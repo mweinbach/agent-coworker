@@ -92,7 +92,7 @@ describe("Anthropic provider (claude-opus-4-6)", () => {
     expect(model).toBeDefined();
     expect(model.modelId).toBe("claude-opus-4-6");
     expect(model.provider).toBe("anthropic.messages");
-    expect(model.specificationVersion).toBe("v2");
+    expect(model.specificationVersion).toBe("v3");
   });
 
   test("getModel with explicit claude-opus-4-6 override", () => {
@@ -219,7 +219,7 @@ describe("OpenAI provider (gpt-5.2 with reasoning)", () => {
     expect(model).toBeDefined();
     expect(model.modelId).toBe("gpt-5.2");
     expect(model.provider).toBe("openai.responses");
-    expect(model.specificationVersion).toBe("v2");
+    expect(model.specificationVersion).toBe("v3");
   });
 
   test("getModel with explicit gpt-5.2 override", () => {
@@ -341,7 +341,7 @@ describe("Google provider (gemini-3-flash-preview)", () => {
     expect(model).toBeDefined();
     expect(model.modelId).toBe("gemini-3-flash-preview");
     expect(model.provider).toBe("google.generative-ai");
-    expect(model.specificationVersion).toBe("v2");
+    expect(model.specificationVersion).toBe("v3");
   });
 
   test("getModel with explicit gemini model override", () => {
@@ -469,10 +469,10 @@ describe("Cross-provider model creation", () => {
       expect(model.provider).toBe(providerPrefix);
     });
 
-    test(`${name}: getModel returns v2 specification`, () => {
+    test(`${name}: getModel returns v3 specification`, () => {
       const cfg = makeConfig({ provider: name, model: defaultModel });
       const model = getModel(cfg);
-      expect(model.specificationVersion).toBe("v2");
+      expect(model.specificationVersion).toBe("v3");
     });
 
     test(`${name}: model override works correctly`, () => {

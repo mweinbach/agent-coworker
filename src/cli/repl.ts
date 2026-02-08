@@ -323,176 +323,181 @@ export async function runCliRepl(
   activateNextPrompt(rl);
 
   rl.on("line", async (input) => {
-    const line = input.trim();
+    try {
+      const line = input.trim();
 
-    if (promptMode === "ask") {
-      if (!activeAsk || !sessionId) {
+      if (promptMode === "ask") {
+        if (!activeAsk || !sessionId) {
+          activateNextPrompt(rl);
+          return;
+        }
+        const answer = resolveAskAnswer(line, activeAsk.options);
+        send({ type: "ask_response", sessionId, requestId: activeAsk.requestId, answer });
         activateNextPrompt(rl);
         return;
       }
-      const answer = resolveAskAnswer(line, activeAsk.options);
-      send({ type: "ask_response", sessionId, requestId: activeAsk.requestId, answer });
+
+      if (promptMode === "approval") {
+        if (!activeApproval || !sessionId) {
+          activateNextPrompt(rl);
+          return;
+        }
+        const approved = normalizeApprovalAnswer(line);
+        send({ type: "approval_response", sessionId, requestId: activeApproval.requestId, approved });
+        activateNextPrompt(rl);
+        return;
+      }
+
+      if (!line) {
+        activateNextPrompt(rl);
+        return;
+      }
+
+      if (line.startsWith("/")) {
+        const [cmd, ...rest] = line.slice(1).split(/\s+/);
+
+        if (cmd === "help") {
+          printHelp();
+          activateNextPrompt(rl);
+          return;
+        }
+
+        if (cmd === "exit") {
+          rl.close();
+          return;
+        }
+
+        if (cmd === "new") {
+          if (sessionId) send({ type: "reset", sessionId });
+          console.log("(cleared)\n");
+          activateNextPrompt(rl);
+          return;
+        }
+
+        if (cmd === "model") {
+          const id = rest.join(" ").trim();
+          if (!id) {
+            console.log("usage: /model <id>");
+            activateNextPrompt(rl);
+            return;
+          }
+          if (sessionId) send({ type: "set_model", sessionId, model: id });
+          activateNextPrompt(rl);
+          return;
+        }
+
+        if (cmd === "provider") {
+          const name = (rest[0] ?? "").trim();
+          if (UI_DISABLED_PROVIDERS.has(name)) {
+            console.log(`${name} is temporarily disabled in the UI.`);
+            activateNextPrompt(rl);
+            return;
+          }
+          if (!isProviderName(name)) {
+            console.log(`usage: /provider <${UI_PROVIDER_NAMES.join("|")}>`);
+            activateNextPrompt(rl);
+            return;
+          }
+          const nextModel = defaultModelForProvider(name);
+          if (sessionId) send({ type: "set_model", sessionId, provider: name, model: nextModel });
+          activateNextPrompt(rl);
+          return;
+        }
+
+        if (cmd === "cwd") {
+          const p = rest.join(" ").trim();
+          if (!p) {
+            console.log("usage: /cwd <path>");
+            activateNextPrompt(rl);
+            return;
+          }
+          const next = await resolveAndValidateDir(p);
+          process.chdir(next);
+          await restartServer(next, rl);
+          console.log(`cwd set to ${next}`);
+          return;
+        }
+
+        if (cmd === "connect") {
+          const serviceToken = (rest[0] ?? "").trim().toLowerCase();
+          const apiKey = rest.slice(1).join(" ").trim();
+
+          if (!serviceToken || serviceToken === "help" || serviceToken === "list") {
+            await showConnectStatus();
+            activateNextPrompt(rl);
+            return;
+          }
+
+          if (UI_DISABLED_PROVIDERS.has(serviceToken)) {
+            console.log(`${serviceToken} is temporarily disabled in the UI.`);
+            activateNextPrompt(rl);
+            return;
+          }
+
+          if (!isProviderName(serviceToken)) {
+            console.log(`usage: /connect <${UI_PROVIDER_NAMES.join("|")}> [api_key]`);
+            activateNextPrompt(rl);
+            return;
+          }
+
+          if (!sessionId) {
+            console.log("not connected: cannot run /connect yet");
+            activateNextPrompt(rl);
+            return;
+          }
+
+          const ok = send({
+            type: "connect_provider",
+            sessionId,
+            provider: serviceToken,
+            apiKey: apiKey || undefined,
+          });
+          if (!ok) {
+            console.log("connect failed: unable to send websocket request");
+            activateNextPrompt(rl);
+            return;
+          }
+
+          console.log(
+            apiKey
+              ? `saving key for ${serviceToken}...`
+              : isOauthCliProvider(serviceToken)
+                ? `starting OAuth sign-in for ${serviceToken}...`
+                : `marking ${serviceToken} as pending (no key supplied)...`
+          );
+          activateNextPrompt(rl);
+          return;
+        }
+
+        if (cmd === "tools") {
+          if (!sessionId) {
+            console.log("not connected: cannot list tools yet");
+            activateNextPrompt(rl);
+            return;
+          }
+          send({ type: "list_tools", sessionId });
+          activateNextPrompt(rl);
+          return;
+        }
+
+        console.log(`unknown command: /${cmd}`);
+        activateNextPrompt(rl);
+        return;
+      }
+
+      if (!sessionId) {
+        console.log("not connected: cannot send messages yet");
+        activateNextPrompt(rl);
+        return;
+      }
+
+      const clientMessageId = crypto.randomUUID();
+      send({ type: "user_message", sessionId, text: line, clientMessageId });
       activateNextPrompt(rl);
-      return;
-    }
-
-    if (promptMode === "approval") {
-      if (!activeApproval || !sessionId) {
-        activateNextPrompt(rl);
-        return;
-      }
-      const approved = normalizeApprovalAnswer(line);
-      send({ type: "approval_response", sessionId, requestId: activeApproval.requestId, approved });
+    } catch (err) {
+      console.error(`Error: ${String(err)}`);
       activateNextPrompt(rl);
-      return;
     }
-
-    if (!line) {
-      activateNextPrompt(rl);
-      return;
-    }
-
-    if (line.startsWith("/")) {
-      const [cmd, ...rest] = line.slice(1).split(/\s+/);
-
-      if (cmd === "help") {
-        printHelp();
-        activateNextPrompt(rl);
-        return;
-      }
-
-      if (cmd === "exit") {
-        rl.close();
-        return;
-      }
-
-      if (cmd === "new") {
-        if (sessionId) send({ type: "reset", sessionId });
-        console.log("(cleared)\n");
-        activateNextPrompt(rl);
-        return;
-      }
-
-      if (cmd === "model") {
-        const id = rest.join(" ").trim();
-        if (!id) {
-          console.log("usage: /model <id>");
-          activateNextPrompt(rl);
-          return;
-        }
-        if (sessionId) send({ type: "set_model", sessionId, model: id });
-        activateNextPrompt(rl);
-        return;
-      }
-
-      if (cmd === "provider") {
-        const name = (rest[0] ?? "").trim();
-        if (UI_DISABLED_PROVIDERS.has(name)) {
-          console.log(`${name} is temporarily disabled in the UI.`);
-          activateNextPrompt(rl);
-          return;
-        }
-        if (!isProviderName(name)) {
-          console.log(`usage: /provider <${UI_PROVIDER_NAMES.join("|")}>`);
-          activateNextPrompt(rl);
-          return;
-        }
-        const nextModel = defaultModelForProvider(name);
-        if (sessionId) send({ type: "set_model", sessionId, provider: name, model: nextModel });
-        activateNextPrompt(rl);
-        return;
-      }
-
-      if (cmd === "cwd") {
-        const p = rest.join(" ").trim();
-        if (!p) {
-          console.log("usage: /cwd <path>");
-          activateNextPrompt(rl);
-          return;
-        }
-        const next = await resolveAndValidateDir(p);
-        process.chdir(next);
-        await restartServer(next, rl);
-        console.log(`cwd set to ${next}`);
-        return;
-      }
-
-      if (cmd === "connect") {
-        const serviceToken = (rest[0] ?? "").trim().toLowerCase();
-        const apiKey = rest.slice(1).join(" ").trim();
-
-        if (!serviceToken || serviceToken === "help" || serviceToken === "list") {
-          await showConnectStatus();
-          activateNextPrompt(rl);
-          return;
-        }
-
-        if (UI_DISABLED_PROVIDERS.has(serviceToken)) {
-          console.log(`${serviceToken} is temporarily disabled in the UI.`);
-          activateNextPrompt(rl);
-          return;
-        }
-
-        if (!isProviderName(serviceToken)) {
-          console.log(`usage: /connect <${UI_PROVIDER_NAMES.join("|")}> [api_key]`);
-          activateNextPrompt(rl);
-          return;
-        }
-
-        if (!sessionId) {
-          console.log("not connected: cannot run /connect yet");
-          activateNextPrompt(rl);
-          return;
-        }
-
-        const ok = send({
-          type: "connect_provider",
-          sessionId,
-          provider: serviceToken,
-          apiKey: apiKey || undefined,
-        });
-        if (!ok) {
-          console.log("connect failed: unable to send websocket request");
-          activateNextPrompt(rl);
-          return;
-        }
-
-        console.log(
-          apiKey
-            ? `saving key for ${serviceToken}...`
-            : isOauthCliProvider(serviceToken)
-              ? `starting OAuth sign-in for ${serviceToken}...`
-              : `marking ${serviceToken} as pending (no key supplied)...`
-        );
-        activateNextPrompt(rl);
-        return;
-      }
-
-      if (cmd === "tools") {
-        if (!sessionId) {
-          console.log("not connected: cannot list tools yet");
-          activateNextPrompt(rl);
-          return;
-        }
-        send({ type: "list_tools", sessionId });
-        activateNextPrompt(rl);
-        return;
-      }
-
-      console.log(`unknown command: /${cmd}`);
-      activateNextPrompt(rl);
-      return;
-    }
-
-    if (!sessionId) {
-      console.log("not connected: cannot send messages yet");
-      activateNextPrompt(rl);
-      return;
-    }
-
-    const clientMessageId = crypto.randomUUID();
-    send({ type: "user_message", sessionId, text: line, clientMessageId });
-    activateNextPrompt(rl);
   });
 
   await new Promise<void>((resolve) => {

@@ -1,0 +1,63 @@
+import fs from "node:fs/promises";
+
+import { tool } from "ai";
+import { z } from "zod";
+
+import type { ToolContext } from "./context";
+import { resolveMaybeRelative } from "../utils/paths";
+import { isWritePathAllowed } from "../utils/permissions";
+
+export function createNotebookEditTool(ctx: ToolContext) {
+  return tool({
+    description:
+      "Edit a Jupyter notebook (.ipynb) cell. Supports replace, insert, and delete operations.",
+    inputSchema: z.object({
+      notebookPath: z.string().describe("Path to the .ipynb file (prefer absolute)"),
+      cellIndex: z.number().int().min(0).describe("0-indexed cell index"),
+      newSource: z.string().describe("New content for the cell"),
+      cellType: z.enum(["code", "markdown"]).optional(),
+      editMode: z.enum(["replace", "insert", "delete"]).optional().default("replace"),
+    }),
+    execute: async ({ notebookPath, cellIndex, newSource, cellType, editMode }) => {
+      ctx.log(
+        `tool> notebookEdit ${JSON.stringify({ notebookPath, cellIndex, cellType, editMode })}`
+      );
+
+      const abs = resolveMaybeRelative(notebookPath, ctx.config.workingDirectory);
+      if (!isWritePathAllowed(abs, ctx.config)) {
+        throw new Error(
+          `Notebook edit blocked: path is outside workingDirectory/outputDirectory: ${abs}`
+        );
+      }
+      const raw = await fs.readFile(abs, "utf-8");
+      const nb = JSON.parse(raw);
+      const cells = nb.cells;
+
+      if (!Array.isArray(cells)) throw new Error(`Invalid notebook format: ${abs}`);
+
+      const sourceLines = newSource
+        .split("\n")
+        .map((l, i, a) => l + (i < a.length - 1 ? "\n" : ""));
+
+      if (editMode === "delete") {
+        cells.splice(cellIndex, 1);
+      } else if (editMode === "insert") {
+        const ct = cellType || "code";
+        cells.splice(cellIndex, 0, {
+          cell_type: ct,
+          source: sourceLines,
+          metadata: {},
+          ...(ct === "code" ? { outputs: [], execution_count: null } : {}),
+        });
+      } else {
+        if (cellIndex >= cells.length) throw new Error(`Cell ${cellIndex} out of range (${cells.length})`);
+        cells[cellIndex].source = sourceLines;
+        if (cellType) cells[cellIndex].cell_type = cellType;
+      }
+
+      await fs.writeFile(abs, JSON.stringify(nb, null, 1), "utf-8");
+      ctx.log(`tool< notebookEdit ${JSON.stringify({ ok: true })}`);
+      return `Notebook updated: ${editMode} cell ${cellIndex}`;
+    },
+  });
+}

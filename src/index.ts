@@ -1,0 +1,110 @@
+#!/usr/bin/env bun
+
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import { parseCliArgs } from "./cli/args";
+import { runCliRepl } from "./cli/repl";
+import { startAgentServer } from "./server/startServer";
+import { runTui } from "./tui/index";
+
+// Keep output clean by default.
+(globalThis as any).AI_SDK_LOG_WARNINGS = false;
+
+// Central place to tune provider-specific reasoning/thinking behavior.
+// Kept in `src/index.ts` on purpose so defaults are easy to change while we iterate.
+const DEFAULT_PROVIDER_OPTIONS: Record<string, any> = {
+  openai: {
+    reasoningEffort: "high",
+    reasoningSummary: "detailed",
+  },
+  google: {
+    thinkingConfig: {
+      // Gemini maps "thought" parts to AI SDK `reasoning` parts when includeThoughts is enabled.
+      includeThoughts: true,
+      thinkingLevel: "high",
+    },
+  },
+  anthropic: {
+    thinking: {
+      type: "enabled",
+      budgetTokens: 32_000,
+    },
+  },
+};
+
+function printUsage() {
+  console.log("Usage: cowork [--dir <directory_path>] [--cli]");
+  console.log("");
+  console.log("By default, cowork launches the TUI (and starts the agent server in the background).");
+  console.log("");
+  console.log("Options:");
+  console.log("  --dir, -d   Run the agent in the specified directory");
+  console.log("  --cli, -c   Run the plain CLI instead of the TUI");
+  console.log("  --help, -h  Show help");
+  console.log("");
+}
+
+async function resolveAndValidateDir(dirArg: string): Promise<string> {
+  const resolved = path.resolve(dirArg);
+  let st: { isDirectory: () => boolean } | null = null;
+  try {
+    st = await fs.stat(resolved);
+  } catch {
+    st = null;
+  }
+  if (!st || !st.isDirectory()) throw new Error(`--dir is not a directory: ${resolved}`);
+  return resolved;
+}
+
+async function main() {
+  const { args, errors } = parseCliArgs(process.argv.slice(2));
+  if (args.help) {
+    printUsage();
+    return;
+  }
+  if (errors.length > 0) {
+    for (const e of errors) console.error(e);
+    console.error("");
+    printUsage();
+    process.exitCode = 1;
+    return;
+  }
+
+  if (args.cli) {
+    await runCliRepl({ dir: args.dir, providerOptions: DEFAULT_PROVIDER_OPTIONS });
+    return;
+  }
+
+  const cwd = args.dir ? await resolveAndValidateDir(args.dir) : process.cwd();
+  if (args.dir) process.chdir(cwd);
+
+  const { server, url } = await startAgentServer({
+    cwd,
+    hostname: "127.0.0.1",
+    port: 0, // ephemeral port; avoids collisions and keeps launch simple
+    providerOptions: DEFAULT_PROVIDER_OPTIONS,
+  });
+
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    try {
+      server.stop();
+    } catch {
+      // ignore
+    }
+  };
+
+  try {
+    await runTui(url, { onDestroy: stop });
+  } finally {
+    stop();
+  }
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});

@@ -1,0 +1,98 @@
+import { generateText, stepCountIs, tool } from "ai";
+import { z } from "zod";
+
+import { getModel } from "../config";
+import { loadSubAgentPrompt } from "../prompt";
+import { AUTO_APPROVE_PATTERNS } from "../utils/approval";
+
+import type { ToolContext } from "./context";
+import { createBashTool } from "./bash";
+import { createGlobTool } from "./glob";
+import { createGrepTool } from "./grep";
+import { createReadTool } from "./read";
+import { createWebFetchTool } from "./webFetch";
+import { createWebSearchTool } from "./webSearch";
+import { createEditTool } from "./edit";
+import { createWriteTool } from "./write";
+import { createMemoryTool } from "./memory";
+import { createSkillTool } from "./skill";
+import { createNotebookEditTool } from "./notebookEdit";
+
+type AgentType = "explore" | "research" | "general";
+
+function safeApprove(command: string): boolean {
+  return AUTO_APPROVE_PATTERNS.some((p) => p.test(command));
+}
+
+function createSubAgentTools(parent: ToolContext, agentType: AgentType): Record<string, any> {
+  const subCtx: ToolContext = {
+    config: parent.config,
+    log: (line) => parent.log(`[sub:${agentType}] ${line}`),
+    askUser: async () => {
+      throw new Error("Sub-agent cannot ask the user directly.");
+    },
+    approveCommand: async (command) => safeApprove(command),
+  };
+
+  if (agentType === "explore") {
+    return {
+      read: createReadTool(subCtx),
+      glob: createGlobTool(subCtx),
+      grep: createGrepTool(subCtx),
+      bash: createBashTool(subCtx),
+    };
+  }
+
+  if (agentType === "research") {
+    return {
+      read: createReadTool(subCtx),
+      webSearch: createWebSearchTool(subCtx),
+      webFetch: createWebFetchTool(subCtx),
+    };
+  }
+
+  // general
+  return {
+    read: createReadTool(subCtx),
+    write: createWriteTool(subCtx),
+    edit: createEditTool(subCtx),
+    glob: createGlobTool(subCtx),
+    grep: createGrepTool(subCtx),
+    webSearch: createWebSearchTool(subCtx),
+    webFetch: createWebFetchTool(subCtx),
+    notebookEdit: createNotebookEditTool(subCtx),
+    skill: createSkillTool(subCtx),
+    memory: createMemoryTool(subCtx),
+  };
+}
+
+export function createSpawnAgentTool(ctx: ToolContext) {
+  return tool({
+    description:
+      "Launch a sub-agent for a focused task (explore, research, or general). Sub-agents run with their own prompt and restricted tools and return their result.",
+    inputSchema: z.object({
+      task: z.string().describe("What the sub-agent should accomplish"),
+      agentType: z.enum(["explore", "research", "general"]).optional().default("general"),
+    }),
+    execute: async ({ task, agentType }) => {
+      ctx.log(`tool> spawnAgent ${JSON.stringify({ agentType })}`);
+
+      const system = await loadSubAgentPrompt(ctx.config, agentType);
+      const modelId = agentType === "research" ? ctx.config.model : ctx.config.subAgentModel;
+
+      const tools = createSubAgentTools(ctx, agentType);
+
+      const { text } = await generateText({
+        model: getModel(ctx.config, modelId),
+        system,
+        tools,
+        stopWhen: stepCountIs(50),
+        providerOptions: ctx.config.providerOptions,
+        prompt: task,
+      } as any);
+
+      ctx.log(`tool< spawnAgent ${JSON.stringify({ chars: text.length })}`);
+      return text;
+    },
+  });
+}

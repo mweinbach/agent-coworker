@@ -1,0 +1,15 @@
+node_modules/
+
+# Agent runtime dirs
+output/
+uploads/
+.agent/
+
+# Env / misc
+.env
+.env.*
+*.log
+.DS_Store
+
+# Local editor / tool state
+.claude/

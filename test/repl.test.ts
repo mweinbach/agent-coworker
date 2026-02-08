@@ -200,7 +200,18 @@ describe("renderTodos", () => {
 // Command parsing logic (replicated from the REPL's while-loop)
 // ---------------------------------------------------------------------------
 interface ParsedCommand {
-  type: "help" | "exit" | "new" | "model" | "provider" | "connect" | "cwd" | "tools" | "unknown" | "message";
+  type:
+    | "help"
+    | "exit"
+    | "new"
+    | "restart"
+    | "model"
+    | "provider"
+    | "connect"
+    | "cwd"
+    | "tools"
+    | "unknown"
+    | "message";
   arg?: string;
 }
 
@@ -215,6 +226,7 @@ function parseReplInput(input: string): ParsedCommand {
   if (cmd === "help") return { type: "help" };
   if (cmd === "exit") return { type: "exit" };
   if (cmd === "new") return { type: "new" };
+  if (cmd === "restart") return { type: "restart" };
   if (cmd === "model") return { type: "model", arg: rest.join(" ").trim() };
   if (cmd === "provider") return { type: "provider", arg: rest[0] };
   if (cmd === "connect") return { type: "connect", arg: rest.join(" ").trim() };
@@ -235,6 +247,10 @@ describe("REPL command parsing", () => {
 
   test("/new is parsed as new command", () => {
     expect(parseReplInput("/new")).toEqual({ type: "new" });
+  });
+
+  test("/restart is parsed as restart command", () => {
+    expect(parseReplInput("/restart")).toEqual({ type: "restart" });
   });
 
   test("/model with id is parsed correctly", () => {

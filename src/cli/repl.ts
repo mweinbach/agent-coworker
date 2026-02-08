@@ -65,13 +65,29 @@ function normalizeApprovalAnswer(raw: string): boolean {
 }
 
 export async function runCliRepl(
-  opts: { dir?: string; providerOptions?: Record<string, any>; yolo?: boolean } = {}
+  opts: {
+    dir?: string;
+    providerOptions?: Record<string, any>;
+    yolo?: boolean;
+    // Internal hooks for tests to avoid global/module mocks.
+    __internal?: {
+      startAgentServer?: typeof startAgentServer;
+      WebSocket?: { new (url: string): WebSocket; OPEN: number };
+      createReadlineInterface?: () => readline.Interface;
+    };
+  } = {}
 ) {
   const initialDir = opts.dir ? await resolveAndValidateDir(opts.dir) : process.cwd();
   if (opts.dir) process.chdir(initialDir);
 
+  const startAgentServerImpl = opts.__internal?.startAgentServer ?? startAgentServer;
+  const WebSocketCtor = opts.__internal?.WebSocket ?? WebSocket;
+  const createReadlineInterface =
+    opts.__internal?.createReadlineInterface ??
+    (() => readline.createInterface({ input: process.stdin, output: process.stdout }));
+
   const startServerForDir = async (cwd: string) => {
-    return await startAgentServer({
+    return await startAgentServerImpl({
       cwd,
       hostname: "127.0.0.1",
       port: 0,
@@ -98,6 +114,7 @@ export async function runCliRepl(
   let ws: WebSocket | null = null;
   let sessionId: string | null = null;
   let config: PublicConfig | null = null;
+  let disconnectNotified = false;
 
   let pendingAsk: AskPrompt[] = [];
   let pendingApproval: ApprovalPrompt[] = [];
@@ -107,9 +124,13 @@ export async function runCliRepl(
   let busy = false;
 
   const send = (msg: ClientMessage) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-    ws.send(JSON.stringify(msg));
-    return true;
+    if (!ws || ws.readyState !== WebSocketCtor.OPEN) return false;
+    try {
+      ws.send(JSON.stringify(msg));
+      return true;
+    } catch {
+      return false;
+    }
   };
 
   const printHelp = () => {
@@ -117,6 +138,7 @@ export async function runCliRepl(
     console.log("  /help                 Show help");
     console.log("  /exit                 Quit");
     console.log("  /new                  Clear conversation");
+    console.log("  /restart              Restart server + new session");
     console.log("  /model <id>            Set model id for this session");
     console.log(`  /provider <name>       Set provider (${UI_PROVIDER_NAMES.join("|")})`);
     console.log(`  /connect <name> [key]  Save provider key or run OAuth (${UI_PROVIDER_NAMES.join("|")})`);
@@ -187,10 +209,35 @@ export async function runCliRepl(
     rl.prompt();
   };
 
+  const handleDisconnect = (rl: readline.Interface, reason: string) => {
+    // Avoid noisy disconnect output during intentional server restarts/shutdown.
+    if (serverStopping) return;
+
+    ws = null;
+    sessionId = null;
+    config = null;
+    busy = false;
+
+    pendingAsk = [];
+    pendingApproval = [];
+    activeAsk = null;
+    activeApproval = null;
+    promptMode = "user";
+
+    if (!disconnectNotified) {
+      disconnectNotified = true;
+      console.log(`disconnected: ${reason}. Use /restart to start a new session.`);
+    }
+
+    activateNextPrompt(rl);
+  };
+
   const handleServerEvent = (evt: ServerEvent, rl: readline.Interface) => {
     if (evt.type === "server_hello") {
       sessionId = evt.sessionId;
       config = evt.config;
+      busy = false;
+      disconnectNotified = false;
       console.log(`connected: ${evt.sessionId}`);
       console.log(`provider=${evt.config.provider} model=${evt.config.model}`);
       console.log(`cwd=${evt.config.workingDirectory}`);
@@ -263,7 +310,7 @@ export async function runCliRepl(
     config = null;
 
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(url);
+      const socket = new WebSocketCtor(url);
       ws = socket;
       let ready = false;
 
@@ -281,7 +328,11 @@ export async function runCliRepl(
       };
 
       socket.onerror = () => {
-        reject(new Error(`Failed to connect to ${url}`));
+        if (!ready) {
+          reject(new Error(`Failed to connect to ${url}`));
+          return;
+        }
+        handleDisconnect(rl, "websocket error");
       };
 
       socket.onmessage = (ev) => {
@@ -301,7 +352,7 @@ export async function runCliRepl(
           reject(new Error(`WebSocket closed before handshake: ${url}`));
           return;
         }
-        if (!serverStopping) console.log("websocket closed");
+        handleDisconnect(rl, "websocket closed");
       };
     });
   };
@@ -323,7 +374,7 @@ export async function runCliRepl(
     activateNextPrompt(rl);
   };
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const rl = createReadlineInterface();
   rl.on("SIGINT", () => {
     rl.close();
   });
@@ -346,7 +397,11 @@ export async function runCliRepl(
           return;
         }
         const answer = resolveAskAnswer(line, activeAsk.options);
-        send({ type: "ask_response", sessionId, requestId: activeAsk.requestId, answer });
+        const ok = send({ type: "ask_response", sessionId, requestId: activeAsk.requestId, answer });
+        if (!ok) {
+          handleDisconnect(rl, "unable to send (not connected)");
+          return;
+        }
         activateNextPrompt(rl);
         return;
       }
@@ -357,7 +412,11 @@ export async function runCliRepl(
           return;
         }
         const approved = normalizeApprovalAnswer(line);
-        send({ type: "approval_response", sessionId, requestId: activeApproval.requestId, approved });
+        const ok = send({ type: "approval_response", sessionId, requestId: activeApproval.requestId, approved });
+        if (!ok) {
+          handleDisconnect(rl, "unable to send (not connected)");
+          return;
+        }
         activateNextPrompt(rl);
         return;
       }
@@ -381,13 +440,25 @@ export async function runCliRepl(
           return;
         }
 
+        if (cmd === "restart") {
+          console.log("restarting server...");
+          await restartServer(process.cwd(), rl);
+          return;
+        }
+
         if (cmd === "new") {
           if (busy) {
             console.log("Agent is busy; cannot /new until the current turn finishes.\n");
             activateNextPrompt(rl);
             return;
           }
-          if (sessionId) send({ type: "reset", sessionId });
+          if (sessionId) {
+            const ok = send({ type: "reset", sessionId });
+            if (!ok) {
+              handleDisconnect(rl, "unable to send (not connected)");
+              return;
+            }
+          }
           activateNextPrompt(rl);
           return;
         }
@@ -399,7 +470,13 @@ export async function runCliRepl(
             activateNextPrompt(rl);
             return;
           }
-          if (sessionId) send({ type: "set_model", sessionId, model: id });
+          if (sessionId) {
+            const ok = send({ type: "set_model", sessionId, model: id });
+            if (!ok) {
+              handleDisconnect(rl, "unable to send (not connected)");
+              return;
+            }
+          }
           activateNextPrompt(rl);
           return;
         }
@@ -417,7 +494,13 @@ export async function runCliRepl(
             return;
           }
           const nextModel = defaultModelForProvider(name);
-          if (sessionId) send({ type: "set_model", sessionId, provider: name, model: nextModel });
+          if (sessionId) {
+            const ok = send({ type: "set_model", sessionId, provider: name, model: nextModel });
+            if (!ok) {
+              handleDisconnect(rl, "unable to send (not connected)");
+              return;
+            }
+          }
           activateNextPrompt(rl);
           return;
         }
@@ -471,8 +554,7 @@ export async function runCliRepl(
             apiKey: apiKey || undefined,
           });
           if (!ok) {
-            console.log("connect failed: unable to send websocket request");
-            activateNextPrompt(rl);
+            handleDisconnect(rl, "unable to send (not connected)");
             return;
           }
 
@@ -493,7 +575,11 @@ export async function runCliRepl(
             activateNextPrompt(rl);
             return;
           }
-          send({ type: "list_tools", sessionId });
+          const ok = send({ type: "list_tools", sessionId });
+          if (!ok) {
+            handleDisconnect(rl, "unable to send (not connected)");
+            return;
+          }
           activateNextPrompt(rl);
           return;
         }
@@ -516,7 +602,11 @@ export async function runCliRepl(
       }
 
       const clientMessageId = crypto.randomUUID();
-      send({ type: "user_message", sessionId, text: line, clientMessageId });
+      const ok = send({ type: "user_message", sessionId, text: line, clientMessageId });
+      if (!ok) {
+        handleDisconnect(rl, "unable to send (not connected)");
+        return;
+      }
       activateNextPrompt(rl);
     } catch (err) {
       console.error(`Error: ${String(err)}`);

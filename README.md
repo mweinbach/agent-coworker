@@ -1,10 +1,10 @@
 # agent-coworker
 
-Terminal-first “coworker” agent with:
-- a WebSocket agent server (Bun)
-- a TUI client (OpenTUI + React)
+Terminal-first “coworker” agent built on Bun + the Vercel AI SDK, with:
+- a WebSocket agent server
+- an OpenTUI + React client (default)
 - a plain CLI REPL
-- a small built-in toolbelt (bash/read/write/edit/glob/grep/web + memory/skills/todos/sub-agents)
+- a built-in toolbelt for file/code/web tasks (with command approval for risky ops)
 
 ## Quickstart
 
@@ -14,7 +14,7 @@ Prereqs: Bun installed.
 bun install
 ```
 
-Set an API key for the provider you want to use:
+Set an API key for the provider you want:
 - Google Gemini: `GOOGLE_GENERATIVE_AI_API_KEY`
 - OpenAI: `OPENAI_API_KEY`
 - Anthropic: `ANTHROPIC_API_KEY`
@@ -22,11 +22,11 @@ Set an API key for the provider you want to use:
 Run the TUI (starts the server automatically):
 ```bash
 bun run start
-# optionally target a directory:
+# target a specific directory:
 bun run start -- --dir /path/to/project
 ```
 
-Run the plain CLI:
+Run the CLI REPL:
 ```bash
 bun run cli
 ```
@@ -38,19 +38,28 @@ bun run serve
 
 ## Configuration
 
-Config merges built-in defaults + user + project overrides.
+Config precedence: built-in defaults < user < project < environment variables.
 
 Environment variables:
 - `AGENT_PROVIDER` (`google|openai|anthropic`)
-- `AGENT_MODEL`
-- `AGENT_WORKING_DIR`
-- `AGENT_OUTPUT_DIR`
-- `AGENT_UPLOADS_DIR`
+- `AGENT_MODEL` (main model id)
+- `AGENT_WORKING_DIR` (directory the agent should operate in)
+- `AGENT_OUTPUT_DIR`, `AGENT_UPLOADS_DIR`
 - `AGENT_USER_NAME`
 
 Config files (optional):
 - `./.agent/config.json` (project)
 - `~/.agent/config.json` (user)
+
+Example `./.agent/config.json`:
+```json
+{
+  "provider": "openai",
+  "model": "gpt-5.2",
+  "subAgentModel": "gpt-5.2",
+  "userName": "Max"
+}
+```
 
 ## Development
 
@@ -63,4 +72,3 @@ Watch mode:
 ```bash
 bun run dev
 ```
-

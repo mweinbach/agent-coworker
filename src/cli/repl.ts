@@ -10,6 +10,7 @@ import { loadSystemPrompt } from "../prompt";
 import { approveCommand } from "../utils/approval";
 import { createTools } from "../tools";
 import { currentTodos, onTodoChange } from "../tools/todoWrite";
+import { isProviderName, PROVIDER_NAMES } from "../types";
 
 // Keep CLI output clean by default.
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
@@ -104,7 +105,7 @@ export async function runCliRepl(
   console.log(`provider=${config.provider} model=${config.model}`);
   console.log(`cwd=${config.workingDirectory}`);
   if (yolo) console.log("YOLO mode enabled: command approvals are bypassed.");
-  console.log("Type /help for commands. Set GOOGLE_GENERATIVE_AI_API_KEY to use Gemini.\n");
+  console.log("Type /help for commands. Use /connect to store keys or mark OAuth sign-in pending.\n");
 
   let messages: ModelMessage[] = [];
 
@@ -114,7 +115,7 @@ export async function runCliRepl(
     console.log("  /exit                 Quit");
     console.log("  /new                  Clear conversation");
     console.log("  /model <id>            Set model id for this session");
-    console.log("  /provider <name>       Set provider (google|openai|anthropic)");
+    console.log(`  /provider <name>       Set provider (${PROVIDER_NAMES.join("|")})`);
     console.log("  /cwd <path>            Set working directory for this session");
     console.log("  /tools                List tool names\n");
   };
@@ -157,8 +158,8 @@ export async function runCliRepl(
 
       if (cmd === "provider") {
         const name = rest[0];
-        if (name !== "google" && name !== "openai" && name !== "anthropic") {
-          console.log("usage: /provider <google|openai|anthropic>");
+        if (!isProviderName(name)) {
+          console.log(`usage: /provider <${PROVIDER_NAMES.join("|")}>`);
           continue;
         }
         const nextModel = defaultModelForProvider(name);

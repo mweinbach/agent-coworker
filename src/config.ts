@@ -7,7 +7,11 @@ import { fileURLToPath } from "node:url";
 import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI, google } from "@ai-sdk/google";
 import { createOpenAI, openai } from "@ai-sdk/openai";
+import { claudeCode, createClaudeCode } from "ai-sdk-provider-claude-code";
+import { codexCli, createCodexCli } from "ai-sdk-provider-codex-cli";
+import { createGeminiProvider } from "ai-sdk-provider-gemini-cli";
 
+import { isProviderName } from "./types";
 import type { AgentConfig, ProviderName } from "./types";
 
 export interface LoadConfigOptions {
@@ -37,11 +41,17 @@ export function defaultModelForProvider(provider: ProviderName): string {
   switch (provider) {
     case "google":
       return "gemini-3-flash-preview";
+    case "gemini-cli":
+      return "gemini-3-flash-preview";
     case "openai":
       return "gpt-5.2";
+    case "codex-cli":
+      return "gpt-5.2-codex";
     case "anthropic":
       // Keep this conservative; users can override via /model or config/env.
       return "claude-opus-4-6";
+    case "claude-code":
+      return "sonnet";
     default: {
       const _exhaustive: never = provider;
       return _exhaustive;
@@ -64,7 +74,7 @@ function resolveBuiltInDir(): string {
 }
 
 function asProviderName(v: unknown): ProviderName | null {
-  if (v === "google" || v === "openai" || v === "anthropic") return v;
+  if (isProviderName(v)) return v;
   return null;
 }
 
@@ -94,18 +104,31 @@ function readSavedApiKey(config: AgentConfig, provider: ProviderName): string | 
   const home = resolveUserHomeFromConfig(config);
   const connectionsPath = path.join(home, ".ai-coworker", "config", "connections.json");
 
+  const keyCandidates: readonly ProviderName[] =
+    provider === "gemini-cli"
+      ? [provider, "google"]
+      : provider === "codex-cli"
+        ? [provider, "openai"]
+        : provider === "claude-code"
+          ? [provider, "anthropic"]
+          : [provider];
+
   try {
     const raw = fsSync.readFileSync(connectionsPath, "utf-8");
     const parsed = JSON.parse(raw) as any;
 
-    const direct = parsed?.services?.[provider];
-    const directKey =
-      typeof direct?.apiKey === "string" && direct.apiKey.trim() ? direct.apiKey.trim() : "";
-    if (directKey) return directKey;
+    for (const candidate of keyCandidates) {
+      const direct = parsed?.services?.[candidate];
+      const directKey =
+        typeof direct?.apiKey === "string" && direct.apiKey.trim() ? direct.apiKey.trim() : "";
+      if (directKey) return directKey;
+    }
 
     // Backward-compatible fallback for any simpler shape like { apiKeys: { openai: "..." } }.
-    const legacy = parsed?.apiKeys?.[provider];
-    if (typeof legacy === "string" && legacy.trim()) return legacy.trim();
+    for (const candidate of keyCandidates) {
+      const legacy = parsed?.apiKeys?.[candidate];
+      if (typeof legacy === "string" && legacy.trim()) return legacy.trim();
+    }
   } catch {
     // Missing/invalid file means no saved key; fall back to provider defaults (.env).
   }
@@ -233,6 +256,44 @@ export function getModel(config: AgentConfig, id?: string) {
     }
     case "anthropic": {
       const provider = savedKey ? createAnthropic({ apiKey: savedKey }) : anthropic;
+      return provider(modelId);
+    }
+    case "gemini-cli": {
+      const envKey = savedKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+      const provider = envKey
+        ? createGeminiProvider({
+            authType: "api-key",
+            apiKey: envKey,
+          })
+        : createGeminiProvider({
+            authType: "oauth-personal",
+          });
+      return provider(modelId);
+    }
+    case "codex-cli": {
+      const envKey = savedKey || process.env.OPENAI_API_KEY;
+      const provider = envKey
+        ? createCodexCli({
+            defaultSettings: {
+              env: {
+                OPENAI_API_KEY: envKey,
+              },
+            },
+          })
+        : codexCli;
+      return provider(modelId);
+    }
+    case "claude-code": {
+      const envKey = savedKey || process.env.ANTHROPIC_API_KEY;
+      const provider = envKey
+        ? createClaudeCode({
+            defaultSettings: {
+              env: {
+                ANTHROPIC_API_KEY: envKey,
+              },
+            },
+          })
+        : claudeCode;
       return provider(modelId);
     }
     default: {

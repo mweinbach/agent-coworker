@@ -1,6 +1,19 @@
 import type { ModelMessage } from "ai";
 
-export type ProviderName = "google" | "openai" | "anthropic";
+export const PROVIDER_NAMES = [
+  "google",
+  "openai",
+  "anthropic",
+  "gemini-cli",
+  "codex-cli",
+  "claude-code",
+] as const;
+
+export type ProviderName = (typeof PROVIDER_NAMES)[number];
+
+export function isProviderName(v: unknown): v is ProviderName {
+  return typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
+}
 
 export interface AgentConfig {
   provider: ProviderName;

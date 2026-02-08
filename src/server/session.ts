@@ -1,5 +1,6 @@
 import type { ModelMessage } from "ai";
 
+import { isProviderName } from "../types";
 import type { AgentConfig, TodoItem } from "../types";
 import { runTurn } from "../agent";
 import { loadSystemPrompt } from "../prompt";
@@ -71,7 +72,7 @@ export class AgentSession {
     this.emit({ type: "todos", sessionId: this.id, todos: [] });
   }
 
-  async setModel(modelIdRaw: string) {
+  async setModel(modelIdRaw: string, providerRaw?: AgentConfig["provider"]) {
     const modelId = modelIdRaw.trim();
     if (!modelId) {
       this.emit({ type: "error", sessionId: this.id, message: "Model id is required" });
@@ -82,8 +83,20 @@ export class AgentSession {
       return;
     }
 
+    const nextProvider =
+      providerRaw === undefined
+        ? this.config.provider
+        : isProviderName(providerRaw)
+          ? providerRaw
+          : null;
+    if (!nextProvider) {
+      this.emit({ type: "error", sessionId: this.id, message: `Unsupported provider: ${String(providerRaw)}` });
+      return;
+    }
+
     this.config = {
       ...this.config,
+      provider: nextProvider,
       model: modelId,
       // Keep sub-agent model aligned for now until we expose a dedicated toggle.
       subAgentModel: modelId,
@@ -197,7 +210,7 @@ export class AgentSession {
 
       const reasoning = (res.reasoningText || "").trim();
       if (reasoning) {
-        const kind = this.config.provider === "openai" ? "summary" : "reasoning";
+        const kind = this.config.provider === "openai" || this.config.provider === "codex-cli" ? "summary" : "reasoning";
         this.emit({ type: "reasoning", sessionId: this.id, kind, text: reasoning });
       }
 

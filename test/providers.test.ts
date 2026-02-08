@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 import { anthropic } from "@ai-sdk/anthropic";
 import { google } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
+import { claudeCode } from "ai-sdk-provider-claude-code";
+import { codexCli } from "ai-sdk-provider-codex-cli";
+import { createGeminiProvider } from "ai-sdk-provider-gemini-cli";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../src/config";
 import type { AgentConfig, ProviderName } from "../src/types";
@@ -421,6 +424,135 @@ describe("Google provider (gemini-3-flash-preview)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Gemini CLI provider - gemini-3-flash-preview (OAuth/API key via CLI provider)
+// ---------------------------------------------------------------------------
+describe("Gemini CLI provider (gemini-3-flash-preview)", () => {
+  test("defaultModelForProvider returns gemini-3-flash-preview", () => {
+    expect(defaultModelForProvider("gemini-cli")).toBe("gemini-3-flash-preview");
+  });
+
+  test("getModel creates gemini-cli model with default gemini-3-flash-preview", () => {
+    const cfg = makeConfig({ provider: "gemini-cli", model: "gemini-3-flash-preview" });
+    const model = getModel(cfg);
+
+    expect(model).toBeDefined();
+    expect(model.modelId).toBe("gemini-3-flash-preview");
+    expect(model.provider).toBe("gemini-cli-core");
+    expect(model.specificationVersion).toBe("v3");
+  });
+
+  test("directly created gemini-cli model matches getModel output", () => {
+    const direct = createGeminiProvider({ authType: "oauth-personal" })("gemini-3-flash-preview");
+    const cfg = makeConfig({ provider: "gemini-cli", model: "gemini-3-flash-preview" });
+    const viaGetModel = getModel(cfg);
+
+    expect(viaGetModel.modelId).toBe(direct.modelId);
+    expect(viaGetModel.provider).toBe(direct.provider);
+    expect(viaGetModel.specificationVersion).toBe(direct.specificationVersion);
+  });
+
+  test("loadConfig with gemini-cli provider returns gemini-3-flash-preview model", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: { AGENT_PROVIDER: "gemini-cli" },
+    });
+
+    expect(cfg.provider).toBe("gemini-cli");
+    expect(cfg.model).toBe("gemini-3-flash-preview");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Codex CLI provider - gpt-5.2-codex (OAuth/API key via Codex CLI)
+// ---------------------------------------------------------------------------
+describe("Codex CLI provider (gpt-5.2-codex)", () => {
+  test("defaultModelForProvider returns gpt-5.2-codex", () => {
+    expect(defaultModelForProvider("codex-cli")).toBe("gpt-5.2-codex");
+  });
+
+  test("getModel creates codex-cli model with default gpt-5.2-codex", () => {
+    const cfg = makeConfig({ provider: "codex-cli", model: "gpt-5.2-codex" });
+    const model = getModel(cfg);
+
+    expect(model).toBeDefined();
+    expect(model.modelId).toBe("gpt-5.2-codex");
+    expect(model.provider).toBe("codex-cli");
+    expect(model.specificationVersion).toBe("v3");
+  });
+
+  test("directly created codex-cli model matches getModel output", () => {
+    const direct = codexCli("gpt-5.2-codex");
+    const cfg = makeConfig({ provider: "codex-cli", model: "gpt-5.2-codex" });
+    const viaGetModel = getModel(cfg);
+
+    expect(viaGetModel.modelId).toBe(direct.modelId);
+    expect(viaGetModel.provider).toBe(direct.provider);
+    expect(viaGetModel.specificationVersion).toBe(direct.specificationVersion);
+  });
+
+  test("loadConfig with codex-cli provider returns gpt-5.2-codex model", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: { AGENT_PROVIDER: "codex-cli" },
+    });
+
+    expect(cfg.provider).toBe("codex-cli");
+    expect(cfg.model).toBe("gpt-5.2-codex");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Claude Code provider - sonnet (OAuth/API key via Claude Code)
+// ---------------------------------------------------------------------------
+describe("Claude Code provider (sonnet)", () => {
+  test("defaultModelForProvider returns sonnet", () => {
+    expect(defaultModelForProvider("claude-code")).toBe("sonnet");
+  });
+
+  test("getModel creates claude-code model with default sonnet", () => {
+    const cfg = makeConfig({ provider: "claude-code", model: "sonnet" });
+    const model = getModel(cfg);
+
+    expect(model).toBeDefined();
+    expect(model.modelId).toBe("sonnet");
+    expect(model.provider).toBe("claude-code");
+    expect(model.specificationVersion).toBe("v3");
+  });
+
+  test("directly created claude-code model matches getModel output", () => {
+    const direct = claudeCode("sonnet");
+    const cfg = makeConfig({ provider: "claude-code", model: "sonnet" });
+    const viaGetModel = getModel(cfg);
+
+    expect(viaGetModel.modelId).toBe(direct.modelId);
+    expect(viaGetModel.provider).toBe(direct.provider);
+    expect(viaGetModel.specificationVersion).toBe(direct.specificationVersion);
+  });
+
+  test("loadConfig with claude-code provider returns sonnet model", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: { AGENT_PROVIDER: "claude-code" },
+    });
+
+    expect(cfg.provider).toBe("claude-code");
+    expect(cfg.model).toBe("sonnet");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Provider options structure and consistency
 // ---------------------------------------------------------------------------
 describe("Provider options structure", () => {
@@ -473,6 +605,9 @@ describe("Cross-provider model creation", () => {
     { name: "anthropic", defaultModel: "claude-opus-4-6", providerPrefix: "anthropic.messages" },
     { name: "openai", defaultModel: "gpt-5.2", providerPrefix: "openai.responses" },
     { name: "google", defaultModel: "gemini-3-flash-preview", providerPrefix: "google.generative-ai" },
+    { name: "gemini-cli", defaultModel: "gemini-3-flash-preview", providerPrefix: "gemini-cli-core" },
+    { name: "codex-cli", defaultModel: "gpt-5.2-codex", providerPrefix: "codex-cli" },
+    { name: "claude-code", defaultModel: "sonnet", providerPrefix: "claude-code" },
   ];
 
   for (const { name, defaultModel, providerPrefix } of providers) {
@@ -586,26 +721,38 @@ describe("Provider switching via config", () => {
 // Session reasoning kind per provider
 // ---------------------------------------------------------------------------
 describe("Session reasoning kind mapping", () => {
+  const reasoningKind = (provider: ProviderName) =>
+    provider === "openai" || provider === "codex-cli" ? "summary" : "reasoning";
+
   // The session.ts uses this logic:
-  //   const kind = config.provider === "openai" ? "summary" : "reasoning";
+  //   const kind =
+  //     config.provider === "openai" || config.provider === "codex-cli"
+  //       ? "summary"
+  //       : "reasoning";
   // Test the mapping directly.
 
   test("openai provider maps to 'summary' reasoning kind", () => {
-    const provider: ProviderName = "openai";
-    const kind = provider === "openai" ? "summary" : "reasoning";
-    expect(kind).toBe("summary");
+    expect(reasoningKind("openai")).toBe("summary");
   });
 
   test("anthropic provider maps to 'reasoning' kind", () => {
-    const provider: ProviderName = "anthropic";
-    const kind = provider === "openai" ? "summary" : "reasoning";
-    expect(kind).toBe("reasoning");
+    expect(reasoningKind("anthropic")).toBe("reasoning");
   });
 
   test("google provider maps to 'reasoning' kind", () => {
-    const provider: ProviderName = "google";
-    const kind = provider === "openai" ? "summary" : "reasoning";
-    expect(kind).toBe("reasoning");
+    expect(reasoningKind("google")).toBe("reasoning");
+  });
+
+  test("codex-cli provider maps to 'summary' reasoning kind", () => {
+    expect(reasoningKind("codex-cli")).toBe("summary");
+  });
+
+  test("gemini-cli provider maps to 'reasoning' kind", () => {
+    expect(reasoningKind("gemini-cli")).toBe("reasoning");
+  });
+
+  test("claude-code provider maps to 'reasoning' kind", () => {
+    expect(reasoningKind("claude-code")).toBe("reasoning");
   });
 });
 
@@ -752,6 +899,87 @@ describe("Saved API key precedence (~/.ai-coworker)", () => {
       const headers = await model.config.headers();
       expect(headers["x-api-key"]).toBe(savedKey);
     });
+  });
+
+  test("gemini-cli provider can reuse saved google key", async () => {
+    const { home } = await makeTmpDirs();
+    const savedKey = "saved-google-key";
+
+    await writeJson(path.join(home, ".ai-coworker", "config", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        google: {
+          service: "google",
+          mode: "api_key",
+          apiKey: savedKey,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const cfg = makeConfig({
+      provider: "gemini-cli",
+      model: "gemini-3-flash-preview",
+      userAgentDir: path.join(home, ".agent"),
+    });
+
+    const model = getModel(cfg) as any;
+    expect(model.providerOptions?.apiKey).toBe(savedKey);
+  });
+
+  test("codex-cli provider can reuse saved openai key", async () => {
+    const { home } = await makeTmpDirs();
+    const savedKey = "saved-openai-key";
+
+    await writeJson(path.join(home, ".ai-coworker", "config", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        openai: {
+          service: "openai",
+          mode: "api_key",
+          apiKey: savedKey,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const cfg = makeConfig({
+      provider: "codex-cli",
+      model: "gpt-5.2-codex",
+      userAgentDir: path.join(home, ".agent"),
+    });
+
+    const model = getModel(cfg) as any;
+    expect(model.settings?.env?.OPENAI_API_KEY).toBe(savedKey);
+  });
+
+  test("claude-code provider can reuse saved anthropic key", async () => {
+    const { home } = await makeTmpDirs();
+    const savedKey = "saved-anthropic-key";
+
+    await writeJson(path.join(home, ".ai-coworker", "config", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        anthropic: {
+          service: "anthropic",
+          mode: "api_key",
+          apiKey: savedKey,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const cfg = makeConfig({
+      provider: "claude-code",
+      model: "sonnet",
+      userAgentDir: path.join(home, ".agent"),
+    });
+
+    const model = getModel(cfg) as any;
+    expect(model.settings?.env?.ANTHROPIC_API_KEY).toBe(savedKey);
   });
 
   test("falls back to env key when saved entry has no api key", async () => {

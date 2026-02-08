@@ -8,7 +8,8 @@ import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-import type { TodoItem } from "../types";
+import { PROVIDER_NAMES } from "../types";
+import type { ProviderName, TodoItem } from "../types";
 import type { ClientMessage, ServerEvent } from "../server/protocol";
 
 // Keep output clean.
@@ -71,9 +72,9 @@ type Theme = {
   cursor: string;
 };
 
-type SlashCommandId = "help" | "new" | "status" | "model" | "connect" | "clear" | "exit";
+type SlashCommandId = "help" | "new" | "status" | "models" | "connect" | "clear" | "exit";
 
-type ConnectService = "openai" | "google" | "anthropic";
+type ConnectService = ProviderName;
 
 type SlashCommand = {
   id: SlashCommandId;
@@ -106,7 +107,24 @@ type ConnectionStore = {
   services: Partial<Record<ConnectService, StoredConnection>>;
 };
 
-const CONNECT_SERVICES: readonly ConnectService[] = ["openai", "google", "anthropic"];
+type ModelChoice = { provider: ConnectService; model: string };
+
+type CommandWindow = { kind: "slash" } | { kind: "help" } | { kind: "models" } | { kind: "connect" } | null;
+
+const CONNECT_SERVICES: readonly ConnectService[] = [...PROVIDER_NAMES];
+
+const MODEL_CHOICES: Record<ConnectService, readonly string[]> = {
+  google: ["gemini-3-flash-preview", "gemini-3-pro-preview"],
+  "gemini-cli": ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-pro"],
+  anthropic: ["claude-4-6-opus", "claude-4-5-sonnet", "claude-4-5-haiku"],
+  "claude-code": ["sonnet", "opus", "haiku"],
+  openai: ["gpt-5.2", "gpt-5.2-codex", "gpt-5.1", "gpt-5-mini", "gpt-5", "gpt-5.2-pro"],
+  "codex-cli": ["gpt-5.2-codex", "gpt-5.2-codex-max", "gpt-5.2-codex-mini", "gpt-5.1-codex"],
+};
+
+const ALL_MODEL_CHOICES: readonly ModelChoice[] = CONNECT_SERVICES.flatMap((provider) =>
+  MODEL_CHOICES[provider].map((model) => ({ provider, model }))
+);
 
 function getAiCoworkerPaths(): AiCoworkerPaths {
   const rootDir = path.join(os.homedir(), ".ai-coworker");
@@ -203,21 +221,27 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
     details: "Displays connection, session id, model/provider, and working directory.",
   },
   {
-    id: "model",
-    name: "model",
-    summary: "Switch the active model for this session.",
-    usage: "/model <model_id>",
-    details: "Changes the model immediately for future turns in the current session.",
-    examples: ["/model gpt-5.2", "/model gemini-3-flash-preview", "/model claude-opus-4-6"],
+    id: "models",
+    name: "models",
+    aliases: ["model"],
+    summary: "Open model picker and switch session model.",
+    usage: "/models",
+    details: "Opens a model selection window. Choose a model and press Enter to apply.",
+    examples: ["/models"],
   },
   {
     id: "connect",
     name: "connect",
     summary: "Connect a provider key (or start sign-in placeholder flow).",
-    usage: "/connect <openai|google|anthropic> [api_key]",
+    usage: `/connect <${CONNECT_SERVICES.join("|")}> [api_key]`,
     details:
       "Stores provider connection info under ~/.ai-coworker. With no key, it records a pending sign-in placeholder.",
-    examples: ["/connect openai sk-...", "/connect google", "/connect anthropic sk-ant-..."],
+    examples: [
+      "/connect openai sk-...",
+      "/connect codex-cli",
+      "/connect gemini-cli",
+      "/connect claude-code",
+    ],
   },
   {
     id: "clear",
@@ -242,6 +266,47 @@ function normalizeInputValue(v: unknown): string {
   if (typeof (v as any)?.value === "string") return String((v as any).value);
   if (v == null) return "";
   return String(v);
+}
+
+function resolveProviderForModel(modelId: string): ConnectService | null {
+  const normalized = modelId.trim();
+  if (!normalized) return null;
+  const found = ALL_MODEL_CHOICES.find((entry) => entry.model === normalized);
+  return found?.provider ?? null;
+}
+
+function asConnectService(v: string): ConnectService | null {
+  const normalized = v.trim().toLowerCase();
+  if (!normalized) return null;
+  if ((CONNECT_SERVICES as readonly string[]).includes(normalized)) return normalized as ConnectService;
+  return null;
+}
+
+function parseModelChoiceArg(raw: string, currentProvider?: string): ModelChoice | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const slashOrColon = trimmed.match(/^([a-zA-Z][a-zA-Z0-9_-]*)[/:](.+)$/);
+  if (slashOrColon) {
+    const provider = asConnectService(slashOrColon[1] ?? "");
+    const model = (slashOrColon[2] ?? "").trim();
+    if (provider && model) return { provider, model };
+  }
+
+  const parts = trimmed.split(/\s+/);
+  const maybeProvider = asConnectService(parts[0] ?? "");
+  if (maybeProvider && parts.length > 1) {
+    const model = parts.slice(1).join(" ").trim();
+    if (model) return { provider: maybeProvider, model };
+  }
+
+  const inferredProvider = resolveProviderForModel(trimmed);
+  if (inferredProvider) return { provider: inferredProvider, model: trimmed };
+
+  const fallbackProvider = asConnectService(currentProvider ?? "");
+  if (fallbackProvider) return { provider: fallbackProvider, model: trimmed };
+
+  return null;
 }
 
 function truncateUiText(s: string, maxChars: number): string {
@@ -560,6 +625,11 @@ function App(props: { serverUrl: string }) {
   const [modalFocus, setModalFocus] = useState<ModalFocus>("input");
   const [askSelectedIndex, setAskSelectedIndex] = useState<number>(0);
   const [slashSelectedIndex, setSlashSelectedIndex] = useState<number>(0);
+  const [modelsSelectedIndex, setModelsSelectedIndex] = useState<number>(0);
+  const [connectSelectedIndex, setConnectSelectedIndex] = useState<number>(0);
+  const [connectApiKeyInput, setConnectApiKeyInput] = useState<string>("");
+  const [connectFocus, setConnectFocus] = useState<"select" | "input">("select");
+  const [commandWindow, setCommandWindow] = useState<CommandWindow>(null);
   const [toolDetailId, setToolDetailId] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -575,6 +645,14 @@ function App(props: { serverUrl: string }) {
     return cwd ? `${base} (${cwd})` : base;
   }, [provider, model, cwd]);
   const aiCoworkerPaths = useMemo(() => getAiCoworkerPaths(), []);
+  const modelChoices = useMemo(() => {
+    const base = [...ALL_MODEL_CHOICES];
+    if (provider && model && !base.some((m) => m.provider === provider && m.model === model)) {
+      const p = asConnectService(provider) ?? "openai";
+      base.unshift({ provider: p, model });
+    }
+    return base;
+  }, [provider, model]);
 
   const slashQuery = useMemo(() => {
     if (mode.kind !== "chat" || toolDetailId) return null;
@@ -598,6 +676,28 @@ function App(props: { serverUrl: string }) {
   useEffect(() => {
     void ensureAiCoworkerHome(aiCoworkerPaths);
   }, [aiCoworkerPaths]);
+
+  useEffect(() => {
+    if (slashVisible) {
+      setCommandWindow((prev) => (prev && prev.kind !== "slash" ? prev : { kind: "slash" }));
+      return;
+    }
+    setCommandWindow((prev) => (prev?.kind === "slash" ? null : prev));
+  }, [slashVisible]);
+
+  useEffect(() => {
+    setSlashSelectedIndex((idx) => {
+      if (slashSuggestions.length === 0) return 0;
+      if (idx >= slashSuggestions.length) return slashSuggestions.length - 1;
+      if (idx < 0) return 0;
+      return idx;
+    });
+  }, [slashSuggestions.length]);
+
+  useEffect(() => {
+    const idx = modelChoices.findIndex((choice) => choice.provider === provider && choice.model === model);
+    setModelsSelectedIndex(idx >= 0 ? idx : 0);
+  }, [modelChoices, provider, model]);
 
   const updateSessionStateFile = async (patch: Record<string, unknown>) => {
     const p = sessionStatePathRef.current;
@@ -654,6 +754,7 @@ function App(props: { serverUrl: string }) {
   const clearComposer = () => {
     setComposer("");
     setSlashSelectedIndex(0);
+    setCommandWindow((prev) => (prev?.kind === "slash" ? null : prev));
   };
 
   const sendChat = (raw: string) => {
@@ -830,6 +931,55 @@ function App(props: { serverUrl: string }) {
     }
   };
 
+  const openModelsWindow = () => {
+    const idx = modelChoices.findIndex((choice) => choice.provider === provider && choice.model === model);
+    setModelsSelectedIndex(idx >= 0 ? idx : 0);
+    setCommandWindow({ kind: "models" });
+  };
+
+  const openConnectWindow = (serviceHint?: string, apiKeyHint?: string) => {
+    const hint = (serviceHint ?? "").toLowerCase();
+    const idx = CONNECT_SERVICES.findIndex((s) => s === hint);
+    setConnectSelectedIndex(idx >= 0 ? idx : 0);
+    setConnectApiKeyInput(apiKeyHint ?? "");
+    setConnectFocus("select");
+    setCommandWindow({ kind: "connect" });
+  };
+
+  const applyModelSelection = (selection: ModelChoice) => {
+    const sid = sessionIdRef.current;
+    if (!sid) {
+      appendFeed({ id: nextFeedId(), type: "system", line: "not connected: cannot switch model yet" });
+      return;
+    }
+
+    const ok = send({
+      type: "set_model",
+      sessionId: sid,
+      provider: selection.provider,
+      model: selection.model,
+    });
+    if (!ok) {
+      appendFeed({ id: nextFeedId(), type: "system", line: "failed to send model switch request" });
+      return;
+    }
+
+    appendFeed({
+      id: nextFeedId(),
+      type: "system",
+      line: `switching model -> ${selection.provider}/${selection.model}`,
+    });
+  };
+
+  const submitConnectSelection = () => {
+    const service = CONNECT_SERVICES[connectSelectedIndex] ?? CONNECT_SERVICES[0];
+    const args = connectApiKeyInput.trim() ? `${service} ${connectApiKeyInput.trim()}` : service;
+    void handleConnectCommand(args);
+    setCommandWindow(null);
+    setConnectApiKeyInput("");
+    setConnectFocus("select");
+  };
+
   const executeSlashCommand = (raw: string, fallback?: SlashCommand | null) => {
     const trimmed = raw.trim();
     if (!trimmed.startsWith("/")) return false;
@@ -860,7 +1010,7 @@ function App(props: { serverUrl: string }) {
 
     switch (cmd.id) {
       case "help":
-        appendFeed({ id: nextFeedId(), type: "message", role: "assistant", text: renderSlashHelp() });
+        setCommandWindow({ kind: "help" });
         return true;
       case "new":
         resetConversation();
@@ -882,47 +1032,28 @@ function App(props: { serverUrl: string }) {
           ].join("\n"),
         });
         return true;
-      case "model": {
-        if (!args) {
-          appendFeed({
-            id: nextFeedId(),
-            type: "message",
-            role: "assistant",
-            text: [
-              "### Model Selection",
-              "",
-              `Current model: \`${model || "n/a"}\``,
-              "",
-              "Usage:",
-              "- `/model <model_id>`",
-              "",
-              "Examples:",
-              "- `/model gpt-5.2`",
-              "- `/model gemini-3-flash-preview`",
-              "- `/model claude-opus-4-6`",
-            ].join("\n"),
-          });
+      case "models":
+        if (args) {
+          const parsedChoice = parseModelChoiceArg(args, provider);
+          if (!parsedChoice) {
+            appendFeed({
+              id: nextFeedId(),
+              type: "system",
+              line: `invalid model selection: "${args}". Use /models and pick from the list.`,
+            });
+            return true;
+          }
+          applyModelSelection(parsedChoice);
           return true;
         }
-
-        const sid = sessionIdRef.current;
-        if (!sid) {
-          appendFeed({ id: nextFeedId(), type: "system", line: "not connected: cannot switch model yet" });
-          return true;
-        }
-
-        const ok = send({ type: "set_model", sessionId: sid, model: args });
-        if (!ok) {
-          appendFeed({ id: nextFeedId(), type: "system", line: "failed to send model switch request" });
-          return true;
-        }
-
-        appendFeed({ id: nextFeedId(), type: "system", line: `switching model -> ${args}` });
+        openModelsWindow();
+        return true;
+      case "connect": {
+        const [serviceHint, ...rest] = args.split(/\s+/).filter(Boolean);
+        const keyHint = rest.join(" ").trim();
+        openConnectWindow(serviceHint, keyHint || "");
         return true;
       }
-      case "connect":
-        void handleConnectCommand(args);
-        return true;
       case "clear":
         clearComposer();
         return true;
@@ -989,56 +1120,43 @@ function App(props: { serverUrl: string }) {
     setSlashSelectedIndex(0);
   }, [slashQuery]);
 
-  useEffect(() => {
-    setSlashSelectedIndex((idx) => {
-      if (slashSuggestions.length === 0) return 0;
-      if (idx >= slashSuggestions.length) return slashSuggestions.length - 1;
-      if (idx < 0) return 0;
-      return idx;
-    });
-  }, [slashSuggestions.length]);
-
   useKeyboard((key) => {
     if (key.eventType !== "press") return;
-
-    const slashOpen = slashVisible && slashSuggestions.length > 0;
 
     if (key.name === "escape") {
       if (toolDetailId) {
         setToolDetailId(null);
         return;
       }
+      if (commandWindow) {
+        if (commandWindow.kind === "slash") clearComposer();
+        else setCommandWindow(null);
+        return;
+      }
       renderer.destroy();
       return;
     }
+
     if (key.ctrl && key.name === "c") {
+      if (commandWindow?.kind === "connect" && connectFocus === "input") {
+        setConnectApiKeyInput("");
+        return;
+      }
       if (mode.kind === "chat") clearComposer();
       if (mode.kind === "ask") setResponseInput("");
       return;
     }
 
-    if (slashOpen && key.name === "up") {
-      setSlashSelectedIndex((i) => {
-        const max = slashSuggestions.length - 1;
-        if (max < 0) return 0;
-        return i <= 0 ? max : i - 1;
-      });
-      return;
-    }
-
-    if (slashOpen && key.name === "down") {
-      setSlashSelectedIndex((i) => {
-        const max = slashSuggestions.length - 1;
-        if (max < 0) return 0;
-        return i >= max ? 0 : i + 1;
-      });
-      return;
-    }
-
     if (key.name === "tab") {
-      if (slashOpen) {
+      if (commandWindow?.kind === "slash") {
         const selected = slashSuggestions[slashSelectedIndex] ?? slashSuggestions[0];
-        if (selected) setComposer(`/${selected.name} `);
+        if (selected) setComposer(`/${selected.name}`);
+        setCommandWindow(null);
+        return;
+      }
+
+      if (commandWindow?.kind === "connect") {
+        setConnectFocus((f) => (f === "select" ? "input" : "select"));
         return;
       }
 
@@ -1065,6 +1183,7 @@ function App(props: { serverUrl: string }) {
       setConnected(false);
       setMode({ kind: "chat" });
       setToolDetailId(null);
+      setCommandWindow(null);
       appendSessionLog("websocket closed");
       if (closedSessionId) {
         void updateSessionStateFile({
@@ -1479,78 +1598,271 @@ function App(props: { serverUrl: string }) {
           textColor={theme.text}
           cursorColor={theme.cursor}
           placeholderColor={theme.muted}
-          focused={mode.kind === "chat" && !toolDetailId}
+          focused={mode.kind === "chat" && !toolDetailId && !commandWindow}
         />
 
-        {slashVisible ? (
-          <box
-            border
-            borderStyle="single"
-            borderColor={theme.borderDim}
-            backgroundColor={theme.inputBg}
-            padding={1}
-            flexDirection="column"
-            gap={1}
-          >
-            <text fg={theme.muted}>
-              <strong>slash commands</strong> Up/down: navigate. Tab: autocomplete. Enter: run.
-            </text>
-
-            {slashSuggestions.length > 0 ? (
-              <box flexDirection="column" gap={0}>
-                {slashSuggestions.slice(0, 8).map((cmd, idx) => {
-                  const selected = idx === slashSelectedIndex;
-                  return (
-                    <box
-                      key={cmd.id}
-                      paddingLeft={1}
-                      paddingRight={1}
-                      backgroundColor={selected ? theme.borderDim : theme.inputBg}
-                    >
-                      <text fg={selected ? theme.text : theme.muted}>
-                        <strong>/{cmd.name}</strong> {cmd.summary}
-                      </text>
-                    </box>
-                  );
-                })}
-              </box>
-            ) : (
-              <text fg={theme.danger}>
-                No slash command matches <strong>/{slashQuery ?? ""}</strong>.
-              </text>
-            )}
-
-            {selectedSlashCommand ? (
-              <box
-                border
-                borderStyle="single"
-                borderColor={theme.borderDim}
-                backgroundColor={theme.panelBg}
-                padding={1}
-                flexDirection="column"
-                gap={0}
-              >
-                <text fg={theme.warn}>
-                  <strong>{selectedSlashCommand.usage}</strong>
-                </text>
-                <text fg={theme.text}>{selectedSlashCommand.details}</text>
-                {selectedSlashCommand.aliases && selectedSlashCommand.aliases.length > 0 ? (
-                  <text fg={theme.muted}>
-                    aliases: {selectedSlashCommand.aliases.map((a) => `/${a}`).join(", ")}
-                  </text>
-                ) : null}
-                {selectedSlashCommand.examples && selectedSlashCommand.examples.length > 0 ? (
-                  <text fg={theme.muted}>
-                    examples: {selectedSlashCommand.examples.map((x) => `\`${x}\``).join("  ")}
-                  </text>
-                ) : null}
-              </box>
-            ) : null}
-          </box>
-        ) : null}
+        {slashVisible ? <text fg={theme.muted}>Slash command window is open. Use arrows + Enter.</text> : null}
       </box>
 
       <text fg={theme.muted}>Esc: quit. Ctrl+C: clear input. Server: {props.serverUrl}</text>
+
+      {commandWindow?.kind === "slash" ? (
+        <box
+          position="absolute"
+          left={0}
+          top={0}
+          width="100%"
+          height="100%"
+          zIndex={85}
+          justifyContent="center"
+          alignItems="center"
+          backgroundColor={theme.appBg}
+        >
+          <box
+            border
+            borderStyle="double"
+            borderColor={theme.border}
+            backgroundColor={theme.panelBg}
+            padding={2}
+            flexDirection="column"
+            gap={1}
+            width="88%"
+            height="72%"
+          >
+            <text fg={theme.warn}>
+              <strong>Slash Commands</strong>
+            </text>
+
+            {slashSuggestions.length > 0 ? (
+              <>
+                <select
+                  options={slashSuggestions.map((cmd) => ({
+                    name: `/${cmd.name}`,
+                    description: cmd.summary,
+                    value: cmd.name,
+                  }))}
+                  selectedIndex={slashSelectedIndex}
+                  onChange={(i) => setSlashSelectedIndex(i)}
+                  onSelect={(_, opt) => {
+                    if (!opt) return;
+                    const cmdName = String((opt as any).value ?? opt.name ?? "").replace(/^\//, "");
+                    if (!cmdName) return;
+                    const handled = executeSlashCommand(`/${cmdName}`);
+                    if (handled) clearComposer();
+                  }}
+                  width="100%"
+                  height={Math.min(14, Math.max(6, slashSuggestions.length + 2))}
+                  showDescription
+                  showScrollIndicator
+                  wrapSelection
+                  backgroundColor={theme.panelBg}
+                  focusedBackgroundColor={theme.inputBgFocus}
+                  textColor={theme.text}
+                  focusedTextColor={theme.text}
+                  selectedBackgroundColor={theme.borderDim}
+                  selectedTextColor={theme.text}
+                  focused
+                />
+
+                {selectedSlashCommand ? (
+                  <box
+                    border
+                    borderStyle="single"
+                    borderColor={theme.borderDim}
+                    backgroundColor={theme.inputBg}
+                    padding={1}
+                    flexDirection="column"
+                    gap={0}
+                  >
+                    <text fg={theme.warn}>
+                      <strong>{selectedSlashCommand.usage}</strong>
+                    </text>
+                    <text fg={theme.text}>{selectedSlashCommand.details}</text>
+                    {selectedSlashCommand.examples && selectedSlashCommand.examples.length > 0 ? (
+                      <text fg={theme.muted}>
+                        examples: {selectedSlashCommand.examples.map((x) => `\`${x}\``).join("  ")}
+                      </text>
+                    ) : null}
+                  </box>
+                ) : null}
+              </>
+            ) : (
+              <text fg={theme.danger}>No slash command matches /{slashQuery ?? ""}</text>
+            )}
+
+            <text fg={theme.muted}>Up/down to scroll, Enter to open, Esc to close.</text>
+          </box>
+        </box>
+      ) : null}
+
+      {commandWindow?.kind === "help" ? (
+        <box
+          position="absolute"
+          left={0}
+          top={0}
+          width="100%"
+          height="100%"
+          zIndex={86}
+          justifyContent="center"
+          alignItems="center"
+          backgroundColor={theme.appBg}
+        >
+          <box
+            border
+            borderStyle="double"
+            borderColor={theme.warn}
+            backgroundColor={theme.panelBg}
+            padding={2}
+            flexDirection="column"
+            gap={1}
+            width="90%"
+            height="80%"
+          >
+            <text fg={theme.warn}>
+              <strong>Help</strong>
+            </text>
+
+            <scrollbox flexGrow={1} focused style={{ rootOptions: { backgroundColor: theme.panelBg } }}>
+              <Markdown markdown={renderSlashHelp()} theme={theme} maxChars={20_000} />
+            </scrollbox>
+
+            <text fg={theme.muted}>Esc to close.</text>
+          </box>
+        </box>
+      ) : null}
+
+      {commandWindow?.kind === "models" ? (
+        <box
+          position="absolute"
+          left={0}
+          top={0}
+          width="100%"
+          height="100%"
+          zIndex={87}
+          justifyContent="center"
+          alignItems="center"
+          backgroundColor={theme.appBg}
+        >
+          <box
+            border
+            borderStyle="double"
+            borderColor={theme.warn}
+            backgroundColor={theme.panelBg}
+            padding={2}
+            flexDirection="column"
+            gap={1}
+            width="88%"
+            height="72%"
+          >
+            <text fg={theme.warn}>
+              <strong>Model Picker</strong>{" "}
+              <span fg={theme.muted}>({provider && model ? `${provider}/${model}` : "no active model"})</span>
+            </text>
+
+            <select
+              options={modelChoices.map((choice) => ({
+                name: `${choice.provider} / ${choice.model}`,
+                description:
+                  choice.provider === provider && choice.model === model
+                    ? "current"
+                    : `switch to ${choice.provider}/${choice.model}`,
+                value: `${choice.provider}:${choice.model}`,
+              }))}
+              selectedIndex={modelsSelectedIndex}
+              onChange={(i) => setModelsSelectedIndex(i)}
+              onSelect={(i) => {
+                const chosen = modelChoices[i];
+                if (!chosen) return;
+                applyModelSelection(chosen);
+                setCommandWindow(null);
+                clearComposer();
+              }}
+              width="100%"
+              height={Math.min(16, Math.max(6, modelChoices.length + 2))}
+              showDescription
+              showScrollIndicator
+              wrapSelection
+              backgroundColor={theme.panelBg}
+              focusedBackgroundColor={theme.inputBgFocus}
+              textColor={theme.text}
+              focusedTextColor={theme.text}
+              selectedBackgroundColor={theme.borderDim}
+              selectedTextColor={theme.text}
+              focused
+            />
+
+            <text fg={theme.muted}>Up/down to scroll models, Enter to switch, Esc to close.</text>
+          </box>
+        </box>
+      ) : null}
+
+      {commandWindow?.kind === "connect" ? (
+        <box
+          position="absolute"
+          left={0}
+          top={0}
+          width="100%"
+          height="100%"
+          zIndex={88}
+          justifyContent="center"
+          alignItems="center"
+          backgroundColor={theme.appBg}
+        >
+          <box
+            border
+            borderStyle="double"
+            borderColor={theme.warn}
+            backgroundColor={theme.panelBg}
+            padding={2}
+            flexDirection="column"
+            gap={1}
+            width="88%"
+          >
+            <text fg={theme.warn}>
+              <strong>Connect Provider</strong>
+            </text>
+
+            <select
+              options={CONNECT_SERVICES.map((service) => ({
+                name: service,
+                description: `save ${service} key or sign-in placeholder`,
+                value: service,
+              }))}
+              selectedIndex={connectSelectedIndex}
+              onChange={(i) => setConnectSelectedIndex(i)}
+              onSelect={() => submitConnectSelection()}
+              width="100%"
+              height={Math.max(4, CONNECT_SERVICES.length + 2)}
+              showDescription
+              showScrollIndicator
+              wrapSelection
+              backgroundColor={theme.panelBg}
+              focusedBackgroundColor={theme.inputBgFocus}
+              textColor={theme.text}
+              focusedTextColor={theme.text}
+              selectedBackgroundColor={theme.borderDim}
+              selectedTextColor={theme.text}
+              focused={connectFocus === "select"}
+            />
+
+            <input
+              value={connectApiKeyInput}
+              onChange={(v) => setConnectApiKeyInput(normalizeInputValue(v))}
+              onSubmit={() => submitConnectSelection()}
+              width="100%"
+              placeholder="Optional API key (leave blank for sign-in placeholder)"
+              backgroundColor={theme.inputBg}
+              focusedBackgroundColor={theme.inputBgFocus}
+              textColor={theme.text}
+              cursorColor={theme.cursor}
+              placeholderColor={theme.muted}
+              focused={connectFocus === "input"}
+            />
+
+            <text fg={theme.muted}>Tab switches field. Enter saves selected provider. Esc closes.</text>
+          </box>
+        </box>
+      ) : null}
 
       {toolDetail ? (
         <box

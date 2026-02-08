@@ -171,15 +171,49 @@ describe("safeParseClientMessage", () => {
         JSON.stringify({
           type: "set_model",
           sessionId: "s1",
+          provider: "openai",
           model: "gpt-5.2",
         }),
       );
       expect(msg.type).toBe("set_model");
       if (msg.type === "set_model") {
         expect(msg.sessionId).toBe("s1");
+        expect(msg.provider).toBe("openai");
         expect(msg.model).toBe("gpt-5.2");
       }
     });
+
+    test("set_model parses without provider", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_model",
+          sessionId: "s1",
+          model: "claude-4-5-sonnet",
+        }),
+      );
+      if (msg.type === "set_model") {
+        expect(msg.provider).toBeUndefined();
+        expect(msg.model).toBe("claude-4-5-sonnet");
+      }
+    });
+
+    test.each(["gemini-cli", "codex-cli", "claude-code"])(
+      "set_model accepts %s provider",
+      (provider) => {
+        const msg = expectOk(
+          JSON.stringify({
+            type: "set_model",
+            sessionId: "s1",
+            provider,
+            model: "test-model",
+          })
+        );
+        if (msg.type === "set_model") {
+          expect(msg.provider).toBe(provider);
+          expect(msg.model).toBe("test-model");
+        }
+      }
+    );
 
     test("set_model with empty model still parses", () => {
       const msg = expectOk(
@@ -192,6 +226,18 @@ describe("safeParseClientMessage", () => {
       if (msg.type === "set_model") {
         expect(msg.model).toBe("");
       }
+    });
+
+    test("set_model with invalid provider fails", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "set_model",
+          sessionId: "s1",
+          provider: "not-real",
+          model: "gpt-5.2",
+        }),
+      );
+      expect(err).toContain("set_model invalid provider");
     });
   });
 

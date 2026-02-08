@@ -1,3 +1,4 @@
+import { isProviderName } from "../types";
 import type { AgentConfig, TodoItem } from "../types";
 
 export type ClientMessage =
@@ -5,7 +6,7 @@ export type ClientMessage =
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
   | { type: "ask_response"; sessionId: string; requestId: string; answer: string }
   | { type: "approval_response"; sessionId: string; requestId: string; approved: boolean }
-  | { type: "set_model"; sessionId: string; model: string }
+  | { type: "set_model"; sessionId: string; model: string; provider?: AgentConfig["provider"] }
   | { type: "reset"; sessionId: string };
 
 export type ServerEvent =
@@ -52,9 +53,16 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
     case "user_message":
     case "ask_response":
     case "approval_response":
-    case "set_model":
     case "reset":
       return { ok: true, msg: obj };
+    case "set_model": {
+      if (typeof obj.sessionId !== "string") return { ok: false, error: "set_model missing sessionId" };
+      if (typeof obj.model !== "string") return { ok: false, error: "set_model missing model" };
+      if (obj.provider !== undefined && !isProviderName(obj.provider)) {
+        return { ok: false, error: `set_model invalid provider: ${String(obj.provider)}` };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
     default:
       return { ok: false, error: `Unknown type: ${String(obj.type)}` };
   }

@@ -217,6 +217,21 @@ describe("AgentSession", () => {
       }
     });
 
+    test("updates provider when provider is supplied", async () => {
+      const { session, events } = makeSession();
+      await session.setModel("claude-4-5-sonnet", "anthropic");
+
+      expect(session.getPublicConfig().provider).toBe("anthropic");
+      expect(session.getPublicConfig().model).toBe("claude-4-5-sonnet");
+
+      const evt = events.find((e) => e.type === "config_updated");
+      expect(evt).toBeDefined();
+      if (evt && evt.type === "config_updated") {
+        expect(evt.config.provider).toBe("anthropic");
+        expect(evt.config.model).toBe("claude-4-5-sonnet");
+      }
+    });
+
     test("empty model emits error and does not change model", async () => {
       const { session, events } = makeSession();
       const before = session.getPublicConfig().model;
@@ -228,6 +243,20 @@ describe("AgentSession", () => {
       expect(err).toBeDefined();
       if (err && err.type === "error") {
         expect(err.message).toContain("Model id is required");
+      }
+    });
+
+    test("unsupported provider emits error and does not change config", async () => {
+      const { session, events } = makeSession();
+      const before = session.getPublicConfig();
+
+      await session.setModel("gpt-5.2", "invalid-provider" as any);
+
+      expect(session.getPublicConfig()).toEqual(before);
+      const err = events.find((e) => e.type === "error");
+      expect(err).toBeDefined();
+      if (err && err.type === "error") {
+        expect(err.message).toContain("Unsupported provider");
       }
     });
   });
@@ -834,6 +863,23 @@ describe("AgentSession", () => {
 
       const dir = "/tmp/test-session";
       const config = { ...makeConfig(dir), provider: "openai" as const };
+      const { session, events } = makeSession({ config });
+      await session.sendUserMessage("go");
+
+      const reasoningEvt = events.find((e) => e.type === "reasoning") as any;
+      expect(reasoningEvt).toBeDefined();
+      expect(reasoningEvt.kind).toBe("summary");
+    });
+
+    test('uses "summary" kind for codex-cli provider', async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "answer",
+        reasoningText: "my reasoning",
+        responseMessages: [],
+      }));
+
+      const dir = "/tmp/test-session";
+      const config = { ...makeConfig(dir), provider: "codex-cli" as const };
       const { session, events } = makeSession({ config });
       await session.sendUserMessage("go");
 

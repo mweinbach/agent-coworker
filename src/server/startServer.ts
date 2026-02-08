@@ -121,7 +121,7 @@ export async function startAgentServer(
           }
 
           if (msg.type === "set_model") {
-            void session.setModel(msg.model);
+            void session.setModel(msg.model, msg.provider);
             return;
           }
 

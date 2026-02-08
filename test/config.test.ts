@@ -675,12 +675,24 @@ describe("defaultModelForProvider", () => {
     expect(defaultModelForProvider("google")).toBe("gemini-3-flash-preview");
   });
 
+  test("returns correct default for gemini-cli", () => {
+    expect(defaultModelForProvider("gemini-cli")).toBe("gemini-3-flash-preview");
+  });
+
   test("returns correct default for openai", () => {
     expect(defaultModelForProvider("openai")).toBe("gpt-5.2");
   });
 
+  test("returns correct default for codex-cli", () => {
+    expect(defaultModelForProvider("codex-cli")).toBe("gpt-5.2-codex");
+  });
+
   test("returns correct default for anthropic", () => {
     expect(defaultModelForProvider("anthropic")).toBe("claude-opus-4-6");
+  });
+
+  test("returns correct default for claude-code", () => {
+    expect(defaultModelForProvider("claude-code")).toBe("sonnet");
   });
 });
 

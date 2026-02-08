@@ -2,16 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 
-import type { ModelMessage } from "ai";
-
-import { connectProvider as connectModelProvider, getAiCoworkerPaths, isOauthCliProvider, readConnectionStore } from "../connect";
-import { loadConfig, defaultModelForProvider } from "../config";
-import { runTurn } from "../agent";
-import { loadSystemPrompt } from "../prompt";
-import { approveCommand } from "../utils/approval";
-import { createTools } from "../tools";
-import { currentTodos, onTodoChange } from "../tools/todoWrite";
+import { getAiCoworkerPaths, isOauthCliProvider, readConnectionStore } from "../connect";
+import { defaultModelForProvider } from "../config";
+import { startAgentServer } from "../server/startServer";
+import type { ClientMessage, ServerEvent } from "../server/protocol";
 import { isProviderName, PROVIDER_NAMES } from "../types";
+import type { AgentConfig, TodoItem } from "../types";
 
 // Keep CLI output clean by default.
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
@@ -19,19 +15,12 @@ import { isProviderName, PROVIDER_NAMES } from "../types";
 const UI_DISABLED_PROVIDERS = new Set<string>(["gemini-cli"]);
 const UI_PROVIDER_NAMES = PROVIDER_NAMES.filter((name) => !UI_DISABLED_PROVIDERS.has(name));
 
-function createQuestion(rl: readline.Interface) {
-  return (q: string) =>
-    new Promise<string | null>((resolve) => {
-      if ((rl as any).closed) return resolve(null);
-      try {
-        rl.question(q, (answer) => resolve(answer));
-      } catch {
-        resolve(null);
-      }
-    });
-}
+type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
 
-function renderTodos(todos: typeof currentTodos) {
+type AskPrompt = { requestId: string; question: string; options?: string[] };
+type ApprovalPrompt = { requestId: string; command: string; dangerous: boolean };
+
+function renderTodos(todos: TodoItem[]) {
   if (todos.length === 0) return;
 
   console.log("\n--- Progress ---");
@@ -57,61 +46,70 @@ async function resolveAndValidateDir(dirArg: string): Promise<string> {
   return resolved;
 }
 
+function resolveAskAnswer(raw: string, options?: string[]) {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const asNum = Number(trimmed);
+  if (options && options.length > 0 && Number.isInteger(asNum) && asNum >= 1 && asNum <= options.length) {
+    return options[asNum - 1];
+  }
+  return trimmed;
+}
+
+function normalizeApprovalAnswer(raw: string): boolean {
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed) return false;
+  if (["y", "yes", "approve", "approved"].includes(trimmed)) return true;
+  if (["n", "no", "deny", "denied"].includes(trimmed)) return false;
+  return false;
+}
+
 export async function runCliRepl(
   opts: { dir?: string; providerOptions?: Record<string, any>; yolo?: boolean } = {}
 ) {
-  let config: Awaited<ReturnType<typeof loadConfig>>;
-  if (opts.dir) {
-    const dir = await resolveAndValidateDir(opts.dir);
-    process.chdir(dir);
-    config = await loadConfig({ cwd: dir, env: { ...process.env, AGENT_WORKING_DIR: dir } });
-  } else {
-    config = await loadConfig();
-  }
-  if (opts.providerOptions) config.providerOptions = opts.providerOptions;
+  const initialDir = opts.dir ? await resolveAndValidateDir(opts.dir) : process.cwd();
+  if (opts.dir) process.chdir(initialDir);
 
-  await fs.mkdir(config.projectAgentDir, { recursive: true });
-  await fs.mkdir(config.outputDirectory, { recursive: true });
-  await fs.mkdir(config.uploadsDirectory, { recursive: true });
-
-  let system = await loadSystemPrompt(config);
-
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const question = createQuestion(rl);
-  const yolo = opts.yolo === true;
-
-  onTodoChange(renderTodos);
-
-  const log = (line: string) => console.log(line);
-
-  const askUser = async (q: string, options?: string[]) => {
-    console.log(`\n${q}`);
-    if (options && options.length > 0) {
-      for (let i = 0; i < options.length; i++) {
-        console.log(`  ${i + 1}. ${options[i]}`);
-      }
-    }
-
-    const ansRaw = await question("answer> ");
-    const ans = (ansRaw ?? "").trim();
-    const asNum = Number(ans);
-    if (options && options.length > 0 && Number.isInteger(asNum) && asNum >= 1 && asNum <= options.length) {
-      return options[asNum - 1];
-    }
-    return ans;
+  const startServerForDir = async (cwd: string) => {
+    return await startAgentServer({
+      cwd,
+      hostname: "127.0.0.1",
+      port: 0,
+      providerOptions: opts.providerOptions,
+      yolo: opts.yolo,
+    });
   };
 
-  const approve = yolo
-    ? async (_command: string) => true
-    : async (command: string) => approveCommand(command, async (msg) => (await question(msg)) ?? "");
+  let serverInfo = await startServerForDir(initialDir);
+  let server = serverInfo.server;
+  let serverUrl = serverInfo.url;
+  let serverStopping = false;
 
-  console.log("Cowork agent (CLI)");
-  console.log(`provider=${config.provider} model=${config.model}`);
-  console.log(`cwd=${config.workingDirectory}`);
-  if (yolo) console.log("YOLO mode enabled: command approvals are bypassed.");
-  console.log("Type /help for commands. Use /connect to store keys or run OAuth sign-in.\n");
+  const stopServer = () => {
+    if (serverStopping) return;
+    serverStopping = true;
+    try {
+      server.stop();
+    } catch {
+      // ignore
+    }
+  };
 
-  let messages: ModelMessage[] = [];
+  let ws: WebSocket | null = null;
+  let sessionId: string | null = null;
+  let config: PublicConfig | null = null;
+
+  let pendingAsk: AskPrompt[] = [];
+  let pendingApproval: ApprovalPrompt[] = [];
+  let promptMode: "user" | "ask" | "approval" = "user";
+  let activeAsk: AskPrompt | null = null;
+  let activeApproval: ApprovalPrompt | null = null;
+
+  const send = (msg: ClientMessage) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify(msg));
+    return true;
+  };
 
   const printHelp = () => {
     console.log("\nCommands:");
@@ -126,180 +124,380 @@ export async function runCliRepl(
     console.log("  note: gemini-cli is temporarily disabled in the UI.");
   };
 
-  while (true) {
-    const lineRaw = await question("you> ");
-    if (lineRaw === null) break;
-    const line = lineRaw.trim();
-    if (!line) continue;
+  const showConnectStatus = async () => {
+    const paths = getAiCoworkerPaths();
+    const store = await readConnectionStore(paths);
+    console.log("\nConnections:");
+    console.log(`  file=${paths.connectionsFile}`);
+    for (const service of UI_PROVIDER_NAMES) {
+      const entry = store.services[service];
+      if (!entry) {
+        console.log(`  - ${service}: not connected`);
+        continue;
+      }
+      if (entry.mode === "api_key") {
+        console.log(`  - ${service}: api key saved`);
+        continue;
+      }
+      if (entry.mode === "oauth") {
+        console.log(`  - ${service}: oauth connected`);
+        continue;
+      }
+      console.log(`  - ${service}: pending`);
+    }
+    console.log("");
+  };
+
+  const activateNextPrompt = (rl: readline.Interface) => {
+    if (pendingApproval.length > 0) {
+      activeApproval = pendingApproval.shift() ?? null;
+      activeAsk = null;
+      promptMode = "approval";
+      if (activeApproval) {
+        console.log(`\nApproval requested: ${activeApproval.command}`);
+        console.log(activeApproval.dangerous ? "Dangerous command." : "Standard command.");
+      }
+      rl.setPrompt("approve (y/n)> ");
+      rl.prompt();
+      return;
+    }
+
+    if (pendingAsk.length > 0) {
+      activeAsk = pendingAsk.shift() ?? null;
+      activeApproval = null;
+      promptMode = "ask";
+      if (activeAsk) {
+        console.log(`\n${activeAsk.question}`);
+        if (activeAsk.options && activeAsk.options.length > 0) {
+          for (let i = 0; i < activeAsk.options.length; i++) {
+            console.log(`  ${i + 1}. ${activeAsk.options[i]}`);
+          }
+        }
+      }
+      rl.setPrompt("answer> ");
+      rl.prompt();
+      return;
+    }
+
+    activeAsk = null;
+    activeApproval = null;
+    promptMode = "user";
+    rl.setPrompt("you> ");
+    rl.prompt();
+  };
+
+  const handleServerEvent = (evt: ServerEvent, rl: readline.Interface) => {
+    if (evt.type === "server_hello") {
+      sessionId = evt.sessionId;
+      config = evt.config;
+      console.log(`connected: ${evt.sessionId}`);
+      console.log(`provider=${evt.config.provider} model=${evt.config.model}`);
+      console.log(`cwd=${evt.config.workingDirectory}`);
+      return;
+    }
+
+    if (!sessionId || evt.sessionId !== sessionId) return;
+
+    switch (evt.type) {
+      case "assistant_message": {
+        const out = evt.text.trim();
+        if (out) console.log(`\n${out}\n`);
+        break;
+      }
+      case "reasoning":
+        console.log(`\n[${evt.kind}] ${evt.text}\n`);
+        break;
+      case "log":
+        console.log(`[log] ${evt.line}`);
+        break;
+      case "todos":
+        renderTodos(evt.todos);
+        break;
+      case "ask":
+        pendingAsk.push({ requestId: evt.requestId, question: evt.question, options: evt.options });
+        activateNextPrompt(rl);
+        break;
+      case "approval":
+        pendingApproval.push({ requestId: evt.requestId, command: evt.command, dangerous: evt.dangerous });
+        activateNextPrompt(rl);
+        break;
+      case "config_updated":
+        config = evt.config;
+        console.log(`config updated: ${evt.config.provider}/${evt.config.model}`);
+        break;
+      case "tools":
+        console.log(`\nTools:\n${evt.tools.map((t) => `  - ${t}`).join("\n")}\n`);
+        break;
+      case "error":
+        console.error(`\nError: ${evt.message}\n`);
+        break;
+      default:
+        break;
+    }
+  };
+
+  const connectToServer = async (url: string, rl: readline.Interface) => {
+    if (ws) {
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+    }
+
+    sessionId = null;
+    config = null;
+
+    await new Promise<void>((resolve, reject) => {
+      const socket = new WebSocket(url);
+      ws = socket;
+      let ready = false;
+
+      const onReady = (evt: ServerEvent) => {
+        if (evt.type === "server_hello") {
+          handleServerEvent(evt, rl);
+          ready = true;
+          resolve();
+        }
+      };
+
+      socket.onopen = () => {
+        const hello: ClientMessage = { type: "client_hello", client: "cli", version: "0.1.0" };
+        socket.send(JSON.stringify(hello));
+      };
+
+      socket.onerror = () => {
+        reject(new Error(`Failed to connect to ${url}`));
+      };
+
+      socket.onmessage = (ev) => {
+        let parsed: ServerEvent;
+        try {
+          parsed = JSON.parse(String(ev.data));
+        } catch {
+          console.error(`bad event: ${String(ev.data)}`);
+          return;
+        }
+        onReady(parsed);
+        if (parsed.type !== "server_hello") handleServerEvent(parsed, rl);
+      };
+
+      socket.onclose = () => {
+        if (!ready) {
+          reject(new Error(`WebSocket closed before handshake: ${url}`));
+          return;
+        }
+        if (!serverStopping) console.log("websocket closed");
+      };
+    });
+  };
+
+  const restartServer = async (cwd: string, rl: readline.Interface) => {
+    serverStopping = true;
+    try {
+      server.stop();
+    } catch {
+      // ignore
+    }
+    serverInfo = await startServerForDir(cwd);
+    server = serverInfo.server;
+    serverUrl = serverInfo.url;
+    await connectToServer(serverUrl, rl);
+    serverStopping = false;
+    pendingAsk = [];
+    pendingApproval = [];
+    activateNextPrompt(rl);
+  };
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  rl.on("SIGINT", () => {
+    rl.close();
+  });
+
+  await connectToServer(serverUrl, rl);
+
+  console.log("Cowork agent (CLI)");
+  if (opts.yolo) console.log("YOLO mode enabled: command approvals are bypassed.");
+  console.log("Type /help for commands. Use /connect to store keys or run OAuth.\n");
+
+  activateNextPrompt(rl);
+
+  rl.on("line", async (input) => {
+    const line = input.trim();
+
+    if (promptMode === "ask") {
+      if (!activeAsk || !sessionId) {
+        activateNextPrompt(rl);
+        return;
+      }
+      const answer = resolveAskAnswer(line, activeAsk.options);
+      send({ type: "ask_response", sessionId, requestId: activeAsk.requestId, answer });
+      activateNextPrompt(rl);
+      return;
+    }
+
+    if (promptMode === "approval") {
+      if (!activeApproval || !sessionId) {
+        activateNextPrompt(rl);
+        return;
+      }
+      const approved = normalizeApprovalAnswer(line);
+      send({ type: "approval_response", sessionId, requestId: activeApproval.requestId, approved });
+      activateNextPrompt(rl);
+      return;
+    }
+
+    if (!line) {
+      activateNextPrompt(rl);
+      return;
+    }
 
     if (line.startsWith("/")) {
       const [cmd, ...rest] = line.slice(1).split(/\s+/);
 
       if (cmd === "help") {
         printHelp();
-        continue;
+        activateNextPrompt(rl);
+        return;
       }
 
       if (cmd === "exit") {
-        break;
+        rl.close();
+        return;
       }
 
       if (cmd === "new") {
-        messages = [];
+        if (sessionId) send({ type: "reset", sessionId });
         console.log("(cleared)\n");
-        continue;
+        activateNextPrompt(rl);
+        return;
       }
 
       if (cmd === "model") {
         const id = rest.join(" ").trim();
         if (!id) {
           console.log("usage: /model <id>");
-          continue;
+          activateNextPrompt(rl);
+          return;
         }
-        config = { ...config, model: id };
-        system = await loadSystemPrompt(config);
-        console.log(`model set to ${id}`);
-        continue;
+        if (sessionId) send({ type: "set_model", sessionId, model: id });
+        activateNextPrompt(rl);
+        return;
       }
 
       if (cmd === "provider") {
         const name = (rest[0] ?? "").trim();
         if (UI_DISABLED_PROVIDERS.has(name)) {
           console.log(`${name} is temporarily disabled in the UI.`);
-          continue;
+          activateNextPrompt(rl);
+          return;
         }
         if (!isProviderName(name)) {
           console.log(`usage: /provider <${UI_PROVIDER_NAMES.join("|")}>`);
-          continue;
+          activateNextPrompt(rl);
+          return;
         }
         const nextModel = defaultModelForProvider(name);
-        config = { ...config, provider: name, model: nextModel, subAgentModel: nextModel };
-        system = await loadSystemPrompt(config);
-        console.log(`provider set to ${name} (model=${config.model})`);
-        continue;
+        if (sessionId) send({ type: "set_model", sessionId, provider: name, model: nextModel });
+        activateNextPrompt(rl);
+        return;
       }
 
       if (cmd === "cwd") {
         const p = rest.join(" ").trim();
         if (!p) {
           console.log("usage: /cwd <path>");
-          continue;
+          activateNextPrompt(rl);
+          return;
         }
         const next = await resolveAndValidateDir(p);
         process.chdir(next);
-        config = await loadConfig({ cwd: next, env: { ...process.env, AGENT_WORKING_DIR: next } });
-        if (opts.providerOptions) config.providerOptions = opts.providerOptions;
-
-        await fs.mkdir(config.projectAgentDir, { recursive: true });
-        await fs.mkdir(config.outputDirectory, { recursive: true });
-        await fs.mkdir(config.uploadsDirectory, { recursive: true });
-
-        system = await loadSystemPrompt(config);
-        console.log(`cwd set to ${config.workingDirectory}`);
-        continue;
+        await restartServer(next, rl);
+        console.log(`cwd set to ${next}`);
+        return;
       }
 
       if (cmd === "connect") {
         const serviceToken = (rest[0] ?? "").trim().toLowerCase();
         const apiKey = rest.slice(1).join(" ").trim();
 
-        const paths = getAiCoworkerPaths({
-          homedir: config.userAgentDir ? path.dirname(config.userAgentDir) : undefined,
-        });
-
         if (!serviceToken || serviceToken === "help" || serviceToken === "list") {
-          const store = await readConnectionStore(paths);
-          console.log("\nConnections:");
-          console.log(`  file=${paths.connectionsFile}`);
-          for (const service of UI_PROVIDER_NAMES) {
-            const entry = store.services[service];
-            if (!entry) {
-              console.log(`  - ${service}: not connected`);
-              continue;
-            }
-            if (entry.mode === "api_key") {
-              console.log(`  - ${service}: api key saved`);
-              continue;
-            }
-            if (entry.mode === "oauth") {
-              console.log(`  - ${service}: oauth connected`);
-              continue;
-            }
-            console.log(`  - ${service}: pending`);
-          }
-          console.log("");
-          continue;
+          await showConnectStatus();
+          activateNextPrompt(rl);
+          return;
         }
 
         if (UI_DISABLED_PROVIDERS.has(serviceToken)) {
           console.log(`${serviceToken} is temporarily disabled in the UI.`);
-          continue;
+          activateNextPrompt(rl);
+          return;
         }
 
         if (!isProviderName(serviceToken)) {
           console.log(`usage: /connect <${UI_PROVIDER_NAMES.join("|")}> [api_key]`);
-          continue;
+          activateNextPrompt(rl);
+          return;
         }
 
-        const useInherit = !apiKey && isOauthCliProvider(serviceToken);
-        if (useInherit) {
-          console.log(`Starting OAuth sign-in for ${serviceToken}...`);
-          rl.pause();
+        if (!sessionId) {
+          console.log("not connected: cannot run /connect yet");
+          activateNextPrompt(rl);
+          return;
         }
 
-        try {
-          const result = await connectModelProvider({
-            provider: serviceToken,
-            apiKey,
-            cwd: config.workingDirectory,
-            paths,
-            oauthStdioMode: useInherit ? "inherit" : "pipe",
-            onOauthLine: (line) => console.log(line),
-          });
-          if (!result.ok) {
-            console.log(`connect failed: ${result.message}`);
-          } else {
-            console.log(result.message);
-            console.log(`mode=${result.mode}`);
-            console.log(`storage=${result.storageFile}`);
-          }
-        } finally {
-          if (useInherit) rl.resume();
+        const ok = send({
+          type: "connect_provider",
+          sessionId,
+          provider: serviceToken,
+          apiKey: apiKey || undefined,
+        });
+        if (!ok) {
+          console.log("connect failed: unable to send websocket request");
+          activateNextPrompt(rl);
+          return;
         }
-        continue;
+
+        console.log(
+          apiKey
+            ? `saving key for ${serviceToken}...`
+            : isOauthCliProvider(serviceToken)
+              ? `starting OAuth sign-in for ${serviceToken}...`
+              : `marking ${serviceToken} as pending (no key supplied)...`
+        );
+        activateNextPrompt(rl);
+        return;
       }
 
       if (cmd === "tools") {
-        const toolNames = Object.keys(createTools({ config, log, askUser, approveCommand: approve })).sort();
-        console.log(`\nTools:\n${toolNames.map((t) => `  - ${t}`).join("\n")}\n`);
-        continue;
+        if (!sessionId) {
+          console.log("not connected: cannot list tools yet");
+          activateNextPrompt(rl);
+          return;
+        }
+        send({ type: "list_tools", sessionId });
+        activateNextPrompt(rl);
+        return;
       }
 
       console.log(`unknown command: /${cmd}`);
-      continue;
+      activateNextPrompt(rl);
+      return;
     }
 
-    messages.push({ role: "user", content: line });
-
-    try {
-      const res = await runTurn({
-        config,
-        system,
-        messages,
-        log,
-        askUser,
-        approveCommand: approve,
-        maxSteps: 100,
-        enableMcp: config.enableMcp,
-      });
-
-      messages.push(...res.responseMessages);
-      const out = res.text.trim();
-      if (out) console.log(`\n${out}\n`);
-    } catch (err) {
-      console.error(`\nError: ${String(err)}\n`);
+    if (!sessionId) {
+      console.log("not connected: cannot send messages yet");
+      activateNextPrompt(rl);
+      return;
     }
-  }
 
-  rl.close();
+    const clientMessageId = crypto.randomUUID();
+    send({ type: "user_message", sessionId, text: line, clientMessageId });
+    activateNextPrompt(rl);
+  });
+
+  await new Promise<void>((resolve) => {
+    rl.on("close", () => resolve());
+  });
+
+  stopServer();
 }

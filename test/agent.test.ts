@@ -1,17 +1,9 @@
-import { describe, expect, test, mock, beforeEach, afterAll } from "bun:test";
+import { describe, expect, test, mock, beforeEach, afterEach } from "bun:test";
 import path from "node:path";
 
-import * as REAL_AI from "ai";
-import * as REAL_CONFIG from "../src/config";
-import * as REAL_MCP from "../src/mcp/index";
-
 import type { AgentConfig } from "../src/types";
-import { createTools as realCreateTools } from "../src/tools/index";
-
-// Snapshot the real implementation so we can restore it after this file's
-// module mocks run. `mock.module()` overrides persist across test files within
-// a Bun worker.
-const REAL_CREATE_TOOLS = realCreateTools;
+import type { RunTurnParams } from "../src/agent";
+import { createRunTurn } from "../src/agent";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -52,24 +44,11 @@ const mockGenerateText = mock(async () => ({
 
 const mockStepCountIs = mock((_n: number) => "step-count-sentinel");
 
-mock.module("ai", () => ({
-  generateText: mockGenerateText,
-  stepCountIs: mockStepCountIs,
-}));
-
 const mockGetModel = mock((_config: AgentConfig, _id?: string) => "model-sentinel");
-
-mock.module("../src/config", () => ({
-  getModel: mockGetModel,
-}));
 
 const mockCreateTools = mock((_ctx: any) => ({
   bash: { type: "builtin" },
   read: { type: "builtin" },
-}));
-
-mock.module("../src/tools", () => ({
-  createTools: mockCreateTools,
 }));
 
 const mockLoadMCPServers = mock(async (_config: AgentConfig) => [] as any[]);
@@ -77,14 +56,6 @@ const mockLoadMCPTools = mock(async (_servers: any[], _opts?: any) => ({
   tools: {} as Record<string, any>,
   errors: [] as string[],
 }));
-
-mock.module("../src/mcp", () => ({
-  loadMCPServers: mockLoadMCPServers,
-  loadMCPTools: mockLoadMCPTools,
-}));
-
-// Now import the module under test -- after the mocks are registered.
-import { runTurn, type RunTurnParams } from "../src/agent";
 
 // ---------------------------------------------------------------------------
 // Factory for default RunTurnParams
@@ -107,14 +78,7 @@ function makeParams(overrides: Partial<RunTurnParams> = {}): RunTurnParams {
 // ---------------------------------------------------------------------------
 
 describe("runTurn", () => {
-  afterAll(() => {
-    // Prevent this file's module mock from leaking into other test files.
-    mock.module("ai", () => REAL_AI);
-    mock.module("../src/config", () => REAL_CONFIG);
-    mock.module("../src/mcp", () => REAL_MCP);
-    mock.module("../src/tools", () => ({ createTools: REAL_CREATE_TOOLS }));
-    mock.module("../src/tools/index", () => ({ createTools: REAL_CREATE_TOOLS }));
-  });
+  let runTurn: typeof import("../src/agent").runTurn;
 
   beforeEach(() => {
     mockGenerateText.mockClear();
@@ -130,6 +94,30 @@ describe("runTurn", () => {
       reasoningText: undefined as string | undefined,
       response: { messages: [{ role: "assistant", content: "hi" }] },
     }));
+    mockStepCountIs.mockImplementation((_n: number) => "step-count-sentinel");
+    mockGetModel.mockImplementation((_config: AgentConfig, _id?: string) => "model-sentinel");
+    mockCreateTools.mockImplementation((_ctx: any) => ({
+      bash: { type: "builtin" },
+      read: { type: "builtin" },
+    }));
+    mockLoadMCPServers.mockImplementation(async (_config: AgentConfig) => [] as any[]);
+    mockLoadMCPTools.mockImplementation(async (_servers: any[], _opts?: any) => ({
+      tools: {} as Record<string, any>,
+      errors: [] as string[],
+    }));
+
+    runTurn = createRunTurn({
+      generateText: mockGenerateText,
+      stepCountIs: mockStepCountIs,
+      getModel: mockGetModel,
+      createTools: mockCreateTools,
+      loadMCPServers: mockLoadMCPServers,
+      loadMCPTools: mockLoadMCPTools,
+    });
+  });
+
+  afterEach(() => {
+    mock.restore();
   });
 
   // -------------------------------------------------------------------------

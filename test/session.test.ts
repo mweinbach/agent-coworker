@@ -3,6 +3,7 @@ import path from "node:path";
 
 import type { AgentConfig, TodoItem } from "../src/types";
 import type { ServerEvent } from "../src/server/protocol";
+import * as REAL_AGENT from "../src/agent";
 
 // ---------------------------------------------------------------------------
 // Mock runTurn before importing AgentSession (which imports ../agent)
@@ -142,6 +143,7 @@ describe("AgentSession", () => {
   });
 
   afterAll(() => {
+    mock.module("../src/agent", () => REAL_AGENT);
     mock.restore();
   });
 

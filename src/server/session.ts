@@ -6,6 +6,7 @@ import { isProviderName } from "../types";
 import type { AgentConfig, TodoItem } from "../types";
 import { runTurn } from "../agent";
 import { loadSystemPrompt } from "../prompt";
+import { createTools } from "../tools";
 import { classifyCommand } from "../utils/approval";
 
 import type { ServerEvent } from "./protocol";
@@ -79,6 +80,18 @@ export class AgentSession {
     this.messages = [];
     this.todos = [];
     this.emit({ type: "todos", sessionId: this.id, todos: [] });
+  }
+
+  listTools() {
+    const tools = Object.keys(
+      createTools({
+        config: this.config,
+        log: () => {},
+        askUser: async () => "",
+        approveCommand: async () => false,
+      })
+    ).sort();
+    this.emit({ type: "tools", sessionId: this.id, tools });
   }
 
   async setModel(modelIdRaw: string, providerRaw?: AgentConfig["provider"]) {

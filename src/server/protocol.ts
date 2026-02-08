@@ -8,6 +8,7 @@ export type ClientMessage =
   | { type: "approval_response"; sessionId: string; requestId: string; approved: boolean }
   | { type: "connect_provider"; sessionId: string; provider: AgentConfig["provider"]; apiKey?: string }
   | { type: "set_model"; sessionId: string; model: string; provider?: AgentConfig["provider"] }
+  | { type: "list_tools"; sessionId: string }
   | { type: "reset"; sessionId: string };
 
 export type ServerEvent =
@@ -34,6 +35,7 @@ export type ServerEvent =
       sessionId: string;
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
     }
+  | { type: "tools"; sessionId: string; tools: string[] }
   | { type: "error"; sessionId: string; message: string };
 
 export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMessage } | { ok: false; error: string } {
@@ -54,6 +56,7 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
     case "user_message":
     case "ask_response":
     case "approval_response":
+    case "list_tools":
     case "reset":
       return { ok: true, msg: obj };
     case "connect_provider": {

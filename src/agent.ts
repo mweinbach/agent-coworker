@@ -47,99 +47,133 @@ export interface RunTurnParams {
   enableMcp?: boolean;
 }
 
-export async function runTurn(params: RunTurnParams): Promise<{
+type RunTurnDeps = {
+  generateText: typeof generateText;
+  stepCountIs: typeof stepCountIs;
+  getModel: typeof getModel;
+  createTools: typeof createTools;
+  loadMCPServers: typeof loadMCPServers;
+  loadMCPTools: typeof loadMCPTools;
+};
+
+export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
+  const deps: RunTurnDeps = {
+    generateText,
+    stepCountIs,
+    getModel,
+    createTools,
+    loadMCPServers,
+    loadMCPTools,
+    ...overrides,
+  };
+
+  return async function runTurn(params: RunTurnParams): Promise<{
+    text: string;
+    reasoningText?: string;
+    responseMessages: ModelMessage[];
+  }> {
+    const { config, system, messages, log, askUser, approveCommand, updateTodos } = params;
+
+    const toolCtx = { config, log, askUser, approveCommand, updateTodos };
+    const builtInTools = deps.createTools(toolCtx);
+
+    let mcpTools: Record<string, any> = {};
+    const enableMcp = params.enableMcp ?? config.enableMcp ?? false;
+    let closeMcp: undefined | (() => Promise<void>);
+    if (enableMcp) {
+      const servers = await deps.loadMCPServers(config);
+      if (servers.length > 0) {
+        const loaded = await deps.loadMCPTools(servers, { log });
+        mcpTools = loaded.tools;
+        closeMcp = loaded.close;
+      }
+    }
+
+    const tools = { ...builtInTools, ...mcpTools };
+
+    const result = await (async () => {
+      try {
+        if (config.provider === "gemini-cli") {
+          // Workaround for Gemini CLI provider tool-call replay:
+          // keep model calls single-step and manually continue with sanitized history.
+          const maxSteps = params.maxSteps ?? 100;
+          const rollingMessages = sanitizeGeminiToolCallReplay(messages);
+          const responseMessages: ModelMessage[] = [];
+          const reasoningChunks: string[] = [];
+          let text = "";
+
+          for (let step = 0; step < maxSteps; step++) {
+            const stepResult = await deps.generateText({
+              model: deps.getModel(config),
+              system,
+              messages: rollingMessages,
+              tools,
+              providerOptions: config.providerOptions,
+              stopWhen: deps.stepCountIs(1),
+            } as any);
+
+            const stepResponseMessages = sanitizeGeminiToolCallReplay(
+              (stepResult.response?.messages || []) as ModelMessage[]
+            );
+            if (stepResponseMessages.length > 0) {
+              responseMessages.push(...stepResponseMessages);
+              rollingMessages.push(...stepResponseMessages);
+            }
+
+            const stepReasoning = typeof stepResult.reasoningText === "string" ? stepResult.reasoningText.trim() : "";
+            if (stepReasoning) reasoningChunks.push(stepReasoning);
+
+            const stepText = String(stepResult.text ?? "").trim();
+            if (stepText) text = text ? `${text}\n${stepText}` : stepText;
+
+            const finish = unifiedFinishReason((stepResult as any).finishReason);
+            const hasToolResult = stepResponseMessages.some((m) => m.role === "tool");
+            if (finish !== "tool-calls") break;
+            if (!hasToolResult) break;
+          }
+
+          return {
+            text,
+            reasoningText: reasoningChunks.length > 0 ? reasoningChunks.join("\n\n") : undefined,
+            response: { messages: responseMessages },
+          } as any;
+        }
+
+        return await deps.generateText({
+          model: deps.getModel(config),
+          system,
+          messages,
+          tools,
+          providerOptions: config.providerOptions,
+          stopWhen: deps.stepCountIs(params.maxSteps ?? 100),
+        } as any);
+      } finally {
+        try {
+          await closeMcp?.();
+        } catch {
+          // ignore MCP close errors
+        }
+      }
+    })();
+
+    const responseMessages = (result.response?.messages || []) as ModelMessage[];
+    return {
+      text: String(result.text ?? ""),
+      reasoningText: typeof result.reasoningText === "string" ? result.reasoningText : undefined,
+      responseMessages,
+    };
+  };
+}
+
+export const runTurn = createRunTurn();
+
+export async function runTurnWithDeps(
+  params: RunTurnParams,
+  overrides: Partial<RunTurnDeps> = {}
+): Promise<{
   text: string;
   reasoningText?: string;
   responseMessages: ModelMessage[];
 }> {
-  const { config, system, messages, log, askUser, approveCommand, updateTodos } = params;
-
-  const toolCtx = { config, log, askUser, approveCommand, updateTodos };
-  const builtInTools = createTools(toolCtx);
-
-  let mcpTools: Record<string, any> = {};
-  const enableMcp = params.enableMcp ?? config.enableMcp ?? false;
-  let closeMcp: undefined | (() => Promise<void>);
-  if (enableMcp) {
-    const servers = await loadMCPServers(config);
-    if (servers.length > 0) {
-      const loaded = await loadMCPTools(servers, { log });
-      mcpTools = loaded.tools;
-      closeMcp = loaded.close;
-    }
-  }
-
-  const tools = { ...builtInTools, ...mcpTools };
-
-  const result = await (async () => {
-    try {
-      if (config.provider === "gemini-cli") {
-        // Workaround for Gemini CLI provider tool-call replay:
-        // keep model calls single-step and manually continue with sanitized history.
-        const maxSteps = params.maxSteps ?? 100;
-        const rollingMessages = sanitizeGeminiToolCallReplay(messages);
-        const responseMessages: ModelMessage[] = [];
-        const reasoningChunks: string[] = [];
-        let text = "";
-
-        for (let step = 0; step < maxSteps; step++) {
-          const stepResult = await generateText({
-            model: getModel(config),
-            system,
-            messages: rollingMessages,
-            tools,
-            providerOptions: config.providerOptions,
-            stopWhen: stepCountIs(1),
-          } as any);
-
-          const stepResponseMessages = sanitizeGeminiToolCallReplay(
-            (stepResult.response?.messages || []) as ModelMessage[]
-          );
-          if (stepResponseMessages.length > 0) {
-            responseMessages.push(...stepResponseMessages);
-            rollingMessages.push(...stepResponseMessages);
-          }
-
-          const stepReasoning = typeof stepResult.reasoningText === "string" ? stepResult.reasoningText.trim() : "";
-          if (stepReasoning) reasoningChunks.push(stepReasoning);
-
-          const stepText = String(stepResult.text ?? "").trim();
-          if (stepText) text = text ? `${text}\n${stepText}` : stepText;
-
-          const finish = unifiedFinishReason((stepResult as any).finishReason);
-          const hasToolResult = stepResponseMessages.some((m) => m.role === "tool");
-          if (finish !== "tool-calls") break;
-          if (!hasToolResult) break;
-        }
-
-        return {
-          text,
-          reasoningText: reasoningChunks.length > 0 ? reasoningChunks.join("\n\n") : undefined,
-          response: { messages: responseMessages },
-        } as any;
-      }
-
-      return await generateText({
-        model: getModel(config),
-        system,
-        messages,
-        tools,
-        providerOptions: config.providerOptions,
-        stopWhen: stepCountIs(params.maxSteps ?? 100),
-      } as any);
-    } finally {
-      try {
-        await closeMcp?.();
-      } catch {
-        // ignore MCP close errors
-      }
-    }
-  })();
-
-  const responseMessages = (result.response?.messages || []) as ModelMessage[];
-  return {
-    text: String(result.text ?? ""),
-    reasoningText: typeof result.reasoningText === "string" ? result.reasoningText : undefined,
-    responseMessages,
-  };
+  return await createRunTurn(overrides)(params);
 }

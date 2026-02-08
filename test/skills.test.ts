@@ -274,9 +274,9 @@ describe("discoverSkills", () => {
     const entries = await discoverSkills([builtInSkills]);
     const names = entries.map((e) => e.name).sort();
     expect(names).toContain("pdf");
-    expect(names).toContain("docx");
-    expect(names).toContain("xlsx");
-    expect(names).toContain("pptx");
+    expect(names).toContain("doc");
+    expect(names).toContain("spreadsheet");
+    expect(names).toContain("slides");
     expect(entries.length).toBeGreaterThanOrEqual(4);
   });
 

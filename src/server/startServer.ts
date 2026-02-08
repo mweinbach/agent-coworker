@@ -140,6 +140,11 @@ export async function startAgentServer(
             session.reset();
             return;
           }
+
+          if (msg.type === "list_tools") {
+            session.listTools();
+            return;
+          }
         },
         close(ws) {
           ws.data.session?.dispose("websocket closed");

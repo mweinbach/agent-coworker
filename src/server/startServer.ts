@@ -13,6 +13,7 @@ export interface StartAgentServerOptions {
   port?: number;
   env?: Record<string, string | undefined>;
   providerOptions?: Record<string, any>;
+  yolo?: boolean;
 }
 
 export async function startAgentServer(
@@ -53,6 +54,7 @@ export async function startAgentServer(
           const session = new AgentSession({
             config,
             system,
+            yolo: opts.yolo,
             emit: (evt: ServerEvent) => {
               try {
                 ws.send(JSON.stringify(evt));

@@ -52,7 +52,9 @@ async function resolveAndValidateDir(dirArg: string): Promise<string> {
   return resolved;
 }
 
-export async function runCliRepl(opts: { dir?: string; providerOptions?: Record<string, any> } = {}) {
+export async function runCliRepl(
+  opts: { dir?: string; providerOptions?: Record<string, any>; yolo?: boolean } = {}
+) {
   let config: Awaited<ReturnType<typeof loadConfig>>;
   if (opts.dir) {
     const dir = await resolveAndValidateDir(opts.dir);
@@ -71,6 +73,7 @@ export async function runCliRepl(opts: { dir?: string; providerOptions?: Record<
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const question = createQuestion(rl);
+  const yolo = opts.yolo === true;
 
   onTodoChange(renderTodos);
 
@@ -93,12 +96,14 @@ export async function runCliRepl(opts: { dir?: string; providerOptions?: Record<
     return ans;
   };
 
-  const approve = async (command: string) =>
-    approveCommand(command, async (msg) => (await question(msg)) ?? "");
+  const approve = yolo
+    ? async (_command: string) => true
+    : async (command: string) => approveCommand(command, async (msg) => (await question(msg)) ?? "");
 
   console.log("Cowork agent (CLI)");
   console.log(`provider=${config.provider} model=${config.model}`);
   console.log(`cwd=${config.workingDirectory}`);
+  if (yolo) console.log("YOLO mode enabled: command approvals are bypassed.");
   console.log("Type /help for commands. Set GOOGLE_GENERATIVE_AI_API_KEY to use Gemini.\n");
 
   let messages: ModelMessage[] = [];

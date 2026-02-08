@@ -34,13 +34,14 @@ const DEFAULT_PROVIDER_OPTIONS: Record<string, any> = {
 };
 
 function printUsage() {
-  console.log("Usage: cowork [--dir <directory_path>] [--cli]");
+  console.log("Usage: cowork [--dir <directory_path>] [--cli] [--yolo]");
   console.log("");
   console.log("By default, cowork launches the TUI (and starts the agent server in the background).");
   console.log("");
   console.log("Options:");
   console.log("  --dir, -d   Run the agent in the specified directory");
   console.log("  --cli, -c   Run the plain CLI instead of the TUI");
+  console.log("  --yolo, -y  Skip command approvals (dangerous; use with care)");
   console.log("  --help, -h  Show help");
   console.log("");
 }
@@ -72,7 +73,7 @@ async function main() {
   }
 
   if (args.cli) {
-    await runCliRepl({ dir: args.dir, providerOptions: DEFAULT_PROVIDER_OPTIONS });
+    await runCliRepl({ dir: args.dir, providerOptions: DEFAULT_PROVIDER_OPTIONS, yolo: args.yolo });
     return;
   }
 
@@ -84,6 +85,7 @@ async function main() {
     hostname: "127.0.0.1",
     port: 0, // ephemeral port; avoids collisions and keeps launch simple
     providerOptions: DEFAULT_PROVIDER_OPTIONS,
+    yolo: args.yolo,
   });
 
   let stopped = false;

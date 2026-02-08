@@ -2,10 +2,11 @@ export interface CliArgs {
   dir?: string;
   help: boolean;
   cli: boolean;
+  yolo: boolean;
 }
 
 export function parseCliArgs(argv: string[]): { args: CliArgs; errors: string[] } {
-  const args: CliArgs = { help: false, cli: false };
+  const args: CliArgs = { help: false, cli: false, yolo: false };
   const errors: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
@@ -18,6 +19,11 @@ export function parseCliArgs(argv: string[]): { args: CliArgs; errors: string[] 
 
     if (a === "--cli" || a === "-c") {
       args.cli = true;
+      continue;
+    }
+
+    if (a === "--yolo" || a === "-y") {
+      args.yolo = true;
       continue;
     }
 

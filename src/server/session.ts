@@ -31,6 +31,7 @@ export class AgentSession {
 
   private readonly config: AgentConfig;
   private readonly system: string;
+  private readonly yolo: boolean;
   private readonly emit: (evt: ServerEvent) => void;
 
   private messages: ModelMessage[] = [];
@@ -41,10 +42,16 @@ export class AgentSession {
 
   private todos: TodoItem[] = [];
 
-  constructor(opts: { config: AgentConfig; system: string; emit: (evt: ServerEvent) => void }) {
+  constructor(opts: {
+    config: AgentConfig;
+    system: string;
+    yolo?: boolean;
+    emit: (evt: ServerEvent) => void;
+  }) {
     this.id = makeId();
     this.config = opts.config;
     this.system = opts.system;
+    this.yolo = opts.yolo === true;
     this.emit = opts.emit;
   }
 
@@ -102,6 +109,8 @@ export class AgentSession {
   }
 
   private async approveCommand(command: string) {
+    if (this.yolo) return true;
+
     const classification = classifyCommand(command);
     if (classification.kind === "auto") return true;
 

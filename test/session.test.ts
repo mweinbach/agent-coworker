@@ -54,12 +54,20 @@ function makeEmit(): { emit: (evt: ServerEvent) => void; events: ServerEvent[] }
   return { emit, events };
 }
 
-function makeSession(overrides?: Partial<{ config: AgentConfig; system: string; emit: (evt: ServerEvent) => void }>) {
+function makeSession(
+  overrides?: Partial<{
+    config: AgentConfig;
+    system: string;
+    yolo: boolean;
+    emit: (evt: ServerEvent) => void;
+  }>
+) {
   const dir = "/tmp/test-session";
   const { emit, events } = makeEmit();
   const session = new AgentSession({
     config: overrides?.config ?? makeConfig(dir),
     system: overrides?.system ?? "You are a test assistant.",
+    yolo: overrides?.yolo,
     emit: overrides?.emit ?? emit,
   });
   return { session, emit, events };
@@ -407,6 +415,23 @@ describe("AgentSession", () => {
 
       const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
       expect(assistantEvt.text).toBe("auto-approved");
+    });
+
+    test("yolo mode skips approval flow even for dangerous commands", async () => {
+      const { session, events } = makeSession({ yolo: true });
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const approved = await params.approveCommand("rm -rf /tmp/whatever");
+        return { text: approved ? "approved" : "denied", reasoningText: undefined, responseMessages: [] };
+      });
+
+      await session.sendUserMessage("go");
+
+      const approvalEvt = events.find((e) => e.type === "approval");
+      expect(approvalEvt).toBeUndefined();
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt.text).toBe("approved");
     });
   });
 

@@ -31,6 +31,18 @@ describe("parseCliArgs", () => {
     expect(args.cli).toBe(true);
   });
 
+  test("parses --yolo", () => {
+    const { args, errors } = parseCliArgs(["--yolo"]);
+    expect(errors).toEqual([]);
+    expect(args.yolo).toBe(true);
+  });
+
+  test("parses -y", () => {
+    const { args, errors } = parseCliArgs(["-y"]);
+    expect(errors).toEqual([]);
+    expect(args.yolo).toBe(true);
+  });
+
   test("parses --help", () => {
     const { args, errors } = parseCliArgs(["--help"]);
     expect(errors).toEqual([]);
@@ -55,12 +67,13 @@ describe("parseCliArgs", () => {
     expect(args.help).toBe(true);
   });
 
-  test("parses combined flags: --dir /path --cli --help", () => {
-    const { args, errors } = parseCliArgs(["--dir", "/path/to/proj", "--cli", "--help"]);
+  test("parses combined flags: --dir /path --cli --help --yolo", () => {
+    const { args, errors } = parseCliArgs(["--dir", "/path/to/proj", "--cli", "--help", "--yolo"]);
     expect(errors).toEqual([]);
     expect(args.dir).toBe("/path/to/proj");
     expect(args.cli).toBe(true);
     expect(args.help).toBe(true);
+    expect(args.yolo).toBe(true);
   });
 
   test("parses flags in different order: --help --cli --dir /path", () => {
@@ -87,11 +100,12 @@ describe("parseCliArgs", () => {
     expect(errors[2]).toContain("--huh");
   });
 
-  test("empty argv returns defaults (help=false, cli=false, dir=undefined)", () => {
+  test("empty argv returns defaults (help=false, cli=false, yolo=false, dir=undefined)", () => {
     const { args, errors } = parseCliArgs([]);
     expect(errors).toEqual([]);
     expect(args.help).toBe(false);
     expect(args.cli).toBe(false);
+    expect(args.yolo).toBe(false);
     expect(args.dir).toBeUndefined();
   });
 

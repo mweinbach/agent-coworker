@@ -24,11 +24,15 @@ Run the TUI (starts the server automatically):
 bun run start
 # target a specific directory:
 bun run start -- --dir /path/to/project
+# bypass command approvals (dangerous):
+bun run start -- --yolo
 ```
 
 Run the CLI REPL:
 ```bash
 bun run cli
+# bypass command approvals (dangerous):
+bun run cli -- --yolo
 ```
 
 Run the server directly:

@@ -9,7 +9,7 @@ import { startAgentServer } from "./startServer";
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
 
 function printUsage() {
-  console.log("Usage: bun src/server/index.ts [--dir <directory_path>] [--port <port>]");
+  console.log("Usage: bun src/server/index.ts [--dir <directory_path>] [--port <port>] [--yolo]");
 }
 
 async function resolveAndValidateDir(dirArg: string): Promise<string> {
@@ -19,9 +19,10 @@ async function resolveAndValidateDir(dirArg: string): Promise<string> {
   return resolved;
 }
 
-function parseArgs(argv: string[]): { dir?: string; port: number } {
+function parseArgs(argv: string[]): { dir?: string; port: number; yolo: boolean } {
   let dir: string | undefined;
   let port = 7337;
+  let yolo = false;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -45,14 +46,18 @@ function parseArgs(argv: string[]): { dir?: string; port: number } {
       i++;
       continue;
     }
+    if (a === "--yolo" || a === "-y") {
+      yolo = true;
+      continue;
+    }
     throw new Error(`Unknown argument: ${a}`);
   }
 
-  return { dir, port };
+  return { dir, port, yolo };
 }
 
 async function main() {
-  const { dir, port } = parseArgs(process.argv.slice(2));
+  const { dir, port, yolo } = parseArgs(process.argv.slice(2));
 
   const cwd = dir ? await resolveAndValidateDir(dir) : process.cwd();
   if (dir) process.chdir(cwd);
@@ -62,6 +67,7 @@ async function main() {
     hostname: "127.0.0.1",
     port,
     env: { ...process.env, AGENT_WORKING_DIR: cwd },
+    yolo,
   });
 
   console.log(`[server] ws://127.0.0.1:${server.port}/ws (cwd=${config.workingDirectory})`);

@@ -232,14 +232,16 @@ describe("classifyCommand", () => {
       if (c.kind === "prompt") expect(c.dangerous).toBe(false);
     });
 
-    test("safe command chained with dangerous via semicolon (auto takes precedence)", () => {
-      // ls\b matches at position 0, so auto-approve fires first -- known limitation
+    test("safe command chained with dangerous via semicolon is dangerous", () => {
       const c = classifyCommand("ls; rm -rf /");
-      expect(c).toEqual({ kind: "auto" });
+      expect(c.kind).toBe("prompt");
+      if (c.kind === "prompt") expect(c.dangerous).toBe(true);
     });
 
-    test("safe command chained with dangerous via && (auto takes precedence)", () => {
-      expect(classifyCommand("ls && rm -rf /tmp")).toEqual({ kind: "auto" });
+    test("safe command chained with dangerous via && is dangerous", () => {
+      const c = classifyCommand("ls && rm -rf /tmp");
+      expect(c.kind).toBe("prompt");
+      if (c.kind === "prompt") expect(c.dangerous).toBe(true);
     });
 
     test("non-auto command chained with dangerous via semicolon IS dangerous", () => {

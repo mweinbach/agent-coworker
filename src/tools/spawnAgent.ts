@@ -1,9 +1,9 @@
-import { generateText, stepCountIs, tool } from "ai";
+import { generateText as realGenerateText, stepCountIs as realStepCountIs, tool } from "ai";
 import { z } from "zod";
 
-import { getModel } from "../config";
-import { loadSubAgentPrompt } from "../prompt";
-import { AUTO_APPROVE_PATTERNS } from "../utils/approval";
+import { getModel as realGetModel } from "../config";
+import { loadSubAgentPrompt as realLoadSubAgentPrompt } from "../prompt";
+import { classifyCommand as realClassifyCommand } from "../utils/approval";
 
 import type { ToolContext } from "./context";
 import { createBashTool } from "./bash";
@@ -20,11 +20,19 @@ import { createNotebookEditTool } from "./notebookEdit";
 
 type AgentType = "explore" | "research" | "general";
 
-function safeApprove(command: string): boolean {
-  return AUTO_APPROVE_PATTERNS.some((p) => p.test(command));
-}
+export type SpawnAgentDeps = Partial<{
+  generateText: typeof realGenerateText;
+  stepCountIs: typeof realStepCountIs;
+  getModel: typeof realGetModel;
+  loadSubAgentPrompt: typeof realLoadSubAgentPrompt;
+  classifyCommand: typeof realClassifyCommand;
+}>;
 
-function createSubAgentTools(parent: ToolContext, agentType: AgentType): Record<string, any> {
+function createSubAgentTools(
+  parent: ToolContext,
+  agentType: AgentType,
+  safeApprove: (command: string) => boolean
+): Record<string, any> {
   const subCtx: ToolContext = {
     config: parent.config,
     log: (line) => parent.log(`[sub:${agentType}] ${line}`),
@@ -66,7 +74,15 @@ function createSubAgentTools(parent: ToolContext, agentType: AgentType): Record<
   };
 }
 
-export function createSpawnAgentTool(ctx: ToolContext) {
+export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}) {
+  const generateText = deps.generateText ?? realGenerateText;
+  const stepCountIs = deps.stepCountIs ?? realStepCountIs;
+  const getModel = deps.getModel ?? realGetModel;
+  const loadSubAgentPrompt = deps.loadSubAgentPrompt ?? realLoadSubAgentPrompt;
+  const classifyCommand = deps.classifyCommand ?? realClassifyCommand;
+
+  const safeApprove = (command: string) => classifyCommand(command).kind === "auto";
+
   return tool({
     description:
       "Launch a sub-agent for a focused task (explore, research, or general). Sub-agents run with their own prompt and restricted tools and return their result.",
@@ -80,7 +96,7 @@ export function createSpawnAgentTool(ctx: ToolContext) {
       const system = await loadSubAgentPrompt(ctx.config, agentType);
       const modelId = agentType === "research" ? ctx.config.model : ctx.config.subAgentModel;
 
-      const tools = createSubAgentTools(ctx, agentType);
+      const tools = createSubAgentTools(ctx, agentType, safeApprove);
 
       const { text } = await generateText({
         model: getModel(ctx.config, modelId),

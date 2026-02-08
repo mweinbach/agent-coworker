@@ -35,98 +35,137 @@ export async function startAgentServer(
 
   const system = await loadSystemPrompt(config);
 
-  const server = Bun.serve<{ session?: AgentSession }>({
-    hostname,
-    port: opts.port ?? 7337,
-    fetch(req, srv) {
-      const url = new URL(req.url);
-      if (url.pathname === "/ws") {
-        const upgraded = srv.upgrade(req, { data: {} });
-        if (upgraded) return;
-        return new Response("WebSocket upgrade failed", { status: 400 });
+  function createServer(port: number): ReturnType<typeof Bun.serve> {
+    return Bun.serve<{ session?: AgentSession }>({
+      hostname,
+      port,
+      fetch(req, srv) {
+        const url = new URL(req.url);
+        if (url.pathname === "/ws") {
+          const upgraded = srv.upgrade(req, { data: {} });
+          if (upgraded) return;
+          return new Response("WebSocket upgrade failed", { status: 400 });
+        }
+        return new Response("OK", { status: 200 });
+      },
+      websocket: {
+        open(ws) {
+          const session = new AgentSession({
+            config,
+            system,
+            emit: (evt: ServerEvent) => {
+              try {
+                ws.send(JSON.stringify(evt));
+              } catch {
+                // ignore
+              }
+            },
+          });
+
+          ws.data.session = session;
+
+          const hello: ServerEvent = {
+            type: "server_hello",
+            sessionId: session.id,
+            config: session.getPublicConfig(),
+          };
+
+          ws.send(JSON.stringify(hello));
+        },
+        message(ws, raw) {
+          const session = ws.data.session;
+          if (!session) return;
+
+          const text = typeof raw === "string" ? raw : Buffer.from(raw as any).toString("utf-8");
+          const parsed = safeParseClientMessage(text);
+          if (!parsed.ok) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                sessionId: session.id,
+                message: parsed.error,
+              } satisfies ServerEvent)
+            );
+            return;
+          }
+
+          const msg: ClientMessage = parsed.msg;
+          if (msg.type === "client_hello") return;
+
+          if (msg.sessionId !== session.id) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                sessionId: session.id,
+                message: `Unknown sessionId: ${msg.sessionId}`,
+              } satisfies ServerEvent)
+            );
+            return;
+          }
+
+          if (msg.type === "user_message") {
+            session.sendUserMessage(msg.text, msg.clientMessageId);
+            return;
+          }
+
+          if (msg.type === "ask_response") {
+            session.handleAskResponse(msg.requestId, msg.answer);
+            return;
+          }
+
+          if (msg.type === "approval_response") {
+            session.handleApprovalResponse(msg.requestId, msg.approved);
+            return;
+          }
+
+          if (msg.type === "reset") {
+            session.reset();
+            return;
+          }
+        },
+        close(ws) {
+          ws.data.session?.dispose("websocket closed");
+        },
+      },
+    });
+  }
+
+  function isAddrInUse(err: unknown): boolean {
+    const code = (err as any)?.code;
+    return code === "EADDRINUSE";
+  }
+
+  const requestedPort = opts.port ?? 7337;
+
+  function serveWithPortFallback(port: number): ReturnType<typeof Bun.serve> {
+    try {
+      // Normal behavior: when port=0, Bun (like Node) will request an ephemeral port from the OS.
+      return createServer(port);
+    } catch (err) {
+      // Fallback for environments/versions where binding port 0 may fail.
+      if (port !== 0) throw err;
+
+      const min = 49152;
+      const max = 65535;
+      const attempts = 50;
+      let lastErr: unknown = err;
+
+      for (let i = 0; i < attempts; i++) {
+        const candidate = min + Math.floor(Math.random() * (max - min + 1));
+        try {
+          return createServer(candidate);
+        } catch (e) {
+          lastErr = e;
+          if (isAddrInUse(e)) continue;
+          throw e;
+        }
       }
-      return new Response("OK", { status: 200 });
-    },
-    websocket: {
-      open(ws) {
-        const session = new AgentSession({
-          config,
-          system,
-          emit: (evt: ServerEvent) => {
-            try {
-              ws.send(JSON.stringify(evt));
-            } catch {
-              // ignore
-            }
-          },
-        });
 
-        ws.data.session = session;
+      throw lastErr;
+    }
+  }
 
-        const hello: ServerEvent = {
-          type: "server_hello",
-          sessionId: session.id,
-          config: session.getPublicConfig(),
-        };
-
-        ws.send(JSON.stringify(hello));
-      },
-      message(ws, raw) {
-        const session = ws.data.session;
-        if (!session) return;
-
-        const text = typeof raw === "string" ? raw : Buffer.from(raw as any).toString("utf-8");
-        const parsed = safeParseClientMessage(text);
-        if (!parsed.ok) {
-          ws.send(
-            JSON.stringify({
-              type: "error",
-              sessionId: session.id,
-              message: parsed.error,
-            } satisfies ServerEvent)
-          );
-          return;
-        }
-
-        const msg: ClientMessage = parsed.msg;
-        if (msg.type === "client_hello") return;
-
-        if (msg.sessionId !== session.id) {
-          ws.send(
-            JSON.stringify({
-              type: "error",
-              sessionId: session.id,
-              message: `Unknown sessionId: ${msg.sessionId}`,
-            } satisfies ServerEvent)
-          );
-          return;
-        }
-
-        if (msg.type === "user_message") {
-          session.sendUserMessage(msg.text, msg.clientMessageId);
-          return;
-        }
-
-        if (msg.type === "ask_response") {
-          session.handleAskResponse(msg.requestId, msg.answer);
-          return;
-        }
-
-        if (msg.type === "approval_response") {
-          session.handleApprovalResponse(msg.requestId, msg.approved);
-          return;
-        }
-
-        if (msg.type === "reset") {
-          session.reset();
-          return;
-        }
-      },
-      close(ws) {
-        ws.data.session?.dispose("websocket closed");
-      },
-    },
-  });
+  const server = serveWithPortFallback(requestedPort);
 
   const url = `ws://${hostname}:${server.port}/ws`;
   return { server, config, system, url };

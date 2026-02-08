@@ -1,11 +1,12 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { anthropic } from "@ai-sdk/anthropic";
-import { google } from "@ai-sdk/google";
-import { openai } from "@ai-sdk/openai";
+import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
+import { createGoogleGenerativeAI, google } from "@ai-sdk/google";
+import { createOpenAI, openai } from "@ai-sdk/openai";
 
 import type { AgentConfig, ProviderName } from "./types";
 
@@ -80,6 +81,36 @@ function resolveDir(maybeRelative: unknown, baseDir: string): string {
   if (typeof maybeRelative !== "string" || !maybeRelative) return baseDir;
   if (path.isAbsolute(maybeRelative)) return maybeRelative;
   return path.join(baseDir, maybeRelative);
+}
+
+function resolveUserHomeFromConfig(config: AgentConfig): string {
+  if (typeof config.userAgentDir === "string" && config.userAgentDir) {
+    return path.dirname(config.userAgentDir);
+  }
+  return os.homedir();
+}
+
+function readSavedApiKey(config: AgentConfig, provider: ProviderName): string | undefined {
+  const home = resolveUserHomeFromConfig(config);
+  const connectionsPath = path.join(home, ".ai-coworker", "config", "connections.json");
+
+  try {
+    const raw = fsSync.readFileSync(connectionsPath, "utf-8");
+    const parsed = JSON.parse(raw) as any;
+
+    const direct = parsed?.services?.[provider];
+    const directKey =
+      typeof direct?.apiKey === "string" && direct.apiKey.trim() ? direct.apiKey.trim() : "";
+    if (directKey) return directKey;
+
+    // Backward-compatible fallback for any simpler shape like { apiKeys: { openai: "..." } }.
+    const legacy = parsed?.apiKeys?.[provider];
+    if (typeof legacy === "string" && legacy.trim()) return legacy.trim();
+  } catch {
+    // Missing/invalid file means no saved key; fall back to provider defaults (.env).
+  }
+
+  return undefined;
 }
 
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<AgentConfig> {
@@ -189,13 +220,21 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
 export function getModel(config: AgentConfig, id?: string) {
   const modelId = id || config.model;
+  const savedKey = readSavedApiKey(config, config.provider);
+
   switch (config.provider) {
-    case "google":
-      return google(modelId);
-    case "openai":
-      return openai(modelId);
-    case "anthropic":
-      return anthropic(modelId);
+    case "google": {
+      const provider = savedKey ? createGoogleGenerativeAI({ apiKey: savedKey }) : google;
+      return provider(modelId);
+    }
+    case "openai": {
+      const provider = savedKey ? createOpenAI({ apiKey: savedKey }) : openai;
+      return provider(modelId);
+    }
+    case "anthropic": {
+      const provider = savedKey ? createAnthropic({ apiKey: savedKey }) : anthropic;
+      return provider(modelId);
+    }
     default: {
       const _exhaustive: never = config.provider;
       return _exhaustive;

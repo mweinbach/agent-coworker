@@ -1,4 +1,4 @@
-import { describe, expect, test, mock, beforeEach } from "bun:test";
+import { describe, expect, test, mock, beforeEach, afterAll } from "bun:test";
 import path from "node:path";
 
 import type { AgentConfig, TodoItem } from "../src/types";
@@ -18,7 +18,28 @@ mock.module("../src/agent", () => ({
   runTurn: mockRunTurn,
 }));
 
-// Import AgentSession AFTER the mock is registered so it picks up the mock.
+const mockConnectModelProvider = mock(async (_opts: any): Promise<any> => ({
+  ok: true,
+  provider: "openai",
+  mode: "api_key",
+  storageFile: "/tmp/mock/.ai-coworker/config/connections.json",
+  message: "Provider key saved.",
+  maskedApiKey: "sk-t...est",
+}));
+
+const mockGetAiCoworkerPaths = mock((opts?: { homedir?: string }) => {
+  const home = opts?.homedir ?? "/tmp/mock-home";
+  const rootDir = path.join(home, ".ai-coworker");
+  return {
+    rootDir,
+    configDir: path.join(rootDir, "config"),
+    sessionsDir: path.join(rootDir, "sessions"),
+    logsDir: path.join(rootDir, "logs"),
+    connectionsFile: path.join(rootDir, "config", "connections.json"),
+  };
+});
+
+// Import AgentSession AFTER the runTurn mock is registered so it picks up the mock.
 const { AgentSession } = await import("../src/server/session");
 
 // ---------------------------------------------------------------------------
@@ -60,6 +81,14 @@ function makeSession(
     system: string;
     yolo: boolean;
     emit: (evt: ServerEvent) => void;
+    connectProviderImpl: (opts: any) => Promise<any>;
+    getAiCoworkerPathsImpl: (opts?: { homedir?: string }) => {
+      rootDir: string;
+      configDir: string;
+      sessionsDir: string;
+      logsDir: string;
+      connectionsFile: string;
+    };
   }>
 ) {
   const dir = "/tmp/test-session";
@@ -69,6 +98,8 @@ function makeSession(
     system: overrides?.system ?? "You are a test assistant.",
     yolo: overrides?.yolo,
     emit: overrides?.emit ?? emit,
+    connectProviderImpl: overrides?.connectProviderImpl,
+    getAiCoworkerPathsImpl: overrides?.getAiCoworkerPathsImpl,
   });
   return { session, emit, events };
 }
@@ -85,6 +116,33 @@ describe("AgentSession", () => {
       reasoningText: undefined,
       responseMessages: [],
     }));
+
+    mockConnectModelProvider.mockReset();
+    mockConnectModelProvider.mockImplementation(async () => ({
+      ok: true,
+      provider: "openai",
+      mode: "api_key",
+      storageFile: "/tmp/mock/.ai-coworker/config/connections.json",
+      message: "Provider key saved.",
+      maskedApiKey: "sk-t...est",
+    }));
+
+    mockGetAiCoworkerPaths.mockReset();
+    mockGetAiCoworkerPaths.mockImplementation((opts?: { homedir?: string }) => {
+      const home = opts?.homedir ?? "/tmp/mock-home";
+      const rootDir = path.join(home, ".ai-coworker");
+      return {
+        rootDir,
+        configDir: path.join(rootDir, "config"),
+        sessionsDir: path.join(rootDir, "sessions"),
+        logsDir: path.join(rootDir, "logs"),
+        connectionsFile: path.join(rootDir, "config", "connections.json"),
+      };
+    });
+  });
+
+  afterAll(() => {
+    mock.restore();
   });
 
   // =========================================================================
@@ -257,6 +315,202 @@ describe("AgentSession", () => {
       expect(err).toBeDefined();
       if (err && err.type === "error") {
         expect(err.message).toContain("Unsupported provider");
+      }
+    });
+  });
+
+  describe("connectProvider", () => {
+    test("emits error when agent is busy", async () => {
+      const { session, events } = makeSession({
+        connectProviderImpl: mockConnectModelProvider,
+        getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
+      });
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          })
+      );
+
+      const first = session.sendUserMessage("first");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.connectProvider("openai", "sk-test");
+
+      const err = events.find((e) => e.type === "error");
+      expect(err).toBeDefined();
+      if (err && err.type === "error") {
+        expect(err.message).toBe("Agent is busy");
+      }
+
+      resolveRunTurn();
+      await first;
+    });
+
+    test("emits error when a connect flow is already running", async () => {
+      const { session, events } = makeSession({
+        connectProviderImpl: mockConnectModelProvider,
+        getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
+      });
+
+      let resolveConnect!: () => void;
+      mockConnectModelProvider.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveConnect = () =>
+              resolve({
+                ok: true,
+                provider: "openai",
+                mode: "api_key",
+                storageFile: "/tmp/mock/.ai-coworker/config/connections.json",
+                message: "Provider key saved.",
+                maskedApiKey: "sk-t...est",
+              });
+          })
+      );
+
+      const first = session.connectProvider("openai", "sk-test");
+      await new Promise((r) => setTimeout(r, 10));
+      await session.connectProvider("openai", "sk-test-2");
+
+      const err = events.find((e) => e.type === "error");
+      expect(err).toBeDefined();
+      if (err && err.type === "error") {
+        expect(err.message).toBe("Connection flow already running");
+      }
+
+      resolveConnect();
+      await first;
+    });
+
+    test("invalid provider emits unsupported provider error", async () => {
+      const { session, events } = makeSession({
+        connectProviderImpl: mockConnectModelProvider,
+        getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
+      });
+      await session.connectProvider("not-a-provider" as any, "sk-test");
+
+      const err = events.find((e) => e.type === "error");
+      expect(err).toBeDefined();
+      if (err && err.type === "error") {
+        expect(err.message).toContain("Unsupported provider");
+      }
+      expect(mockConnectModelProvider).toHaveBeenCalledTimes(0);
+    });
+
+    test("successful connect emits assistant message and forwards expected options", async () => {
+      const dir = "/tmp/test-session-connect";
+      const config = makeConfig(dir);
+      const { session, events } = makeSession({
+        config,
+        connectProviderImpl: mockConnectModelProvider,
+        getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
+      });
+
+      mockConnectModelProvider.mockImplementationOnce(async (opts: any) => {
+        opts.onOauthLine?.("auth step");
+        return {
+          ok: true,
+          provider: "openai",
+          mode: "api_key",
+          storageFile: "/tmp/mock/.ai-coworker/config/connections.json",
+          message: "Provider key saved.",
+          maskedApiKey: "sk-t...est",
+        };
+      });
+
+      await session.connectProvider("openai", "sk-test");
+
+      expect(mockGetAiCoworkerPaths).toHaveBeenCalledWith({ homedir: path.dirname(config.userAgentDir) });
+
+      expect(mockConnectModelProvider).toHaveBeenCalledTimes(1);
+      const args = mockConnectModelProvider.mock.calls[0][0] as any;
+      expect(args.provider).toBe("openai");
+      expect(args.apiKey).toBe("sk-test");
+      expect(args.cwd).toBe(config.workingDirectory);
+      expect(args.oauthStdioMode).toBe("pipe");
+      expect(typeof args.onOauthLine).toBe("function");
+
+      const logEvt = events.find((e) => e.type === "log");
+      expect(logEvt).toBeDefined();
+      if (logEvt && logEvt.type === "log") {
+        expect(logEvt.line).toContain("[connect openai] auth step");
+      }
+
+      const assistant = events.find((e) => e.type === "assistant_message");
+      expect(assistant).toBeDefined();
+      if (assistant && assistant.type === "assistant_message") {
+        expect(assistant.text).toContain("### /connect openai");
+        expect(assistant.text).toContain("Provider key saved.");
+        expect(assistant.text).toContain("- Mode: api_key");
+        expect(assistant.text).toContain("- Storage: ");
+        expect(assistant.text).toContain("- Key: ");
+      }
+    });
+
+    test("successful oauth connect includes oauth command in assistant message", async () => {
+      const { session, events } = makeSession({
+        connectProviderImpl: mockConnectModelProvider,
+        getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
+      });
+      mockConnectModelProvider.mockImplementationOnce(async () => ({
+        ok: true,
+        provider: "codex-cli",
+        mode: "oauth",
+        storageFile: "/tmp/mock/.ai-coworker/config/connections.json",
+        message: "OAuth sign-in completed.",
+        oauthCommand: "codex login",
+      }));
+
+      await session.connectProvider("codex-cli");
+
+      const assistant = events.find((e) => e.type === "assistant_message");
+      expect(assistant).toBeDefined();
+      if (assistant && assistant.type === "assistant_message") {
+        expect(assistant.text).toContain("### /connect codex-cli");
+        expect(assistant.text).toContain("- Mode: oauth");
+        expect(assistant.text).toContain("- OAuth command: `codex login`");
+      }
+    });
+
+    test("connect failure result emits error event", async () => {
+      const { session, events } = makeSession({
+        connectProviderImpl: mockConnectModelProvider,
+        getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
+      });
+      mockConnectModelProvider.mockImplementationOnce(async () => ({
+        ok: false,
+        provider: "openai",
+        message: "OAuth sign-in failed",
+      }));
+
+      await session.connectProvider("openai");
+
+      const err = events.find((e) => e.type === "error");
+      expect(err).toBeDefined();
+      if (err && err.type === "error") {
+        expect(err.message).toBe("OAuth sign-in failed");
+      }
+    });
+
+    test("connect throw emits wrapped error", async () => {
+      const { session, events } = makeSession({
+        connectProviderImpl: mockConnectModelProvider,
+        getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
+      });
+      mockConnectModelProvider.mockImplementationOnce(async () => {
+        throw new Error("boom");
+      });
+
+      await session.connectProvider("openai");
+
+      const err = events.find((e) => e.type === "error");
+      expect(err).toBeDefined();
+      if (err && err.type === "error") {
+        expect(err.message).toContain("connect failed:");
+        expect(err.message).toContain("boom");
       }
     });
   });

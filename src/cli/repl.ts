@@ -4,6 +4,7 @@ import readline from "node:readline";
 
 import type { ModelMessage } from "ai";
 
+import { connectProvider as connectModelProvider, getAiCoworkerPaths, isOauthCliProvider, readConnectionStore } from "../connect";
 import { loadConfig, defaultModelForProvider } from "../config";
 import { runTurn } from "../agent";
 import { loadSystemPrompt } from "../prompt";
@@ -105,7 +106,7 @@ export async function runCliRepl(
   console.log(`provider=${config.provider} model=${config.model}`);
   console.log(`cwd=${config.workingDirectory}`);
   if (yolo) console.log("YOLO mode enabled: command approvals are bypassed.");
-  console.log("Type /help for commands. Use /connect to store keys or mark OAuth sign-in pending.\n");
+  console.log("Type /help for commands. Use /connect to store keys or run OAuth sign-in.\n");
 
   let messages: ModelMessage[] = [];
 
@@ -116,6 +117,7 @@ export async function runCliRepl(
     console.log("  /new                  Clear conversation");
     console.log("  /model <id>            Set model id for this session");
     console.log(`  /provider <name>       Set provider (${PROVIDER_NAMES.join("|")})`);
+    console.log(`  /connect <name> [key]  Save provider key or run OAuth (${PROVIDER_NAMES.join("|")})`);
     console.log("  /cwd <path>            Set working directory for this session");
     console.log("  /tools                List tool names\n");
   };
@@ -186,6 +188,71 @@ export async function runCliRepl(
 
         system = await loadSystemPrompt(config);
         console.log(`cwd set to ${config.workingDirectory}`);
+        continue;
+      }
+
+      if (cmd === "connect") {
+        const serviceToken = (rest[0] ?? "").trim().toLowerCase();
+        const apiKey = rest.slice(1).join(" ").trim();
+
+        const paths = getAiCoworkerPaths({
+          homedir: config.userAgentDir ? path.dirname(config.userAgentDir) : undefined,
+        });
+
+        if (!serviceToken || serviceToken === "help" || serviceToken === "list") {
+          const store = await readConnectionStore(paths);
+          console.log("\nConnections:");
+          console.log(`  file=${paths.connectionsFile}`);
+          for (const service of PROVIDER_NAMES) {
+            const entry = store.services[service];
+            if (!entry) {
+              console.log(`  - ${service}: not connected`);
+              continue;
+            }
+            if (entry.mode === "api_key") {
+              console.log(`  - ${service}: api key saved`);
+              continue;
+            }
+            if (entry.mode === "oauth") {
+              console.log(`  - ${service}: oauth connected`);
+              continue;
+            }
+            console.log(`  - ${service}: pending`);
+          }
+          console.log("");
+          continue;
+        }
+
+        if (!isProviderName(serviceToken)) {
+          console.log(`usage: /connect <${PROVIDER_NAMES.join("|")}> [api_key]`);
+          continue;
+        }
+
+        const useInherit = !apiKey && isOauthCliProvider(serviceToken);
+        if (useInherit) {
+          console.log(`Starting OAuth sign-in for ${serviceToken}...`);
+          rl.pause();
+        }
+
+        try {
+          const result = await connectModelProvider({
+            provider: serviceToken,
+            apiKey,
+            cwd: config.workingDirectory,
+            paths,
+            oauthStdioMode: useInherit ? "inherit" : "pipe",
+            onOauthLine: (line) => console.log(line),
+          });
+          if (!result.ok) {
+            console.log(`connect failed: ${result.message}`);
+          } else {
+            console.log(result.message);
+            console.log(`mode=${result.mode}`);
+            console.log(`storage=${result.storageFile}`);
+          }
+        } finally {
+          if (useInherit) rl.resume();
+        }
         continue;
       }
 

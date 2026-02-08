@@ -1,13 +1,14 @@
 #!/usr/bin/env bun
 
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+import { ensureAiCoworkerHome, getAiCoworkerPaths, isOauthCliProvider, maskApiKey, readConnectionStore } from "../connect";
+import type { ConnectionStore } from "../connect";
 import { PROVIDER_NAMES } from "../types";
 import type { ProviderName, TodoItem } from "../types";
 import type { ClientMessage, ServerEvent } from "../server/protocol";
@@ -86,27 +87,6 @@ type SlashCommand = {
   examples?: string[];
 };
 
-type AiCoworkerPaths = {
-  rootDir: string;
-  configDir: string;
-  sessionsDir: string;
-  logsDir: string;
-  connectionsFile: string;
-};
-
-type StoredConnection = {
-  service: ConnectService;
-  mode: "api_key" | "oauth_pending";
-  apiKey?: string;
-  updatedAt: string;
-};
-
-type ConnectionStore = {
-  version: 1;
-  updatedAt: string;
-  services: Partial<Record<ConnectService, StoredConnection>>;
-};
-
 type ModelChoice = { provider: ConnectService; model: string };
 
 type CommandWindow = { kind: "slash" } | { kind: "help" } | { kind: "models" } | { kind: "connect" } | null;
@@ -125,57 +105,6 @@ const MODEL_CHOICES: Record<ConnectService, readonly string[]> = {
 const ALL_MODEL_CHOICES: readonly ModelChoice[] = CONNECT_SERVICES.flatMap((provider) =>
   MODEL_CHOICES[provider].map((model) => ({ provider, model }))
 );
-
-function getAiCoworkerPaths(): AiCoworkerPaths {
-  const rootDir = path.join(os.homedir(), ".ai-coworker");
-  const configDir = path.join(rootDir, "config");
-  const sessionsDir = path.join(rootDir, "sessions");
-  const logsDir = path.join(rootDir, "logs");
-  const connectionsFile = path.join(configDir, "connections.json");
-  return { rootDir, configDir, sessionsDir, logsDir, connectionsFile };
-}
-
-async function ensureAiCoworkerHome(paths: AiCoworkerPaths): Promise<void> {
-  await fs.mkdir(paths.rootDir, { recursive: true });
-  await fs.mkdir(paths.configDir, { recursive: true });
-  await fs.mkdir(paths.sessionsDir, { recursive: true });
-  await fs.mkdir(paths.logsDir, { recursive: true });
-}
-
-async function readConnectionStore(paths: AiCoworkerPaths): Promise<ConnectionStore> {
-  await ensureAiCoworkerHome(paths);
-
-  try {
-    const raw = await fs.readFile(paths.connectionsFile, "utf-8");
-    const parsed = JSON.parse(raw) as Partial<ConnectionStore>;
-    if (parsed && typeof parsed === "object" && parsed.version === 1 && parsed.services && typeof parsed.services === "object") {
-      return {
-        version: 1,
-        updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
-        services: parsed.services,
-      };
-    }
-  } catch {
-    // ignore and initialize below
-  }
-
-  return { version: 1, updatedAt: new Date().toISOString(), services: {} };
-}
-
-async function writeConnectionStore(paths: AiCoworkerPaths, store: ConnectionStore): Promise<void> {
-  await ensureAiCoworkerHome(paths);
-  await fs.writeFile(paths.connectionsFile, JSON.stringify(store, null, 2), { encoding: "utf-8", mode: 0o600 });
-  try {
-    await fs.chmod(paths.connectionsFile, 0o600);
-  } catch {
-    // Best-effort hardening only.
-  }
-}
-
-function maskApiKey(value: string): string {
-  if (value.length <= 8) return "*".repeat(Math.max(4, value.length));
-  return `${value.slice(0, 4)}...${value.slice(-4)}`;
-}
 
 async function readJsonSafe<T>(filePath: string): Promise<T | null> {
   try {
@@ -232,10 +161,9 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   {
     id: "connect",
     name: "connect",
-    summary: "Connect a provider key (or start sign-in placeholder flow).",
+    summary: "Connect a provider key or start OAuth sign-in.",
     usage: `/connect <${CONNECT_SERVICES.join("|")}> [api_key]`,
-    details:
-      "Stores provider connection info under ~/.ai-coworker. With no key, it records a pending sign-in placeholder.",
+    details: "Stores provider connection info under ~/.ai-coworker. For CLI providers, no key starts OAuth.",
     examples: [
       "/connect openai sk-...",
       "/connect codex-cli",
@@ -830,7 +758,12 @@ function App(props: { serverUrl: string }) {
       }
 
       if (entry.mode === "oauth_pending") {
-        lines.push(`- ${service}: sign-in pending (placeholder)`);
+        lines.push(`- ${service}: pending`);
+        continue;
+      }
+
+      if (entry.mode === "oauth") {
+        lines.push(`- ${service}: oauth connected`);
         continue;
       }
 
@@ -840,17 +773,19 @@ function App(props: { serverUrl: string }) {
     lines.push("");
     lines.push("Usage:");
     lines.push(`- \`/connect <${CONNECT_SERVICES.join("|")}> <api_key>\``);
-    lines.push(`- \`/connect <${CONNECT_SERVICES.join("|")}>\` (placeholder sign-in marker)`);
+    lines.push(
+      `- \`/connect <${CONNECT_SERVICES.join("|")}>\` (runs OAuth for gemini-cli/codex-cli/claude-code; otherwise marks pending)`
+    );
     return lines.join("\n");
   };
 
   const handleConnectCommand = async (args: string) => {
     try {
-      const store = await readConnectionStore(aiCoworkerPaths);
       const tokens = args.split(/\s+/).filter(Boolean);
       const serviceToken = (tokens[0] ?? "").toLowerCase();
 
       if (!serviceToken || serviceToken === "help" || serviceToken === "list") {
+        const store = await readConnectionStore(aiCoworkerPaths);
         appendFeed({
           id: nextFeedId(),
           type: "message",
@@ -871,56 +806,39 @@ function App(props: { serverUrl: string }) {
 
       const service = serviceToken as ConnectService;
       const apiKey = tokens.slice(1).join(" ").trim();
-      const now = new Date().toISOString();
-
-      if (!apiKey) {
-        store.services[service] = {
-          service,
-          mode: "oauth_pending",
-          updatedAt: now,
-        };
-        store.updatedAt = now;
-        await writeConnectionStore(aiCoworkerPaths, store);
+      const sid = sessionIdRef.current;
+      if (!sid) {
         appendFeed({
           id: nextFeedId(),
-          type: "message",
-          role: "assistant",
-          text: [
-            `### /connect ${service}`,
-            "",
-            "Sign-in placeholder saved.",
-            "",
-            `- Status: pending`,
-            `- Storage: \`${aiCoworkerPaths.connectionsFile}\``,
-            "",
-            "OAuth/browser-based sign-in can be plugged into this command next.",
-          ].join("\n"),
+          type: "system",
+          line: "not connected: cannot run /connect yet",
         });
         return;
       }
 
-      store.services[service] = {
-        service,
-        mode: "api_key",
-        apiKey,
-        updatedAt: now,
-      };
-      store.updatedAt = now;
-      await writeConnectionStore(aiCoworkerPaths, store);
+      const ok = send({
+        type: "connect_provider",
+        sessionId: sid,
+        provider: service,
+        apiKey: apiKey || undefined,
+      });
+      if (!ok) {
+        appendFeed({
+          id: nextFeedId(),
+          type: "error",
+          message: "connect failed: unable to send websocket request",
+        });
+        return;
+      }
+
       appendFeed({
         id: nextFeedId(),
-        type: "message",
-        role: "assistant",
-        text: [
-          `### /connect ${service}`,
-          "",
-          "Provider key saved.",
-          "",
-          `- Key: \`${maskApiKey(apiKey)}\``,
-          `- Storage: \`${aiCoworkerPaths.connectionsFile}\``,
-          "",
-          "Note: this currently stores keys as local config; keychain integration can be added next.",
-        ].join("\n"),
+        type: "system",
+        line: apiKey
+          ? `saving key for ${service}...`
+          : isOauthCliProvider(service)
+            ? `starting OAuth sign-in for ${service}...`
+            : `marking ${service} as pending (no key supplied)...`,
       });
     } catch (err) {
       appendFeed({
@@ -1049,9 +967,11 @@ function App(props: { serverUrl: string }) {
         openModelsWindow();
         return true;
       case "connect": {
-        const [serviceHint, ...rest] = args.split(/\s+/).filter(Boolean);
-        const keyHint = rest.join(" ").trim();
-        openConnectWindow(serviceHint, keyHint || "");
+        if (args) {
+          void handleConnectCommand(args);
+          return true;
+        }
+        openConnectWindow();
         return true;
       }
       case "clear":
@@ -1825,7 +1745,7 @@ function App(props: { serverUrl: string }) {
             <select
               options={CONNECT_SERVICES.map((service) => ({
                 name: service,
-                description: `save ${service} key or sign-in placeholder`,
+                description: isOauthCliProvider(service) ? "save key or start OAuth login" : "save key or mark pending",
                 value: service,
               }))}
               selectedIndex={connectSelectedIndex}
@@ -1850,7 +1770,7 @@ function App(props: { serverUrl: string }) {
               onChange={(v) => setConnectApiKeyInput(normalizeInputValue(v))}
               onSubmit={() => submitConnectSelection()}
               width="100%"
-              placeholder="Optional API key (leave blank for sign-in placeholder)"
+              placeholder="Optional API key (leave blank to start OAuth for CLI providers)"
               backgroundColor={theme.inputBg}
               focusedBackgroundColor={theme.inputBgFocus}
               textColor={theme.text}
@@ -1859,7 +1779,7 @@ function App(props: { serverUrl: string }) {
               focused={connectFocus === "input"}
             />
 
-            <text fg={theme.muted}>Tab switches field. Enter saves selected provider. Esc closes.</text>
+            <text fg={theme.muted}>Tab switches field. Enter starts connect flow. Esc closes.</text>
           </box>
         </box>
       ) : null}

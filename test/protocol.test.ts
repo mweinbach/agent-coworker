@@ -241,6 +241,89 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("connect_provider", () => {
+    test("valid connect_provider with api key", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "connect_provider",
+          sessionId: "s1",
+          provider: "openai",
+          apiKey: "sk-test",
+        })
+      );
+      expect(msg.type).toBe("connect_provider");
+      if (msg.type === "connect_provider") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.provider).toBe("openai");
+        expect(msg.apiKey).toBe("sk-test");
+      }
+    });
+
+    test("valid connect_provider without api key", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "connect_provider",
+          sessionId: "s1",
+          provider: "codex-cli",
+        })
+      );
+      if (msg.type === "connect_provider") {
+        expect(msg.provider).toBe("codex-cli");
+        expect(msg.apiKey).toBeUndefined();
+      }
+    });
+
+    test.each(["gemini-cli", "codex-cli", "claude-code"])(
+      "connect_provider accepts %s provider",
+      (provider) => {
+        const msg = expectOk(
+          JSON.stringify({
+            type: "connect_provider",
+            sessionId: "s1",
+            provider,
+          })
+        );
+        if (msg.type === "connect_provider") {
+          expect(msg.provider).toBe(provider);
+        }
+      }
+    );
+
+    test("connect_provider missing sessionId fails", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "connect_provider",
+          provider: "openai",
+          apiKey: "sk-test",
+        })
+      );
+      expect(err).toContain("connect_provider missing sessionId");
+    });
+
+    test("connect_provider with invalid provider fails", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "connect_provider",
+          sessionId: "s1",
+          provider: "not-real",
+        })
+      );
+      expect(err).toContain("connect_provider missing/invalid provider");
+    });
+
+    test("connect_provider with non-string apiKey fails", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "connect_provider",
+          sessionId: "s1",
+          provider: "openai",
+          apiKey: 123,
+        })
+      );
+      expect(err).toContain("connect_provider invalid apiKey");
+    });
+  });
+
   describe("reset", () => {
     test("valid reset message", () => {
       const msg = expectOk(JSON.stringify({ type: "reset", sessionId: "s1" }));

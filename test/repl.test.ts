@@ -200,7 +200,7 @@ describe("renderTodos", () => {
 // Command parsing logic (replicated from the REPL's while-loop)
 // ---------------------------------------------------------------------------
 interface ParsedCommand {
-  type: "help" | "exit" | "new" | "model" | "provider" | "cwd" | "tools" | "unknown" | "message";
+  type: "help" | "exit" | "new" | "model" | "provider" | "connect" | "cwd" | "tools" | "unknown" | "message";
   arg?: string;
 }
 
@@ -217,6 +217,7 @@ function parseReplInput(input: string): ParsedCommand {
   if (cmd === "new") return { type: "new" };
   if (cmd === "model") return { type: "model", arg: rest.join(" ").trim() };
   if (cmd === "provider") return { type: "provider", arg: rest[0] };
+  if (cmd === "connect") return { type: "connect", arg: rest.join(" ").trim() };
   if (cmd === "cwd") return { type: "cwd", arg: rest.join(" ").trim() };
   if (cmd === "tools") return { type: "tools" };
 
@@ -252,6 +253,18 @@ describe("REPL command parsing", () => {
     const result = parseReplInput("/provider google");
     expect(result.type).toBe("provider");
     expect(result.arg).toBe("google");
+  });
+
+  test("/connect with provider and key is parsed", () => {
+    const result = parseReplInput("/connect openai sk-test");
+    expect(result.type).toBe("connect");
+    expect(result.arg).toBe("openai sk-test");
+  });
+
+  test("/connect with only provider is parsed", () => {
+    const result = parseReplInput("/connect codex-cli");
+    expect(result.type).toBe("connect");
+    expect(result.arg).toBe("codex-cli");
   });
 
   test("/cwd with path is parsed", () => {

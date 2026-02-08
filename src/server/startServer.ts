@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 
+import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
 import type { AgentConfig } from "../types";
 import { loadConfig } from "../config";
 import { loadSystemPrompt } from "../prompt";
@@ -14,6 +15,9 @@ export interface StartAgentServerOptions {
   env?: Record<string, string | undefined>;
   providerOptions?: Record<string, any>;
   yolo?: boolean;
+  homedir?: string;
+  connectProviderImpl?: typeof connectModelProvider;
+  getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
 }
 
 export async function startAgentServer(
@@ -27,7 +31,7 @@ export async function startAgentServer(
   const hostname = opts.hostname ?? "127.0.0.1";
   const env = opts.env ?? { ...process.env, AGENT_WORKING_DIR: opts.cwd };
 
-  const config = await loadConfig({ cwd: opts.cwd, env });
+  const config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir });
   if (opts.providerOptions) config.providerOptions = opts.providerOptions;
 
   await fs.mkdir(config.projectAgentDir, { recursive: true });
@@ -55,6 +59,8 @@ export async function startAgentServer(
             config,
             system,
             yolo: opts.yolo,
+            connectProviderImpl: opts.connectProviderImpl,
+            getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl,
             emit: (evt: ServerEvent) => {
               try {
                 ws.send(JSON.stringify(evt));
@@ -122,6 +128,11 @@ export async function startAgentServer(
 
           if (msg.type === "set_model") {
             void session.setModel(msg.model, msg.provider);
+            return;
+          }
+
+          if (msg.type === "connect_provider") {
+            void session.connectProvider(msg.provider, msg.apiKey);
             return;
           }
 

@@ -6,6 +6,7 @@ export type ClientMessage =
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
   | { type: "ask_response"; sessionId: string; requestId: string; answer: string }
   | { type: "approval_response"; sessionId: string; requestId: string; approved: boolean }
+  | { type: "connect_provider"; sessionId: string; provider: AgentConfig["provider"]; apiKey?: string }
   | { type: "set_model"; sessionId: string; model: string; provider?: AgentConfig["provider"] }
   | { type: "reset"; sessionId: string };
 
@@ -55,6 +56,14 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
     case "approval_response":
     case "reset":
       return { ok: true, msg: obj };
+    case "connect_provider": {
+      if (typeof obj.sessionId !== "string") return { ok: false, error: "connect_provider missing sessionId" };
+      if (!isProviderName(obj.provider)) return { ok: false, error: "connect_provider missing/invalid provider" };
+      if (obj.apiKey !== undefined && typeof obj.apiKey !== "string") {
+        return { ok: false, error: "connect_provider invalid apiKey" };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
     case "set_model": {
       if (typeof obj.sessionId !== "string") return { ok: false, error: "set_model missing sessionId" };
       if (typeof obj.model !== "string") return { ok: false, error: "set_model missing model" };

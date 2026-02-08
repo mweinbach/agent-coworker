@@ -1,5 +1,7 @@
 import type { ModelMessage } from "ai";
+import path from "node:path";
 
+import { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
 import { isProviderName } from "../types";
 import type { AgentConfig, TodoItem } from "../types";
 import { runTurn } from "../agent";
@@ -35,9 +37,12 @@ export class AgentSession {
   private system: string;
   private readonly yolo: boolean;
   private readonly emit: (evt: ServerEvent) => void;
+  private readonly connectProviderImpl: typeof connectModelProvider;
+  private readonly getAiCoworkerPathsImpl: typeof getAiCoworkerPaths;
 
   private messages: ModelMessage[] = [];
   private running = false;
+  private connecting = false;
 
   private readonly pendingAsk = new Map<string, Deferred<string>>();
   private readonly pendingApproval = new Map<string, Deferred<boolean>>();
@@ -49,12 +54,16 @@ export class AgentSession {
     system: string;
     yolo?: boolean;
     emit: (evt: ServerEvent) => void;
+    connectProviderImpl?: typeof connectModelProvider;
+    getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   }) {
     this.id = makeId();
     this.config = opts.config;
     this.system = opts.system;
     this.yolo = opts.yolo === true;
     this.emit = opts.emit;
+    this.connectProviderImpl = opts.connectProviderImpl ?? connectModelProvider;
+    this.getAiCoworkerPathsImpl = opts.getAiCoworkerPathsImpl ?? getAiCoworkerPaths;
   }
 
   getPublicConfig() {
@@ -117,6 +126,57 @@ export class AgentSession {
       sessionId: this.id,
       config: this.getPublicConfig(),
     });
+  }
+
+  async connectProvider(providerRaw: AgentConfig["provider"], apiKeyRaw?: string) {
+    if (this.running) {
+      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      return;
+    }
+    if (this.connecting) {
+      this.emit({ type: "error", sessionId: this.id, message: "Connection flow already running" });
+      return;
+    }
+    if (!isProviderName(providerRaw)) {
+      this.emit({ type: "error", sessionId: this.id, message: `Unsupported provider: ${String(providerRaw)}` });
+      return;
+    }
+
+    this.connecting = true;
+    try {
+      const userHome = this.config.userAgentDir ? path.dirname(this.config.userAgentDir) : undefined;
+      const paths = this.getAiCoworkerPathsImpl({ homedir: userHome });
+      const result = await this.connectProviderImpl({
+        provider: providerRaw,
+        apiKey: apiKeyRaw,
+        cwd: this.config.workingDirectory,
+        paths,
+        oauthStdioMode: "pipe",
+        onOauthLine: (line) => this.log(`[connect ${providerRaw}] ${line}`),
+      });
+
+      if (!result.ok) {
+        this.emit({
+          type: "error",
+          sessionId: this.id,
+          message: result.message,
+        });
+        return;
+      }
+
+      const lines = [`### /connect ${providerRaw}`, "", result.message, "", `- Mode: ${result.mode}`, `- Storage: \`${result.storageFile}\``];
+      if (result.maskedApiKey) lines.splice(4, 0, `- Key: \`${result.maskedApiKey}\``);
+      if (result.oauthCommand) lines.push(`- OAuth command: \`${result.oauthCommand}\``);
+      this.emit({
+        type: "assistant_message",
+        sessionId: this.id,
+        text: lines.join("\n"),
+      });
+    } catch (err) {
+      this.emit({ type: "error", sessionId: this.id, message: `connect failed: ${String(err)}` });
+    } finally {
+      this.connecting = false;
+    }
   }
 
   handleAskResponse(requestId: string, answer: string) {

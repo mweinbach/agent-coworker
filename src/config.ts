@@ -4,15 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI, google } from "@ai-sdk/google";
-import { createOpenAI, openai } from "@ai-sdk/openai";
-import { claudeCode, createClaudeCode } from "ai-sdk-provider-claude-code";
-import { codexCli, createCodexCli } from "ai-sdk-provider-codex-cli";
-import { createGeminiProvider } from "ai-sdk-provider-gemini-cli";
-
+import { defaultModelForProvider, getModelForProvider, getProviderKeyCandidates } from "./providers";
 import { isProviderName } from "./types";
 import type { AgentConfig, ProviderName } from "./types";
+
+export { defaultModelForProvider } from "./providers";
 
 export interface LoadConfigOptions {
   cwd?: string;
@@ -35,28 +31,6 @@ function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
     out[k] = v;
   }
   return out as T;
-}
-
-export function defaultModelForProvider(provider: ProviderName): string {
-  switch (provider) {
-    case "google":
-      return "gemini-3-flash-preview";
-    case "gemini-cli":
-      return "gemini-3-flash-preview";
-    case "openai":
-      return "gpt-5.2";
-    case "codex-cli":
-      return "gpt-5.2-codex";
-    case "anthropic":
-      // Keep this conservative; users can override via /model or config/env.
-      return "claude-opus-4-6";
-    case "claude-code":
-      return "sonnet";
-    default: {
-      const _exhaustive: never = provider;
-      return _exhaustive;
-    }
-  }
 }
 
 async function loadJsonSafe(filePath: string): Promise<Record<string, unknown>> {
@@ -100,60 +74,11 @@ function resolveUserHomeFromConfig(config: AgentConfig): string {
   return os.homedir();
 }
 
-function resolveGeminiCliModelSettings(config: AgentConfig): Record<string, unknown> {
-  // The Gemini CLI community provider expects `thinkingConfig` on model settings
-  // (provider(modelId, settings)), not in AI SDK `providerOptions`.
-  const optionCandidates = [
-    config.providerOptions?.["gemini-cli-core"],
-    config.providerOptions?.["gemini-cli"],
-  ];
-
-  let providedThinking: Record<string, unknown> | null = null;
-  for (const candidate of optionCandidates) {
-    if (!isPlainObject(candidate)) continue;
-    const maybeThinking = candidate.thinkingConfig;
-    if (!isPlainObject(maybeThinking)) continue;
-    providedThinking = maybeThinking;
-    break;
-  }
-
-  const thinkingConfig: Record<string, unknown> = {};
-  if (providedThinking) {
-    if (typeof providedThinking.includeThoughts === "boolean") {
-      thinkingConfig.includeThoughts = providedThinking.includeThoughts;
-    }
-    if (typeof providedThinking.thinkingLevel === "string" && providedThinking.thinkingLevel.trim()) {
-      thinkingConfig.thinkingLevel = providedThinking.thinkingLevel;
-    }
-    if (typeof providedThinking.thinkingBudget === "number" && Number.isFinite(providedThinking.thinkingBudget)) {
-      thinkingConfig.thinkingBudget = providedThinking.thinkingBudget;
-    }
-  }
-
-  // Default to tool-safe behavior for Gemini CLI:
-  // keep thought parts disabled unless the user explicitly opts in.
-  if (thinkingConfig.includeThoughts === undefined) {
-    thinkingConfig.includeThoughts = false;
-  }
-  if (thinkingConfig.thinkingLevel === undefined && thinkingConfig.thinkingBudget === undefined) {
-    thinkingConfig.thinkingLevel = "minimal";
-  }
-
-  return { thinkingConfig };
-}
-
 function readSavedApiKey(config: AgentConfig, provider: ProviderName): string | undefined {
   const home = resolveUserHomeFromConfig(config);
   const connectionsPath = path.join(home, ".ai-coworker", "config", "connections.json");
 
-  const keyCandidates: readonly ProviderName[] =
-    provider === "gemini-cli"
-      ? [provider, "google"]
-      : provider === "codex-cli"
-        ? [provider, "openai"]
-        : provider === "claude-code"
-          ? [provider, "anthropic"]
-          : [provider];
+  const keyCandidates = getProviderKeyCandidates(provider);
 
   try {
     const raw = fsSync.readFileSync(connectionsPath, "utf-8");
@@ -286,61 +211,5 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 export function getModel(config: AgentConfig, id?: string) {
   const modelId = id || config.model;
   const savedKey = readSavedApiKey(config, config.provider);
-
-  switch (config.provider) {
-    case "google": {
-      const provider = savedKey ? createGoogleGenerativeAI({ apiKey: savedKey }) : google;
-      return provider(modelId);
-    }
-    case "openai": {
-      const provider = savedKey ? createOpenAI({ apiKey: savedKey }) : openai;
-      return provider(modelId);
-    }
-    case "anthropic": {
-      const provider = savedKey ? createAnthropic({ apiKey: savedKey }) : anthropic;
-      return provider(modelId);
-    }
-    case "gemini-cli": {
-      const envKey = savedKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-      const provider = envKey
-        ? createGeminiProvider({
-            authType: "api-key",
-            apiKey: envKey,
-          })
-        : createGeminiProvider({
-            authType: "oauth-personal",
-          });
-      return provider(modelId, resolveGeminiCliModelSettings(config));
-    }
-    case "codex-cli": {
-      const envKey = savedKey || process.env.OPENAI_API_KEY;
-      const provider = envKey
-        ? createCodexCli({
-            defaultSettings: {
-              env: {
-                OPENAI_API_KEY: envKey,
-              },
-            },
-          })
-        : codexCli;
-      return provider(modelId);
-    }
-    case "claude-code": {
-      const envKey = savedKey || process.env.ANTHROPIC_API_KEY;
-      const provider = envKey
-        ? createClaudeCode({
-            defaultSettings: {
-              env: {
-                ANTHROPIC_API_KEY: envKey,
-              },
-            },
-          })
-        : claudeCode;
-      return provider(modelId);
-    }
-    default: {
-      const _exhaustive: never = config.provider;
-      return _exhaustive;
-    }
-  }
+  return getModelForProvider(config, modelId, savedKey);
 }

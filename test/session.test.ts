@@ -203,6 +203,35 @@ describe("AgentSession", () => {
     });
   });
 
+  describe("setModel", () => {
+    test("updates public model and emits config_updated", async () => {
+      const { session, events } = makeSession();
+      await session.setModel("gpt-5.2");
+
+      expect(session.getPublicConfig().model).toBe("gpt-5.2");
+
+      const evt = events.find((e) => e.type === "config_updated");
+      expect(evt).toBeDefined();
+      if (evt && evt.type === "config_updated") {
+        expect(evt.config.model).toBe("gpt-5.2");
+      }
+    });
+
+    test("empty model emits error and does not change model", async () => {
+      const { session, events } = makeSession();
+      const before = session.getPublicConfig().model;
+
+      await session.setModel("   ");
+
+      expect(session.getPublicConfig().model).toBe(before);
+      const err = events.find((e) => e.type === "error");
+      expect(err).toBeDefined();
+      if (err && err.type === "error") {
+        expect(err.message).toContain("Model id is required");
+      }
+    });
+  });
+
   // =========================================================================
   // reset
   // =========================================================================

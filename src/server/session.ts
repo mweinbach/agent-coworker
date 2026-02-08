@@ -2,6 +2,7 @@ import type { ModelMessage } from "ai";
 
 import type { AgentConfig, TodoItem } from "../types";
 import { runTurn } from "../agent";
+import { loadSystemPrompt } from "../prompt";
 import { classifyCommand } from "../utils/approval";
 
 import type { ServerEvent } from "./protocol";
@@ -29,8 +30,8 @@ function deferred<T>(): Deferred<T> {
 export class AgentSession {
   readonly id: string;
 
-  private readonly config: AgentConfig;
-  private readonly system: string;
+  private config: AgentConfig;
+  private system: string;
   private readonly yolo: boolean;
   private readonly emit: (evt: ServerEvent) => void;
 
@@ -68,6 +69,41 @@ export class AgentSession {
     this.messages = [];
     this.todos = [];
     this.emit({ type: "todos", sessionId: this.id, todos: [] });
+  }
+
+  async setModel(modelIdRaw: string) {
+    const modelId = modelIdRaw.trim();
+    if (!modelId) {
+      this.emit({ type: "error", sessionId: this.id, message: "Model id is required" });
+      return;
+    }
+    if (this.running) {
+      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      return;
+    }
+
+    this.config = {
+      ...this.config,
+      model: modelId,
+      // Keep sub-agent model aligned for now until we expose a dedicated toggle.
+      subAgentModel: modelId,
+    };
+
+    try {
+      this.system = await loadSystemPrompt(this.config);
+    } catch (err) {
+      this.emit({
+        type: "error",
+        sessionId: this.id,
+        message: `Model updated but failed to refresh prompt: ${String(err)}`,
+      });
+    }
+
+    this.emit({
+      type: "config_updated",
+      sessionId: this.id,
+      config: this.getPublicConfig(),
+    });
   }
 
   handleAskResponse(requestId: string, answer: string) {

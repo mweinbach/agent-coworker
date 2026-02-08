@@ -1,5 +1,9 @@
 #!/usr/bin/env bun
 
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -66,6 +70,179 @@ type Theme = {
   inputBgFocus: string;
   cursor: string;
 };
+
+type SlashCommandId = "help" | "new" | "status" | "model" | "connect" | "clear" | "exit";
+
+type ConnectService = "openai" | "google" | "anthropic";
+
+type SlashCommand = {
+  id: SlashCommandId;
+  name: string;
+  aliases?: string[];
+  summary: string;
+  usage: string;
+  details: string;
+  examples?: string[];
+};
+
+type AiCoworkerPaths = {
+  rootDir: string;
+  configDir: string;
+  sessionsDir: string;
+  logsDir: string;
+  connectionsFile: string;
+};
+
+type StoredConnection = {
+  service: ConnectService;
+  mode: "api_key" | "oauth_pending";
+  apiKey?: string;
+  updatedAt: string;
+};
+
+type ConnectionStore = {
+  version: 1;
+  updatedAt: string;
+  services: Partial<Record<ConnectService, StoredConnection>>;
+};
+
+const CONNECT_SERVICES: readonly ConnectService[] = ["openai", "google", "anthropic"];
+
+function getAiCoworkerPaths(): AiCoworkerPaths {
+  const rootDir = path.join(os.homedir(), ".ai-coworker");
+  const configDir = path.join(rootDir, "config");
+  const sessionsDir = path.join(rootDir, "sessions");
+  const logsDir = path.join(rootDir, "logs");
+  const connectionsFile = path.join(configDir, "connections.json");
+  return { rootDir, configDir, sessionsDir, logsDir, connectionsFile };
+}
+
+async function ensureAiCoworkerHome(paths: AiCoworkerPaths): Promise<void> {
+  await fs.mkdir(paths.rootDir, { recursive: true });
+  await fs.mkdir(paths.configDir, { recursive: true });
+  await fs.mkdir(paths.sessionsDir, { recursive: true });
+  await fs.mkdir(paths.logsDir, { recursive: true });
+}
+
+async function readConnectionStore(paths: AiCoworkerPaths): Promise<ConnectionStore> {
+  await ensureAiCoworkerHome(paths);
+
+  try {
+    const raw = await fs.readFile(paths.connectionsFile, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<ConnectionStore>;
+    if (parsed && typeof parsed === "object" && parsed.version === 1 && parsed.services && typeof parsed.services === "object") {
+      return {
+        version: 1,
+        updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
+        services: parsed.services,
+      };
+    }
+  } catch {
+    // ignore and initialize below
+  }
+
+  return { version: 1, updatedAt: new Date().toISOString(), services: {} };
+}
+
+async function writeConnectionStore(paths: AiCoworkerPaths, store: ConnectionStore): Promise<void> {
+  await ensureAiCoworkerHome(paths);
+  await fs.writeFile(paths.connectionsFile, JSON.stringify(store, null, 2), { encoding: "utf-8", mode: 0o600 });
+  try {
+    await fs.chmod(paths.connectionsFile, 0o600);
+  } catch {
+    // Best-effort hardening only.
+  }
+}
+
+function maskApiKey(value: string): string {
+  if (value.length <= 8) return "*".repeat(Math.max(4, value.length));
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+async function readJsonSafe<T>(filePath: string): Promise<T | null> {
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function writeJsonSafe(filePath: string, value: unknown): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(value, null, 2), "utf-8");
+}
+
+async function appendLogLine(filePath: string, line: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.appendFile(filePath, line, "utf-8");
+}
+
+const SLASH_COMMANDS: readonly SlashCommand[] = [
+  {
+    id: "help",
+    name: "help",
+    aliases: ["h", "commands"],
+    summary: "Show slash commands and usage.",
+    usage: "/help",
+    details: "Shows every available slash command with quick usage guidance.",
+  },
+  {
+    id: "new",
+    name: "new",
+    aliases: ["reset"],
+    summary: "Start a fresh conversation.",
+    usage: "/new",
+    details: "Clears the current feed and resets the active server session context.",
+  },
+  {
+    id: "status",
+    name: "status",
+    summary: "Show session details.",
+    usage: "/status",
+    details: "Displays connection, session id, model/provider, and working directory.",
+  },
+  {
+    id: "model",
+    name: "model",
+    summary: "Switch the active model for this session.",
+    usage: "/model <model_id>",
+    details: "Changes the model immediately for future turns in the current session.",
+    examples: ["/model gpt-5.2", "/model gemini-3-flash-preview", "/model claude-opus-4-6"],
+  },
+  {
+    id: "connect",
+    name: "connect",
+    summary: "Connect a provider key (or start sign-in placeholder flow).",
+    usage: "/connect <openai|google|anthropic> [api_key]",
+    details:
+      "Stores provider connection info under ~/.ai-coworker. With no key, it records a pending sign-in placeholder.",
+    examples: ["/connect openai sk-...", "/connect google", "/connect anthropic sk-ant-..."],
+  },
+  {
+    id: "clear",
+    name: "clear",
+    aliases: ["cls"],
+    summary: "Clear the composer text box.",
+    usage: "/clear",
+    details: "Empties the input composer without sending a message.",
+  },
+  {
+    id: "exit",
+    name: "exit",
+    aliases: ["quit", "q"],
+    summary: "Close the TUI.",
+    usage: "/exit",
+    details: "Closes the terminal UI immediately.",
+  },
+];
+
+function normalizeInputValue(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (typeof (v as any)?.value === "string") return String((v as any).value);
+  if (v == null) return "";
+  return String(v);
+}
 
 function truncateUiText(s: string, maxChars: number): string {
   if (s.length <= maxChars) return s;
@@ -382,6 +559,7 @@ function App(props: { serverUrl: string }) {
   const [responseInput, setResponseInput] = useState<string>("");
   const [modalFocus, setModalFocus] = useState<ModalFocus>("input");
   const [askSelectedIndex, setAskSelectedIndex] = useState<number>(0);
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState<number>(0);
   const [toolDetailId, setToolDetailId] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -389,11 +567,56 @@ function App(props: { serverUrl: string }) {
   const pendingToolsRef = useRef<Map<string, string[]>>(new Map());
   const feedSeqRef = useRef(0);
   const feedScrollRef = useRef<any>(null);
+  const sessionStatePathRef = useRef<string | null>(null);
+  const sessionLogPathRef = useRef<string | null>(null);
 
   const title = useMemo(() => {
     const base = provider && model ? `${provider} / ${model}` : "connecting";
     return cwd ? `${base} (${cwd})` : base;
   }, [provider, model, cwd]);
+  const aiCoworkerPaths = useMemo(() => getAiCoworkerPaths(), []);
+
+  const slashQuery = useMemo(() => {
+    if (mode.kind !== "chat" || toolDetailId) return null;
+    if (!composer.startsWith("/")) return null;
+    const withoutSlash = composer.slice(1);
+    const token = withoutSlash.split(/\s+/)[0] ?? "";
+    return token.toLowerCase();
+  }, [composer, mode.kind, toolDetailId]);
+
+  const slashSuggestions = useMemo(() => {
+    if (slashQuery === null) return [];
+    if (!slashQuery) return [...SLASH_COMMANDS];
+    return SLASH_COMMANDS.filter(
+      (cmd) => cmd.name.startsWith(slashQuery) || (cmd.aliases ?? []).some((alias) => alias.startsWith(slashQuery))
+    );
+  }, [slashQuery]);
+
+  const slashVisible = mode.kind === "chat" && !toolDetailId && slashQuery !== null;
+  const selectedSlashCommand = slashSuggestions[slashSelectedIndex] ?? null;
+
+  useEffect(() => {
+    void ensureAiCoworkerHome(aiCoworkerPaths);
+  }, [aiCoworkerPaths]);
+
+  const updateSessionStateFile = async (patch: Record<string, unknown>) => {
+    const p = sessionStatePathRef.current;
+    if (!p) return;
+
+    const current = (await readJsonSafe<Record<string, unknown>>(p)) ?? {};
+    await writeJsonSafe(p, {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const appendSessionLog = (line: string) => {
+    const p = sessionLogPathRef.current;
+    if (!p) return;
+    const ts = new Date().toISOString();
+    void appendLogLine(p, `[${ts}] ${line}\n`);
+  };
 
   const nextFeedId = () => {
     feedSeqRef.current += 1;
@@ -428,15 +651,20 @@ function App(props: { serverUrl: string }) {
     return trimmed;
   };
 
+  const clearComposer = () => {
+    setComposer("");
+    setSlashSelectedIndex(0);
+  };
+
   const sendChat = (raw: string) => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
 
     const sid = sessionIdRef.current;
-    if (!sid) return;
+    if (!sid) return false;
 
     const text = raw.trim();
-    if (!text) return;
+    if (!text) return false;
 
     const clientMessageId = crypto.randomUUID();
     sentMessageIdsRef.current.add(clientMessageId);
@@ -444,9 +672,288 @@ function App(props: { serverUrl: string }) {
     if (sentMessageIdsRef.current.size > 500) sentMessageIdsRef.current.clear();
 
     const ok = send({ type: "user_message", sessionId: sid, text, clientMessageId });
-    if (!ok) return;
-    setComposer("");
+    if (!ok) return false;
     appendFeed({ id: nextFeedId(), type: "message", role: "user", text });
+    appendSessionLog(`you: ${text.replace(/\r?\n/g, " ")}`);
+    return true;
+  };
+
+  const resetConversation = () => {
+    const sid = sessionIdRef.current;
+    if (sid) send({ type: "reset", sessionId: sid });
+
+    feedSeqRef.current = 0;
+    sentMessageIdsRef.current.clear();
+    pendingToolsRef.current.clear();
+    setToolDetailId(null);
+    setTodos([]);
+    setFeed([{ id: nextFeedId(), type: "system", line: "conversation reset" }]);
+    appendSessionLog("conversation reset");
+  };
+
+  const renderSlashHelp = () => {
+    const lines = [
+      "### Slash Commands",
+      "",
+      ...SLASH_COMMANDS.flatMap((cmd) => {
+        const aliases = (cmd.aliases ?? []).map((a) => `\`/${a}\``).join(", ");
+        const line = `- \`/${cmd.name}\` - ${cmd.summary} Usage: \`${cmd.usage}\``;
+        return aliases ? [line, `  aliases: ${aliases}`] : [line];
+      }),
+    ];
+    return lines.join("\n");
+  };
+
+  const renderConnectStatus = (store: ConnectionStore): string => {
+    const lines = [
+      "### Connections",
+      "",
+      `- Home: \`${aiCoworkerPaths.rootDir}\``,
+      `- Config: \`${aiCoworkerPaths.configDir}\``,
+      `- Sessions: \`${aiCoworkerPaths.sessionsDir}\``,
+      `- Logs: \`${aiCoworkerPaths.logsDir}\``,
+      `- Keys file: \`${aiCoworkerPaths.connectionsFile}\``,
+      "",
+    ];
+
+    for (const service of CONNECT_SERVICES) {
+      const entry = store.services[service];
+      if (!entry) {
+        lines.push(`- ${service}: not connected`);
+        continue;
+      }
+
+      if (entry.mode === "api_key" && entry.apiKey) {
+        lines.push(`- ${service}: api key saved (${maskApiKey(entry.apiKey)})`);
+        continue;
+      }
+
+      if (entry.mode === "oauth_pending") {
+        lines.push(`- ${service}: sign-in pending (placeholder)`);
+        continue;
+      }
+
+      lines.push(`- ${service}: configured`);
+    }
+
+    lines.push("");
+    lines.push("Usage:");
+    lines.push(`- \`/connect <${CONNECT_SERVICES.join("|")}> <api_key>\``);
+    lines.push(`- \`/connect <${CONNECT_SERVICES.join("|")}>\` (placeholder sign-in marker)`);
+    return lines.join("\n");
+  };
+
+  const handleConnectCommand = async (args: string) => {
+    try {
+      const store = await readConnectionStore(aiCoworkerPaths);
+      const tokens = args.split(/\s+/).filter(Boolean);
+      const serviceToken = (tokens[0] ?? "").toLowerCase();
+
+      if (!serviceToken || serviceToken === "help" || serviceToken === "list") {
+        appendFeed({
+          id: nextFeedId(),
+          type: "message",
+          role: "assistant",
+          text: renderConnectStatus(store),
+        });
+        return;
+      }
+
+      if (!CONNECT_SERVICES.includes(serviceToken as ConnectService)) {
+        appendFeed({
+          id: nextFeedId(),
+          type: "system",
+          line: `unknown service "${serviceToken}". valid services: ${CONNECT_SERVICES.join(", ")}`,
+        });
+        return;
+      }
+
+      const service = serviceToken as ConnectService;
+      const apiKey = tokens.slice(1).join(" ").trim();
+      const now = new Date().toISOString();
+
+      if (!apiKey) {
+        store.services[service] = {
+          service,
+          mode: "oauth_pending",
+          updatedAt: now,
+        };
+        store.updatedAt = now;
+        await writeConnectionStore(aiCoworkerPaths, store);
+        appendFeed({
+          id: nextFeedId(),
+          type: "message",
+          role: "assistant",
+          text: [
+            `### /connect ${service}`,
+            "",
+            "Sign-in placeholder saved.",
+            "",
+            `- Status: pending`,
+            `- Storage: \`${aiCoworkerPaths.connectionsFile}\``,
+            "",
+            "OAuth/browser-based sign-in can be plugged into this command next.",
+          ].join("\n"),
+        });
+        return;
+      }
+
+      store.services[service] = {
+        service,
+        mode: "api_key",
+        apiKey,
+        updatedAt: now,
+      };
+      store.updatedAt = now;
+      await writeConnectionStore(aiCoworkerPaths, store);
+      appendFeed({
+        id: nextFeedId(),
+        type: "message",
+        role: "assistant",
+        text: [
+          `### /connect ${service}`,
+          "",
+          "Provider key saved.",
+          "",
+          `- Key: \`${maskApiKey(apiKey)}\``,
+          `- Storage: \`${aiCoworkerPaths.connectionsFile}\``,
+          "",
+          "Note: this currently stores keys as local config; keychain integration can be added next.",
+        ].join("\n"),
+      });
+    } catch (err) {
+      appendFeed({
+        id: nextFeedId(),
+        type: "error",
+        message: `connect failed: ${String(err)}`,
+      });
+    }
+  };
+
+  const executeSlashCommand = (raw: string, fallback?: SlashCommand | null) => {
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith("/")) return false;
+
+    const body = trimmed.slice(1).trim();
+    if (!body) {
+      if (fallback) {
+        return executeSlashCommand(`/${fallback.name}`);
+      }
+      return false;
+    }
+
+    const [tokenRaw, ...rest] = body.split(/\s+/);
+    const token = tokenRaw?.toLowerCase() ?? "";
+    const args = rest.join(" ").trim();
+
+    const cmd =
+      SLASH_COMMANDS.find((c) => c.name === token || (c.aliases ?? []).includes(token)) ??
+      (!args && fallback ? fallback : null);
+    if (!cmd) {
+      appendFeed({
+        id: nextFeedId(),
+        type: "system",
+        line: `unknown command: /${token}. type /help for available commands.`,
+      });
+      return true;
+    }
+
+    switch (cmd.id) {
+      case "help":
+        appendFeed({ id: nextFeedId(), type: "message", role: "assistant", text: renderSlashHelp() });
+        return true;
+      case "new":
+        resetConversation();
+        return true;
+      case "status":
+        appendFeed({
+          id: nextFeedId(),
+          type: "message",
+          role: "assistant",
+          text: [
+            "### Session Status",
+            "",
+            `- Connected: ${connected ? "yes" : "no"}`,
+            `- Session: ${sessionId ?? "n/a"}`,
+            `- Provider: ${provider || "n/a"}`,
+            `- Model: ${model || "n/a"}`,
+            `- CWD: \`${cwd || "n/a"}\``,
+            `- Storage: \`${aiCoworkerPaths.rootDir}\``,
+          ].join("\n"),
+        });
+        return true;
+      case "model": {
+        if (!args) {
+          appendFeed({
+            id: nextFeedId(),
+            type: "message",
+            role: "assistant",
+            text: [
+              "### Model Selection",
+              "",
+              `Current model: \`${model || "n/a"}\``,
+              "",
+              "Usage:",
+              "- `/model <model_id>`",
+              "",
+              "Examples:",
+              "- `/model gpt-5.2`",
+              "- `/model gemini-3-flash-preview`",
+              "- `/model claude-opus-4-6`",
+            ].join("\n"),
+          });
+          return true;
+        }
+
+        const sid = sessionIdRef.current;
+        if (!sid) {
+          appendFeed({ id: nextFeedId(), type: "system", line: "not connected: cannot switch model yet" });
+          return true;
+        }
+
+        const ok = send({ type: "set_model", sessionId: sid, model: args });
+        if (!ok) {
+          appendFeed({ id: nextFeedId(), type: "system", line: "failed to send model switch request" });
+          return true;
+        }
+
+        appendFeed({ id: nextFeedId(), type: "system", line: `switching model -> ${args}` });
+        return true;
+      }
+      case "connect":
+        void handleConnectCommand(args);
+        return true;
+      case "clear":
+        clearComposer();
+        return true;
+      case "exit":
+        renderer.destroy();
+        return true;
+      default:
+        return false;
+    }
+  };
+
+  const submitComposer = (v: unknown) => {
+    if (mode.kind !== "chat" || toolDetailId) return;
+    const text = normalizeInputValue(v) || composer;
+    const trimmed = text.trim();
+
+    if (!trimmed) {
+      clearComposer();
+      return;
+    }
+
+    if (trimmed.startsWith("/")) {
+      const handled = executeSlashCommand(trimmed, selectedSlashCommand);
+      if (handled) {
+        clearComposer();
+        return;
+      }
+    }
+
+    sendChat(trimmed);
+    clearComposer();
   };
 
   const sendAskAnswer = (raw: string) => {
@@ -478,8 +985,23 @@ function App(props: { serverUrl: string }) {
     setMode({ kind: "chat" });
   };
 
+  useEffect(() => {
+    setSlashSelectedIndex(0);
+  }, [slashQuery]);
+
+  useEffect(() => {
+    setSlashSelectedIndex((idx) => {
+      if (slashSuggestions.length === 0) return 0;
+      if (idx >= slashSuggestions.length) return slashSuggestions.length - 1;
+      if (idx < 0) return 0;
+      return idx;
+    });
+  }, [slashSuggestions.length]);
+
   useKeyboard((key) => {
     if (key.eventType !== "press") return;
+
+    const slashOpen = slashVisible && slashSuggestions.length > 0;
 
     if (key.name === "escape") {
       if (toolDetailId) {
@@ -490,11 +1012,36 @@ function App(props: { serverUrl: string }) {
       return;
     }
     if (key.ctrl && key.name === "c") {
-      renderer.destroy();
+      if (mode.kind === "chat") clearComposer();
+      if (mode.kind === "ask") setResponseInput("");
+      return;
+    }
+
+    if (slashOpen && key.name === "up") {
+      setSlashSelectedIndex((i) => {
+        const max = slashSuggestions.length - 1;
+        if (max < 0) return 0;
+        return i <= 0 ? max : i - 1;
+      });
+      return;
+    }
+
+    if (slashOpen && key.name === "down") {
+      setSlashSelectedIndex((i) => {
+        const max = slashSuggestions.length - 1;
+        if (max < 0) return 0;
+        return i >= max ? 0 : i + 1;
+      });
       return;
     }
 
     if (key.name === "tab") {
+      if (slashOpen) {
+        const selected = slashSuggestions[slashSelectedIndex] ?? slashSuggestions[0];
+        if (selected) setComposer(`/${selected.name} `);
+        return;
+      }
+
       if (mode.kind === "ask" && mode.options && mode.options.length > 0) {
         setModalFocus((f) => (f === "select" ? "input" : "select"));
         return;
@@ -510,14 +1057,27 @@ function App(props: { serverUrl: string }) {
       setConnected(true);
       const hello: ClientMessage = { type: "client_hello", client: "tui", version: "0.1.0" };
       ws.send(JSON.stringify(hello));
+      appendSessionLog("websocket open");
     };
 
     ws.onclose = () => {
+      const closedSessionId = sessionIdRef.current;
       setConnected(false);
       setMode({ kind: "chat" });
       setToolDetailId(null);
+      appendSessionLog("websocket closed");
+      if (closedSessionId) {
+        void updateSessionStateFile({
+          sessionId: closedSessionId,
+          status: "closed",
+          endedAt: new Date().toISOString(),
+        });
+      }
+
       sessionIdRef.current = null;
       setSessionId(null);
+      sessionStatePathRef.current = null;
+      sessionLogPathRef.current = null;
     };
 
     ws.onerror = () => {
@@ -534,6 +1094,11 @@ function App(props: { serverUrl: string }) {
       }
 
       if (parsed.type === "server_hello") {
+        const stateFile = path.join(aiCoworkerPaths.sessionsDir, `${parsed.sessionId}.json`);
+        const logFile = path.join(aiCoworkerPaths.logsDir, `${parsed.sessionId}.log`);
+        sessionStatePathRef.current = stateFile;
+        sessionLogPathRef.current = logFile;
+
         sessionIdRef.current = parsed.sessionId;
         sentMessageIdsRef.current.clear();
         pendingToolsRef.current.clear();
@@ -545,6 +1110,17 @@ function App(props: { serverUrl: string }) {
         setProvider(parsed.config.provider);
         setModel(parsed.config.model);
         setCwd(parsed.config.workingDirectory);
+        appendSessionLog(`connected session=${parsed.sessionId} model=${parsed.config.model}`);
+        void updateSessionStateFile({
+          sessionId: parsed.sessionId,
+          serverUrl: props.serverUrl,
+          status: "connected",
+          startedAt: new Date().toISOString(),
+          provider: parsed.config.provider,
+          model: parsed.config.model,
+          workingDirectory: parsed.config.workingDirectory,
+          outputDirectory: parsed.config.outputDirectory,
+        });
         return;
       }
 
@@ -562,9 +1138,11 @@ function App(props: { serverUrl: string }) {
             break;
           }
           appendFeed({ id: nextFeedId(), type: "message", role: "user", text: parsed.text });
+          appendSessionLog(`you: ${parsed.text.replace(/\r?\n/g, " ")}`);
           break;
         case "assistant_message":
           appendFeed({ id: nextFeedId(), type: "message", role: "assistant", text: parsed.text });
+          appendSessionLog(`agent: ${parsed.text.replace(/\r?\n/g, " ")}`);
           break;
         case "reasoning":
           appendFeed({ id: nextFeedId(), type: "reasoning", kind: parsed.kind, text: parsed.text });
@@ -610,6 +1188,7 @@ function App(props: { serverUrl: string }) {
           } else {
             appendFeed({ id: nextFeedId(), type: "log", line: parsed.line });
           }
+          appendSessionLog(`log: ${parsed.line.replace(/\r?\n/g, " ")}`);
           break;
         }
         case "todos":
@@ -640,6 +1219,23 @@ function App(props: { serverUrl: string }) {
           });
           setModalFocus("select");
           setResponseInput("");
+          break;
+        case "config_updated":
+          setProvider(parsed.config.provider);
+          setModel(parsed.config.model);
+          setCwd(parsed.config.workingDirectory);
+          void updateSessionStateFile({
+            provider: parsed.config.provider,
+            model: parsed.config.model,
+            workingDirectory: parsed.config.workingDirectory,
+            outputDirectory: parsed.config.outputDirectory,
+          });
+          appendSessionLog(`config updated: ${parsed.config.provider}/${parsed.config.model}`);
+          appendFeed({
+            id: nextFeedId(),
+            type: "system",
+            line: `model updated: ${parsed.config.provider}/${parsed.config.model}`,
+          });
           break;
         case "error":
           appendFeed({ id: nextFeedId(), type: "error", message: parsed.message });
@@ -869,22 +1465,13 @@ function App(props: { serverUrl: string }) {
       >
         <input
           value={composer}
-          onChange={(v) => setComposer(typeof v === "string" ? v : String((v as any)?.value ?? v ?? ""))}
-          onSubmit={(v) => {
-            if (mode.kind !== "chat" || toolDetailId) return;
-            const text =
-              typeof v === "string"
-                ? v
-                : typeof (v as any)?.value === "string"
-                  ? String((v as any).value)
-                  : composer;
-            sendChat(text);
-          }}
+          onChange={(v) => setComposer(normalizeInputValue(v))}
+          onSubmit={submitComposer}
           placeholder={
             toolDetailId
               ? "Viewing tool details (Esc to close)"
               : mode.kind === "chat"
-                ? "Type a message (Enter to send, Esc to quit)"
+                ? "Type a message (Enter sends, / opens commands)"
                 : "Agent is waiting for input (answer in the modal)"
           }
           backgroundColor={theme.inputBg}
@@ -894,9 +1481,76 @@ function App(props: { serverUrl: string }) {
           placeholderColor={theme.muted}
           focused={mode.kind === "chat" && !toolDetailId}
         />
+
+        {slashVisible ? (
+          <box
+            border
+            borderStyle="single"
+            borderColor={theme.borderDim}
+            backgroundColor={theme.inputBg}
+            padding={1}
+            flexDirection="column"
+            gap={1}
+          >
+            <text fg={theme.muted}>
+              <strong>slash commands</strong> Up/down: navigate. Tab: autocomplete. Enter: run.
+            </text>
+
+            {slashSuggestions.length > 0 ? (
+              <box flexDirection="column" gap={0}>
+                {slashSuggestions.slice(0, 8).map((cmd, idx) => {
+                  const selected = idx === slashSelectedIndex;
+                  return (
+                    <box
+                      key={cmd.id}
+                      paddingLeft={1}
+                      paddingRight={1}
+                      backgroundColor={selected ? theme.borderDim : theme.inputBg}
+                    >
+                      <text fg={selected ? theme.text : theme.muted}>
+                        <strong>/{cmd.name}</strong> {cmd.summary}
+                      </text>
+                    </box>
+                  );
+                })}
+              </box>
+            ) : (
+              <text fg={theme.danger}>
+                No slash command matches <strong>/{slashQuery ?? ""}</strong>.
+              </text>
+            )}
+
+            {selectedSlashCommand ? (
+              <box
+                border
+                borderStyle="single"
+                borderColor={theme.borderDim}
+                backgroundColor={theme.panelBg}
+                padding={1}
+                flexDirection="column"
+                gap={0}
+              >
+                <text fg={theme.warn}>
+                  <strong>{selectedSlashCommand.usage}</strong>
+                </text>
+                <text fg={theme.text}>{selectedSlashCommand.details}</text>
+                {selectedSlashCommand.aliases && selectedSlashCommand.aliases.length > 0 ? (
+                  <text fg={theme.muted}>
+                    aliases: {selectedSlashCommand.aliases.map((a) => `/${a}`).join(", ")}
+                  </text>
+                ) : null}
+                {selectedSlashCommand.examples && selectedSlashCommand.examples.length > 0 ? (
+                  <text fg={theme.muted}>
+                    examples: {selectedSlashCommand.examples.map((x) => `\`${x}\``).join("  ")}
+                  </text>
+                ) : null}
+              </box>
+            ) : null}
+          </box>
+        ) : null}
       </box>
 
-      <text fg={theme.muted}>Esc/Ctrl+C to quit. Server: {props.serverUrl}</text>
+      <text fg={theme.muted}>Esc: quit. Ctrl+C: clear input. Server: {props.serverUrl}</text>
 
       {toolDetail ? (
         <box

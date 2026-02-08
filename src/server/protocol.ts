@@ -5,6 +5,7 @@ export type ClientMessage =
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
   | { type: "ask_response"; sessionId: string; requestId: string; answer: string }
   | { type: "approval_response"; sessionId: string; requestId: string; approved: boolean }
+  | { type: "set_model"; sessionId: string; model: string }
   | { type: "reset"; sessionId: string };
 
 export type ServerEvent =
@@ -26,6 +27,11 @@ export type ServerEvent =
       command: string;
       dangerous: boolean;
     }
+  | {
+      type: "config_updated";
+      sessionId: string;
+      config: Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
+    }
   | { type: "error"; sessionId: string; message: string };
 
 export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMessage } | { ok: false; error: string } {
@@ -46,6 +52,7 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
     case "user_message":
     case "ask_response":
     case "approval_response":
+    case "set_model":
     case "reset":
       return { ok: true, msg: obj };
     default:

@@ -165,6 +165,36 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("set_model", () => {
+    test("valid set_model message", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_model",
+          sessionId: "s1",
+          model: "gpt-5.2",
+        }),
+      );
+      expect(msg.type).toBe("set_model");
+      if (msg.type === "set_model") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.model).toBe("gpt-5.2");
+      }
+    });
+
+    test("set_model with empty model still parses", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_model",
+          sessionId: "s1",
+          model: "",
+        }),
+      );
+      if (msg.type === "set_model") {
+        expect(msg.model).toBe("");
+      }
+    });
+  });
+
   describe("reset", () => {
     test("valid reset message", () => {
       const msg = expectOk(JSON.stringify({ type: "reset", sessionId: "s1" }));

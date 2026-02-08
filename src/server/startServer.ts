@@ -120,6 +120,11 @@ export async function startAgentServer(
             return;
           }
 
+          if (msg.type === "set_model") {
+            void session.setModel(msg.model);
+            return;
+          }
+
           if (msg.type === "reset") {
             session.reset();
             return;

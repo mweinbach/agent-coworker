@@ -1,6 +1,10 @@
 import { describe, expect, test, mock, beforeEach, afterAll } from "bun:test";
 import path from "node:path";
 
+import * as REAL_AI from "ai";
+import * as REAL_CONFIG from "../src/config";
+import * as REAL_MCP from "../src/mcp/index";
+
 import type { AgentConfig } from "../src/types";
 import { createTools as realCreateTools } from "../src/tools/index";
 
@@ -105,6 +109,9 @@ function makeParams(overrides: Partial<RunTurnParams> = {}): RunTurnParams {
 describe("runTurn", () => {
   afterAll(() => {
     // Prevent this file's module mock from leaking into other test files.
+    mock.module("ai", () => REAL_AI);
+    mock.module("../src/config", () => REAL_CONFIG);
+    mock.module("../src/mcp", () => REAL_MCP);
     mock.module("../src/tools", () => ({ createTools: REAL_CREATE_TOOLS }));
     mock.module("../src/tools/index", () => ({ createTools: REAL_CREATE_TOOLS }));
   });

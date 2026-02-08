@@ -67,6 +67,15 @@ function asProviderName(v: unknown): ProviderName | null {
   return null;
 }
 
+function asBoolean(v: unknown): boolean | null {
+  if (typeof v === "boolean") return v;
+  if (typeof v !== "string") return null;
+  const s = v.trim().toLowerCase();
+  if (s === "1" || s === "true" || s === "yes" || s === "y" || s === "on") return true;
+  if (s === "0" || s === "false" || s === "no" || s === "n" || s === "off") return false;
+  return null;
+}
+
 function resolveDir(maybeRelative: unknown, baseDir: string): string {
   if (typeof maybeRelative !== "string" || !maybeRelative) return baseDir;
   if (path.isAbsolute(maybeRelative)) return maybeRelative;
@@ -144,6 +153,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     (typeof builtInDefaults.knowledgeCutoff === "string" && builtInDefaults.knowledgeCutoff) ||
     "unknown";
 
+  const enableMcp =
+    asBoolean(env.AGENT_ENABLE_MCP) ??
+    asBoolean(projectConfig.enableMcp) ??
+    asBoolean(userConfig.enableMcp) ??
+    asBoolean(builtInDefaults.enableMcp) ??
+    true;
+
   return {
     provider,
     model,
@@ -166,6 +182,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     ],
     memoryDirs: [path.join(projectAgentDir, "memory"), path.join(userAgentDir, "memory")],
     configDirs: [projectAgentDir, userAgentDir, builtInConfigDir],
+
+    enableMcp,
   };
 }
 

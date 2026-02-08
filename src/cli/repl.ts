@@ -204,7 +204,7 @@ export async function runCliRepl(opts: { dir?: string; providerOptions?: Record<
         askUser,
         approveCommand: approve,
         maxSteps: 100,
-        enableMcp: false,
+        enableMcp: config.enableMcp,
       });
 
       messages.push(...res.responseMessages);

@@ -145,7 +145,7 @@ export class AgentSession {
         approveCommand: (cmd) => this.approveCommand(cmd),
         updateTodos: (todos) => this.updateTodos(todos),
         maxSteps: 100,
-        enableMcp: false,
+        enableMcp: this.config.enableMcp,
       });
 
       this.messages.push(...res.responseMessages);

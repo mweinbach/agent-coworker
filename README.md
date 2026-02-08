@@ -46,6 +46,7 @@ Environment variables:
 - `AGENT_WORKING_DIR` (directory the agent should operate in)
 - `AGENT_OUTPUT_DIR`, `AGENT_UPLOADS_DIR`
 - `AGENT_USER_NAME`
+- `AGENT_ENABLE_MCP` (`true|false`, defaults to `true`)
 
 Config files (optional):
 - `./.agent/config.json` (project)
@@ -60,6 +61,29 @@ Example `./.agent/config.json`:
   "userName": "Max"
 }
 ```
+
+## MCP (Remote Tool Servers)
+
+MCP (Model Context Protocol) servers add extra tools to the agent at runtime.
+
+Server configs are loaded from (highest priority first):
+- `./.agent/mcp-servers.json` (project)
+- `~/.agent/mcp-servers.json` (user)
+- `./config/mcp-servers.json` (built-in defaults)
+
+Example `./.agent/mcp-servers.json` using `mcp.grep.app`:
+```json
+{
+  "servers": [
+    {
+      "name": "grep",
+      "transport": { "type": "http", "url": "https://mcp.grep.app" }
+    }
+  ]
+}
+```
+
+Tools are namespaced as `mcp__{serverName}__{toolName}` (e.g. `mcp__grep__searchGitHub`).
 
 ## Development
 

@@ -31,22 +31,37 @@ export async function runTurn(params: RunTurnParams): Promise<{
   const builtInTools = createTools(toolCtx);
 
   let mcpTools: Record<string, any> = {};
-  if (params.enableMcp) {
+  const enableMcp = params.enableMcp ?? config.enableMcp ?? false;
+  let closeMcp: undefined | (() => Promise<void>);
+  if (enableMcp) {
     const servers = await loadMCPServers(config);
     if (servers.length > 0) {
       const loaded = await loadMCPTools(servers, { log });
       mcpTools = loaded.tools;
+      closeMcp = loaded.close;
     }
   }
 
-  const result = await generateText({
-    model: getModel(config),
-    system,
-    messages,
-    tools: { ...builtInTools, ...mcpTools },
-    providerOptions: config.providerOptions,
-    stopWhen: stepCountIs(params.maxSteps ?? 100),
-  } as any);
+  const tools = { ...builtInTools, ...mcpTools };
+
+  const result = await (async () => {
+    try {
+      return await generateText({
+        model: getModel(config),
+        system,
+        messages,
+        tools,
+        providerOptions: config.providerOptions,
+        stopWhen: stepCountIs(params.maxSteps ?? 100),
+      } as any);
+    } finally {
+      try {
+        await closeMcp?.();
+      } catch {
+        // ignore MCP close errors
+      }
+    }
+  })();
 
   const responseMessages = (result.response?.messages || []) as ModelMessage[];
   return {

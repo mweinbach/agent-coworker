@@ -28,6 +28,12 @@ export interface AgentConfig {
    * This lets us tune reasoning/thinking behavior per provider without hardcoding it in every call site.
    */
   providerOptions?: Record<string, any>;
+
+  /**
+   * Whether to enable MCP (Model Context Protocol) tool discovery/execution.
+   * Defaults to true when not specified.
+   */
+  enableMcp?: boolean;
 }
 
 export interface SkillEntry {
@@ -47,8 +53,14 @@ export interface TodoItem {
 export type AgentMessages = ModelMessage[];
 
 export type MCPServerTransport =
-  | { type: "stdio"; command: string; args: string[] }
-  | { type: "http"; url: string };
+  | {
+      type: "stdio";
+      command: string;
+      args?: string[];
+      env?: Record<string, string>;
+      cwd?: string;
+    }
+  | { type: "http" | "sse"; url: string; headers?: Record<string, string> };
 
 export interface MCPServerConfig {
   name: string;

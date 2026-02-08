@@ -1,7 +1,9 @@
-import { describe, expect, test, mock, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, mock, beforeEach, afterEach, afterAll } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+
+import * as REAL_MCP_SDK from "@ai-sdk/mcp";
 
 import type { AgentConfig, MCPServerConfig } from "../src/types";
 
@@ -50,7 +52,12 @@ mock.module("@ai-sdk/mcp", () => ({
 }));
 
 // Import after mocks are set up.
-import { loadMCPServers, loadMCPTools, closeMCPClients } from "../src/mcp/index";
+import { loadMCPServers, loadMCPTools } from "../src/mcp/index";
+
+afterAll(() => {
+  // Prevent this file's module mock from leaking into other test files.
+  mock.module("@ai-sdk/mcp", () => REAL_MCP_SDK);
+});
 
 // ---------------------------------------------------------------------------
 // loadMCPServers
@@ -237,6 +244,7 @@ describe("loadMCPTools", () => {
 
     expect(result.tools).toEqual({});
     expect(result.errors).toEqual([]);
+    expect(typeof result.close).toBe("function");
   });
 
   test("prefixes tool names with mcp__serverName__toolName format", async () => {
@@ -469,6 +477,24 @@ describe("loadMCPTools", () => {
     expect(mockCreateMCPClient).toHaveBeenCalledTimes(1);
     const callArg = mockCreateMCPClient.mock.calls[0][0] as any;
     expect(callArg.name).toBe("check-args");
+    // stdio transport is wrapped in a proper MCP transport implementation
+    expect(callArg.transport).toBeDefined();
+    expect(typeof callArg.transport.start).toBe("function");
+    expect(typeof callArg.transport.send).toBe("function");
+    expect(typeof callArg.transport.close).toBe("function");
+  });
+
+  test("passes http transport config through to createMCPClient", async () => {
+    const transport = { type: "http" as const, url: "http://localhost:3000" };
+    const servers: MCPServerConfig[] = [
+      { name: "http-args", transport },
+    ];
+
+    await loadMCPTools(servers);
+
+    expect(mockCreateMCPClient).toHaveBeenCalledTimes(1);
+    const callArg = mockCreateMCPClient.mock.calls[0][0] as any;
+    expect(callArg.name).toBe("http-args");
     expect(callArg.transport).toBe(transport);
   });
 
@@ -484,19 +510,17 @@ describe("loadMCPTools", () => {
 });
 
 // ---------------------------------------------------------------------------
-// closeMCPClients
+// close()
 // ---------------------------------------------------------------------------
 
-describe("closeMCPClients", () => {
-  beforeEach(() => {
-    mockCreateMCPClient.mockClear();
-  });
+describe("loadMCPTools().close", () => {
+  test("closes all clients created during discovery", async () => {
+    const closeFns = [mock(async () => {}), mock(async () => {})];
+    let i = 0;
 
-  test("closes all active clients", async () => {
-    const closeFn = mock(async () => {});
     mockCreateMCPClient.mockImplementation(async () => ({
       tools: mock(async () => ({ t: {} })),
-      close: closeFn,
+      close: closeFns[i++],
     }));
 
     const servers: MCPServerConfig[] = [
@@ -504,11 +528,11 @@ describe("closeMCPClients", () => {
       { name: "srv2", transport: { type: "stdio", command: "y", args: [] } },
     ];
 
-    await loadMCPTools(servers);
-    await closeMCPClients();
+    const result = await loadMCPTools(servers);
+    await expect(result.close()).resolves.toBeUndefined();
 
-    // closeFn is shared so it should have been called twice (once per client)
-    expect(closeFn).toHaveBeenCalledTimes(2);
+    expect(closeFns[0]).toHaveBeenCalledTimes(1);
+    expect(closeFns[1]).toHaveBeenCalledTimes(1);
   });
 
   test("handles errors during close gracefully", async () => {
@@ -524,14 +548,7 @@ describe("closeMCPClients", () => {
       { name: "err-close", transport: { type: "stdio", command: "x", args: [] } },
     ];
 
-    await loadMCPTools(servers);
-
-    // Should not throw
-    await expect(closeMCPClients()).resolves.toBeUndefined();
-  });
-
-  test("does nothing when no clients are active", async () => {
-    // Just make sure it does not throw when called with no active clients
-    await expect(closeMCPClients()).resolves.toBeUndefined();
+    const result = await loadMCPTools(servers);
+    await expect(result.close()).resolves.toBeUndefined();
   });
 });

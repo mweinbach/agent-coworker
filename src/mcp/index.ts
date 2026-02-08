@@ -2,10 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { createMCPClient } from "@ai-sdk/mcp";
+import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
 
 import type { AgentConfig, MCPServerConfig } from "../types";
-
-const activeClients: Map<string, { close: () => Promise<void> }> = new Map();
 
 export async function loadMCPServers(config: AgentConfig): Promise<MCPServerConfig[]> {
   const serversByName = new Map<string, MCPServerConfig>();
@@ -30,21 +29,42 @@ export async function loadMCPServers(config: AgentConfig): Promise<MCPServerConf
 export async function loadMCPTools(
   servers: MCPServerConfig[],
   opts: { log?: (line: string) => void } = {}
-): Promise<{ tools: Record<string, any>; errors: string[] }> {
+): Promise<{ tools: Record<string, any>; errors: string[]; close: () => Promise<void> }> {
   const tools: Record<string, any> = {};
   const errors: string[] = [];
+  const clients: Array<{ name: string; close: () => Promise<void> }> = [];
+
+  const close = async () => {
+    // Close in reverse order (last opened, first closed), in case transports depend on ordering.
+    for (const c of clients.reverse()) {
+      try {
+        await c.close();
+      } catch {
+        // ignore
+      }
+    }
+  };
 
   for (const server of servers) {
     const retries = server.retries ?? 3;
 
     for (let attempt = 0; attempt <= retries; attempt++) {
+      let client: any | null = null;
       try {
-        const client = await createMCPClient({
-          name: server.name,
-          transport: server.transport as any,
-        });
+        const transport =
+          server.transport.type === "stdio"
+            ? new Experimental_StdioMCPTransport({
+                command: server.transport.command,
+                args: server.transport.args || [],
+                env: server.transport.env,
+                cwd: server.transport.cwd,
+              })
+            : (server.transport as any);
 
-        activeClients.set(server.name, client as any);
+        client = await createMCPClient({
+          name: server.name,
+          transport,
+        });
 
         const discovered = await client.tools();
 
@@ -52,11 +72,21 @@ export async function loadMCPTools(
           tools[`mcp__${server.name}__${name}`] = t;
         }
 
+        clients.push({ name: server.name, close: client.close.bind(client) });
+
         opts.log?.(
           `[MCP] Connected to ${server.name}: ${Object.keys(discovered).length} tools`
         );
         break;
       } catch (err) {
+        // If we created a client for this attempt, close it; otherwise we'd leak
+        // transports (especially stdio processes).
+        try {
+          await client?.close?.();
+        } catch {
+          // ignore
+        }
+
         if (attempt === retries) {
           const msg = `[MCP] Failed to connect to ${server.name} after ${attempt + 1} attempts: ${String(
             err
@@ -72,16 +102,5 @@ export async function loadMCPTools(
     }
   }
 
-  return { tools, errors };
-}
-
-export async function closeMCPClients(): Promise<void> {
-  for (const [name, client] of activeClients) {
-    try {
-      await client.close();
-    } catch {
-      // ignore
-    }
-    activeClients.delete(name);
-  }
+  return { tools, errors, close };
 }

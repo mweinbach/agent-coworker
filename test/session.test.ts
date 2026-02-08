@@ -42,6 +42,7 @@ function makeConfig(dir: string): AgentConfig {
     skillsDirs: [],
     memoryDirs: [],
     configDirs: [],
+    enableMcp: true,
   };
 }
 
@@ -634,12 +635,12 @@ describe("AgentSession", () => {
       expect(call.maxSteps).toBe(100);
     });
 
-    test("passes enableMcp=false to runTurn", async () => {
+    test("passes enableMcp from config to runTurn", async () => {
       const { session } = makeSession();
       await session.sendUserMessage("go");
 
       const call = mockRunTurn.mock.calls[0][0] as any;
-      expect(call.enableMcp).toBe(false);
+      expect(call.enableMcp).toBe(true);
     });
 
     test("adds response messages to history", async () => {

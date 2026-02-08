@@ -100,6 +100,48 @@ function resolveUserHomeFromConfig(config: AgentConfig): string {
   return os.homedir();
 }
 
+function resolveGeminiCliModelSettings(config: AgentConfig): Record<string, unknown> {
+  // The Gemini CLI community provider expects `thinkingConfig` on model settings
+  // (provider(modelId, settings)), not in AI SDK `providerOptions`.
+  const optionCandidates = [
+    config.providerOptions?.["gemini-cli-core"],
+    config.providerOptions?.["gemini-cli"],
+  ];
+
+  let providedThinking: Record<string, unknown> | null = null;
+  for (const candidate of optionCandidates) {
+    if (!isPlainObject(candidate)) continue;
+    const maybeThinking = candidate.thinkingConfig;
+    if (!isPlainObject(maybeThinking)) continue;
+    providedThinking = maybeThinking;
+    break;
+  }
+
+  const thinkingConfig: Record<string, unknown> = {};
+  if (providedThinking) {
+    if (typeof providedThinking.includeThoughts === "boolean") {
+      thinkingConfig.includeThoughts = providedThinking.includeThoughts;
+    }
+    if (typeof providedThinking.thinkingLevel === "string" && providedThinking.thinkingLevel.trim()) {
+      thinkingConfig.thinkingLevel = providedThinking.thinkingLevel;
+    }
+    if (typeof providedThinking.thinkingBudget === "number" && Number.isFinite(providedThinking.thinkingBudget)) {
+      thinkingConfig.thinkingBudget = providedThinking.thinkingBudget;
+    }
+  }
+
+  // Default to tool-safe behavior for Gemini CLI:
+  // keep thought parts disabled unless the user explicitly opts in.
+  if (thinkingConfig.includeThoughts === undefined) {
+    thinkingConfig.includeThoughts = false;
+  }
+  if (thinkingConfig.thinkingLevel === undefined && thinkingConfig.thinkingBudget === undefined) {
+    thinkingConfig.thinkingLevel = "minimal";
+  }
+
+  return { thinkingConfig };
+}
+
 function readSavedApiKey(config: AgentConfig, provider: ProviderName): string | undefined {
   const home = resolveUserHomeFromConfig(config);
   const connectionsPath = path.join(home, ".ai-coworker", "config", "connections.json");
@@ -268,7 +310,7 @@ export function getModel(config: AgentConfig, id?: string) {
         : createGeminiProvider({
             authType: "oauth-personal",
           });
-      return provider(modelId);
+      return provider(modelId, resolveGeminiCliModelSettings(config));
     }
     case "codex-cli": {
       const envKey = savedKey || process.env.OPENAI_API_KEY;

@@ -6,6 +6,33 @@ import type { AgentConfig, TodoItem } from "./types";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
 
+function sanitizeGeminiToolCallReplay(messages: ModelMessage[]): ModelMessage[] {
+  const out: ModelMessage[] = [];
+
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      out.push(message);
+      continue;
+    }
+
+    // Gemini CLI currently drops function-call thought signatures when AI SDK
+    // replays assistant tool-call parts. Keep only non-tool-call assistant parts.
+    const filtered = message.content.filter((part: any) => part?.type !== "tool-call");
+    if (filtered.length === 0) continue;
+    out.push({ ...message, content: filtered } as ModelMessage);
+  }
+
+  return out;
+}
+
+function unifiedFinishReason(v: unknown): string | undefined {
+  if (typeof v === "string") return v;
+  if (typeof v === "object" && v !== null && typeof (v as any).unified === "string") {
+    return (v as any).unified;
+  }
+  return undefined;
+}
+
 export interface RunTurnParams {
   config: AgentConfig;
   system: string;
@@ -46,6 +73,52 @@ export async function runTurn(params: RunTurnParams): Promise<{
 
   const result = await (async () => {
     try {
+      if (config.provider === "gemini-cli") {
+        // Workaround for Gemini CLI provider tool-call replay:
+        // keep model calls single-step and manually continue with sanitized history.
+        const maxSteps = params.maxSteps ?? 100;
+        const rollingMessages = sanitizeGeminiToolCallReplay(messages);
+        const responseMessages: ModelMessage[] = [];
+        const reasoningChunks: string[] = [];
+        let text = "";
+
+        for (let step = 0; step < maxSteps; step++) {
+          const stepResult = await generateText({
+            model: getModel(config),
+            system,
+            messages: rollingMessages,
+            tools,
+            providerOptions: config.providerOptions,
+            stopWhen: stepCountIs(1),
+          } as any);
+
+          const stepResponseMessages = sanitizeGeminiToolCallReplay(
+            (stepResult.response?.messages || []) as ModelMessage[]
+          );
+          if (stepResponseMessages.length > 0) {
+            responseMessages.push(...stepResponseMessages);
+            rollingMessages.push(...stepResponseMessages);
+          }
+
+          const stepReasoning = typeof stepResult.reasoningText === "string" ? stepResult.reasoningText.trim() : "";
+          if (stepReasoning) reasoningChunks.push(stepReasoning);
+
+          const stepText = String(stepResult.text ?? "").trim();
+          if (stepText) text = text ? `${text}\n${stepText}` : stepText;
+
+          const finish = unifiedFinishReason((stepResult as any).finishReason);
+          const hasToolResult = stepResponseMessages.some((m) => m.role === "tool");
+          if (finish !== "tool-calls") break;
+          if (!hasToolResult) break;
+        }
+
+        return {
+          text,
+          reasoningText: reasoningChunks.length > 0 ? reasoningChunks.join("\n\n") : undefined,
+          response: { messages: responseMessages },
+        } as any;
+      }
+
       return await generateText({
         model: getModel(config),
         system,

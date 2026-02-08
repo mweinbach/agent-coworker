@@ -25,6 +25,13 @@ const DEFAULT_PROVIDER_OPTIONS: Record<string, any> = {
       thinkingLevel: "high",
     },
   },
+  "gemini-cli-core": {
+    thinkingConfig: {
+      // Keep thought parts off by default for Gemini CLI tool-call loops.
+      includeThoughts: false,
+      thinkingLevel: "minimal",
+    },
+  },
   anthropic: {
     thinking: {
       type: "enabled",

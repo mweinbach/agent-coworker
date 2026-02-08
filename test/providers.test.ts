@@ -89,6 +89,12 @@ const DEFAULT_PROVIDER_OPTIONS: Record<string, any> = {
       thinkingLevel: "high",
     },
   },
+  "gemini-cli-core": {
+    thinkingConfig: {
+      includeThoughts: false,
+      thinkingLevel: "minimal",
+    },
+  },
   anthropic: {
     thinking: {
       type: "enabled",
@@ -441,6 +447,33 @@ describe("Gemini CLI provider (gemini-3-flash-preview)", () => {
     expect(model.specificationVersion).toBe("v3");
   });
 
+  test("getModel disables Gemini thought parts by default for tool-call loops", () => {
+    const cfg = makeConfig({ provider: "gemini-cli", model: "gemini-3-flash-preview" });
+    const model = getModel(cfg) as any;
+
+    expect(model.settings?.thinkingConfig?.includeThoughts).toBe(false);
+    expect(model.settings?.thinkingConfig?.thinkingLevel).toBe("minimal");
+  });
+
+  test("getModel allows gemini-cli thinking overrides via providerOptions", () => {
+    const cfg = makeConfig({
+      provider: "gemini-cli",
+      model: "gemini-3-flash-preview",
+      providerOptions: {
+        "gemini-cli-core": {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: "high",
+          },
+        },
+      },
+    });
+    const model = getModel(cfg) as any;
+
+    expect(model.settings?.thinkingConfig?.includeThoughts).toBe(true);
+    expect(model.settings?.thinkingConfig?.thinkingLevel).toBe("high");
+  });
+
   test("directly created gemini-cli model matches getModel output", () => {
     const direct = createGeminiProvider({ authType: "oauth-personal" })("gemini-3-flash-preview");
     const cfg = makeConfig({ provider: "gemini-cli", model: "gemini-3-flash-preview" });
@@ -556,15 +589,16 @@ describe("Claude Code provider (sonnet)", () => {
 // Provider options structure and consistency
 // ---------------------------------------------------------------------------
 describe("Provider options structure", () => {
-  test("all three providers have options defined", () => {
+  test("all expected providers have options defined", () => {
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("openai");
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("google");
+    expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("gemini-cli-core");
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("anthropic");
   });
 
   test("no extra unknown providers in options", () => {
     const providers = Object.keys(DEFAULT_PROVIDER_OPTIONS);
-    expect(providers).toEqual(["openai", "google", "anthropic"]);
+    expect(providers).toEqual(["openai", "google", "gemini-cli-core", "anthropic"]);
   });
 
   test("each provider options is a plain object", () => {
@@ -585,12 +619,15 @@ describe("Provider options structure", () => {
     expect(cfg.providerOptions).toBeUndefined();
   });
 
-  test("all providers enable reasoning/thinking by default", () => {
+  test("provider defaults include reasoning/thinking profiles", () => {
     // OpenAI: reasoningEffort is "high"
     expect(DEFAULT_PROVIDER_OPTIONS.openai.reasoningEffort).toBe("high");
 
     // Google: thinkingConfig.includeThoughts is true
     expect(DEFAULT_PROVIDER_OPTIONS.google.thinkingConfig.includeThoughts).toBe(true);
+
+    // Gemini CLI: keep tool-call loops safe by disabling thought parts.
+    expect(DEFAULT_PROVIDER_OPTIONS["gemini-cli-core"].thinkingConfig.includeThoughts).toBe(false);
 
     // Anthropic: thinking.type is "enabled"
     expect(DEFAULT_PROVIDER_OPTIONS.anthropic.thinking.type).toBe("enabled");

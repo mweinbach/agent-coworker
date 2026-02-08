@@ -16,6 +16,9 @@ import { isProviderName, PROVIDER_NAMES } from "../types";
 // Keep CLI output clean by default.
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
 
+const UI_DISABLED_PROVIDERS = new Set<string>(["gemini-cli"]);
+const UI_PROVIDER_NAMES = PROVIDER_NAMES.filter((name) => !UI_DISABLED_PROVIDERS.has(name));
+
 function createQuestion(rl: readline.Interface) {
   return (q: string) =>
     new Promise<string | null>((resolve) => {
@@ -116,10 +119,11 @@ export async function runCliRepl(
     console.log("  /exit                 Quit");
     console.log("  /new                  Clear conversation");
     console.log("  /model <id>            Set model id for this session");
-    console.log(`  /provider <name>       Set provider (${PROVIDER_NAMES.join("|")})`);
-    console.log(`  /connect <name> [key]  Save provider key or run OAuth (${PROVIDER_NAMES.join("|")})`);
+    console.log(`  /provider <name>       Set provider (${UI_PROVIDER_NAMES.join("|")})`);
+    console.log(`  /connect <name> [key]  Save provider key or run OAuth (${UI_PROVIDER_NAMES.join("|")})`);
     console.log("  /cwd <path>            Set working directory for this session");
     console.log("  /tools                List tool names\n");
+    console.log("  note: gemini-cli is temporarily disabled in the UI.");
   };
 
   while (true) {
@@ -159,9 +163,13 @@ export async function runCliRepl(
       }
 
       if (cmd === "provider") {
-        const name = rest[0];
+        const name = (rest[0] ?? "").trim();
+        if (UI_DISABLED_PROVIDERS.has(name)) {
+          console.log(`${name} is temporarily disabled in the UI.`);
+          continue;
+        }
         if (!isProviderName(name)) {
-          console.log(`usage: /provider <${PROVIDER_NAMES.join("|")}>`);
+          console.log(`usage: /provider <${UI_PROVIDER_NAMES.join("|")}>`);
           continue;
         }
         const nextModel = defaultModelForProvider(name);
@@ -203,7 +211,7 @@ export async function runCliRepl(
           const store = await readConnectionStore(paths);
           console.log("\nConnections:");
           console.log(`  file=${paths.connectionsFile}`);
-          for (const service of PROVIDER_NAMES) {
+          for (const service of UI_PROVIDER_NAMES) {
             const entry = store.services[service];
             if (!entry) {
               console.log(`  - ${service}: not connected`);
@@ -223,8 +231,13 @@ export async function runCliRepl(
           continue;
         }
 
+        if (UI_DISABLED_PROVIDERS.has(serviceToken)) {
+          console.log(`${serviceToken} is temporarily disabled in the UI.`);
+          continue;
+        }
+
         if (!isProviderName(serviceToken)) {
-          console.log(`usage: /connect <${PROVIDER_NAMES.join("|")}> [api_key]`);
+          console.log(`usage: /connect <${UI_PROVIDER_NAMES.join("|")}> [api_key]`);
           continue;
         }
 

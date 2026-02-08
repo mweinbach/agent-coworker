@@ -532,6 +532,54 @@ describe("AgentSession", () => {
       expect(lastCall.messages[0].content).toBe("second");
     });
 
+    test("emits reset_done when idle", () => {
+      const { session, events } = makeSession();
+      session.reset();
+      const doneEvt = events.find((e) => e.type === "reset_done") as any;
+      expect(doneEvt).toBeDefined();
+      expect(doneEvt.sessionId).toBe(session.id);
+    });
+
+    test("reset while running emits error and does not clear messages", async () => {
+      const { session, events } = makeSession();
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () =>
+              resolve({
+                text: "",
+                reasoningText: undefined,
+                responseMessages: [{ role: "assistant", content: "ok" }],
+              });
+          })
+      );
+
+      const first = session.sendUserMessage("first");
+      await new Promise((r) => setTimeout(r, 10));
+
+      session.reset();
+      const errEvt = events.find((e) => e.type === "error") as any;
+      expect(errEvt).toBeDefined();
+      expect(errEvt.message).toBe("Agent is busy");
+
+      resolveRunTurn();
+      await first;
+
+      mockRunTurn.mockImplementationOnce(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [],
+      }));
+      await session.sendUserMessage("second");
+      const secondCall = mockRunTurn.mock.calls[1][0] as any;
+      expect(secondCall.messages).toHaveLength(3);
+      expect(secondCall.messages[0]).toEqual({ role: "user", content: "first" });
+      expect(secondCall.messages[1]).toEqual({ role: "assistant", content: "ok" });
+      expect(secondCall.messages[2]).toEqual({ role: "user", content: "second" });
+    });
+
     test("clears todos array", () => {
       const { session, events } = makeSession();
       session.reset();
@@ -917,6 +965,32 @@ describe("AgentSession", () => {
       await session.sendUserMessage("after");
       const errorEvt = events.find((e) => e.type === "error");
       expect(errorEvt).toBeUndefined();
+    });
+
+    test("emits session_busy true then false", async () => {
+      const { session, events } = makeSession();
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          })
+      );
+
+      const p = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const busyTrueIdx = events.findIndex((e) => e.type === "session_busy" && (e as any).busy === true);
+      const busyFalseIdx = events.findIndex((e) => e.type === "session_busy" && (e as any).busy === false);
+      expect(busyTrueIdx).toBeGreaterThanOrEqual(0);
+      expect(busyFalseIdx).toBe(-1);
+
+      resolveRunTurn();
+      await p;
+
+      const busyFalseIdxAfter = events.findIndex((e) => e.type === "session_busy" && (e as any).busy === false);
+      expect(busyFalseIdxAfter).toBeGreaterThan(busyTrueIdx);
     });
 
     test("emits user_message event", async () => {

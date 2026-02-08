@@ -550,6 +550,8 @@ function App(props: { serverUrl: string }) {
   const [provider, setProvider] = useState<string>("");
   const [model, setModel] = useState<string>("");
   const [cwd, setCwd] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
 
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
@@ -696,6 +698,11 @@ function App(props: { serverUrl: string }) {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
 
+    if (busyRef.current) {
+      appendFeed({ id: nextFeedId(), type: "system", line: "Agent is busy; wait for the current turn to finish." });
+      return false;
+    }
+
     const sid = sessionIdRef.current;
     if (!sid) return false;
 
@@ -714,17 +721,35 @@ function App(props: { serverUrl: string }) {
     return true;
   };
 
-  const resetConversation = () => {
-    const sid = sessionIdRef.current;
-    if (sid) send({ type: "reset", sessionId: sid });
+  const performLocalReset = (line: string) => {
+    setBusy(false);
+    busyRef.current = false;
 
     feedSeqRef.current = 0;
     sentMessageIdsRef.current.clear();
     pendingToolsRef.current.clear();
     setToolDetailId(null);
     setTodos([]);
-    setFeed([{ id: nextFeedId(), type: "system", line: "conversation reset" }]);
-    appendSessionLog("conversation reset");
+    setFeed([{ id: nextFeedId(), type: "system", line }]);
+    appendSessionLog(line);
+  };
+
+  const resetConversation = () => {
+    const sid = sessionIdRef.current;
+    if (!sid) {
+      performLocalReset("conversation reset (local)");
+      return;
+    }
+    if (busyRef.current) {
+      appendFeed({
+        id: nextFeedId(),
+        type: "system",
+        line: "Agent is busy; cannot /new until the current turn finishes.",
+      });
+      return;
+    }
+    const ok = send({ type: "reset", sessionId: sid });
+    if (!ok) appendFeed({ id: nextFeedId(), type: "system", line: "failed to send reset request" });
   };
 
   const renderSlashHelp = () => {
@@ -1021,8 +1046,8 @@ function App(props: { serverUrl: string }) {
       }
     }
 
-    sendChat(trimmed);
-    clearComposer();
+    const ok = sendChat(trimmed);
+    if (ok) clearComposer();
   };
 
   const sendAskAnswer = (raw: string) => {
@@ -1119,6 +1144,8 @@ function App(props: { serverUrl: string }) {
     ws.onclose = () => {
       const closedSessionId = sessionIdRef.current;
       setConnected(false);
+      setBusy(false);
+      busyRef.current = false;
       setMode({ kind: "chat" });
       setToolDetailId(null);
       setCommandWindow(null);
@@ -1157,6 +1184,8 @@ function App(props: { serverUrl: string }) {
         sessionLogPathRef.current = logFile;
 
         sessionIdRef.current = parsed.sessionId;
+        setBusy(false);
+        busyRef.current = false;
         sentMessageIdsRef.current.clear();
         pendingToolsRef.current.clear();
         feedSeqRef.current = 0;
@@ -1188,6 +1217,13 @@ function App(props: { serverUrl: string }) {
       }
 
       switch (parsed.type) {
+        case "session_busy":
+          setBusy(parsed.busy);
+          busyRef.current = parsed.busy;
+          break;
+        case "reset_done":
+          performLocalReset("conversation reset");
+          break;
         case "user_message":
           if (parsed.clientMessageId && sentMessageIdsRef.current.has(parsed.clientMessageId)) {
             // We already appended the local echo.

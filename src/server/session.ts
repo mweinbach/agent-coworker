@@ -77,9 +77,14 @@ export class AgentSession {
   }
 
   reset() {
+    if (this.running) {
+      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      return;
+    }
     this.messages = [];
     this.todos = [];
     this.emit({ type: "todos", sessionId: this.id, todos: [] });
+    this.emit({ type: "reset_done", sessionId: this.id });
   }
 
   listTools() {
@@ -265,6 +270,7 @@ export class AgentSession {
     this.running = true;
     try {
       this.emit({ type: "user_message", sessionId: this.id, text, clientMessageId });
+      this.emit({ type: "session_busy", sessionId: this.id, busy: true });
       this.messages.push({ role: "user", content: text });
 
       const res = await runTurn({
@@ -292,6 +298,7 @@ export class AgentSession {
     } catch (err) {
       this.emit({ type: "error", sessionId: this.id, message: String(err) });
     } finally {
+      this.emit({ type: "session_busy", sessionId: this.id, busy: false });
       this.running = false;
     }
   }

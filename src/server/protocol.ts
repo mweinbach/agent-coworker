@@ -17,11 +17,13 @@ export type ServerEvent =
       sessionId: string;
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
     }
+  | { type: "session_busy"; sessionId: string; busy: boolean }
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
   | { type: "assistant_message"; sessionId: string; text: string }
   | { type: "reasoning"; sessionId: string; kind: "reasoning" | "summary"; text: string }
   | { type: "log"; sessionId: string; line: string }
   | { type: "todos"; sessionId: string; todos: TodoItem[] }
+  | { type: "reset_done"; sessionId: string }
   | { type: "ask"; sessionId: string; requestId: string; question: string; options?: string[] }
   | {
       type: "approval";

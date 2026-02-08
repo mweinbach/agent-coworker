@@ -104,6 +104,7 @@ export async function runCliRepl(
   let promptMode: "user" | "ask" | "approval" = "user";
   let activeAsk: AskPrompt | null = null;
   let activeApproval: ApprovalPrompt | null = null;
+  let busy = false;
 
   const send = (msg: ClientMessage) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
@@ -199,6 +200,19 @@ export async function runCliRepl(
     if (!sessionId || evt.sessionId !== sessionId) return;
 
     switch (evt.type) {
+      case "session_busy":
+        busy = evt.busy;
+        break;
+      case "reset_done":
+        console.log("(cleared)\n");
+        pendingAsk = [];
+        pendingApproval = [];
+        activeAsk = null;
+        activeApproval = null;
+        promptMode = "user";
+        rl.setPrompt("you> ");
+        rl.prompt();
+        break;
       case "assistant_message": {
         const out = evt.text.trim();
         if (out) console.log(`\n${out}\n`);
@@ -368,8 +382,12 @@ export async function runCliRepl(
         }
 
         if (cmd === "new") {
+          if (busy) {
+            console.log("Agent is busy; cannot /new until the current turn finishes.\n");
+            activateNextPrompt(rl);
+            return;
+          }
           if (sessionId) send({ type: "reset", sessionId });
-          console.log("(cleared)\n");
           activateNextPrompt(rl);
           return;
         }
@@ -487,6 +505,12 @@ export async function runCliRepl(
 
       if (!sessionId) {
         console.log("not connected: cannot send messages yet");
+        activateNextPrompt(rl);
+        return;
+      }
+
+      if (busy) {
+        console.log("Agent is busy; cannot send a message until the current turn finishes.\n");
         activateNextPrompt(rl);
         return;
       }

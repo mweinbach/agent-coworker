@@ -3,8 +3,8 @@ import path from "node:path";
 
 import type { SkillEntry } from "../types";
 
-function extractTriggers(name: string, content: string): string[] {
-  const triggerMatch = content.match(/^TRIGGERS?:\s*(.+)$/im);
+export function extractTriggers(name: string, content: string): string[] {
+  const triggerMatch = content.match(/^\s*TRIGGERS?\s*:\s*(.+)$/im);
   if (triggerMatch) {
     return triggerMatch[1]
       .split(",")

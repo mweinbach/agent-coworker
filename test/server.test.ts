@@ -464,6 +464,27 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("sending session_backup_get returns session_backup_state", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const { responses } = await sendAndCollect(
+        url,
+        (sessionId) => ({ type: "session_backup_get", sessionId }),
+        1,
+        3000
+      );
+
+      const backupEvt = responses[0];
+      expect(backupEvt.type).toBe("session_backup_state");
+      expect(backupEvt.backup).toBeDefined();
+      expect(typeof backupEvt.backup.status).toBe("string");
+      expect(backupEvt.sessionId).toBeDefined();
+    } finally {
+      server.stop();
+    }
+  });
+
   test("sending a non-object JSON value receives error", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

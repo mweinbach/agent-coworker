@@ -41,9 +41,9 @@ export async function loadSystemPrompt(config: AgentConfig): Promise<string> {
     skillsDirectory: config.skillsDirs[0] || path.join(config.projectAgentDir, "skills"),
   };
 
-  for (const [k, v] of Object.entries(vars)) {
-    prompt = prompt.replaceAll(`{{${k}}}`, v);
-  }
+  prompt = prompt.replace(/{{(\w+)}}/g, (match, key) => {
+    return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : match;
+  });
 
   const skills = await discoverSkills(config.skillsDirs);
   if (skills.length > 0) {

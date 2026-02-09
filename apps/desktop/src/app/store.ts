@@ -1,9 +1,10 @@
 import { create } from "zustand";
 
 import { open } from "@tauri-apps/plugin-dialog";
+import { defaultModelForProvider } from "@cowork/providers";
 
 import { AgentSocket } from "../lib/agentSocket";
-import { MODEL_CHOICES, UI_DISABLED_PROVIDERS } from "../lib/modelChoices";
+import { UI_DISABLED_PROVIDERS } from "../lib/modelChoices";
 import {
   appendTranscriptEvent,
   deleteTranscript,
@@ -794,7 +795,8 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const state = await loadState();
     const normalizedWorkspaces: WorkspaceRecord[] = (state.workspaces || []).map((w) => {
       const provider = w.defaultProvider && isProviderName(w.defaultProvider) ? w.defaultProvider : "google";
-      const model = typeof w.defaultModel === "string" && w.defaultModel.trim() ? w.defaultModel : (MODEL_CHOICES[provider]?.[0] ?? "");
+      const model =
+        typeof w.defaultModel === "string" && w.defaultModel.trim() ? w.defaultModel : defaultModelForProvider(provider);
       return {
         ...w,
         defaultProvider: provider,
@@ -830,7 +832,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       createdAt: nowIso(),
       lastOpenedAt: nowIso(),
       defaultProvider: "google",
-      defaultModel: MODEL_CHOICES.google?.[0] ?? "",
+      defaultModel: defaultModelForProvider("google"),
       defaultEnableMcp: true,
       yolo: false,
     };

@@ -9,6 +9,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { ensureAiCoworkerHome, getAiCoworkerPaths, isOauthCliProvider, maskApiKey, readConnectionStore } from "../connect";
 import type { ConnectionStore } from "../connect";
+import { modelChoicesByProvider } from "../providers";
 import { PROVIDER_NAMES } from "../types";
 import type { ProviderName, TodoItem } from "../types";
 import type { ClientMessage, ServerEvent } from "../server/protocol";
@@ -96,14 +97,7 @@ const CONNECT_SERVICES: readonly ConnectService[] = PROVIDER_NAMES.filter(
   (provider) => !UI_DISABLED_CONNECT_SERVICES.has(provider)
 );
 
-const MODEL_CHOICES: Record<ConnectService, readonly string[]> = {
-  google: ["gemini-3-flash-preview", "gemini-3-pro-preview"],
-  "gemini-cli": ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-pro"],
-  anthropic: ["claude-4-6-opus", "claude-4-5-sonnet", "claude-4-5-haiku"],
-  "claude-code": ["sonnet", "opus", "haiku"],
-  openai: ["gpt-5.2", "gpt-5.2-codex", "gpt-5.1", "gpt-5-mini", "gpt-5", "gpt-5.2-pro"],
-  "codex-cli": ["gpt-5.2-codex", "gpt-5.2-codex-max", "gpt-5.2-codex-mini", "gpt-5.1-codex"],
-};
+const MODEL_CHOICES: Record<ConnectService, readonly string[]> = modelChoicesByProvider();
 
 const ALL_MODEL_CHOICES: readonly ModelChoice[] = CONNECT_SERVICES.flatMap((provider) =>
   MODEL_CHOICES[provider].map((model) => ({ provider, model }))

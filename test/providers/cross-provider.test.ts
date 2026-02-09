@@ -1,23 +1,27 @@
 import { describe, expect, test } from "bun:test";
 
 import type { ProviderName } from "../../src/types";
+import { PROVIDER_NAMES } from "../../src/types";
 import { defaultModelForProvider, getModel } from "../../src/config";
+import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
 import { makeConfig } from "./helpers";
 
 // ---------------------------------------------------------------------------
 // Cross-provider model creation
 // ---------------------------------------------------------------------------
 describe("Cross-provider model creation", () => {
-  const providers: { name: ProviderName; defaultModel: string; providerPrefix: string }[] = [
-    { name: "anthropic", defaultModel: "claude-opus-4-6", providerPrefix: "anthropic.messages" },
-    { name: "openai", defaultModel: "gpt-5.2", providerPrefix: "openai.responses" },
-    { name: "google", defaultModel: "gemini-3-flash-preview", providerPrefix: "google.generative-ai" },
-    { name: "gemini-cli", defaultModel: "gemini-3-flash-preview", providerPrefix: "gemini-cli-core" },
-    { name: "codex-cli", defaultModel: "gpt-5.2-codex", providerPrefix: "codex-cli" },
-    { name: "claude-code", defaultModel: "sonnet", providerPrefix: "claude-code" },
+  const providers: { name: ProviderName; providerPrefix: string }[] = [
+    { name: "anthropic", providerPrefix: "anthropic.messages" },
+    { name: "openai", providerPrefix: "openai.responses" },
+    { name: "google", providerPrefix: "google.generative-ai" },
+    { name: "gemini-cli", providerPrefix: "gemini-cli-core" },
+    { name: "codex-cli", providerPrefix: "codex-cli" },
+    { name: "claude-code", providerPrefix: "claude-code" },
   ];
 
-  for (const { name, defaultModel, providerPrefix } of providers) {
+  for (const { name, providerPrefix } of providers) {
+    const defaultModel = PROVIDER_MODEL_CATALOG[name].defaultModel;
+
     test(`${name}: default model is ${defaultModel}`, () => {
       expect(defaultModelForProvider(name)).toBe(defaultModel);
     });
@@ -38,6 +42,18 @@ describe("Cross-provider model creation", () => {
       const cfg = makeConfig({ provider: name, model: "wrong-model" });
       const model = getModel(cfg, defaultModel);
       expect(model.modelId).toBe(defaultModel);
+    });
+  }
+});
+
+describe("Provider model catalog invariants", () => {
+  for (const provider of PROVIDER_NAMES) {
+    test(`${provider}: available model list is non-empty`, () => {
+      expect(PROVIDER_MODEL_CATALOG[provider].availableModels.length).toBeGreaterThan(0);
+    });
+
+    test(`${provider}: default model exists in available models`, () => {
+      expect(PROVIDER_MODEL_CATALOG[provider].availableModels).toContain(PROVIDER_MODEL_CATALOG[provider].defaultModel);
     });
   }
 });

@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../src/config";
+import { PROVIDER_MODEL_CATALOG } from "../src/providers";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -672,29 +673,11 @@ describe("getModel", () => {
 // defaultModelForProvider
 // ---------------------------------------------------------------------------
 describe("defaultModelForProvider", () => {
-  test("returns correct default for google", () => {
-    expect(defaultModelForProvider("google")).toBe("gemini-3-flash-preview");
-  });
-
-  test("returns correct default for gemini-cli", () => {
-    expect(defaultModelForProvider("gemini-cli")).toBe("gemini-3-flash-preview");
-  });
-
-  test("returns correct default for openai", () => {
-    expect(defaultModelForProvider("openai")).toBe("gpt-5.2");
-  });
-
-  test("returns correct default for codex-cli", () => {
-    expect(defaultModelForProvider("codex-cli")).toBe("gpt-5.2-codex");
-  });
-
-  test("returns correct default for anthropic", () => {
-    expect(defaultModelForProvider("anthropic")).toBe("claude-opus-4-6");
-  });
-
-  test("returns correct default for claude-code", () => {
-    expect(defaultModelForProvider("claude-code")).toBe("sonnet");
-  });
+  for (const providerName of Object.keys(PROVIDER_MODEL_CATALOG) as (keyof typeof PROVIDER_MODEL_CATALOG)[]) {
+    test(`returns correct default for ${providerName}`, () => {
+      expect(defaultModelForProvider(providerName)).toBe(PROVIDER_MODEL_CATALOG[providerName].defaultModel);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,5 @@
 {
   "provider": "google",
-  "model": "gemini-3-flash-preview",
-  "subAgentModel": "gemini-3-flash-preview",
   "outputDirectory": "output",
   "uploadsDirectory": "uploads",
   "userName": "",

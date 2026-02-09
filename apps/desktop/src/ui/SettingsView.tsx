@@ -4,6 +4,7 @@ import { useAppStore } from "../app/store";
 import type { ProviderName } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 import { MODEL_CHOICES, UI_DISABLED_PROVIDERS } from "../lib/modelChoices";
+import { defaultModelForProvider } from "@cowork/providers";
 
 const KEYLESS_PROVIDERS = new Set<ProviderName>(["codex-cli", "claude-code"]);
 
@@ -347,7 +348,7 @@ export function SettingsView() {
                     if (UI_DISABLED_PROVIDERS.has(v)) return;
                     void updateWorkspaceDefaults(ws.id, {
                       defaultProvider: v,
-                      defaultModel: MODEL_CHOICES[v]?.[0] ?? "",
+                      defaultModel: defaultModelForProvider(v),
                     });
                   }}
                 />

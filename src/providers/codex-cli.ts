@@ -19,7 +19,6 @@ export const DEFAULT_CODEX_CLI_PROVIDER_OPTIONS = {
 } as const satisfies CodexCliProviderOptions;
 
 export const codexCliProvider = {
-  defaultModel: "gpt-5.3-codex",
   keyCandidates: ["codex-cli", "openai"] as const,
   createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) => {
     // Default to Codex CLI's local auth (~/.codex/auth.json) rather than OPENAI_API_KEY.

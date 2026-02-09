@@ -63,7 +63,6 @@ export const DEFAULT_CLAUDE_CODE_PROVIDER_OPTIONS = {
 } as const satisfies Partial<ClaudeCodeSettings>;
 
 export const claudeCodeProvider = {
-  defaultModel: "sonnet",
   keyCandidates: ["claude-code", "anthropic"] as const,
   createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) => {
     const envKey = savedKey || process.env.ANTHROPIC_API_KEY;

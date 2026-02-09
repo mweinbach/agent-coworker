@@ -26,6 +26,8 @@ agent-coworker is a terminal-first coworker agent built on Bun + TypeScript (ESM
 
 Example: `bun run start -- --dir /path/to/project`
 
+Always run tests while doing work, make sure you run these tests.
+
 ## Coding Style & Naming Conventions
 
 - TypeScript is `strict` (see `tsconfig.json`); prefer `async/await` and explicit types at module boundaries.
@@ -57,3 +59,4 @@ When adding a new WebSocket message or event:
 - Don’t commit secrets or local state. `.env`, `.agent/`, `output/`, and `uploads/` are gitignored.
 - Prefer environment variables (e.g. `OPENAI_API_KEY`) and local `.agent/config.json` / `.agent/mcp-servers.json` for developer setup.
 - `--yolo` bypasses command approvals; use only for local experiments.
+- Make commits liberally as you go with meaningful detailed messages.

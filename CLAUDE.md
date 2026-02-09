@@ -74,3 +74,10 @@ The protocol doc (`docs/websocket-protocol.md`) is the source of truth for anyon
 ## Testing
 
 Tests live in `test/` and use Bun's built-in test runner (`bun:test`). Test files follow `*.test.ts` naming. Provider-specific tests are under `test/providers/`. Tests extensively use the dependency injection factories to mock AI SDK calls without patching modules.
+
+**Always run tests while doing work.**
+
+**Commits & PRs**
+
+- Commit messages: Follow the [Conventional Commits](https://www.conventionalcommits.org/) format. Liberally make commits as you go. 
+- Pull Requests: Ensure all tests pass and provide a clear description of the changes.

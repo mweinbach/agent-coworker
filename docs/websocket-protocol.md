@@ -55,6 +55,26 @@ interface TodoItem {
   status: "pending" | "in_progress" | "completed";
   activeForm: string; // present-continuous label, e.g. "Running tests"
 }
+
+interface SessionBackupCheckpoint {
+  id: string;                 // e.g. "cp-0001"
+  index: number;              // 1-based checkpoint index
+  createdAt: string;          // ISO timestamp
+  trigger: "auto" | "manual"; // auto per agent completion, or manual request
+  changed: boolean;           // false when no workspace diff vs original
+  patchBytes: number;         // compressed patch size on disk
+}
+
+interface SessionBackupState {
+  status: "initializing" | "ready" | "failed";
+  sessionId: string;
+  workingDirectory: string;
+  backupDirectory: string | null; // ~/.cowork/session-backups/{sessionId}
+  createdAt: string;
+  originalSnapshot: { kind: "pending" | "directory" | "tar_gz" };
+  checkpoints: SessionBackupCheckpoint[];
+  failureReason?: string;
+}
 ```
 
 ---
@@ -167,6 +187,59 @@ Clear conversation history and todos.
 {
   "type": "reset",
   "sessionId": "..."
+}
+```
+
+### session_backup_get
+
+Request backup/checkpoint state for the active session.
+
+```jsonc
+{
+  "type": "session_backup_get",
+  "sessionId": "..."
+}
+```
+
+### session_backup_checkpoint
+
+Create a manual checkpoint immediately (in addition to automatic per-turn checkpoints).
+
+```jsonc
+{
+  "type": "session_backup_checkpoint",
+  "sessionId": "..."
+}
+```
+
+### session_backup_restore
+
+Restore the workspace to the original snapshot or a specific checkpoint.
+
+```jsonc
+// Restore to original snapshot
+{
+  "type": "session_backup_restore",
+  "sessionId": "..."
+}
+
+// Restore to a checkpoint
+{
+  "type": "session_backup_restore",
+  "sessionId": "...",
+  "checkpointId": "cp-0003"
+}
+```
+
+### session_backup_delete_checkpoint
+
+Delete a checkpoint (metadata + stored patch).
+
+```jsonc
+{
+  "type": "session_backup_delete_checkpoint",
+  "sessionId": "...",
+  "checkpointId": "cp-0003"
 }
 ```
 
@@ -333,6 +406,36 @@ List of available tool names (response to `list_tools`).
 }
 ```
 
+### session_backup_state
+
+Backup/checkpoint status update. Emitted on explicit requests and whenever checkpoint state changes.
+
+```jsonc
+{
+  "type": "session_backup_state",
+  "sessionId": "...",
+  "reason": "auto_checkpoint", // requested | auto_checkpoint | manual_checkpoint | restore | delete
+  "backup": {
+    "status": "ready",
+    "sessionId": "...",
+    "workingDirectory": "/Users/user/project",
+    "backupDirectory": "/Users/user/.cowork/session-backups/...",
+    "createdAt": "2026-02-09T00:00:00.000Z",
+    "originalSnapshot": { "kind": "directory" },
+    "checkpoints": [
+      {
+        "id": "cp-0001",
+        "index": 1,
+        "createdAt": "2026-02-09T00:00:10.000Z",
+        "trigger": "auto",
+        "changed": true,
+        "patchBytes": 2048
+      }
+    ]
+  }
+}
+```
+
 ### reset_done
 
 Confirms the conversation was cleared (response to `reset`).
@@ -398,6 +501,20 @@ client  -> set_model { model: "gpt-4-turbo", provider: "openai" }
 server  <- config_updated { config: { provider: "openai", model: "gpt-4-turbo", ... } }
 ```
 
+### Backup / Checkpoint Flow
+
+```
+client  -> session_backup_get {}
+server  <- session_backup_state { reason: "requested", backup: {...} }
+
+client  -> user_message { text: "make changes" }
+server  <- ...normal turn events...
+server  <- session_backup_state { reason: "auto_checkpoint", backup: {...checkpoints:+1...} }
+
+client  -> session_backup_restore { checkpointId: "cp-0001" }
+server  <- session_backup_state { reason: "restore", backup: {...} }
+```
+
 ---
 
 ## Error Reference
@@ -414,6 +531,13 @@ server  <- config_updated { config: { provider: "openai", model: "gpt-4-turbo", 
 | `Unsupported provider: X` | Invalid provider name |
 | `Model id is required` | Empty model string in `set_model` |
 | `connect failed: X` | Provider connection/auth failed |
+| `session_backup_get missing sessionId` | Invalid `session_backup_get` payload |
+| `session_backup_checkpoint missing sessionId` | Invalid `session_backup_checkpoint` payload |
+| `session_backup_restore missing sessionId` | Invalid `session_backup_restore` payload |
+| `session_backup_restore invalid checkpointId` | `checkpointId` is present but not a string |
+| `session_backup_delete_checkpoint missing sessionId` | Invalid `session_backup_delete_checkpoint` payload |
+| `session_backup_delete_checkpoint missing checkpointId` | Missing/empty checkpoint id |
+| `Unknown checkpoint id: X` | Requested delete/restore checkpoint does not exist |
 
 ---
 
@@ -423,6 +547,7 @@ server  <- config_updated { config: { provider: "openai", model: "gpt-4-turbo", 
 - **requestId pairing**: `ask` and `approval` events block the agent until you respond with the matching `requestId`.
 - **Session = connection**: disconnecting disposes the session and rejects all pending ask/approval deferreds. There is no reconnection or session resumption.
 - **Localhost only**: the server binds to `127.0.0.1`; no auth, no TLS.
+- **Automatic snapshots/checkpoints**: on session start, the server snapshots the working directory into `~/.cowork/session-backups/{sessionId}`. After every agent turn completion, it stores a compressed binary diff checkpoint against the original snapshot.
 
 ---
 
@@ -433,6 +558,7 @@ server  <- config_updated { config: { provider: "openai", model: "gpt-4-turbo", 
 | `src/server/protocol.ts` | Type definitions, message validation (`safeParseClientMessage`) |
 | `src/server/startServer.ts` | Bun.serve setup, WebSocket open/message/close handlers |
 | `src/server/session.ts` | `AgentSession` state, event emission, agent turn execution |
+| `src/server/sessionBackup.ts` | Session snapshot/diff checkpoint lifecycle, restore/compaction logic under `~/.cowork/session-backups` |
 | `src/server/index.ts` | CLI entry point, arg parsing (`--port`, `--dir`, `--yolo`) |
 | `src/cli/repl.ts` | Reference client implementation (CLI REPL) |
 | `src/types.ts` | Shared types (`AgentConfig`, `TodoItem`, etc.) |

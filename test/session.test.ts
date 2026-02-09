@@ -3,6 +3,12 @@ import path from "node:path";
 
 import type { AgentConfig, TodoItem } from "../src/types";
 import type { ServerEvent } from "../src/server/protocol";
+import type {
+  SessionBackupHandle,
+  SessionBackupInitOptions,
+  SessionBackupPublicCheckpoint,
+  SessionBackupPublicState,
+} from "../src/server/sessionBackup";
 import * as REAL_AGENT from "../src/agent";
 
 // ---------------------------------------------------------------------------
@@ -78,6 +84,52 @@ function makeEmit(): { emit: (evt: ServerEvent) => void; events: ServerEvent[] }
   return { emit, events };
 }
 
+function makeSessionBackupFactory() {
+  return mock(async (opts: SessionBackupInitOptions): Promise<SessionBackupHandle> => {
+    const checkpoints: SessionBackupPublicCheckpoint[] = [];
+    const createdAt = new Date().toISOString();
+
+    const getState = (): SessionBackupPublicState => ({
+      status: "ready",
+      sessionId: opts.sessionId,
+      workingDirectory: opts.workingDirectory,
+      backupDirectory: `/tmp/mock-backups/${opts.sessionId}`,
+      createdAt,
+      originalSnapshot: { kind: "directory" },
+      checkpoints: [...checkpoints],
+    });
+
+    return {
+      getPublicState: () => getState(),
+      createCheckpoint: async (trigger) => {
+        const checkpoint: SessionBackupPublicCheckpoint = {
+          id: `cp-${String(checkpoints.length + 1).padStart(4, "0")}`,
+          index: checkpoints.length + 1,
+          createdAt: new Date().toISOString(),
+          trigger,
+          changed: true,
+          patchBytes: 42,
+        };
+        checkpoints.push(checkpoint);
+        return checkpoint;
+      },
+      restoreOriginal: async () => {},
+      restoreCheckpoint: async (checkpointId) => {
+        if (!checkpoints.some((cp) => cp.id === checkpointId)) {
+          throw new Error(`Unknown checkpoint: ${checkpointId}`);
+        }
+      },
+      deleteCheckpoint: async (checkpointId) => {
+        const idx = checkpoints.findIndex((cp) => cp.id === checkpointId);
+        if (idx < 0) return false;
+        checkpoints.splice(idx, 1);
+        return true;
+      },
+      close: async () => {},
+    };
+  });
+}
+
 function makeSession(
   overrides?: Partial<{
     config: AgentConfig;
@@ -92,10 +144,12 @@ function makeSession(
       logsDir: string;
       connectionsFile: string;
     };
+    sessionBackupFactory: (opts: SessionBackupInitOptions) => Promise<SessionBackupHandle>;
   }>
 ) {
   const dir = "/tmp/test-session";
   const { emit, events } = makeEmit();
+  const sessionBackupFactory = overrides?.sessionBackupFactory ?? makeSessionBackupFactory();
   const session = new AgentSession({
     config: overrides?.config ?? makeConfig(dir),
     system: overrides?.system ?? "You are a test assistant.",
@@ -103,8 +157,9 @@ function makeSession(
     emit: overrides?.emit ?? emit,
     connectProviderImpl: overrides?.connectProviderImpl,
     getAiCoworkerPathsImpl: overrides?.getAiCoworkerPathsImpl,
+    sessionBackupFactory,
   });
-  return { session, emit, events };
+  return { session, emit, events, sessionBackupFactory };
 }
 
 // ---------------------------------------------------------------------------
@@ -1461,6 +1516,72 @@ describe("AgentSession", () => {
 
       const todosEvt = events.find((e) => e.type === "todos") as any;
       expect(todosEvt.todos).toEqual([]);
+    });
+  });
+
+  describe("session backups", () => {
+    test("getSessionBackupState emits a session_backup_state event", async () => {
+      const { session, events } = makeSession();
+      await session.getSessionBackupState();
+
+      const evt = events.find((e) => e.type === "session_backup_state");
+      expect(evt).toBeDefined();
+      if (evt && evt.type === "session_backup_state") {
+        expect(evt.reason).toBe("requested");
+        expect(evt.backup.status).toBe("ready");
+      }
+    });
+
+    test("sendUserMessage emits auto checkpoint state after completion", async () => {
+      const { session, events } = makeSession();
+      await session.sendUserMessage("checkpoint me");
+
+      const backupEvents = events.filter((e) => e.type === "session_backup_state") as Array<
+        Extract<ServerEvent, { type: "session_backup_state" }>
+      >;
+      const auto = backupEvents.find((e) => e.reason === "auto_checkpoint");
+      expect(auto).toBeDefined();
+      if (auto) {
+        expect(auto.backup.checkpoints).toHaveLength(1);
+        expect(auto.backup.checkpoints[0]?.trigger).toBe("auto");
+      }
+    });
+
+    test("createManualSessionCheckpoint emits manual checkpoint state", async () => {
+      const { session, events } = makeSession();
+      await session.createManualSessionCheckpoint();
+
+      const manual = events.find(
+        (e) => e.type === "session_backup_state" && e.reason === "manual_checkpoint"
+      ) as Extract<ServerEvent, { type: "session_backup_state" }> | undefined;
+      expect(manual).toBeDefined();
+      if (manual) {
+        expect(manual.backup.checkpoints).toHaveLength(1);
+        expect(manual.backup.checkpoints[0]?.trigger).toBe("manual");
+      }
+    });
+
+    test("restoreSessionBackup supports restoring to original and checkpoint id", async () => {
+      const { session, events } = makeSession();
+      await session.createManualSessionCheckpoint();
+      await session.restoreSessionBackup();
+      await session.restoreSessionBackup("cp-0001");
+
+      const restoreEvents = events.filter(
+        (e) => e.type === "session_backup_state" && e.reason === "restore"
+      ) as Array<Extract<ServerEvent, { type: "session_backup_state" }>>;
+      expect(restoreEvents.length).toBeGreaterThanOrEqual(2);
+    });
+
+    test("deleteSessionCheckpoint emits error when checkpoint does not exist", async () => {
+      const { session, events } = makeSession();
+      await session.deleteSessionCheckpoint("does-not-exist");
+
+      const err = events.find((e) => e.type === "error");
+      expect(err).toBeDefined();
+      if (err && err.type === "error") {
+        expect(err.message).toContain("Unknown checkpoint id");
+      }
     });
   });
 

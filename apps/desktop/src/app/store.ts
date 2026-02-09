@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import { open } from "@tauri-apps/plugin-dialog";
-import { defaultModelForProvider } from "@cowork/providers";
+import { defaultModelForProvider } from "@cowork/providers/catalog";
 
 import { AgentSocket } from "../lib/agentSocket";
 import { UI_DISABLED_PROVIDERS } from "../lib/modelChoices";

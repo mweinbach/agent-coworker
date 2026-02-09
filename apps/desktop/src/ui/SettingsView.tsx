@@ -4,7 +4,7 @@ import { useAppStore } from "../app/store";
 import type { ProviderName } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 import { MODEL_CHOICES, UI_DISABLED_PROVIDERS } from "../lib/modelChoices";
-import { defaultModelForProvider } from "@cowork/providers";
+import { defaultModelForProvider } from "@cowork/providers/catalog";
 
 const KEYLESS_PROVIDERS = new Set<ProviderName>(["codex-cli", "claude-code"]);
 

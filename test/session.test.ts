@@ -94,6 +94,7 @@ function makeSession(
       logsDir: string;
       connectionsFile: string;
     };
+    getProviderStatusesImpl: (opts: any) => Promise<any>;
   }>
 ) {
   const dir = "/tmp/test-session";
@@ -105,6 +106,7 @@ function makeSession(
     emit: overrides?.emit ?? emit,
     connectProviderImpl: overrides?.connectProviderImpl,
     getAiCoworkerPathsImpl: overrides?.getAiCoworkerPathsImpl,
+    getProviderStatusesImpl: overrides?.getProviderStatusesImpl,
   });
   return { session, emit, events };
 }
@@ -693,6 +695,43 @@ describe("AgentSession", () => {
       if (err && err.type === "error") {
         expect(err.message).toContain("connect failed:");
         expect(err.message).toContain("boom");
+      }
+    });
+  });
+
+  describe("refreshProviderStatus", () => {
+    test("emits provider_status with computed statuses", async () => {
+      const dir = "/tmp/test-session-provider-status";
+      const config = makeConfig(dir);
+      const statuses = [
+        {
+          provider: "codex-cli",
+          authorized: true,
+          verified: true,
+          mode: "oauth",
+          account: { email: "user@example.com", name: "User" },
+          message: "ok",
+          checkedAt: "2026-02-09T00:00:00.000Z",
+        },
+      ];
+
+      const mockGetProviderStatuses = mock(async () => statuses);
+      const { session, events } = makeSession({
+        config,
+        getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
+        getProviderStatusesImpl: mockGetProviderStatuses,
+      });
+
+      await session.refreshProviderStatus();
+
+      expect(mockGetAiCoworkerPaths).toHaveBeenCalledWith({ homedir: path.dirname(config.userAgentDir) });
+      expect(mockGetProviderStatuses).toHaveBeenCalledTimes(1);
+
+      const evt = events.find((e) => e.type === "provider_status");
+      expect(evt).toBeDefined();
+      if (evt && evt.type === "provider_status") {
+        expect(evt.sessionId).toBe(session.id);
+        expect(evt.providers).toEqual(statuses);
       }
     });
   });

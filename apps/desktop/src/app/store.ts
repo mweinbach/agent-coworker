@@ -51,6 +51,9 @@ function truncateTitle(s: string, max = 34) {
   return trimmed.slice(0, max - 1) + "…";
 }
 
+type ProviderStatusEvent = Extract<ServerEvent, { type: "provider_status" }>;
+type ProviderStatus = ProviderStatusEvent["providers"][number];
+
 type RuntimeMaps = {
   controlSockets: Map<string, AgentSocket>;
   threadSockets: Map<string, AgentSocket>;
@@ -255,6 +258,10 @@ export type AppStoreState = {
   promptModal: PromptModalState;
   notifications: Notification[];
 
+  providerStatusByName: Partial<Record<ProviderName, ProviderStatus>>;
+  providerStatusLastUpdatedAt: string | null;
+  providerStatusRefreshing: boolean;
+
   composerText: string;
   injectContext: boolean;
 
@@ -283,6 +290,7 @@ export type AppStoreState = {
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
 
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
+  refreshProviderStatus: () => Promise<void>;
 
   answerAsk: (threadId: string, requestId: string, answer: string) => void;
   answerApproval: (threadId: string, requestId: string, approved: boolean) => void;
@@ -358,6 +366,7 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
               controlConfig: evt.config,
             },
           },
+          providerStatusRefreshing: true,
         }));
 
         // Immediately hydrate skills on connect so the Skills screen doesn't require a second click.
@@ -365,6 +374,7 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
           socket.send({ type: "list_skills", sessionId: evt.sessionId });
           const selected = get().workspaceRuntimeById[workspaceId]?.selectedSkillName;
           if (selected) socket.send({ type: "read_skill", sessionId: evt.sessionId, skillName: selected });
+          socket.send({ type: "refresh_provider_status", sessionId: evt.sessionId });
         } catch {
           // ignore
         }
@@ -418,12 +428,24 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
         return;
       }
 
+      if (evt.type === "provider_status") {
+        const byName: Partial<Record<ProviderName, ProviderStatus>> = {};
+        for (const p of evt.providers) byName[p.provider] = p;
+        set((s) => ({
+          providerStatusByName: { ...s.providerStatusByName, ...byName },
+          providerStatusLastUpdatedAt: nowIso(),
+          providerStatusRefreshing: false,
+        }));
+        return;
+      }
+
       if (evt.type === "error") {
         set((s) => ({
           notifications: [
             ...s.notifications,
             { id: makeId(), ts: nowIso(), kind: "error", title: "Control session error", detail: evt.message },
           ],
+          providerStatusRefreshing: false,
         }));
         return;
       }
@@ -760,6 +782,10 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   promptModal: null,
   notifications: [],
+
+  providerStatusByName: {},
+  providerStatusLastUpdatedAt: null,
+  providerStatusRefreshing: false,
 
   composerText: "",
   injectContext: false,
@@ -1182,6 +1208,35 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
         notifications: [
           ...s.notifications,
           { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to send connect_provider." },
+        ],
+      }));
+    }
+  },
+
+  refreshProviderStatus: async () => {
+    const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+    if (!workspaceId) return;
+
+    await ensureServerRunning(get, set, workspaceId);
+    ensureControlSocket(get, set, workspaceId);
+
+    set({ providerStatusRefreshing: true });
+    const sid = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
+    const sock = RUNTIME.controlSockets.get(workspaceId);
+    if (!sid || !sock) {
+      // Control socket is still handshaking. server_hello will trigger a refresh automatically.
+      set({ providerStatusRefreshing: false });
+      return;
+    }
+
+    try {
+      sock.send({ type: "refresh_provider_status", sessionId: sid });
+    } catch {
+      set((s) => ({
+        providerStatusRefreshing: false,
+        notifications: [
+          ...s.notifications,
+          { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to refresh provider status." },
         ],
       }));
     }

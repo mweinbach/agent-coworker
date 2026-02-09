@@ -18,7 +18,7 @@ const DESKTOP_BUNDLE = process.env.COWORK_DESKTOP_BUNDLE === "1";
 const geminiCliProvider: ProviderDefinition = DESKTOP_BUNDLE
   ? {
       defaultModel: "gemini-3-flash-preview",
-      keyCandidates: ["gemini-cli", "google"] as const,
+      keyCandidates: ["google"] as const,
       createModel: () => {
         throw new Error(
           "The gemini-cli provider is disabled in the desktop bundle. Connect via google/openai/anthropic instead."

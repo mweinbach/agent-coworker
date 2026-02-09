@@ -1,9 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../app/store";
 import type { ProviderName } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 import { MODEL_CHOICES, UI_DISABLED_PROVIDERS } from "../lib/modelChoices";
+
+const KEYLESS_PROVIDERS = new Set<ProviderName>(["codex-cli", "claude-code"]);
 
 function ProviderSelect(props: {
   value: ProviderName;
@@ -26,14 +28,22 @@ export function SettingsView() {
   const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
   const restartWorkspaceServer = useAppStore((s) => s.restartWorkspaceServer);
   const connectProvider = useAppStore((s) => s.connectProvider);
+  const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
+  const providerStatusByName = useAppStore((s) => s.providerStatusByName);
+  const providerStatusRefreshing = useAppStore((s) => s.providerStatusRefreshing);
 
   const [apiKeysByProvider, setApiKeysByProvider] = useState<Partial<Record<ProviderName, string>>>({});
   const [revealKeyByProvider, setRevealKeyByProvider] = useState<Partial<Record<ProviderName, boolean>>>({});
+  const [showClaudeHelp, setShowClaudeHelp] = useState(false);
 
   const ws = useMemo(
     () => workspaces.find((w) => w.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
     [selectedWorkspaceId, workspaces]
   );
+
+  useEffect(() => {
+    void refreshProviderStatus();
+  }, [refreshProviderStatus]);
 
   if (!ws) {
     return (
@@ -52,6 +62,31 @@ export function SettingsView() {
   const modelOptions = MODEL_CHOICES[provider] ?? [];
   const modelListId = `models-${provider}`;
 
+  const formatAccount = (account: any): string => {
+    const name = typeof account?.name === "string" ? account.name.trim() : "";
+    const email = typeof account?.email === "string" ? account.email.trim() : "";
+    if (name && email) return `${name} <${email}>`;
+    return name || email || "Unavailable";
+  };
+
+  const statusPill = (p: ProviderName) => {
+    const s = providerStatusByName[p];
+    if (!s) return { label: providerStatusRefreshing ? "Checking…" : "Unknown", style: undefined as any };
+    if (s.verified) {
+      return {
+        label: "Verified",
+        style: { background: "rgba(0, 128, 64, 0.10)", borderColor: "rgba(0, 128, 64, 0.22)", color: "rgba(0,0,0,0.70)" },
+      };
+    }
+    if (s.authorized) {
+      return { label: "Authorized", style: { background: "var(--warn-bg)", borderColor: "rgba(162, 104, 0, 0.22)", color: "var(--warn)" } };
+    }
+    if (s.mode === "oauth_pending") {
+      return { label: "Pending", style: { background: "var(--warn-bg)", borderColor: "rgba(162, 104, 0, 0.22)", color: "var(--warn)" } };
+    }
+    return { label: "Not authorized", style: { background: "var(--danger-bg)", borderColor: "rgba(194, 59, 59, 0.22)", color: "var(--danger)" } };
+  };
+
   return (
     <div style={{ padding: 18, overflow: "auto", flex: 1, minHeight: 0, boxSizing: "border-box" }}>
       <div style={{ maxWidth: 860 }}>
@@ -61,9 +96,20 @@ export function SettingsView() {
         </div>
 
         <div style={{ marginTop: 18 }} className="inlineCard">
-          <div style={{ fontWeight: 650 }}>Providers</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <div style={{ fontWeight: 650 }}>Providers</div>
+            <button
+              className="iconButton"
+              type="button"
+              onClick={() => void refreshProviderStatus()}
+              disabled={providerStatusRefreshing}
+              title="Refresh provider authorization status"
+            >
+              {providerStatusRefreshing ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
           <div style={{ marginTop: 6, color: "rgba(0,0,0,0.55)", maxWidth: 760 }}>
-            One API key per provider. Connecting saves credentials under <code>~/.cowork/auth</code> via the server’s <code>connect_provider</code> flow.
+            API keys are supported for hosted providers. CLI providers (<code>codex-cli</code>, <code>claude-code</code>) authenticate via OAuth and are verified by the server.
           </div>
 
           <div
@@ -80,6 +126,9 @@ export function SettingsView() {
               const apiKey = apiKeysByProvider[p] ?? "";
               const reveal = revealKeyByProvider[p] ?? false;
               const modelsCount = models.length;
+              const isKeyless = KEYLESS_PROVIDERS.has(p);
+              const status = providerStatusByName[p];
+              const pill = statusPill(p);
 
               return (
                 <div
@@ -93,47 +142,149 @@ export function SettingsView() {
                 >
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
                     <div style={{ fontWeight: 700, letterSpacing: "-0.01em" }}>{p}</div>
-                    {disabled ? <span className="pill">UI disabled</span> : null}
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      {disabled ? <span className="pill">UI disabled</span> : null}
+                      {!disabled ? (
+                        <span className="pill" style={pill.style}>
+                          {pill.label}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
 
                   <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-                    <label style={{ display: "grid", gap: 6 }}>
-                      <div className="metaLine">API key (optional)</div>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <input
-                          value={apiKey}
-                          onChange={(e) => {
-                            const next = e.currentTarget.value;
-                            setApiKeysByProvider((s) => ({ ...s, [p]: next }));
-                          }}
-                          placeholder="Leave blank for OAuth-capable providers"
-                          type={reveal ? "text" : "password"}
-                          autoCapitalize="none"
-                          autoCorrect="off"
-                          spellCheck={false}
-                          style={{
-                            flex: 1,
-                            padding: "10px 12px",
-                            borderRadius: 12,
-                            border: "1px solid rgba(0,0,0,0.12)",
-                            outline: "none",
-                            background: "rgba(255,255,255,0.75)",
-                          }}
-                        />
-                        <button
-                          className="iconButton"
-                          type="button"
-                          onClick={() => setRevealKeyByProvider((s) => ({ ...s, [p]: !(s[p] ?? false) }))}
-                          title={reveal ? "Hide API key" : "Show API key"}
-                        >
-                          {reveal ? "Hide" : "Show"}
-                        </button>
-                      </div>
-                    </label>
+                    {isKeyless ? (
+                      <>
+                        <div className="metaLine">
+                          {p === "codex-cli" ? (
+                            <>
+                              Sign in with your ChatGPT account. If not verified, click <strong>Sign in</strong> to open the authorization flow.
+                            </>
+                          ) : (
+                            <>
+                              Sign in with your Claude account. If not verified, click <strong>Sign in</strong>. If that fails, use a terminal and run <code>claude</code> to authenticate.
+                            </>
+                          )}
+                        </div>
 
-                    <div className="metaLine">
-                      Leave blank for OAuth-capable providers (e.g. <code>codex-cli</code>, <code>claude-code</code>). <code>gemini-cli</code> OAuth requires a terminal TTY.
-                    </div>
+                        <div style={{ display: "grid", gap: 6 }}>
+                          <div className="metaLine">Account</div>
+                          <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, color: "rgba(0,0,0,0.72)" }}>
+                            {formatAccount(status?.account)}
+                          </div>
+                        </div>
+
+                        {p === "claude-code" ? (
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                            <button
+                              className="iconButton"
+                              type="button"
+                              onClick={() => setShowClaudeHelp((v) => !v)}
+                              title="Show Claude Code sign-in help"
+                            >
+                              {showClaudeHelp ? "Hide help" : "How to sign in"}
+                            </button>
+                            <div style={{ display: "flex", gap: 8 }}>
+                              <button
+                                className="iconButton"
+                                type="button"
+                                disabled={providerStatusRefreshing}
+                                onClick={() => void refreshProviderStatus()}
+                                title="Re-check authorization"
+                              >
+                                Refresh
+                              </button>
+                              <button
+                                className="modalButton modalButtonPrimary"
+                                type="button"
+                                disabled={disabled}
+                                onClick={() => {
+                                  void connectProvider(p);
+                                  setTimeout(() => void refreshProviderStatus(), 1200);
+                                }}
+                                title={disabled ? "This provider is temporarily disabled in the UI" : "Start Claude sign-in"}
+                              >
+                                Sign in
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                            <button
+                              className="iconButton"
+                              type="button"
+                              disabled={providerStatusRefreshing}
+                              onClick={() => void refreshProviderStatus()}
+                              title="Re-check authorization"
+                            >
+                              Refresh
+                            </button>
+                            <button
+                              className="modalButton modalButtonPrimary"
+                              type="button"
+                              disabled={disabled}
+                              onClick={() => {
+                                void connectProvider(p);
+                                setTimeout(() => void refreshProviderStatus(), 1200);
+                              }}
+                              title={disabled ? "This provider is temporarily disabled in the UI" : "Start Codex sign-in"}
+                            >
+                              {status?.authorized ? "Re-auth" : "Sign in"}
+                            </button>
+                          </div>
+                        )}
+
+                        {p === "claude-code" && showClaudeHelp ? (
+                          <div style={{ marginTop: 6, display: "grid", gap: 6 }}>
+                            <div className="metaLine">
+                              Install: <code>npm install -g @anthropic-ai/claude-code</code>
+                            </div>
+                            <div className="metaLine">
+                              Authenticate: run <code>claude</code> in a terminal and complete the login flow (some versions use <code>/login</code> inside the app).
+                            </div>
+                            <div className="metaLine">Return here and click Refresh.</div>
+                          </div>
+                        ) : null}
+
+                        {status?.message ? <div className="metaLine">{status.message}</div> : null}
+                      </>
+                    ) : (
+                      <>
+                        <label style={{ display: "grid", gap: 6 }}>
+                          <div className="metaLine">API key (optional)</div>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <input
+                              value={apiKey}
+                              onChange={(e) => {
+                                const next = e.currentTarget.value;
+                                setApiKeysByProvider((s) => ({ ...s, [p]: next }));
+                              }}
+                              placeholder="Enter API key"
+                              type={reveal ? "text" : "password"}
+                              autoCapitalize="none"
+                              autoCorrect="off"
+                              spellCheck={false}
+                              style={{
+                                flex: 1,
+                                padding: "10px 12px",
+                                borderRadius: 12,
+                                border: "1px solid rgba(0,0,0,0.12)",
+                                outline: "none",
+                                background: "rgba(255,255,255,0.75)",
+                              }}
+                            />
+                            <button
+                              className="iconButton"
+                              type="button"
+                              onClick={() => setRevealKeyByProvider((s) => ({ ...s, [p]: !(s[p] ?? false) }))}
+                              title={reveal ? "Hide API key" : "Show API key"}
+                            >
+                              {reveal ? "Hide" : "Show"}
+                            </button>
+                          </div>
+                        </label>
+
+                        {status?.message ? <div className="metaLine">{status.message}</div> : <div className="metaLine">Status: unknown (click Refresh)</div>}
 
                     <div style={{ display: "flex", justifyContent: "flex-end" }}>
                       <button
@@ -144,12 +295,15 @@ export function SettingsView() {
                           void connectProvider(p, apiKey);
                           setApiKeysByProvider((s) => ({ ...s, [p]: "" }));
                           setRevealKeyByProvider((s) => ({ ...s, [p]: false }));
+                          setTimeout(() => void refreshProviderStatus(), 1200);
                         }}
                         title={disabled ? "This provider is temporarily disabled in the UI" : "Connect provider"}
                       >
                         Connect
                       </button>
                     </div>
+                      </>
+                    )}
                   </div>
 
                   <div style={{ marginTop: 12, display: "grid", gap: 6 }}>

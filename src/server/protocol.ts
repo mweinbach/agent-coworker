@@ -1,5 +1,6 @@
 import { isProviderName } from "../types";
 import type { AgentConfig, SkillEntry, TodoItem } from "../types";
+import type { ProviderStatus } from "../providerStatus";
 
 export type ClientMessage =
   | { type: "client_hello"; client: "tui" | "cli" | string; version?: string }
@@ -8,6 +9,7 @@ export type ClientMessage =
   | { type: "approval_response"; sessionId: string; requestId: string; approved: boolean }
   | { type: "connect_provider"; sessionId: string; provider: AgentConfig["provider"]; apiKey?: string }
   | { type: "set_model"; sessionId: string; model: string; provider?: AgentConfig["provider"] }
+  | { type: "refresh_provider_status"; sessionId: string }
   | { type: "list_tools"; sessionId: string }
   | { type: "list_skills"; sessionId: string }
   | { type: "read_skill"; sessionId: string; skillName: string }
@@ -24,6 +26,7 @@ export type ServerEvent =
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
     }
   | { type: "session_settings"; sessionId: string; enableMcp: boolean }
+  | { type: "provider_status"; sessionId: string; providers: ProviderStatus[] }
   | { type: "session_busy"; sessionId: string; busy: boolean }
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
   | { type: "assistant_message"; sessionId: string; text: string }
@@ -70,6 +73,10 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
     case "list_tools":
     case "reset":
       return { ok: true, msg: obj };
+    case "refresh_provider_status": {
+      if (typeof obj.sessionId !== "string") return { ok: false, error: "refresh_provider_status missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
     case "list_skills": {
       if (typeof obj.sessionId !== "string") return { ok: false, error: "list_skills missing sessionId" };
       return { ok: true, msg: obj as ClientMessage };

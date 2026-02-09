@@ -143,6 +143,11 @@ export async function startAgentServer(
             return;
           }
 
+          if (msg.type === "refresh_provider_status") {
+            void session.refreshProviderStatus();
+            return;
+          }
+
           if (msg.type === "reset") {
             session.reset();
             return;

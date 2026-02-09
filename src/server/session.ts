@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
+import { getProviderStatuses } from "../providerStatus";
 import { discoverSkills, stripSkillFrontMatter } from "../skills";
 import { isProviderName } from "../types";
 import type { AgentConfig, TodoItem } from "../types";
@@ -42,10 +43,12 @@ export class AgentSession {
   private readonly emit: (evt: ServerEvent) => void;
   private readonly connectProviderImpl: typeof connectModelProvider;
   private readonly getAiCoworkerPathsImpl: typeof getAiCoworkerPaths;
+  private readonly getProviderStatusesImpl: typeof getProviderStatuses;
 
   private messages: ModelMessage[] = [];
   private running = false;
   private connecting = false;
+  private refreshingProviderStatus = false;
 
   private readonly pendingAsk = new Map<string, Deferred<string>>();
   private readonly pendingApproval = new Map<string, Deferred<boolean>>();
@@ -59,6 +62,7 @@ export class AgentSession {
     emit: (evt: ServerEvent) => void;
     connectProviderImpl?: typeof connectModelProvider;
     getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
+    getProviderStatusesImpl?: typeof getProviderStatuses;
   }) {
     this.id = makeId();
     this.config = opts.config;
@@ -67,6 +71,7 @@ export class AgentSession {
     this.emit = opts.emit;
     this.connectProviderImpl = opts.connectProviderImpl ?? connectModelProvider;
     this.getAiCoworkerPathsImpl = opts.getAiCoworkerPathsImpl ?? getAiCoworkerPaths;
+    this.getProviderStatusesImpl = opts.getProviderStatusesImpl ?? getProviderStatuses;
   }
 
   getPublicConfig() {
@@ -371,6 +376,21 @@ export class AgentSession {
       this.emit({ type: "error", sessionId: this.id, message: `connect failed: ${String(err)}` });
     } finally {
       this.connecting = false;
+    }
+  }
+
+  async refreshProviderStatus() {
+    if (this.refreshingProviderStatus) return;
+    this.refreshingProviderStatus = true;
+    try {
+      const userHome = this.config.userAgentDir ? path.dirname(this.config.userAgentDir) : undefined;
+      const paths = this.getAiCoworkerPathsImpl({ homedir: userHome });
+      const providers = await this.getProviderStatusesImpl({ paths });
+      this.emit({ type: "provider_status", sessionId: this.id, providers });
+    } catch (err) {
+      this.emit({ type: "error", sessionId: this.id, message: `Failed to refresh provider status: ${String(err)}` });
+    } finally {
+      this.refreshingProviderStatus = false;
     }
   }
 

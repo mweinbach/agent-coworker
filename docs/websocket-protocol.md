@@ -148,6 +148,17 @@ Authenticate with a provider (API key or OAuth).
 }
 ```
 
+### refresh_provider_status
+
+Request the server's latest provider authorization/verification status (and account identity where available).
+
+```jsonc
+{
+  "type": "refresh_provider_status",
+  "sessionId": "..."
+}
+```
+
 ### list_tools
 
 Request the list of available tools.
@@ -274,6 +285,28 @@ Session-level toggles/settings. Sent on connect (after `server_hello`) and whene
   "type": "session_settings",
   "sessionId": "...",
   "enableMcp": true
+}
+```
+
+### provider_status
+
+Provider authorization / verification status. Sent in response to `refresh_provider_status`.
+
+```jsonc
+{
+  "type": "provider_status",
+  "sessionId": "...",
+  "providers": [
+    {
+      "provider": "codex-cli",
+      "authorized": true,
+      "verified": true,
+      "mode": "oauth",
+      "account": { "email": "user@example.com", "name": "User Name" },
+      "message": "Verified via OIDC userinfo.",
+      "checkedAt": "2026-02-09T21:37:00.000Z"
+    }
+  ]
 }
 ```
 

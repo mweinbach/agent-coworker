@@ -301,7 +301,7 @@ async function persistOauthCredentials(service: ConnectService, paths: AiCoworke
 
 function oauthCommandCandidates(
   service: ConnectService
-): readonly Array<{ command: string; args: string[]; display: string }> {
+): readonly { command: string; args: string[]; display: string }[] {
   switch (service) {
     case "gemini-cli":
       // Gemini CLI does not expose `gemini auth login`; run `gemini` for interactive auth setup.

@@ -324,6 +324,21 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("refresh_provider_status", () => {
+    test("valid refresh_provider_status", () => {
+      const msg = expectOk(JSON.stringify({ type: "refresh_provider_status", sessionId: "s1" }));
+      expect(msg.type).toBe("refresh_provider_status");
+      if (msg.type === "refresh_provider_status") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("refresh_provider_status missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "refresh_provider_status" }));
+      expect(err).toBe("refresh_provider_status missing sessionId");
+    });
+  });
+
   describe("list_skills", () => {
     test("valid list_skills message", () => {
       const msg = expectOk(JSON.stringify({ type: "list_skills", sessionId: "s1" }));

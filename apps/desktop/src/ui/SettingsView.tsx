@@ -121,8 +121,7 @@ export function SettingsView() {
               gap: 12,
             }}
           >
-            {PROVIDER_NAMES.map((p) => {
-              const disabled = UI_DISABLED_PROVIDERS.has(p);
+            {PROVIDER_NAMES.filter((p) => !UI_DISABLED_PROVIDERS.has(p)).map((p) => {
               const models = MODEL_CHOICES[p] ?? [];
               const apiKey = apiKeysByProvider[p] ?? "";
               const reveal = revealKeyByProvider[p] ?? false;
@@ -144,12 +143,9 @@ export function SettingsView() {
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
                     <div style={{ fontWeight: 700, letterSpacing: "-0.01em" }}>{p}</div>
                     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      {disabled ? <span className="pill">UI disabled</span> : null}
-                      {!disabled ? (
-                        <span className="pill" style={pill.style}>
-                          {pill.label}
-                        </span>
-                      ) : null}
+                      <span className="pill" style={pill.style}>
+                        {pill.label}
+                      </span>
                     </div>
                   </div>
 
@@ -163,7 +159,7 @@ export function SettingsView() {
                             </>
                           ) : (
                             <>
-                              Sign in with your Claude account. If not verified, click <strong>Sign in</strong>. If that fails, use a terminal and run <code>claude</code> to authenticate.
+                              Sign in with your Claude account. If not verified, click <strong>Sign in</strong>. If that fails, use a terminal and run <code>claude setup-token</code> to authenticate.
                             </>
                           )}
                         </div>
@@ -198,12 +194,11 @@ export function SettingsView() {
                               <button
                                 className="modalButton modalButtonPrimary"
                                 type="button"
-                                disabled={disabled}
                                 onClick={() => {
                                   void connectProvider(p);
                                   setTimeout(() => void refreshProviderStatus(), 1200);
                                 }}
-                                title={disabled ? "This provider is temporarily disabled in the UI" : "Start Claude sign-in"}
+                                title="Start Claude sign-in"
                               >
                                 Sign in
                               </button>
@@ -223,12 +218,11 @@ export function SettingsView() {
                             <button
                               className="modalButton modalButtonPrimary"
                               type="button"
-                              disabled={disabled}
                               onClick={() => {
                                 void connectProvider(p);
                                 setTimeout(() => void refreshProviderStatus(), 1200);
                               }}
-                              title={disabled ? "This provider is temporarily disabled in the UI" : "Start Codex sign-in"}
+                              title="Start Codex sign-in"
                             >
                               {status?.authorized ? "Re-auth" : "Sign in"}
                             </button>
@@ -241,7 +235,7 @@ export function SettingsView() {
                               Install: <code>npm install -g @anthropic-ai/claude-code</code>
                             </div>
                             <div className="metaLine">
-                              Authenticate: run <code>claude</code> in a terminal and complete the login flow (some versions use <code>/login</code> inside the app).
+                              Authenticate: run <code>claude setup-token</code> in a terminal and complete the browser sign-in flow (older versions may use <code>/login</code> inside the app).
                             </div>
                             <div className="metaLine">Return here and click Refresh.</div>
                           </div>
@@ -291,14 +285,13 @@ export function SettingsView() {
                       <button
                         className="modalButton modalButtonPrimary"
                         type="button"
-                        disabled={disabled}
                         onClick={() => {
                           void connectProvider(p, apiKey);
                           setApiKeysByProvider((s) => ({ ...s, [p]: "" }));
                           setRevealKeyByProvider((s) => ({ ...s, [p]: false }));
                           setTimeout(() => void refreshProviderStatus(), 1200);
                         }}
-                        title={disabled ? "This provider is temporarily disabled in the UI" : "Connect provider"}
+                        title="Connect provider"
                       >
                         Connect
                       </button>

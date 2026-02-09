@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { getAiCoworkerPaths, readConnectionStore, type AiCoworkerPaths, type ConnectionStore } from "./connect";
@@ -368,22 +370,247 @@ function extractClaudeAccount(creds: ClaudeCreds): ProviderAccount | null {
   return out.email || out.name ? out : null;
 }
 
-async function loadClaudeCredentials(paths: AiCoworkerPaths): Promise<{ file: string; account: ProviderAccount | null } | null> {
+type ClaudeAuthMaterial = {
+  source: string;
+  account: ProviderAccount | null;
+  accessToken?: string;
+  idToken?: string;
+};
+
+function getClaudeCodeConfigDir(paths: AiCoworkerPaths): string {
   const homeDir = path.dirname(paths.rootDir);
-  const candidates = [
-    path.join(paths.authDir, "claude-code", "credentials.json"),
+  return process.env.CLAUDE_CONFIG_DIR ?? path.join(homeDir, ".claude");
+}
+
+function getClaudeCodeKeychainAccountName(): string {
+  const envUser = (process.env.USER ?? "").trim();
+  if (envUser) return envUser;
+  try {
+    return os.userInfo().username;
+  } catch {
+    return "claude-code-user";
+  }
+}
+
+function claudeCodeServiceNameCandidates(configDir: string): string[] {
+  const base = "Claude Code";
+  const oauthSuffixes = ["", "-custom-oauth", "-local-oauth", "-staging-oauth"];
+
+  const hash = createHash("sha256").update(configDir).digest("hex").slice(0, 8);
+  const hashSuffixes = ["", `-${hash}`];
+
+  const out: string[] = [];
+  for (const oauthSuffix of oauthSuffixes) {
+    for (const hashSuffix of hashSuffixes) {
+      out.push(`${base}${oauthSuffix}-credentials${hashSuffix}`);
+    }
+  }
+  // De-dupe while preserving order.
+  return out.filter((s, i) => out.indexOf(s) === i);
+}
+
+function extractClaudeTokens(creds: ClaudeCreds): { accessToken?: string; idToken?: string } {
+  const tryGet = (obj: unknown, keys: string[]): unknown => {
+    let cur: any = obj;
+    for (const k of keys) {
+      if (!cur || typeof cur !== "object") return undefined;
+      cur = cur[k];
+    }
+    return cur;
+  };
+
+  const accessTokenCandidates: unknown[] = [
+    creds.accessToken,
+    creds.access_token,
+    tryGet(creds, ["claudeAiOauth", "accessToken"]),
+    tryGet(creds, ["claudeAiOauth", "access_token"]),
+    tryGet(creds, ["consoleOauth", "accessToken"]),
+    tryGet(creds, ["consoleOauth", "access_token"]),
+    tryGet(creds, ["tokens", "accessToken"]),
+    tryGet(creds, ["tokens", "access_token"]),
+    tryGet(creds, ["token", "accessToken"]),
+    tryGet(creds, ["token", "access_token"]),
+    tryGet(creds, ["auth", "accessToken"]),
+    tryGet(creds, ["auth", "access_token"]),
+  ];
+
+  const idTokenCandidates: unknown[] = [
+    creds.idToken,
+    creds.id_token,
+    tryGet(creds, ["claudeAiOauth", "idToken"]),
+    tryGet(creds, ["claudeAiOauth", "id_token"]),
+    tryGet(creds, ["consoleOauth", "idToken"]),
+    tryGet(creds, ["consoleOauth", "id_token"]),
+    tryGet(creds, ["tokens", "idToken"]),
+    tryGet(creds, ["tokens", "id_token"]),
+    tryGet(creds, ["token", "idToken"]),
+    tryGet(creds, ["token", "id_token"]),
+    tryGet(creds, ["auth", "idToken"]),
+    tryGet(creds, ["auth", "id_token"]),
+  ];
+
+  const pick = (candidates: unknown[]): string | undefined => {
+    for (const c of candidates) {
+      if (typeof c === "string" && c.trim()) return c.trim();
+    }
+    return undefined;
+  };
+
+  return { accessToken: pick(accessTokenCandidates), idToken: pick(idTokenCandidates) };
+}
+
+function accountFromClaudeIdToken(idToken: string | undefined): ProviderAccount | null {
+  if (!idToken) return null;
+  const payload = decodeJwtPayload(idToken);
+  if (!payload) return null;
+
+  const email =
+    typeof payload.email === "string"
+      ? payload.email
+      : typeof payload.preferred_username === "string"
+        ? payload.preferred_username
+        : undefined;
+  const name =
+    typeof payload.name === "string"
+      ? payload.name
+      : typeof payload.given_name === "string" || typeof payload.family_name === "string"
+        ? `${typeof payload.given_name === "string" ? payload.given_name : ""} ${typeof payload.family_name === "string" ? payload.family_name : ""}`.trim()
+        : undefined;
+
+  const out: ProviderAccount = {};
+  if (email) out.email = email;
+  if (name) out.name = name;
+  return out.email || out.name ? out : null;
+}
+
+async function loadClaudeCredentialsFromFile(filePath: string): Promise<ClaudeAuthMaterial | null> {
+  if (!(await fileExists(filePath))) return null;
+  const creds = await readJsonFile<ClaudeCreds>(filePath);
+  if (!creds || !isObjectLike(creds)) return null;
+
+  const tokens = extractClaudeTokens(creds);
+  const fromCreds = extractClaudeAccount(creds);
+  const fromIdToken = accountFromClaudeIdToken(tokens.idToken);
+  const account = fromCreds ?? fromIdToken;
+
+  return { source: filePath, account, accessToken: tokens.accessToken, idToken: tokens.idToken };
+}
+
+async function loadClaudeCredentialsFromKeychain(opts: {
+  paths: AiCoworkerPaths;
+  runner: CommandRunner;
+}): Promise<ClaudeAuthMaterial | null> {
+  if (process.platform !== "darwin") return null;
+  const configDir = getClaudeCodeConfigDir(opts.paths);
+  const accountName = getClaudeCodeKeychainAccountName();
+  const serviceCandidates = claudeCodeServiceNameCandidates(configDir);
+
+  for (const serviceName of serviceCandidates) {
+    try {
+      const res = await opts.runner({
+        command: "security",
+        args: ["find-generic-password", "-a", accountName, "-w", "-s", serviceName],
+        timeoutMs: 5_000,
+      });
+      if (res.exitCode !== 0) continue;
+      const secret = (res.stdout || "").trim();
+      if (!secret) continue;
+
+      let credsObj: ClaudeCreds | null = null;
+      try {
+        const parsed = JSON.parse(secret) as unknown;
+        if (isObjectLike(parsed)) credsObj = parsed as ClaudeCreds;
+      } catch {
+        credsObj = null;
+      }
+      if (!credsObj) {
+        // Some installs may store a raw token string.
+        credsObj = { accessToken: secret };
+      }
+
+      const tokens = extractClaudeTokens(credsObj);
+      const fromCreds = extractClaudeAccount(credsObj);
+      const fromIdToken = accountFromClaudeIdToken(tokens.idToken);
+      const account = fromCreds ?? fromIdToken;
+
+      return {
+        source: `keychain:${serviceName}`,
+        account,
+        accessToken: tokens.accessToken,
+        idToken: tokens.idToken,
+      };
+    } catch {
+      // ignore and continue
+    }
+  }
+
+  return null;
+}
+
+async function loadClaudeAuthMaterial(opts: {
+  paths: AiCoworkerPaths;
+  runner: CommandRunner;
+}): Promise<ClaudeAuthMaterial | null> {
+  const homeDir = path.dirname(opts.paths.rootDir);
+  const configDir = getClaudeCodeConfigDir(opts.paths);
+  const fileCandidates = [
+    // Persisted copies under ~/.cowork/auth
+    path.join(opts.paths.authDir, "claude-code", "credentials.json"),
+    path.join(opts.paths.authDir, "claude-code", ".credentials.json"),
+
+    // Upstream Claude Code plaintext fallback
+    path.join(configDir, ".credentials.json"),
+
+    // Legacy / alternate locations (best-effort)
     path.join(homeDir, ".claude", "credentials.json"),
     path.join(homeDir, ".config", "claude", "credentials.json"),
   ];
 
-  for (const candidate of candidates) {
-    if (!(await fileExists(candidate))) continue;
-    const creds = await readJsonFile<ClaudeCreds>(candidate);
-    if (!creds || !isObjectLike(creds)) continue;
-    return { file: candidate, account: extractClaudeAccount(creds) };
+  for (const candidate of fileCandidates) {
+    const file = await loadClaudeCredentialsFromFile(candidate);
+    if (file) return file;
   }
 
-  return null;
+  return await loadClaudeCredentialsFromKeychain({ paths: opts.paths, runner: opts.runner });
+}
+
+function mergeAccounts(a: ProviderAccount | null, b: ProviderAccount | null): ProviderAccount | null {
+  if (!a && !b) return null;
+  return { email: b?.email ?? a?.email, name: b?.name ?? a?.name };
+}
+
+async function claudeOauthProfile(opts: {
+  accessToken: string;
+  fetchImpl: typeof fetch;
+}): Promise<{ ok: boolean; message: string; account: ProviderAccount | null }> {
+  const base = process.env.CLAUDE_CODE_CUSTOM_OAUTH_URL?.replace(/\/$/, "") || "https://api.anthropic.com";
+  const url = joinUrl(base, "/api/oauth/profile");
+  try {
+    const res = await opts.fetchImpl(url, {
+      method: "GET",
+      headers: { authorization: `Bearer ${opts.accessToken}`, "content-type": "application/json" },
+    });
+    if (!res.ok) {
+      return { ok: false, message: `OAuth profile request failed (${res.status}).`, account: null };
+    }
+    const json = (await res.json()) as any;
+    const accountObj = isObjectLike(json?.account) ? json.account : null;
+    const email =
+      (typeof accountObj?.email === "string" ? accountObj.email : undefined) ??
+      (typeof accountObj?.email_address === "string" ? accountObj.email_address : undefined) ??
+      (typeof accountObj?.emailAddress === "string" ? accountObj.emailAddress : undefined);
+    const name =
+      (typeof accountObj?.display_name === "string" ? accountObj.display_name : undefined) ??
+      (typeof accountObj?.displayName === "string" ? accountObj.displayName : undefined) ??
+      (typeof accountObj?.name === "string" ? accountObj.name : undefined);
+
+    const out: ProviderAccount = {};
+    if (email && email.trim()) out.email = email.trim();
+    if (name && name.trim()) out.name = name.trim();
+    return { ok: true, message: "Loaded Claude account profile.", account: out.email || out.name ? out : null };
+  } catch (err) {
+    return { ok: false, message: `OAuth profile error: ${String(err)}`, account: null };
+  }
 }
 
 async function verifyClaudeCli(opts: { runner: CommandRunner }): Promise<{ ok: boolean; message: string }> {
@@ -429,6 +656,7 @@ async function getClaudeCodeStatus(opts: {
   store: ConnectionStore;
   checkedAt: string;
   runner: CommandRunner;
+  fetchImpl: typeof fetch;
 }): Promise<ProviderStatus> {
   const base = statusFromConnectionStore({ provider: "claude-code", store: opts.store, checkedAt: opts.checkedAt });
 
@@ -439,14 +667,21 @@ async function getClaudeCodeStatus(opts: {
   }
 
   const verify = await verifyClaudeCli({ runner: opts.runner });
-  const creds = await loadClaudeCredentials(opts.paths);
+  const material = verify.ok ? await loadClaudeAuthMaterial({ paths: opts.paths, runner: opts.runner }) : null;
+  let account = material?.account ?? null;
+
+  // If we can, fetch the OAuth profile to get a stable name/email.
+  if (verify.ok && material?.accessToken && (!account?.email || !account?.name)) {
+    const profile = await claudeOauthProfile({ accessToken: material.accessToken, fetchImpl: opts.fetchImpl });
+    if (profile.ok) account = mergeAccounts(account, profile.account);
+  }
 
   return {
     provider: "claude-code",
     authorized: verify.ok,
     verified: verify.ok,
     mode: verify.ok ? "oauth" : base.mode === "oauth_pending" ? "oauth_pending" : "missing",
-    account: creds?.account ?? null,
+    account,
     message: verify.ok ? verify.message : `Not authorized. ${verify.message}`.trim(),
     checkedAt: opts.checkedAt,
   };
@@ -474,7 +709,7 @@ export async function getProviderStatuses(opts: {
       continue;
     }
     if (provider === "claude-code") {
-      out.push(await getClaudeCodeStatus({ paths, store, checkedAt, runner }));
+      out.push(await getClaudeCodeStatus({ paths, store, checkedAt, runner, fetchImpl }));
       continue;
     }
     out.push(statusFromConnectionStore({ provider, store, checkedAt }));
@@ -482,4 +717,3 @@ export async function getProviderStatuses(opts: {
 
   return out;
 }
-

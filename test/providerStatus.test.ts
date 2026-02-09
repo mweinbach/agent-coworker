@@ -135,5 +135,46 @@ describe("getProviderStatuses", () => {
     expect(claude?.account?.email).toBe("c@example.com");
     expect(claude?.account?.name).toBe("Claude User");
   });
-});
 
+  test("claude-code: loads identity via keychain creds + OAuth profile", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+
+    const runner = async ({ command, args }: { command: string; args: string[] }) => {
+      if (command === "claude") {
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok" }),
+          stderr: "",
+        };
+      }
+      if (command === "security") {
+        // Simulate finding keychain credentials (do not include real tokens in tests).
+        if (args.includes("find-generic-password")) {
+          return { exitCode: 0, signal: null, stdout: JSON.stringify({ accessToken: "test-access-token" }), stderr: "" };
+        }
+        return { exitCode: 1, signal: null, stdout: "", stderr: "unsupported" };
+      }
+      return { exitCode: 1, signal: null, stdout: "", stderr: "unknown" };
+    };
+
+    const fetchImpl = async (url: any, init?: any) => {
+      const u = String(url);
+      if (u === "https://api.anthropic.com/api/oauth/profile") {
+        expect(init?.headers?.authorization).toBe("Bearer test-access-token");
+        return new Response(JSON.stringify({ account: { email: "c@example.com", display_name: "Claude User" } }), { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    const statuses = await getProviderStatuses({ paths, runner: runner as any, fetchImpl: fetchImpl as any });
+    const claude = statuses.find((s) => s.provider === "claude-code");
+    expect(claude).toBeDefined();
+    expect(claude?.authorized).toBe(true);
+    expect(claude?.verified).toBe(true);
+    expect(claude?.mode).toBe("oauth");
+    expect(claude?.account?.email).toBe("c@example.com");
+    expect(claude?.account?.name).toBe("Claude User");
+  });
+});

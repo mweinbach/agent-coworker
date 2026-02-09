@@ -351,6 +351,7 @@ export class AgentSession {
         cwd: this.config.workingDirectory,
         paths,
         oauthStdioMode: "pipe",
+        allowOpenTerminal: providerRaw === "claude-code",
         onOauthLine: (line) => this.log(`[connect ${providerRaw}] ${line}`),
       });
 

@@ -210,8 +210,7 @@ export async function runCliRepl(
   };
 
   const handleDisconnect = (rl: readline.Interface, reason: string) => {
-    // Avoid noisy disconnect output during intentional server restarts/shutdown.
-    if (serverStopping) return;
+    const silent = serverStopping;
 
     ws = null;
     sessionId = null;
@@ -224,12 +223,13 @@ export async function runCliRepl(
     activeApproval = null;
     promptMode = "user";
 
-    if (!disconnectNotified) {
-      disconnectNotified = true;
-      console.log(`disconnected: ${reason}. Use /restart to start a new session.`);
+    if (!silent) {
+      if (!disconnectNotified) {
+        disconnectNotified = true;
+        console.log(`disconnected: ${reason}. Use /restart to start a new session.`);
+      }
+      activateNextPrompt(rl);
     }
-
-    activateNextPrompt(rl);
   };
 
   const handleServerEvent = (evt: ServerEvent, rl: readline.Interface) => {
@@ -323,11 +323,13 @@ export async function runCliRepl(
       };
 
       socket.onopen = () => {
+        if (ws !== socket) return;
         const hello: ClientMessage = { type: "client_hello", client: "cli", version: "0.1.0" };
         socket.send(JSON.stringify(hello));
       };
 
       socket.onerror = () => {
+        if (ws !== socket) return;
         if (!ready) {
           reject(new Error(`Failed to connect to ${url}`));
           return;
@@ -336,6 +338,7 @@ export async function runCliRepl(
       };
 
       socket.onmessage = (ev) => {
+        if (ws !== socket) return;
         let parsed: ServerEvent;
         try {
           parsed = JSON.parse(String(ev.data));
@@ -348,6 +351,7 @@ export async function runCliRepl(
       };
 
       socket.onclose = () => {
+        if (ws !== socket) return;
         if (!ready) {
           reject(new Error(`WebSocket closed before handshake: ${url}`));
           return;
@@ -360,18 +364,31 @@ export async function runCliRepl(
   const restartServer = async (cwd: string, rl: readline.Interface) => {
     serverStopping = true;
     try {
-      server.stop();
-    } catch {
-      // ignore
+      // Clear client state and suppress disconnect noise during intentional restarts.
+      if (ws) {
+        try {
+          ws.close();
+        } catch {
+          // ignore
+        }
+      }
+      handleDisconnect(rl, "restarting server");
+
+      try {
+        server.stop();
+      } catch {
+        // ignore
+      }
+      serverInfo = await startServerForDir(cwd);
+      server = serverInfo.server;
+      serverUrl = serverInfo.url;
+      await connectToServer(serverUrl, rl);
+      pendingAsk = [];
+      pendingApproval = [];
+      activateNextPrompt(rl);
+    } finally {
+      serverStopping = false;
     }
-    serverInfo = await startServerForDir(cwd);
-    server = serverInfo.server;
-    serverUrl = serverInfo.url;
-    await connectToServer(serverUrl, rl);
-    serverStopping = false;
-    pendingAsk = [];
-    pendingApproval = [];
-    activateNextPrompt(rl);
   };
 
   const rl = createReadlineInterface();

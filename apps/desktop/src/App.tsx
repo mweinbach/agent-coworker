@@ -9,7 +9,7 @@ import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { Sidebar } from "./ui/Sidebar";
 import { ChatView } from "./ui/ChatView";
 import { SkillsView } from "./ui/SkillsView";
-import { SettingsView } from "./ui/SettingsView";
+import { SettingsShell } from "./ui/settings/SettingsShell";
 import { PromptModal } from "./ui/PromptModal";
 
 function ProviderSelect(props: { value: ProviderName; onChange: (v: ProviderName) => void }) {
@@ -68,14 +68,28 @@ export default function App() {
 
   const showChatTopbarControls = view === "chat";
 
+  if (view === "settings") {
+    return (
+      <div className="settingsRoot">
+        {!ready ? (
+          <div className="hero">
+            <div className="heroTitle">Starting…</div>
+            <div className="heroSub">Loading state and warming up.</div>
+          </div>
+        ) : (
+          <SettingsShell />
+        )}
+        <PromptModal />
+      </div>
+    );
+  }
+
   const title =
     view === "skills"
       ? "Skills"
-      : view === "settings"
-        ? "Settings"
-        : view === "automations"
-          ? "Automations"
-          : activeThread?.title || "New thread";
+      : view === "automations"
+        ? "Automations"
+        : activeThread?.title || "New thread";
 
   return (
     <div className="app">
@@ -160,8 +174,6 @@ export default function App() {
             </div>
           ) : view === "skills" ? (
             <SkillsView />
-          ) : view === "settings" ? (
-            <SettingsView />
           ) : view === "automations" ? (
             <div className="hero">
               <div className="heroTitle">Automations</div>

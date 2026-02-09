@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { ViewId } from "../app/types";
 import { useAppStore } from "../app/store";
 import { formatThreadTime } from "../lib/time";
+import { selectSidebarThreadsForWorkspace } from "./sidebarSelectors";
 
 function NavButton(props: {
   active: boolean;
@@ -39,6 +39,8 @@ export function Sidebar() {
   const removeThread = useAppStore((s) => s.removeThread);
   const selectThread = useAppStore((s) => s.selectThread);
   const openSkills = useAppStore((s) => s.openSkills);
+  const openSettings = useAppStore((s) => s.openSettings);
+  const archiveThread = useAppStore((s) => s.archiveThread);
 
   const [ctxMenu, setCtxMenu] = useState<
     | {
@@ -79,19 +81,11 @@ export function Sidebar() {
   const ctxStyle = useMemo(() => {
     if (!ctxMenu) return null;
     const w = 240;
-    const h = 90;
+    const h = ctxMenu.kind === "thread" ? 140 : 90;
     const left = Math.max(10, Math.min(ctxMenu.x, window.innerWidth - w - 10));
     const top = Math.max(10, Math.min(ctxMenu.y, window.innerHeight - h - 10));
     return { left, top } as const;
   }, [ctxMenu]);
-
-  const setView = (v: ViewId) => useAppStore.setState({ view: v });
-
-  const threadsForWorkspace = (workspaceId: string) =>
-    threads
-      .filter((t) => t.workspaceId === workspaceId)
-      .slice()
-      .sort((a, b) => String(b.lastMessageAt).localeCompare(String(a.lastMessageAt)));
 
   return (
     <aside className="sidebar">
@@ -173,7 +167,7 @@ export function Sidebar() {
 
                 {active ? (
                   <div className="threadList">
-                    {threadsForWorkspace(ws.id).map((t) => {
+                    {selectSidebarThreadsForWorkspace(threads, ws.id).map((t) => {
                       const tr = threadRuntimeById[t.id];
                       const busy = tr?.busy === true;
                       return (
@@ -200,8 +194,7 @@ export function Sidebar() {
                           <div className="threadTitle">
                             <div className="threadTitleMain">{t.title || "New thread"}</div>
                             <div className="threadTitleMeta">
-                              {t.status === "active" ? "Active" : t.status === "archived" ? "Archived" : "Transcript"}{" "}
-                              · {formatThreadTime(t.lastMessageAt)}
+                              {t.status === "active" ? "Active" : "Transcript"} · {formatThreadTime(t.lastMessageAt)}
                             </div>
                           </div>
                           {busy ? <span className="pill pillBusy">busy</span> : null}
@@ -246,6 +239,17 @@ export function Sidebar() {
               </div>
 
               <button
+                className="ctxMenuItem"
+                type="button"
+                onClick={() => {
+                  void archiveThread(ctxMenu.threadId);
+                  setCtxMenu(null);
+                }}
+              >
+                Archive session
+              </button>
+
+              <button
                 className="ctxMenuItem ctxMenuItemDanger"
                 type="button"
                 onClick={() => {
@@ -259,13 +263,15 @@ export function Sidebar() {
               >
                 Remove session
               </button>
+
+              <div className="ctxMenuMuted">Archived sessions are available under Settings → Sessions.</div>
             </>
           )}
         </div>
       ) : null}
 
       <div style={{ marginTop: "auto" }}>
-        <button className={"navItem" + (view === "settings" ? " navItemActive" : "")} type="button" onClick={() => setView("settings")}>
+        <button className={"navItem" + (view === "settings" ? " navItemActive" : "")} type="button" onClick={() => openSettings()}>
           <span className="navDot" aria-hidden="true" />
           <span>Settings</span>
         </button>

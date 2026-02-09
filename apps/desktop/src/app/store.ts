@@ -24,6 +24,7 @@ import type {
   Notification,
   PersistedState,
   PromptModalState,
+  SettingsPageId,
   ThreadRecord,
   ThreadRuntime,
   ThreadStatus,
@@ -247,6 +248,9 @@ export type AppStoreState = {
   ready: boolean;
   view: ViewId;
 
+  settingsPage: SettingsPageId;
+  lastNonSettingsView: ViewId;
+
   workspaces: WorkspaceRecord[];
   threads: ThreadRecord[];
 
@@ -268,11 +272,17 @@ export type AppStoreState = {
 
   init: () => Promise<void>;
 
+  openSettings: (page?: SettingsPageId) => void;
+  closeSettings: () => void;
+  setSettingsPage: (page: SettingsPageId) => void;
+
   addWorkspace: () => Promise<void>;
   removeWorkspace: (workspaceId: string) => Promise<void>;
   selectWorkspace: (workspaceId: string) => Promise<void>;
 
   newThread: (opts?: { workspaceId?: string; titleHint?: string; firstMessage?: string }) => Promise<void>;
+  archiveThread: (threadId: string) => Promise<void>;
+  unarchiveThread: (threadId: string) => Promise<void>;
   removeThread: (threadId: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
 
@@ -514,7 +524,11 @@ function ensureThreadSocket(
             ...s.threadRuntimeById,
             [threadId]: { ...rt, connected: false, sessionId: null, busy: false },
           },
-          threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "disconnected" } : t)),
+          threads: s.threads.map((t) =>
+            t.id === threadId
+              ? { ...t, status: t.status === "archived" ? "archived" : "disconnected" }
+              : t
+          ),
         };
       });
       void persist(get);
@@ -772,6 +786,9 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   ready: false,
   view: "chat",
 
+  settingsPage: "providers",
+  lastNonSettingsView: "chat",
+
   workspaces: [],
   threads: [],
 
@@ -820,11 +837,28 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     });
   },
 
+  openSettings: (page) => {
+    set((s) => ({
+      view: "settings",
+      settingsPage: page ?? s.settingsPage,
+      lastNonSettingsView: s.view === "settings" ? s.lastNonSettingsView : s.view,
+    }));
+  },
+
+  closeSettings: () => {
+    set((s) => ({
+      view: s.lastNonSettingsView === "settings" ? "chat" : s.lastNonSettingsView,
+    }));
+  },
+
+  setSettingsPage: (page) => set({ settingsPage: page }),
+
   addWorkspace: async () => {
     const picked = await open({ directory: true, multiple: false, title: "Select a workspace directory" });
     const dir = typeof picked === "string" ? picked : Array.isArray(picked) ? picked[0] : null;
     if (!dir) return;
 
+    const stayInSettings = get().view === "settings";
     const ws: WorkspaceRecord = {
       id: makeId(),
       name: basename(dir),
@@ -840,7 +874,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     set((s) => ({
       workspaces: [ws, ...s.workspaces],
       selectedWorkspaceId: ws.id,
-      view: "chat",
+      view: stayInSettings ? "settings" : "chat",
     }));
     ensureWorkspaceRuntime(get, set, ws.id);
     await persist(get);
@@ -907,7 +941,10 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   },
 
   selectWorkspace: async (workspaceId: string) => {
-    set({ selectedWorkspaceId: workspaceId, view: "chat" });
+    set((s) => ({
+      selectedWorkspaceId: workspaceId,
+      view: s.view === "settings" ? "settings" : "chat",
+    }));
     ensureWorkspaceRuntime(get, set, workspaceId);
 
     const ws = get().workspaces.find((w) => w.id === workspaceId);
@@ -964,6 +1001,31 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     await persist(get);
 
     ensureThreadSocket(get, set, threadId, url, opts?.firstMessage);
+  },
+
+  archiveThread: async (threadId: string) => {
+    // Mark archived first so any socket close handler preserves status.
+    set((s) => ({
+      threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "archived" } : t)),
+    }));
+    await persist(get);
+
+    // Best-effort disconnect.
+    const sock = RUNTIME.threadSockets.get(threadId);
+    RUNTIME.threadSockets.delete(threadId);
+    RUNTIME.optimisticUserMessageIds.delete(threadId);
+    try {
+      sock?.close();
+    } catch {
+      // ignore
+    }
+  },
+
+  unarchiveThread: async (threadId: string) => {
+    set((s) => ({
+      threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "disconnected" } : t)),
+    }));
+    await persist(get);
   },
 
   selectThread: async (threadId: string) => {

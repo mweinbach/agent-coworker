@@ -48,6 +48,8 @@ export type FeedItem =
 
 export type ViewId = "chat" | "skills" | "automations" | "settings";
 
+export type SettingsPageId = "providers" | "workspaces" | "sessions";
+
 export type WorkspaceRuntime = {
   serverUrl: string | null;
   starting: boolean;
@@ -106,4 +108,3 @@ export type ThreadEvent = Extract<
   ServerEvent,
   { type: "assistant_message" | "reasoning" | "todos" | "log" | "error" | "user_message" | "session_busy" }
 >;
-

@@ -42,7 +42,7 @@ export function WorkspacesPage() {
   const yolo = ws?.yolo ?? false;
 
   const modelOptions = MODEL_CHOICES[provider] ?? [];
-  const modelListId = `models-settings-${provider}`;
+  const modelInCatalog = modelOptions.includes(model);
 
   return (
     <div className="settingsStack">
@@ -129,22 +129,24 @@ export function WorkspacesPage() {
 
               <SettingsRow
                 label="Model"
-                hint="You can enter a custom model id."
                 control={
-                  <>
-                    <input
-                      className="settingsTextInput"
-                      list={modelListId}
-                      placeholder="Model id"
-                      value={model}
-                      onChange={(e) => ws && void updateWorkspaceDefaults(ws.id, { defaultModel: e.currentTarget.value })}
-                    />
-                    <datalist id={modelListId}>
-                      {modelOptions.map((m) => (
-                        <option key={m} value={m} />
-                      ))}
-                    </datalist>
-                  </>
+                  <select
+                    className="settingsSelect"
+                    value={model}
+                    onChange={(e) => ws && void updateWorkspaceDefaults(ws.id, { defaultModel: e.currentTarget.value })}
+                    disabled={modelOptions.length === 0}
+                  >
+                    {!modelInCatalog && model.trim() ? (
+                      <option value={model} disabled>
+                        {model} (not in catalog)
+                      </option>
+                    ) : null}
+                    {modelOptions.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
                 }
               />
 

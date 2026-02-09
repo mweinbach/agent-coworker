@@ -79,6 +79,13 @@ export async function startAgentServer(
           };
 
           ws.send(JSON.stringify(hello));
+
+          const settings: ServerEvent = {
+            type: "session_settings",
+            sessionId: session.id,
+            enableMcp: session.getEnableMcp(),
+          };
+          ws.send(JSON.stringify(settings));
         },
         message(ws, raw) {
           const session = ws.data.session;
@@ -143,6 +150,36 @@ export async function startAgentServer(
 
           if (msg.type === "list_tools") {
             session.listTools();
+            return;
+          }
+
+          if (msg.type === "list_skills") {
+            void session.listSkills();
+            return;
+          }
+
+          if (msg.type === "read_skill") {
+            void session.readSkill(msg.skillName);
+            return;
+          }
+
+          if (msg.type === "disable_skill") {
+            void session.disableSkill(msg.skillName);
+            return;
+          }
+
+          if (msg.type === "enable_skill") {
+            void session.enableSkill(msg.skillName);
+            return;
+          }
+
+          if (msg.type === "delete_skill") {
+            void session.deleteSkill(msg.skillName);
+            return;
+          }
+
+          if (msg.type === "set_enable_mcp") {
+            session.setEnableMcp(msg.enableMcp);
             return;
           }
         },

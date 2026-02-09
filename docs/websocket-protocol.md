@@ -159,6 +159,78 @@ Request the list of available tools.
 }
 ```
 
+### list_skills
+
+Request the list of discovered skills. Desktop UIs may also surface disabled global skills
+from `~/.cowork/disabled-skills` (they are marked with `"enabled": false`).
+
+```jsonc
+{
+  "type": "list_skills",
+  "sessionId": "..."
+}
+```
+
+### read_skill
+
+Read the contents of a single skill's `SKILL.md`.
+
+```jsonc
+{
+  "type": "read_skill",
+  "sessionId": "...",
+  "skillName": "pdf"
+}
+```
+
+### disable_skill
+
+Disable a global skill by moving it from `~/.cowork/skills/<name>` to `~/.cowork/disabled-skills/<name>`.
+
+```jsonc
+{
+  "type": "disable_skill",
+  "sessionId": "...",
+  "skillName": "pdf"
+}
+```
+
+### enable_skill
+
+Enable a global skill by moving it from `~/.cowork/disabled-skills/<name>` back to `~/.cowork/skills/<name>`.
+
+```jsonc
+{
+  "type": "enable_skill",
+  "sessionId": "...",
+  "skillName": "pdf"
+}
+```
+
+### delete_skill
+
+Delete a global skill directory permanently.
+
+```jsonc
+{
+  "type": "delete_skill",
+  "sessionId": "...",
+  "skillName": "pdf"
+}
+```
+
+### set_enable_mcp
+
+Enable/disable MCP tool discovery/execution for this session.
+
+```jsonc
+{
+  "type": "set_enable_mcp",
+  "sessionId": "...",
+  "enableMcp": true
+}
+```
+
 ### reset
 
 Clear conversation history and todos.
@@ -190,6 +262,18 @@ First message after connection. Contains the session ID and current configuratio
     "workingDirectory": "/Users/user/project",
     "outputDirectory": "/Users/user/project/output"
   }
+}
+```
+
+### session_settings
+
+Session-level toggles/settings. Sent on connect (after `server_hello`) and whenever they change.
+
+```jsonc
+{
+  "type": "session_settings",
+  "sessionId": "...",
+  "enableMcp": true
 }
 ```
 
@@ -333,6 +417,65 @@ List of available tool names (response to `list_tools`).
 }
 ```
 
+### skills_list
+
+List of discovered skills (response to `list_skills`).
+
+```jsonc
+{
+  "type": "skills_list",
+  "sessionId": "...",
+  "skills": [
+    {
+      "name": "pdf",
+      "path": "/Users/user/project/.agent/skills/pdf/SKILL.md",
+      "source": "project", // or "global" (from ~/.cowork/skills), "user" (~/.agent/skills), "built-in"
+      "enabled": true,
+      "triggers": ["pdf", ".pdf", "form"],
+      "description": "Use when tasks involve reading, creating, or reviewing PDF files...",
+      // Optional UI metadata loaded from skillDir/agents/*.yaml (best-effort).
+      "interface": {
+        "displayName": "PDF Skill",
+        "shortDescription": "Create, edit, and review PDFs",
+        "iconSmall": "data:image/svg+xml;base64,...",
+        "iconLarge": "data:image/png;base64,...",
+        "defaultPrompt": "Create, edit, or review this PDF and summarize the key output or changes.",
+        "agents": ["openai"]
+      }
+    }
+  ]
+}
+```
+
+### skill_content
+
+Skill metadata + its `SKILL.md` content (response to `read_skill`).
+
+```jsonc
+{
+  "type": "skill_content",
+  "sessionId": "...",
+  "skill": {
+    "name": "pdf",
+    "path": "/Users/user/project/.agent/skills/pdf/SKILL.md",
+    "source": "project",
+    "enabled": true,
+    "triggers": ["pdf", ".pdf", "form"],
+    "description": "Use when tasks involve reading, creating, or reviewing PDF files...",
+    "interface": {
+      "displayName": "PDF Skill",
+      "shortDescription": "Create, edit, and review PDFs",
+      "iconSmall": "data:image/svg+xml;base64,...",
+      "iconLarge": "data:image/png;base64,...",
+      "defaultPrompt": "Create, edit, or review this PDF and summarize the key output or changes.",
+      "agents": ["openai"]
+    }
+  },
+  // SKILL.md content with any leading YAML front matter stripped (so it renders cleanly in UIs).
+  "content": "# PDF Skill\\n\\n..."
+}
+```
+
 ### reset_done
 
 Confirms the conversation was cleared (response to `reset`).
@@ -423,6 +566,29 @@ server  <- config_updated { config: { provider: "openai", model: "gpt-4-turbo", 
 - **requestId pairing**: `ask` and `approval` events block the agent until you respond with the matching `requestId`.
 - **Session = connection**: disconnecting disposes the session and rejects all pending ask/approval deferreds. There is no reconnection or session resumption.
 - **Localhost only**: the server binds to `127.0.0.1`; no auth, no TLS.
+
+---
+
+## Desktop / Wrapper Integration
+
+### Server CLI (machine-readable)
+
+For desktop wrappers (e.g. Tauri), the server supports:
+
+- Ephemeral ports with `--port 0`
+- JSON startup output with `--json`
+
+Example:
+
+```bash
+bun src/server/index.ts --dir /path/to/project --port 0 --json
+```
+
+On success, stdout prints a single JSON line:
+
+```json
+{"type":"server_listening","url":"ws://127.0.0.1:12345/ws","port":12345,"cwd":"/path/to/project"}
+```
 
 ---
 

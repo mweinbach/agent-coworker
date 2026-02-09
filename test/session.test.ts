@@ -1,4 +1,6 @@
 import { describe, expect, test, mock, beforeEach, afterAll } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import type { AgentConfig, TodoItem } from "../src/types";
@@ -264,6 +266,180 @@ describe("AgentSession", () => {
       const { session } = makeSession();
       const pub = session.getPublicConfig() as any;
       expect(pub.skillsDirs).toBeUndefined();
+    });
+  });
+
+  describe("enableMcp settings", () => {
+    test("getEnableMcp reflects config.enableMcp", () => {
+      const dir = "/tmp/test-session";
+      const cfg = { ...makeConfig(dir), enableMcp: false };
+      const { session } = makeSession({ config: cfg });
+      expect(session.getEnableMcp()).toBe(false);
+    });
+
+    test("setEnableMcp updates config and emits session_settings", () => {
+      const dir = "/tmp/test-session";
+      const cfg = { ...makeConfig(dir), enableMcp: true };
+      const { session, events } = makeSession({ config: cfg });
+
+      session.setEnableMcp(false);
+
+      expect(session.getEnableMcp()).toBe(false);
+      const evt = events.find((e) => e.type === "session_settings") as any;
+      expect(evt).toBeDefined();
+      expect(evt.enableMcp).toBe(false);
+    });
+
+    test("setEnableMcp while running emits Agent is busy", async () => {
+      const { session, events } = makeSession();
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          })
+      );
+
+      const first = session.sendUserMessage("first");
+      await new Promise((r) => setTimeout(r, 10));
+
+      session.setEnableMcp(false);
+      const errEvt = events.find((e) => e.type === "error") as any;
+      expect(errEvt).toBeDefined();
+      expect(errEvt.message).toBe("Agent is busy");
+
+      resolveRunTurn();
+      await first;
+    });
+  });
+
+  describe("skills", () => {
+    async function makeTmpDir(prefix = "session-skills-test-"): Promise<string> {
+      return await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    }
+
+    async function createSkill(parentDir: string, name: string, content: string): Promise<string> {
+      const skillDir = path.join(parentDir, name);
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(path.join(skillDir, "SKILL.md"), content, "utf-8");
+      return skillDir;
+    }
+
+    test("listSkills emits skills_list with discovered entries", async () => {
+      const tmp = await makeTmpDir();
+      await createSkill(tmp, "alpha", "# Alpha Skill\nTRIGGERS: a\n");
+
+      const cfg: AgentConfig = { ...makeConfig(tmp), skillsDirs: [tmp] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.listSkills();
+
+      const evt = events.find((e) => e.type === "skills_list") as any;
+      expect(evt).toBeDefined();
+      expect(Array.isArray(evt.skills)).toBe(true);
+      expect(evt.skills.some((s: any) => s.name === "alpha")).toBe(true);
+
+      const alpha = evt.skills.find((s: any) => s.name === "alpha");
+      expect(alpha.source).toBe("project");
+      expect(alpha.enabled).toBe(true);
+      expect(String(alpha.path)).toContain("alpha/SKILL.md");
+    });
+
+    test("readSkill emits skill_content with content", async () => {
+      const tmp = await makeTmpDir();
+      await createSkill(tmp, "alpha", "# Alpha Skill\nTRIGGERS: a\n");
+
+      const cfg: AgentConfig = { ...makeConfig(tmp), skillsDirs: [tmp] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.readSkill("alpha");
+
+      const evt = events.find((e) => e.type === "skill_content") as any;
+      expect(evt).toBeDefined();
+      expect(evt.skill.name).toBe("alpha");
+      expect(evt.skill.enabled).toBe(true);
+      expect(String(evt.content)).toContain("# Alpha Skill");
+    });
+
+    test("readSkill missing skill emits error", async () => {
+      const tmp = await makeTmpDir();
+      const cfg: AgentConfig = { ...makeConfig(tmp), skillsDirs: [tmp] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.readSkill("missing");
+
+      const evt = events.find((e) => e.type === "error") as any;
+      expect(evt).toBeDefined();
+      expect(evt.message).toContain('Skill "missing" not found.');
+    });
+
+    test("disableSkill moves global skill to disabled-skills and marks it disabled", async () => {
+      const root = await makeTmpDir();
+      const project = path.join(root, "project-skills");
+      const global = path.join(root, "skills");
+      await fs.mkdir(project, { recursive: true });
+      await fs.mkdir(global, { recursive: true });
+
+      await createSkill(global, "alpha", "# Alpha Skill\nTRIGGERS: a\n");
+
+      const cfg: AgentConfig = { ...makeConfig(root), skillsDirs: [project, global] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.disableSkill("alpha");
+
+      const evt = events.filter((e) => e.type === "skills_list").at(-1) as any;
+      expect(evt).toBeDefined();
+      const alpha = evt.skills.find((s: any) => s.name === "alpha");
+      expect(alpha).toBeDefined();
+      expect(alpha.source).toBe("global");
+      expect(alpha.enabled).toBe(false);
+      expect(String(alpha.path)).toContain("disabled-skills/alpha/SKILL.md");
+      await fs.access(path.join(root, "disabled-skills", "alpha", "SKILL.md"));
+    });
+
+    test("enableSkill moves global skill back to skills and marks it enabled", async () => {
+      const root = await makeTmpDir();
+      const project = path.join(root, "project-skills");
+      const global = path.join(root, "skills");
+      const disabled = path.join(root, "disabled-skills");
+      await fs.mkdir(project, { recursive: true });
+      await fs.mkdir(disabled, { recursive: true });
+
+      await createSkill(disabled, "alpha", "# Alpha Skill\nTRIGGERS: a\n");
+
+      const cfg: AgentConfig = { ...makeConfig(root), skillsDirs: [project, global] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.enableSkill("alpha");
+
+      const evt = events.filter((e) => e.type === "skills_list").at(-1) as any;
+      expect(evt).toBeDefined();
+      const alpha = evt.skills.find((s: any) => s.name === "alpha");
+      expect(alpha).toBeDefined();
+      expect(alpha.source).toBe("global");
+      expect(alpha.enabled).toBe(true);
+      expect(String(alpha.path)).toContain("skills/alpha/SKILL.md");
+      await fs.access(path.join(root, "skills", "alpha", "SKILL.md"));
+    });
+
+    test("deleteSkill removes global skill directory", async () => {
+      const root = await makeTmpDir();
+      const project = path.join(root, "project-skills");
+      const global = path.join(root, "skills");
+      await fs.mkdir(project, { recursive: true });
+      await fs.mkdir(global, { recursive: true });
+      await createSkill(global, "alpha", "# Alpha Skill\nTRIGGERS: a\n");
+
+      const cfg: AgentConfig = { ...makeConfig(root), skillsDirs: [project, global] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.deleteSkill("alpha");
+
+      const evt = events.filter((e) => e.type === "skills_list").at(-1) as any;
+      expect(evt).toBeDefined();
+      expect(evt.skills.some((s: any) => s.name === "alpha")).toBe(false);
+      await expect(fs.access(path.join(root, "skills", "alpha"))).rejects.toBeDefined();
     });
   });
 

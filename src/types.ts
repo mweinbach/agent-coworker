@@ -52,9 +52,18 @@ export interface AgentConfig {
 export interface SkillEntry {
   name: string;
   path: string;
-  source: "project" | "user" | "built-in";
+  source: "project" | "user" | "global" | "built-in";
+  enabled: boolean;
   triggers: string[];
   description: string;
+  interface?: {
+    displayName?: string;
+    shortDescription?: string;
+    iconSmall?: string; // data: URI (best-effort)
+    iconLarge?: string; // data: URI (best-effort)
+    defaultPrompt?: string;
+    agents?: string[];
+  };
 }
 
 export interface TodoItem {

@@ -104,6 +104,8 @@ function sendAndCollect(
         return;
       }
 
+      if (msg.type === "session_settings") return;
+
       responses.push(msg);
       if (responses.length >= responseCount) {
         clearTimeout(timer);
@@ -367,6 +369,7 @@ describe("WebSocket Lifecycle", () => {
             ws.send("this is not valid json {{{");
             return;
           }
+          if (msg.type === "session_settings") return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);
@@ -483,6 +486,7 @@ describe("WebSocket Lifecycle", () => {
             ws.send(JSON.stringify("just a string"));
             return;
           }
+          if (msg.type === "session_settings") return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);
@@ -515,6 +519,7 @@ describe("WebSocket Lifecycle", () => {
             ws.send("null");
             return;
           }
+          if (msg.type === "session_settings") return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);
@@ -547,6 +552,7 @@ describe("WebSocket Lifecycle", () => {
             ws.send(JSON.stringify([1, 2, 3]));
             return;
           }
+          if (msg.type === "session_settings") return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);

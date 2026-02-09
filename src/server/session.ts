@@ -1,7 +1,9 @@
 import type { ModelMessage } from "ai";
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
+import { discoverSkills, stripSkillFrontMatter } from "../skills";
 import { isProviderName } from "../types";
 import type { AgentConfig, TodoItem } from "../types";
 import { runTurn } from "../agent";
@@ -76,6 +78,10 @@ export class AgentSession {
     };
   }
 
+  getEnableMcp() {
+    return this.config.enableMcp ?? false;
+  }
+
   reset() {
     if (this.running) {
       this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
@@ -97,6 +103,176 @@ export class AgentSession {
       })
     ).sort();
     this.emit({ type: "tools", sessionId: this.id, tools });
+  }
+
+  async listSkills() {
+    try {
+      const skills = await discoverSkills(this.config.skillsDirs, { includeDisabled: true });
+      this.emit({ type: "skills_list", sessionId: this.id, skills });
+    } catch (err) {
+      this.emit({ type: "error", sessionId: this.id, message: `Failed to list skills: ${String(err)}` });
+    }
+  }
+
+  async readSkill(skillNameRaw: string) {
+    const skillName = skillNameRaw.trim();
+    if (!skillName) {
+      this.emit({ type: "error", sessionId: this.id, message: "Skill name is required" });
+      return;
+    }
+
+    try {
+      const skills = await discoverSkills(this.config.skillsDirs, { includeDisabled: true });
+      const skill = skills.find((s) => s.name === skillName);
+      if (!skill) {
+        this.emit({ type: "error", sessionId: this.id, message: `Skill "${skillName}" not found.` });
+        return;
+      }
+
+      const content = await fs.readFile(skill.path, "utf-8");
+      this.emit({ type: "skill_content", sessionId: this.id, skill, content: stripSkillFrontMatter(content) });
+    } catch (err) {
+      this.emit({ type: "error", sessionId: this.id, message: `Failed to read skill: ${String(err)}` });
+    }
+  }
+
+  private globalSkillsDirs(): { enabledDir: string | null; disabledDir: string | null } {
+    const enabledDir = this.config.skillsDirs.length >= 2 ? this.config.skillsDirs[1]! : null;
+    if (!enabledDir) return { enabledDir: null, disabledDir: null };
+    return { enabledDir, disabledDir: path.join(path.dirname(enabledDir), "disabled-skills") };
+  }
+
+  private async refreshSkillsList() {
+    const skills = await discoverSkills(this.config.skillsDirs, { includeDisabled: true });
+    this.emit({ type: "skills_list", sessionId: this.id, skills });
+  }
+
+  async disableSkill(skillNameRaw: string) {
+    const skillName = skillNameRaw.trim();
+    if (!skillName) {
+      this.emit({ type: "error", sessionId: this.id, message: "Skill name is required" });
+      return;
+    }
+    if (this.running) {
+      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      return;
+    }
+
+    const { enabledDir, disabledDir } = this.globalSkillsDirs();
+    if (!enabledDir || !disabledDir) {
+      this.emit({ type: "error", sessionId: this.id, message: "Global skills directory is not configured." });
+      return;
+    }
+
+    try {
+      const skills = await discoverSkills(this.config.skillsDirs, { includeDisabled: true });
+      const skill = skills.find((s) => s.name === skillName);
+      if (!skill) {
+        this.emit({ type: "error", sessionId: this.id, message: `Skill "${skillName}" not found.` });
+        return;
+      }
+      if (skill.source !== "global") {
+        this.emit({ type: "error", sessionId: this.id, message: "Only global skills can be disabled in v1." });
+        return;
+      }
+      if (!skill.enabled) {
+        await this.refreshSkillsList();
+        return;
+      }
+
+      await fs.mkdir(disabledDir, { recursive: true });
+      const from = path.join(enabledDir, skillName);
+      const to = path.join(disabledDir, skillName);
+      await fs.rename(from, to);
+      await this.refreshSkillsList();
+    } catch (err) {
+      this.emit({ type: "error", sessionId: this.id, message: `Failed to disable skill: ${String(err)}` });
+    }
+  }
+
+  async enableSkill(skillNameRaw: string) {
+    const skillName = skillNameRaw.trim();
+    if (!skillName) {
+      this.emit({ type: "error", sessionId: this.id, message: "Skill name is required" });
+      return;
+    }
+    if (this.running) {
+      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      return;
+    }
+
+    const { enabledDir, disabledDir } = this.globalSkillsDirs();
+    if (!enabledDir || !disabledDir) {
+      this.emit({ type: "error", sessionId: this.id, message: "Global skills directory is not configured." });
+      return;
+    }
+
+    try {
+      const skills = await discoverSkills(this.config.skillsDirs, { includeDisabled: true });
+      const skill = skills.find((s) => s.name === skillName);
+      if (!skill) {
+        this.emit({ type: "error", sessionId: this.id, message: `Skill "${skillName}" not found.` });
+        return;
+      }
+      if (skill.source !== "global") {
+        this.emit({ type: "error", sessionId: this.id, message: "Only global skills can be enabled in v1." });
+        return;
+      }
+      if (skill.enabled) {
+        await this.refreshSkillsList();
+        return;
+      }
+
+      await fs.mkdir(enabledDir, { recursive: true });
+      const from = path.join(disabledDir, skillName);
+      const to = path.join(enabledDir, skillName);
+      await fs.rename(from, to);
+      await this.refreshSkillsList();
+    } catch (err) {
+      this.emit({ type: "error", sessionId: this.id, message: `Failed to enable skill: ${String(err)}` });
+    }
+  }
+
+  async deleteSkill(skillNameRaw: string) {
+    const skillName = skillNameRaw.trim();
+    if (!skillName) {
+      this.emit({ type: "error", sessionId: this.id, message: "Skill name is required" });
+      return;
+    }
+    if (this.running) {
+      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      return;
+    }
+
+    try {
+      const skills = await discoverSkills(this.config.skillsDirs, { includeDisabled: true });
+      const skill = skills.find((s) => s.name === skillName);
+      if (!skill) {
+        this.emit({ type: "error", sessionId: this.id, message: `Skill "${skillName}" not found.` });
+        return;
+      }
+      if (skill.source !== "global") {
+        this.emit({ type: "error", sessionId: this.id, message: "Only global skills can be deleted in v1." });
+        return;
+      }
+
+      // Delete the containing directory (skill.path points at SKILL.md).
+      const skillDir = path.dirname(skill.path);
+      await fs.rm(skillDir, { recursive: true, force: true });
+      await this.refreshSkillsList();
+    } catch (err) {
+      this.emit({ type: "error", sessionId: this.id, message: `Failed to delete skill: ${String(err)}` });
+    }
+  }
+
+  setEnableMcp(enableMcp: boolean) {
+    if (this.running) {
+      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      return;
+    }
+
+    this.config = { ...this.config, enableMcp };
+    this.emit({ type: "session_settings", sessionId: this.id, enableMcp });
   }
 
   async setModel(modelIdRaw: string, providerRaw?: AgentConfig["provider"]) {

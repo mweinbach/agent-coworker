@@ -1,4 +1,5 @@
 node_modules/
+dist/
 
 # Agent runtime dirs
 output/

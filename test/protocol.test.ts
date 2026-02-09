@@ -324,6 +324,111 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("list_skills", () => {
+    test("valid list_skills message", () => {
+      const msg = expectOk(JSON.stringify({ type: "list_skills", sessionId: "s1" }));
+      expect(msg.type).toBe("list_skills");
+      if (msg.type === "list_skills") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("list_skills missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "list_skills" }));
+      expect(err).toBe("list_skills missing sessionId");
+    });
+  });
+
+  describe("read_skill", () => {
+    test("valid read_skill message", () => {
+      const msg = expectOk(JSON.stringify({ type: "read_skill", sessionId: "s1", skillName: "pdf" }));
+      expect(msg.type).toBe("read_skill");
+      if (msg.type === "read_skill") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.skillName).toBe("pdf");
+      }
+    });
+
+    test("read_skill missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "read_skill", skillName: "pdf" }));
+      expect(err).toBe("read_skill missing sessionId");
+    });
+
+    test("read_skill missing skillName fails", () => {
+      const err = expectErr(JSON.stringify({ type: "read_skill", sessionId: "s1" }));
+      expect(err).toBe("read_skill missing skillName");
+    });
+  });
+
+  describe("disable_skill", () => {
+    test("valid disable_skill message", () => {
+      const msg = expectOk(JSON.stringify({ type: "disable_skill", sessionId: "s1", skillName: "pdf" }));
+      expect(msg.type).toBe("disable_skill");
+      if (msg.type === "disable_skill") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.skillName).toBe("pdf");
+      }
+    });
+
+    test("disable_skill missing fields fail", () => {
+      expect(expectErr(JSON.stringify({ type: "disable_skill", skillName: "pdf" }))).toBe("disable_skill missing sessionId");
+      expect(expectErr(JSON.stringify({ type: "disable_skill", sessionId: "s1" }))).toBe("disable_skill missing skillName");
+    });
+  });
+
+  describe("enable_skill", () => {
+    test("valid enable_skill message", () => {
+      const msg = expectOk(JSON.stringify({ type: "enable_skill", sessionId: "s1", skillName: "pdf" }));
+      expect(msg.type).toBe("enable_skill");
+      if (msg.type === "enable_skill") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.skillName).toBe("pdf");
+      }
+    });
+
+    test("enable_skill missing fields fail", () => {
+      expect(expectErr(JSON.stringify({ type: "enable_skill", skillName: "pdf" }))).toBe("enable_skill missing sessionId");
+      expect(expectErr(JSON.stringify({ type: "enable_skill", sessionId: "s1" }))).toBe("enable_skill missing skillName");
+    });
+  });
+
+  describe("delete_skill", () => {
+    test("valid delete_skill message", () => {
+      const msg = expectOk(JSON.stringify({ type: "delete_skill", sessionId: "s1", skillName: "pdf" }));
+      expect(msg.type).toBe("delete_skill");
+      if (msg.type === "delete_skill") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.skillName).toBe("pdf");
+      }
+    });
+
+    test("delete_skill missing fields fail", () => {
+      expect(expectErr(JSON.stringify({ type: "delete_skill", skillName: "pdf" }))).toBe("delete_skill missing sessionId");
+      expect(expectErr(JSON.stringify({ type: "delete_skill", sessionId: "s1" }))).toBe("delete_skill missing skillName");
+    });
+  });
+
+  describe("set_enable_mcp", () => {
+    test("valid set_enable_mcp message", () => {
+      const msg = expectOk(JSON.stringify({ type: "set_enable_mcp", sessionId: "s1", enableMcp: true }));
+      expect(msg.type).toBe("set_enable_mcp");
+      if (msg.type === "set_enable_mcp") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.enableMcp).toBe(true);
+      }
+    });
+
+    test("set_enable_mcp missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "set_enable_mcp", enableMcp: true }));
+      expect(err).toBe("set_enable_mcp missing sessionId");
+    });
+
+    test("set_enable_mcp missing/invalid enableMcp fails", () => {
+      const err = expectErr(JSON.stringify({ type: "set_enable_mcp", sessionId: "s1", enableMcp: "true" }));
+      expect(err).toBe("set_enable_mcp missing/invalid enableMcp");
+    });
+  });
+
   describe("reset", () => {
     test("valid reset message", () => {
       const msg = expectOk(JSON.stringify({ type: "reset", sessionId: "s1" }));

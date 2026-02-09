@@ -21,7 +21,7 @@ export function createSkillTool(ctx: ToolContext) {
     description: `Load a skill (a SKILL.md file) to get specialized instructions.
 
 Use this before producing deliverables like spreadsheets, slides, PDFs, or Word docs.
-Skills are searched in project, user, then built-in directories.`,
+Skills are searched in project, global (~/.cowork/skills), user (~/.agent/skills), then built-in directories.`,
     inputSchema: z.object({
       skillName: z.string().describe("The skill to load (e.g. 'xlsx', 'pptx', 'pdf', 'docx')"),
     }),

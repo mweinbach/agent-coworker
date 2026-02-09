@@ -7,11 +7,15 @@
     "cowork": "./src/index.ts"
   },
   "scripts": {
+    "postinstall": "bun install --cwd apps/desktop",
     "start": "bun src/index.ts",
     "cli": "bun src/index.ts --cli",
     "dev": "bun --watch src/index.ts",
     "serve": "bun src/server/index.ts",
     "tui": "bun src/tui/index.tsx",
+    "desktop:dev": "cd apps/desktop && bun run tauri dev",
+    "desktop:build": "cd apps/desktop && bun run build",
+    "build:desktop-resources": "bun scripts/build_desktop_resources.ts",
     "test": "bun test"
   },
   "dependencies": {

@@ -117,6 +117,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const projectAgentDir = path.join(cwd, ".agent");
   const userAgentDir = path.join(homedir, ".agent");
   const builtInConfigDir = path.join(builtInDir, "config");
+  const coworkPaths = getAiCoworkerPaths({ homedir });
 
   const builtInDefaults = await loadJsonSafe(path.join(builtInConfigDir, "defaults.json"));
   const userConfig = await loadJsonSafe(path.join(userAgentDir, "config.json"));
@@ -203,6 +204,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
     skillsDirs: [
       path.join(projectAgentDir, "skills"),
+      // Global/shared skills live under ~/.cowork/skills.
+      path.join(coworkPaths.rootDir, "skills"),
       path.join(userAgentDir, "skills"),
       path.join(builtInDir, "skills"),
     ],

@@ -195,18 +195,18 @@ describe("discoverSkills", () => {
     const entries = await discoverSkills([dir1, dir2]);
     const userEntry = entries.find((e) => e.name === "user-skill");
     expect(userEntry).toBeDefined();
-    expect(userEntry!.source).toBe("user");
+    expect(userEntry!.source).toBe("global");
   });
 
-  test("assigns built-in source to third directory", async () => {
+  test("assigns user source to third directory", async () => {
     const dir1 = await makeTmpDir("project-");
-    const dir2 = await makeTmpDir("user-");
-    const dir3 = await makeTmpDir("builtin-");
-    await createSkill(dir3, "bi-skill", "# BuiltIn\nTRIGGERS: bi\n");
+    const dir2 = await makeTmpDir("global-");
+    const dir3 = await makeTmpDir("user-");
+    await createSkill(dir3, "user-skill", "# User\nTRIGGERS: u\n");
     const entries = await discoverSkills([dir1, dir2, dir3]);
-    const biEntry = entries.find((e) => e.name === "bi-skill");
-    expect(biEntry).toBeDefined();
-    expect(biEntry!.source).toBe("built-in");
+    const userEntry = entries.find((e) => e.name === "user-skill");
+    expect(userEntry).toBeDefined();
+    expect(userEntry!.source).toBe("user");
   });
 
   test("assigns built-in source to fourth+ directory", async () => {
@@ -285,7 +285,7 @@ describe("discoverSkills", () => {
     const entries = await discoverSkills(["/tmp/nope-does-not-exist-8888", tmp]);
     expect(entries).toHaveLength(1);
     expect(entries[0].name).toBe("exists");
-    expect(entries[0].source).toBe("user");
+    expect(entries[0].source).toBe("global");
   });
 
   test("empty SKILL.md uses directory name as description and [name] as trigger", async () => {

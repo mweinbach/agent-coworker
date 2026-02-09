@@ -515,7 +515,7 @@ describe("directory resolution", () => {
     expect(cfg.uploadsDirectory).toBe(path.join(cwd, "uploads"));
   });
 
-  test("skillsDirs populated with 3 paths (project, user, built-in)", async () => {
+  test("skillsDirs populated with 4 paths (project, global, user, built-in)", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -525,10 +525,11 @@ describe("directory resolution", () => {
       env: {},
     });
 
-    expect(cfg.skillsDirs).toHaveLength(3);
+    expect(cfg.skillsDirs).toHaveLength(4);
     expect(cfg.skillsDirs[0]).toBe(path.join(cwd, ".agent", "skills"));
-    expect(cfg.skillsDirs[1]).toBe(path.join(home, ".agent", "skills"));
-    expect(cfg.skillsDirs[2]).toBe(path.join(repoRoot(), "skills"));
+    expect(cfg.skillsDirs[1]).toBe(path.join(home, ".cowork", "skills"));
+    expect(cfg.skillsDirs[2]).toBe(path.join(home, ".agent", "skills"));
+    expect(cfg.skillsDirs[3]).toBe(path.join(repoRoot(), "skills"));
   });
 
   test("memoryDirs populated correctly", async () => {

@@ -7,17 +7,18 @@ const mockConnectModelProvider = mock(async (_opts: any): Promise<any> => ({
   ok: true,
   provider: "openai",
   mode: "api_key",
-  storageFile: "/tmp/mock/.ai-coworker/config/connections.json",
+  storageFile: "/tmp/mock/.cowork/auth/connections.json",
   message: "Provider key saved.",
   maskedApiKey: "sk-t...est",
 }));
 
 const mockGetAiCoworkerPaths = mock((_opts?: { homedir?: string }) => ({
-  rootDir: "/tmp/mock/.ai-coworker",
-  configDir: "/tmp/mock/.ai-coworker/config",
-  sessionsDir: "/tmp/mock/.ai-coworker/sessions",
-  logsDir: "/tmp/mock/.ai-coworker/logs",
-  connectionsFile: "/tmp/mock/.ai-coworker/config/connections.json",
+  rootDir: "/tmp/mock/.cowork",
+  authDir: "/tmp/mock/.cowork/auth",
+  configDir: "/tmp/mock/.cowork/config",
+  sessionsDir: "/tmp/mock/.cowork/sessions",
+  logsDir: "/tmp/mock/.cowork/logs",
+  connectionsFile: "/tmp/mock/.cowork/auth/connections.json",
 }));
 
 const { startAgentServer } = await import("../src/server/startServer");
@@ -77,17 +78,18 @@ describe("Server connect_provider flow", () => {
       ok: true,
       provider: "openai",
       mode: "api_key",
-      storageFile: "/tmp/mock/.ai-coworker/config/connections.json",
+      storageFile: "/tmp/mock/.cowork/auth/connections.json",
       message: "Provider key saved.",
       maskedApiKey: "sk-t...est",
     }));
     mockGetAiCoworkerPaths.mockReset();
     mockGetAiCoworkerPaths.mockImplementation((_opts?: { homedir?: string }) => ({
-      rootDir: "/tmp/mock/.ai-coworker",
-      configDir: "/tmp/mock/.ai-coworker/config",
-      sessionsDir: "/tmp/mock/.ai-coworker/sessions",
-      logsDir: "/tmp/mock/.ai-coworker/logs",
-      connectionsFile: "/tmp/mock/.ai-coworker/config/connections.json",
+      rootDir: "/tmp/mock/.cowork",
+      authDir: "/tmp/mock/.cowork/auth",
+      configDir: "/tmp/mock/.cowork/config",
+      sessionsDir: "/tmp/mock/.cowork/sessions",
+      logsDir: "/tmp/mock/.cowork/logs",
+      connectionsFile: "/tmp/mock/.cowork/auth/connections.json",
     }));
   });
 
@@ -143,7 +145,7 @@ describe("Server connect_provider flow", () => {
         ok: true,
         provider: "codex-cli",
         mode: "oauth",
-        storageFile: "/tmp/mock/.ai-coworker/config/connections.json",
+        storageFile: "/tmp/mock/.cowork/auth/connections.json",
         message: "OAuth sign-in completed.",
         oauthCommand: "codex login",
       };

@@ -6,6 +6,7 @@ import { codexCliProvider } from "./codex-cli";
 import { geminiCliProvider } from "./gemini-cli";
 import { googleProvider } from "./google";
 import { openaiProvider } from "./openai";
+export { DEFAULT_PROVIDER_OPTIONS } from "./providerOptions";
 
 export type ProviderDefinition = {
   defaultModel: string;

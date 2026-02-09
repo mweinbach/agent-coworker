@@ -11,12 +11,23 @@ describe("Provider options structure", () => {
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("openai");
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("google");
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("gemini-cli-core");
+    expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("gemini-cli");
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("anthropic");
+    expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("codex-cli");
+    expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("claude-code");
   });
 
   test("no extra unknown providers in options", () => {
     const providers = Object.keys(DEFAULT_PROVIDER_OPTIONS);
-    expect(providers).toEqual(["openai", "google", "gemini-cli-core", "anthropic"]);
+    expect(providers).toEqual([
+      "openai",
+      "google",
+      "gemini-cli-core",
+      "gemini-cli",
+      "anthropic",
+      "codex-cli",
+      "claude-code",
+    ]);
   });
 
   test("each provider options is a plain object", () => {

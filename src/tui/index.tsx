@@ -166,7 +166,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
     name: "connect",
     summary: "Connect a provider key or start OAuth sign-in.",
     usage: `/connect <${CONNECT_SERVICES.join("|")}> [api_key]`,
-    details: "Stores provider connection info under ~/.ai-coworker. For CLI providers, no key starts OAuth.",
+    details: "Stores provider connection info under ~/.cowork/auth. For CLI providers, no key starts OAuth.",
     examples: [
       "/connect openai sk-...",
       "/connect codex-cli",

@@ -5,15 +5,15 @@ import { getModel } from "../../src/config";
 import { makeConfig, makeTmpDirs, withEnv, writeJson } from "./helpers";
 
 // ---------------------------------------------------------------------------
-// Saved API keys in ~/.ai-coworker should override .env keys
+// Saved API keys in ~/.cowork/auth should override .env keys
 // ---------------------------------------------------------------------------
-describe("Saved API key precedence (~/.ai-coworker)", () => {
+describe("Saved API key precedence (~/.cowork/auth)", () => {
   test("openai saved key overrides OPENAI_API_KEY", async () => {
     const { home } = await makeTmpDirs();
     const savedKey = "saved-openai-key";
     const envKey = "env-openai-key";
 
-    await writeJson(path.join(home, ".ai-coworker", "config", "connections.json"), {
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
       version: 1,
       updatedAt: new Date().toISOString(),
       services: {
@@ -44,7 +44,7 @@ describe("Saved API key precedence (~/.ai-coworker)", () => {
     const savedKey = "saved-google-key";
     const envKey = "env-google-key";
 
-    await writeJson(path.join(home, ".ai-coworker", "config", "connections.json"), {
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
       version: 1,
       updatedAt: new Date().toISOString(),
       services: {
@@ -75,7 +75,7 @@ describe("Saved API key precedence (~/.ai-coworker)", () => {
     const savedKey = "saved-anthropic-key";
     const envKey = "env-anthropic-key";
 
-    await writeJson(path.join(home, ".ai-coworker", "config", "connections.json"), {
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
       version: 1,
       updatedAt: new Date().toISOString(),
       services: {
@@ -105,7 +105,7 @@ describe("Saved API key precedence (~/.ai-coworker)", () => {
     const { home } = await makeTmpDirs();
     const savedKey = "saved-google-key";
 
-    await writeJson(path.join(home, ".ai-coworker", "config", "connections.json"), {
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
       version: 1,
       updatedAt: new Date().toISOString(),
       services: {
@@ -132,7 +132,7 @@ describe("Saved API key precedence (~/.ai-coworker)", () => {
     const { home } = await makeTmpDirs();
     const savedKey = "saved-openai-key";
 
-    await writeJson(path.join(home, ".ai-coworker", "config", "connections.json"), {
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
       version: 1,
       updatedAt: new Date().toISOString(),
       services: {
@@ -159,7 +159,7 @@ describe("Saved API key precedence (~/.ai-coworker)", () => {
     const { home } = await makeTmpDirs();
     const savedKey = "saved-anthropic-key";
 
-    await writeJson(path.join(home, ".ai-coworker", "config", "connections.json"), {
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
       version: 1,
       updatedAt: new Date().toISOString(),
       services: {
@@ -186,7 +186,7 @@ describe("Saved API key precedence (~/.ai-coworker)", () => {
     const { home } = await makeTmpDirs();
     const envKey = "env-openai-fallback";
 
-    await writeJson(path.join(home, ".ai-coworker", "config", "connections.json"), {
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
       version: 1,
       updatedAt: new Date().toISOString(),
       services: {

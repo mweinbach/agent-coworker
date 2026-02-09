@@ -5,40 +5,12 @@ import path from "node:path";
 
 import { parseCliArgs } from "./cli/args";
 import { runCliRepl } from "./cli/repl";
+import { DEFAULT_PROVIDER_OPTIONS } from "./providers";
 import { startAgentServer } from "./server/startServer";
 import { runTui } from "./tui/index";
 
 // Keep output clean by default.
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
-
-// Central place to tune provider-specific reasoning/thinking behavior.
-// Kept in `src/index.ts` on purpose so defaults are easy to change while we iterate.
-const DEFAULT_PROVIDER_OPTIONS: Record<string, any> = {
-  openai: {
-    reasoningEffort: "high",
-    reasoningSummary: "detailed",
-  },
-  google: {
-    thinkingConfig: {
-      // Gemini maps "thought" parts to AI SDK `reasoning` parts when includeThoughts is enabled.
-      includeThoughts: true,
-      thinkingLevel: "high",
-    },
-  },
-  "gemini-cli-core": {
-    thinkingConfig: {
-      // Keep thought parts off by default for Gemini CLI tool-call loops.
-      includeThoughts: false,
-      thinkingLevel: "minimal",
-    },
-  },
-  anthropic: {
-    thinking: {
-      type: "enabled",
-      budgetTokens: 32_000,
-    },
-  },
-};
 
 function printUsage() {
   console.log("Usage: cowork [--dir <directory_path>] [--cli] [--yolo]");

@@ -185,6 +185,7 @@ export class AgentSession {
       const lines = [`### /connect ${providerRaw}`, "", result.message, "", `- Mode: ${result.mode}`, `- Storage: \`${result.storageFile}\``];
       if (result.maskedApiKey) lines.splice(4, 0, `- Key: \`${result.maskedApiKey}\``);
       if (result.oauthCommand) lines.push(`- OAuth command: \`${result.oauthCommand}\``);
+      if (result.oauthCredentialsFile) lines.push(`- OAuth credentials: \`${result.oauthCredentialsFile}\``);
       this.emit({
         type: "assistant_message",
         sessionId: this.id,

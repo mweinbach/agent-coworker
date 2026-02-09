@@ -115,6 +115,11 @@ describe("connectProvider", () => {
     if (!result.ok) return;
     expect(result.mode).toBe("oauth");
     expect(result.message).toContain("Existing OAuth credentials detected");
+    expect(result.oauthCredentialsFile).toBe(path.join(home, ".cowork", "auth", "gemini-cli", "oauth_creds.json"));
+
+    // Credentials are also persisted under ~/.cowork/auth for centralized storage.
+    const persisted = await fs.readFile(path.join(home, ".cowork", "auth", "gemini-cli", "oauth_creds.json"), "utf-8");
+    expect(persisted).toContain("access_token");
 
     const store = await readConnectionStore(paths);
     const entry = store.services["gemini-cli"];
@@ -134,6 +139,12 @@ describe("connectProvider", () => {
       oauthStdioMode: "pipe",
       oauthRunner: async ({ command, args, stdioMode }) => {
         seen.push({ command, args, stdioMode });
+
+        // Simulate Codex writing its OAuth credentials to ~/.codex/auth.json
+        const codexCreds = path.join(home, ".codex", "auth.json");
+        await fs.mkdir(path.dirname(codexCreds), { recursive: true });
+        await fs.writeFile(codexCreds, JSON.stringify({ access_token: "x" }), "utf-8");
+
         return { exitCode: 0, signal: null };
       },
     });
@@ -143,6 +154,10 @@ describe("connectProvider", () => {
     expect(result.mode).toBe("oauth");
     expect(result.oauthCommand).toBe("codex login");
     expect(seen).toEqual([{ command: "codex", args: ["login"], stdioMode: "pipe" }]);
+    expect(result.oauthCredentialsFile).toBe(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"));
+
+    const persisted = await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8");
+    expect(persisted).toContain("access_token");
 
     const store = await readConnectionStore(paths);
     const entry = store.services["codex-cli"];

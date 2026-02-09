@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { getAiCoworkerPaths } from "./connect";
 import { defaultModelForProvider, getModelForProvider, getProviderKeyCandidates } from "./providers";
 import { isProviderName } from "./types";
 import type { AgentConfig, ProviderName } from "./types";
@@ -76,28 +77,32 @@ function resolveUserHomeFromConfig(config: AgentConfig): string {
 
 function readSavedApiKey(config: AgentConfig, provider: ProviderName): string | undefined {
   const home = resolveUserHomeFromConfig(config);
-  const connectionsPath = path.join(home, ".ai-coworker", "config", "connections.json");
+  const paths = getAiCoworkerPaths({ homedir: home });
+  const legacyConnectionsPath = path.join(home, ".ai-coworker", "config", "connections.json");
 
   const keyCandidates = getProviderKeyCandidates(provider);
 
-  try {
-    const raw = fsSync.readFileSync(connectionsPath, "utf-8");
-    const parsed = JSON.parse(raw) as any;
+  const connectionFiles = [paths.connectionsFile, legacyConnectionsPath];
+  for (const connectionsPath of connectionFiles) {
+    try {
+      const raw = fsSync.readFileSync(connectionsPath, "utf-8");
+      const parsed = JSON.parse(raw) as any;
 
-    for (const candidate of keyCandidates) {
-      const direct = parsed?.services?.[candidate];
-      const directKey =
-        typeof direct?.apiKey === "string" && direct.apiKey.trim() ? direct.apiKey.trim() : "";
-      if (directKey) return directKey;
-    }
+      for (const candidate of keyCandidates) {
+        const direct = parsed?.services?.[candidate];
+        const directKey =
+          typeof direct?.apiKey === "string" && direct.apiKey.trim() ? direct.apiKey.trim() : "";
+        if (directKey) return directKey;
+      }
 
-    // Backward-compatible fallback for any simpler shape like { apiKeys: { openai: "..." } }.
-    for (const candidate of keyCandidates) {
-      const legacy = parsed?.apiKeys?.[candidate];
-      if (typeof legacy === "string" && legacy.trim()) return legacy.trim();
+      // Backward-compatible fallback for any simpler shape like { apiKeys: { openai: "..." } }.
+      for (const candidate of keyCandidates) {
+        const legacy = parsed?.apiKeys?.[candidate];
+        if (typeof legacy === "string" && legacy.trim()) return legacy.trim();
+      }
+    } catch {
+      // continue to fallback file (or default to env below)
     }
-  } catch {
-    // Missing/invalid file means no saved key; fall back to provider defaults (.env).
   }
 
   return undefined;

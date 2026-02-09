@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { AgentConfig } from "../../src/types";
+export { DEFAULT_PROVIDER_OPTIONS } from "../../src/providers";
 
 export function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -62,30 +63,3 @@ export function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     ...overrides,
   };
 }
-
-// The same DEFAULT_PROVIDER_OPTIONS defined in src/index.ts.
-// We test against these to ensure they match the expected shape.
-export const DEFAULT_PROVIDER_OPTIONS: Record<string, any> = {
-  openai: {
-    reasoningEffort: "high",
-    reasoningSummary: "detailed",
-  },
-  google: {
-    thinkingConfig: {
-      includeThoughts: true,
-      thinkingLevel: "high",
-    },
-  },
-  "gemini-cli-core": {
-    thinkingConfig: {
-      includeThoughts: false,
-      thinkingLevel: "minimal",
-    },
-  },
-  anthropic: {
-    thinking: {
-      type: "enabled",
-      budgetTokens: 32_000,
-    },
-  },
-};

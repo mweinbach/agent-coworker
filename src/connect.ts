@@ -24,6 +24,7 @@ export type ConnectionStore = {
 
 export type AiCoworkerPaths = {
   rootDir: string;
+  authDir: string;
   configDir: string;
   sessionsDir: string;
   logsDir: string;
@@ -103,41 +104,75 @@ function isObjectLike(v: unknown): v is Record<string, unknown> {
 
 export function getAiCoworkerPaths(opts: { homedir?: string } = {}): AiCoworkerPaths {
   const home = opts.homedir ?? os.homedir();
-  const rootDir = path.join(home, ".ai-coworker");
+  const rootDir = path.join(home, ".cowork");
+  const authDir = path.join(rootDir, "auth");
   const configDir = path.join(rootDir, "config");
   const sessionsDir = path.join(rootDir, "sessions");
   const logsDir = path.join(rootDir, "logs");
-  const connectionsFile = path.join(configDir, "connections.json");
-  return { rootDir, configDir, sessionsDir, logsDir, connectionsFile };
+  const connectionsFile = path.join(authDir, "connections.json");
+  return { rootDir, authDir, configDir, sessionsDir, logsDir, connectionsFile };
 }
 
 export async function ensureAiCoworkerHome(paths: AiCoworkerPaths): Promise<void> {
-  await fs.mkdir(paths.rootDir, { recursive: true });
-  await fs.mkdir(paths.configDir, { recursive: true });
-  await fs.mkdir(paths.sessionsDir, { recursive: true });
-  await fs.mkdir(paths.logsDir, { recursive: true });
+  await fs.mkdir(paths.rootDir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(paths.authDir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(paths.configDir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(paths.sessionsDir, { recursive: true, mode: 0o700 });
+  await fs.mkdir(paths.logsDir, { recursive: true, mode: 0o700 });
+
+  // Best-effort hardening for secret-bearing dirs.
+  for (const dir of [paths.rootDir, paths.authDir, paths.configDir, paths.sessionsDir, paths.logsDir]) {
+    try {
+      await fs.chmod(dir, 0o700);
+    } catch {
+      // best effort only
+    }
+  }
 }
 
 export async function readConnectionStore(paths: AiCoworkerPaths): Promise<ConnectionStore> {
   await ensureAiCoworkerHome(paths);
-  try {
-    const raw = await fs.readFile(paths.connectionsFile, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (
-      isObjectLike(parsed) &&
-      parsed.version === 1 &&
-      isObjectLike(parsed.services) &&
-      (typeof parsed.updatedAt === "string" || parsed.updatedAt === undefined)
-    ) {
-      return {
-        version: 1,
-        updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
-        services: parsed.services as ConnectionStore["services"],
-      };
+
+  const loadFrom = async (filePath: string): Promise<ConnectionStore | null> => {
+    try {
+      const raw = await fs.readFile(filePath, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (
+        isObjectLike(parsed) &&
+        parsed.version === 1 &&
+        isObjectLike(parsed.services) &&
+        (typeof parsed.updatedAt === "string" || parsed.updatedAt === undefined)
+      ) {
+        return {
+          version: 1,
+          updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
+          services: parsed.services as ConnectionStore["services"],
+        };
+      }
+    } catch {
+      // ignore
     }
-  } catch {
-    // initialize below
+    return null;
+  };
+
+  // Primary location: ~/.cowork/auth/connections.json
+  const primary = await loadFrom(paths.connectionsFile);
+  if (primary) return primary;
+
+  // Backward-compatible fallback: ~/.ai-coworker/config/connections.json
+  const homeDir = path.dirname(paths.rootDir);
+  const legacyFile = path.join(homeDir, ".ai-coworker", "config", "connections.json");
+  const legacy = await loadFrom(legacyFile);
+  if (legacy) {
+    // Best-effort migration to the new location.
+    try {
+      await writeConnectionStore(paths, legacy);
+    } catch {
+      // ignore migration failures; still return legacy view
+    }
+    return legacy;
   }
+
   return { version: 1, updatedAt: new Date().toISOString(), services: {} };
 }
 
@@ -164,11 +199,18 @@ function oauthCredentialCandidates(service: ConnectService, paths: AiCoworkerPat
   const homeDir = path.dirname(paths.rootDir);
   switch (service) {
     case "gemini-cli":
-      return [path.join(homeDir, ".gemini", "oauth_creds.json")];
+      return [
+        path.join(paths.authDir, "gemini-cli", "oauth_creds.json"),
+        path.join(homeDir, ".gemini", "oauth_creds.json"),
+      ];
     case "codex-cli":
-      return [path.join(homeDir, ".codex", "auth.json")];
+      return [path.join(paths.authDir, "codex-cli", "auth.json"), path.join(homeDir, ".codex", "auth.json")];
     case "claude-code":
-      return [path.join(homeDir, ".claude", "credentials.json"), path.join(homeDir, ".config", "claude", "credentials.json")];
+      return [
+        path.join(paths.authDir, "claude-code", "credentials.json"),
+        path.join(homeDir, ".claude", "credentials.json"),
+        path.join(homeDir, ".config", "claude", "credentials.json"),
+      ];
     default:
       return [];
   }
@@ -185,6 +227,76 @@ async function hasExistingOauthCredentials(service: ConnectService, paths: AiCow
     }
   }
   return false;
+}
+
+function oauthCredentialSourceCandidates(service: ConnectService, paths: AiCoworkerPaths): readonly string[] {
+  // Prefer the upstream CLI's canonical location as the source of truth.
+  const homeDir = path.dirname(paths.rootDir);
+  switch (service) {
+    case "gemini-cli":
+      return [path.join(homeDir, ".gemini", "oauth_creds.json")];
+    case "codex-cli":
+      return [path.join(homeDir, ".codex", "auth.json")];
+    case "claude-code":
+      return [
+        path.join(homeDir, ".claude", "credentials.json"),
+        path.join(homeDir, ".config", "claude", "credentials.json"),
+      ];
+    default:
+      return [];
+  }
+}
+
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    const st = await fs.stat(p);
+    return st.isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function persistOauthCredentials(service: ConnectService, paths: AiCoworkerPaths): Promise<string | null> {
+  if (!isOauthCliProvider(service)) return null;
+
+  // Try to copy from the canonical upstream location into ~/.cowork/auth/{provider}/...
+  const sources = oauthCredentialSourceCandidates(service, paths);
+  let sourcePath: string | null = null;
+  for (const candidate of sources) {
+    if (await fileExists(candidate)) {
+      sourcePath = candidate;
+      break;
+    }
+  }
+
+  const destDir = path.join(paths.authDir, service);
+  const destFileFrom = (src: string) => path.join(destDir, path.basename(src));
+
+  // If we can't find an upstream source file, return the existing persisted copy (if any).
+  if (!sourcePath) {
+    for (const candidate of oauthCredentialCandidates(service, paths)) {
+      if (!candidate.startsWith(destDir + path.sep)) continue;
+      if (await fileExists(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  await fs.mkdir(destDir, { recursive: true, mode: 0o700 });
+  try {
+    await fs.chmod(destDir, 0o700);
+  } catch {
+    // best effort only
+  }
+
+  const destPath = destFileFrom(sourcePath);
+  const raw = await fs.readFile(sourcePath);
+  await fs.writeFile(destPath, raw, { mode: 0o600 });
+  try {
+    await fs.chmod(destPath, 0o600);
+  } catch {
+    // best effort only
+  }
+  return destPath;
 }
 
 function oauthCommandCandidates(
@@ -212,6 +324,7 @@ export type ConnectProviderResult =
       message: string;
       maskedApiKey?: string;
       oauthCommand?: string;
+      oauthCredentialsFile?: string;
     }
   | { ok: false; provider: ConnectService; message: string };
 
@@ -278,12 +391,14 @@ export async function connectProvider(opts: {
     };
     store.updatedAt = now;
     await writeConnectionStore(paths, store);
+    const oauthCredentialsFile = await persistOauthCredentials(provider, paths);
     return {
       ok: true,
       provider,
       mode: "oauth",
       storageFile: paths.connectionsFile,
       message: "Existing OAuth credentials detected.",
+      oauthCredentialsFile: oauthCredentialsFile ?? undefined,
     };
   }
 
@@ -318,6 +433,7 @@ export async function connectProvider(opts: {
         };
         store.updatedAt = now;
         await writeConnectionStore(paths, store);
+        const oauthCredentialsFile = await persistOauthCredentials(provider, paths);
         return {
           ok: true,
           provider,
@@ -325,6 +441,7 @@ export async function connectProvider(opts: {
           storageFile: paths.connectionsFile,
           message: "OAuth sign-in completed.",
           oauthCommand: attempt.display,
+          oauthCredentialsFile: oauthCredentialsFile ?? undefined,
         };
       }
       lastError =

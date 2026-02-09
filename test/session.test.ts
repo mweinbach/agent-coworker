@@ -23,20 +23,22 @@ const mockConnectModelProvider = mock(async (_opts: any): Promise<any> => ({
   ok: true,
   provider: "openai",
   mode: "api_key",
-  storageFile: "/tmp/mock/.ai-coworker/config/connections.json",
+  storageFile: "/tmp/mock-home/.cowork/auth/connections.json",
   message: "Provider key saved.",
   maskedApiKey: "sk-t...est",
 }));
 
 const mockGetAiCoworkerPaths = mock((opts?: { homedir?: string }) => {
   const home = opts?.homedir ?? "/tmp/mock-home";
-  const rootDir = path.join(home, ".ai-coworker");
+  const rootDir = path.join(home, ".cowork");
+  const authDir = path.join(rootDir, "auth");
   return {
     rootDir,
+    authDir,
     configDir: path.join(rootDir, "config"),
     sessionsDir: path.join(rootDir, "sessions"),
     logsDir: path.join(rootDir, "logs"),
-    connectionsFile: path.join(rootDir, "config", "connections.json"),
+    connectionsFile: path.join(authDir, "connections.json"),
   };
 });
 
@@ -123,7 +125,7 @@ describe("AgentSession", () => {
       ok: true,
       provider: "openai",
       mode: "api_key",
-      storageFile: "/tmp/mock/.ai-coworker/config/connections.json",
+      storageFile: "/tmp/mock-home/.cowork/auth/connections.json",
       message: "Provider key saved.",
       maskedApiKey: "sk-t...est",
     }));
@@ -131,13 +133,15 @@ describe("AgentSession", () => {
     mockGetAiCoworkerPaths.mockReset();
     mockGetAiCoworkerPaths.mockImplementation((opts?: { homedir?: string }) => {
       const home = opts?.homedir ?? "/tmp/mock-home";
-      const rootDir = path.join(home, ".ai-coworker");
+      const rootDir = path.join(home, ".cowork");
+      const authDir = path.join(rootDir, "auth");
       return {
         rootDir,
+        authDir,
         configDir: path.join(rootDir, "config"),
         sessionsDir: path.join(rootDir, "sessions"),
         logsDir: path.join(rootDir, "logs"),
-        connectionsFile: path.join(rootDir, "config", "connections.json"),
+        connectionsFile: path.join(authDir, "connections.json"),
       };
     });
   });
@@ -366,7 +370,7 @@ describe("AgentSession", () => {
                 ok: true,
                 provider: "openai",
                 mode: "api_key",
-                storageFile: "/tmp/mock/.ai-coworker/config/connections.json",
+                storageFile: "/tmp/mock-home/.cowork/auth/connections.json",
                 message: "Provider key saved.",
                 maskedApiKey: "sk-t...est",
               });
@@ -417,7 +421,7 @@ describe("AgentSession", () => {
           ok: true,
           provider: "openai",
           mode: "api_key",
-          storageFile: "/tmp/mock/.ai-coworker/config/connections.json",
+          storageFile: "/tmp/mock-home/.cowork/auth/connections.json",
           message: "Provider key saved.",
           maskedApiKey: "sk-t...est",
         };
@@ -461,7 +465,7 @@ describe("AgentSession", () => {
         ok: true,
         provider: "codex-cli",
         mode: "oauth",
-        storageFile: "/tmp/mock/.ai-coworker/config/connections.json",
+        storageFile: "/tmp/mock-home/.cowork/auth/connections.json",
         message: "OAuth sign-in completed.",
         oauthCommand: "codex login",
       }));

@@ -2,6 +2,15 @@ import { createGeminiProvider } from "ai-sdk-provider-gemini-cli";
 
 import type { AgentConfig } from "../types";
 
+export const DEFAULT_GEMINI_CLI_CORE_PROVIDER_OPTIONS = {
+  thinkingConfig: {
+    // Keep thought parts off by default for Gemini CLI tool-call loops.
+    includeThoughts: false,
+    thinkingLevel: "minimal",
+    // thinkingBudget: 0, // set for Gemini 2.5 models if you prefer budget-based thinking
+  },
+} as const;
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }

@@ -84,7 +84,10 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
     }
     case "session_backup_restore": {
       if (typeof obj.sessionId !== "string") return { ok: false, error: "session_backup_restore missing sessionId" };
-      if (obj.checkpointId !== undefined && typeof obj.checkpointId !== "string") {
+      if (
+        obj.checkpointId !== undefined &&
+        (typeof obj.checkpointId !== "string" || obj.checkpointId.trim().length === 0)
+      ) {
         return { ok: false, error: "session_backup_restore invalid checkpointId" };
       }
       return { ok: true, msg: obj as ClientMessage };

@@ -43,6 +43,21 @@ describe("SessionBackupManager", () => {
     const checkpoint = await manager.createCheckpoint("auto");
     expect(checkpoint.changed).toBe(true);
 
+    if (process.platform !== "win32") {
+      const backupDir = manager.getPublicState().backupDirectory;
+      expect(backupDir).toBeDefined();
+      if (backupDir) {
+        const backupSt = await fs.stat(backupDir);
+        expect(backupSt.mode & 0o777).toBe(0o700);
+
+        const metadataSt = await fs.stat(path.join(backupDir, "metadata.json"));
+        expect(metadataSt.mode & 0o777).toBe(0o600);
+
+        const patchSt = await fs.stat(path.join(backupDir, "checkpoints", `${checkpoint.id}.patch.gz`));
+        expect(patchSt.mode & 0o777).toBe(0o600);
+      }
+    }
+
     await fs.writeFile(path.join(workspace, "a.txt"), "three\n", "utf-8");
     await fs.rm(path.join(workspace, "new.txt"), { force: true });
     await fs.writeFile(path.join(workspace, "sub", "b.txt"), "different\n", "utf-8");

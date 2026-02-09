@@ -402,6 +402,11 @@ describe("safeParseClientMessage", () => {
       expect(err).toContain("session_backup_restore invalid checkpointId");
     });
 
+    test("session_backup_restore empty checkpointId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "session_backup_restore", sessionId: "s1", checkpointId: "" }));
+      expect(err).toContain("session_backup_restore invalid checkpointId");
+    });
+
     test("session_backup_delete_checkpoint parses", () => {
       const msg = expectOk(
         JSON.stringify({

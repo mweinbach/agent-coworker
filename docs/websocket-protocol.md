@@ -504,7 +504,7 @@ server  <- config_updated { config: { provider: "openai", model: "gpt-4-turbo", 
 ### Backup / Checkpoint Flow
 
 ```
-client  -> session_backup_get {}
+client  -> session_backup_get { sessionId: "..." }
 server  <- session_backup_state { reason: "requested", backup: {...} }
 
 client  -> user_message { text: "make changes" }

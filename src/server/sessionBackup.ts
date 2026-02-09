@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 
-import { getAiCoworkerPaths } from "../connect";
+import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../connect";
 
 export type SessionBackupCheckpointTrigger = "auto" | "manual";
 
@@ -65,6 +66,13 @@ const CHECKPOINTS_DIR = "checkpoints";
 
 function makeCheckpointId(index: number): string {
   return `cp-${String(index).padStart(4, "0")}`;
+}
+
+function isPathWithin(parent: string, candidate: string): boolean {
+  const relative = path.relative(parent, candidate);
+  if (!relative) return true;
+  if (relative.startsWith("..")) return false;
+  return !path.isAbsolute(relative);
 }
 
 function toPatchPrefix(absPath: string): string {
@@ -150,6 +158,15 @@ async function ensureDirectory(p: string): Promise<void> {
   await fs.mkdir(p, { recursive: true });
 }
 
+async function ensureSecureDirectory(p: string): Promise<void> {
+  await fs.mkdir(p, { recursive: true, mode: 0o700 });
+  try {
+    await fs.chmod(p, 0o700);
+  } catch {
+    // best effort only
+  }
+}
+
 async function ensureWorkingDirectory(workingDirectory: string): Promise<void> {
   try {
     const st = await fs.stat(workingDirectory);
@@ -182,7 +199,12 @@ async function copyDirectoryContents(sourceDir: string, destinationDir: string):
 }
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+  try {
+    await fs.chmod(filePath, 0o600);
+  } catch {
+    // best effort only
+  }
 }
 
 async function readMetadata(filePath: string): Promise<SessionBackupMetadata | null> {
@@ -197,17 +219,22 @@ async function readMetadata(filePath: string): Promise<SessionBackupMetadata | n
 }
 
 async function createTarGzFromDirectory(sourceDir: string, targetArchive: string): Promise<void> {
-  await ensureDirectory(path.dirname(targetArchive));
+  await ensureSecureDirectory(path.dirname(targetArchive));
   const parentDir = path.dirname(sourceDir);
   const dirName = path.basename(sourceDir);
   const res = await runCommand("tar", ["-czf", targetArchive, "-C", parentDir, dirName]);
   if (res.exitCode !== 0) {
     throw new Error(`tar create failed: ${res.stderr || res.stdout || `exit=${String(res.exitCode)}`}`);
   }
+  try {
+    await fs.chmod(targetArchive, 0o600);
+  } catch {
+    // best effort only
+  }
 }
 
 async function extractTarGzIntoDirectory(archivePath: string, targetDir: string): Promise<void> {
-  await ensureDirectory(targetDir);
+  await ensureSecureDirectory(targetDir);
   const res = await runCommand("tar", ["-xzf", archivePath, "-C", targetDir]);
   if (res.exitCode !== 0) {
     throw new Error(`tar extract failed: ${res.stderr || res.stdout || `exit=${String(res.exitCode)}`}`);
@@ -234,7 +261,7 @@ async function applyDiffPatch(workingDir: string, patchText: string): Promise<vo
 
 export class SessionBackupManager implements SessionBackupHandle {
   static async compactClosedSessions(backupsRootDir: string, skipSessionId?: string): Promise<void> {
-    await ensureDirectory(backupsRootDir);
+    await ensureSecureDirectory(backupsRootDir);
     const entries = await fs.readdir(backupsRootDir, { withFileTypes: true });
 
     for (const entry of entries) {
@@ -265,24 +292,40 @@ export class SessionBackupManager implements SessionBackupHandle {
   }
 
   static async create(opts: SessionBackupInitOptions): Promise<SessionBackupManager> {
+    const workingDirectory = path.resolve(opts.workingDirectory);
     const paths = getAiCoworkerPaths({ homedir: opts.homedir });
-    const backupsRootDir = path.join(paths.rootDir, "session-backups");
+    const defaultBackupsRootDir = path.join(paths.rootDir, "session-backups");
+
+    // Ensure ~/.cowork exists and isn't world-readable before adding backups beneath it.
+    await ensureAiCoworkerHome(paths);
+
+    // If the default backup directory would be created inside the working directory (e.g. when
+    // the working directory is the user's home), fall back to a temp location to avoid self-copies
+    // and restore routines deleting their own backup source.
+    const backupsRootDir = isPathWithin(workingDirectory, defaultBackupsRootDir)
+      ? path.join(os.tmpdir(), "cowork-session-backups")
+      : defaultBackupsRootDir;
     const sessionDir = path.join(backupsRootDir, opts.sessionId);
     const originalDir = path.join(sessionDir, ORIGINAL_DIR);
     const metadataPath = path.join(sessionDir, METADATA_FILE);
 
-    await ensureDirectory(backupsRootDir);
+    if (isPathWithin(workingDirectory, sessionDir)) {
+      // If the working directory is "/" (or similar), there is no safe backup location; refuse.
+      throw new Error(`Refusing to create session backup inside working directory: ${workingDirectory}`);
+    }
+
+    await ensureSecureDirectory(backupsRootDir);
     await SessionBackupManager.compactClosedSessions(backupsRootDir, opts.sessionId);
 
-    await ensureDirectory(sessionDir);
-    await ensureDirectory(path.join(sessionDir, CHECKPOINTS_DIR));
-    await ensureWorkingDirectory(opts.workingDirectory);
-    await copyDirectory(opts.workingDirectory, originalDir);
+    await ensureSecureDirectory(sessionDir);
+    await ensureSecureDirectory(path.join(sessionDir, CHECKPOINTS_DIR));
+    await ensureWorkingDirectory(workingDirectory);
+    await copyDirectory(workingDirectory, originalDir);
 
     const metadata: SessionBackupMetadata = {
       version: 1,
       sessionId: opts.sessionId,
-      workingDirectory: path.resolve(opts.workingDirectory),
+      workingDirectory,
       createdAt: new Date().toISOString(),
       state: "active",
       originalSnapshot: { kind: "directory", path: ORIGINAL_DIR },
@@ -346,7 +389,12 @@ export class SessionBackupManager implements SessionBackupHandle {
       const patchAbsPath = path.join(this.sessionDir, CHECKPOINTS_DIR, `${id}.patch.gz`);
       const compressed = gzipSync(Buffer.from(diffPatch, "utf-8"));
       patchBytes = compressed.byteLength;
-      await fs.writeFile(patchAbsPath, compressed);
+      await fs.writeFile(patchAbsPath, compressed, { mode: 0o600 });
+      try {
+        await fs.chmod(patchAbsPath, 0o600);
+      } catch {
+        // best effort only
+      }
       patchFile = path.join(CHECKPOINTS_DIR, `${id}.patch.gz`);
     }
 
@@ -374,6 +422,12 @@ export class SessionBackupManager implements SessionBackupHandle {
   }
 
   async restoreOriginal(): Promise<void> {
+    // Restoring is inherently destructive. Refuse if the backup dir lives inside the working directory
+    // (e.g. misconfigured workingDirectory="/"), as we'd be deleting our own restore source.
+    if (isPathWithin(this.metadata.workingDirectory, this.sessionDir)) {
+      throw new Error("Refusing to restore: backup directory is inside the working directory");
+    }
+
     const originalDir = await this.ensureOriginalDirectory();
     await ensureWorkingDirectory(this.metadata.workingDirectory);
     await emptyDirectory(this.metadata.workingDirectory);

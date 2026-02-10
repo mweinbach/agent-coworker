@@ -6,7 +6,7 @@ Complete documentation of the agent-coworker WebSocket protocol for building alt
 
 - **URL**: `ws://127.0.0.1:{port}/ws` (default port `7337`)
 - **No authentication** — server binds to localhost only
-- **No heartbeat/keepalive** — relies on the WebSocket layer
+- **Ping/pong keepalive** — clients may send `ping` messages; the server responds with `pong`
 - **One session per connection** — disconnecting destroys the session; there is no resumption
 
 ## Handshake Flow
@@ -251,6 +251,25 @@ Clear conversation history and todos.
   "type": "reset",
   "sessionId": "..."
 }
+```
+
+### cancel
+
+Abort the currently running agent turn. The server aborts the underlying LLM call and rejects any pending ask/approval deferreds. A `session_busy { busy: false }` event is emitted once the cancellation completes.
+
+```jsonc
+{
+  "type": "cancel",
+  "sessionId": "..."
+}
+```
+
+### ping
+
+Lightweight keepalive probe. Does **not** require a `sessionId` — can be sent at any time, even before `server_hello`. The server responds with `pong`.
+
+```jsonc
+{ "type": "ping" }
 ```
 
 ---
@@ -529,6 +548,14 @@ Any error condition.
 }
 ```
 
+### pong
+
+Keepalive response to a client `ping`. The `sessionId` is always an empty string.
+
+```jsonc
+{ "type": "pong", "sessionId": "" }
+```
+
 ---
 
 ## Message Flow Examples
@@ -565,6 +592,24 @@ server  <- ask { requestId: "r2", question: "Which database?", options: ["Postgr
          ... agent blocks, waiting ...
 client  -> ask_response { requestId: "r2", answer: "PostgreSQL" }
          ... agent continues ...
+```
+
+### Cancel In-Flight Turn
+
+```
+client  -> user_message { text: "Refactor the entire codebase" }
+server  <- session_busy { busy: true }
+server  <- reasoning { ... }
+client  -> cancel { sessionId: "..." }
+         ... server aborts LLM call ...
+server  <- session_busy { busy: false }
+```
+
+### Keepalive Ping/Pong
+
+```
+client  -> ping
+server  <- pong { sessionId: "" }
 ```
 
 ### Model Change

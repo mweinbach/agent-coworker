@@ -35,6 +35,15 @@ export async function appendTranscriptEvent(opts: {
   await invoke("append_transcript_event", opts);
 }
 
+export async function appendTranscriptBatch(events: {
+  ts: string;
+  threadId: string;
+  direction: "server" | "client";
+  payload: unknown;
+}[]): Promise<void> {
+  await invoke("append_transcript_batch", { events });
+}
+
 export async function deleteTranscript(opts: { threadId: string }): Promise<void> {
   await invoke("delete_transcript", opts);
 }

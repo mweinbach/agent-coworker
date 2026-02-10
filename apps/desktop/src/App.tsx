@@ -46,6 +46,40 @@ export default function App() {
     });
   }, [init, ready]);
 
+  // Global keyboard shortcuts (Finding 11.1).
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // Cmd/Ctrl+N → new thread
+      if ((e.metaKey || e.ctrlKey) && e.key === "n") {
+        e.preventDefault();
+        void newThread();
+        return;
+      }
+
+      // Escape → close modal / cancel busy agent / close settings
+      if (e.key === "Escape") {
+        const state = useAppStore.getState();
+        if (state.promptModal) {
+          state.dismissPrompt();
+          return;
+        }
+        if (state.view === "settings") {
+          state.closeSettings();
+          return;
+        }
+        if (state.selectedThreadId) {
+          const rt = state.threadRuntimeById[state.selectedThreadId];
+          if (rt?.busy) {
+            state.cancelThread(state.selectedThreadId);
+            return;
+          }
+        }
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [newThread]);
+
   const activeThread = useMemo(
     () => threads.find((t) => t.id === selectedThreadId) ?? null,
     [selectedThreadId, threads]
@@ -95,8 +129,8 @@ export default function App() {
     <div className="app">
       <Sidebar />
 
-      <div className="main">
-        <div className="topbar">
+      <main className="main" role="main" aria-label="Chat area">
+        <div className="topbar" role="toolbar" aria-label="Thread controls">
           <div className="topbarLeft">
             <div className="topbarTitle">{title}</div>
             {busy ? <span className="pill pillBusy">busy</span> : null}
@@ -158,7 +192,7 @@ export default function App() {
                   </>
                 ) : null}
 
-                <button className="iconButton" type="button" onClick={() => void newThread()} title="New thread">
+                <button className="iconButton" type="button" onClick={() => void newThread()} title="New thread (Cmd+N)" aria-label="New thread">
                   New
                 </button>
               </>
@@ -183,7 +217,7 @@ export default function App() {
             <ChatView />
           )}
         </div>
-      </div>
+      </main>
 
       <PromptModal />
     </div>

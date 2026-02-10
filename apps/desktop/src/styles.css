@@ -31,6 +31,142 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ---------------------------------------------------------------------------
+   Dark mode (Finding 10.1)
+   --------------------------------------------------------------------------- */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --app-bg: #1a1a1a;
+    --sidebar-bg: #1f1f1f;
+    --panel-bg: #222222;
+    --panel-bg-2: #262626;
+    --border: rgba(255, 255, 255, 0.08);
+    --border-2: rgba(255, 255, 255, 0.12);
+    --text: #e5e5e5;
+    --muted: rgba(255, 255, 255, 0.55);
+    --muted-2: rgba(255, 255, 255, 0.38);
+    --accent: #f0f0f0;
+    --danger: #e86060;
+    --danger-bg: rgba(232, 96, 96, 0.14);
+    --warn: #e8a830;
+    --warn-bg: rgba(232, 168, 48, 0.14);
+
+    --shadow: 0 14px 40px rgba(0, 0, 0, 0.25);
+
+    color-scheme: dark;
+  }
+
+  .brandMark {
+    background: linear-gradient(135deg, #3a3a3a, #2a2a2a);
+  }
+
+  .heroMark {
+    background: radial-gradient(circle at 30% 20%, #3a3a3a, #222222);
+  }
+
+  .navItem { color: rgba(255, 255, 255, 0.7); }
+  .navItem:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.06); }
+  .navItemActive { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.88); }
+
+  .workspaceRow:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.06); }
+  .workspaceRowActive { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.08); }
+  .workspacePath { color: rgba(255, 255, 255, 0.42); }
+
+  .threadRow:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.06); }
+  .threadRowActive { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.08); }
+  .threadTitleMeta { color: rgba(255, 255, 255, 0.42); }
+
+  .sectionTitle { color: rgba(255, 255, 255, 0.42); }
+
+  .iconButton { border-color: rgba(255, 255, 255, 0.08); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.7); }
+  .iconButton:hover { background: rgba(255, 255, 255, 0.1); }
+
+  .pill { border-color: rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.65); }
+  .pillBusy { background: rgba(255, 255, 255, 0.08); }
+
+  .topbar { background: rgba(34, 34, 34, 0.88); }
+  .heroTitle { color: rgba(255, 255, 255, 0.86); }
+  .heroSub { color: rgba(255, 255, 255, 0.48); }
+  .hero { color: rgba(255, 255, 255, 0.52); }
+
+  .feed { background: linear-gradient(var(--panel-bg), var(--panel-bg) 55%, #1e1e1e); }
+  .composerWrap { background: linear-gradient(to bottom, rgba(34, 34, 34, 0), var(--panel-bg) 45%); }
+  .composer { background: rgba(42, 42, 42, 0.92); box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2); }
+  .sendButton { background: rgba(255, 255, 255, 0.88); color: #1a1a1a; }
+  .stopButton { background: #e86060; border-color: rgba(232, 96, 96, 0.3); }
+  .stopIcon { background: #1a1a1a; }
+  .sendArrow { border-bottom-color: #1a1a1a; }
+
+  .bubble { background: rgba(50, 50, 50, 0.92); }
+  .bubbleUser { background: rgba(255, 255, 255, 0.88); color: #1a1a1a; }
+  .metaLine { color: rgba(255, 255, 255, 0.42); }
+  .inlineCard { background: rgba(255, 255, 255, 0.04); }
+
+  .chip { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.72); }
+  .chip select, .chip input { color: inherit; }
+  .chipQuiet { color: rgba(255, 255, 255, 0.58); background: rgba(255, 255, 255, 0.04); }
+
+  .modalOverlay { background: rgba(0, 0, 0, 0.45); }
+  .modal { background: rgba(42, 42, 42, 0.98); border-color: rgba(255, 255, 255, 0.1); }
+  .modalBody { color: rgba(255, 255, 255, 0.72); }
+  .modalButton { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.12); color: var(--text); }
+  .modalButtonPrimary { background: rgba(255, 255, 255, 0.88); color: #1a1a1a; border-color: rgba(255, 255, 255, 0.14); }
+
+  .toggleRow { color: rgba(255, 255, 255, 0.62); }
+
+  .ctxMenu { background: rgba(42, 42, 42, 0.96); border-color: rgba(255, 255, 255, 0.1); }
+  .ctxMenuTitle { color: rgba(255, 255, 255, 0.52); }
+  .ctxMenuItem { color: rgba(255, 255, 255, 0.86); }
+  .ctxMenuItem:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.06); }
+  .ctxMenuMuted { color: rgba(255, 255, 255, 0.48); }
+
+  .markdown code { background: rgba(255, 255, 255, 0.08); }
+  .markdown pre { background: rgba(255, 255, 255, 0.06); }
+  .markdown :where(blockquote) { border-left-color: rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.04); color: rgba(255, 255, 255, 0.68); }
+  .markdown :where(hr) { border-top-color: rgba(255, 255, 255, 0.08); }
+
+  .skillsList { background: var(--panel-bg-2); }
+  .skillsItem:hover { border-color: rgba(255, 255, 255, 0.06); background: rgba(255, 255, 255, 0.05); }
+  .skillsItemActive { border-color: rgba(255, 255, 255, 0.1); background: rgba(255, 255, 255, 0.08); }
+  .skillsDesc { color: rgba(255, 255, 255, 0.48); }
+  .skillsBadge { color: rgba(255, 255, 255, 0.46); border-color: rgba(255, 255, 255, 0.08); background: rgba(255, 255, 255, 0.04); }
+  .skillsBadgeDisabled { color: rgba(255, 255, 255, 0.52); background: rgba(255, 255, 255, 0.03); }
+  .skillHeader { background: linear-gradient(180deg, rgba(42, 42, 42, 0.95), rgba(42, 42, 42, 0.8)); }
+  .skillHeaderSub { color: rgba(255, 255, 255, 0.55); }
+  .skillPrompt { background: rgba(255, 255, 255, 0.04); }
+  .skillPromptLabel { color: rgba(255, 255, 255, 0.42); }
+  .skillPromptText { color: rgba(255, 255, 255, 0.78); }
+  .skillsIcon { background: rgba(255, 255, 255, 0.06); }
+
+  .settingsPage { background: linear-gradient(var(--panel-bg-2), #1e1e1e); }
+  .settingsBackButton { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.78); }
+  .settingsBackButton:hover { background: rgba(255, 255, 255, 0.1); }
+  .settingsNavItem { color: rgba(255, 255, 255, 0.72); }
+  .settingsNavItem:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.06); }
+  .settingsNavItemActive { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.88); }
+  .settingsPageTitle { color: rgba(255, 255, 255, 0.86); }
+  .settingsPageSub { color: rgba(255, 255, 255, 0.56); }
+  .settingsCard { background: rgba(42, 42, 42, 0.88); }
+  .settingsSelect, .settingsTextInput { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.86); }
+  .settingsRowHint { color: rgba(255, 255, 255, 0.52); }
+  .settingsRow { border-top-color: rgba(255, 255, 255, 0.06); }
+  .settingsProviderListRow { border-top-color: rgba(255, 255, 255, 0.06); }
+  .settingsProviderListRow:hover { background: rgba(255, 255, 255, 0.04); }
+  .settingsProviderListMeta { color: rgba(255, 255, 255, 0.52); }
+  .settingsChevron { border-right-color: rgba(255, 255, 255, 0.28); border-bottom-color: rgba(255, 255, 255, 0.28); }
+  .settingsProviderCard { background: rgba(42, 42, 42, 0.88); }
+  .settingsPillNeutral { background: rgba(255, 255, 255, 0.06); }
+  .settingsProviderHelp { background: rgba(255, 255, 255, 0.04); }
+  .settingsMono { color: rgba(255, 255, 255, 0.68); }
+  .settingsSectionTitle { color: rgba(255, 255, 255, 0.82); }
+  .settingsSectionSub { color: rgba(255, 255, 255, 0.55); }
+  .settingsMeta { color: rgba(255, 255, 255, 0.48); }
+  .settingsSessionRow { border-top-color: rgba(255, 255, 255, 0.06); }
+  .settingsSessionMeta { color: rgba(255, 255, 255, 0.48); }
+  .settingsApp code { background: rgba(255, 255, 255, 0.08); }
+}
+
 html,
 body,
 #root {
@@ -444,6 +580,23 @@ a {
 .sendButton:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* Stop button — shown while agent is busy (Finding 11.2) */
+.stopButton {
+  background: var(--danger);
+  border-color: rgba(194, 59, 59, 0.3);
+}
+
+.stopButton:hover {
+  opacity: 0.88;
+}
+
+.stopIcon {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: #ffffff;
 }
 
 .sendArrow {
@@ -1506,4 +1659,80 @@ a {
 .settingsDangerButton {
   border-color: rgba(194, 59, 59, 0.24);
   color: rgba(194, 59, 59, 0.96);
+}
+
+/* ---------------------------------------------------------------------------
+   Smooth transitions (Finding 10.3)
+   --------------------------------------------------------------------------- */
+
+.navItem,
+.workspaceRow,
+.threadRow,
+.ctxMenuItem,
+.iconButton,
+.sendButton,
+.modalButton,
+.settingsNavItem,
+.settingsBackButton,
+.settingsProviderListRow,
+.skillsItem {
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.pill,
+.pillBusy {
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.sidebar {
+  transition: background 0.2s ease;
+}
+
+.modalOverlay {
+  transition: opacity 0.15s ease;
+}
+
+/* ---------------------------------------------------------------------------
+   Focus-visible outlines for keyboard navigation (Finding 12.2)
+   --------------------------------------------------------------------------- */
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+button:focus-visible,
+.navItem:focus-visible,
+.workspaceRow:focus-visible,
+.threadRow:focus-visible,
+.ctxMenuItem:focus-visible,
+.iconButton:focus-visible,
+.sendButton:focus-visible,
+.stopButton:focus-visible,
+.modalButton:focus-visible,
+.settingsNavItem:focus-visible,
+.settingsBackButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+textarea:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Reduced motion preference (Finding 12.3)
+   --------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

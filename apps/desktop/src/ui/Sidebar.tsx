@@ -88,7 +88,7 @@ export function Sidebar() {
   }, [ctxMenu]);
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" role="complementary" aria-label="Sidebar navigation">
       <div className="sidebarHeader">
         <div className="brand">
           <div className="brandMark" aria-hidden="true" />
@@ -96,7 +96,7 @@ export function Sidebar() {
         </div>
       </div>
 
-      <nav className="sidebarNav">
+      <nav className="sidebarNav" aria-label="Main navigation">
         <NavButton
           active={view === "chat"}
           label="New thread"
@@ -114,15 +114,15 @@ export function Sidebar() {
         />
       </nav>
 
-      <div className="sidebarSection">
+      <div className="sidebarSection" role="region" aria-label="Workspaces">
         <div className="sectionTitleRow">
-          <div className="sectionTitle">Workspaces</div>
-          <button className="iconButton" type="button" onClick={() => void addWorkspace()} title="Add workspace">
+          <div className="sectionTitle" id="workspaces-label">Workspaces</div>
+          <button className="iconButton" type="button" onClick={() => void addWorkspace()} title="Add workspace" aria-label="Add workspace">
             +
           </button>
         </div>
 
-        <div className="workspaceList">
+        <div className="workspaceList" role="list" aria-labelledby="workspaces-label">
           {workspaces.length === 0 ? (
             <div style={{ padding: 10, color: "rgba(0,0,0,0.45)" }}>
               Add a workspace to start.
@@ -144,6 +144,7 @@ export function Sidebar() {
             return (
               <div
                 key={ws.id}
+                role="listitem"
                 className={"workspaceRow" + (active ? " workspaceRowActive" : "")}
                 onClick={() => void selectWorkspace(ws.id)}
                 onContextMenu={(e) => {
@@ -210,7 +211,7 @@ export function Sidebar() {
       </div>
 
       {ctxMenu && ctxStyle ? (
-        <div className="ctxMenu" style={ctxStyle} onClick={(e) => e.stopPropagation()}>
+        <div className="ctxMenu" role="menu" aria-label="Context menu" style={ctxStyle} onClick={(e) => e.stopPropagation()}>
           {ctxMenu.kind === "workspace" ? (
             <>
               <div className="ctxMenuTitle" title={ctxMenu.workspacePath}>
@@ -219,6 +220,7 @@ export function Sidebar() {
 
               <button
                 className="ctxMenuItem ctxMenuItemDanger"
+                role="menuitem"
                 type="button"
                 onClick={() => {
                   const ok = window.confirm(
@@ -240,6 +242,7 @@ export function Sidebar() {
 
               <button
                 className="ctxMenuItem"
+                role="menuitem"
                 type="button"
                 onClick={() => {
                   void archiveThread(ctxMenu.threadId);
@@ -251,6 +254,7 @@ export function Sidebar() {
 
               <button
                 className="ctxMenuItem ctxMenuItemDanger"
+                role="menuitem"
                 type="button"
                 onClick={() => {
                   const ok = window.confirm(

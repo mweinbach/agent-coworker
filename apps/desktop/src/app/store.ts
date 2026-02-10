@@ -308,6 +308,7 @@ export type AppStoreState = {
   selectThread: (threadId: string) => Promise<void>;
 
   sendMessage: (text: string) => Promise<void>;
+  cancelThread: (threadId: string) => void;
   setComposerText: (text: string) => void;
   setInjectContext: (v: boolean) => void;
 
@@ -1164,6 +1165,10 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const ok = sendUserMessageToThread(get, set, activeThreadId, trimmed);
     if (!ok) return;
     set({ composerText: "" });
+  },
+
+  cancelThread: (threadId: string) => {
+    sendThread(get, threadId, (sid) => ({ type: "cancel", sessionId: sid }));
   },
 
   setComposerText: (text) => set({ composerText: text }),

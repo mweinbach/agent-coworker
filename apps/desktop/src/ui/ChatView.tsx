@@ -126,9 +126,11 @@ export function ChatView() {
   const setComposerText = useAppStore((s) => s.setComposerText);
   const setInjectContext = useAppStore((s) => s.setInjectContext);
   const sendMessage = useAppStore((s) => s.sendMessage);
+  const cancelThread = useAppStore((s) => s.cancelThread);
   const newThread = useAppStore((s) => s.newThread);
 
   const feedRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const lastCountRef = useRef<number>(0);
 
   const feed = rt?.feed ?? [];
@@ -145,6 +147,13 @@ export function ChatView() {
       el.scrollTop = el.scrollHeight;
     }
   }, [feed.length]);
+
+  // Auto-focus the textarea when a thread is selected (Finding 11.3).
+  useEffect(() => {
+    if (selectedThreadId && textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  }, [selectedThreadId]);
 
   // Stable callback to avoid re-creating the keyboard handler each render.
   const onComposerKeyDown = useCallback(
@@ -205,15 +214,35 @@ export function ChatView() {
       <div className="composerWrap">
         <div className="composer">
           <textarea
+            ref={textareaRef}
             value={composerText}
             onChange={(e) => setComposerText(e.currentTarget.value)}
             placeholder={transcriptOnly ? "Continue in a new thread…" : busy ? "Working…" : "Message coworker…"}
             disabled={disabled}
             onKeyDown={onComposerKeyDown}
+            aria-label="Message input"
           />
-          <button className="sendButton" type="button" disabled={disabled || !composerText.trim()} onClick={() => void sendMessage(composerText)}>
-            <span className="sendArrow" aria-hidden="true" />
-          </button>
+          {busy ? (
+            <button
+              className="sendButton stopButton"
+              type="button"
+              onClick={() => cancelThread(selectedThreadId!)}
+              aria-label="Stop generation"
+              title="Stop (Escape)"
+            >
+              <span className="stopIcon" aria-hidden="true" />
+            </button>
+          ) : (
+            <button
+              className="sendButton"
+              type="button"
+              disabled={disabled || !composerText.trim()}
+              onClick={() => void sendMessage(composerText)}
+              aria-label="Send message"
+            >
+              <span className="sendArrow" aria-hidden="true" />
+            </button>
+          )}
         </div>
 
         <label className="toggleRow">

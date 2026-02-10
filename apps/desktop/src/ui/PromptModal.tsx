@@ -103,7 +103,7 @@ export function PromptModal() {
 
   if (!modal) return null;
   return (
-    <div className="modalOverlay" onMouseDown={dismiss}>
+    <div className="modalOverlay" role="dialog" aria-modal="true" aria-label={modal.kind === "ask" ? "Question" : "Command approval"} onMouseDown={dismiss}>
       <div onMouseDown={(e) => e.stopPropagation()}>{content}</div>
     </div>
   );

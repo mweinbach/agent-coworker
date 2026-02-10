@@ -239,6 +239,104 @@ fn repo_root() -> PathBuf {
     }
 }
 
+fn sidecar_base_name() -> &'static str {
+    "cowork-server"
+}
+
+fn sidecar_exact_filename() -> String {
+    if cfg!(windows) {
+        format!("{}.exe", sidecar_base_name())
+    } else {
+        sidecar_base_name().to_string()
+    }
+}
+
+fn sidecar_matches_filename(name: &str) -> bool {
+    let base = sidecar_base_name();
+    if cfg!(windows) {
+        let exact = format!("{base}.exe");
+        if name == exact {
+            return true;
+        }
+        // Be tolerant: accept target-suffixed binaries (ex: cowork-server-x86_64-pc-windows-msvc.exe)
+        return name.starts_with(&format!("{base}-")) && name.ends_with(".exe");
+    }
+
+    if name == base {
+        return true;
+    }
+    // Accept target-suffixed binaries (ex: cowork-server-aarch64-apple-darwin)
+    name.starts_with(&format!("{base}-"))
+}
+
+fn find_sidecar_binary(app: &AppHandle) -> Result<PathBuf, AppError> {
+    if let Ok(p) = std::env::var("COWORK_DESKTOP_SIDECAR_PATH") {
+        let pb = PathBuf::from(p);
+        if pb.exists() {
+            return Ok(pb);
+        }
+    }
+
+    let exact = sidecar_exact_filename();
+    let mut dirs: Vec<PathBuf> = Vec::new();
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        dirs.push(resource_dir.clone());
+        dirs.push(resource_dir.join("binaries"));
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            dirs.push(parent.to_path_buf());
+            dirs.push(parent.join("binaries"));
+
+            // macOS app layout: Cowork.app/Contents/MacOS/Cowork
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(contents) = parent.parent() {
+                    let resources = contents.join("Resources");
+                    dirs.push(resources.clone());
+                    dirs.push(resources.join("binaries"));
+                }
+            }
+        }
+    }
+
+    // First pass: exact filename.
+    for dir in &dirs {
+        let candidate = dir.join(&exact);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    // Second pass: scan for target-suffixed binaries.
+    for dir in &dirs {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if !p.is_file() {
+                continue;
+            }
+            let name = match p.file_name().and_then(|s| s.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            if sidecar_matches_filename(name) {
+                return Ok(p);
+            }
+        }
+    }
+
+    Err(AppError::NotFound(format!(
+        "Server sidecar binary not found (expected {})",
+        exact
+    )))
+}
+
 fn ensure_dir(p: &Path) -> Result<(), AppError> {
     std::fs::create_dir_all(p)?;
     Ok(())
@@ -309,7 +407,6 @@ async fn start_workspace_server(
     }
 
     let root = repo_root();
-    let bun_exe = "bun";
 
     let use_source = cfg!(debug_assertions)
         || std::env::var("COWORK_DESKTOP_USE_SOURCE")
@@ -317,33 +414,42 @@ async fn start_workspace_server(
             .as_deref()
             == Some("1");
 
-    let (spawn_cwd, server_entry) = if use_source {
-        (root.clone(), root.join("src/server/index.ts"))
-    } else {
-        match app.path().resource_dir() {
-            Ok(resource_dir) => {
-                let bundled = resource_dir.join("dist/server/index.js");
-                if bundled.exists() {
-                    (resource_dir, bundled)
-                } else {
-                    (root.clone(), root.join("src/server/index.ts"))
-                }
-            }
-            Err(_) => (root.clone(), root.join("src/server/index.ts")),
+    let mut cmd = if use_source {
+        let server_entry = root.join("src/server/index.ts");
+        if !server_entry.exists() {
+            return Err(format!(
+                "Server entrypoint not found: {}",
+                server_entry.display()
+            ));
         }
+
+        let mut c = Command::new("bun");
+        c.current_dir(&root).arg(&server_entry);
+        c
+    } else {
+        let resource_dir = app
+            .path()
+            .resource_dir()
+            .map_err(|e| format!("Failed to resolve resource dir: {e}"))?;
+
+        let built_in_dir = resource_dir.join("dist");
+        if !built_in_dir.exists() {
+            return Err(format!(
+                "Bundled dist directory not found: {}",
+                built_in_dir.display()
+            ));
+        }
+
+        let sidecar = find_sidecar_binary(&app).map_err(|e| e.to_string())?;
+
+        let mut c = Command::new(sidecar);
+        c.current_dir(&resource_dir)
+            .env("COWORK_BUILTIN_DIR", built_in_dir.as_os_str())
+            .env("COWORK_DESKTOP_BUNDLE", "1");
+        c
     };
 
-    if !server_entry.exists() {
-        return Err(format!(
-            "Server entrypoint not found: {}",
-            server_entry.display()
-        ));
-    }
-
-    let mut cmd = Command::new(bun_exe);
-    cmd.current_dir(&spawn_cwd)
-        .arg(&server_entry)
-        .arg("--dir")
+    cmd.arg("--dir")
         .arg(&workspace_path)
         .arg("--port")
         .arg("0")

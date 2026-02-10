@@ -401,7 +401,7 @@ describe("AgentSession", () => {
       const alpha = evt.skills.find((s: any) => s.name === "alpha");
       expect(alpha.source).toBe("project");
       expect(alpha.enabled).toBe(true);
-      expect(String(alpha.path)).toContain("alpha/SKILL.md");
+      expect(String(alpha.path)).toContain(path.join("alpha", "SKILL.md"));
     });
 
     test("readSkill emits skill_content with content", async () => {
@@ -452,7 +452,7 @@ describe("AgentSession", () => {
       expect(alpha).toBeDefined();
       expect(alpha.source).toBe("global");
       expect(alpha.enabled).toBe(false);
-      expect(String(alpha.path)).toContain("disabled-skills/alpha/SKILL.md");
+      expect(String(alpha.path)).toContain(path.join("disabled-skills", "alpha", "SKILL.md"));
       await fs.access(path.join(root, "disabled-skills", "alpha", "SKILL.md"));
     });
 
@@ -477,7 +477,7 @@ describe("AgentSession", () => {
       expect(alpha).toBeDefined();
       expect(alpha.source).toBe("global");
       expect(alpha.enabled).toBe(true);
-      expect(String(alpha.path)).toContain("skills/alpha/SKILL.md");
+      expect(String(alpha.path)).toContain(path.join("skills", "alpha", "SKILL.md"));
       await fs.access(path.join(root, "skills", "alpha", "SKILL.md"));
     });
 

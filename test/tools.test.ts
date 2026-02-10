@@ -433,14 +433,17 @@ describe("bash tool", () => {
   test("handles stderr output", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
-    const res = await t.execute({ command: "echo error >&2", timeout: 5000 });
+    const res = await t.execute({
+      command: `bun -e "console.error('error')"`,
+      timeout: 5000,
+    });
     expect(res.stderr.trim()).toBe("error");
   });
 
   test("uses workingDirectory as cwd", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
-    const res = await t.execute({ command: "pwd", timeout: 5000 });
+    const res = await t.execute({ command: `bun -e "console.log(process.cwd())"`, timeout: 5000 });
     // Resolve symlinks for macOS /private/var/... vs /var/...
     const normalizedStdout = await fs.realpath(res.stdout.trim());
     const normalizedDir = await fs.realpath(dir);
@@ -450,9 +453,8 @@ describe("bash tool", () => {
   test("truncates large stdout", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
-    // Generate output larger than 30000 chars using a simple shell approach
     const res = await t.execute({
-      command: "python3 -c \"print('x' * 50000)\" 2>/dev/null || printf '%0.sx' $(seq 1 50000)",
+      command: `bun -e "process.stdout.write('x'.repeat(50000))"`,
       timeout: 15000,
     });
     expect(res.stdout.length).toBeLessThanOrEqual(30000);
@@ -462,7 +464,7 @@ describe("bash tool", () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
     const res = await t.execute({
-      command: "echo out && echo err >&2",
+      command: `bun -e "console.log('out'); console.error('err')"`,
       timeout: 5000,
     });
     expect(res.stdout.trim()).toBe("out");
@@ -568,6 +570,103 @@ describe("glob tool", () => {
 // ---------------------------------------------------------------------------
 
 describe("grep tool", () => {
+  const fakeEnsureRipgrep: any = async () => "rg";
+
+  function globToRegExp(glob: string): RegExp {
+    // Minimal glob support for tests (enough for patterns like "*.ts").
+    const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    const re = "^" + escaped.replace(/\*/g, ".*").replace(/\?/g, ".") + "$";
+    return new RegExp(re);
+  }
+
+  const fakeExecFile: any = (_cmd: string, args: string[], _opts: any, cb: any) => {
+    void (async () => {
+      try {
+        let caseInsensitive = false;
+        let contextLines = 0;
+        let fileGlob: string | undefined;
+
+        const rest = [...args];
+        while (rest.length > 0) {
+          const a = rest[0];
+          if (a === "--line-number") {
+            rest.shift();
+            continue;
+          }
+          if (a === "-i") {
+            rest.shift();
+            caseInsensitive = true;
+            continue;
+          }
+          if (a === "-C") {
+            rest.shift();
+            const v = rest.shift();
+            contextLines = v ? Number(v) : 0;
+            continue;
+          }
+          if (a === "--glob") {
+            rest.shift();
+            fileGlob = rest.shift();
+            continue;
+          }
+          break;
+        }
+
+        const pattern = rest.shift();
+        const searchPath = rest.shift();
+        if (!pattern || !searchPath) throw new Error("fake rg: missing pattern or searchPath");
+
+        const re = new RegExp(pattern, caseInsensitive ? "i" : "");
+        const globRe = fileGlob ? globToRegExp(fileGlob) : null;
+
+        const files: string[] = [];
+        const walk = async (p: string) => {
+          const st = await fs.stat(p);
+          if (st.isFile()) {
+            if (!globRe || globRe.test(path.basename(p))) files.push(p);
+            return;
+          }
+          if (!st.isDirectory()) return;
+          const entries = await fs.readdir(p, { withFileTypes: true });
+          for (const e of entries) {
+            if (e.isSymbolicLink()) continue;
+            await walk(path.join(p, e.name));
+          }
+        };
+
+        await walk(searchPath);
+
+        const outLines: string[] = [];
+        for (const filePath of files) {
+          const raw = await fs.readFile(filePath, "utf-8");
+          const lines = raw.split("\n");
+
+          const addLine = (idx: number) => {
+            if (idx < 0 || idx >= lines.length) return;
+            const lineNo = idx + 1;
+            outLines.push(`${filePath}:${lineNo}:${lines[idx]}`);
+          };
+
+          for (let i = 0; i < lines.length; i++) {
+            if (!re.test(lines[i] ?? "")) continue;
+            for (let j = i - contextLines; j <= i + contextLines; j++) addLine(j);
+          }
+        }
+
+        if (outLines.length === 0) {
+          const err: any = new Error("no matches");
+          err.code = 1;
+          cb(err, "", "");
+          return;
+        }
+
+        cb(null, outLines.join("\n") + "\n", "");
+      } catch (err) {
+        cb(err, "", "");
+      }
+    })();
+  };
+
   test("returns matches for pattern", async () => {
     const dir = await tmpDir();
     await fs.writeFile(
@@ -576,7 +675,10 @@ describe("grep tool", () => {
       "utf-8"
     );
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "needle",
       path: dir,
@@ -590,7 +692,10 @@ describe("grep tool", () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "file.txt"), "some content\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "zzz_impossible_pattern_zzz",
       path: dir,
@@ -603,7 +708,10 @@ describe("grep tool", () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "file.txt"), "Hello World\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "hello",
       path: dir,
@@ -616,7 +724,10 @@ describe("grep tool", () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "file.txt"), "Hello World\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "hello",
       path: dir,
@@ -629,7 +740,10 @@ describe("grep tool", () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "found.txt"), "target_pattern\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "target_pattern",
       caseSensitive: true,
@@ -642,7 +756,10 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "match.ts"), "pattern_here\n", "utf-8");
     await fs.writeFile(path.join(dir, "skip.js"), "pattern_here\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "pattern_here",
       path: dir,
@@ -657,7 +774,10 @@ describe("grep tool", () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "ctx.txt"), "before\ntarget\nafter\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "target",
       path: dir,
@@ -673,7 +793,10 @@ describe("grep tool", () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "numbered.txt"), "aaa\nbbb\nccc\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "bbb",
       path: dir,
@@ -688,7 +811,10 @@ describe("grep tool", () => {
     await fs.mkdir(path.join(dir, "sub"), { recursive: true });
     await fs.writeFile(path.join(dir, "sub", "deep.txt"), "deep_match\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "deep_match",
       path: dir,

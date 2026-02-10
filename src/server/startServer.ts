@@ -31,7 +31,11 @@ export async function startAgentServer(
   const hostname = opts.hostname ?? "127.0.0.1";
   const env = opts.env ?? { ...process.env, AGENT_WORKING_DIR: opts.cwd };
 
-  const config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir });
+  const builtInDir =
+    typeof env.COWORK_BUILTIN_DIR === "string" && env.COWORK_BUILTIN_DIR.trim()
+      ? env.COWORK_BUILTIN_DIR
+      : undefined;
+  const config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
   if (opts.providerOptions) config.providerOptions = opts.providerOptions;
 
   await fs.mkdir(config.projectAgentDir, { recursive: true });

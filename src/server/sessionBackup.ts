@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -29,7 +30,10 @@ export type SessionBackupPublicState = {
 };
 
 type SessionBackupMetadataCheckpoint = SessionBackupPublicCheckpoint & {
+  patchKind?: "git_patch" | "manifest";
   patchFile?: string;
+  manifestFile?: string;
+  blobsDir?: string;
 };
 
 type SessionBackupMetadata = {
@@ -100,6 +104,185 @@ function normalizeDiffPatchPaths(diffPatch: string, originalDir: string, working
     .join("\n");
 }
 
+type ManifestCheckpointV1 = {
+  version: 1;
+  createdAt: string;
+  deletes: string[]; // posix-style, relative to working dir
+  writes: Array<{ path: string; blob: string }>; // posix-style path + blob filename within blobsDir
+};
+
+function toPosixRelPath(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
+function splitPosixRelPath(p: string): string[] {
+  if (!p) throw new Error("Invalid manifest path: empty");
+  if (p.includes("\\")) throw new Error(`Invalid manifest path (backslash): ${p}`);
+  if (p.startsWith("/")) throw new Error(`Invalid manifest path (absolute): ${p}`);
+  if (p.includes("\0")) throw new Error(`Invalid manifest path (NUL): ${p}`);
+  const parts = p.split("/").filter(Boolean);
+  if (parts.length === 0) throw new Error(`Invalid manifest path: ${p}`);
+  if (parts.some((seg) => seg === "." || seg === "..")) throw new Error(`Invalid manifest path (traversal): ${p}`);
+  return parts;
+}
+
+async function listFilesRecursive(rootDir: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+
+  async function walk(dirAbs: string) {
+    const entries = await fs.readdir(dirAbs, { withFileTypes: true });
+    for (const entry of entries) {
+      const abs = path.join(dirAbs, entry.name);
+      if (entry.isDirectory()) {
+        await walk(abs);
+        continue;
+      }
+      if (entry.isFile()) {
+        const rel = toPosixRelPath(path.relative(rootDir, abs));
+        out.set(rel, abs);
+        continue;
+      }
+      // Ignore symlinks and special files for now (best-effort snapshots).
+    }
+  }
+
+  await walk(rootDir);
+  return out;
+}
+
+function blobNameForPath(relPosixPath: string): string {
+  return `${createHash("sha256").update(relPosixPath).digest("hex")}.gz`;
+}
+
+async function writeManifestCheckpoint(opts: {
+  originalDir: string;
+  workingDir: string;
+  sessionDir: string;
+  checkpointId: string;
+}): Promise<{ changed: boolean; patchBytes: number; manifestFile?: string; blobsDir?: string }> {
+  const { originalDir, workingDir, sessionDir, checkpointId } = opts;
+
+  const [origFiles, workFiles] = await Promise.all([
+    listFilesRecursive(originalDir),
+    listFilesRecursive(workingDir),
+  ]);
+
+  const deletes: string[] = [];
+  for (const rel of origFiles.keys()) {
+    if (!workFiles.has(rel)) deletes.push(rel);
+  }
+
+  const writes: Array<{ path: string; blob: string }> = [];
+  const blobsDirRel = path.join(CHECKPOINTS_DIR, `${checkpointId}.blobs`);
+  const blobsDirAbs = path.join(sessionDir, blobsDirRel);
+
+  let patchBytes = 0;
+
+  for (const [rel, workAbs] of workFiles.entries()) {
+    const origAbs = origFiles.get(rel);
+
+    let changed = false;
+    if (!origAbs) {
+      changed = true;
+    } else {
+      const [stWork, stOrig] = await Promise.all([fs.stat(workAbs), fs.stat(origAbs)]);
+      if (stWork.size !== stOrig.size) {
+        changed = true;
+      } else {
+        const [bufWork, bufOrig] = await Promise.all([fs.readFile(workAbs), fs.readFile(origAbs)]);
+        changed = !bufWork.equals(bufOrig);
+      }
+    }
+
+    if (!changed) continue;
+
+    const buf = await fs.readFile(workAbs);
+    const compressed = gzipSync(buf);
+    const blob = blobNameForPath(rel);
+    const blobAbs = path.join(blobsDirAbs, blob);
+
+    await ensureSecureDirectory(blobsDirAbs);
+    await fs.writeFile(blobAbs, compressed, { mode: 0o600 });
+    try {
+      await fs.chmod(blobAbs, 0o600);
+    } catch {
+      // best effort only
+    }
+
+    patchBytes += compressed.byteLength;
+    writes.push({ path: rel, blob });
+  }
+
+  const changed = deletes.length > 0 || writes.length > 0;
+  if (!changed) return { changed: false, patchBytes: 0 };
+
+  const manifest: ManifestCheckpointV1 = {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    deletes,
+    writes,
+  };
+
+  const manifestRel = path.join(CHECKPOINTS_DIR, `${checkpointId}.manifest.json`);
+  const manifestAbs = path.join(sessionDir, manifestRel);
+  const raw = `${JSON.stringify(manifest, null, 2)}\n`;
+  patchBytes += Buffer.byteLength(raw, "utf-8");
+
+  await fs.writeFile(manifestAbs, raw, { encoding: "utf-8", mode: 0o600 });
+  try {
+    await fs.chmod(manifestAbs, 0o600);
+  } catch {
+    // best effort only
+  }
+
+  return { changed: true, patchBytes, manifestFile: manifestRel, blobsDir: blobsDirRel };
+}
+
+async function applyManifestCheckpoint(opts: {
+  workingDir: string;
+  sessionDir: string;
+  manifestFile: string;
+  blobsDir: string;
+}): Promise<void> {
+  const manifestAbs = path.join(opts.sessionDir, opts.manifestFile);
+  const blobsAbs = path.join(opts.sessionDir, opts.blobsDir);
+
+  const raw = await fs.readFile(manifestAbs, "utf-8");
+  const parsed = JSON.parse(raw) as ManifestCheckpointV1;
+  if (!parsed || parsed.version !== 1) throw new Error("Unsupported manifest checkpoint format");
+
+  for (const rel of parsed.deletes ?? []) {
+    const relPosix = toPosixRelPath(String(rel));
+    const parts = splitPosixRelPath(relPosix);
+    const abs = path.join(opts.workingDir, ...parts);
+    if (!isPathWithin(opts.workingDir, abs)) {
+      throw new Error(`Refusing to delete outside working dir: ${relPosix}`);
+    }
+    await fs.rm(abs, { force: true, recursive: false });
+  }
+
+  for (const entry of parsed.writes ?? []) {
+    const relPosix = toPosixRelPath(String(entry.path ?? ""));
+    const parts = splitPosixRelPath(relPosix);
+    const abs = path.join(opts.workingDir, ...parts);
+    if (!isPathWithin(opts.workingDir, abs)) {
+      throw new Error(`Refusing to write outside working dir: ${relPosix}`);
+    }
+
+    const blobName = String(entry.blob ?? "");
+    if (!blobName || blobName.includes("/") || blobName.includes("\\") || blobName.includes("..")) {
+      throw new Error(`Invalid blob reference for ${relPosix}`);
+    }
+
+    const blobAbs = path.join(blobsAbs, blobName);
+    const compressed = await fs.readFile(blobAbs);
+    const content = gunzipSync(compressed);
+
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, content);
+  }
+}
+
 type CommandResult = { exitCode: number | null; stdout: string; stderr: string };
 
 async function runCommand(
@@ -107,11 +290,16 @@ async function runCommand(
   args: string[],
   opts: { cwd?: string; stdin?: string } = {}
 ): Promise<CommandResult> {
-  const child = spawn(command, args, {
-    cwd: opts.cwd,
-    env: process.env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(command, args, {
+      cwd: opts.cwd,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch (err) {
+    return { exitCode: 127, stdout: "", stderr: String(err) };
+  }
 
   const stdoutChunks: Uint8Array[] = [];
   const stderrChunks: Uint8Array[] = [];
@@ -126,8 +314,13 @@ async function runCommand(
     for await (const chunk of child.stderr) stderrChunks.push(chunk);
   })();
 
-  const closePromise = new Promise<number | null>((resolve, reject) => {
-    child.once("error", reject);
+  let spawnErr: unknown = null;
+  const closePromise = new Promise<number | null>((resolve) => {
+    child.once("error", (err) => {
+      spawnErr = err;
+      // Match common shell behavior for "command not found".
+      resolve(127);
+    });
     child.once("close", (exitCode) => resolve(exitCode));
   });
 
@@ -138,11 +331,11 @@ async function runCommand(
 
   const [exitCode] = await Promise.all([closePromise, stdoutPromise, stderrPromise]);
 
-  return {
-    exitCode,
-    stdout: Buffer.concat(stdoutChunks).toString("utf-8"),
-    stderr: Buffer.concat(stderrChunks).toString("utf-8"),
-  };
+  const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
+  const stderrBase = Buffer.concat(stderrChunks).toString("utf-8");
+  const stderr = spawnErr ? `${stderrBase}\n${String((spawnErr as any)?.message ?? spawnErr)}`.trim() : stderrBase;
+
+  return { exitCode, stdout, stderr };
 }
 
 async function pathExists(p: string): Promise<boolean> {
@@ -375,27 +568,50 @@ export class SessionBackupManager implements SessionBackupHandle {
 
   async createCheckpoint(trigger: SessionBackupCheckpointTrigger): Promise<SessionBackupPublicCheckpoint> {
     const originalDir = await this.ensureOriginalDirectory();
-    const diffPatch = await createDiffPatch(originalDir, this.metadata.workingDirectory);
-    const changed = diffPatch.trim().length > 0;
-
     const index = this.metadata.checkpoints.length + 1;
     const id = makeCheckpointId(index);
     const createdAt = new Date().toISOString();
 
+    let changed = false;
     let patchBytes = 0;
+    let patchKind: SessionBackupMetadataCheckpoint["patchKind"];
     let patchFile: string | undefined;
+    let manifestFile: string | undefined;
+    let blobsDir: string | undefined;
 
-    if (changed) {
-      const patchAbsPath = path.join(this.sessionDir, CHECKPOINTS_DIR, `${id}.patch.gz`);
-      const compressed = gzipSync(Buffer.from(diffPatch, "utf-8"));
-      patchBytes = compressed.byteLength;
-      await fs.writeFile(patchAbsPath, compressed, { mode: 0o600 });
-      try {
-        await fs.chmod(patchAbsPath, 0o600);
-      } catch {
-        // best effort only
+    try {
+      const diffPatch = await createDiffPatch(originalDir, this.metadata.workingDirectory);
+      changed = diffPatch.trim().length > 0;
+
+      if (changed) {
+        const patchAbsPath = path.join(this.sessionDir, CHECKPOINTS_DIR, `${id}.patch.gz`);
+        const compressed = gzipSync(Buffer.from(diffPatch, "utf-8"));
+        patchBytes = compressed.byteLength;
+        await fs.writeFile(patchAbsPath, compressed, { mode: 0o600 });
+        try {
+          await fs.chmod(patchAbsPath, 0o600);
+        } catch {
+          // best effort only
+        }
+        patchKind = "git_patch";
+        patchFile = path.join(CHECKPOINTS_DIR, `${id}.patch.gz`);
       }
-      patchFile = path.join(CHECKPOINTS_DIR, `${id}.patch.gz`);
+    } catch {
+      // `git` may be unavailable (especially on Windows). Fall back to a manifest-based checkpoint that does
+      // not depend on external binaries.
+      const manifest = await writeManifestCheckpoint({
+        originalDir,
+        workingDir: this.metadata.workingDirectory,
+        sessionDir: this.sessionDir,
+        checkpointId: id,
+      });
+      changed = manifest.changed;
+      patchBytes = manifest.patchBytes;
+      if (changed) {
+        patchKind = "manifest";
+        manifestFile = manifest.manifestFile;
+        blobsDir = manifest.blobsDir;
+      }
     }
 
     const checkpoint: SessionBackupMetadataCheckpoint = {
@@ -405,7 +621,10 @@ export class SessionBackupManager implements SessionBackupHandle {
       trigger,
       changed,
       patchBytes,
+      patchKind,
       patchFile,
+      manifestFile,
+      blobsDir,
     };
 
     this.metadata.checkpoints.push(checkpoint);
@@ -440,6 +659,24 @@ export class SessionBackupManager implements SessionBackupHandle {
 
     await this.restoreOriginal();
     if (!checkpoint.changed) return;
+
+    const kind =
+      checkpoint.patchKind ??
+      (checkpoint.manifestFile && checkpoint.blobsDir ? "manifest" : checkpoint.patchFile ? "git_patch" : undefined);
+
+    if (kind === "manifest") {
+      if (!checkpoint.manifestFile || !checkpoint.blobsDir) {
+        throw new Error(`Checkpoint ${checkpointId} is manifest-based but missing files`);
+      }
+      await applyManifestCheckpoint({
+        workingDir: this.metadata.workingDirectory,
+        sessionDir: this.sessionDir,
+        manifestFile: checkpoint.manifestFile,
+        blobsDir: checkpoint.blobsDir,
+      });
+      return;
+    }
+
     if (!checkpoint.patchFile) {
       throw new Error(`Checkpoint ${checkpointId} is marked changed but has no patch file`);
     }
@@ -460,6 +697,16 @@ export class SessionBackupManager implements SessionBackupHandle {
     if (checkpoint.patchFile) {
       const patchAbsPath = path.join(this.sessionDir, checkpoint.patchFile);
       await fs.rm(patchAbsPath, { force: true });
+    }
+
+    if (checkpoint.manifestFile) {
+      const manifestAbsPath = path.join(this.sessionDir, checkpoint.manifestFile);
+      await fs.rm(manifestAbsPath, { force: true });
+    }
+
+    if (checkpoint.blobsDir) {
+      const blobsAbsPath = path.join(this.sessionDir, checkpoint.blobsDir);
+      await fs.rm(blobsAbsPath, { recursive: true, force: true });
     }
 
     await this.persistMetadata();

@@ -5,6 +5,28 @@ async function rmrf(p: string) {
   await fs.rm(p, { recursive: true, force: true });
 }
 
+function resolveTauriTargetTriple(): string {
+  const platform = process.platform;
+  const arch = process.arch;
+
+  if (platform === "win32") {
+    if (arch === "x64") return "x86_64-pc-windows-msvc";
+    if (arch === "arm64") return "aarch64-pc-windows-msvc";
+  }
+
+  if (platform === "darwin") {
+    if (arch === "x64") return "x86_64-apple-darwin";
+    if (arch === "arm64") return "aarch64-apple-darwin";
+  }
+
+  if (platform === "linux") {
+    if (arch === "x64") return "x86_64-unknown-linux-gnu";
+    if (arch === "arm64") return "aarch64-unknown-linux-gnu";
+  }
+
+  throw new Error(`Unsupported platform/arch for desktop sidecar: ${platform}/${arch}`);
+}
+
 async function copyDir(src: string, dest: string) {
   // Bun supports fs.cp (Node 16+). Use it when available for performance.
   const anyFs = fs as any;
@@ -73,6 +95,44 @@ async function main() {
   const code = await proc.exited;
   if (code !== 0) process.exit(code);
 
+  // Build a standalone server sidecar so end users don't need Bun installed.
+  // Tauri expects external binaries to be named: <name>-<target_triple>[.exe]
+  const tauriBinariesDir = path.join(root, "apps", "desktop", "src-tauri", "binaries");
+  await fs.mkdir(tauriBinariesDir, { recursive: true });
+
+  const targetTriple = resolveTauriTargetTriple();
+  const sidecarBaseName = "cowork-server";
+  const sidecarExt = process.platform === "win32" ? ".exe" : "";
+  const sidecarOutfile = path.join(tauriBinariesDir, `${sidecarBaseName}-${targetTriple}${sidecarExt}`);
+  await fs.rm(sidecarOutfile, { force: true }).catch(() => {});
+
+  const compileArgs = [
+    "bun",
+    "build",
+    entry,
+    "--compile",
+    "--outfile",
+    sidecarOutfile,
+    "--env",
+    "COWORK_DESKTOP_BUNDLE*",
+    "--external",
+    "ai-sdk-provider-gemini-cli",
+    "--external",
+    "@google/gemini-cli-core",
+    "--target",
+    "bun",
+  ];
+  if (process.platform === "win32") compileArgs.push("--windows-hide-console");
+
+  const sidecarProc = Bun.spawn(compileArgs, {
+    cwd: root,
+    stdout: "inherit",
+    stderr: "inherit",
+    env: { ...process.env, COWORK_DESKTOP_BUNDLE: "1" },
+  });
+  const sidecarCode = await sidecarProc.exited;
+  if (sidecarCode !== 0) process.exit(sidecarCode);
+
   // The server expects built-in prompts/config/skills to live at builtInDir/{prompts,config,skills},
   // where builtInDir is the parent of dist/server/*.js (i.e. dist/).
   for (const dir of ["prompts", "config", "skills"] as const) {
@@ -89,6 +149,7 @@ async function main() {
   await copyDir(docsSrc, docsDest);
 
   console.log(`[resources] built server bundle at ${path.relative(root, serverOutDir)}`);
+  console.log(`[resources] built server sidecar at ${path.relative(root, sidecarOutfile)}`);
 }
 
 main().catch((err) => {

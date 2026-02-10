@@ -137,6 +137,8 @@ describe("getProviderStatuses", () => {
   });
 
   test("claude-code: loads identity via keychain creds + OAuth profile", async () => {
+    if (process.platform !== "darwin") return;
+
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
 

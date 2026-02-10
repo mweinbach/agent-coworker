@@ -8,7 +8,7 @@ import { discoverSkills, stripSkillFrontMatter } from "../skills";
 import { isProviderName } from "../types";
 import type { AgentConfig, TodoItem } from "../types";
 import { runTurn } from "../agent";
-import { loadSystemPrompt } from "../prompt";
+import { loadSystemPromptWithSkills } from "../prompt";
 import { createTools } from "../tools";
 import { classifyCommand } from "../utils/approval";
 
@@ -50,6 +50,7 @@ export class AgentSession {
 
   private config: AgentConfig;
   private system: string;
+  private discoveredSkills: Array<{ name: string; description: string }>;
   private readonly yolo: boolean;
   private readonly emit: (evt: ServerEvent) => void;
   private readonly connectProviderImpl: typeof connectModelProvider;
@@ -74,6 +75,7 @@ export class AgentSession {
   constructor(opts: {
     config: AgentConfig;
     system: string;
+    discoveredSkills?: Array<{ name: string; description: string }>;
     yolo?: boolean;
     emit: (evt: ServerEvent) => void;
     connectProviderImpl?: typeof connectModelProvider;
@@ -84,6 +86,7 @@ export class AgentSession {
     this.id = makeId();
     this.config = opts.config;
     this.system = opts.system;
+    this.discoveredSkills = opts.discoveredSkills ?? [];
     this.yolo = opts.yolo === true;
     this.emit = opts.emit;
     this.connectProviderImpl = opts.connectProviderImpl ?? connectModelProvider;
@@ -341,7 +344,9 @@ export class AgentSession {
     };
 
     try {
-      this.system = await loadSystemPrompt(this.config);
+      const result = await loadSystemPromptWithSkills(this.config);
+      this.system = result.prompt;
+      this.discoveredSkills = result.discoveredSkills;
     } catch (err) {
       this.emit({
         type: "error",
@@ -621,6 +626,7 @@ export class AgentSession {
         askUser: (q, opts) => this.askUser(q, opts),
         approveCommand: (cmd) => this.approveCommand(cmd),
         updateTodos: (todos) => this.updateTodos(todos),
+        discoveredSkills: this.discoveredSkills,
         maxSteps: 100,
         enableMcp: this.config.enableMcp,
         abortSignal: this.abortController.signal,

@@ -43,6 +43,9 @@ export interface RunTurnParams {
   approveCommand: (command: string) => Promise<boolean>;
   updateTodos?: (todos: TodoItem[]) => void;
 
+  /** Lightweight skill metadata for dynamic tool descriptions. */
+  discoveredSkills?: Array<{ name: string; description: string }>;
+
   maxSteps?: number;
   enableMcp?: boolean;
   abortSignal?: AbortSignal;
@@ -73,9 +76,9 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
     reasoningText?: string;
     responseMessages: ModelMessage[];
   }> {
-    const { config, system, messages, log, askUser, approveCommand, updateTodos, abortSignal } = params;
+    const { config, system, messages, log, askUser, approveCommand, updateTodos, discoveredSkills, abortSignal } = params;
 
-    const toolCtx = { config, log, askUser, approveCommand, updateTodos };
+    const toolCtx = { config, log, askUser, approveCommand, updateTodos, availableSkills: discoveredSkills };
     const builtInTools = deps.createTools(toolCtx);
 
     let mcpTools: Record<string, any> = {};

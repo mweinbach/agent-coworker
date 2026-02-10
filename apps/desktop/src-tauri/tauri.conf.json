@@ -24,6 +24,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": [
+      "binaries/cowork-server"
+    ],
     "resources": [
       "../../../dist/**/*"
     ],

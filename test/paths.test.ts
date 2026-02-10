@@ -8,11 +8,11 @@ import { isPathInside, resolveMaybeRelative, truncateLine, truncateText } from "
 // ---------------------------------------------------------------------------
 
 describe("resolveMaybeRelative", () => {
-  const base = "/home/user/project";
+  const base = process.platform === "win32" ? "C:\\home\\user\\project" : "/home/user/project";
 
   describe("absolute paths remain unchanged (modulo normalization)", () => {
     test("simple absolute path is returned as-is", () => {
-      expect(resolveMaybeRelative("/usr/local/bin", base)).toBe("/usr/local/bin");
+      expect(resolveMaybeRelative("/usr/local/bin", base)).toBe(path.normalize("/usr/local/bin"));
     });
 
     test("absolute path with trailing slash is normalized", () => {
@@ -22,65 +22,65 @@ describe("resolveMaybeRelative", () => {
     });
 
     test("absolute path with .. components is normalized", () => {
-      expect(resolveMaybeRelative("/usr/local/../bin", base)).toBe("/usr/bin");
+      expect(resolveMaybeRelative("/usr/local/../bin", base)).toBe(path.normalize("/usr/bin"));
     });
 
     test("absolute path with . components is normalized", () => {
-      expect(resolveMaybeRelative("/usr/./local/./bin", base)).toBe("/usr/local/bin");
+      expect(resolveMaybeRelative("/usr/./local/./bin", base)).toBe(path.normalize("/usr/local/bin"));
     });
 
     test("root path", () => {
-      expect(resolveMaybeRelative("/", base)).toBe("/");
+      expect(resolveMaybeRelative("/", base)).toBe(path.normalize("/"));
     });
 
     test("absolute path ignores baseDir entirely", () => {
-      expect(resolveMaybeRelative("/etc/config", "/some/other/dir")).toBe("/etc/config");
+      expect(resolveMaybeRelative("/etc/config", "/some/other/dir")).toBe(path.normalize("/etc/config"));
     });
   });
 
   describe("relative paths are resolved against baseDir", () => {
     test("simple relative path", () => {
       expect(resolveMaybeRelative("src/index.ts", base)).toBe(
-        path.normalize("/home/user/project/src/index.ts"),
+        path.normalize(path.join(base, "src", "index.ts")),
       );
     });
 
     test("relative path with ./ prefix", () => {
       expect(resolveMaybeRelative("./src/index.ts", base)).toBe(
-        path.normalize("/home/user/project/src/index.ts"),
+        path.normalize(path.join(base, "src", "index.ts")),
       );
     });
 
     test("relative path with .. component", () => {
       expect(resolveMaybeRelative("../sibling/file.txt", base)).toBe(
-        path.normalize("/home/user/sibling/file.txt"),
+        path.normalize(path.join(base, "..", "sibling", "file.txt")),
       );
     });
 
     test("relative path with multiple .. components", () => {
       expect(resolveMaybeRelative("../../other/file.txt", base)).toBe(
-        path.normalize("/home/other/file.txt"),
+        path.normalize(path.join(base, "..", "..", "other", "file.txt")),
       );
     });
 
     test("bare filename", () => {
       expect(resolveMaybeRelative("file.txt", base)).toBe(
-        path.normalize("/home/user/project/file.txt"),
+        path.normalize(path.join(base, "file.txt")),
       );
     });
 
     test("relative path with redundant separators is normalized", () => {
       expect(resolveMaybeRelative("src//lib///util.ts", base)).toBe(
-        path.normalize("/home/user/project/src/lib/util.ts"),
+        path.normalize(path.join(base, "src", "lib", "util.ts")),
       );
     });
 
     test("dot-only relative path", () => {
-      expect(resolveMaybeRelative(".", base)).toBe(path.normalize("/home/user/project"));
+      expect(resolveMaybeRelative(".", base)).toBe(path.normalize(base));
     });
 
     test("double-dot relative path", () => {
-      expect(resolveMaybeRelative("..", base)).toBe(path.normalize("/home/user"));
+      expect(resolveMaybeRelative("..", base)).toBe(path.normalize(path.join(base, "..")));
     });
   });
 
@@ -96,7 +96,8 @@ describe("resolveMaybeRelative", () => {
 
   describe("different baseDirs", () => {
     test("root baseDir", () => {
-      expect(resolveMaybeRelative("foo", "/")).toBe(path.normalize("/foo"));
+      const root = process.platform === "win32" ? path.parse(process.cwd()).root : "/";
+      expect(resolveMaybeRelative("foo", root)).toBe(path.normalize(path.join(root, "foo")));
     });
 
     test("deeply nested baseDir", () => {

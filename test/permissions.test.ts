@@ -25,7 +25,7 @@ function makeConfig(dir: string): AgentConfig {
 }
 
 describe("isWritePathAllowed", () => {
-  const PROJECT = "/home/user/project";
+  const PROJECT = process.platform === "win32" ? "C:\\home\\user\\project" : "/home/user/project";
 
   // ---- Writes inside workingDirectory ---------------------------------------
 
@@ -237,9 +237,10 @@ describe("isWritePathAllowed", () => {
     });
 
     test("workingDirectory set to / would allow everything (root is permissive)", () => {
-      const cfg = makeConfig("/");
-      expect(isWritePathAllowed("/etc/passwd", cfg)).toBe(true);
-      expect(isWritePathAllowed("/any/path/at/all", cfg)).toBe(true);
+      const root = process.platform === "win32" ? path.parse(PROJECT).root : "/";
+      const cfg = makeConfig(root);
+      expect(isWritePathAllowed(path.join(root, "etc", "passwd"), cfg)).toBe(true);
+      expect(isWritePathAllowed(path.join(root, "any", "path", "at", "all"), cfg)).toBe(true);
     });
   });
 });

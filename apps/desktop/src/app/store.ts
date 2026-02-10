@@ -6,7 +6,7 @@ import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { AgentSocket } from "../lib/agentSocket";
 import { UI_DISABLED_PROVIDERS } from "../lib/modelChoices";
 import {
-  appendTranscriptEvent,
+  appendTranscriptBatch,
   deleteTranscript,
   loadState,
   readTranscript,
@@ -52,6 +52,22 @@ function truncateTitle(s: string, max = 34) {
   if (trimmed.length <= max) return trimmed;
   return trimmed.slice(0, max - 1) + "…";
 }
+
+// ---------------------------------------------------------------------------
+// Performance constants (Findings 8.1, 8.2, 8.3)
+// ---------------------------------------------------------------------------
+
+/** Maximum number of feed items to keep per thread. Older items are trimmed. */
+const MAX_FEED_ITEMS = 2000;
+
+/** Maximum number of notifications before oldest are pruned. */
+const MAX_NOTIFICATIONS = 50;
+
+/** Debounce interval for persist() — batches rapid state saves. */
+const PERSIST_DEBOUNCE_MS = 300;
+
+/** Batch interval for transcript events — buffers writes then flushes once. */
+const TRANSCRIPT_BATCH_MS = 200;
 
 type ProviderStatusEvent = Extract<ServerEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
@@ -129,10 +145,15 @@ function pushFeedItem(set: (fn: (s: AppStoreState) => Partial<AppStoreState>) =>
   set((s) => {
     const rt = s.threadRuntimeById[threadId];
     if (!rt) return {};
+    // Cap feed to MAX_FEED_ITEMS (Finding 8.3: prevent unbounded growth).
+    let nextFeed = [...rt.feed, item];
+    if (nextFeed.length > MAX_FEED_ITEMS) {
+      nextFeed = nextFeed.slice(nextFeed.length - MAX_FEED_ITEMS);
+    }
     return {
       threadRuntimeById: {
         ...s.threadRuntimeById,
-        [threadId]: { ...rt, feed: [...rt.feed, item] },
+        [threadId]: { ...rt, feed: nextFeed },
       },
     };
   });
@@ -308,13 +329,66 @@ export type AppStoreState = {
   dismissPrompt: () => void;
 };
 
-async function persist(get: () => AppStoreState) {
+// ---------------------------------------------------------------------------
+// Debounced persist (Finding 8.1: reduce IPC on rapid state changes)
+// ---------------------------------------------------------------------------
+
+let _persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function persist(get: () => AppStoreState) {
+  if (_persistTimer) clearTimeout(_persistTimer);
+  _persistTimer = setTimeout(() => {
+    _persistTimer = null;
+    const state: PersistedState = {
+      version: 1,
+      workspaces: get().workspaces,
+      threads: get().threads,
+    };
+    void saveState(state);
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+/** Force an immediate persist (for critical writes like thread creation). */
+async function persistNow(get: () => AppStoreState) {
+  if (_persistTimer) {
+    clearTimeout(_persistTimer);
+    _persistTimer = null;
+  }
   const state: PersistedState = {
     version: 1,
     workspaces: get().workspaces,
     threads: get().threads,
   };
   await saveState(state);
+}
+
+// ---------------------------------------------------------------------------
+// Batched transcript writes (Finding 8.2: reduce file I/O overhead)
+// ---------------------------------------------------------------------------
+
+type PendingTranscriptEntry = {
+  ts: string;
+  threadId: string;
+  direction: "server" | "client";
+  payload: unknown;
+};
+
+let _transcriptBuffer: PendingTranscriptEntry[] = [];
+let _transcriptTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushTranscriptBuffer() {
+  if (_transcriptBuffer.length === 0) return;
+  const batch = _transcriptBuffer;
+  _transcriptBuffer = [];
+  _transcriptTimer = null;
+  void appendTranscriptBatch(batch);
+}
+
+function appendThreadTranscriptBatched(threadId: string, direction: "server" | "client", payload: unknown) {
+  _transcriptBuffer.push({ ts: nowIso(), threadId, direction, payload });
+  if (!_transcriptTimer) {
+    _transcriptTimer = setTimeout(flushTranscriptBuffer, TRANSCRIPT_BATCH_MS);
+  }
 }
 
 async function ensureServerRunning(get: () => AppStoreState, set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void, workspaceId: string) {
@@ -452,10 +526,7 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
 
       if (evt.type === "error") {
         set((s) => ({
-          notifications: [
-            ...s.notifications,
-            { id: makeId(), ts: nowIso(), kind: "error", title: "Control session error", detail: evt.message },
-          ],
+          notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Control session error", detail: evt.message }),
           providerStatusRefreshing: false,
         }));
         return;
@@ -465,10 +536,7 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
         const text = String(evt.text ?? "").trim();
         if (!text) return;
         set((s) => ({
-          notifications: [
-            ...s.notifications,
-            { id: makeId(), ts: nowIso(), kind: "info", title: "Server message", detail: text },
-          ],
+          notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "info", title: "Server message", detail: text }),
         }));
       }
     },
@@ -558,12 +626,16 @@ function sendThread(
 }
 
 function appendThreadTranscript(threadId: string, direction: "server" | "client", payload: unknown) {
-  void appendTranscriptEvent({
-    ts: nowIso(),
-    threadId,
-    direction,
-    payload,
-  });
+  appendThreadTranscriptBatched(threadId, direction, payload);
+}
+
+/** Append a notification, capping the list to MAX_NOTIFICATIONS. */
+function pushNotification(notifications: Notification[], entry: Notification): Notification[] {
+  const next = [...notifications, entry];
+  if (next.length > MAX_NOTIFICATIONS) {
+    return next.slice(next.length - MAX_NOTIFICATIONS);
+  }
+  return next;
 }
 
 function sendUserMessageToThread(
@@ -776,7 +848,7 @@ function handleThreadEvent(
   if (evt.type === "error") {
     pushFeedItem(set, threadId, { id: makeId(), kind: "error", ts: nowIso(), message: evt.message });
     set((s) => ({
-      notifications: [...s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Agent error", detail: evt.message }],
+      notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Agent error", detail: evt.message }),
     }));
     return;
   }
@@ -877,7 +949,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       view: stayInSettings ? "settings" : "chat",
     }));
     ensureWorkspaceRuntime(get, set, ws.id);
-    await persist(get);
+    await persistNow(get);
     await get().selectWorkspace(ws.id);
   },
 
@@ -901,7 +973,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
         selectedThreadId,
       };
     });
-    await persist(get);
+    await persistNow(get);
   },
 
   removeThread: async (threadId: string) => {
@@ -937,7 +1009,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       // ignore
     }
 
-    await persist(get);
+    await persistNow(get);
   },
 
   selectWorkspace: async (workspaceId: string) => {
@@ -953,7 +1025,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     set((s) => ({
       workspaces: s.workspaces.map((w) => (w.id === workspaceId ? { ...w, lastOpenedAt: nowIso() } : w)),
     }));
-    await persist(get);
+    await persistNow(get);
 
     await ensureServerRunning(get, set, workspaceId);
     ensureControlSocket(get, set, workspaceId);
@@ -998,7 +1070,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
         [threadId]: { ...s.threadRuntimeById[threadId], transcriptOnly: false },
       },
     }));
-    await persist(get);
+    await persistNow(get);
 
     ensureThreadSocket(get, set, threadId, url, opts?.firstMessage);
   },
@@ -1008,7 +1080,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     set((s) => ({
       threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "archived" } : t)),
     }));
-    await persist(get);
+    await persistNow(get);
 
     // Best-effort disconnect.
     const sock = RUNTIME.threadSockets.get(threadId);
@@ -1025,7 +1097,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     set((s) => ({
       threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "disconnected" } : t)),
     }));
-    await persist(get);
+    await persistNow(get);
   },
 
   selectThread: async (threadId: string) => {
@@ -1141,10 +1213,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "disable_skill", sessionId, skillName }));
     if (!ok) {
       set((s) => ({
-        notifications: [
-          ...s.notifications,
-          { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to disable skill." },
-        ],
+        notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to disable skill." }),
       }));
     }
   },
@@ -1155,10 +1224,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "enable_skill", sessionId, skillName }));
     if (!ok) {
       set((s) => ({
-        notifications: [
-          ...s.notifications,
-          { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to enable skill." },
-        ],
+        notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to enable skill." }),
       }));
     }
   },
@@ -1169,10 +1235,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "delete_skill", sessionId, skillName }));
     if (!ok) {
       set((s) => ({
-        notifications: [
-          ...s.notifications,
-          { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to delete skill." },
-        ],
+        notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to delete skill." }),
       }));
     }
   },
@@ -1219,7 +1282,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     set((s) => ({
       workspaces: s.workspaces.map((w) => (w.id === workspaceId ? { ...w, ...patch } : w)),
     }));
-    await persist(get);
+    await persistNow(get);
   },
 
   restartWorkspaceServer: async (workspaceId) => {
@@ -1269,10 +1332,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     }));
     if (!ok) {
       set((s) => ({
-        notifications: [
-          ...s.notifications,
-          { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to send connect_provider." },
-        ],
+        notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to send connect_provider." }),
       }));
     }
   },
@@ -1298,10 +1358,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     } catch {
       set((s) => ({
         providerStatusRefreshing: false,
-        notifications: [
-          ...s.notifications,
-          { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to refresh provider status." },
-        ],
+        notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to refresh provider status." }),
       }));
     }
   },

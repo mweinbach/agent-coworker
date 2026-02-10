@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../app/store";
 
@@ -9,6 +9,12 @@ export function PromptModal() {
   const dismiss = useAppStore((s) => s.dismissPrompt);
 
   const [freeText, setFreeText] = useState("");
+
+  // Reset free-text input when a new prompt appears (Finding 9.1).
+  const requestId = modal?.kind === "ask" ? modal.prompt.requestId : null;
+  useEffect(() => {
+    setFreeText("");
+  }, [requestId]);
 
   const content = useMemo(() => {
     if (!modal) return null;

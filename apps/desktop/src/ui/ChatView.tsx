@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useRef } from "react";
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -7,17 +7,22 @@ import rehypeSanitize from "rehype-sanitize";
 import { useAppStore } from "../app/store";
 import type { FeedItem } from "../app/types";
 
-function Markdown(props: { text: string }) {
+// Stable plugin arrays — avoids recreating on every render which would
+// force ReactMarkdown to re-parse even when the text hasn't changed.
+const REMARK_PLUGINS = [remarkGfm];
+const REHYPE_PLUGINS = [rehypeSanitize];
+
+const Markdown = memo(function Markdown(props: { text: string }) {
   return (
     <div className="markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>
         {props.text}
       </ReactMarkdown>
     </div>
   );
-}
+});
 
-function FeedRow(props: { item: FeedItem }) {
+const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
   const item = props.item;
 
   if (item.kind === "message") {
@@ -98,15 +103,25 @@ function FeedRow(props: { item: FeedItem }) {
   }
 
   return null;
-}
+});
 
 export function ChatView() {
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
-  const threads = useAppStore((s) => s.threads);
-  const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
+  // Narrow selector: only re-render when the *selected* thread record changes,
+  // not when any thread in the array changes (Finding 7.1).
+  const thread = useAppStore((s) => {
+    if (!s.selectedThreadId) return null;
+    return s.threads.find((t) => t.id === s.selectedThreadId) ?? null;
+  });
+  // Narrow selector: only subscribe to the selected thread's runtime, not the
+  // entire threadRuntimeById map (Finding 7.1).
+  const rt = useAppStore((s) => {
+    if (!s.selectedThreadId) return null;
+    return s.threadRuntimeById[s.selectedThreadId] ?? null;
+  });
   const composerText = useAppStore((s) => s.composerText);
   const injectContext = useAppStore((s) => s.injectContext);
-  const promptModal = useAppStore((s) => s.promptModal);
+  const hasPromptModal = useAppStore((s) => s.promptModal !== null);
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const setInjectContext = useAppStore((s) => s.setInjectContext);
@@ -116,17 +131,31 @@ export function ChatView() {
   const feedRef = useRef<HTMLDivElement | null>(null);
   const lastCountRef = useRef<number>(0);
 
-  const thread = useMemo(() => threads.find((t) => t.id === selectedThreadId) ?? null, [selectedThreadId, threads]);
-  const rt = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
   const feed = rt?.feed ?? [];
 
+  // Auto-scroll: only scroll to bottom if the user was already near the bottom,
+  // preventing annoying jumps when they've scrolled up to read history.
   useEffect(() => {
     const el = feedRef.current;
     if (!el) return;
     if (feed.length === lastCountRef.current) return;
     lastCountRef.current = feed.length;
-    el.scrollTop = el.scrollHeight;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distFromBottom < 200) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [feed.length]);
+
+  // Stable callback to avoid re-creating the keyboard handler each render.
+  const onComposerKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        void sendMessage(composerText);
+      }
+    },
+    [sendMessage, composerText]
+  );
 
   if (!selectedThreadId || !thread) {
     return (
@@ -142,7 +171,7 @@ export function ChatView() {
   }
 
   const busy = rt?.busy === true;
-  const disabled = busy || !!promptModal;
+  const disabled = busy || hasPromptModal;
   const transcriptOnly = rt?.transcriptOnly === true || thread.status !== "active";
 
   return (
@@ -180,12 +209,7 @@ export function ChatView() {
             onChange={(e) => setComposerText(e.currentTarget.value)}
             placeholder={transcriptOnly ? "Continue in a new thread…" : busy ? "Working…" : "Message coworker…"}
             disabled={disabled}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void sendMessage(composerText);
-              }
-            }}
+            onKeyDown={onComposerKeyDown}
           />
           <button className="sendButton" type="button" disabled={disabled || !composerText.trim()} onClick={() => void sendMessage(composerText)}>
             <span className="sendArrow" aria-hidden="true" />

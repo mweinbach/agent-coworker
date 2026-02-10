@@ -50,11 +50,11 @@ export async function loadSystemPrompt(config: AgentConfig): Promise<string> {
     const list = skills
       .map(
         (s) =>
-          `- **${s.name}**: ${s.description} (source: ${s.source}; triggers: ${s.triggers.join(", ")})`
+          `- **${s.name}**: ${s.description} (source: ${s.source}; aliases: ${s.triggers.join(", ")})\n  - Call: skill({ skillName: "${s.name}" })`
       )
       .join("\n");
     prompt +=
-      "\n\n## Available Skills\n\nLoad these with the skill tool before creating the relevant output:\n\n" +
+      "\n\n## Available Skills\n\nLoad the relevant skill with the skill tool before creating deliverables.\nIf a task uses an alias/trigger, map it to the canonical skill name below and call that skill first.\n\n" +
       list;
   }
 

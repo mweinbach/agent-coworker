@@ -1,4 +1,4 @@
-import { extractTriggers } from "../src/skills/index";
+import { buildSkillAliasMap, extractTriggers, resolveSkillName } from "../src/skills/index";
 import { describe, test, expect } from "bun:test";
 
 describe("extractTriggers", () => {
@@ -40,5 +40,37 @@ describe("extractTriggers", () => {
   test("returns name as default if no match found (unknown skill)", () => {
     const content = "No triggers here";
     expect(extractTriggers("unknown-skill", content)).toEqual(["unknown-skill"]);
+  });
+});
+
+describe("skill alias resolution", () => {
+  const mockSkills = [
+    {
+      name: "spreadsheet",
+      path: "/tmp/spreadsheet/SKILL.md",
+      source: "built-in" as const,
+      description: "Spreadsheet",
+      triggers: ["spreadsheet", "xlsx", "excel"],
+    },
+    {
+      name: "doc",
+      path: "/tmp/doc/SKILL.md",
+      source: "built-in" as const,
+      description: "Doc",
+      triggers: ["doc", "docx", "word"],
+    },
+  ];
+
+  test("maps canonical names and aliases", () => {
+    const aliases = buildSkillAliasMap(mockSkills);
+    expect(aliases.get("spreadsheet")).toBe("spreadsheet");
+    expect(aliases.get("xlsx")).toBe("spreadsheet");
+    expect(aliases.get("docx")).toBe("doc");
+  });
+
+  test("resolves canonical name from alias", () => {
+    expect(resolveSkillName("xlsx", mockSkills)).toBe("spreadsheet");
+    expect(resolveSkillName("word", mockSkills)).toBe("doc");
+    expect(resolveSkillName("unknown", mockSkills)).toBeNull();
   });
 });

@@ -167,7 +167,7 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("## Available Skills");
     expect(prompt).toContain("test-skill");
     expect(prompt).toContain("Test Skill Description");
-    expect(prompt).toContain("trigger1");
+    expect(prompt).toContain("aliases: trigger1");
     expect(prompt).toContain("trigger2");
   });
 

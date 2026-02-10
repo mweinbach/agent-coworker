@@ -175,10 +175,10 @@ describe("discoverSkills", () => {
     expect(entries[0].description).toBe("Sub Header Skill");
   });
 
-  test("uses first line as description when no markdown header prefix", async () => {
+  test("uses skill name as description when no heading/frontmatter description exists", async () => {
     await createSkill(tmp, "noheader", "No header line here.\nTRIGGERS: n\n");
     const entries = await discoverSkills([tmp]);
-    expect(entries[0].description).toBe("No header line here.");
+    expect(entries[0].description).toBe("noheader");
   });
 
   test("assigns project source to first directory", async () => {

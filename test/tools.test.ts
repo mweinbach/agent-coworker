@@ -1444,6 +1444,27 @@ describe("skill tool", () => {
     expect(res).toContain("PDF Skill Content");
   });
 
+  test("includes references index when reference folders exist", async () => {
+    const dir = await tmpDir();
+    const skillDir = path.join(dir, "skills", "with-refs");
+    await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
+    await fs.mkdir(path.join(skillDir, "scripts"), { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# PDF Skill", "utf-8");
+    await fs.writeFile(path.join(skillDir, "references", "guide.md"), "guide", "utf-8");
+    await fs.writeFile(path.join(skillDir, "scripts", "build.py"), "print('ok')", "utf-8");
+
+    const config = makeConfig(dir);
+    config.skillsDirs = [path.join(dir, "skills")];
+    const ctx = makeCtx(dir);
+    ctx.config = config;
+
+    const t: any = createSkillTool(ctx);
+    const res: string = await t.execute({ skillName: "with-refs" });
+    expect(res).toContain("Skill references index");
+    expect(res).toContain("references/guide.md");
+    expect(res).toContain("scripts/build.py");
+  });
+
   test("returns 'not found' for missing skill", async () => {
     const dir = await tmpDir();
     const config = makeConfig(dir);
@@ -1470,14 +1491,14 @@ describe("skill tool", () => {
     const t: any = createSkillTool(ctx);
     // First call reads from disk
     const res1: string = await t.execute({ skillName: "cached_skill_unique" });
-    expect(res1).toBe("Cached content");
+    expect(res1).toContain("Cached content");
 
     // Modify the file on disk
     await fs.writeFile(path.join(skillDir, "SKILL.md"), "Modified content", "utf-8");
 
     // Second call should return cached version
     const res2: string = await t.execute({ skillName: "cached_skill_unique" });
-    expect(res2).toBe("Cached content");
+    expect(res2).toContain("Cached content");
   });
 
   test("searches multiple skillsDirs in order", async () => {
@@ -1486,8 +1507,8 @@ describe("skill tool", () => {
     const dir2 = path.join(dir, "s2_order_test");
     await fs.mkdir(path.join(dir1, "myskill_order"), { recursive: true });
     await fs.mkdir(path.join(dir2, "myskill_order"), { recursive: true });
-    await fs.writeFile(path.join(dir1, "myskill_order", "SKILL.md"), "First dir", "utf-8");
-    await fs.writeFile(path.join(dir2, "myskill_order", "SKILL.md"), "Second dir", "utf-8");
+    await fs.writeFile(path.join(dir1, "myskill_order", "SKILL.md"), "# First dir", "utf-8");
+    await fs.writeFile(path.join(dir2, "myskill_order", "SKILL.md"), "# Second dir", "utf-8");
 
     const config = makeConfig(dir);
     config.skillsDirs = [dir1, dir2];
@@ -1496,7 +1517,24 @@ describe("skill tool", () => {
 
     const t: any = createSkillTool(ctx);
     const res: string = await t.execute({ skillName: "myskill_order" });
-    expect(res).toBe("First dir");
+    expect(res).toContain("First dir");
+  });
+
+  test("resolves alias to canonical skill name", async () => {
+    const dir = await tmpDir();
+    const skillDir = path.join(dir, "skills", "spreadsheet");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Spreadsheet Skill\nTRIGGERS: spreadsheet, xlsx", "utf-8");
+
+    const config = makeConfig(dir);
+    config.skillsDirs = [path.join(dir, "skills")];
+    const ctx = makeCtx(dir);
+    ctx.config = config;
+
+    const t: any = createSkillTool(ctx);
+    const res: string = await t.execute({ skillName: "xlsx" });
+    expect(res).toContain('Resolved skill "xlsx" -> "spreadsheet"');
+    expect(res).toContain("Spreadsheet Skill");
   });
 
   test("returns not found when skillsDirs is empty", async () => {

@@ -13,10 +13,18 @@ import { createTools } from "../tools";
 import { classifyCommand } from "../utils/approval";
 
 import type { ServerEvent } from "./protocol";
+import {
+  SessionBackupManager,
+  type SessionBackupHandle,
+  type SessionBackupInitOptions,
+  type SessionBackupPublicState,
+} from "./sessionBackup";
 
 function makeId(): string {
   return crypto.randomUUID();
 }
+
+type SessionBackupFactory = (opts: SessionBackupInitOptions) => Promise<SessionBackupHandle>;
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -47,6 +55,7 @@ export class AgentSession {
   private readonly connectProviderImpl: typeof connectModelProvider;
   private readonly getAiCoworkerPathsImpl: typeof getAiCoworkerPaths;
   private readonly getProviderStatusesImpl: typeof getProviderStatuses;
+  private readonly sessionBackupFactory: SessionBackupFactory;
 
   private messages: ModelMessage[] = [];
   private running = false;
@@ -58,6 +67,9 @@ export class AgentSession {
   private readonly pendingApproval = new Map<string, Deferred<boolean>>();
 
   private todos: TodoItem[] = [];
+  private sessionBackup: SessionBackupHandle | null = null;
+  private sessionBackupState: SessionBackupPublicState;
+  private readonly sessionBackupInit: Promise<void>;
 
   constructor(opts: {
     config: AgentConfig;
@@ -67,6 +79,7 @@ export class AgentSession {
     connectProviderImpl?: typeof connectModelProvider;
     getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
     getProviderStatusesImpl?: typeof getProviderStatuses;
+    sessionBackupFactory?: SessionBackupFactory;
   }) {
     this.id = makeId();
     this.config = opts.config;
@@ -76,6 +89,19 @@ export class AgentSession {
     this.connectProviderImpl = opts.connectProviderImpl ?? connectModelProvider;
     this.getAiCoworkerPathsImpl = opts.getAiCoworkerPathsImpl ?? getAiCoworkerPaths;
     this.getProviderStatusesImpl = opts.getProviderStatusesImpl ?? getProviderStatuses;
+    this.getProviderStatusesImpl = opts.getProviderStatusesImpl ?? getProviderStatuses;
+    this.sessionBackupFactory =
+      opts.sessionBackupFactory ?? (async (factoryOpts) => await SessionBackupManager.create(factoryOpts));
+    this.sessionBackupState = {
+      status: "initializing",
+      sessionId: this.id,
+      workingDirectory: this.config.workingDirectory,
+      backupDirectory: null,
+      createdAt: new Date().toISOString(),
+      originalSnapshot: { kind: "pending" },
+      checkpoints: [],
+    };
+    this.sessionBackupInit = this.initializeSessionBackup();
   }
 
   getPublicConfig() {
@@ -440,6 +466,8 @@ export class AgentSession {
       d.reject(new Error(`Session disposed (${reason})`));
       this.pendingApproval.delete(id);
     }
+
+    void this.closeSessionBackup();
   }
 
   private log(line: string) {
@@ -481,6 +509,89 @@ export class AgentSession {
     this.emit({ type: "todos", sessionId: this.id, todos });
   };
 
+  async getSessionBackupState() {
+    await this.sessionBackupInit;
+    this.emitSessionBackupState("requested");
+  }
+
+  async createManualSessionCheckpoint() {
+    if (this.running) {
+      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      return;
+    }
+
+    await this.sessionBackupInit;
+    if (!this.sessionBackup) {
+      const reason = this.sessionBackupState.failureReason ?? "Session backup is unavailable";
+      this.emit({ type: "error", sessionId: this.id, message: reason });
+      return;
+    }
+
+    try {
+      await this.sessionBackup.createCheckpoint("manual");
+      this.sessionBackupState = this.sessionBackup.getPublicState();
+      this.emitSessionBackupState("manual_checkpoint");
+    } catch (err) {
+      this.emit({ type: "error", sessionId: this.id, message: `manual checkpoint failed: ${String(err)}` });
+    }
+  }
+
+  async restoreSessionBackup(checkpointId?: string) {
+    if (this.running) {
+      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      return;
+    }
+
+    await this.sessionBackupInit;
+    if (!this.sessionBackup) {
+      const reason = this.sessionBackupState.failureReason ?? "Session backup is unavailable";
+      this.emit({ type: "error", sessionId: this.id, message: reason });
+      return;
+    }
+
+    try {
+      if (checkpointId) {
+        await this.sessionBackup.restoreCheckpoint(checkpointId);
+      } else {
+        await this.sessionBackup.restoreOriginal();
+      }
+      this.sessionBackupState = this.sessionBackup.getPublicState();
+      this.emitSessionBackupState("restore");
+    } catch (err) {
+      this.emit({ type: "error", sessionId: this.id, message: `restore failed: ${String(err)}` });
+    }
+  }
+
+  async deleteSessionCheckpoint(checkpointId: string) {
+    if (this.running) {
+      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      return;
+    }
+
+    await this.sessionBackupInit;
+    if (!this.sessionBackup) {
+      const reason = this.sessionBackupState.failureReason ?? "Session backup is unavailable";
+      this.emit({ type: "error", sessionId: this.id, message: reason });
+      return;
+    }
+
+    try {
+      const removed = await this.sessionBackup.deleteCheckpoint(checkpointId);
+      if (!removed) {
+        this.emit({
+          type: "error",
+          sessionId: this.id,
+          message: `Unknown checkpoint id: ${checkpointId}`,
+        });
+        return;
+      }
+      this.sessionBackupState = this.sessionBackup.getPublicState();
+      this.emitSessionBackupState("delete");
+    } catch (err) {
+      this.emit({ type: "error", sessionId: this.id, message: `delete checkpoint failed: ${String(err)}` });
+    }
+  }
+
   async sendUserMessage(text: string, clientMessageId?: string) {
     if (this.running) {
       this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
@@ -492,6 +603,7 @@ export class AgentSession {
     try {
       this.emit({ type: "user_message", sessionId: this.id, text, clientMessageId });
       this.emit({ type: "session_busy", sessionId: this.id, busy: true });
+      await this.sessionBackupInit;
       this.messages.push({ role: "user", content: text });
 
       // Trim message history to prevent unbounded memory growth.
@@ -531,9 +643,65 @@ export class AgentSession {
         this.emit({ type: "error", sessionId: this.id, message: msg });
       }
     } finally {
+      await this.takeAutomaticSessionCheckpoint();
       this.emit({ type: "session_busy", sessionId: this.id, busy: false });
       this.running = false;
       this.abortController = null;
+    }
+  }
+
+  private emitSessionBackupState(
+    reason: "requested" | "auto_checkpoint" | "manual_checkpoint" | "restore" | "delete"
+  ) {
+    this.emit({
+      type: "session_backup_state",
+      sessionId: this.id,
+      reason,
+      backup: this.sessionBackupState,
+    });
+  }
+
+  private async initializeSessionBackup() {
+    const userHome = this.config.userAgentDir ? path.dirname(this.config.userAgentDir) : undefined;
+
+    try {
+      this.sessionBackup = await this.sessionBackupFactory({
+        sessionId: this.id,
+        workingDirectory: this.config.workingDirectory,
+        homedir: userHome,
+      });
+      this.sessionBackupState = this.sessionBackup.getPublicState();
+    } catch (err) {
+      const reason = `session backup initialization failed: ${String(err)}`;
+      this.sessionBackup = null;
+      this.sessionBackupState = {
+        ...this.sessionBackupState,
+        status: "failed",
+        failureReason: reason,
+        originalSnapshot: { kind: "pending" },
+      };
+    }
+  }
+
+  private async takeAutomaticSessionCheckpoint() {
+    if (!this.sessionBackup) return;
+    try {
+      await this.sessionBackup.createCheckpoint("auto");
+      this.sessionBackupState = this.sessionBackup.getPublicState();
+      this.emitSessionBackupState("auto_checkpoint");
+    } catch (err) {
+      this.emit({ type: "error", sessionId: this.id, message: `automatic checkpoint failed: ${String(err)}` });
+    }
+  }
+
+  private async closeSessionBackup() {
+    await this.sessionBackupInit;
+    if (!this.sessionBackup) return;
+    try {
+      await this.sessionBackup.close();
+      this.sessionBackupState = this.sessionBackup.getPublicState();
+    } catch {
+      // best-effort close
     }
   }
 }

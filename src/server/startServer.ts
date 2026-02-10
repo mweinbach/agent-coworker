@@ -202,6 +202,26 @@ export async function startAgentServer(
             session.setEnableMcp(msg.enableMcp);
             return;
           }
+
+          if (msg.type === "session_backup_get") {
+            void session.getSessionBackupState();
+            return;
+          }
+
+          if (msg.type === "session_backup_checkpoint") {
+            void session.createManualSessionCheckpoint();
+            return;
+          }
+
+          if (msg.type === "session_backup_restore") {
+            void session.restoreSessionBackup(msg.checkpointId);
+            return;
+          }
+
+          if (msg.type === "session_backup_delete_checkpoint") {
+            void session.deleteSessionCheckpoint(msg.checkpointId);
+            return;
+          }
         },
         close(ws) {
           ws.data.session?.dispose("websocket closed");

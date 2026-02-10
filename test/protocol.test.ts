@@ -463,6 +463,96 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("session backup messages", () => {
+    test("session_backup_get parses", () => {
+      const msg = expectOk(JSON.stringify({ type: "session_backup_get", sessionId: "s1" }));
+      expect(msg.type).toBe("session_backup_get");
+      if (msg.type === "session_backup_get") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("session_backup_get missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "session_backup_get" }));
+      expect(err).toContain("session_backup_get missing sessionId");
+    });
+
+    test("session_backup_checkpoint parses", () => {
+      const msg = expectOk(JSON.stringify({ type: "session_backup_checkpoint", sessionId: "s1" }));
+      expect(msg.type).toBe("session_backup_checkpoint");
+      if (msg.type === "session_backup_checkpoint") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("session_backup_checkpoint missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "session_backup_checkpoint" }));
+      expect(err).toContain("session_backup_checkpoint missing sessionId");
+    });
+
+    test("session_backup_restore parses original target (no checkpointId)", () => {
+      const msg = expectOk(JSON.stringify({ type: "session_backup_restore", sessionId: "s1" }));
+      expect(msg.type).toBe("session_backup_restore");
+      if (msg.type === "session_backup_restore") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.checkpointId).toBeUndefined();
+      }
+    });
+
+    test("session_backup_restore parses checkpoint target", () => {
+      const msg = expectOk(
+        JSON.stringify({ type: "session_backup_restore", sessionId: "s1", checkpointId: "cp-0001" })
+      );
+      expect(msg.type).toBe("session_backup_restore");
+      if (msg.type === "session_backup_restore") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.checkpointId).toBe("cp-0001");
+      }
+    });
+
+    test("session_backup_restore missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "session_backup_restore" }));
+      expect(err).toContain("session_backup_restore missing sessionId");
+    });
+
+    test("session_backup_restore non-string checkpointId fails", () => {
+      const err = expectErr(
+        JSON.stringify({ type: "session_backup_restore", sessionId: "s1", checkpointId: 42 })
+      );
+      expect(err).toContain("session_backup_restore invalid checkpointId");
+    });
+
+    test("session_backup_restore empty checkpointId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "session_backup_restore", sessionId: "s1", checkpointId: "" }));
+      expect(err).toContain("session_backup_restore invalid checkpointId");
+    });
+
+    test("session_backup_delete_checkpoint parses", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "session_backup_delete_checkpoint",
+          sessionId: "s1",
+          checkpointId: "cp-0003",
+        })
+      );
+      expect(msg.type).toBe("session_backup_delete_checkpoint");
+      if (msg.type === "session_backup_delete_checkpoint") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.checkpointId).toBe("cp-0003");
+      }
+    });
+
+    test("session_backup_delete_checkpoint missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "session_backup_delete_checkpoint", checkpointId: "cp-1" }));
+      expect(err).toContain("session_backup_delete_checkpoint missing sessionId");
+    });
+
+    test("session_backup_delete_checkpoint missing checkpointId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "session_backup_delete_checkpoint", sessionId: "s1" }));
+      expect(err).toContain("session_backup_delete_checkpoint missing checkpointId");
+    });
+  });
+
   describe("return shape", () => {
     test("ok result has ok: true and msg", () => {
       const result = safeParseClientMessage(

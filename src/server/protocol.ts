@@ -1,6 +1,7 @@
 import { isProviderName } from "../types";
 import type { AgentConfig, SkillEntry, TodoItem } from "../types";
 import type { ProviderStatus } from "../providerStatus";
+import type { SessionBackupPublicState } from "./sessionBackup";
 
 export type ClientMessage =
   | { type: "client_hello"; client: "tui" | "cli" | string; version?: string }
@@ -19,6 +20,10 @@ export type ClientMessage =
   | { type: "set_enable_mcp"; sessionId: string; enableMcp: boolean }
   | { type: "cancel"; sessionId: string }
   | { type: "ping" }
+  | { type: "session_backup_get"; sessionId: string }
+  | { type: "session_backup_checkpoint"; sessionId: string }
+  | { type: "session_backup_restore"; sessionId: string; checkpointId?: string }
+  | { type: "session_backup_delete_checkpoint"; sessionId: string; checkpointId: string }
   | { type: "reset"; sessionId: string };
 
 export type ServerEvent =
@@ -52,6 +57,12 @@ export type ServerEvent =
   | { type: "tools"; sessionId: string; tools: string[] }
   | { type: "skills_list"; sessionId: string; skills: SkillEntry[] }
   | { type: "skill_content"; sessionId: string; skill: SkillEntry; content: string }
+  | {
+      type: "session_backup_state";
+      sessionId: string;
+      reason: "requested" | "auto_checkpoint" | "manual_checkpoint" | "restore" | "delete";
+      backup: SessionBackupPublicState;
+    }
   | { type: "error"; sessionId: string; message: string }
   | { type: "pong"; sessionId: "" };
 
@@ -110,6 +121,35 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
       if (typeof obj.sessionId !== "string") return { ok: false, error: "set_enable_mcp missing sessionId" };
       if (typeof obj.enableMcp !== "boolean") {
         return { ok: false, error: "set_enable_mcp missing/invalid enableMcp" };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "session_backup_get": {
+      if (typeof obj.sessionId !== "string") return { ok: false, error: "session_backup_get missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "session_backup_checkpoint": {
+      if (typeof obj.sessionId !== "string") {
+        return { ok: false, error: "session_backup_checkpoint missing sessionId" };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "session_backup_restore": {
+      if (typeof obj.sessionId !== "string") return { ok: false, error: "session_backup_restore missing sessionId" };
+      if (
+        obj.checkpointId !== undefined &&
+        (typeof obj.checkpointId !== "string" || obj.checkpointId.trim().length === 0)
+      ) {
+        return { ok: false, error: "session_backup_restore invalid checkpointId" };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "session_backup_delete_checkpoint": {
+      if (typeof obj.sessionId !== "string") {
+        return { ok: false, error: "session_backup_delete_checkpoint missing sessionId" };
+      }
+      if (typeof obj.checkpointId !== "string" || !obj.checkpointId) {
+        return { ok: false, error: "session_backup_delete_checkpoint missing checkpointId" };
       }
       return { ok: true, msg: obj as ClientMessage };
     }

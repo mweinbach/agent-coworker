@@ -6,6 +6,7 @@ mock.module("@tauri-apps/plugin-dialog", () => ({
 }));
 
 mock.module("../src/lib/tauriCommands", () => ({
+  appendTranscriptBatch: async () => {},
   appendTranscriptEvent: async () => {},
   deleteTranscript: async () => {},
   loadState: async () => ({ version: 1, workspaces: [], threads: [] }),

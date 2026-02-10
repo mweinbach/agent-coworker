@@ -45,6 +45,7 @@ export interface RunTurnParams {
 
   maxSteps?: number;
   enableMcp?: boolean;
+  abortSignal?: AbortSignal;
 }
 
 type RunTurnDeps = {
@@ -72,7 +73,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
     reasoningText?: string;
     responseMessages: ModelMessage[];
   }> {
-    const { config, system, messages, log, askUser, approveCommand, updateTodos } = params;
+    const { config, system, messages, log, askUser, approveCommand, updateTodos, abortSignal } = params;
 
     const toolCtx = { config, log, askUser, approveCommand, updateTodos };
     const builtInTools = deps.createTools(toolCtx);
@@ -110,6 +111,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
               tools,
               providerOptions: config.providerOptions,
               stopWhen: deps.stepCountIs(1),
+              abortSignal,
             } as any);
 
             const stepResponseMessages = sanitizeGeminiToolCallReplay(
@@ -146,6 +148,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           tools,
           providerOptions: config.providerOptions,
           stopWhen: deps.stepCountIs(params.maxSteps ?? 100),
+          abortSignal,
         } as any);
       } finally {
         try {

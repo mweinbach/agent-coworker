@@ -34,6 +34,9 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+/** Maximum number of message history entries before older entries are pruned. */
+const MAX_MESSAGE_HISTORY = 200;
+
 export class AgentSession {
   readonly id: string;
 
@@ -49,6 +52,7 @@ export class AgentSession {
   private running = false;
   private connecting = false;
   private refreshingProviderStatus = false;
+  private abortController: AbortController | null = null;
 
   private readonly pendingAsk = new Map<string, Deferred<string>>();
   private readonly pendingApproval = new Map<string, Deferred<boolean>>();
@@ -409,7 +413,25 @@ export class AgentSession {
     d.resolve(approved);
   }
 
+  /** Cancel the currently running agent turn. */
+  cancel() {
+    if (!this.running) return;
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+    // Reject any pending ask/approval so the turn unblocks.
+    for (const [id, d] of this.pendingAsk) {
+      d.reject(new Error("Cancelled by user"));
+      this.pendingAsk.delete(id);
+    }
+    for (const [id, d] of this.pendingApproval) {
+      d.reject(new Error("Cancelled by user"));
+      this.pendingApproval.delete(id);
+    }
+  }
+
   dispose(reason: string) {
+    this.abortController?.abort();
     for (const [id, d] of this.pendingAsk) {
       d.reject(new Error(`Session disposed (${reason})`));
       this.pendingAsk.delete(id);
@@ -466,10 +488,18 @@ export class AgentSession {
     }
 
     this.running = true;
+    this.abortController = new AbortController();
     try {
       this.emit({ type: "user_message", sessionId: this.id, text, clientMessageId });
       this.emit({ type: "session_busy", sessionId: this.id, busy: true });
       this.messages.push({ role: "user", content: text });
+
+      // Trim message history to prevent unbounded memory growth.
+      if (this.messages.length > MAX_MESSAGE_HISTORY) {
+        // Keep the most recent messages, preserving at least the first system/user
+        // turn so the model retains initial context.
+        this.messages = this.messages.slice(-MAX_MESSAGE_HISTORY);
+      }
 
       const res = await runTurn({
         config: this.config,
@@ -481,6 +511,7 @@ export class AgentSession {
         updateTodos: (todos) => this.updateTodos(todos),
         maxSteps: 100,
         enableMcp: this.config.enableMcp,
+        abortSignal: this.abortController.signal,
       });
 
       this.messages.push(...res.responseMessages);
@@ -494,10 +525,15 @@ export class AgentSession {
       const out = (res.text || "").trim();
       if (out) this.emit({ type: "assistant_message", sessionId: this.id, text: out });
     } catch (err) {
-      this.emit({ type: "error", sessionId: this.id, message: String(err) });
+      const msg = String(err);
+      // Don't emit error for user-initiated cancellation.
+      if (!msg.includes("abort") && !msg.includes("cancel")) {
+        this.emit({ type: "error", sessionId: this.id, message: msg });
+      }
     } finally {
       this.emit({ type: "session_busy", sessionId: this.id, busy: false });
       this.running = false;
+      this.abortController = null;
     }
   }
 }

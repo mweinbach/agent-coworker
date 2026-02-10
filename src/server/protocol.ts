@@ -17,6 +17,8 @@ export type ClientMessage =
   | { type: "enable_skill"; sessionId: string; skillName: string }
   | { type: "delete_skill"; sessionId: string; skillName: string }
   | { type: "set_enable_mcp"; sessionId: string; enableMcp: boolean }
+  | { type: "cancel"; sessionId: string }
+  | { type: "ping" }
   | { type: "reset"; sessionId: string };
 
 export type ServerEvent =
@@ -50,7 +52,8 @@ export type ServerEvent =
   | { type: "tools"; sessionId: string; tools: string[] }
   | { type: "skills_list"; sessionId: string; skills: SkillEntry[] }
   | { type: "skill_content"; sessionId: string; skill: SkillEntry; content: string }
-  | { type: "error"; sessionId: string; message: string };
+  | { type: "error"; sessionId: string; message: string }
+  | { type: "pong"; sessionId: "" };
 
 export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMessage } | { ok: false; error: string } {
   let parsed: unknown;
@@ -66,11 +69,13 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
 
   switch (obj.type) {
     case "client_hello":
+    case "ping":
       return { ok: true, msg: obj };
     case "user_message":
     case "ask_response":
     case "approval_response":
     case "list_tools":
+    case "cancel":
     case "reset":
       return { ok: true, msg: obj };
     case "refresh_provider_status": {

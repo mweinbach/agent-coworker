@@ -33,7 +33,19 @@ export type AgentSocketOpts = {
   onClose?: (reason: string) => void;
   onOpen?: () => void;
   WebSocketImpl?: typeof WebSocket;
+
+  /** Enable automatic reconnection on unexpected disconnects. Default: false. */
+  autoReconnect?: boolean;
+  /** Maximum number of reconnection attempts before giving up. Default: 10. */
+  maxReconnectAttempts?: number;
+  /** Ping interval in ms for keepalive. 0 disables. Default: 30000. */
+  pingIntervalMs?: number;
 };
+
+/** Base delay for exponential backoff (ms). */
+const BASE_RECONNECT_DELAY_MS = 500;
+/** Maximum delay cap for exponential backoff (ms). */
+const MAX_RECONNECT_DELAY_MS = 30_000;
 
 export class AgentSocket {
   private readonly url: string;
@@ -43,9 +55,24 @@ export class AgentSocket {
   private readonly clientHello: { client: string; version?: string };
   private readonly WebSocketImpl: typeof WebSocket;
 
+  private readonly autoReconnect: boolean;
+  private readonly maxReconnectAttempts: number;
+  private readonly pingIntervalMs: number;
+
   private ws: WebSocket | null = null;
   private ready = deferred<string>();
   private _sessionId: string | null = null;
+
+  // Reconnection state.
+  private reconnectAttempt = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private intentionalClose = false;
+
+  // Keepalive state.
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+
+  // Queue messages sent while disconnected (if autoReconnect is on).
+  private sendQueue: ClientMessage[] = [];
 
   constructor(opts: AgentSocketOpts) {
     this.url = opts.url;
@@ -53,6 +80,10 @@ export class AgentSocket {
     this.onClose = opts.onClose;
     this.onOpen = opts.onOpen;
     this.clientHello = { client: opts.client, version: opts.version };
+
+    this.autoReconnect = opts.autoReconnect ?? false;
+    this.maxReconnectAttempts = opts.maxReconnectAttempts ?? 10;
+    this.pingIntervalMs = opts.pingIntervalMs ?? 30_000;
 
     const impl = opts.WebSocketImpl ?? (globalThis as any).WebSocket;
     if (!impl) {
@@ -71,10 +102,16 @@ export class AgentSocket {
 
   connect() {
     if (this.ws) return;
+    this.intentionalClose = false;
+    this.doConnect();
+  }
+
+  private doConnect() {
     const ws = new this.WebSocketImpl(this.url);
     this.ws = ws;
 
     ws.onopen = () => {
+      this.reconnectAttempt = 0;
       try {
         ws.send(
           JSON.stringify({
@@ -85,6 +122,7 @@ export class AgentSocket {
       } catch {
         // ignore
       }
+      this.startPing();
       this.onOpen?.();
     };
 
@@ -93,9 +131,16 @@ export class AgentSocket {
       if (!msg || typeof msg.type !== "string") return;
 
       const evt = msg as ServerEvent;
+
+      // Pong is an internal keepalive — don't surface to consumer.
+      if (evt.type === "pong") return;
+
       if (evt.type === "server_hello") {
         this._sessionId = evt.sessionId;
         this.ready.resolve(evt.sessionId);
+
+        // Flush any messages that were queued while disconnected.
+        this.flushSendQueue();
       }
 
       this.onEvent(evt);
@@ -106,15 +151,25 @@ export class AgentSocket {
     };
 
     ws.onclose = () => {
-      const reason = "websocket closed";
-      if (!this._sessionId) this.ready.reject(new Error(reason));
+      this.stopPing();
+      const hadSession = !!this._sessionId;
+      if (!this._sessionId) this.ready.reject(new Error("websocket closed"));
       this.ws = null;
       this._sessionId = null;
-      this.onClose?.(reason);
+
+      if (!this.intentionalClose && this.autoReconnect && hadSession) {
+        this.scheduleReconnect();
+      } else {
+        this.onClose?.("websocket closed");
+      }
     };
   }
 
   close() {
+    this.intentionalClose = true;
+    this.cancelReconnect();
+    this.stopPing();
+    this.sendQueue = [];
     try {
       this.ws?.close();
     } catch {
@@ -124,7 +179,14 @@ export class AgentSocket {
   }
 
   send(msg: ClientMessage): boolean {
-    if (!this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) return false;
+    if (!this.ws || this.ws.readyState !== this.WebSocketImpl.OPEN) {
+      // If auto-reconnect is on and this is a user message, queue it.
+      if (this.autoReconnect && !this.intentionalClose) {
+        this.sendQueue.push(msg);
+        return true; // indicate "accepted" even though delivery is deferred
+      }
+      return false;
+    }
     try {
       this.ws.send(JSON.stringify(msg));
       return true;
@@ -132,5 +194,75 @@ export class AgentSocket {
       return false;
     }
   }
-}
 
+  // ---------------------------------------------------------------------------
+  // Reconnection with exponential backoff + jitter
+  // ---------------------------------------------------------------------------
+
+  private scheduleReconnect() {
+    if (this.reconnectAttempt >= this.maxReconnectAttempts) {
+      this.onClose?.("max reconnect attempts exceeded");
+      return;
+    }
+
+    const delay = Math.min(
+      BASE_RECONNECT_DELAY_MS * 2 ** this.reconnectAttempt + Math.random() * 200,
+      MAX_RECONNECT_DELAY_MS
+    );
+    this.reconnectAttempt++;
+
+    // Reset the ready deferred so consumers can await the new session.
+    this.ready = deferred<string>();
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.doConnect();
+    }, delay);
+  }
+
+  private cancelReconnect() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempt = 0;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Keepalive ping
+  // ---------------------------------------------------------------------------
+
+  private startPing() {
+    this.stopPing();
+    if (this.pingIntervalMs <= 0) return;
+    this.pingTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === this.WebSocketImpl.OPEN) {
+        try {
+          this.ws.send(JSON.stringify({ type: "ping" }));
+        } catch {
+          // ignore
+        }
+      }
+    }, this.pingIntervalMs);
+  }
+
+  private stopPing() {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Queue flush
+  // ---------------------------------------------------------------------------
+
+  private flushSendQueue() {
+    if (this.sendQueue.length === 0) return;
+    const queue = this.sendQueue;
+    this.sendQueue = [];
+    for (const msg of queue) {
+      this.send(msg);
+    }
+  }
+}

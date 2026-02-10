@@ -107,6 +107,16 @@ export async function startAgentServer(
           const msg: ClientMessage = parsed.msg;
           if (msg.type === "client_hello") return;
 
+          // Lightweight keepalive (no session required).
+          if (msg.type === "ping") {
+            try {
+              ws.send(JSON.stringify({ type: "pong", sessionId: "" } satisfies ServerEvent));
+            } catch {
+              // ignore
+            }
+            return;
+          }
+
           if (msg.sessionId !== session.id) {
             ws.send(
               JSON.stringify({
@@ -145,6 +155,11 @@ export async function startAgentServer(
 
           if (msg.type === "refresh_provider_status") {
             void session.refreshProviderStatus();
+            return;
+          }
+
+          if (msg.type === "cancel") {
+            session.cancel();
             return;
           }
 

@@ -11,6 +11,7 @@ import { ChatView } from "./ui/ChatView";
 import { SkillsView } from "./ui/SkillsView";
 import { SettingsShell } from "./ui/settings/SettingsShell";
 import { PromptModal } from "./ui/PromptModal";
+import { CheckpointsModal } from "./ui/CheckpointsModal";
 
 function ProviderSelect(props: { value: ProviderName; onChange: (v: ProviderName) => void }) {
   return (
@@ -38,6 +39,8 @@ export default function App() {
   const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
   const applyWorkspaceDefaultsToThread = useAppStore((s) => s.applyWorkspaceDefaultsToThread);
   const newThread = useAppStore((s) => s.newThread);
+  const openCheckpointsModal = useAppStore((s) => s.openCheckpointsModal);
+  const checkpointThread = useAppStore((s) => s.checkpointThread);
 
   useEffect(() => {
     if (ready) return;
@@ -61,6 +64,10 @@ export default function App() {
         const state = useAppStore.getState();
         if (state.promptModal) {
           state.dismissPrompt();
+          return;
+        }
+        if (state.checkpointsModalThreadId) {
+          state.closeCheckpointsModal();
           return;
         }
         if (state.view === "settings") {
@@ -101,6 +108,21 @@ export default function App() {
   const modelListId = `models-top-${provider}`;
 
   const showChatTopbarControls = view === "chat";
+  const canShowBackups = showChatTopbarControls && activeThread?.status === "active";
+  const backup = canShowBackups ? rt?.backup ?? null : null;
+  const backupStatus = backup?.status ?? (canShowBackups && rt?.connected ? "initializing" : "offline");
+  const lastCheckpoint = backup?.checkpoints?.[backup.checkpoints.length - 1] ?? null;
+  const backupLabel =
+    backupStatus === "ready"
+      ? `Backups: ready${lastCheckpoint ? ` · ${lastCheckpoint.id}` : ""}`
+      : backupStatus === "failed"
+        ? "Backups: failed"
+        : backupStatus === "initializing"
+          ? "Backups: starting…"
+          : "Backups: offline";
+  const backupTitle =
+    backup?.status === "failed" ? backup.failureReason ?? "Backups are unavailable for this session." : undefined;
+  const backupActionsDisabled = !canShowBackups || !rt?.connected || !rt?.sessionId || busy;
 
   if (view === "settings") {
     return (
@@ -114,6 +136,7 @@ export default function App() {
           <SettingsShell />
         )}
         <PromptModal />
+        <CheckpointsModal />
       </div>
     );
   }
@@ -139,6 +162,29 @@ export default function App() {
           <div className="topbarRight">
             {showChatTopbarControls ? (
               <>
+                {canShowBackups && activeThread ? (
+                  <>
+                    <button
+                      className="chip chipQuiet chipButton"
+                      type="button"
+                      onClick={() => openCheckpointsModal(activeThread.id)}
+                      title={backupTitle}
+                    >
+                      {backupLabel}
+                    </button>
+
+                    <button
+                      className="iconButton"
+                      type="button"
+                      onClick={() => checkpointThread(activeThread.id)}
+                      disabled={backupActionsDisabled || rt?.backupUi?.checkpointing === true || rt?.backup?.status !== "ready"}
+                      title={rt?.backup?.status !== "ready" ? "Backups must be ready first" : "Create a checkpoint now"}
+                    >
+                      {rt?.backupUi?.checkpointing ? "Checkpointing…" : "Checkpoint"}
+                    </button>
+                  </>
+                ) : null}
+
                 {activeWorkspace ? (
                   <>
                     <div className="chip" title="Provider and model (workspace default)">
@@ -220,6 +266,7 @@ export default function App() {
       </main>
 
       <PromptModal />
+      <CheckpointsModal />
     </div>
   );
 }

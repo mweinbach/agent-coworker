@@ -41,6 +41,8 @@ export function Sidebar() {
   const openSkills = useAppStore((s) => s.openSkills);
   const openSettings = useAppStore((s) => s.openSettings);
   const archiveThread = useAppStore((s) => s.archiveThread);
+  const openCheckpointsModal = useAppStore((s) => s.openCheckpointsModal);
+  const checkpointThread = useAppStore((s) => s.checkpointThread);
 
   const [ctxMenu, setCtxMenu] = useState<
     | {
@@ -81,7 +83,7 @@ export function Sidebar() {
   const ctxStyle = useMemo(() => {
     if (!ctxMenu) return null;
     const w = 240;
-    const h = ctxMenu.kind === "thread" ? 140 : 90;
+    const h = ctxMenu.kind === "thread" ? 210 : 90;
     const left = Math.max(10, Math.min(ctxMenu.x, window.innerWidth - w - 10));
     const top = Math.max(10, Math.min(ctxMenu.y, window.innerHeight - h - 10));
     return { left, top } as const;
@@ -239,6 +241,46 @@ export function Sidebar() {
               <div className="ctxMenuTitle" title={`Workspace: ${ctxMenu.workspaceName}`}>
                 {ctxMenu.threadTitle}
               </div>
+
+              {(() => {
+                const t = threads.find((x) => x.id === ctxMenu.threadId);
+                const rt = threadRuntimeById[ctxMenu.threadId];
+                const canOpen = t?.status === "active";
+                const canCheckpoint =
+                  canOpen && rt?.sessionId && rt.busy !== true && rt?.backup?.status === "ready" && rt?.backupUi?.checkpointing !== true;
+
+                if (!canOpen) return null;
+
+                return (
+                  <>
+                    <button
+                      className="ctxMenuItem"
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        openCheckpointsModal(ctxMenu.threadId);
+                        setCtxMenu(null);
+                      }}
+                    >
+                      Backups / checkpoints…
+                    </button>
+
+                    {canCheckpoint ? (
+                      <button
+                        className="ctxMenuItem"
+                        role="menuitem"
+                        type="button"
+                        onClick={() => {
+                          checkpointThread(ctxMenu.threadId);
+                          setCtxMenu(null);
+                        }}
+                      >
+                        Checkpoint now
+                      </button>
+                    ) : null}
+                  </>
+                );
+              })()}
 
               <button
                 className="ctxMenuItem"

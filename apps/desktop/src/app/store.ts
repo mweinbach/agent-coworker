@@ -107,6 +107,15 @@ function defaultThreadRuntime(): ThreadRuntime {
     enableMcp: null,
     busy: false,
     feed: [],
+    backup: null,
+    backupReason: null,
+    backupUi: {
+      refreshing: false,
+      checkpointing: false,
+      restoring: false,
+      deletingById: {},
+      error: null,
+    },
     transcriptOnly: false,
   };
 }
@@ -282,6 +291,7 @@ export type AppStoreState = {
   threadRuntimeById: Record<string, ThreadRuntime>;
 
   promptModal: PromptModalState;
+  checkpointsModalThreadId: string | null;
   notifications: Notification[];
 
   providerStatusByName: Partial<Record<ProviderName, ProviderStatus>>;
@@ -328,6 +338,13 @@ export type AppStoreState = {
   answerAsk: (threadId: string, requestId: string, answer: string) => void;
   answerApproval: (threadId: string, requestId: string, approved: boolean) => void;
   dismissPrompt: () => void;
+
+  openCheckpointsModal: (threadId: string) => void;
+  closeCheckpointsModal: () => void;
+  refreshThreadBackups: (threadId: string) => void;
+  checkpointThread: (threadId: string) => void;
+  restoreThreadBackup: (threadId: string, checkpointId?: string) => void;
+  deleteThreadCheckpoint: (threadId: string, checkpointId: string) => void;
 };
 
 // ---------------------------------------------------------------------------
@@ -591,7 +608,19 @@ function ensureThreadSocket(
         return {
           threadRuntimeById: {
             ...s.threadRuntimeById,
-            [threadId]: { ...rt, connected: false, sessionId: null, busy: false },
+            [threadId]: {
+              ...rt,
+              connected: false,
+              sessionId: null,
+              busy: false,
+              backupUi: {
+                ...rt.backupUi,
+                refreshing: false,
+                checkpointing: false,
+                restoring: false,
+                deletingById: {},
+              },
+            },
           },
           threads: s.threads.map((t) =>
             t.id === threadId
@@ -710,13 +739,22 @@ function handleThreadEvent(
       return {
         threadRuntimeById: {
           ...s.threadRuntimeById,
-          [threadId]: { ...rt, connected: true, sessionId: evt.sessionId, config: evt.config },
+          [threadId]: {
+            ...rt,
+            connected: true,
+            sessionId: evt.sessionId,
+            config: evt.config,
+            backupUi: { ...rt.backupUi, refreshing: true, error: null },
+          },
         },
       };
     });
 
     // Apply workspace defaults.
     void useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+
+    // Sync session backup/checkpoint state (auto-snapshots happen on the server).
+    sendThread(get, threadId, (sessionId) => ({ type: "session_backup_get", sessionId }));
 
     // If we queued a first message (fork/continue), send it after handshake.
     if (pendingFirstMessage && pendingFirstMessage.trim()) {
@@ -761,6 +799,73 @@ function handleThreadEvent(
         threadRuntimeById: {
           ...s.threadRuntimeById,
           [threadId]: { ...rt, config: evt.config },
+        },
+      };
+    });
+    return;
+  }
+
+  if (evt.type === "session_backup_state") {
+    set((s) => {
+      const rt = s.threadRuntimeById[threadId];
+      if (!rt) return {};
+
+      let nextNotifications = s.notifications;
+
+      // Avoid noisy notifications for auto checkpoints; surface manual actions and failures.
+      if (evt.backup.status === "failed") {
+        const reason = evt.backup.failureReason ?? "Session backup failed.";
+        nextNotifications = pushNotification(nextNotifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Backups unavailable",
+          detail: reason,
+        });
+      } else if (evt.reason === "manual_checkpoint") {
+        const last = evt.backup.checkpoints[evt.backup.checkpoints.length - 1];
+        nextNotifications = pushNotification(nextNotifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "info",
+          title: "Checkpoint created",
+          detail: last ? `${last.id} (${last.trigger})` : undefined,
+        });
+      } else if (evt.reason === "restore") {
+        nextNotifications = pushNotification(nextNotifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "info",
+          title: "Workspace restored",
+        });
+      } else if (evt.reason === "delete") {
+        nextNotifications = pushNotification(nextNotifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "info",
+          title: "Checkpoint deleted",
+        });
+      }
+
+      const failureReason = evt.backup.status === "failed" ? evt.backup.failureReason ?? "Session backup failed." : null;
+
+      return {
+        notifications: nextNotifications,
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: {
+            ...rt,
+            backup: evt.backup,
+            backupReason: evt.reason,
+            backupUi: {
+              ...rt.backupUi,
+              refreshing: false,
+              checkpointing: false,
+              restoring: false,
+              deletingById: {},
+              error: failureReason,
+            },
+          },
         },
       };
     });
@@ -848,9 +953,35 @@ function handleThreadEvent(
 
   if (evt.type === "error") {
     pushFeedItem(set, threadId, { id: makeId(), kind: "error", ts: nowIso(), message: evt.message });
-    set((s) => ({
-      notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Agent error", detail: evt.message }),
-    }));
+    set((s) => {
+      const rt = s.threadRuntimeById[threadId];
+      const isBackupError = /\b(checkpoint|backup)\b/i.test(evt.message);
+      return {
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Agent error",
+          detail: evt.message,
+        }),
+        threadRuntimeById: rt
+          ? {
+              ...s.threadRuntimeById,
+              [threadId]: {
+                ...rt,
+                backupUi: {
+                  ...rt.backupUi,
+                  refreshing: false,
+                  checkpointing: false,
+                  restoring: false,
+                  deletingById: {},
+                  error: isBackupError ? evt.message : rt.backupUi.error,
+                },
+              },
+            }
+          : s.threadRuntimeById,
+      };
+    });
     return;
   }
 }
@@ -872,6 +1003,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   threadRuntimeById: {},
 
   promptModal: null,
+  checkpointsModalThreadId: null,
   notifications: [],
 
   providerStatusByName: {},
@@ -992,6 +1124,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       const remainingThreads = s.threads.filter((t) => t.id !== threadId);
       const selectedThreadId = s.selectedThreadId === threadId ? null : s.selectedThreadId;
       const nextPromptModal = s.promptModal?.threadId === threadId ? null : s.promptModal;
+      const nextCheckpointsModalThreadId = s.checkpointsModalThreadId === threadId ? null : s.checkpointsModalThreadId;
 
       const nextThreadRuntimeById = { ...s.threadRuntimeById };
       delete nextThreadRuntimeById[threadId];
@@ -1000,6 +1133,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
         threads: remainingThreads,
         selectedThreadId,
         promptModal: nextPromptModal,
+        checkpointsModalThreadId: nextCheckpointsModalThreadId,
         threadRuntimeById: nextThreadRuntimeById,
       };
     });
@@ -1381,4 +1515,212 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   },
 
   dismissPrompt: () => set({ promptModal: null }),
+
+  openCheckpointsModal: (threadId: string) => {
+    set({ checkpointsModalThreadId: threadId });
+    get().refreshThreadBackups(threadId);
+  },
+
+  closeCheckpointsModal: () => set({ checkpointsModalThreadId: null }),
+
+  refreshThreadBackups: (threadId: string) => {
+    const thread = get().threads.find((t) => t.id === threadId);
+    if (!thread || thread.status !== "active") {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "info",
+          title: "Backups are session-scoped",
+          detail: "Backups/checkpoints are available only while a session is active and connected.",
+        }),
+      }));
+      return;
+    }
+
+    const rt = get().threadRuntimeById[threadId];
+    set((s) => {
+      const cur = s.threadRuntimeById[threadId];
+      if (!cur) return {};
+      return {
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: { ...cur, backupUi: { ...cur.backupUi, refreshing: true, error: null } },
+        },
+      };
+    });
+
+    const ok = sendThread(get, threadId, (sessionId) => ({ type: "session_backup_get", sessionId }));
+    if (!ok) {
+      set((s) => {
+        const cur = s.threadRuntimeById[threadId];
+        return {
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to request backup state. Reconnect the session and try again.",
+          }),
+          threadRuntimeById: cur
+            ? {
+                ...s.threadRuntimeById,
+                [threadId]: { ...cur, backupUi: { ...cur.backupUi, refreshing: false } },
+              }
+            : s.threadRuntimeById,
+        };
+      });
+      return;
+    }
+
+    appendThreadTranscript(threadId, "client", { type: "session_backup_get", sessionId: rt?.sessionId });
+  },
+
+  checkpointThread: (threadId: string) => {
+    const thread = get().threads.find((t) => t.id === threadId);
+    if (!thread || thread.status !== "active") return;
+
+    const rt = get().threadRuntimeById[threadId];
+    if (!rt?.sessionId || rt.busy) return;
+
+    set((s) => {
+      const cur = s.threadRuntimeById[threadId];
+      if (!cur) return {};
+      return {
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: { ...cur, backupUi: { ...cur.backupUi, checkpointing: true, error: null } },
+        },
+      };
+    });
+
+    const ok = sendThread(get, threadId, (sessionId) => ({ type: "session_backup_checkpoint", sessionId }));
+    if (!ok) {
+      set((s) => {
+        const cur = s.threadRuntimeById[threadId];
+        return {
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to create checkpoint.",
+          }),
+          threadRuntimeById: cur
+            ? {
+                ...s.threadRuntimeById,
+                [threadId]: { ...cur, backupUi: { ...cur.backupUi, checkpointing: false } },
+              }
+            : s.threadRuntimeById,
+        };
+      });
+      return;
+    }
+
+    appendThreadTranscript(threadId, "client", { type: "session_backup_checkpoint", sessionId: rt.sessionId });
+  },
+
+  restoreThreadBackup: (threadId: string, checkpointId?: string) => {
+    const thread = get().threads.find((t) => t.id === threadId);
+    if (!thread || thread.status !== "active") return;
+
+    const rt = get().threadRuntimeById[threadId];
+    if (!rt?.sessionId || rt.busy) return;
+
+    set((s) => {
+      const cur = s.threadRuntimeById[threadId];
+      if (!cur) return {};
+      return {
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: { ...cur, backupUi: { ...cur.backupUi, restoring: true, error: null } },
+        },
+      };
+    });
+
+    const ok = sendThread(get, threadId, (sessionId) => ({
+      type: "session_backup_restore",
+      sessionId,
+      checkpointId,
+    }));
+    if (!ok) {
+      set((s) => {
+        const cur = s.threadRuntimeById[threadId];
+        return {
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to restore checkpoint.",
+          }),
+          threadRuntimeById: cur
+            ? {
+                ...s.threadRuntimeById,
+                [threadId]: { ...cur, backupUi: { ...cur.backupUi, restoring: false } },
+              }
+            : s.threadRuntimeById,
+        };
+      });
+      return;
+    }
+
+    appendThreadTranscript(threadId, "client", { type: "session_backup_restore", sessionId: rt.sessionId, checkpointId });
+  },
+
+  deleteThreadCheckpoint: (threadId: string, checkpointId: string) => {
+    const thread = get().threads.find((t) => t.id === threadId);
+    if (!thread || thread.status !== "active") return;
+
+    const rt = get().threadRuntimeById[threadId];
+    if (!rt?.sessionId || rt.busy) return;
+
+    set((s) => {
+      const cur = s.threadRuntimeById[threadId];
+      if (!cur) return {};
+      return {
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: {
+            ...cur,
+            backupUi: {
+              ...cur.backupUi,
+              deletingById: { ...cur.backupUi.deletingById, [checkpointId]: true },
+              error: null,
+            },
+          },
+        },
+      };
+    });
+
+    const ok = sendThread(get, threadId, (sessionId) => ({
+      type: "session_backup_delete_checkpoint",
+      sessionId,
+      checkpointId,
+    }));
+    if (!ok) {
+      set((s) => {
+        const cur = s.threadRuntimeById[threadId];
+        if (!cur) return {};
+        const nextDeleting = { ...cur.backupUi.deletingById };
+        delete nextDeleting[checkpointId];
+        return {
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to delete checkpoint.",
+          }),
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: { ...cur, backupUi: { ...cur.backupUi, deletingById: nextDeleting } },
+          },
+        };
+      });
+      return;
+    }
+
+    appendThreadTranscript(threadId, "client", { type: "session_backup_delete_checkpoint", sessionId: rt.sessionId, checkpointId });
+  },
 }));

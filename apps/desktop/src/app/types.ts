@@ -70,9 +70,23 @@ export type ThreadRuntime = {
   enableMcp: boolean | null;
   busy: boolean;
   feed: FeedItem[];
+  backup: SessionBackupPublicState | null;
+  backupReason: SessionBackupReason | null;
+  backupUi: {
+    refreshing: boolean;
+    checkpointing: boolean;
+    restoring: boolean;
+    deletingById: Record<string, boolean>;
+    error: string | null;
+  };
   // When true, "sending" will fork into a new live thread.
   transcriptOnly: boolean;
 };
+
+export type SessionBackupStateEvent = Extract<ServerEvent, { type: "session_backup_state" }>;
+export type SessionBackupPublicState = SessionBackupStateEvent["backup"];
+export type SessionBackupReason = SessionBackupStateEvent["reason"];
+export type SessionBackupCheckpoint = SessionBackupPublicState["checkpoints"][number];
 
 export type ConnectDraft = {
   provider: ProviderName;

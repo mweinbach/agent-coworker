@@ -110,6 +110,7 @@
   .chip { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.72); }
   .chip select, .chip input { color: inherit; }
   .chipQuiet { color: rgba(255, 255, 255, 0.58); background: rgba(255, 255, 255, 0.04); }
+  .chipButton:hover { background: rgba(255, 255, 255, 0.08); }
 
   .modalOverlay { background: rgba(0, 0, 0, 0.45); }
   .modal { background: rgba(42, 42, 42, 0.98); border-color: rgba(255, 255, 255, 0.1); }
@@ -121,6 +122,10 @@
   .modalTextInput { background: rgba(255, 255, 255, 0.04); border-color: rgba(255, 255, 255, 0.12); color: var(--text); }
   .modalTextInput:focus { border-color: rgba(255, 255, 255, 0.28); }
   .approvalCommandCode { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.06); }
+
+  .checkpointStatus { background: rgba(255, 255, 255, 0.04); }
+  .checkpointRow { background: rgba(255, 255, 255, 0.04); }
+  .checkpointError { border-color: rgba(232, 96, 96, 0.28); }
 
   .toggleRow { color: rgba(255, 255, 255, 0.62); }
 
@@ -492,6 +497,20 @@ a {
 
 .chip input {
   width: 160px;
+}
+
+.chipButton {
+  cursor: pointer;
+  font: inherit;
+}
+
+.chipButton:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.chipButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .content {
@@ -895,6 +914,104 @@ a {
   white-space: pre-wrap;
   word-break: break-word;
   text-align: left;
+}
+
+.checkpointHeaderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.checkpointTitle {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.checkpointStatus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.checkpointStatusLabel {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+.checkpointStatusValue {
+  font-weight: 650;
+}
+
+.checkpointError {
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(194, 59, 59, 0.24);
+  background: var(--danger-bg);
+  color: var(--text);
+}
+
+.checkpointToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.checkpointList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 320px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.checkpointEmpty {
+  padding: 4px 2px;
+  color: var(--muted);
+}
+
+.checkpointRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.checkpointRowMain {
+  min-width: 0;
+}
+
+.checkpointRowTitle {
+  font-weight: 650;
+}
+
+.checkpointRowMeta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 360px;
+}
+
+.checkpointRowActions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .skillsLayout {

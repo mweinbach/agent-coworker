@@ -182,6 +182,11 @@ export class AgentSession {
 
   private async refreshSkillsList() {
     const skills = await discoverSkills(this.config.skillsDirs, { includeDisabled: true });
+    // Keep the cached metadata used by skill tool descriptions in sync with the
+    // current enabled set so subsequent turns don't advertise stale skills.
+    this.discoveredSkills = skills
+      .filter((s) => s.enabled)
+      .map((s) => ({ name: s.name, description: s.description }));
     this.emit({ type: "skills_list", sessionId: this.id, skills });
   }
 

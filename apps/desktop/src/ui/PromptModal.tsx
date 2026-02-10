@@ -18,19 +18,21 @@ export function PromptModal() {
 
   const content = useMemo(() => {
     if (!modal) return null;
+
     if (modal.kind === "ask") {
       const opts = modal.prompt.options ?? [];
       const hasOptions = opts.length > 0;
       return (
         <div className="modal">
-          <div className="modalTitle">Question</div>
-          <div className="modalBody">{modal.prompt.question}</div>
+          <div className="modalTitle modalTitleCenter">Question</div>
+          <div className="modalBody modalBodyCenter">{modal.prompt.question}</div>
+
           {hasOptions ? (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <div className="modalOptionsRow">
               {opts.map((o) => (
                 <button
                   key={o}
-                  className="modalButton modalButtonPrimary"
+                  className="modalButton modalButtonOutline"
                   type="button"
                   onClick={() => answerAsk(modal.threadId, modal.prompt.requestId, o)}
                 >
@@ -38,33 +40,39 @@ export function PromptModal() {
                 </button>
               ))}
             </div>
-          ) : (
-            <div style={{ display: "grid", gap: 10 }}>
-              <input
-                value={freeText}
-                onChange={(e) => setFreeText(e.currentTarget.value)}
-                placeholder="Type your answer…"
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 12,
-                  border: "1px solid rgba(0,0,0,0.12)",
-                  outline: "none",
-                }}
-              />
-              <div className="modalActions">
-                <button className="modalButton" type="button" onClick={dismiss}>
-                  Cancel
-                </button>
-                <button
-                  className="modalButton modalButtonPrimary"
-                  type="button"
-                  onClick={() => answerAsk(modal.threadId, modal.prompt.requestId, freeText)}
-                >
-                  Send
-                </button>
-              </div>
+          ) : null}
+
+          <div className="modalTextInputGroup">
+            <input
+              value={freeText}
+              onChange={(e) => setFreeText(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && freeText.trim()) {
+                  e.preventDefault();
+                  answerAsk(modal.threadId, modal.prompt.requestId, freeText);
+                }
+              }}
+              placeholder={hasOptions ? "Or type a custom answer\u2026" : "Type your answer\u2026"}
+              className="modalTextInput"
+              autoFocus={!hasOptions}
+            />
+            <button
+              className="modalButton modalButtonPrimary"
+              type="button"
+              disabled={!freeText.trim()}
+              onClick={() => answerAsk(modal.threadId, modal.prompt.requestId, freeText)}
+            >
+              Send
+            </button>
+          </div>
+
+          {!hasOptions ? (
+            <div className="modalActions">
+              <button className="modalButton" type="button" onClick={dismiss}>
+                Cancel
+              </button>
             </div>
-          )}
+          ) : null}
         </div>
       );
     }
@@ -73,16 +81,14 @@ export function PromptModal() {
       const danger = modal.prompt.dangerous === true;
       return (
         <div className="modal">
-          <div className="modalTitle">Command approval</div>
-          <div className={"inlineCard" + (danger ? " inlineCardDanger" : " inlineCardWarn")}>
-            <div style={{ fontWeight: 650, marginBottom: 8 }}>
+          <div className="modalTitle modalTitleCenter">Command approval</div>
+          <div className={"approvalCommandCard" + (danger ? " approvalCommandCardDanger" : "")}>
+            <div className="approvalCommandLabel">
               {danger ? "Dangerous command" : "Command"}
             </div>
-            <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: 12 }}>
-              {modal.prompt.command}
-            </div>
+            <code className="approvalCommandCode">{modal.prompt.command}</code>
           </div>
-          <div className="modalActions">
+          <div className="modalActions" style={{ justifyContent: "center" }}>
             <button className="modalButton" type="button" onClick={() => answerApproval(modal.threadId, modal.prompt.requestId, false)}>
               Deny
             </button>

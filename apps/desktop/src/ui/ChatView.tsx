@@ -12,12 +12,78 @@ import type { FeedItem } from "../app/types";
 const REMARK_PLUGINS = [remarkGfm];
 const REHYPE_PLUGINS = [rehypeSanitize];
 
+// ---------------------------------------------------------------------------
+// Tool call log parser
+// ---------------------------------------------------------------------------
+
+type ParsedToolLog = {
+  sub?: string;
+  dir: ">" | "<";
+  name: string;
+  payload: Record<string, unknown> | string;
+};
+
+const TOOL_LOG_RE = /^(?:\[(?<sub>sub:[^\]]+)\]\s+)?tool(?<dir>[><])\s+(?<name>\w+)\s+(?<json>\{.*\})$/;
+
+function parseToolLogLine(line: string): ParsedToolLog | null {
+  const m = line.match(TOOL_LOG_RE);
+  if (!m?.groups) return null;
+  const dir = m.groups.dir as ">" | "<";
+  const name = m.groups.name;
+  let payload: Record<string, unknown> | string = m.groups.json;
+  try {
+    payload = JSON.parse(m.groups.json);
+  } catch {
+    // keep raw string
+  }
+  return { sub: m.groups.sub, dir, name, payload };
+}
+
+function truncateValue(value: unknown, maxLen = 48): string {
+  const s = typeof value === "string" ? value : JSON.stringify(value);
+  if (s.length <= maxLen) return s;
+  return s.slice(0, maxLen - 1) + "\u2026";
+}
+
 const Markdown = memo(function Markdown(props: { text: string }) {
   return (
     <div className="markdown">
       <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>
         {props.text}
       </ReactMarkdown>
+    </div>
+  );
+});
+
+const ToolCallCard = memo(function ToolCallCard(props: { parsed: ParsedToolLog }) {
+  const { dir, name, payload } = props.parsed;
+  const isCall = dir === ">";
+  const arrow = isCall ? "\u2192" : "\u2190";
+  const cardClass = "toolCallCard" + (isCall ? " toolCallCardOut" : " toolCallCardIn");
+
+  const entries: Array<[string, unknown]> =
+    typeof payload === "object" && payload !== null ? Object.entries(payload) : [];
+
+  return (
+    <div className={cardClass}>
+      <div className="toolCallHeader">
+        <span className="toolCallArrow">{arrow}</span>
+        <span className="toolCallName">{name}</span>
+      </div>
+      {entries.length > 0 ? (
+        <div className="toolCallParams">
+          {entries.map(([key, val]) => (
+            <div key={key} className="toolCallParam">
+              <span className="toolCallParamKey">{key}:</span>{" "}
+              <span className="toolCallParamVal">{truncateValue(val)}</span>
+            </div>
+          ))}
+        </div>
+      ) : typeof payload === "string" ? (
+        <div className="toolCallParams">
+          <span className="toolCallParamVal">{truncateValue(payload, 80)}</span>
+        </div>
+      ) : null}
     </div>
   );
 });
@@ -71,6 +137,14 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
   }
 
   if (item.kind === "log") {
+    const parsed = parseToolLogLine(item.line);
+    if (parsed) {
+      return (
+        <div className="feedItem">
+          <ToolCallCard parsed={parsed} />
+        </div>
+      );
+    }
     return (
       <div className="feedItem">
         <div className="inlineCard">

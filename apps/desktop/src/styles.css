@@ -98,6 +98,10 @@
   .stopIcon { background: #1a1a1a; }
   .sendArrow { border-bottom-color: #1a1a1a; }
 
+  .toolCallCardOut { background: rgba(255, 255, 255, 0.03); border-left-color: rgba(255, 255, 255, 0.18); }
+  .toolCallCardIn { background: rgba(80, 200, 120, 0.06); border-left-color: rgba(80, 200, 120, 0.28); }
+  .toolCallName { background: rgba(255, 255, 255, 0.08); }
+
   .bubble { background: rgba(50, 50, 50, 0.92); }
   .bubbleUser { background: rgba(255, 255, 255, 0.88); color: #1a1a1a; }
   .metaLine { color: rgba(255, 255, 255, 0.42); }
@@ -112,6 +116,11 @@
   .modalBody { color: rgba(255, 255, 255, 0.72); }
   .modalButton { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.12); color: var(--text); }
   .modalButtonPrimary { background: rgba(255, 255, 255, 0.88); color: #1a1a1a; border-color: rgba(255, 255, 255, 0.14); }
+  .modalButtonOutline { border-color: rgba(255, 255, 255, 0.2); color: var(--text); }
+  .modalButtonOutline:hover { background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.35); }
+  .modalTextInput { background: rgba(255, 255, 255, 0.04); border-color: rgba(255, 255, 255, 0.12); color: var(--text); }
+  .modalTextInput:focus { border-color: rgba(255, 255, 255, 0.28); }
+  .approvalCommandCode { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.06); }
 
   .toggleRow { color: rgba(255, 255, 255, 0.62); }
 
@@ -661,6 +670,78 @@ a {
   background: var(--warn-bg);
 }
 
+/* ---------------------------------------------------------------------------
+   Tool call cards (parsed log items)
+   --------------------------------------------------------------------------- */
+
+.toolCallCard {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.toolCallCardOut {
+  background: rgba(0, 0, 0, 0.02);
+  border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.toolCallCardIn {
+  background: rgba(0, 128, 64, 0.04);
+  border-left: 3px solid rgba(0, 128, 64, 0.22);
+}
+
+.toolCallHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolCallArrow {
+  color: var(--muted);
+  font-size: 14px;
+  flex: 0 0 auto;
+}
+
+.toolCallName {
+  font-weight: 650;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.05);
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.toolCallParams {
+  margin-top: 4px;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toolCallParam {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.toolCallParamKey {
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.toolCallParamVal {
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 480px;
+}
+
 .toggleRow {
   display: flex;
   align-items: center;
@@ -689,10 +770,10 @@ a {
   border: 1px solid rgba(0, 0, 0, 0.12);
   background: rgba(255, 255, 255, 0.98);
   box-shadow: var(--shadow);
-  padding: 14px;
+  padding: 22px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
 .modalTitle {
@@ -730,6 +811,90 @@ a {
   background: rgba(194, 59, 59, 0.92);
   color: #ffffff;
   border-color: rgba(194, 59, 59, 0.2);
+}
+
+.modalTitleCenter {
+  text-align: center;
+}
+
+.modalBodyCenter {
+  text-align: center;
+}
+
+.modalOptionsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.modalButtonOutline {
+  background: transparent;
+  border: 1.5px solid rgba(0, 0, 0, 0.18);
+  border-radius: 999px;
+  padding: 9px 18px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.modalButtonOutline:hover {
+  background: rgba(0, 0, 0, 0.05);
+  border-color: rgba(0, 0, 0, 0.35);
+}
+
+.modalTextInputGroup {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.modalTextInput {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  outline: none;
+  background: rgba(0, 0, 0, 0.02);
+  font: inherit;
+}
+
+.modalTextInput:focus {
+  border-color: rgba(0, 0, 0, 0.28);
+}
+
+.approvalCommandCard {
+  border: 1px solid rgba(162, 104, 0, 0.22);
+  background: var(--warn-bg);
+  border-radius: 14px;
+  padding: 14px 16px;
+  text-align: center;
+}
+
+.approvalCommandCardDanger {
+  border-color: rgba(194, 59, 59, 0.24);
+  background: var(--danger-bg);
+}
+
+.approvalCommandLabel {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.approvalCommandCode {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
 }
 
 .skillsLayout {
@@ -1672,10 +1837,12 @@ a {
 .iconButton,
 .sendButton,
 .modalButton,
+.modalButtonOutline,
 .settingsNavItem,
 .settingsBackButton,
 .settingsProviderListRow,
-.skillsItem {
+.skillsItem,
+.toolCallCard {
   transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
 }
 

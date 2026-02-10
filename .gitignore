@@ -1,5 +1,21 @@
 node_modules/
 
+# Build output
+dist/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Frontend tooling caches
+**/.vite/
+**/.vite-temp/
+.turbo/
+.cache/
+
+# Tauri / Rust build output
+**/src-tauri/target/
+**/src-tauri/gen/
+
 # Agent runtime dirs
 output/
 uploads/
@@ -8,8 +24,14 @@ uploads/
 # Env / misc
 .env
 .env.*
+!.env.example
+!.env.template
 *.log
 .DS_Store
 
 # Local editor / tool state
 .claude/
+.vscode/
+.idea/
+*.swp
+*~

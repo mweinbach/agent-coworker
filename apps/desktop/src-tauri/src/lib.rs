@@ -376,8 +376,8 @@ async fn start_workspace_server(
     yolo: bool,
 ) -> CommandResult<StartServerResponse> {
     // Validate inputs (Findings 6.2, 6.3).
-    validate_safe_id(&workspace_id, "workspace_id").map_err(|e| e.to_string())?;
-    validate_workspace_path(&workspace_path).map_err(|e| e.to_string())?;
+    validate_safe_id(&workspace_id, "workspace_id")?;
+    validate_workspace_path(&workspace_path)?;
 
     // Check for existing running server. Hold lock for the full duration to
     // prevent TOCTOU races where two callers both pass the check and spawn
@@ -397,7 +397,10 @@ async fn start_workspace_server(
                 }
                 Err(err) => {
                     map.remove(&workspace_id);
-                    return Err(format!("Failed to check server process status: {err}"));
+                    return Err(AppError::Process(format!(
+                        "Failed to check server process status: {err}"
+                    ))
+                    .into());
                 }
             }
         }
@@ -417,10 +420,11 @@ async fn start_workspace_server(
     let mut cmd = if use_source {
         let server_entry = root.join("src/server/index.ts");
         if !server_entry.exists() {
-            return Err(format!(
+            return Err(AppError::NotFound(format!(
                 "Server entrypoint not found: {}",
                 server_entry.display()
-            ));
+            ))
+            .into());
         }
 
         let mut c = Command::new("bun");
@@ -430,17 +434,18 @@ async fn start_workspace_server(
         let resource_dir = app
             .path()
             .resource_dir()
-            .map_err(|e| format!("Failed to resolve resource dir: {e}"))?;
+            .map_err(|e| AppError::Process(format!("Failed to resolve resource dir: {e}")))?;
 
         let built_in_dir = resource_dir.join("dist");
         if !built_in_dir.exists() {
-            return Err(format!(
+            return Err(AppError::NotFound(format!(
                 "Bundled dist directory not found: {}",
                 built_in_dir.display()
-            ));
+            ))
+            .into());
         }
 
-        let sidecar = find_sidecar_binary(&app).map_err(|e| e.to_string())?;
+        let sidecar = find_sidecar_binary(&app)?;
 
         let mut c = Command::new(sidecar);
         c.current_dir(&resource_dir)
@@ -463,14 +468,14 @@ async fn start_workspace_server(
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("Failed to spawn server process: {e}"))?;
+        .map_err(|e| AppError::Process(format!("Failed to spawn server process: {e}")))?;
 
     // Read first stdout line for startup JSON (Finding 1.2, 1.3: use tokio
     // channels instead of OS threads + blocking mpsc).
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "Failed to capture server stdout".to_string())?;
+        .ok_or_else(|| AppError::Process("Failed to capture server stdout".to_string()))?;
 
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     std::thread::spawn(move || {
@@ -502,19 +507,19 @@ async fn start_workspace_server(
     // Non-blocking wait with increased timeout (Finding 1.3, Finding: 27).
     let first_line = tokio::time::timeout(
         std::time::Duration::from_secs(SERVER_STARTUP_TIMEOUT_SECS),
-        async { rx.await.map_err(|_| "Server stdout reader closed".to_string()) },
+        async {
+            rx.await.map_err(|_| {
+                AppError::Process(
+                    "Failed to read server startup line: server stdout reader closed".to_string(),
+                )
+            })
+        },
     )
     .await
-    .map_err(|_| {
-        format!(
-            "Timed out after {}s waiting for server startup JSON",
-            SERVER_STARTUP_TIMEOUT_SECS
-        )
-    })?
-    .map_err(|e| format!("Failed to read server startup line: {e}"))?;
+    .map_err(|_| AppError::ServerTimeout(SERVER_STARTUP_TIMEOUT_SECS))??;
 
     let listening: ServerListening = serde_json::from_str(first_line.trim())
-        .map_err(|e| format!("Failed to parse server startup JSON: {e}"))?;
+        .map_err(|e| AppError::Process(format!("Failed to parse server startup JSON: {e}")))?;
 
     let url = listening.url.clone();
 

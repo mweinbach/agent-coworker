@@ -370,13 +370,12 @@ export async function getHarnessRunDetail(runRootName: string, runDirName: strin
   const traceTodoEvents = toArray(traceRecord.todoEvents);
   const traceResponseMessages = toArray(traceResult.responseMessages);
 
-  const files = (() => {
-    try {
-      return fs.readdir(runDir);
-    } catch {
-      return Promise.resolve([] as string[]);
-    }
-  })();
+  let files: string[] = [];
+  try {
+    files = await fs.readdir(runDir);
+  } catch {
+    files = [];
+  }
 
   const updatedAtMs = await maxMtimeMs([
     runDir,
@@ -416,7 +415,7 @@ export async function getHarnessRunDetail(runRootName: string, runDirName: strin
     observabilityQueries,
     artifactsIndex,
     toolLogTail: tailLines(toolLogText, 220),
-    files: (await files).sort((a, b) => a.localeCompare(b)),
+    files: files.sort((a, b) => a.localeCompare(b)),
     updatedAtMs,
   };
 }

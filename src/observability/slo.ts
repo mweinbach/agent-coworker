@@ -69,9 +69,39 @@ function toCheckResult(check: HarnessSloCheck, queryResult: ObservabilityQueryRe
     };
   }
 
-  // Treat empty results (e.g., zero errors in log query) as zero, not failure.
-  // This prevents false SLO failures when queries correctly return no rows.
-  const actual = extractNumeric(queryResult.data) ?? 0;
+  // Distinguish between empty results and unparseable data:
+  // - Empty arrays/objects (no errors/data) → treat as 0
+  // - Unparseable data (NaN, invalid strings) → fail the check
+  let actual = extractNumeric(queryResult.data);
+  if (actual === null) {
+    // Check if the data is an empty structure (array/object with no meaningful content)
+    const isEmptyStructure =
+      queryResult.data === null ||
+      queryResult.data === undefined ||
+      (Array.isArray(queryResult.data) && queryResult.data.length === 0) ||
+      (typeof queryResult.data === "object" &&
+        !Array.isArray(queryResult.data) &&
+        (Object.keys(queryResult.data).length === 0 ||
+          (Object.keys(queryResult.data).length === 1 && "result" in queryResult.data && Array.isArray((queryResult.data as any).result) && (queryResult.data as any).result.length === 0)));
+
+    if (isEmptyStructure) {
+      actual = 0; // Treat empty results as zero
+    } else {
+      // Data exists but can't be parsed - this is a failure
+      return {
+        id: check.id,
+        type: check.type,
+        queryType: check.queryType,
+        query: check.query,
+        op: check.op,
+        threshold: check.threshold,
+        windowSec: check.windowSec,
+        actual: null,
+        pass: false,
+        reason: "Unable to derive numeric value from query result",
+      };
+    }
+  }
 
   return {
     id: check.id,

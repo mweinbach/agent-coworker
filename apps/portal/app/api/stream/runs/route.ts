@@ -18,18 +18,24 @@ export async function GET(request: Request) {
     async start(controller) {
       let closed = false;
       let lastDigest = "";
+      let intervalTimer: ReturnType<typeof setInterval> | undefined;
+      let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
       const cleanup = () => {
         if (closed) return;
         closed = true;
-        clearInterval(intervalTimer);
-        clearInterval(heartbeatTimer);
+        if (intervalTimer) clearInterval(intervalTimer);
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
         try {
           controller.close();
         } catch {
           // ignore double-close races
         }
       };
+
+      // Register abort listener before any async operations to ensure it's called
+      // even if the client disconnects during the initial snapshot.
+      request.signal.addEventListener("abort", cleanup);
 
       const sendSnapshot = async () => {
         if (closed) return;
@@ -55,16 +61,14 @@ export async function GET(request: Request) {
 
       await sendSnapshot();
 
-      const intervalTimer = setInterval(() => {
+      intervalTimer = setInterval(() => {
         void sendSnapshot();
       }, intervalMs);
 
-      const heartbeatTimer = setInterval(() => {
+      heartbeatTimer = setInterval(() => {
         if (closed) return;
         controller.enqueue(new TextEncoder().encode(`: heartbeat ${Date.now()}\n\n`));
       }, 12_000);
-
-      request.signal.addEventListener("abort", cleanup);
     },
   });
 

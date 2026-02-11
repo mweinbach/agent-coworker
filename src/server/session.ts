@@ -659,7 +659,8 @@ export class AgentSession {
     try {
       this.emit({ type: "user_message", sessionId: this.id, text, clientMessageId });
       this.emit({ type: "session_busy", sessionId: this.id, busy: true });
-      await emitObservabilityEvent(this.config, {
+      // Telemetry is best-effort; don't block turn execution on network I/O.
+      void emitObservabilityEvent(this.config, {
         name: "agent.turn.started",
         at: new Date().toISOString(),
         status: "ok",
@@ -703,7 +704,8 @@ export class AgentSession {
 
       const out = (res.text || "").trim();
       if (out) this.emit({ type: "assistant_message", sessionId: this.id, text: out });
-      await emitObservabilityEvent(this.config, {
+      // Telemetry is best-effort; don't block turn execution on network I/O.
+      void emitObservabilityEvent(this.config, {
         name: "agent.turn.completed",
         at: new Date().toISOString(),
         status: "ok",
@@ -720,7 +722,8 @@ export class AgentSession {
       if (!msg.includes("abort") && !msg.includes("cancel")) {
         this.emit({ type: "error", sessionId: this.id, message: msg });
       }
-      await emitObservabilityEvent(this.config, {
+      // Telemetry is best-effort; don't block turn execution on network I/O.
+      void emitObservabilityEvent(this.config, {
         name: "agent.turn.failed",
         at: new Date().toISOString(),
         status: "error",

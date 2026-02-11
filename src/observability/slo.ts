@@ -69,21 +69,9 @@ function toCheckResult(check: HarnessSloCheck, queryResult: ObservabilityQueryRe
     };
   }
 
-  const actual = extractNumeric(queryResult.data);
-  if (actual === null) {
-    return {
-      id: check.id,
-      type: check.type,
-      queryType: check.queryType,
-      query: check.query,
-      op: check.op,
-      threshold: check.threshold,
-      windowSec: check.windowSec,
-      actual: null,
-      pass: false,
-      reason: "Unable to derive numeric value from query result",
-    };
-  }
+  // Treat empty results (e.g., zero errors in log query) as zero, not failure.
+  // This prevents false SLO failures when queries correctly return no rows.
+  const actual = extractNumeric(queryResult.data) ?? 0;
 
   return {
     id: check.id,

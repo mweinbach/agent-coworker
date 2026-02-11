@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
 import type { AgentConfig } from "../types";
 import { loadConfig } from "../config";
-import { loadSystemPrompt } from "../prompt";
+import { loadSystemPromptWithSkills } from "../prompt";
 
 import { AgentSession } from "./session";
 import { safeParseClientMessage, type ClientMessage, type ServerEvent } from "./protocol";
@@ -42,7 +42,7 @@ export async function startAgentServer(
   await fs.mkdir(config.outputDirectory, { recursive: true });
   await fs.mkdir(config.uploadsDirectory, { recursive: true });
 
-  const system = await loadSystemPrompt(config);
+  const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
 
   function createServer(port: number): ReturnType<typeof Bun.serve> {
     return Bun.serve<{ session?: AgentSession }>({
@@ -62,6 +62,7 @@ export async function startAgentServer(
           const session = new AgentSession({
             config,
             system,
+            discoveredSkills,
             yolo: opts.yolo,
             connectProviderImpl: opts.connectProviderImpl,
             getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl,

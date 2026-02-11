@@ -13,7 +13,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { loadConfig, getModel as realGetModel } from "../src/config";
 import { runTurnWithDeps } from "../src/agent";
 import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
-import { loadSubAgentPrompt, loadSystemPrompt } from "../src/prompt";
+import { loadSubAgentPrompt, loadSystemPromptWithSkills } from "../src/prompt";
 import type { AgentConfig, ProviderName, TodoItem } from "../src/types";
 import type { ToolContext } from "../src/tools";
 import { createAskTool } from "../src/tools/ask";
@@ -721,7 +721,7 @@ Final response must be a JSON object:
 
     await ensureDir(config.projectAgentDir);
 
-    const system = await loadSystemPrompt(config);
+    const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
 
     const userPrompt = run.prompt({ runId: run.id, runDir, repoDir });
     const inputMessages: ModelMessage[] = [{ role: "user", content: userPrompt }];
@@ -794,6 +794,7 @@ Final response must be a JSON object:
             askUser,
             approveCommand,
             updateTodos,
+            discoveredSkills,
             maxSteps: run.maxSteps ?? 100,
             enableMcp: false,
           },

@@ -10,4 +10,7 @@ export interface ToolContext {
   approveCommand: (command: string) => Promise<boolean>;
 
   updateTodos?: (todos: TodoItem[]) => void;
+
+  /** Lightweight skill metadata for dynamic tool descriptions. Populated from skill discovery. */
+  availableSkills?: Array<{ name: string; description: string }>;
 }

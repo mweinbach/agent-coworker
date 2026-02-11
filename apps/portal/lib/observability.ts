@@ -91,6 +91,44 @@ function toEndpoints(value: unknown): ObservabilityEndpoints | null {
   return { otlpHttpEndpoint, logsBaseUrl, metricsBaseUrl, tracesBaseUrl };
 }
 
+function readEnvEndpointOverrides(): Partial<ObservabilityEndpoints> {
+  const override: Partial<ObservabilityEndpoints> = {};
+  const entries: Array<[keyof ObservabilityEndpoints, string | undefined]> = [
+    ["otlpHttpEndpoint", process.env.HARNESS_OBS_OTLP_HTTP],
+    ["logsBaseUrl", process.env.HARNESS_OBS_LOGS_URL],
+    ["metricsBaseUrl", process.env.HARNESS_OBS_METRICS_URL],
+    ["tracesBaseUrl", process.env.HARNESS_OBS_TRACES_URL],
+  ];
+  for (const [key, value] of entries) {
+    const normalized = value?.trim();
+    if (!normalized) continue;
+    override[key] = normalized;
+  }
+  return override;
+}
+
+function hasEndpointOverrides(value: Partial<ObservabilityEndpoints>): boolean {
+  return (
+    value.otlpHttpEndpoint !== undefined ||
+    value.logsBaseUrl !== undefined ||
+    value.metricsBaseUrl !== undefined ||
+    value.tracesBaseUrl !== undefined
+  );
+}
+
+function applyEndpointOverrides(
+  endpoints: ObservabilityEndpoints,
+  overrides: Partial<ObservabilityEndpoints>
+): ObservabilityEndpoints {
+  if (!hasEndpointOverrides(overrides)) return endpoints;
+  return {
+    otlpHttpEndpoint: overrides.otlpHttpEndpoint ?? endpoints.otlpHttpEndpoint,
+    logsBaseUrl: overrides.logsBaseUrl ?? endpoints.logsBaseUrl,
+    metricsBaseUrl: overrides.metricsBaseUrl ?? endpoints.metricsBaseUrl,
+    tracesBaseUrl: overrides.tracesBaseUrl ?? endpoints.tracesBaseUrl,
+  };
+}
+
 function hostMappedFallbackEndpoints(): ObservabilityEndpoints {
   return {
     otlpHttpEndpoint: "http://127.0.0.1:14318",
@@ -280,12 +318,8 @@ async function checkHealth(url: string): Promise<boolean> {
 }
 
 export async function resolveObservabilityEndpoints(): Promise<ObservabilityEndpoints> {
-  const fromEnv = toEndpoints({
-    otlpHttpEndpoint: process.env.HARNESS_OBS_OTLP_HTTP,
-    logsBaseUrl: process.env.HARNESS_OBS_LOGS_URL,
-    metricsBaseUrl: process.env.HARNESS_OBS_METRICS_URL,
-    tracesBaseUrl: process.env.HARNESS_OBS_TRACES_URL,
-  });
+  const envOverrides = readEnvEndpointOverrides();
+  const fromEnv = toEndpoints(envOverrides);
   if (fromEnv) return fromEnv;
 
   const repoRoot = await resolveRepoRoot();
@@ -321,7 +355,7 @@ export async function resolveObservabilityEndpoints(): Promise<ObservabilityEndp
   candidates.push(hostMappedFallbackEndpoints());
 
   const unique = dedupeEndpoints(candidates);
-  if (unique.length === 1) return unique[0];
+  if (unique.length === 1) return applyEndpointOverrides(unique[0], envOverrides);
 
   let best = unique[0];
   let bestScore = -1;
@@ -333,7 +367,7 @@ export async function resolveObservabilityEndpoints(): Promise<ObservabilityEndp
     }
   }
 
-  return best;
+  return applyEndpointOverrides(best, envOverrides);
 }
 
 export async function runObservabilityQuery(req: ObservabilityQueryRequest): Promise<ObservabilityQueryResult> {

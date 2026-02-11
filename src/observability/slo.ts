@@ -25,18 +25,29 @@ function compare(actual: number, op: HarnessSloOperator, threshold: number): boo
   }
 }
 
-function extractNumeric(value: unknown): number | null {
+function parseFiniteNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
     const parsed = Number(value);
     if (Number.isFinite(parsed)) return parsed;
-    return null;
   }
+  return null;
+}
+
+function isPrometheusSampleTuple(value: unknown[]): boolean {
+  if (value.length !== 2) return false;
+  const timestamp = parseFiniteNumber(value[0]);
+  const sample = value[1];
+  return timestamp !== null && (typeof sample === "number" || typeof sample === "string");
+}
+
+function extractNumeric(value: unknown): number | null {
+  const scalar = parseFiniteNumber(value);
+  if (scalar !== null) return scalar;
   if (Array.isArray(value)) {
-    // Prometheus often encodes samples as [unixTimestamp, sampleValue].
-    if (value.length === 2) {
-      const sampleValue = extractNumeric(value[1]);
-      if (sampleValue !== null) return sampleValue;
+    if (isPrometheusSampleTuple(value)) {
+      // Prometheus samples are [unixTimestamp, sampleValue]; never treat timestamp as metric value.
+      return parseFiniteNumber(value[1]);
     }
     for (const item of value) {
       const nested = extractNumeric(item);
@@ -51,6 +62,16 @@ function extractNumeric(value: unknown): number | null {
     }
   }
   return null;
+}
+
+function hasEmptyPrometheusResult(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (Array.isArray(record.result) && record.result.length === 0) return true;
+  if ("data" in record) {
+    return hasEmptyPrometheusResult(record.data);
+  }
+  return false;
 }
 
 function toCheckResult(check: HarnessSloCheck, queryResult: ObservabilityQueryResult): HarnessSloCheckResult {
@@ -81,8 +102,7 @@ function toCheckResult(check: HarnessSloCheck, queryResult: ObservabilityQueryRe
       (Array.isArray(queryResult.data) && queryResult.data.length === 0) ||
       (typeof queryResult.data === "object" &&
         !Array.isArray(queryResult.data) &&
-        (Object.keys(queryResult.data).length === 0 ||
-          (Object.keys(queryResult.data).length === 1 && "result" in queryResult.data && Array.isArray((queryResult.data as any).result) && (queryResult.data as any).result.length === 0)));
+        (Object.keys(queryResult.data).length === 0 || hasEmptyPrometheusResult(queryResult.data)));
 
     if (isEmptyStructure) {
       actual = 0; // Treat empty results as zero

@@ -121,6 +121,70 @@ describe("evaluateHarnessSlo", () => {
     expect(result.checks[0]?.actual).toBe(0);
   });
 
+  test("treats empty Prometheus envelopes as zero-valued checks", async () => {
+    const cfg = makeConfig();
+    const fetchImpl: typeof fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          status: "success",
+          data: { resultType: "vector", result: [] },
+        }),
+        { status: 200 }
+      )) as any;
+
+    const result = await evaluateHarnessSlo(
+      cfg,
+      [
+        {
+          id: "empty_vector",
+          type: "custom",
+          queryType: "promql",
+          query: "sum(rate(nonexistent_metric_total[5m]))",
+          op: "<=",
+          threshold: 0,
+          windowSec: 300,
+        },
+      ],
+      { fetchImpl, nowMs: 1738736700000 }
+    );
+
+    expect(result.passed).toBe(true);
+    expect(result.checks[0]?.pass).toBe(true);
+    expect(result.checks[0]?.actual).toBe(0);
+  });
+
+  test("does not read tuple timestamps as sample values", async () => {
+    const cfg = makeConfig();
+    const fetchImpl: typeof fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          status: "success",
+          data: { result: [{ value: [1738736700, "NaN"] }] },
+        }),
+        { status: 200 }
+      )) as any;
+
+    const result = await evaluateHarnessSlo(
+      cfg,
+      [
+        {
+          id: "nan_tuple",
+          type: "custom",
+          queryType: "promql",
+          query: "up",
+          op: "<=",
+          threshold: 1,
+          windowSec: 60,
+        },
+      ],
+      { fetchImpl, nowMs: 1738736700000 }
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.checks[0]?.actual).toBeNull();
+    expect(result.checks[0]?.reason).toContain("numeric");
+  });
+
   test("fails when no numeric value can be extracted", async () => {
     const cfg = makeConfig();
     const fetchImpl: typeof fetch = (async () =>

@@ -881,3 +881,56 @@ If you do **not** set `HARNESS_OBS_*` overrides, the portal resolves endpoints i
    - Traces `http://127.0.0.1:10428`
 
 When multiple candidates are available, the portal probes them and picks the most reachable set, which avoids common cases where default config points at container-internal ports while you are querying from the host.
+
+## 18. GitHub CI In Testing Environment
+
+Workflow path:
+
+- `.github/workflows/ci.yml`
+
+### 18.1 Trigger behavior
+
+- `pull_request`
+  - runs: `checks`, `harness_smoke`
+  - does **not** run full model harness
+- `push` to `main` or `testing`
+  - runs: `checks`, `harness_smoke`, `harness_full_testing`
+- `workflow_dispatch`
+  - runs: `checks`, `harness_smoke`, `harness_full_testing`
+
+### 18.2 Required GitHub environment
+
+Create (or confirm) GitHub Environment:
+
+- `Testing`
+
+Add these environment secrets to `Testing`:
+
+- `OPENAI_API_KEY`
+- `GOOGLE_GENERATIVE_AI_API_KEY`
+- `ANTHROPIC_API_KEY`
+
+The workflow maps `GEMINI_API_KEY` from `GOOGLE_GENERATIVE_AI_API_KEY` for compatibility.
+
+### 18.3 What each CI job validates
+
+- `checks`
+  - `bun install`
+  - `bun run docs:check`
+  - `bun test`
+  - `bun run portal:build`
+- `harness_smoke`
+  - local Docker observability stack up/query/SLO/down
+- `harness_full_testing`
+  - full mixed-provider harness run (`bun run harness:run`)
+  - uploads run artifacts from `output/raw-agent-loop_mixed_*`
+
+### 18.4 Failure modes to expect
+
+- Missing `testing` secrets:
+- Missing `Testing` secrets:
+  - `harness_full_testing` fails at "Validate required provider secrets".
+- Docker unavailable on runner:
+  - `harness_smoke` or `harness_full_testing` fails before harness execution.
+- Provider quota/rate limits:
+  - full harness run may fail one or more runs; inspect uploaded artifact logs.

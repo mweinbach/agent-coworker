@@ -132,3 +132,4 @@ Full operational runbook:
 - `docs/harness/runbook.md`
 - `docs/harness/runbook.md` section `9.4 End-to-end: run in a target directory + watch live traces`
 - `docs/harness/runbook.md` section `17. Next.js Web Portal (Realtime)`
+- `docs/harness/runbook.md` section `18. GitHub CI In Testing Environment`

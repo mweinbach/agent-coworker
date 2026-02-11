@@ -61,7 +61,7 @@ describe("emitObservabilityEvent", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("emits an OTLP trace span to VictoriaTraces insert endpoint", async () => {
+  test("emits an OTLP trace span to configured OTLP HTTP endpoint", async () => {
     const cfg = makeConfig();
     const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
     const fetchImpl: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -85,7 +85,7 @@ describe("emitObservabilityEvent", () => {
     );
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe("http://127.0.0.1:10428/insert/opentelemetry/v1/traces");
+    expect(calls[0]?.url).toBe("http://127.0.0.1:4318/v1/traces");
 
     const body = JSON.parse(String(calls[0]?.init?.body));
     const span = body.resourceSpans?.[0]?.scopeSpans?.[0]?.spans?.[0];
@@ -96,6 +96,29 @@ describe("emitObservabilityEvent", () => {
     expect(Array.isArray(span?.attributes)).toBe(true);
     expect(span?.attributes.some((attr: any) => attr.key === "sessionId")).toBe(true);
     expect(span?.attributes.some((attr: any) => attr.key === "duration.ms")).toBe(true);
+  });
+
+  test("falls back to VictoriaTraces insert endpoint when OTLP HTTP endpoint is empty", async () => {
+    const cfg = makeConfig();
+    cfg.observability!.otlpHttpEndpoint = "";
+    const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const fetchImpl: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response("", { status: 200 });
+    }) as any;
+
+    await emitObservabilityEvent(
+      cfg,
+      {
+        name: "agent.turn.completed",
+        at: "2026-02-11T18:00:00.000Z",
+        status: "ok",
+      },
+      { fetchImpl }
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("http://127.0.0.1:10428/insert/opentelemetry/v1/traces");
   });
 
   test("marks error spans with error status code", async () => {

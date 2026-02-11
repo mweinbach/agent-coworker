@@ -10,6 +10,9 @@ export interface ObservabilityEvent {
   attributes?: Record<string, string | number | boolean>;
 }
 
+const OTLP_HTTP_TRACES_PATH = "/v1/traces";
+const LEGACY_VICTORIA_TRACES_PATH = "/insert/opentelemetry/v1/traces";
+
 function toAnyValue(v: string | number | boolean): Record<string, unknown> {
   if (typeof v === "number") return { doubleValue: v };
   if (typeof v === "boolean") return { boolValue: v };
@@ -29,6 +32,40 @@ function computeSpanWindow(atIso: string, durationMs: number | undefined): { sta
     startNs: String(BigInt(Math.floor(startMs)) * 1_000_000n),
     endNs: String(BigInt(Math.floor(endMs)) * 1_000_000n),
   };
+}
+
+function normalizeUrl(input: string): string {
+  return input.replace(/\/+$/, "");
+}
+
+function resolveTraceIngestUrl(config: AgentConfig): string {
+  const otlpEndpoint = config.observability?.otlpHttpEndpoint?.trim();
+  if (!otlpEndpoint) {
+    return `${normalizeUrl(config.observability!.queryApi.tracesBaseUrl)}${LEGACY_VICTORIA_TRACES_PATH}`;
+  }
+
+  try {
+    const parsed = new URL(otlpEndpoint);
+    const normalizedPath = normalizeUrl(parsed.pathname);
+    if (
+      normalizedPath.endsWith(OTLP_HTTP_TRACES_PATH) ||
+      normalizedPath.endsWith(LEGACY_VICTORIA_TRACES_PATH)
+    ) {
+      return normalizeUrl(parsed.toString());
+    }
+
+    parsed.pathname = `${normalizedPath}${OTLP_HTTP_TRACES_PATH}`;
+    return parsed.toString();
+  } catch {
+    const normalizedEndpoint = normalizeUrl(otlpEndpoint);
+    if (
+      normalizedEndpoint.endsWith(OTLP_HTTP_TRACES_PATH) ||
+      normalizedEndpoint.endsWith(LEGACY_VICTORIA_TRACES_PATH)
+    ) {
+      return normalizedEndpoint;
+    }
+    return `${normalizedEndpoint}${OTLP_HTTP_TRACES_PATH}`;
+  }
 }
 
 export async function emitObservabilityEvent(
@@ -84,7 +121,7 @@ export async function emitObservabilityEvent(
       },
     ],
   };
-  const tracesInsertUrl = `${config.observability.queryApi.tracesBaseUrl.replace(/\/$/, "")}/insert/opentelemetry/v1/traces`;
+  const tracesInsertUrl = resolveTraceIngestUrl(config);
 
   try {
     await fetchImpl(tracesInsertUrl, {

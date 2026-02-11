@@ -434,6 +434,29 @@ describe("AgentSession", () => {
       expect(runObservabilityQueryImpl).toHaveBeenCalledTimes(1);
     });
 
+    test("queryObservability emits error result envelope when query impl throws", async () => {
+      const runObservabilityQueryImpl = mock(async () => {
+        throw new Error("invalid observability endpoint");
+      });
+      const { session, events } = makeSession({ runObservabilityQueryImpl: runObservabilityQueryImpl as any });
+
+      await session.queryObservability({
+        queryType: "promql",
+        query: " up ",
+        fromMs: 10,
+        toMs: 20,
+      });
+
+      const evt = events.find((e) => e.type === "observability_query_result") as any;
+      expect(evt).toBeDefined();
+      expect(evt.result.status).toBe("error");
+      expect(evt.result.query).toBe("up");
+      expect(evt.result.fromMs).toBe(10);
+      expect(evt.result.toMs).toBe(20);
+      expect(String(evt.result.error)).toContain("Failed to run observability query: invalid observability endpoint");
+      expect(runObservabilityQueryImpl).toHaveBeenCalledTimes(1);
+    });
+
     test("evaluateHarnessSloChecks emits harness_slo_result", async () => {
       const evaluateHarnessSloImpl = mock(async () => ({
         reportOnly: true,
@@ -450,6 +473,36 @@ describe("AgentSession", () => {
       const evt = events.find((e) => e.type === "harness_slo_result") as any;
       expect(evt).toBeDefined();
       expect(evt.result.passed).toBe(true);
+      expect(evaluateHarnessSloImpl).toHaveBeenCalledTimes(1);
+    });
+
+    test("evaluateHarnessSloChecks emits failing result envelope when evaluator throws", async () => {
+      const evaluateHarnessSloImpl = mock(async () => {
+        throw new Error("slo evaluation failed");
+      });
+      const { session, events } = makeSession({ evaluateHarnessSloImpl: evaluateHarnessSloImpl as any });
+      const checks = [
+        {
+          id: "vector_errors",
+          type: "custom" as const,
+          queryType: "promql" as const,
+          query: "sum(rate(vector_component_errors_total[5m]))",
+          op: "<=" as const,
+          threshold: 0,
+          windowSec: 300,
+        },
+      ];
+
+      await session.evaluateHarnessSloChecks(checks);
+
+      const evt = events.find((e) => e.type === "harness_slo_result") as any;
+      expect(evt).toBeDefined();
+      expect(evt.result.passed).toBe(false);
+      expect(evt.result.checks).toHaveLength(1);
+      expect(evt.result.checks[0].id).toBe("vector_errors");
+      expect(evt.result.checks[0].pass).toBe(false);
+      expect(evt.result.checks[0].actual).toBeNull();
+      expect(String(evt.result.checks[0].reason)).toContain("Failed to evaluate SLO checks: slo evaluation failed");
       expect(evaluateHarnessSloImpl).toHaveBeenCalledTimes(1);
     });
   });

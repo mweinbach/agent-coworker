@@ -547,6 +547,80 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("observability_query surfaces thrown failures as result envelopes", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: {
+          AGENT_WORKING_DIR: tmpDir,
+          AGENT_PROVIDER: "google",
+          AGENT_OBSERVABILITY_ENABLED: "true",
+          AGENT_OBS_METRICS_URL: "not-a-valid-url",
+        },
+      })
+    );
+    try {
+      const { responses } = await sendAndCollect(
+        url,
+        (sessionId) => ({
+          type: "observability_query",
+          sessionId,
+          query: { queryType: "promql", query: "up", fromMs: 1000, toMs: 2000 },
+        }),
+        1
+      );
+      expect(responses[0].type).toBe("observability_query_result");
+      expect(responses[0].result.status).toBe("error");
+      expect(responses[0].result.fromMs).toBe(1000);
+      expect(responses[0].result.toMs).toBe(2000);
+      expect(String(responses[0].result.error)).toContain("Failed to run observability query");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("harness_slo_evaluate surfaces thrown failures as result envelopes", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: {
+          AGENT_WORKING_DIR: tmpDir,
+          AGENT_PROVIDER: "google",
+          AGENT_OBSERVABILITY_ENABLED: "true",
+          AGENT_OBS_METRICS_URL: "not-a-valid-url",
+        },
+      })
+    );
+    try {
+      const { responses } = await sendAndCollect(
+        url,
+        (sessionId) => ({
+          type: "harness_slo_evaluate",
+          sessionId,
+          checks: [
+            {
+              id: "vector_errors",
+              type: "custom",
+              queryType: "promql",
+              query: "sum(rate(vector_component_errors_total[5m]))",
+              op: "<=",
+              threshold: 0,
+              windowSec: 300,
+            },
+          ],
+        }),
+        1
+      );
+      expect(responses[0].type).toBe("harness_slo_result");
+      expect(responses[0].result.passed).toBe(false);
+      expect(responses[0].result.checks).toHaveLength(1);
+      expect(responses[0].result.checks[0].pass).toBe(false);
+      expect(String(responses[0].result.checks[0].reason)).toContain("Failed to evaluate SLO checks");
+    } finally {
+      server.stop();
+    }
+  });
+
   test("sending a non-object JSON value receives error", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

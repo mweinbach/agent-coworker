@@ -62,6 +62,14 @@ function asBoolean(v: unknown): boolean | null {
   return null;
 }
 
+function asNumber(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v !== "string" || !v.trim()) return null;
+  const parsed = Number(v);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+}
+
 function resolveDir(maybeRelative: unknown, baseDir: string): string {
   if (typeof maybeRelative !== "string" || !maybeRelative) return baseDir;
   if (path.isAbsolute(maybeRelative)) return maybeRelative;
@@ -187,6 +195,63 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.enableMcp) ??
     true;
 
+  const mergedObservability = isPlainObject(merged.observability) ? merged.observability : {};
+  const mergedQueryApi = isPlainObject((mergedObservability as any).queryApi)
+    ? ((mergedObservability as any).queryApi as Record<string, unknown>)
+    : {};
+  const observabilityEnabled =
+    asBoolean(env.AGENT_OBSERVABILITY_ENABLED) ??
+    asBoolean(projectConfig.observabilityEnabled) ??
+    asBoolean(userConfig.observabilityEnabled) ??
+    asBoolean(builtInDefaults.observabilityEnabled) ??
+    false;
+
+  const observability = {
+    mode:
+      (typeof (mergedObservability as any).mode === "string" && (mergedObservability as any).mode === "local_docker"
+        ? "local_docker"
+        : "local_docker") as const,
+    otlpHttpEndpoint:
+      env.AGENT_OBS_OTLP_HTTP ||
+      (typeof (mergedObservability as any).otlpHttpEndpoint === "string" &&
+      (mergedObservability as any).otlpHttpEndpoint
+        ? (mergedObservability as any).otlpHttpEndpoint
+        : "http://127.0.0.1:4318"),
+    queryApi: {
+      logsBaseUrl:
+        env.AGENT_OBS_LOGS_URL ||
+        (typeof mergedQueryApi.logsBaseUrl === "string" && mergedQueryApi.logsBaseUrl
+          ? mergedQueryApi.logsBaseUrl
+          : "http://127.0.0.1:9428"),
+      metricsBaseUrl:
+        env.AGENT_OBS_METRICS_URL ||
+        (typeof mergedQueryApi.metricsBaseUrl === "string" && mergedQueryApi.metricsBaseUrl
+          ? mergedQueryApi.metricsBaseUrl
+          : "http://127.0.0.1:8428"),
+      tracesBaseUrl:
+        env.AGENT_OBS_TRACES_URL ||
+        (typeof mergedQueryApi.tracesBaseUrl === "string" && mergedQueryApi.tracesBaseUrl
+          ? mergedQueryApi.tracesBaseUrl
+          : "http://127.0.0.1:10428"),
+    },
+    defaultWindowSec: Math.max(
+      1,
+      Math.floor(asNumber(env.AGENT_OBS_DEFAULT_WINDOW_SEC) ?? asNumber((mergedObservability as any).defaultWindowSec) ?? 300)
+    ),
+  };
+
+  const mergedHarness = isPlainObject(merged.harness) ? merged.harness : {};
+  const harness = {
+    reportOnly:
+      asBoolean(env.AGENT_HARNESS_REPORT_ONLY) ??
+      asBoolean((mergedHarness as any).reportOnly) ??
+      true,
+    strictMode:
+      asBoolean(env.AGENT_HARNESS_STRICT_MODE) ??
+      asBoolean((mergedHarness as any).strictMode) ??
+      false,
+  };
+
   return {
     provider,
     model,
@@ -213,6 +278,9 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     configDirs: [projectAgentDir, userAgentDir, builtInConfigDir],
 
     enableMcp,
+    observabilityEnabled,
+    observability,
+    harness,
   };
 }
 

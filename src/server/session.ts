@@ -6,11 +6,15 @@ import { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../
 import { getProviderStatuses } from "../providerStatus";
 import { discoverSkills, stripSkillFrontMatter } from "../skills";
 import { isProviderName } from "../types";
-import type { AgentConfig, TodoItem } from "../types";
+import type { AgentConfig, HarnessContextPayload, HarnessSloCheck, ObservabilityQueryRequest, TodoItem } from "../types";
 import { runTurn } from "../agent";
 import { loadSystemPromptWithSkills } from "../prompt";
 import { createTools } from "../tools";
 import { classifyCommand } from "../utils/approval";
+import { HarnessContextStore } from "../harness/contextStore";
+import { emitObservabilityEvent } from "../observability/otel";
+import { runObservabilityQuery } from "../observability/query";
+import { evaluateHarnessSlo } from "../observability/slo";
 
 import type { ServerEvent } from "./protocol";
 import {
@@ -57,6 +61,9 @@ export class AgentSession {
   private readonly getAiCoworkerPathsImpl: typeof getAiCoworkerPaths;
   private readonly getProviderStatusesImpl: typeof getProviderStatuses;
   private readonly sessionBackupFactory: SessionBackupFactory;
+  private readonly harnessContextStore: HarnessContextStore;
+  private readonly runObservabilityQueryImpl: typeof runObservabilityQuery;
+  private readonly evaluateHarnessSloImpl: typeof evaluateHarnessSlo;
 
   private messages: ModelMessage[] = [];
   private running = false;
@@ -82,6 +89,9 @@ export class AgentSession {
     getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
     getProviderStatusesImpl?: typeof getProviderStatuses;
     sessionBackupFactory?: SessionBackupFactory;
+    harnessContextStore?: HarnessContextStore;
+    runObservabilityQueryImpl?: typeof runObservabilityQuery;
+    evaluateHarnessSloImpl?: typeof evaluateHarnessSlo;
   }) {
     this.id = makeId();
     this.config = opts.config;
@@ -92,9 +102,11 @@ export class AgentSession {
     this.connectProviderImpl = opts.connectProviderImpl ?? connectModelProvider;
     this.getAiCoworkerPathsImpl = opts.getAiCoworkerPathsImpl ?? getAiCoworkerPaths;
     this.getProviderStatusesImpl = opts.getProviderStatusesImpl ?? getProviderStatuses;
-    this.getProviderStatusesImpl = opts.getProviderStatusesImpl ?? getProviderStatuses;
     this.sessionBackupFactory =
       opts.sessionBackupFactory ?? (async (factoryOpts) => await SessionBackupManager.create(factoryOpts));
+    this.harnessContextStore = opts.harnessContextStore ?? new HarnessContextStore();
+    this.runObservabilityQueryImpl = opts.runObservabilityQueryImpl ?? runObservabilityQuery;
+    this.evaluateHarnessSloImpl = opts.evaluateHarnessSloImpl ?? evaluateHarnessSlo;
     this.sessionBackupState = {
       status: "initializing",
       sessionId: this.id,
@@ -118,6 +130,15 @@ export class AgentSession {
 
   getEnableMcp() {
     return this.config.enableMcp ?? false;
+  }
+
+  getObservabilityStatusEvent(): Extract<ServerEvent, { type: "observability_status" }> {
+    return {
+      type: "observability_status",
+      sessionId: this.id,
+      enabled: this.config.observabilityEnabled ?? false,
+      observability: this.config.observability,
+    };
   }
 
   reset() {
@@ -318,6 +339,29 @@ export class AgentSession {
     this.emit({ type: "session_settings", sessionId: this.id, enableMcp });
   }
 
+  getHarnessContext() {
+    this.emit({
+      type: "harness_context",
+      sessionId: this.id,
+      context: this.harnessContextStore.get(this.id),
+    });
+  }
+
+  setHarnessContext(context: HarnessContextPayload) {
+    const next = this.harnessContextStore.set(this.id, context);
+    this.emit({ type: "harness_context", sessionId: this.id, context: next });
+  }
+
+  async queryObservability(query: ObservabilityQueryRequest) {
+    const result = await this.runObservabilityQueryImpl(this.config, query);
+    this.emit({ type: "observability_query_result", sessionId: this.id, result });
+  }
+
+  async evaluateHarnessSloChecks(checks: HarnessSloCheck[]) {
+    const result = await this.evaluateHarnessSloImpl(this.config, checks);
+    this.emit({ type: "harness_slo_result", sessionId: this.id, result });
+  }
+
   async setModel(modelIdRaw: string, providerRaw?: AgentConfig["provider"]) {
     const modelId = modelIdRaw.trim();
     if (!modelId) {
@@ -476,6 +520,7 @@ export class AgentSession {
       d.reject(new Error(`Session disposed (${reason})`));
       this.pendingApproval.delete(id);
     }
+    this.harnessContextStore.clear(this.id);
 
     void this.closeSessionBackup();
   }
@@ -610,9 +655,20 @@ export class AgentSession {
 
     this.running = true;
     this.abortController = new AbortController();
+    const turnStartedAt = Date.now();
     try {
       this.emit({ type: "user_message", sessionId: this.id, text, clientMessageId });
       this.emit({ type: "session_busy", sessionId: this.id, busy: true });
+      await emitObservabilityEvent(this.config, {
+        name: "agent.turn.started",
+        at: new Date().toISOString(),
+        status: "ok",
+        attributes: {
+          sessionId: this.id,
+          provider: this.config.provider,
+          model: this.config.model,
+        },
+      });
       await this.sessionBackupInit;
       this.messages.push({ role: "user", content: text });
 
@@ -647,12 +703,35 @@ export class AgentSession {
 
       const out = (res.text || "").trim();
       if (out) this.emit({ type: "assistant_message", sessionId: this.id, text: out });
+      await emitObservabilityEvent(this.config, {
+        name: "agent.turn.completed",
+        at: new Date().toISOString(),
+        status: "ok",
+        durationMs: Date.now() - turnStartedAt,
+        attributes: {
+          sessionId: this.id,
+          provider: this.config.provider,
+          model: this.config.model,
+        },
+      });
     } catch (err) {
       const msg = String(err);
       // Don't emit error for user-initiated cancellation.
       if (!msg.includes("abort") && !msg.includes("cancel")) {
         this.emit({ type: "error", sessionId: this.id, message: msg });
       }
+      await emitObservabilityEvent(this.config, {
+        name: "agent.turn.failed",
+        at: new Date().toISOString(),
+        status: "error",
+        durationMs: Date.now() - turnStartedAt,
+        attributes: {
+          sessionId: this.id,
+          provider: this.config.provider,
+          model: this.config.model,
+          error: msg,
+        },
+      });
     } finally {
       await this.takeAutomaticSessionCheckpoint();
       this.emit({ type: "session_busy", sessionId: this.id, busy: false });

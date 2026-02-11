@@ -75,6 +75,36 @@ interface SessionBackupState {
   checkpoints: SessionBackupCheckpoint[];
   failureReason?: string;
 }
+
+type ObservabilityQueryType = "logql" | "promql" | "traceql";
+type HarnessSloOperator = "<" | "<=" | ">" | ">=" | "==" | "!=";
+
+interface HarnessContextPayload {
+  runId: string;
+  taskId?: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  constraints: string[];
+  metadata?: Record<string, string>;
+}
+
+interface ObservabilityQueryRequest {
+  queryType: ObservabilityQueryType;
+  query: string;
+  fromMs?: number;
+  toMs?: number;
+  limit?: number;
+}
+
+interface HarnessSloCheck {
+  id: string;
+  type: "latency" | "error_rate" | "custom";
+  queryType: ObservabilityQueryType;
+  query: string;
+  op: HarnessSloOperator;
+  threshold: number;
+  windowSec: number;
+}
 ```
 
 ---
@@ -259,6 +289,76 @@ Enable/disable MCP tool discovery/execution for this session.
   "type": "set_enable_mcp",
   "sessionId": "...",
   "enableMcp": true
+}
+```
+
+### harness_context_get
+
+Fetch the current harness context payload for this session.
+
+```jsonc
+{
+  "type": "harness_context_get",
+  "sessionId": "..."
+}
+```
+
+### harness_context_set
+
+Set/replace the harness context payload for this session.
+
+```jsonc
+{
+  "type": "harness_context_set",
+  "sessionId": "...",
+  "context": {
+    "runId": "run-01",
+    "taskId": "task-123",
+    "objective": "Improve startup reliability",
+    "acceptanceCriteria": ["startup < 800ms", "no startup errors"],
+    "constraints": ["no product behavior changes"],
+    "metadata": { "owner": "platform" }
+  }
+}
+```
+
+### observability_query
+
+Run an observability query (`logql` / `promql` / `traceql`) using configured local endpoints.
+
+```jsonc
+{
+  "type": "observability_query",
+  "sessionId": "...",
+  "query": {
+    "queryType": "promql",
+    "query": "sum(rate(vector_component_errors_total[5m]))",
+    "fromMs": 1738736400000,
+    "toMs": 1738736700000,
+    "limit": 200
+  }
+}
+```
+
+### harness_slo_evaluate
+
+Evaluate one or more SLO checks against observability data.
+
+```jsonc
+{
+  "type": "harness_slo_evaluate",
+  "sessionId": "...",
+  "checks": [
+    {
+      "id": "vector_errors",
+      "type": "custom",
+      "queryType": "promql",
+      "query": "sum(rate(vector_component_errors_total[5m]))",
+      "op": "<=",
+      "threshold": 0,
+      "windowSec": 300
+    }
+  ]
 }
 ```
 
@@ -625,6 +725,96 @@ Backup/checkpoint status update. Emitted on explicit requests and whenever check
         "trigger": "auto",
         "changed": true,
         "patchBytes": 2048
+      }
+    ]
+  }
+}
+```
+
+### observability_status
+
+Emitted on connection with the session's observability configuration.
+
+```jsonc
+{
+  "type": "observability_status",
+  "sessionId": "...",
+  "enabled": true,
+  "observability": {
+    "mode": "local_docker",
+    "otlpHttpEndpoint": "http://127.0.0.1:14318",
+    "queryApi": {
+      "logsBaseUrl": "http://127.0.0.1:19428",
+      "metricsBaseUrl": "http://127.0.0.1:18428",
+      "tracesBaseUrl": "http://127.0.0.1:10428"
+    },
+    "defaultWindowSec": 300
+  }
+}
+```
+
+### harness_context
+
+Current harness context payload for the session (`null` if unset).
+
+```jsonc
+{
+  "type": "harness_context",
+  "sessionId": "...",
+  "context": {
+    "runId": "run-01",
+    "objective": "Improve startup reliability",
+    "acceptanceCriteria": ["startup < 800ms"],
+    "constraints": ["no product behavior changes"],
+    "updatedAt": "2026-02-11T12:00:00.000Z"
+  }
+}
+```
+
+### observability_query_result
+
+Result envelope for a single observability query.
+
+```jsonc
+{
+  "type": "observability_query_result",
+  "sessionId": "...",
+  "result": {
+    "queryType": "promql",
+    "query": "sum(rate(vector_component_errors_total[5m]))",
+    "fromMs": 1738736400000,
+    "toMs": 1738736700000,
+    "status": "ok",
+    "data": { "status": "success", "data": { "resultType": "vector", "result": [] } }
+  }
+}
+```
+
+### harness_slo_result
+
+Evaluation summary for one or more SLO checks.
+
+```jsonc
+{
+  "type": "harness_slo_result",
+  "sessionId": "...",
+  "result": {
+    "reportOnly": true,
+    "strictMode": false,
+    "passed": true,
+    "fromMs": 1738736400000,
+    "toMs": 1738736700000,
+    "checks": [
+      {
+        "id": "vector_errors",
+        "type": "custom",
+        "queryType": "promql",
+        "query": "sum(rate(vector_component_errors_total[5m]))",
+        "op": "<=",
+        "threshold": 0,
+        "windowSec": 300,
+        "actual": 0,
+        "pass": true
       }
     ]
   }

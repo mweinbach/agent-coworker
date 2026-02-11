@@ -7,7 +7,7 @@
     "cowork": "./src/index.ts"
   },
   "scripts": {
-    "postinstall": "bun install --cwd apps/desktop",
+    "postinstall": "bun install --cwd apps/desktop && bun install --cwd apps/portal",
     "start": "bun src/index.ts",
     "cli": "bun src/index.ts --cli",
     "dev": "bun --watch src/index.ts",
@@ -15,7 +15,16 @@
     "tui": "bun src/tui/index.tsx",
     "desktop:dev": "cd apps/desktop && bun run tauri dev",
     "desktop:build": "cd apps/desktop && bun run build",
+    "portal:dev": "cd apps/portal && bun run dev",
+    "portal:build": "cd apps/portal && bun run build",
+    "portal:start": "cd apps/portal && bun run start",
     "build:desktop-resources": "bun scripts/build_desktop_resources.ts",
+    "obs:up": "bun scripts/observability_stack.ts up --run-id default",
+    "obs:down": "bun scripts/observability_stack.ts down --run-id default",
+    "obs:status": "bun scripts/observability_stack.ts status --run-id default",
+    "docs:check": "bun scripts/check_docs.ts",
+    "harness:run": "bun scripts/run_raw_agent_loops.ts --observability --report-only",
+    "harness:smoke": "bun scripts/harness_smoke.ts",
     "test": "bun test"
   },
   "dependencies": {

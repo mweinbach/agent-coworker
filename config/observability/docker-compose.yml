@@ -1,0 +1,32 @@
+services:
+  vector:
+    image: timberio/vector:0.40.1-debian
+    restart: unless-stopped
+    command: ["--config", "/etc/vector/vector.toml"]
+    ports:
+      - "${VECTOR_OTLP_HTTP_PORT}:4318"
+    depends_on:
+      - victoria-logs
+      - victoria-metrics
+      - victoria-traces
+    volumes:
+      - ./vector/vector.toml:/etc/vector/vector.toml:ro
+
+  victoria-logs:
+    image: victoriametrics/victoria-logs:v1.11.0-victorialogs
+    restart: unless-stopped
+    ports:
+      - "${VICTORIA_LOGS_PORT}:9428"
+
+  victoria-metrics:
+    image: victoriametrics/victoria-metrics:v1.103.0
+    restart: unless-stopped
+    command: ["-selfScrapeInterval=0"]
+    ports:
+      - "${VICTORIA_METRICS_PORT}:8428"
+
+  victoria-traces:
+    image: victoriametrics/victoria-traces:v0.7.1
+    restart: unless-stopped
+    ports:
+      - "${VICTORIA_TRACES_PORT}:10428"

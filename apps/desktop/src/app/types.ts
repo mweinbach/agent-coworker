@@ -42,6 +42,10 @@ export type FeedItem =
   | { id: string; kind: "message"; role: "user" | "assistant"; ts: string; text: string }
   | { id: string; kind: "reasoning"; mode: "reasoning" | "summary"; ts: string; text: string }
   | { id: string; kind: "todos"; ts: string; todos: TodoItem[] }
+  | { id: string; kind: "observabilityStatus"; ts: string; enabled: boolean; summary: string }
+  | { id: string; kind: "harnessContext"; ts: string; context: HarnessContextPayload | null }
+  | { id: string; kind: "observabilityQueryResult"; ts: string; result: ObservabilityQueryResultPayload }
+  | { id: string; kind: "harnessSloResult"; ts: string; result: HarnessSloResultPayload }
   | { id: string; kind: "log"; ts: string; line: string }
   | { id: string; kind: "error"; ts: string; message: string }
   | { id: string; kind: "system"; ts: string; line: string };
@@ -88,6 +92,15 @@ export type SessionBackupPublicState = SessionBackupStateEvent["backup"];
 export type SessionBackupReason = SessionBackupStateEvent["reason"];
 export type SessionBackupCheckpoint = SessionBackupPublicState["checkpoints"][number];
 
+export type ObservabilityStatusEvent = Extract<ServerEvent, { type: "observability_status" }>;
+export type HarnessContextEvent = Extract<ServerEvent, { type: "harness_context" }>;
+export type ObservabilityQueryResultEvent = Extract<ServerEvent, { type: "observability_query_result" }>;
+export type HarnessSloResultEvent = Extract<ServerEvent, { type: "harness_slo_result" }>;
+
+export type HarnessContextPayload = HarnessContextEvent["context"];
+export type ObservabilityQueryResultPayload = ObservabilityQueryResultEvent["result"];
+export type HarnessSloResultPayload = HarnessSloResultEvent["result"];
+
 export type ConnectDraft = {
   provider: ProviderName;
   apiKey: string;
@@ -120,5 +133,18 @@ export type Notification = {
 
 export type ThreadEvent = Extract<
   ServerEvent,
-  { type: "assistant_message" | "reasoning" | "todos" | "log" | "error" | "user_message" | "session_busy" }
+  {
+    type:
+      | "assistant_message"
+      | "reasoning"
+      | "todos"
+      | "log"
+      | "error"
+      | "user_message"
+      | "session_busy"
+      | "observability_status"
+      | "harness_context"
+      | "observability_query_result"
+      | "harness_slo_result";
+  }
 >;

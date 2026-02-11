@@ -14,7 +14,7 @@ import { loadConfig, getModel as realGetModel } from "../src/config";
 import { runTurnWithDeps } from "../src/agent";
 import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
 import { loadSubAgentPrompt, loadSystemPromptWithSkills } from "../src/prompt";
-import type { AgentConfig, ProviderName, TodoItem } from "../src/types";
+import type { AgentConfig, HarnessSloCheck, ProviderName, TodoItem } from "../src/types";
 import type { ToolContext } from "../src/tools";
 import { createAskTool } from "../src/tools/ask";
 import { createBashTool } from "../src/tools/bash";
@@ -31,6 +31,14 @@ import { createWebFetchTool } from "../src/tools/webFetch";
 import { createWebSearchTool } from "../src/tools/webSearch";
 import { createWriteTool } from "../src/tools/write";
 import { classifyCommand } from "../src/utils/approval";
+import {
+  createLocalObservabilityStack,
+  startLocalObservabilityStack,
+  stopLocalObservabilityStack,
+  type LocalObservabilityStack,
+} from "../src/observability/runtime";
+import { evaluateHarnessSlo } from "../src/observability/slo";
+import { runObservabilityQuery } from "../src/observability/query";
 
 type AskEvent = {
   at: string;
@@ -70,6 +78,52 @@ type AttemptMeta = {
   error?: string;
   retryDelayMs?: number;
 };
+
+type RawLoopArgs = {
+  observability: boolean;
+  reportOnly: boolean;
+  strictMode: boolean;
+  keepStack: boolean;
+};
+
+function parseArgs(argv: string[]): RawLoopArgs {
+  const args: RawLoopArgs = {
+    observability: false,
+    reportOnly: true,
+    strictMode: false,
+    keepStack: false,
+  };
+
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--observability") {
+      args.observability = true;
+      continue;
+    }
+    if (a === "--strict") {
+      args.strictMode = true;
+      args.reportOnly = false;
+      continue;
+    }
+    if (a === "--report-only") {
+      args.reportOnly = true;
+      continue;
+    }
+    if (a === "--keep-stack") {
+      args.keepStack = true;
+      continue;
+    }
+    if (a === "--help" || a === "-h") {
+      console.log(
+        "Usage: bun scripts/run_raw_agent_loops.ts [--observability] [--strict] [--report-only] [--keep-stack]"
+      );
+      process.exit(0);
+    }
+    throw new Error(`Unknown argument: ${a}`);
+  }
+
+  return args;
+}
 
 class RateLimiter {
   private nextAllowedAtMs = 0;
@@ -354,7 +408,31 @@ function computeRetryDelayMs(err: unknown, attempt: number): number {
   return target + jitterMs;
 }
 
+function defaultHarnessChecks(): HarnessSloCheck[] {
+  return [
+    {
+      id: "run_error_logs",
+      type: "error_rate",
+      queryType: "logql",
+      query: "_time:[now-5m, now] level:error",
+      op: "==",
+      threshold: 0,
+      windowSec: 300,
+    },
+    {
+      id: "vector_errors",
+      type: "custom",
+      queryType: "promql",
+      query: "sum(rate(vector_component_errors_total[5m]))",
+      op: "<=",
+      threshold: 0,
+      windowSec: 300,
+    },
+  ];
+}
+
 async function main() {
+  const cliArgs = parseArgs(process.argv.slice(2));
   const repoDir = process.cwd();
 
   const googleApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || "";
@@ -683,297 +761,366 @@ Final response must be a JSON object:
     await ensureDir(runDir);
 
     const minIntervalMs = typeof run.minIntervalMs === "number" ? run.minIntervalMs : 1000;
-    // Adjust limiter per-run if requested (rare). This is a single limiter instance; set its interval by recreating.
-    // We keep it simple: recreate a fresh limiter only when a run explicitly requests it.
     const runLimiter = run.minIntervalMs ? new RateLimiter(minIntervalMs) : limiter;
-
     const startedAt = isoSafeNow();
 
-    const env = {
-      ...process.env,
-      AGENT_WORKING_DIR: runDir,
-      AGENT_PROVIDER: run.provider,
-      AGENT_MODEL: resolved.resolvedModel,
-    };
+    let stack: LocalObservabilityStack | null = null;
+    try {
+      if (cliArgs.observability) {
+        stack = await createLocalObservabilityStack({
+          repoDir,
+          runId: `${run.id}-${safePathComponent(resolved.resolvedModel)}`,
+        });
+        await startLocalObservabilityStack(stack);
+        await fs.writeFile(path.join(runDir, "observability_endpoints.json"), safeJsonStringify(stack.endpoints), "utf-8");
+      }
 
-    const config = await loadConfig({ cwd: repoDir, env });
-    config.providerOptions = DEFAULT_PROVIDER_OPTIONS;
-    config.enableMcp = false;
-    config.provider = run.provider;
-    config.model = resolved.resolvedModel;
-    config.subAgentModel = resolved.resolvedModel;
-
-    // Keep memory local to the run folder so artifacts can be captured per-run.
-    const localProjectAgentDir = path.join(runDir, ".agent");
-    const localUserAgentDir = path.join(runDir, ".agent-user");
-    const coworkSkillsDir = config.skillsDirs[1] || "";
-    const builtInSkillsDir = path.join(config.builtInDir, "skills");
-    config.projectAgentDir = localProjectAgentDir;
-    config.userAgentDir = localUserAgentDir;
-    config.skillsDirs = [
-      path.join(localProjectAgentDir, "skills"),
-      coworkSkillsDir,
-      path.join(localUserAgentDir, "skills"),
-      builtInSkillsDir,
-    ].filter(Boolean);
-    config.memoryDirs = [path.join(localProjectAgentDir, "memory"), path.join(localUserAgentDir, "memory")];
-    config.configDirs = [localProjectAgentDir, localUserAgentDir, config.builtInConfigDir];
-
-    await ensureDir(config.projectAgentDir);
-
-    const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
-
-    const userPrompt = run.prompt({ runId: run.id, runDir, repoDir });
-    const inputMessages: ModelMessage[] = [{ role: "user", content: userPrompt }];
-
-    await fs.writeFile(path.join(runDir, "prompt.txt"), userPrompt, "utf-8");
-    await fs.writeFile(path.join(runDir, "system.txt"), system, "utf-8");
-    await fs.writeFile(path.join(runDir, "input_messages.json"), safeJsonStringify(inputMessages), "utf-8");
-
-    const attempts: AttemptMeta[] = [];
-
-    const maxAttempts = run.maxAttempts ?? 5;
-
-    let finalToolLogLines: string[] = [];
-    let finalAskEvents: AskEvent[] = [];
-    let finalApprovalEvents: ApprovalEvent[] = [];
-    let finalTodoEvents: TodoEvent[] = [];
-    let finalSteps: TracedStep[] = [];
-    let finalRes:
-      | {
-          text: string;
-          reasoningText?: string;
-          responseMessages: ModelMessage[];
-        }
-      | null = null;
-    let finalError: unknown = null;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const attemptStartedAt = isoSafeNow();
-
-      const toolLogLines: string[] = [];
-      const askEvents: AskEvent[] = [];
-      const approvalEvents: ApprovalEvent[] = [];
-      const todoEvents: TodoEvent[] = [];
-      const steps: TracedStep[] = [];
-
-      const log = (line: string) => {
-        toolLogLines.push(line);
+      const env = {
+        ...process.env,
+        AGENT_WORKING_DIR: runDir,
+        AGENT_PROVIDER: run.provider,
+        AGENT_MODEL: resolved.resolvedModel,
+        AGENT_OBSERVABILITY_ENABLED: stack ? "true" : "false",
+        AGENT_HARNESS_REPORT_ONLY: cliArgs.reportOnly ? "true" : "false",
+        AGENT_HARNESS_STRICT_MODE: cliArgs.strictMode ? "true" : "false",
+        ...(stack
+          ? {
+              AGENT_OBS_OTLP_HTTP: stack.endpoints.otlpHttpEndpoint,
+              AGENT_OBS_LOGS_URL: stack.endpoints.logsBaseUrl,
+              AGENT_OBS_METRICS_URL: stack.endpoints.metricsBaseUrl,
+              AGENT_OBS_TRACES_URL: stack.endpoints.tracesBaseUrl,
+            }
+          : {}),
       };
 
-      const askUser = async (question: string, options?: string[]) => {
-        const idx = options && options.length > 0 ? (runIndex - 1) % options.length : 0;
-        const answer = options && options.length > 0 ? options[idx]! : "OK";
-        askEvents.push({ at: isoSafeNow(), question, options, answer });
-        return answer;
-      };
+      const config = await loadConfig({ cwd: repoDir, env });
+      config.providerOptions = DEFAULT_PROVIDER_OPTIONS;
+      config.enableMcp = false;
+      config.provider = run.provider;
+      config.model = resolved.resolvedModel;
+      config.subAgentModel = resolved.resolvedModel;
+      config.harness = { reportOnly: cliArgs.reportOnly, strictMode: cliArgs.strictMode };
+      if (stack) {
+        config.observabilityEnabled = true;
+        config.observability = {
+          mode: "local_docker",
+          otlpHttpEndpoint: stack.endpoints.otlpHttpEndpoint,
+          queryApi: {
+            logsBaseUrl: stack.endpoints.logsBaseUrl,
+            metricsBaseUrl: stack.endpoints.metricsBaseUrl,
+            tracesBaseUrl: stack.endpoints.tracesBaseUrl,
+          },
+          defaultWindowSec: 300,
+        };
+      } else {
+        config.observabilityEnabled = false;
+      }
 
-      const approveCommand = async (command: string) => {
-        const approved = true;
-        approvalEvents.push({ at: isoSafeNow(), command, approved });
-        return approved;
-      };
+      // Keep memory local to the run folder so artifacts can be captured per-run.
+      const localProjectAgentDir = path.join(runDir, ".agent");
+      const localUserAgentDir = path.join(runDir, ".agent-user");
+      const coworkSkillsDir = config.skillsDirs[1] || "";
+      const builtInSkillsDir = path.join(config.builtInDir, "skills");
+      config.projectAgentDir = localProjectAgentDir;
+      config.userAgentDir = localUserAgentDir;
+      config.skillsDirs = [
+        path.join(localProjectAgentDir, "skills"),
+        coworkSkillsDir,
+        path.join(localUserAgentDir, "skills"),
+        builtInSkillsDir,
+      ].filter(Boolean);
+      config.memoryDirs = [path.join(localProjectAgentDir, "memory"), path.join(localUserAgentDir, "memory")];
+      config.configDirs = [localProjectAgentDir, localUserAgentDir, config.builtInConfigDir];
 
-      const updateTodos = (todos: TodoItem[]) => {
-        todoEvents.push({ at: isoSafeNow(), todos });
-      };
+      await ensureDir(config.projectAgentDir);
 
-      const tracedMainGenerateText = makeTracedGenerateText(steps, "main", runLimiter);
-      const tracedFinalizeGenerateText = makeTracedGenerateText(steps, "finalize", runLimiter);
+      const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
 
-      const createToolsOverride = (ctx: ToolContext) =>
-        createToolsWithTracing(ctx, steps, runLimiter, forcedGetModel);
+      const userPrompt = run.prompt({ runId: run.id, runDir, repoDir });
+      const inputMessages: ModelMessage[] = [{ role: "user", content: userPrompt }];
 
-      try {
-        const res = await runTurnWithDeps(
-          {
+      await fs.writeFile(path.join(runDir, "prompt.txt"), userPrompt, "utf-8");
+      await fs.writeFile(path.join(runDir, "system.txt"), system, "utf-8");
+      await fs.writeFile(path.join(runDir, "input_messages.json"), safeJsonStringify(inputMessages), "utf-8");
+
+      const attempts: AttemptMeta[] = [];
+      const maxAttempts = run.maxAttempts ?? 5;
+
+      let finalToolLogLines: string[] = [];
+      let finalAskEvents: AskEvent[] = [];
+      let finalApprovalEvents: ApprovalEvent[] = [];
+      let finalTodoEvents: TodoEvent[] = [];
+      let finalSteps: TracedStep[] = [];
+      let finalRes:
+        | {
+            text: string;
+            reasoningText?: string;
+            responseMessages: ModelMessage[];
+          }
+        | null = null;
+      let finalError: unknown = null;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const attemptStartedAt = isoSafeNow();
+
+        const toolLogLines: string[] = [];
+        const askEvents: AskEvent[] = [];
+        const approvalEvents: ApprovalEvent[] = [];
+        const todoEvents: TodoEvent[] = [];
+        const steps: TracedStep[] = [];
+
+        const log = (line: string) => {
+          toolLogLines.push(line);
+        };
+
+        const askUser = async (question: string, options?: string[]) => {
+          const idx = options && options.length > 0 ? (runIndex - 1) % options.length : 0;
+          const answer = options && options.length > 0 ? options[idx]! : "OK";
+          askEvents.push({ at: isoSafeNow(), question, options, answer });
+          return answer;
+        };
+
+        const approveCommand = async (command: string) => {
+          const approved = true;
+          approvalEvents.push({ at: isoSafeNow(), command, approved });
+          return approved;
+        };
+
+        const updateTodos = (todos: TodoItem[]) => {
+          todoEvents.push({ at: isoSafeNow(), todos });
+        };
+
+        const tracedMainGenerateText = makeTracedGenerateText(steps, "main", runLimiter);
+        const tracedFinalizeGenerateText = makeTracedGenerateText(steps, "finalize", runLimiter);
+
+        const createToolsOverride = (ctx: ToolContext) =>
+          createToolsWithTracing(ctx, steps, runLimiter, forcedGetModel);
+
+        try {
+          const res = await runTurnWithDeps(
+            {
+              config,
+              system,
+              messages: inputMessages,
+              log,
+              askUser,
+              approveCommand,
+              updateTodos,
+              discoveredSkills,
+              maxSteps: run.maxSteps ?? 100,
+              enableMcp: false,
+            },
+            {
+              generateText: tracedMainGenerateText as any,
+              createTools: createToolsOverride as any,
+              getModel: forcedGetModel as any,
+            }
+          );
+
+          let finalText = String(res?.text ?? "");
+          let finalReasoningText = res?.reasoningText;
+          let finalResponseMessages = (res?.responseMessages ?? []) as ModelMessage[];
+
+          // Ensure we always end with a final response (some runs may stop mid-tool-loop).
+          if (!finalText.includes("<<END_RUN>>")) {
+            const finalizeMessages: ModelMessage[] = [
+              ...inputMessages,
+              ...finalResponseMessages,
+              {
+                role: "user",
+                content:
+                  "You did not provide the required final response. Provide the final response now, do NOT call tools, and end with <<END_RUN>>.",
+              },
+            ];
+
+            const finalized = await tracedFinalizeGenerateText({
+              model: forcedGetModel(config),
+              system,
+              messages: finalizeMessages,
+              providerOptions: config.providerOptions,
+              stopWhen: realStepCountIs(1),
+            } as any);
+
+            const finalizedText = String(finalized?.text ?? "");
+            if (finalizedText.trim()) finalText = finalizedText;
+            if (typeof finalized?.reasoningText === "string") finalReasoningText = finalized.reasoningText;
+            const moreMsgs = (finalized?.response?.messages || []) as ModelMessage[];
+            if (moreMsgs.length > 0) finalResponseMessages = [...finalResponseMessages, ...moreMsgs];
+          }
+
+          finalRes = {
+            text: finalText,
+            reasoningText: finalReasoningText,
+            responseMessages: finalResponseMessages,
+          };
+          finalError = null;
+
+          finalToolLogLines = toolLogLines;
+          finalAskEvents = askEvents;
+          finalApprovalEvents = approvalEvents;
+          finalTodoEvents = todoEvents;
+          finalSteps = steps;
+
+          attempts.push({
+            attempt,
+            startedAt: attemptStartedAt,
+            finishedAt: isoSafeNow(),
+            ok: true,
+          });
+
+          // Save an attempt trace as well for completeness.
+          const attemptTrace: RunTrace = {
+            runId: run.id,
+            startedAt,
+            finishedAt: isoSafeNow(),
             config,
             system,
-            messages: inputMessages,
-            log,
-            askUser,
-            approveCommand,
-            updateTodos,
-            discoveredSkills,
-            maxSteps: run.maxSteps ?? 100,
-            enableMcp: false,
-          },
-          {
-            generateText: tracedMainGenerateText as any,
-            createTools: createToolsOverride as any,
-            getModel: forcedGetModel as any,
-          }
-        );
-
-        let finalText = String(res?.text ?? "");
-        let finalReasoningText = res?.reasoningText;
-        let finalResponseMessages = (res?.responseMessages ?? []) as ModelMessage[];
-
-        // Ensure we always end with a final response (some runs may stop mid-tool-loop).
-        if (!finalText.includes("<<END_RUN>>")) {
-          const finalizeMessages: ModelMessage[] = [
-            ...inputMessages,
-            ...finalResponseMessages,
-            {
-              role: "user",
-              content:
-                "You did not provide the required final response. Provide the final response now, do NOT call tools, and end with <<END_RUN>>.",
+            userPrompt,
+            inputMessages,
+            toolLogLines,
+            askEvents,
+            approvalEvents,
+            todoEvents,
+            steps,
+            result: {
+              text: finalRes.text,
+              reasoningText: finalRes.reasoningText,
+              responseMessages: finalRes.responseMessages as any[],
+              error: undefined,
             },
-          ];
+          };
+          await writeTraceFile(path.join(runDir, `trace_attempt-${pad2(attempt)}.json`), attemptTrace);
+          break;
+        } catch (err) {
+          finalRes = null;
+          finalError = err;
 
-          const finalized = await tracedFinalizeGenerateText({
-            model: forcedGetModel(config),
-            system,
-            messages: finalizeMessages,
-            providerOptions: config.providerOptions,
-            stopWhen: realStepCountIs(1),
-          } as any);
-
-          const finalizedText = String(finalized?.text ?? "");
-          if (finalizedText.trim()) finalText = finalizedText;
-          if (typeof finalized?.reasoningText === "string") finalReasoningText = finalized.reasoningText;
-          const moreMsgs = (finalized?.response?.messages || []) as ModelMessage[];
-          if (moreMsgs.length > 0) finalResponseMessages = [...finalResponseMessages, ...moreMsgs];
-        }
-
-        finalRes = {
-          text: finalText,
-          reasoningText: finalReasoningText,
-          responseMessages: finalResponseMessages,
-        };
-        finalError = null;
-
-        finalToolLogLines = toolLogLines;
-        finalAskEvents = askEvents;
-        finalApprovalEvents = approvalEvents;
-        finalTodoEvents = todoEvents;
-        finalSteps = steps;
-
-        attempts.push({
-          attempt,
-          startedAt: attemptStartedAt,
-          finishedAt: isoSafeNow(),
-          ok: true,
-        });
-
-        // Save an attempt trace as well for completeness.
-        const attemptTrace: RunTrace = {
-          runId: run.id,
-          startedAt,
-          finishedAt: isoSafeNow(),
-          config,
-          system,
-          userPrompt,
-          inputMessages,
-          toolLogLines,
-          askEvents,
-          approvalEvents,
-          todoEvents,
-          steps,
-          result: {
-            text: finalRes.text,
-            reasoningText: finalRes.reasoningText,
-            responseMessages: finalRes.responseMessages as any[],
-            error: undefined,
-          },
-        };
-        await writeTraceFile(path.join(runDir, `trace_attempt-${pad2(attempt)}.json`), attemptTrace);
-        break;
-      } catch (err) {
-        finalRes = null;
-        finalError = err;
-
-        const delayMs = computeRetryDelayMs(err, attempt);
-        attempts.push({
-          attempt,
-          startedAt: attemptStartedAt,
-          finishedAt: isoSafeNow(),
-          ok: false,
-          error: String(err),
-          retryDelayMs: delayMs,
-        });
-
-        const attemptTrace: RunTrace = {
-          runId: run.id,
-          startedAt,
-          finishedAt: isoSafeNow(),
-          config,
-          system,
-          userPrompt,
-          inputMessages,
-          toolLogLines,
-          askEvents,
-          approvalEvents,
-          todoEvents,
-          steps,
-          result: {
-            text: "",
-            reasoningText: undefined,
-            responseMessages: [],
+          const delayMs = computeRetryDelayMs(err, attempt);
+          attempts.push({
+            attempt,
+            startedAt: attemptStartedAt,
+            finishedAt: isoSafeNow(),
+            ok: false,
             error: String(err),
-          },
-        };
-        await writeTraceFile(path.join(runDir, `trace_attempt-${pad2(attempt)}.json`), attemptTrace);
+            retryDelayMs: delayMs,
+          });
 
-        await sleep(delayMs);
+          const attemptTrace: RunTrace = {
+            runId: run.id,
+            startedAt,
+            finishedAt: isoSafeNow(),
+            config,
+            system,
+            userPrompt,
+            inputMessages,
+            toolLogLines,
+            askEvents,
+            approvalEvents,
+            todoEvents,
+            steps,
+            result: {
+              text: "",
+              reasoningText: undefined,
+              responseMessages: [],
+              error: String(err),
+            },
+          };
+          await writeTraceFile(path.join(runDir, `trace_attempt-${pad2(attempt)}.json`), attemptTrace);
+
+          await sleep(delayMs);
+        }
+      }
+
+      const finishedAt = isoSafeNow();
+
+      const trace: RunTrace = {
+        runId: run.id,
+        startedAt,
+        finishedAt,
+        config,
+        system,
+        userPrompt,
+        inputMessages,
+        toolLogLines: finalToolLogLines,
+        askEvents: finalAskEvents,
+        approvalEvents: finalApprovalEvents,
+        todoEvents: finalTodoEvents,
+        steps: finalSteps,
+        result: {
+          text: finalRes?.text ?? "",
+          reasoningText: finalRes?.reasoningText,
+          responseMessages: (finalRes?.responseMessages ?? []) as any[],
+          error: finalError ? String(finalError) : undefined,
+        },
+      };
+
+      await writeTraceFile(path.join(runDir, "trace.json"), trace);
+
+      await fs.writeFile(path.join(runDir, "attempts.json"), safeJsonStringify(attempts), "utf-8");
+      await fs.writeFile(path.join(runDir, "tool-log.txt"), finalToolLogLines.join("\n"), "utf-8");
+      await fs.writeFile(path.join(runDir, "final.txt"), trace.result.text ?? "", "utf-8");
+      await fs.writeFile(path.join(runDir, "final_reasoning.txt"), trace.result.reasoningText ?? "", "utf-8");
+      await fs.writeFile(path.join(runDir, "response_messages.json"), safeJsonStringify(trace.result.responseMessages), "utf-8");
+
+      if (stack) {
+        const checks = defaultHarnessChecks();
+        const queryResults = await Promise.all(
+          checks.map((check) =>
+            runObservabilityQuery(config, {
+              queryType: check.queryType,
+              query: check.query,
+              toMs: Date.now(),
+              fromMs: Date.now() - check.windowSec * 1000,
+            })
+          )
+        );
+        const sloResult = await evaluateHarnessSlo(config, checks);
+        await fs.writeFile(path.join(runDir, "slo_checks.json"), safeJsonStringify(checks), "utf-8");
+        await fs.writeFile(path.join(runDir, "observability_queries.json"), safeJsonStringify(queryResults), "utf-8");
+        await fs.writeFile(path.join(runDir, "slo_report.json"), safeJsonStringify(sloResult), "utf-8");
+        if ((config.harness?.strictMode ?? false) && !(config.harness?.reportOnly ?? true) && !sloResult.passed) {
+          throw new Error(`SLO failure for ${run.id}: strict mode enabled and one or more checks failed`);
+        }
+      }
+
+      const artifacts = await collectArtifacts(runDir);
+      await fs.writeFile(path.join(runDir, "artifacts_index.json"), safeJsonStringify(artifacts), "utf-8");
+
+      const runMeta = {
+        runId: run.id,
+        provider: run.provider,
+        requestedModel: resolved.requestedModel,
+        resolvedModel: resolved.resolvedModel,
+        resolvedFrom: resolved.resolvedFrom,
+        maxSteps: run.maxSteps ?? 100,
+        maxAttempts,
+        runDir,
+        startedAt,
+        finishedAt,
+        observabilityEnabled: !!stack,
+      };
+      await fs.writeFile(path.join(runDir, "run_meta.json"), safeJsonStringify(runMeta), "utf-8");
+    } finally {
+      if (stack && !cliArgs.keepStack) {
+        try {
+          await stopLocalObservabilityStack(stack);
+        } catch (err) {
+          await fs.writeFile(path.join(runDir, "observability_teardown_error.txt"), String(err), "utf-8");
+        }
       }
     }
-
-    finalError = finalError ?? finalError;
-
-    const finishedAt = isoSafeNow();
-
-    const trace: RunTrace = {
-      runId: run.id,
-      startedAt,
-      finishedAt,
-      config,
-      system,
-      userPrompt,
-      inputMessages,
-      toolLogLines: finalToolLogLines,
-      askEvents: finalAskEvents,
-      approvalEvents: finalApprovalEvents,
-      todoEvents: finalTodoEvents,
-      steps: finalSteps,
-      result: {
-        text: finalRes?.text ?? "",
-        reasoningText: finalRes?.reasoningText,
-        responseMessages: (finalRes?.responseMessages ?? []) as any[],
-        error: finalError ? String(finalError) : undefined,
-      },
-    };
-
-    await writeTraceFile(path.join(runDir, "trace.json"), trace);
-
-    await fs.writeFile(path.join(runDir, "attempts.json"), safeJsonStringify(attempts), "utf-8");
-    await fs.writeFile(path.join(runDir, "tool-log.txt"), finalToolLogLines.join("\n"), "utf-8");
-    await fs.writeFile(path.join(runDir, "final.txt"), trace.result.text ?? "", "utf-8");
-    await fs.writeFile(path.join(runDir, "final_reasoning.txt"), trace.result.reasoningText ?? "", "utf-8");
-    await fs.writeFile(path.join(runDir, "response_messages.json"), safeJsonStringify(trace.result.responseMessages), "utf-8");
-
-    const artifacts = await collectArtifacts(runDir);
-    await fs.writeFile(path.join(runDir, "artifacts_index.json"), safeJsonStringify(artifacts), "utf-8");
-
-    const runMeta = {
-      runId: run.id,
-      provider: run.provider,
-      requestedModel: resolved.requestedModel,
-      resolvedModel: resolved.resolvedModel,
-      resolvedFrom: resolved.resolvedFrom,
-      maxSteps: run.maxSteps ?? 100,
-      maxAttempts,
-      runDir,
-      startedAt,
-      finishedAt,
-    };
-    await fs.writeFile(path.join(runDir, "run_meta.json"), safeJsonStringify(runMeta), "utf-8");
   }
 
   const manifest = {
     createdAt: isoSafeNow(),
     cwd: repoDir,
     runRoot,
+    harness: {
+      observability: cliArgs.observability,
+      reportOnly: cliArgs.reportOnly,
+      strictMode: cliArgs.strictMode,
+      keepStack: cliArgs.keepStack,
+    },
     apiKeys: {
       google: maskApiKey(googleApiKey),
       openai: maskApiKey(openaiApiKey),

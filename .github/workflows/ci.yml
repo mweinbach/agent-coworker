@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  checks:
+    name: Docs + Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Docs consistency check
+        run: bun run docs:check
+
+      - name: Unit tests
+        run: bun test
+
+  harness_smoke:
+    name: Harness Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs:
+      - checks
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Docker info
+        run: docker version
+
+      - name: Harness smoke
+        run: bun run harness:smoke -- --run-id ci-${{ github.run_id }}-${{ github.run_attempt }}

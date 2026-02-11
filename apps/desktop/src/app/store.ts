@@ -223,6 +223,47 @@ function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
       continue;
     }
 
+    if (type === "observability_status") {
+      const enabled = payload.enabled === true;
+      const obs = payload.observability as any;
+      const summary =
+        enabled && obs?.queryApi
+          ? `logs=${String(obs.queryApi.logsBaseUrl ?? "")} metrics=${String(obs.queryApi.metricsBaseUrl ?? "")} traces=${String(obs.queryApi.tracesBaseUrl ?? "")}`
+          : "Observability disabled";
+      out.push({ id: makeId(), kind: "observabilityStatus", ts: evt.ts, enabled, summary });
+      continue;
+    }
+
+    if (type === "harness_context") {
+      out.push({
+        id: makeId(),
+        kind: "harnessContext",
+        ts: evt.ts,
+        context: (payload.context ?? null) as any,
+      });
+      continue;
+    }
+
+    if (type === "observability_query_result") {
+      out.push({
+        id: makeId(),
+        kind: "observabilityQueryResult",
+        ts: evt.ts,
+        result: payload.result as any,
+      });
+      continue;
+    }
+
+    if (type === "harness_slo_result") {
+      out.push({
+        id: makeId(),
+        kind: "harnessSloResult",
+        ts: evt.ts,
+        result: payload.result as any,
+      });
+      continue;
+    }
+
     if (type === "log") {
       out.push({ id: makeId(), kind: "log", ts: evt.ts, line: String(payload.line ?? "") });
       continue;
@@ -338,6 +379,17 @@ export type AppStoreState = {
   answerAsk: (threadId: string, requestId: string, answer: string) => void;
   answerApproval: (threadId: string, requestId: string, approved: boolean) => void;
   dismissPrompt: () => void;
+
+  requestHarnessContext: (threadId: string) => void;
+  setHarnessContext: (threadId: string, payload: {
+    runId: string;
+    objective: string;
+    acceptanceCriteria: string[];
+    constraints: string[];
+    taskId?: string;
+    metadata?: Record<string, string>;
+  }) => void;
+  runHarnessSloChecks: (threadId: string) => void;
 
   openCheckpointsModal: (threadId: string) => void;
   closeCheckpointsModal: () => void;
@@ -755,11 +807,28 @@ function handleThreadEvent(
 
     // Sync session backup/checkpoint state (auto-snapshots happen on the server).
     sendThread(get, threadId, (sessionId) => ({ type: "session_backup_get", sessionId }));
+    // Hydrate harness context for this session.
+    sendThread(get, threadId, (sessionId) => ({ type: "harness_context_get", sessionId }));
 
     // If we queued a first message (fork/continue), send it after handshake.
     if (pendingFirstMessage && pendingFirstMessage.trim()) {
       sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
     }
+    return;
+  }
+
+  if (evt.type === "observability_status") {
+    const summary =
+      evt.enabled && evt.observability
+        ? `logs=${evt.observability.queryApi.logsBaseUrl} metrics=${evt.observability.queryApi.metricsBaseUrl} traces=${evt.observability.queryApi.tracesBaseUrl}`
+        : "Observability disabled";
+    pushFeedItem(set, threadId, {
+      id: makeId(),
+      kind: "observabilityStatus",
+      ts: nowIso(),
+      enabled: evt.enabled,
+      summary,
+    });
     return;
   }
 
@@ -869,6 +938,45 @@ function handleThreadEvent(
         },
       };
     });
+    return;
+  }
+
+  if (evt.type === "harness_context") {
+    pushFeedItem(set, threadId, {
+      id: makeId(),
+      kind: "harnessContext",
+      ts: nowIso(),
+      context: evt.context,
+    });
+    return;
+  }
+
+  if (evt.type === "observability_query_result") {
+    pushFeedItem(set, threadId, {
+      id: makeId(),
+      kind: "observabilityQueryResult",
+      ts: nowIso(),
+      result: evt.result,
+    });
+    return;
+  }
+
+  if (evt.type === "harness_slo_result") {
+    pushFeedItem(set, threadId, {
+      id: makeId(),
+      kind: "harnessSloResult",
+      ts: nowIso(),
+      result: evt.result,
+    });
+    set((s) => ({
+      notifications: pushNotification(s.notifications, {
+        id: makeId(),
+        ts: nowIso(),
+        kind: evt.result.passed ? "info" : "error",
+        title: evt.result.passed ? "SLO checks passed" : "SLO checks failed",
+        detail: `${evt.result.checks.filter((c) => c.pass).length}/${evt.result.checks.length} checks passed`,
+      }),
+    }));
     return;
   }
 
@@ -1515,6 +1623,92 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   },
 
   dismissPrompt: () => set({ promptModal: null }),
+
+  requestHarnessContext: (threadId) => {
+    const rt = get().threadRuntimeById[threadId];
+    if (!rt?.sessionId) return;
+    const ok = sendThread(get, threadId, (sessionId) => ({ type: "harness_context_get", sessionId }));
+    if (!ok) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to request harness context.",
+        }),
+      }));
+      return;
+    }
+    appendThreadTranscript(threadId, "client", { type: "harness_context_get", sessionId: rt.sessionId });
+  },
+
+  setHarnessContext: (threadId, payload) => {
+    const rt = get().threadRuntimeById[threadId];
+    if (!rt?.sessionId) return;
+    const ok = sendThread(get, threadId, (sessionId) => ({
+      type: "harness_context_set",
+      sessionId,
+      context: payload,
+    }));
+    if (!ok) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to set harness context.",
+        }),
+      }));
+      return;
+    }
+    appendThreadTranscript(threadId, "client", { type: "harness_context_set", sessionId: rt.sessionId, context: payload });
+  },
+
+  runHarnessSloChecks: (threadId) => {
+    const rt = get().threadRuntimeById[threadId];
+    if (!rt?.sessionId) return;
+    const checks = [
+      {
+        id: "vector_errors",
+        type: "custom" as const,
+        queryType: "promql" as const,
+        query: "sum(rate(vector_component_errors_total[5m]))",
+        op: "<=" as const,
+        threshold: 0,
+        windowSec: 300,
+      },
+      {
+        id: "log_errors",
+        type: "error_rate" as const,
+        queryType: "logql" as const,
+        query: "_time:[now-5m, now] level:error",
+        op: "==" as const,
+        threshold: 0,
+        windowSec: 300,
+      },
+    ];
+
+    const ok = sendThread(get, threadId, (sessionId) => ({
+      type: "harness_slo_evaluate",
+      sessionId,
+      checks,
+    }));
+    if (!ok) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to run SLO checks.",
+        }),
+      }));
+      return;
+    }
+    appendThreadTranscript(threadId, "client", { type: "harness_slo_evaluate", sessionId: rt.sessionId, checks });
+  },
 
   openCheckpointsModal: (threadId: string) => {
     set({ checkpointsModalThreadId: threadId });

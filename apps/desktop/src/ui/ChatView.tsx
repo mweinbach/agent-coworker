@@ -45,6 +45,27 @@ function truncateValue(value: unknown, maxLen = 48): string {
   return s.slice(0, maxLen - 1) + "\u2026";
 }
 
+function formatJsonPreview(value: unknown, maxLen = 1000): string {
+  let raw: string;
+  if (typeof value === "string") {
+    raw = value;
+  } else {
+    try {
+      raw = JSON.stringify(value, null, 2) ?? String(value);
+    } catch {
+      raw = String(value);
+    }
+  }
+  if (raw.length <= maxLen) return raw;
+  return `${raw.slice(0, maxLen)}\n…`;
+}
+
+function formatSloActual(value: number | null): string {
+  if (value === null || Number.isNaN(value)) return "n/a";
+  if (!Number.isFinite(value)) return String(value);
+  return Number(value.toFixed(4)).toString();
+}
+
 const Markdown = memo(function Markdown(props: { text: string }) {
   return (
     <div className="markdown">
@@ -136,6 +157,104 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
     );
   }
 
+  if (item.kind === "observabilityStatus") {
+    return (
+      <div className="feedItem">
+        <div className={"inlineCard" + (item.enabled ? "" : " inlineCardWarn")}>
+          <div className="metaLine">Observability</div>
+          <div style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{item.summary}</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (item.kind === "harnessContext") {
+    if (!item.context) {
+      return (
+        <div className="feedItem">
+          <div className="inlineCard inlineCardWarn">
+            <div className="metaLine">Harness context</div>
+            <div style={{ marginTop: 6 }}>No harness context set for this session.</div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="feedItem">
+        <div className="inlineCard">
+          <div className="metaLine">Harness context</div>
+          <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
+            <div>
+              <strong>runId:</strong> {item.context.runId}
+            </div>
+            <div>
+              <strong>objective:</strong> {item.context.objective}
+            </div>
+            <div>
+              <strong>acceptance:</strong> {item.context.acceptanceCriteria.length}
+            </div>
+            <div>
+              <strong>constraints:</strong> {item.context.constraints.length}
+            </div>
+            <div>
+              <strong>updatedAt:</strong> {item.context.updatedAt}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (item.kind === "observabilityQueryResult") {
+    return (
+      <div className="feedItem">
+        <div className={"inlineCard" + (item.result.status === "ok" ? "" : " inlineCardDanger")}>
+          <div className="metaLine">
+            Observability query ({item.result.queryType}) {item.result.status}
+          </div>
+          <div style={{ marginTop: 6, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: 12 }}>
+            {item.result.query}
+          </div>
+          {item.result.error ? <div style={{ marginTop: 6 }}>{item.result.error}</div> : null}
+          <pre
+            style={{
+              marginTop: 8,
+              marginBottom: 0,
+              overflowX: "auto",
+              whiteSpace: "pre-wrap",
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+              fontSize: 12,
+            }}
+          >
+            {formatJsonPreview(item.result.data)}
+          </pre>
+        </div>
+      </div>
+    );
+  }
+
+  if (item.kind === "harnessSloResult") {
+    const passCount = item.result.checks.filter((check) => check.pass).length;
+    return (
+      <div className="feedItem">
+        <div className={"inlineCard" + (item.result.passed ? "" : " inlineCardDanger")}>
+          <div className="metaLine">
+            SLO checks {item.result.passed ? "passed" : "failed"} ({passCount}/{item.result.checks.length})
+          </div>
+          <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
+            {item.result.checks.map((check) => (
+              <div key={check.id}>
+                <strong>{check.pass ? "PASS" : "FAIL"}</strong> {check.id} ({check.queryType}) {formatSloActual(check.actual)} {check.op}{" "}
+                {check.threshold}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (item.kind === "log") {
     const parsed = parseToolLogLine(item.line);
     if (parsed) {
@@ -202,6 +321,9 @@ export function ChatView() {
   const sendMessage = useAppStore((s) => s.sendMessage);
   const cancelThread = useAppStore((s) => s.cancelThread);
   const newThread = useAppStore((s) => s.newThread);
+  const requestHarnessContext = useAppStore((s) => s.requestHarnessContext);
+  const setHarnessContext = useAppStore((s) => s.setHarnessContext);
+  const runHarnessSloChecks = useAppStore((s) => s.runHarnessSloChecks);
 
   const feedRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -256,10 +378,72 @@ export function ChatView() {
   const busy = rt?.busy === true;
   const disabled = busy || hasPromptModal;
   const transcriptOnly = rt?.transcriptOnly === true || thread.status !== "active";
+  const harnessDisabled = disabled || !selectedThreadId;
+
+  const onRequestHarnessContext = () => {
+    if (!selectedThreadId) return;
+    requestHarnessContext(selectedThreadId);
+  };
+
+  const onSetHarnessContext = () => {
+    if (!selectedThreadId) return;
+    setHarnessContext(selectedThreadId, {
+      runId: `desktop-${Date.now()}`,
+      objective: thread.title && thread.title !== "New thread" ? thread.title : "Drive this thread with explicit acceptance criteria.",
+      acceptanceCriteria: [
+        "Implement the requested change end-to-end.",
+        "Keep tests and docs green for touched behavior.",
+      ],
+      constraints: [
+        "Keep scope focused to this workspace.",
+        "Use websocket protocol controls for runtime actions.",
+      ],
+      taskId: selectedThreadId,
+      metadata: { source: "desktop-ui" },
+    });
+  };
+
+  const onRunHarnessSloChecks = () => {
+    if (!selectedThreadId) return;
+    runHarnessSloChecks(selectedThreadId);
+  };
 
   return (
     <div className="chatLayout">
       <div className="feed" ref={feedRef}>
+        <div className="inlineCard" style={{ marginBottom: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="metaLine" style={{ marginRight: 4 }}>
+            Harness
+          </div>
+          <button
+            className="modalButton modalButtonOutline"
+            type="button"
+            onClick={onRequestHarnessContext}
+            disabled={harnessDisabled}
+            style={{ padding: "6px 10px" }}
+          >
+            Refresh context
+          </button>
+          <button
+            className="modalButton modalButtonOutline"
+            type="button"
+            onClick={onSetHarnessContext}
+            disabled={harnessDisabled}
+            style={{ padding: "6px 10px" }}
+          >
+            Set default context
+          </button>
+          <button
+            className="modalButton modalButtonOutline"
+            type="button"
+            onClick={onRunHarnessSloChecks}
+            disabled={harnessDisabled}
+            style={{ padding: "6px 10px" }}
+          >
+            Run SLO checks
+          </button>
+        </div>
+
         {transcriptOnly ? (
           <div className="inlineCard" style={{ marginBottom: 14 }}>
             <div style={{ fontWeight: 650, marginBottom: 6 }}>Transcript view</div>

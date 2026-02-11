@@ -1,0 +1,32 @@
+# Ingest OTLP (JSON/protobuf over HTTP) and fan out to Victoria endpoints.
+
+[sources.otlp]
+type = "opentelemetry"
+grpc.address = "0.0.0.0:4317"
+http.address = "0.0.0.0:4318"
+
+[transforms.log_events]
+type = "filter"
+inputs = ["otlp.logs"]
+condition = "true"
+
+[sinks.victoria_logs]
+type = "http"
+inputs = ["log_events"]
+uri = "http://victoria-logs:9428/insert/jsonline?_stream_fields=service.name,sessionId"
+method = "post"
+encoding.codec = "json"
+compression = "none"
+
+[transforms.trace_events]
+type = "filter"
+inputs = ["otlp.traces"]
+condition = "true"
+
+[sinks.victoria_traces]
+type = "http"
+inputs = ["trace_events"]
+uri = "http://victoria-traces:10428/insert/opentelemetry/v1/traces"
+method = "post"
+encoding.codec = "json"
+compression = "none"

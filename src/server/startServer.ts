@@ -91,6 +91,8 @@ export async function startAgentServer(
             enableMcp: session.getEnableMcp(),
           };
           ws.send(JSON.stringify(settings));
+
+          ws.send(JSON.stringify(session.getObservabilityStatusEvent()));
         },
         message(ws, raw) {
           const session = ws.data.session;
@@ -205,6 +207,26 @@ export async function startAgentServer(
 
           if (msg.type === "set_enable_mcp") {
             session.setEnableMcp(msg.enableMcp);
+            return;
+          }
+
+          if (msg.type === "harness_context_get") {
+            session.getHarnessContext();
+            return;
+          }
+
+          if (msg.type === "harness_context_set") {
+            session.setHarnessContext(msg.context);
+            return;
+          }
+
+          if (msg.type === "observability_query") {
+            void session.queryObservability(msg.query);
+            return;
+          }
+
+          if (msg.type === "harness_slo_evaluate") {
+            void session.evaluateHarnessSloChecks(msg.checks);
             return;
           }
 

@@ -2009,6 +2009,648 @@ select:focus-visible {
 }
 
 /* ---------------------------------------------------------------------------
+   Desktop visual refresh
+   --------------------------------------------------------------------------- */
+
+:root {
+  --app-bg: #f3ede3;
+  --sidebar-bg: rgba(248, 242, 233, 0.84);
+  --panel-bg: rgba(252, 249, 243, 0.84);
+  --panel-bg-2: rgba(247, 241, 232, 0.8);
+  --border: rgba(67, 47, 32, 0.14);
+  --border-2: rgba(67, 47, 32, 0.24);
+  --text: #23180f;
+  --muted: rgba(35, 24, 15, 0.64);
+  --muted-2: rgba(35, 24, 15, 0.44);
+  --accent: #bc6530;
+  --danger: #ca5444;
+  --danger-bg: rgba(202, 84, 68, 0.14);
+  --warn: #996227;
+  --warn-bg: rgba(153, 98, 39, 0.12);
+  --radius: 18px;
+  --radius-sm: 12px;
+  --shadow: 0 24px 56px rgba(84, 56, 34, 0.14);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}
+
+body {
+  position: relative;
+  background:
+    radial-gradient(1200px 560px at -8% -12%, rgba(214, 162, 103, 0.23), transparent 62%),
+    radial-gradient(920px 460px at 108% -8%, rgba(151, 126, 96, 0.19), transparent 66%),
+    linear-gradient(160deg, #f7f2e9 0%, #f1e9de 56%, #ebe2d5 100%);
+}
+
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  width: 560px;
+  height: 560px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+  filter: blur(40px);
+}
+
+body::before {
+  left: -220px;
+  bottom: -260px;
+  background: radial-gradient(circle, rgba(225, 195, 155, 0.36) 0%, transparent 72%);
+}
+
+body::after {
+  right: -220px;
+  top: -260px;
+  background: radial-gradient(circle, rgba(179, 150, 114, 0.28) 0%, transparent 72%);
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+.app {
+  gap: 14px;
+  padding: 14px;
+  background: transparent;
+  grid-template-columns: minmax(272px, 320px) 1fr;
+}
+
+.main,
+.sidebar,
+.settingsNav,
+.settingsPage {
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+}
+
+.sidebar {
+  padding: 18px 14px 14px;
+  gap: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(248, 241, 232, 0.72)),
+    var(--sidebar-bg);
+}
+
+.sidebarHeader {
+  padding: 0 4px 6px;
+}
+
+.brandMark {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  border-color: rgba(166, 104, 53, 0.3);
+  background: linear-gradient(145deg, #f4c080 0%, #d7894f 52%, #bb6432 100%);
+  box-shadow: 0 10px 20px rgba(122, 75, 41, 0.25);
+}
+
+.brandName,
+.topbarTitle,
+.heroTitle,
+.skillHeaderTitle,
+.settingsPageTitle {
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+}
+
+.brandName {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: rgba(41, 26, 15, 0.92);
+}
+
+.navItem {
+  border-color: transparent;
+  border-radius: 14px;
+  padding: 11px 12px;
+  background: rgba(255, 255, 255, 0.42);
+  font-weight: 560;
+}
+
+.navItem:hover {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(188, 101, 48, 0.18);
+}
+
+.navItemActive {
+  background: linear-gradient(150deg, rgba(243, 220, 194, 0.88), rgba(255, 255, 255, 0.92));
+  border-color: rgba(188, 101, 48, 0.3);
+  color: rgba(34, 21, 12, 0.95);
+}
+
+.navDot {
+  width: 9px;
+  height: 9px;
+  background: rgba(188, 101, 48, 0.46);
+}
+
+.navItemActive .navDot {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(188, 101, 48, 0.2);
+}
+
+.iconButton {
+  border-color: rgba(118, 81, 53, 0.2);
+  background: rgba(255, 255, 255, 0.68);
+  color: rgba(58, 39, 24, 0.76);
+}
+
+.iconButton:hover {
+  border-color: rgba(188, 101, 48, 0.28);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.workspaceList {
+  padding-right: 6px;
+}
+
+.workspaceRow {
+  border-radius: 14px;
+  padding: 10px 10px;
+  border-color: rgba(118, 81, 53, 0.05);
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.workspaceRow:hover {
+  background: rgba(255, 255, 255, 0.68);
+  border-color: rgba(188, 101, 48, 0.2);
+}
+
+.workspaceRowActive {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(188, 101, 48, 0.28);
+}
+
+.workspaceName {
+  font-weight: 650;
+  color: rgba(39, 25, 14, 0.92);
+}
+
+.workspacePath {
+  color: rgba(58, 39, 24, 0.52);
+}
+
+.threadRow {
+  border-radius: 13px;
+  padding: 9px 10px;
+}
+
+.threadRow:hover {
+  border-color: rgba(188, 101, 48, 0.2);
+  background: rgba(246, 233, 217, 0.7);
+}
+
+.threadRowActive {
+  border-color: rgba(188, 101, 48, 0.28);
+  background: linear-gradient(145deg, rgba(245, 229, 210, 0.82), rgba(255, 255, 255, 0.9));
+}
+
+.threadTitleMain {
+  font-weight: 600;
+}
+
+.main {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(248, 240, 231, 0.82)),
+    var(--panel-bg);
+  grid-template-rows: 62px 1fr;
+}
+
+.topbar {
+  border-bottom: 1px solid rgba(96, 66, 43, 0.18);
+  padding: 10px 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(250, 245, 238, 0.7));
+  backdrop-filter: blur(20px);
+}
+
+.topbarTitle {
+  font-size: 17px;
+  font-weight: 680;
+  color: rgba(35, 24, 15, 0.94);
+}
+
+.topbar .chip {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border-color: rgba(110, 78, 52, 0.22);
+  background: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  font-weight: 560;
+  color: rgba(51, 34, 21, 0.8);
+}
+
+.topbar .chip input {
+  width: 172px;
+}
+
+.topbar .chipButton:hover {
+  background: rgba(188, 101, 48, 0.1);
+}
+
+.pill {
+  font-weight: 600;
+  border-color: rgba(110, 78, 52, 0.2);
+  background: rgba(255, 255, 255, 0.76);
+  color: rgba(56, 38, 23, 0.72);
+}
+
+.pillBusy {
+  border-color: rgba(188, 101, 48, 0.25);
+  background: rgba(208, 129, 71, 0.14);
+  color: rgba(130, 73, 33, 0.95);
+}
+
+.heroMark {
+  border-color: rgba(188, 101, 48, 0.28);
+  background: radial-gradient(circle at 28% 20%, #ffe5c7, #d39256 55%, #be6934 100%);
+  box-shadow: 0 16px 30px rgba(115, 74, 41, 0.22);
+}
+
+.heroTitle {
+  color: rgba(35, 24, 15, 0.88);
+}
+
+.heroSub {
+  color: rgba(53, 36, 23, 0.57);
+}
+
+.feed {
+  padding: 22px 22px 0;
+  background:
+    radial-gradient(900px 440px at 85% -20%, rgba(255, 224, 185, 0.18), transparent 62%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(248, 241, 231, 0.9) 100%);
+}
+
+.feedItem {
+  margin-bottom: 16px;
+}
+
+.bubble {
+  border-radius: 18px 18px 18px 8px;
+  border-color: rgba(112, 78, 51, 0.18);
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 14px 28px rgba(100, 67, 40, 0.09);
+}
+
+.bubbleUser {
+  border-radius: 18px 18px 8px 18px;
+  border-color: rgba(44, 29, 18, 0.4);
+  background: linear-gradient(150deg, #47362b 0%, #2e231c 100%);
+  color: #fbf5eb;
+}
+
+.metaLine {
+  color: rgba(68, 46, 29, 0.54);
+}
+
+.inlineCard {
+  border-color: rgba(110, 78, 52, 0.18);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.toolCallCard {
+  border-color: rgba(110, 78, 52, 0.2);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.toolCallCardOut {
+  border-left-color: rgba(118, 81, 53, 0.36);
+  background: rgba(123, 87, 56, 0.07);
+}
+
+.toolCallCardIn {
+  border-left-color: rgba(188, 101, 48, 0.45);
+  background: rgba(188, 101, 48, 0.08);
+}
+
+.toolCallName {
+  background: rgba(188, 101, 48, 0.12);
+  color: rgba(71, 45, 23, 0.88);
+}
+
+.composerWrap {
+  padding: 16px 22px 20px;
+  background: linear-gradient(to bottom, rgba(247, 240, 231, 0), rgba(247, 240, 231, 0.94) 36%, #f7f0e7 100%);
+}
+
+.composer {
+  border-radius: 20px;
+  border-color: rgba(109, 77, 50, 0.22);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 20px 36px rgba(84, 56, 34, 0.14);
+}
+
+.composer:focus-within {
+  border-color: rgba(188, 101, 48, 0.44);
+  box-shadow:
+    0 0 0 3px rgba(188, 101, 48, 0.14),
+    0 20px 36px rgba(84, 56, 34, 0.15);
+}
+
+.composer textarea {
+  color: var(--text);
+}
+
+.composer textarea::placeholder {
+  color: rgba(52, 34, 20, 0.48);
+}
+
+.sendButton {
+  border-color: rgba(120, 67, 31, 0.42);
+  background: linear-gradient(155deg, #d08147, #b95f2f);
+  color: #fff7eb;
+}
+
+.sendButton:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.stopButton {
+  background: linear-gradient(155deg, #da6b5c, #c04f40);
+  border-color: rgba(163, 56, 42, 0.4);
+}
+
+.stopButton:hover {
+  opacity: 1;
+  filter: brightness(1.05);
+}
+
+.sendArrow {
+  border-bottom-color: #fff7eb;
+}
+
+.toggleRow {
+  color: rgba(51, 34, 21, 0.7);
+}
+
+.modalOverlay {
+  background: rgba(42, 29, 19, 0.24);
+  backdrop-filter: blur(3px);
+}
+
+.modal {
+  border-color: rgba(95, 66, 43, 0.2);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 240, 231, 0.95));
+}
+
+.modalButton {
+  border-color: rgba(110, 78, 52, 0.22);
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.modalButtonPrimary {
+  background: linear-gradient(155deg, #d08147, #b95f2f);
+  border-color: rgba(126, 71, 34, 0.42);
+  color: #fff8ee;
+}
+
+.modalButtonOutline {
+  border-color: rgba(110, 78, 52, 0.3);
+}
+
+.modalButtonOutline:hover {
+  border-color: rgba(188, 101, 48, 0.42);
+  background: rgba(188, 101, 48, 0.09);
+}
+
+.ctxMenu {
+  border-color: rgba(95, 66, 43, 0.24);
+  background: rgba(255, 251, 245, 0.94);
+}
+
+.ctxMenuItem:hover {
+  border-color: rgba(188, 101, 48, 0.2);
+  background: rgba(188, 101, 48, 0.09);
+}
+
+.skillsLayout {
+  grid-template-columns: 300px 1fr;
+}
+
+.skillsList {
+  border-right-color: rgba(95, 66, 43, 0.16);
+  background: linear-gradient(180deg, rgba(251, 247, 241, 0.94), rgba(246, 238, 228, 0.82));
+}
+
+.skillsItem {
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.skillsItem:hover {
+  border-color: rgba(188, 101, 48, 0.22);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.skillsItemActive {
+  border-color: rgba(188, 101, 48, 0.3);
+  background: linear-gradient(145deg, rgba(247, 233, 214, 0.84), rgba(255, 255, 255, 0.88));
+}
+
+.skillsDesc {
+  color: rgba(59, 39, 24, 0.54);
+}
+
+.skillHeader {
+  border-color: rgba(110, 78, 52, 0.18);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 240, 231, 0.92));
+}
+
+.skillHeaderSub {
+  color: rgba(56, 37, 22, 0.62);
+}
+
+.skillChips .chip {
+  font-size: 11px;
+  color: rgba(61, 40, 24, 0.72);
+  border-color: rgba(110, 78, 52, 0.2);
+  background: rgba(255, 255, 255, 0.72);
+  padding: 2px 9px;
+}
+
+.skillPrompt {
+  border-color: rgba(110, 78, 52, 0.18);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.skillPromptLabel {
+  color: rgba(60, 39, 23, 0.5);
+}
+
+.skillPromptText {
+  color: rgba(44, 29, 18, 0.8);
+}
+
+.settingsRoot {
+  background: transparent;
+}
+
+.settingsApp {
+  padding: 14px;
+  gap: 14px;
+  background: transparent;
+  grid-template-columns: 272px 1fr;
+}
+
+.settingsNav {
+  border-right: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(248, 241, 232, 0.72)),
+    var(--sidebar-bg);
+}
+
+.settingsBackButton,
+.settingsNavItem {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.44);
+}
+
+.settingsBackButton:hover,
+.settingsNavItem:hover {
+  border-color: rgba(188, 101, 48, 0.2);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.settingsNavItemActive {
+  border-color: rgba(188, 101, 48, 0.3);
+  background: linear-gradient(150deg, rgba(243, 220, 194, 0.86), rgba(255, 255, 255, 0.9));
+}
+
+.settingsPage {
+  background:
+    radial-gradient(840px 400px at 90% -12%, rgba(255, 226, 191, 0.16), transparent 64%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(247, 239, 230, 0.82));
+}
+
+.settingsCard,
+.settingsProviderCard {
+  border-color: rgba(110, 78, 52, 0.18);
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.settingsSelect,
+.settingsTextInput {
+  border-color: rgba(110, 78, 52, 0.22);
+  background: rgba(255, 255, 255, 0.86);
+  color: rgba(35, 24, 15, 0.86);
+}
+
+.settingsProviderHelp {
+  border-color: rgba(110, 78, 52, 0.2);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.settingsRow,
+.settingsProviderListRow,
+.settingsSessionRow {
+  border-top-color: rgba(95, 66, 43, 0.12);
+}
+
+.settingsProviderListRow:hover {
+  background: rgba(188, 101, 48, 0.08);
+}
+
+@keyframes coworkEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.app,
+.settingsApp {
+  animation: coworkEnter 260ms ease-out;
+}
+
+@media (max-width: 1260px) {
+  .app {
+    grid-template-columns: minmax(240px, 288px) 1fr;
+  }
+
+  .skillsLayout {
+    grid-template-columns: 260px 1fr;
+  }
+}
+
+@media (max-width: 960px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(220px, 42vh) 1fr;
+    padding: 10px;
+    gap: 10px;
+  }
+
+  .sidebar,
+  .main {
+    border-radius: 18px;
+  }
+
+  .topbar {
+    padding: 9px 12px;
+  }
+
+  .topbarRight {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .feed,
+  .composerWrap {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .skillsLayout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 220px 1fr;
+  }
+
+  .settingsApp {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    padding: 10px;
+    gap: 10px;
+  }
+
+  .settingsNav,
+  .settingsPage {
+    border-radius: 18px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --app-bg: #1f1913;
+    --sidebar-bg: rgba(37, 31, 24, 0.86);
+    --panel-bg: rgba(45, 38, 30, 0.84);
+    --panel-bg-2: rgba(38, 32, 26, 0.8);
+    --border: rgba(255, 233, 212, 0.12);
+    --border-2: rgba(255, 233, 212, 0.24);
+    --text: #f6ece0;
+    --muted: rgba(246, 236, 224, 0.68);
+    --muted-2: rgba(246, 236, 224, 0.5);
+    --accent: #e29a62;
+    --shadow: 0 24px 56px rgba(0, 0, 0, 0.36);
+    color-scheme: dark;
+  }
+
+  body {
+    background:
+      radial-gradient(1200px 560px at -8% -12%, rgba(200, 132, 72, 0.2), transparent 62%),
+      radial-gradient(920px 460px at 108% -8%, rgba(156, 114, 76, 0.16), transparent 66%),
+      linear-gradient(160deg, #1f1913 0%, #19140f 56%, #16110d 100%);
+  }
+}
+
+/* ---------------------------------------------------------------------------
    Reduced motion preference (Finding 12.3)
    --------------------------------------------------------------------------- */
 

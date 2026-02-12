@@ -2,7 +2,8 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use tokio::io::AsyncWriteExt;
@@ -779,11 +780,153 @@ async fn delete_transcript(app: AppHandle, thread_id: String) -> CommandResult<(
 }
 
 // ---------------------------------------------------------------------------
+// DevTools probe compatibility
+// ---------------------------------------------------------------------------
+
+fn parse_debug_port(raw: &str) -> Option<u16> {
+    if let Ok(port) = raw.parse::<u16>() {
+        return Some(port);
+    }
+    if let Ok(addr) = raw.parse::<SocketAddr>() {
+        return Some(addr.port());
+    }
+    raw.rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+}
+
+fn write_probe_response(stream: &mut TcpStream, status: &str, body: &str) -> std::io::Result<()> {
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes())
+}
+
+fn handle_probe_client(stream: &mut TcpStream, bind_addr: SocketAddr) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line)? == 0 {
+        return Ok(());
+    }
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line)? == 0 || line == "\r\n" {
+            break;
+        }
+    }
+
+    let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+    let ws_url = format!("ws://127.0.0.1:{}/devtools/page/1", bind_addr.port());
+
+    match path {
+        "/json/version" => {
+            let body = serde_json::json!({
+                "Browser": "Cowork WKWebView",
+                "Protocol-Version": "1.3",
+                "User-Agent": "Tauri/WKWebView",
+                "webSocketDebuggerUrl": ws_url
+            })
+            .to_string();
+            write_probe_response(stream, "200 OK", &body)
+        }
+        "/json/list" => {
+            let body = serde_json::json!([{
+                "id": "1",
+                "title": "Cowork",
+                "type": "page",
+                "url": "app://cowork",
+                "webSocketDebuggerUrl": ws_url
+            }])
+            .to_string();
+            write_probe_response(stream, "200 OK", &body)
+        }
+        _ => {
+            let body = serde_json::json!({ "error": "not found" }).to_string();
+            write_probe_response(stream, "404 Not Found", &body)
+        }
+    }
+}
+
+fn start_devtools_probe_server(bind_addr: SocketAddr) {
+    std::thread::Builder::new()
+        .name("cowork-devtools-probe".to_string())
+        .spawn(move || {
+            let listener = match TcpListener::bind(bind_addr) {
+                Ok(listener) => listener,
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to bind devtools probe server on {}: {}",
+                        bind_addr,
+                        e
+                    );
+                    return;
+                }
+            };
+            if let Err(e) = listener.set_nonblocking(true) {
+                tracing::warn!("Failed to configure devtools probe server: {}", e);
+                return;
+            }
+            tracing::info!("Devtools probe server listening on {}", bind_addr);
+
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        if let Err(e) = handle_probe_client(&mut stream, bind_addr) {
+                            tracing::debug!("Devtools probe request error: {}", e);
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    Err(e) => {
+                        tracing::warn!("Devtools probe server stopped: {}", e);
+                        break;
+                    }
+                }
+            }
+        })
+        .map_err(|e| {
+            tracing::warn!("Failed to start devtools probe server thread: {}", e);
+        })
+        .ok();
+}
+
+fn maybe_start_devtools_probe_server() {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let raw = match std::env::var("WEBKIT_INSPECTOR_SERVER") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => return,
+    };
+
+    let Some(port) = parse_debug_port(raw.trim()) else {
+        tracing::warn!(
+            "WEBKIT_INSPECTOR_SERVER was set to '{}' but no valid port was found",
+            raw
+        );
+        return;
+    };
+
+    // Keep the endpoint local-only even if the incoming env var contains a
+    // broader bind address.
+    let bind_addr = SocketAddr::from(([127, 0, 0, 1], port));
+    start_devtools_probe_server(bind_addr);
+}
+
+// ---------------------------------------------------------------------------
 // App entry point
 // ---------------------------------------------------------------------------
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Tauri MCP looks for Chromium-style /json/version and /json/list debug
+    // endpoints. WKWebView on macOS doesn't expose those, so provide a tiny
+    // local compatibility endpoint in debug mode.
+    maybe_start_devtools_probe_server();
+
     tauri::Builder::default()
         .manage(ServerManager::default())
         .manage(StateLock::default())

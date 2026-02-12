@@ -25,6 +25,7 @@ function serverOpts(tmpDir: string, overrides?: Partial<StartAgentServerOptions>
     cwd: tmpDir,
     hostname: "127.0.0.1",
     port: 0,
+    homedir: tmpDir,
     env: {
       AGENT_WORKING_DIR: tmpDir,
       AGENT_PROVIDER: "google",
@@ -104,7 +105,7 @@ function sendAndCollect(
         return;
       }
 
-      if (msg.type === "session_settings") return;
+      if (msg.type === "session_settings" || msg.type === "observability_status") return;
 
       responses.push(msg);
       if (responses.length >= responseCount) {
@@ -321,6 +322,19 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("connect emits observability_status", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const messages = await collectMessages(url, 3);
+      const status = messages.find((msg: any) => msg.type === "observability_status");
+      expect(status).toBeDefined();
+      expect(typeof status.enabled).toBe("boolean");
+    } finally {
+      server.stop();
+    }
+  });
+
   test("each connection gets a unique sessionId", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -369,7 +383,7 @@ describe("WebSocket Lifecycle", () => {
             ws.send("this is not valid json {{{");
             return;
           }
-          if (msg.type === "session_settings") return;
+          if (msg.type === "session_settings" || msg.type === "observability_status") return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);
@@ -488,6 +502,125 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("harness_context_set returns harness_context", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const { responses } = await sendAndCollect(
+        url,
+        (sessionId) => ({
+          type: "harness_context_set",
+          sessionId,
+          context: {
+            runId: "run-01",
+            objective: "Improve startup reliability",
+            acceptanceCriteria: ["startup < 800ms"],
+            constraints: ["no API changes"],
+          },
+        }),
+        1
+      );
+      expect(responses[0].type).toBe("harness_context");
+      expect(responses[0].context.runId).toBe("run-01");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("observability_query returns result envelope", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const { responses } = await sendAndCollect(
+        url,
+        (sessionId) => ({
+          type: "observability_query",
+          sessionId,
+          query: { queryType: "promql", query: "up" },
+        }),
+        1
+      );
+      expect(responses[0].type).toBe("observability_query_result");
+      expect(responses[0].result.status).toBe("error");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("observability_query surfaces thrown failures as result envelopes", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: {
+          AGENT_WORKING_DIR: tmpDir,
+          AGENT_PROVIDER: "google",
+          AGENT_OBSERVABILITY_ENABLED: "true",
+          AGENT_OBS_METRICS_URL: "not-a-valid-url",
+        },
+      })
+    );
+    try {
+      const { responses } = await sendAndCollect(
+        url,
+        (sessionId) => ({
+          type: "observability_query",
+          sessionId,
+          query: { queryType: "promql", query: "up", fromMs: 1000, toMs: 2000 },
+        }),
+        1
+      );
+      expect(responses[0].type).toBe("observability_query_result");
+      expect(responses[0].result.status).toBe("error");
+      expect(responses[0].result.fromMs).toBe(1000);
+      expect(responses[0].result.toMs).toBe(2000);
+      expect(String(responses[0].result.error)).toContain("Failed to run observability query");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("harness_slo_evaluate surfaces thrown failures as result envelopes", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(
+      serverOpts(tmpDir, {
+        env: {
+          AGENT_WORKING_DIR: tmpDir,
+          AGENT_PROVIDER: "google",
+          AGENT_OBSERVABILITY_ENABLED: "true",
+          AGENT_OBS_METRICS_URL: "not-a-valid-url",
+        },
+      })
+    );
+    try {
+      const { responses } = await sendAndCollect(
+        url,
+        (sessionId) => ({
+          type: "harness_slo_evaluate",
+          sessionId,
+          checks: [
+            {
+              id: "vector_errors",
+              type: "custom",
+              queryType: "promql",
+              query: "sum(rate(vector_component_errors_total[5m]))",
+              op: "<=",
+              threshold: 0,
+              windowSec: 300,
+            },
+          ],
+        }),
+        1
+      );
+      expect(responses[0].type).toBe("harness_slo_result");
+      expect(responses[0].result.passed).toBe(false);
+      expect(responses[0].result.checks).toHaveLength(1);
+      expect(responses[0].result.checks[0].pass).toBe(false);
+      expect(String(responses[0].result.checks[0].reason)).toContain("Failed to evaluate SLO checks");
+    } finally {
+      server.stop();
+    }
+  });
+
   test("sending a non-object JSON value receives error", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -507,7 +640,7 @@ describe("WebSocket Lifecycle", () => {
             ws.send(JSON.stringify("just a string"));
             return;
           }
-          if (msg.type === "session_settings") return;
+          if (msg.type === "session_settings" || msg.type === "observability_status") return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);
@@ -540,7 +673,7 @@ describe("WebSocket Lifecycle", () => {
             ws.send("null");
             return;
           }
-          if (msg.type === "session_settings") return;
+          if (msg.type === "session_settings" || msg.type === "observability_status") return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);
@@ -573,7 +706,7 @@ describe("WebSocket Lifecycle", () => {
             ws.send(JSON.stringify([1, 2, 3]));
             return;
           }
-          if (msg.type === "session_settings") return;
+          if (msg.type === "session_settings" || msg.type === "observability_status") return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);

@@ -444,6 +444,138 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("harness context messages", () => {
+    test("harness_context_get parses", () => {
+      const msg = expectOk(JSON.stringify({ type: "harness_context_get", sessionId: "s1" }));
+      expect(msg.type).toBe("harness_context_get");
+      if (msg.type === "harness_context_get") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("harness_context_get missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "harness_context_get" }));
+      expect(err).toBe("harness_context_get missing sessionId");
+    });
+
+    test("harness_context_set parses", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "harness_context_set",
+          sessionId: "s1",
+          context: {
+            runId: "run-01",
+            objective: "Improve startup reliability",
+            acceptanceCriteria: ["startup < 800ms"],
+            constraints: ["no API changes"],
+            metadata: { owner: "platform" },
+          },
+        })
+      );
+      expect(msg.type).toBe("harness_context_set");
+      if (msg.type === "harness_context_set") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.context.runId).toBe("run-01");
+      }
+    });
+
+    test("harness_context_set validates required fields", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "harness_context_set",
+          sessionId: "s1",
+          context: {
+            runId: "",
+            objective: "x",
+            acceptanceCriteria: [],
+            constraints: [],
+          },
+        })
+      );
+      expect(err).toContain("harness_context_set invalid context.runId");
+    });
+  });
+
+  describe("observability_query", () => {
+    test("observability_query parses", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "observability_query",
+          sessionId: "s1",
+          query: {
+            queryType: "promql",
+            query: "sum(rate(vector_component_errors_total[5m]))",
+            fromMs: 1000,
+            toMs: 2000,
+            limit: 10,
+          },
+        })
+      );
+      expect(msg.type).toBe("observability_query");
+      if (msg.type === "observability_query") {
+        expect(msg.query.queryType).toBe("promql");
+      }
+    });
+
+    test("observability_query rejects invalid queryType", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "observability_query",
+          sessionId: "s1",
+          query: { queryType: "sql", query: "select *" },
+        })
+      );
+      expect(err).toContain("observability_query invalid query.queryType");
+    });
+  });
+
+  describe("harness_slo_evaluate", () => {
+    test("harness_slo_evaluate parses", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "harness_slo_evaluate",
+          sessionId: "s1",
+          checks: [
+            {
+              id: "vector_errors",
+              type: "custom",
+              queryType: "promql",
+              query: "sum(rate(vector_component_errors_total[5m]))",
+              op: "<=",
+              threshold: 0,
+              windowSec: 300,
+            },
+          ],
+        })
+      );
+      expect(msg.type).toBe("harness_slo_evaluate");
+      if (msg.type === "harness_slo_evaluate") {
+        expect(msg.checks).toHaveLength(1);
+      }
+    });
+
+    test("harness_slo_evaluate rejects invalid check operator", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "harness_slo_evaluate",
+          sessionId: "s1",
+          checks: [
+            {
+              id: "c1",
+              type: "custom",
+              queryType: "promql",
+              query: "x",
+              op: "lte",
+              threshold: 1,
+              windowSec: 10,
+            },
+          ],
+        })
+      );
+      expect(err).toContain("harness_slo_evaluate invalid check.op");
+    });
+  });
+
   describe("reset", () => {
     test("valid reset message", () => {
       const msg = expectOk(JSON.stringify({ type: "reset", sessionId: "s1" }));

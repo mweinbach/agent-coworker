@@ -148,6 +148,8 @@ function makeSession(
     };
     getProviderStatusesImpl: (opts: any) => Promise<any>;
     sessionBackupFactory: (opts: SessionBackupInitOptions) => Promise<SessionBackupHandle>;
+    runObservabilityQueryImpl: (config: AgentConfig, query: any) => Promise<any>;
+    evaluateHarnessSloImpl: (config: AgentConfig, checks: any[]) => Promise<any>;
   }>
 ) {
   const dir = "/tmp/test-session";
@@ -163,6 +165,8 @@ function makeSession(
     getAiCoworkerPathsImpl: overrides?.getAiCoworkerPathsImpl,
     getProviderStatusesImpl,
     sessionBackupFactory,
+    runObservabilityQueryImpl: overrides?.runObservabilityQueryImpl as any,
+    evaluateHarnessSloImpl: overrides?.evaluateHarnessSloImpl as any,
   });
   return { session, emit, events, sessionBackupFactory };
 }
@@ -369,6 +373,137 @@ describe("AgentSession", () => {
 
       resolveRunTurn();
       await first;
+    });
+  });
+
+  describe("harness/observability", () => {
+    test("getObservabilityStatusEvent reflects config", () => {
+      const dir = "/tmp/test-session";
+      const cfg: AgentConfig = {
+        ...makeConfig(dir),
+        observabilityEnabled: true,
+        observability: {
+          mode: "local_docker",
+          otlpHttpEndpoint: "http://127.0.0.1:14318",
+          queryApi: {
+            logsBaseUrl: "http://127.0.0.1:19428",
+            metricsBaseUrl: "http://127.0.0.1:18428",
+            tracesBaseUrl: "http://127.0.0.1:10428",
+          },
+          defaultWindowSec: 300,
+        },
+      };
+      const { session } = makeSession({ config: cfg });
+      const evt = session.getObservabilityStatusEvent();
+      expect(evt.type).toBe("observability_status");
+      expect(evt.enabled).toBe(true);
+      expect(evt.observability?.otlpHttpEndpoint).toBe("http://127.0.0.1:14318");
+    });
+
+    test("setHarnessContext + getHarnessContext emit harness_context", () => {
+      const { session, events } = makeSession();
+      session.setHarnessContext({
+        runId: "run-01",
+        objective: "Improve startup reliability",
+        acceptanceCriteria: ["startup < 800ms"],
+        constraints: ["no API changes"],
+      });
+      session.getHarnessContext();
+
+      const emitted = events.filter((evt) => evt.type === "harness_context") as any[];
+      expect(emitted.length).toBeGreaterThan(0);
+      expect(emitted.at(-1)?.context?.runId).toBe("run-01");
+    });
+
+    test("queryObservability emits observability_query_result", async () => {
+      const runObservabilityQueryImpl = mock(async () => ({
+        queryType: "promql",
+        query: "up",
+        fromMs: 1,
+        toMs: 2,
+        status: "ok",
+        data: { status: "success" },
+      }));
+      const { session, events } = makeSession({ runObservabilityQueryImpl: runObservabilityQueryImpl as any });
+
+      await session.queryObservability({ queryType: "promql", query: "up" });
+
+      const evt = events.find((e) => e.type === "observability_query_result") as any;
+      expect(evt).toBeDefined();
+      expect(evt.result.status).toBe("ok");
+      expect(runObservabilityQueryImpl).toHaveBeenCalledTimes(1);
+    });
+
+    test("queryObservability emits error result envelope when query impl throws", async () => {
+      const runObservabilityQueryImpl = mock(async () => {
+        throw new Error("invalid observability endpoint");
+      });
+      const { session, events } = makeSession({ runObservabilityQueryImpl: runObservabilityQueryImpl as any });
+
+      await session.queryObservability({
+        queryType: "promql",
+        query: " up ",
+        fromMs: 10,
+        toMs: 20,
+      });
+
+      const evt = events.find((e) => e.type === "observability_query_result") as any;
+      expect(evt).toBeDefined();
+      expect(evt.result.status).toBe("error");
+      expect(evt.result.query).toBe("up");
+      expect(evt.result.fromMs).toBe(10);
+      expect(evt.result.toMs).toBe(20);
+      expect(String(evt.result.error)).toContain("Failed to run observability query: invalid observability endpoint");
+      expect(runObservabilityQueryImpl).toHaveBeenCalledTimes(1);
+    });
+
+    test("evaluateHarnessSloChecks emits harness_slo_result", async () => {
+      const evaluateHarnessSloImpl = mock(async () => ({
+        reportOnly: true,
+        strictMode: false,
+        passed: true,
+        fromMs: 1,
+        toMs: 2,
+        checks: [],
+      }));
+      const { session, events } = makeSession({ evaluateHarnessSloImpl: evaluateHarnessSloImpl as any });
+
+      await session.evaluateHarnessSloChecks([]);
+
+      const evt = events.find((e) => e.type === "harness_slo_result") as any;
+      expect(evt).toBeDefined();
+      expect(evt.result.passed).toBe(true);
+      expect(evaluateHarnessSloImpl).toHaveBeenCalledTimes(1);
+    });
+
+    test("evaluateHarnessSloChecks emits failing result envelope when evaluator throws", async () => {
+      const evaluateHarnessSloImpl = mock(async () => {
+        throw new Error("slo evaluation failed");
+      });
+      const { session, events } = makeSession({ evaluateHarnessSloImpl: evaluateHarnessSloImpl as any });
+      const checks = [
+        {
+          id: "vector_errors",
+          type: "custom" as const,
+          queryType: "promql" as const,
+          query: "sum(rate(vector_component_errors_total[5m]))",
+          op: "<=" as const,
+          threshold: 0,
+          windowSec: 300,
+        },
+      ];
+
+      await session.evaluateHarnessSloChecks(checks);
+
+      const evt = events.find((e) => e.type === "harness_slo_result") as any;
+      expect(evt).toBeDefined();
+      expect(evt.result.passed).toBe(false);
+      expect(evt.result.checks).toHaveLength(1);
+      expect(evt.result.checks[0].id).toBe("vector_errors");
+      expect(evt.result.checks[0].pass).toBe(false);
+      expect(evt.result.checks[0].actual).toBeNull();
+      expect(String(evt.result.checks[0].reason)).toContain("Failed to evaluate SLO checks: slo evaluation failed");
+      expect(evaluateHarnessSloImpl).toHaveBeenCalledTimes(1);
     });
   });
 

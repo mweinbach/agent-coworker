@@ -1,6 +1,5 @@
 import { create } from "zustand";
 
-import { open } from "@tauri-apps/plugin-dialog";
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 
 import { AgentSocket } from "../lib/agentSocket";
@@ -9,11 +8,12 @@ import {
   appendTranscriptBatch,
   deleteTranscript,
   loadState,
+  pickWorkspaceDirectory,
   readTranscript,
   saveState,
   startWorkspaceServer,
   stopWorkspaceServer,
-} from "../lib/tauriCommands";
+} from "../lib/desktopCommands";
 import type { ClientMessage, ProviderName, ServerEvent } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 
@@ -1167,8 +1167,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   setSettingsPage: (page) => set({ settingsPage: page }),
 
   addWorkspace: async () => {
-    const picked = await open({ directory: true, multiple: false, title: "Select a workspace directory" });
-    const dir = typeof picked === "string" ? picked : Array.isArray(picked) ? picked[0] : null;
+    const dir = await pickWorkspaceDirectory();
     if (!dir) return;
 
     const stayInSettings = get().view === "settings";

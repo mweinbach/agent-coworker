@@ -1,29 +1,35 @@
-import { invoke } from "@tauri-apps/api/core";
-
 import type { PersistedState, TranscriptEvent } from "../app/types";
+
+function requireDesktopApi() {
+  const api = window.cowork;
+  if (!api) {
+    throw new Error("Desktop bridge unavailable. Start the app via Electron.");
+  }
+  return api;
+}
 
 export async function startWorkspaceServer(opts: {
   workspaceId: string;
   workspacePath: string;
   yolo: boolean;
 }): Promise<{ url: string }> {
-  return await invoke("start_workspace_server", opts);
+  return await requireDesktopApi().startWorkspaceServer(opts);
 }
 
 export async function stopWorkspaceServer(opts: { workspaceId: string }): Promise<void> {
-  await invoke("stop_workspace_server", opts);
+  await requireDesktopApi().stopWorkspaceServer(opts);
 }
 
 export async function loadState(): Promise<PersistedState> {
-  return await invoke("load_state");
+  return await requireDesktopApi().loadState();
 }
 
 export async function saveState(state: PersistedState): Promise<void> {
-  await invoke("save_state", { state });
+  await requireDesktopApi().saveState(state);
 }
 
 export async function readTranscript(opts: { threadId: string }): Promise<TranscriptEvent[]> {
-  return await invoke("read_transcript", opts);
+  return await requireDesktopApi().readTranscript(opts);
 }
 
 export async function appendTranscriptEvent(opts: {
@@ -32,7 +38,7 @@ export async function appendTranscriptEvent(opts: {
   direction: "server" | "client";
   payload: unknown;
 }): Promise<void> {
-  await invoke("append_transcript_event", opts);
+  await requireDesktopApi().appendTranscriptEvent(opts);
 }
 
 export async function appendTranscriptBatch(events: {
@@ -41,9 +47,13 @@ export async function appendTranscriptBatch(events: {
   direction: "server" | "client";
   payload: unknown;
 }[]): Promise<void> {
-  await invoke("append_transcript_batch", { events });
+  await requireDesktopApi().appendTranscriptBatch(events);
 }
 
 export async function deleteTranscript(opts: { threadId: string }): Promise<void> {
-  await invoke("delete_transcript", opts);
+  await requireDesktopApi().deleteTranscript(opts);
+}
+
+export async function pickWorkspaceDirectory(): Promise<string | null> {
+  return await requireDesktopApi().pickWorkspaceDirectory();
 }

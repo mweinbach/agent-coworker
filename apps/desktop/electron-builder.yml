@@ -1,0 +1,22 @@
+appId: com.cowork.desktop
+productName: Cowork
+directories:
+  output: release
+files:
+  - out/**
+  - package.json
+extraResources:
+  - from: ../../dist
+    to: dist
+  - from: resources/binaries
+    to: binaries
+mac:
+  icon: build/icon.icns
+  target:
+    - dmg
+    - zip
+win:
+  icon: build/icon.ico
+  target:
+    - nsis
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}

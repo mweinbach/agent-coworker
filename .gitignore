@@ -13,10 +13,6 @@ coverage/
 .turbo/
 .cache/
 
-# Tauri / Rust build output
-**/src-tauri/target/
-**/src-tauri/gen/
-
 # Agent runtime dirs
 output/
 uploads/

@@ -13,7 +13,7 @@
     "dev": "bun --watch src/index.ts",
     "serve": "bun src/server/index.ts",
     "tui": "bun src/tui/index.tsx",
-    "desktop:dev": "cd apps/desktop && bun run tauri dev",
+    "desktop:dev": "cd apps/desktop && bun run dev",
     "desktop:build": "cd apps/desktop && bun run build",
     "portal:dev": "cd apps/portal && bun run dev",
     "portal:build": "cd apps/portal && bun run build",

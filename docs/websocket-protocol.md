@@ -966,7 +966,7 @@ server  <- session_backup_state { reason: "restore", backup: {...} }
 
 ### Server CLI (machine-readable)
 
-For desktop wrappers (e.g. Tauri), the server supports:
+For desktop wrappers (e.g. Electron), the server supports:
 
 - Ephemeral ports with `--port 0`
 - JSON startup output with `--json`

@@ -5,7 +5,7 @@ async function rmrf(p: string) {
   await fs.rm(p, { recursive: true, force: true });
 }
 
-function resolveTauriTargetTriple(): string {
+function resolveDesktopTargetTriple(): string {
   const platform = process.platform;
   const arch = process.arch;
 
@@ -73,7 +73,7 @@ async function main() {
       // These dependencies currently pull in wasm assets using `?binary` import
       // specifiers which Bun's bundler cannot resolve. They are unused in the
       // desktop bundle (provider is gated), so keep them external to unblock
-      // building the server resources for Tauri.
+      // building the server resources.
       "--external",
       "ai-sdk-provider-gemini-cli",
       "--external",
@@ -96,14 +96,14 @@ async function main() {
   if (code !== 0) process.exit(code);
 
   // Build a standalone server sidecar so end users don't need Bun installed.
-  // Tauri expects external binaries to be named: <name>-<target_triple>[.exe]
-  const tauriBinariesDir = path.join(root, "apps", "desktop", "src-tauri", "binaries");
-  await fs.mkdir(tauriBinariesDir, { recursive: true });
+  // Electron packaging picks this up from apps/desktop/resources/binaries.
+  const desktopBinariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
+  await fs.mkdir(desktopBinariesDir, { recursive: true });
 
-  const targetTriple = resolveTauriTargetTriple();
+  const targetTriple = resolveDesktopTargetTriple();
   const sidecarBaseName = "cowork-server";
   const sidecarExt = process.platform === "win32" ? ".exe" : "";
-  const sidecarOutfile = path.join(tauriBinariesDir, `${sidecarBaseName}-${targetTriple}${sidecarExt}`);
+  const sidecarOutfile = path.join(desktopBinariesDir, `${sidecarBaseName}-${targetTriple}${sidecarExt}`);
   await fs.rm(sidecarOutfile, { force: true }).catch(() => {});
 
   const compileArgs = [

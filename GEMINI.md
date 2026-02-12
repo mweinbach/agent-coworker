@@ -8,7 +8,7 @@
 *   **Main Technologies:**
     *   **Runtime:** Bun (high-performance JavaScript/TypeScript runtime).
     *   **Agent Framework:** Vercel AI SDK (`ai` package).
-    *   **UI/UX:** OpenTUI + React for the terminal interface; Tauri for the desktop application.
+    *   **UI/UX:** OpenTUI + React for the terminal interface; Electron for the desktop application.
     *   **Communication:** Custom WebSocket protocol for decoupled client-server interaction.
 *   **Core Architecture:**
     *   **Server (`src/server/`):** Manages `AgentSession` state, LLM orchestration, and WebSocket communication.
@@ -17,7 +17,7 @@
     *   **Clients:** 
         *   **TUI (`src/tui/`):** Default interactive terminal UI.
         *   **CLI (`src/cli/`):** Minimal REPL for direct interaction.
-        *   **Desktop (`apps/desktop/`):** Native GUI wrapper using Tauri.
+        *   **Desktop (`apps/desktop/`):** Native GUI wrapper using Electron.
 
 ## Building and Running
 

@@ -3,16 +3,12 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { selectSidebarThreadsForWorkspace } from "../src/ui/sidebarSelectors";
 import { selectArchivedThreadsSorted } from "../src/ui/settings/sessionSelectors";
 
-// Store imports Tauri modules; mock them before importing the store.
-mock.module("@tauri-apps/plugin-dialog", () => ({
-  open: async () => null,
-}));
-
-mock.module("../src/lib/tauriCommands", () => ({
+mock.module("../src/lib/desktopCommands", () => ({
   appendTranscriptBatch: async () => {},
   appendTranscriptEvent: async () => {},
   deleteTranscript: async () => {},
   loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+  pickWorkspaceDirectory: async () => null,
   readTranscript: async () => [],
   saveState: async () => {},
   startWorkspaceServer: async () => ({ url: "ws://mock" }),
@@ -107,4 +103,3 @@ describe("thread archiving (store)", () => {
     expect(selectArchivedThreadsSorted(threads).map((t) => t.id)).toEqual(["b", "a"]);
   });
 });
-

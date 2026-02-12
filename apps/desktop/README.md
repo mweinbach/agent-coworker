@@ -1,7 +1,18 @@
-# Tauri + React + Typescript
+# Cowork Desktop
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Electron + React + TypeScript desktop client for `agent-coworker`.
 
-## Recommended IDE Setup
+## Development
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+```bash
+bun install
+bun run dev
+```
+
+## Build
+
+```bash
+bun run build
+```
+
+The build pipeline rebuilds bundled desktop resources (`cowork-server` sidecar + prompts/config/skills/docs) via the root `build:desktop-resources` script.

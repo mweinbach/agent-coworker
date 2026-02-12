@@ -1,15 +1,11 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
-// Store imports Tauri modules; mock them before importing the store.
-mock.module("@tauri-apps/plugin-dialog", () => ({
-  open: async () => null,
-}));
-
-mock.module("../src/lib/tauriCommands", () => ({
+mock.module("../src/lib/desktopCommands", () => ({
   appendTranscriptBatch: async () => {},
   appendTranscriptEvent: async () => {},
   deleteTranscript: async () => {},
   loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
+  pickWorkspaceDirectory: async () => null,
   readTranscript: async () => [],
   saveState: async () => {},
   startWorkspaceServer: async () => ({ url: "ws://mock" }),
@@ -62,4 +58,3 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().settingsPage).toBe("workspaces");
   });
 });
-

@@ -1,56 +1,32 @@
 # Cowork Desktop Agent Context
 
-This directory contains the desktop application for the Agent Coworker project. It is a native GUI built using Tauri, React, and TypeScript, designed to manage workspaces, threads, and chat sessions with AI agents.
+This directory contains the desktop application for the Agent Coworker project. It is a native GUI built with Electron, React, and TypeScript.
 
 ## Project Overview
 
-*   **Purpose:** Provides a native desktop interface for interacting with `agent-coworker` servers.
-*   **Architecture:**
-    *   **Frontend:** React 19 SPA powered by Vite and Zustand for state management.
-    *   **Backend:** Tauri (Rust) orchestrating system-level operations like process management (for workspace servers) and file I/O.
-    *   **Communication:** Dual WebSocket architecture:
-        *   **Control Socket:** Manages workspace-level configurations, skills, and provider status.
-        *   **Thread Sockets:** Dedicated connections for individual chat sessions.
-*   **Key Technologies:** Tauri v2, React, TypeScript, Bun (runtime/package manager), Zustand, Rust.
+- **Purpose:** Desktop interface for interacting with `agent-coworker` workspace servers.
+- **Architecture:**
+  - **Renderer:** React 19 SPA with Zustand state.
+  - **Main process:** Electron IPC handlers for process management and filesystem persistence.
+  - **Communication:** Dual WebSocket model:
+    - Control socket (workspace-level)
+    - Thread sockets (session-level)
 
-## Building and Running
+## Build and Run
 
-The desktop app requires the core server and resources to be built first.
+- Install deps: `bun install`
+- Full desktop dev app: `bun run dev`
+- Build distributables: `bun run build`
+- Run tests: `bun run test`
 
-*   **Install Dependencies:** `bun install`
-*   **Development (Full App):** `bun run dev:tauri` (Launches the Tauri window with hot-reloading frontend).
-*   **Development (Frontend Only):** `bun run dev` (Vite dev server at localhost).
-*   **Build Production App:** `bun run build` (Compiles Rust backend and bundles frontend).
-*   **Tauri CLI:** `bun run tauri <command>`
+Desktop scripts rebuild bundled resources (`cowork-server` sidecar + `dist` assets) via root `build:desktop-resources`.
 
-## Development Conventions
+## Key Paths
 
-*   **Language & Style:**
-    *   TypeScript (Strict mode) for frontend.
-    *   Rust for system-level backend logic in `src-tauri/`.
-    *   2-space indentation, `camelCase` for variables/functions, `PascalCase` for types/components.
-*   **State Management:**
-    *   Single-store pattern using **Zustand** (`src/app/store.ts`).
-    *   Runtime state (sockets, timers) is kept in a `RUNTIME` object to avoid React re-render cycles for non-visual data.
-*   **Persistence:**
-    *   App state (workspaces, threads) is persisted to `state.json` in the app data directory via Tauri commands.
-    *   Transcripts are stored as `.jsonl` files per thread in a `transcripts/` subdirectory.
-*   **Error Handling:**
-    *   Rust uses `thiserror` for structured internal errors, converted to strings for Tauri's IPC.
-    *   Frontend uses a notification system managed via the Zustand store.
-
-## Project Structure
-
-*   `src/`: Frontend React application.
-    *   `app/`: Core logic, Zustand store (`store.ts`), and type definitions.
-    *   `ui/`: React components and views (Chat, Sidebar, Settings, etc.).
-    *   `lib/`: Utilities, WebSocket protocol wrappers, and Tauri command bindings.
-*   `src-tauri/`: Rust backend.
-    *   `src/lib.rs`: Main logic, command handlers, and server process management.
-*   `test/`: Playwright or similar integration tests for UI flows.
-
-## Operational Notes
-
-*   **Workspace Servers:** Each workspace selected by the user spawns a separate `cowork-server` process via `bun`. The Tauri backend manages these lifecycles.
-*   **IPC:** Frontend communicates with Rust via `invoke` calls defined in `src/lib/tauriCommands.ts` and implemented in `src-tauri/src/lib.rs`.
-*   **Sidecars:** The app expects `cowork-server` to be available (either via source in dev or as a bundled resource/sidecar in production).
+- `src/app/store.ts`: Zustand store and socket orchestration
+- `src/lib/desktopApi.ts`: shared IPC contract
+- `src/lib/desktopCommands.ts`: renderer command wrappers
+- `electron/main.ts`: BrowserWindow lifecycle
+- `electron/preload.ts`: secure bridge (`window.cowork`)
+- `electron/ipc.ts`: IPC routing
+- `electron/services/`: server lifecycle + persistence

@@ -544,14 +544,20 @@ export class AgentSession {
 
   handleAskResponse(requestId: string, answer: string) {
     const d = this.pendingAsk.get(requestId);
-    if (!d) return;
+    if (!d) {
+      this.log(`[warn] ask_response for unknown requestId: ${requestId}`);
+      return;
+    }
     this.pendingAsk.delete(requestId);
     d.resolve(answer);
   }
 
   handleApprovalResponse(requestId: string, approved: boolean) {
     const d = this.pendingApproval.get(requestId);
-    if (!d) return;
+    if (!d) {
+      this.log(`[warn] approval_response for unknown requestId: ${requestId}`);
+      return;
+    }
     this.pendingApproval.delete(requestId);
     d.resolve(approved);
   }
@@ -737,10 +743,10 @@ export class AgentSession {
       this.messages.push({ role: "user", content: text });
 
       // Trim message history to prevent unbounded memory growth.
+      // Keep the first message (initial context) plus the most recent entries.
       if (this.messages.length > MAX_MESSAGE_HISTORY) {
-        // Keep the most recent messages, preserving at least the first system/user
-        // turn so the model retains initial context.
-        this.messages = this.messages.slice(-MAX_MESSAGE_HISTORY);
+        const first = this.messages[0];
+        this.messages = [first, ...this.messages.slice(-(MAX_MESSAGE_HISTORY - 1))];
       }
 
       const res = await runTurn({

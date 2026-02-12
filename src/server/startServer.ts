@@ -136,7 +136,7 @@ export async function startAgentServer(
           }
 
           if (msg.type === "user_message") {
-            session.sendUserMessage(msg.text, msg.clientMessageId);
+            void session.sendUserMessage(msg.text, msg.clientMessageId);
             return;
           }
 

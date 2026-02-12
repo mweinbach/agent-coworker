@@ -38,10 +38,11 @@ function normalizeUrl(input: string): string {
   return input.replace(/\/+$/, "");
 }
 
-function resolveTraceIngestUrl(config: AgentConfig): string {
-  const otlpEndpoint = config.observability?.otlpHttpEndpoint?.trim();
+function resolveTraceIngestUrl(config: AgentConfig): string | null {
+  if (!config.observability) return null;
+  const otlpEndpoint = config.observability.otlpHttpEndpoint?.trim();
   if (!otlpEndpoint) {
-    return `${normalizeUrl(config.observability!.queryApi.tracesBaseUrl)}${LEGACY_VICTORIA_TRACES_PATH}`;
+    return `${normalizeUrl(config.observability.queryApi.tracesBaseUrl)}${LEGACY_VICTORIA_TRACES_PATH}`;
   }
 
   try {
@@ -122,13 +123,16 @@ export async function emitObservabilityEvent(
     ],
   };
   const tracesInsertUrl = resolveTraceIngestUrl(config);
+  if (!tracesInsertUrl) return;
 
   try {
-    await fetchImpl(tracesInsertUrl, {
+    const res = await fetchImpl(tracesInsertUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
+    // Drain the response body to allow socket reuse and prevent connection pool exhaustion.
+    await res.arrayBuffer().catch(() => {});
   } catch {
     // best-effort export; failures should not affect core runtime
   }

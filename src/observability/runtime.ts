@@ -45,6 +45,8 @@ async function findAvailablePort(start: number): Promise<number> {
   throw new Error(`Unable to find available port near ${start}`);
 }
 
+const COMMAND_TIMEOUT_MS = 120_000;
+
 async function runCommand(cmd: string, args: string[], env?: Record<string, string>): Promise<{ stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
@@ -53,14 +55,29 @@ async function runCommand(cmd: string, args: string[], env?: Record<string, stri
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGKILL");
+      reject(new Error(`${cmd} ${args.join(" ")} timed out after ${COMMAND_TIMEOUT_MS / 1000}s`));
+    }, COMMAND_TIMEOUT_MS);
     child.stdout.on("data", (buf) => {
       stdout += String(buf);
     });
     child.stderr.on("data", (buf) => {
       stderr += String(buf);
     });
-    child.on("error", (err) => reject(err));
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
     child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (code === 0) {
         resolve({ stdout, stderr });
         return;

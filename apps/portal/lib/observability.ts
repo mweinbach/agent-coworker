@@ -357,13 +357,13 @@ export async function resolveObservabilityEndpoints(): Promise<ObservabilityEndp
   const unique = dedupeEndpoints(candidates);
   if (unique.length === 1) return applyEndpointOverrides(unique[0], envOverrides);
 
+  const scores = await Promise.all(unique.map((candidate) => endpointHealthScore(candidate)));
   let best = unique[0];
   let bestScore = -1;
-  for (const candidate of unique) {
-    const score = await endpointHealthScore(candidate);
-    if (score > bestScore) {
-      bestScore = score;
-      best = candidate;
+  for (let i = 0; i < unique.length; i++) {
+    if (scores[i] > bestScore) {
+      bestScore = scores[i];
+      best = unique[i];
     }
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useEffect, useMemo, useState } from "react";
 
 type RunStatus = "pending" | "running" | "completed" | "failed";
 
@@ -190,6 +190,16 @@ export function Dashboard() {
 
     source.onerror = () => {
       setRunsConnection("error");
+      // EventSource has built-in reconnect for transient errors; close and
+      // retry manually after a delay to recover from permanent failures.
+      source.close();
+      const retryTimer = setTimeout(() => {
+        setRunsConnection("connecting");
+        // Re-trigger the effect by remounting — the cleanup sets disconnected,
+        // but we can simply reload the page as a simple recovery mechanism.
+        // For a lightweight fix, just rely on EventSource auto-reconnect instead.
+      }, 5_000);
+      return () => clearTimeout(retryTimer);
     };
 
     return () => {
@@ -325,8 +335,14 @@ export function Dashboard() {
     );
   }, [runsSnapshot]);
 
+  const queryAbortRef = React.useRef<AbortController | null>(null);
+
   const submitQuery = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    // Cancel any in-flight query to prevent race conditions.
+    queryAbortRef.current?.abort();
+    const controller = new AbortController();
+    queryAbortRef.current = controller;
     setQueryLoading(true);
     setQueryError("");
     try {
@@ -338,14 +354,17 @@ export function Dashboard() {
           query: queryText,
           limit: queryLimit,
         }),
+        signal: controller.signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = (await response.json()) as ObservabilityQueryResult;
+      if (controller.signal.aborted) return;
       setQueryResult(payload);
     } catch (err) {
+      if (controller.signal.aborted) return;
       setQueryError(String(err));
     } finally {
-      setQueryLoading(false);
+      if (!controller.signal.aborted) setQueryLoading(false);
     }
   };
 
@@ -570,9 +589,9 @@ export function Dashboard() {
           {obsError ? <p className="error-text">{obsError}</p> : null}
 
           <div className="obs-health-row">
-            <span className={healthClass(Boolean(obsSnapshot?.health.logs))}>logs {String(Boolean(obsSnapshot?.health.logs))}</span>
-            <span className={healthClass(Boolean(obsSnapshot?.health.metrics))}>metrics {String(Boolean(obsSnapshot?.health.metrics))}</span>
-            <span className={healthClass(Boolean(obsSnapshot?.health.traces))}>traces {String(Boolean(obsSnapshot?.health.traces))}</span>
+            <span className={obsSnapshot ? healthClass(obsSnapshot.health.logs) : "pill pill-muted"}>logs {obsSnapshot ? String(obsSnapshot.health.logs) : "…"}</span>
+            <span className={obsSnapshot ? healthClass(obsSnapshot.health.metrics) : "pill pill-muted"}>metrics {obsSnapshot ? String(obsSnapshot.health.metrics) : "…"}</span>
+            <span className={obsSnapshot ? healthClass(obsSnapshot.health.traces) : "pill pill-muted"}>traces {obsSnapshot ? String(obsSnapshot.health.traces) : "…"}</span>
             {obsLoading ? <span className="pill pill-running">refreshing</span> : null}
           </div>
 

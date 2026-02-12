@@ -1,6 +1,8 @@
 # Repository Guidelines
 
-agent-coworker is a terminal-first coworker agent built on Bun + TypeScript (ESM) with a WebSocket server, an OpenTUI (React) client, and a CLI REPL.
+agent-coworker is a terminal-first coworker agent built on Bun + TypeScript (ESM) with a WebSocket server, an OpenTUI (React) client, and a CLI REPL. 
+
+When you have access to subagents or agent teams, feel free to use them. Subagents are good for delegating tasks for searching and performing specific actions. Be specific with your delegation, and feel free to use them liberally.  
 
 ## Project Structure & Module Organization
 

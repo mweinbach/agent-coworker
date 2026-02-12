@@ -159,8 +159,8 @@ export async function runObservabilityQuery(
         body: candidate.body,
         signal: controller.signal,
       });
-      clearTimeout(timer);
       const text = await res.text();
+      clearTimeout(timer);
       if (!res.ok) {
         lastError = `HTTP ${res.status}: ${text.slice(0, 400)}`;
         continue;

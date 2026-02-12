@@ -307,7 +307,7 @@ function extractRetryDelayMs(err: unknown): number | null {
   }
 
   // Or a JSON-ish fragment: "retryDelay\": \"34s\""
-  const m2 = raw.match(/retryDelay\"\\s*:\\s*\"(\\d+)s\"/i);
+  const m2 = raw.match(/retryDelay"\s*:\s*"(\d+)s"/i);
   if (m2?.[1]) {
     const seconds = Number(m2[1]);
     if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;

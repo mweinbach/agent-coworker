@@ -34,6 +34,10 @@ export async function POST(request: Request) {
     limit: typeof payload.limit === "number" ? payload.limit : undefined,
   };
 
-  const result = await runObservabilityQuery(reqPayload);
-  return NextResponse.json(result);
+  try {
+    const result = await runObservabilityQuery(reqPayload);
+    return NextResponse.json(result);
+  } catch (err) {
+    return NextResponse.json({ error: `Query failed: ${String(err)}` }, { status: 500 });
+  }
 }

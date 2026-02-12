@@ -145,13 +145,35 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
     case "client_hello":
     case "ping":
       return { ok: true, msg: obj };
-    case "user_message":
-    case "ask_response":
-    case "approval_response":
-    case "list_tools":
-    case "cancel":
-    case "reset":
-      return { ok: true, msg: obj };
+    case "user_message": {
+      if (typeof obj.sessionId !== "string") return { ok: false, error: "user_message missing sessionId" };
+      if (typeof obj.text !== "string") return { ok: false, error: "user_message missing text" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "ask_response": {
+      if (typeof obj.sessionId !== "string") return { ok: false, error: "ask_response missing sessionId" };
+      if (typeof obj.requestId !== "string") return { ok: false, error: "ask_response missing requestId" };
+      if (typeof obj.answer !== "string") return { ok: false, error: "ask_response missing answer" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "approval_response": {
+      if (typeof obj.sessionId !== "string") return { ok: false, error: "approval_response missing sessionId" };
+      if (typeof obj.requestId !== "string") return { ok: false, error: "approval_response missing requestId" };
+      if (typeof obj.approved !== "boolean") return { ok: false, error: "approval_response missing/invalid approved" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "list_tools": {
+      if (typeof obj.sessionId !== "string") return { ok: false, error: "list_tools missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "cancel": {
+      if (typeof obj.sessionId !== "string") return { ok: false, error: "cancel missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "reset": {
+      if (typeof obj.sessionId !== "string") return { ok: false, error: "reset missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
     case "refresh_provider_status": {
       if (typeof obj.sessionId !== "string") return { ok: false, error: "refresh_provider_status missing sessionId" };
       return { ok: true, msg: obj as ClientMessage };

@@ -927,7 +927,6 @@ The workflow maps `GEMINI_API_KEY` from `GOOGLE_GENERATIVE_AI_API_KEY` for compa
 
 ### 18.4 Failure modes to expect
 
-- Missing `testing` secrets:
 - Missing `Testing` secrets:
   - `harness_full_testing` fails at "Validate required provider secrets".
 - Docker unavailable on runner:

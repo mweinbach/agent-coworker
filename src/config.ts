@@ -196,8 +196,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     true;
 
   const mergedObservability = isPlainObject(merged.observability) ? merged.observability : {};
-  const mergedQueryApi = isPlainObject((mergedObservability as any).queryApi)
-    ? ((mergedObservability as any).queryApi as Record<string, unknown>)
+  const mergedQueryApi = isPlainObject(mergedObservability["queryApi"])
+    ? (mergedObservability["queryApi"] as Record<string, unknown>)
     : {};
   const observabilityEnabled =
     asBoolean(env.AGENT_OBSERVABILITY_ENABLED) ??
@@ -207,15 +207,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     false;
 
   const observability = {
-    mode:
-      (typeof (mergedObservability as any).mode === "string" && (mergedObservability as any).mode === "local_docker"
-        ? "local_docker"
-        : "local_docker") as const,
+    // Only "local_docker" is supported for now.
+    mode: "local_docker" as const,
     otlpHttpEndpoint:
       env.AGENT_OBS_OTLP_HTTP ||
-      (typeof (mergedObservability as any).otlpHttpEndpoint === "string" &&
-      (mergedObservability as any).otlpHttpEndpoint
-        ? (mergedObservability as any).otlpHttpEndpoint
+      (typeof mergedObservability["otlpHttpEndpoint"] === "string" &&
+      mergedObservability["otlpHttpEndpoint"]
+        ? (mergedObservability["otlpHttpEndpoint"] as string)
         : "http://127.0.0.1:4318"),
     queryApi: {
       logsBaseUrl:
@@ -236,7 +234,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     },
     defaultWindowSec: Math.max(
       1,
-      Math.floor(asNumber(env.AGENT_OBS_DEFAULT_WINDOW_SEC) ?? asNumber((mergedObservability as any).defaultWindowSec) ?? 300)
+      Math.floor(asNumber(env.AGENT_OBS_DEFAULT_WINDOW_SEC) ?? asNumber(mergedObservability["defaultWindowSec"]) ?? 300)
     ),
   };
 
@@ -244,11 +242,11 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const harness = {
     reportOnly:
       asBoolean(env.AGENT_HARNESS_REPORT_ONLY) ??
-      asBoolean((mergedHarness as any).reportOnly) ??
+      asBoolean(mergedHarness["reportOnly"]) ??
       true,
     strictMode:
       asBoolean(env.AGENT_HARNESS_STRICT_MODE) ??
-      asBoolean((mergedHarness as any).strictMode) ??
+      asBoolean(mergedHarness["strictMode"]) ??
       false,
   };
 

@@ -13,10 +13,13 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Missing runRoot or runDir" }, { status: 400 });
   }
 
-  const detail = await getHarnessRunDetail(runRoot, runDir);
-  if (!detail) {
-    return NextResponse.json({ error: "Run not found" }, { status: 404 });
+  try {
+    const detail = await getHarnessRunDetail(runRoot, runDir);
+    if (!detail) {
+      return NextResponse.json({ error: "Run not found" }, { status: 404 });
+    }
+    return NextResponse.json(detail);
+  } catch (err) {
+    return NextResponse.json({ error: `Failed to load run detail: ${String(err)}` }, { status: 500 });
   }
-
-  return NextResponse.json(detail);
 }

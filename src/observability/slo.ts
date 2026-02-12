@@ -22,6 +22,10 @@ function compare(actual: number, op: HarnessSloOperator, threshold: number): boo
       return actual === threshold;
     case "!=":
       return actual !== threshold;
+    default: {
+      const _exhaustive: never = op;
+      return false;
+    }
   }
 }
 
@@ -142,21 +146,22 @@ export async function evaluateHarnessSlo(
   deps?: { fetchImpl?: typeof fetch; nowMs?: number }
 ): Promise<HarnessSloResult> {
   const nowMs = deps?.nowMs ?? Date.now();
-  const results: HarnessSloCheckResult[] = [];
 
-  for (const check of checks) {
-    const queryResult = await runObservabilityQuery(
-      config,
-      {
-        queryType: check.queryType,
-        query: check.query,
-        fromMs: nowMs - check.windowSec * 1000,
-        toMs: nowMs,
-      },
-      { fetchImpl: deps?.fetchImpl }
-    );
-    results.push(toCheckResult(check, queryResult));
-  }
+  const results = await Promise.all(
+    checks.map(async (check) => {
+      const queryResult = await runObservabilityQuery(
+        config,
+        {
+          queryType: check.queryType,
+          query: check.query,
+          fromMs: nowMs - check.windowSec * 1000,
+          toMs: nowMs,
+        },
+        { fetchImpl: deps?.fetchImpl }
+      );
+      return toCheckResult(check, queryResult);
+    })
+  );
 
   return {
     reportOnly: config.harness?.reportOnly ?? true,

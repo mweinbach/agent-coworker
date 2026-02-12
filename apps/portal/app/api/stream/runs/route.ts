@@ -14,12 +14,14 @@ export async function GET(request: Request) {
   const intervalMs = Math.max(500, Math.min(15_000, Number.isFinite(intervalMsRaw) ? intervalMsRaw : 2000));
   const limitRoots = Math.max(1, Math.min(100, Number.isFinite(limitRaw) ? limitRaw : 30));
 
+  // Hoist timer handles so both start() and cancel() can access them.
+  let intervalTimer: ReturnType<typeof setInterval> | undefined;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  let closed = false;
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      let closed = false;
       let lastDigest = "";
-      let intervalTimer: ReturnType<typeof setInterval> | undefined;
-      let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
       const cleanup = () => {
         if (closed) return;
@@ -69,6 +71,12 @@ export async function GET(request: Request) {
         if (closed) return;
         controller.enqueue(new TextEncoder().encode(`: heartbeat ${Date.now()}\n\n`));
       }, 12_000);
+    },
+    cancel() {
+      // Ensure intervals are cleaned up when the consumer cancels the stream.
+      closed = true;
+      if (intervalTimer) clearInterval(intervalTimer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
     },
   });
 

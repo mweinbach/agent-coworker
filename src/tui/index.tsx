@@ -753,7 +753,15 @@ function App(props: { serverUrl: string }) {
     const clientMessageId = crypto.randomUUID();
     sentMessageIdsRef.current.add(clientMessageId);
     // Prevent unbounded growth if the server never echoes ids (e.g. disconnects mid-flight).
-    if (sentMessageIdsRef.current.size > 500) sentMessageIdsRef.current.clear();
+    // Trim oldest entries instead of clearing all to avoid duplicating in-flight messages.
+    if (sentMessageIdsRef.current.size > 500) {
+      const iter = sentMessageIdsRef.current.values();
+      for (let i = 0; i < 250; i++) {
+        const next = iter.next();
+        if (next.done) break;
+        sentMessageIdsRef.current.delete(next.value);
+      }
+    }
 
     const ok = send({ type: "user_message", sessionId: sid, text, clientMessageId });
     if (!ok) return false;
@@ -2271,7 +2279,7 @@ function App(props: { serverUrl: string }) {
 
             <input
               value={responseInput}
-              onChange={(v) => setResponseInput(v)}
+              onChange={(v) => setResponseInput(normalizeInputValue(v))}
               onSubmit={(v) => {
                 const text = typeof v === "string" ? v : responseInput;
                 sendAskAnswer(text);

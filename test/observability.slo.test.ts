@@ -211,4 +211,82 @@ describe("evaluateHarnessSlo", () => {
     expect(result.passed).toBe(false);
     expect(result.checks[0]?.reason).toContain("numeric");
   });
+
+  test("prefers Prometheus vector sample values over numeric metric labels", async () => {
+    const cfg = makeConfig();
+    const fetchImpl: typeof fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          status: "success",
+          data: {
+            resultType: "vector",
+            result: [{ metric: { quantile: "0.99", le: "0.5" }, value: [1738736700, "0.04"] }],
+          },
+        }),
+        { status: 200 }
+      )) as any;
+
+    const result = await evaluateHarnessSlo(
+      cfg,
+      [
+        {
+          id: "vector_label_vs_sample",
+          type: "custom",
+          queryType: "promql",
+          query: "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))",
+          op: "==",
+          threshold: 0.04,
+          windowSec: 300,
+        },
+      ],
+      { fetchImpl, nowMs: 1738736700000 }
+    );
+
+    expect(result.passed).toBe(true);
+    expect(result.checks[0]?.actual).toBe(0.04);
+    expect(result.checks[0]?.pass).toBe(true);
+  });
+
+  test("prefers latest Prometheus matrix sample over numeric metric labels", async () => {
+    const cfg = makeConfig();
+    const fetchImpl: typeof fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          status: "success",
+          data: {
+            resultType: "matrix",
+            result: [
+              {
+                metric: { quantile: "0.99" },
+                values: [
+                  [1738736400, "0.22"],
+                  [1738736700, "0.28"],
+                ],
+              },
+            ],
+          },
+        }),
+        { status: 200 }
+      )) as any;
+
+    const result = await evaluateHarnessSlo(
+      cfg,
+      [
+        {
+          id: "matrix_label_vs_sample",
+          type: "custom",
+          queryType: "promql",
+          query: "rate(http_request_duration_seconds_sum[5m])",
+          op: "==",
+          threshold: 0.28,
+          windowSec: 300,
+        },
+      ],
+      { fetchImpl, nowMs: 1738736700000 }
+    );
+
+    expect(result.passed).toBe(true);
+    expect(result.checks[0]?.actual).toBe(0.28);
+    expect(result.checks[0]?.pass).toBe(true);
+  });
 });

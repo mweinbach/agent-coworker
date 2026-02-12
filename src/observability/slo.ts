@@ -45,6 +45,25 @@ function isPrometheusSampleTuple(value: unknown[]): boolean {
   return timestamp !== null && (typeof sample === "number" || typeof sample === "string");
 }
 
+function extractPrometheusSampleFromObject(record: Record<string, unknown>): number | null | undefined {
+  if (Array.isArray(record.value)) {
+    return isPrometheusSampleTuple(record.value) ? parseFiniteNumber(record.value[1]) : null;
+  }
+
+  if (Array.isArray(record.values)) {
+    // For matrix results, use the latest parseable sample value.
+    for (let i = record.values.length - 1; i >= 0; i -= 1) {
+      const sample = record.values[i];
+      if (!Array.isArray(sample) || !isPrometheusSampleTuple(sample)) continue;
+      const parsed = parseFiniteNumber(sample[1]);
+      if (parsed !== null) return parsed;
+    }
+    return null;
+  }
+
+  return undefined;
+}
+
 function extractNumeric(value: unknown): number | null {
   const scalar = parseFiniteNumber(value);
   if (scalar !== null) return scalar;
@@ -60,7 +79,10 @@ function extractNumeric(value: unknown): number | null {
     return null;
   }
   if (typeof value === "object" && value !== null) {
-    for (const nested of Object.values(value)) {
+    const record = value as Record<string, unknown>;
+    const sampleValue = extractPrometheusSampleFromObject(record);
+    if (sampleValue !== undefined) return sampleValue;
+    for (const nested of Object.values(record)) {
       const n = extractNumeric(nested);
       if (n !== null) return n;
     }

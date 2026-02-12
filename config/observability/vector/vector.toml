@@ -30,3 +30,26 @@ uri = "http://victoria-traces:10428/insert/opentelemetry/v1/traces"
 method = "post"
 encoding.codec = "json"
 compression = "none"
+
+# --- Metrics pipeline ---
+
+# Vector internal metrics (vector_component_errors_total, etc.)
+[sources.internal_metrics]
+type = "internal_metrics"
+scrape_interval_secs = 15
+
+# Forward OTLP metrics received from instrumented services
+[transforms.metric_events]
+type = "filter"
+inputs = ["otlp.metrics"]
+condition = "true"
+
+[sinks.victoria_internal_metrics]
+type = "prometheus_remote_write"
+inputs = ["internal_metrics"]
+endpoint = "http://victoria-metrics:8428/api/v1/write"
+
+[sinks.victoria_otlp_metrics]
+type = "prometheus_remote_write"
+inputs = ["metric_events"]
+endpoint = "http://victoria-metrics:8428/api/v1/write"

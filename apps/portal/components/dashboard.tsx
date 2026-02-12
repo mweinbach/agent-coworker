@@ -166,45 +166,71 @@ export function Dashboard() {
   const [queryError, setQueryError] = useState<string>("");
 
   useEffect(() => {
-    const source = new EventSource("/api/stream/runs?limitRoots=40&intervalMs=2000");
-    setRunsConnection("connecting");
+    let source: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
 
-    source.onopen = () => {
-      setRunsConnection("connected");
-      setRunsError("");
-    };
-
-    source.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data) as HarnessRunsSnapshot | { type: "stream_error"; message: string };
-        if ((payload as { type?: string }).type === "stream_error") {
-          setRunsError((payload as { message: string }).message);
-          return;
-        }
-        const snapshot = payload as HarnessRunsSnapshot;
-        setRunsSnapshot(snapshot);
-      } catch (err) {
-        setRunsError(`Bad stream payload: ${String(err)}`);
-      }
-    };
-
-    source.onerror = () => {
-      setRunsConnection("error");
-      // EventSource has built-in reconnect for transient errors; close and
-      // retry manually after a delay to recover from permanent failures.
-      source.close();
-      const retryTimer = setTimeout(() => {
-        setRunsConnection("connecting");
-        // Re-trigger the effect by remounting — the cleanup sets disconnected,
-        // but we can simply reload the page as a simple recovery mechanism.
-        // For a lightweight fix, just rely on EventSource auto-reconnect instead.
+    const scheduleReconnect = () => {
+      if (disposed || retryTimer) return;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        connect();
       }, 5_000);
-      return () => clearTimeout(retryTimer);
     };
+
+    const connect = () => {
+      if (disposed) return;
+
+      if (source) {
+        source.close();
+      }
+
+      setRunsConnection("connecting");
+
+      const nextSource = new EventSource("/api/stream/runs?limitRoots=40&intervalMs=2000");
+      source = nextSource;
+
+      nextSource.onopen = () => {
+        if (disposed || source !== nextSource) return;
+        setRunsConnection("connected");
+        setRunsError("");
+      };
+
+      nextSource.onmessage = (event) => {
+        if (disposed || source !== nextSource) return;
+        try {
+          const payload = JSON.parse(event.data) as HarnessRunsSnapshot | { type: "stream_error"; message: string };
+          if ((payload as { type?: string }).type === "stream_error") {
+            setRunsError((payload as { message: string }).message);
+            return;
+          }
+          const snapshot = payload as HarnessRunsSnapshot;
+          setRunsSnapshot(snapshot);
+        } catch (err) {
+          setRunsError(`Bad stream payload: ${String(err)}`);
+        }
+      };
+
+      nextSource.onerror = () => {
+        if (disposed || source !== nextSource) return;
+        setRunsConnection("error");
+        nextSource.close();
+        source = null;
+        scheduleReconnect();
+      };
+    };
+
+    connect();
 
     return () => {
+      disposed = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
+      if (source) {
+        source.close();
+      }
       setRunsConnection("disconnected");
-      source.close();
     };
   }, []);
 

@@ -1062,6 +1062,7 @@ Final response must be a JSON object:
       await fs.writeFile(path.join(runDir, "final_reasoning.txt"), trace.result.reasoningText ?? "", "utf-8");
       await fs.writeFile(path.join(runDir, "response_messages.json"), safeJsonStringify(trace.result.responseMessages), "utf-8");
 
+      let strictSloError: Error | undefined;
       if (stack) {
         const checks = defaultHarnessChecks();
         const queryResults = await Promise.all(
@@ -1079,7 +1080,8 @@ Final response must be a JSON object:
         await fs.writeFile(path.join(runDir, "observability_queries.json"), safeJsonStringify(queryResults), "utf-8");
         await fs.writeFile(path.join(runDir, "slo_report.json"), safeJsonStringify(sloResult), "utf-8");
         if ((config.harness?.strictMode ?? false) && !(config.harness?.reportOnly ?? true) && !sloResult.passed) {
-          throw new Error(`SLO failure for ${run.id}: strict mode enabled and one or more checks failed`);
+          strictSloError = new Error(`SLO failure for ${run.id}: strict mode enabled and one or more checks failed`);
+          await fs.writeFile(path.join(runDir, "strict_slo_failure.txt"), strictSloError.message, "utf-8");
         }
       }
 
@@ -1098,8 +1100,13 @@ Final response must be a JSON object:
         startedAt,
         finishedAt,
         observabilityEnabled: !!stack,
+        ...(strictSloError ? { error: strictSloError.message } : {}),
       };
       await fs.writeFile(path.join(runDir, "run_meta.json"), safeJsonStringify(runMeta), "utf-8");
+
+      if (strictSloError) {
+        throw strictSloError;
+      }
     } finally {
       if (stack && !cliArgs.keepStack) {
         try {

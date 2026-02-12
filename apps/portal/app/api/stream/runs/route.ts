@@ -53,11 +53,17 @@ export async function GET(request: Request) {
 
           if (digest === lastDigest) return;
           lastDigest = digest;
+          if (closed) return;
           controller.enqueue(encodeData(snapshot));
         } catch (err) {
-          controller.enqueue(
-            encodeData({ type: "stream_error", message: String(err), at: new Date().toISOString() })
-          );
+          if (closed) return;
+          try {
+            controller.enqueue(
+              encodeData({ type: "stream_error", message: String(err), at: new Date().toISOString() })
+            );
+          } catch {
+            // controller already closed — discard
+          }
         }
       };
 
@@ -69,7 +75,11 @@ export async function GET(request: Request) {
 
       heartbeatTimer = setInterval(() => {
         if (closed) return;
-        controller.enqueue(new TextEncoder().encode(`: heartbeat ${Date.now()}\n\n`));
+        try {
+          controller.enqueue(new TextEncoder().encode(`: heartbeat ${Date.now()}\n\n`));
+        } catch {
+          // controller already closed — discard
+        }
       }, 12_000);
     },
     cancel() {

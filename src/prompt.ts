@@ -4,6 +4,73 @@ import path from "node:path";
 import type { AgentConfig } from "./types";
 import { discoverSkills } from "./skills";
 
+type ModelSystemPromptTemplate = {
+  fileName: string;
+  matches: (modelId: string) => boolean;
+};
+
+const MODEL_SYSTEM_PROMPT_TEMPLATES: readonly ModelSystemPromptTemplate[] = [
+  {
+    fileName: "gpt-5.2.md",
+    matches: (modelId) => modelId === "gpt-5.2",
+  },
+  {
+    fileName: "claude-4-6-opus.md",
+    matches: (modelId) => modelId === "claude-4-6-opus" || modelId.startsWith("claude-opus-4-6-"),
+  },
+  {
+    fileName: "gemini-3-flash-preview.md",
+    matches: (modelId) => modelId === "gemini-3-flash-preview",
+  },
+  {
+    fileName: "gemini-3-pro-preview.md",
+    matches: (modelId) => modelId === "gemini-3-pro-preview",
+  },
+  {
+    fileName: "claude-4-5-haiku.md",
+    matches: (modelId) => modelId === "claude-4-5-haiku" || modelId.startsWith("claude-haiku-4-5-"),
+  },
+];
+
+function normalizeModelId(modelId: string): string {
+  return modelId.trim().toLowerCase();
+}
+
+function resolveModelSystemPromptTemplate(modelId: string): ModelSystemPromptTemplate | null {
+  const normalized = normalizeModelId(modelId);
+  return MODEL_SYSTEM_PROMPT_TEMPLATES.find((template) => template.matches(normalized)) ?? null;
+}
+
+async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
+  const defaultSystemPath = path.join(config.builtInDir, "prompts", "system.md");
+  const modelTemplate = resolveModelSystemPromptTemplate(config.model);
+  if (!modelTemplate) return defaultSystemPath;
+
+  const modelSystemPath = path.join(config.builtInDir, "prompts", "system-models", modelTemplate.fileName);
+  try {
+    await fs.access(modelSystemPath);
+    return modelSystemPath;
+  } catch {
+    return defaultSystemPath;
+  }
+}
+
+function buildSkillPolicySection(skillNames: string, skillExamples: string): string {
+  return [
+    "## Skill Loading Policy (Strict)",
+    "",
+    "- Before creating any domain deliverable (spreadsheet, document, slides, PDF), call the `skill` tool first.",
+    "- If the user prompt explicitly says to use the `skill` tool, that call is mandatory and must happen before related artifact creation.",
+    "- Do not write build scripts or output artifacts for those domains before loading the corresponding skill.",
+    "- If the task spans multiple deliverable domains, load each required skill before creating files.",
+    "- Never claim a skill was loaded unless the `skill` tool call actually occurred in this run.",
+    `- Canonical skill names available in this run: ${skillNames}.`,
+    "",
+    "Examples:",
+    skillExamples,
+  ].join("\n");
+}
+
 async function loadHotCache(config: AgentConfig): Promise<string> {
   const candidates = [
     path.join(config.projectAgentDir, "AGENT.md"),
@@ -31,7 +98,7 @@ export interface SystemPromptResult {
  * Use this when you need the skill metadata (e.g. for dynamic tool descriptions).
  */
 export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<SystemPromptResult> {
-  const systemPath = path.join(config.builtInDir, "prompts", "system.md");
+  const systemPath = await resolveSystemTemplatePath(config);
   let prompt = await fs.readFile(systemPath, "utf-8");
 
   const skills = await discoverSkills(config.skillsDirs);
@@ -79,6 +146,8 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = prompt.replace(/{{(\w+)}}/g, (match, key) => {
     return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : match;
   });
+
+  prompt += `\n\n${buildSkillPolicySection(vars.skillNames, vars.skillExamples)}`;
 
   if (skills.length > 0) {
     const list = skills

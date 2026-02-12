@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { generateText as realGenerateText, stepCountIs as realStepCountIs } from "ai";
+import { generateText as realGenerateText, stepCountIs as realStepCountIs, tool as aiTool } from "ai";
 import type { ModelMessage } from "ai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
@@ -84,6 +84,9 @@ type RawLoopArgs = {
   reportOnly: boolean;
   strictMode: boolean;
   keepStack: boolean;
+  scenario: "mixed" | "dcf-model-matrix" | "gpt-skill-reliability";
+  onlyRunIds: string[];
+  onlyModels: string[];
 };
 
 function parseArgs(argv: string[]): RawLoopArgs {
@@ -92,6 +95,9 @@ function parseArgs(argv: string[]): RawLoopArgs {
     reportOnly: true,
     strictMode: false,
     keepStack: false,
+    scenario: "mixed",
+    onlyRunIds: [],
+    onlyModels: [],
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -113,9 +119,33 @@ function parseArgs(argv: string[]): RawLoopArgs {
       args.keepStack = true;
       continue;
     }
+    if (a === "--scenario") {
+      const next = argv[i + 1];
+      if (!next) throw new Error("Missing value for --scenario");
+      if (next !== "mixed" && next !== "dcf-model-matrix" && next !== "gpt-skill-reliability") {
+        throw new Error(`Invalid --scenario value: ${next}`);
+      }
+      args.scenario = next;
+      i += 1;
+      continue;
+    }
+    if (a === "--only-run") {
+      const next = argv[i + 1];
+      if (!next) throw new Error("Missing value for --only-run");
+      args.onlyRunIds.push(next);
+      i += 1;
+      continue;
+    }
+    if (a === "--only-model") {
+      const next = argv[i + 1];
+      if (!next) throw new Error("Missing value for --only-model");
+      args.onlyModels.push(next);
+      i += 1;
+      continue;
+    }
     if (a === "--help" || a === "-h") {
       console.log(
-        "Usage: bun scripts/run_raw_agent_loops.ts [--observability] [--strict] [--report-only] [--keep-stack]"
+        "Usage: bun scripts/run_raw_agent_loops.ts [--observability] [--strict] [--report-only] [--keep-stack] [--scenario mixed|dcf-model-matrix|gpt-skill-reliability] [--only-run <run-id>] [--only-model <model>]"
       );
       process.exit(0);
     }
@@ -163,6 +193,27 @@ type RunTrace = {
     responseMessages: unknown[];
     error?: string;
   };
+};
+
+type PromptContext = {
+  runId: string;
+  runDir: string;
+  repoDir: string;
+};
+
+type RunSpec = {
+  id: string;
+  provider: ProviderName;
+  model: string; // may be an alias; resolved per provider
+  maxSteps?: number;
+  maxAttempts?: number;
+  minIntervalMs?: number;
+  providerOptionsOverride?: Record<string, any>;
+  requiredToolCalls?: string[];
+  requiredFirstNonTodoToolCall?: string;
+  requiredSkillBeforeTools?: string;
+  guardedToolsBeforeSkill?: string[];
+  prompt: (ctx: PromptContext) => string;
 };
 
 function isoSafeNow() {
@@ -240,16 +291,70 @@ function makeTracedGenerateText(
   return traced;
 }
 
+type SkillGuardConfig = {
+  requiredSkillName?: string;
+  guardedToolNames?: string[];
+};
+
+function collectToolCallsFromUnknown(value: unknown, sink: string[]) {
+  if (!value) return;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectToolCallsFromUnknown(item, sink);
+    }
+    return;
+  }
+  if (typeof value !== "object") return;
+
+  const record = value as Record<string, unknown>;
+  const isToolCall = record.type === "tool-call" && typeof record.toolName === "string";
+  if (isToolCall) sink.push(record.toolName as string);
+
+  for (const v of Object.values(record)) {
+    collectToolCallsFromUnknown(v, sink);
+  }
+}
+
+function collectTracedToolCallNames(steps: TracedStep[]): string[] {
+  const names: string[] = [];
+  for (const step of steps) {
+    collectToolCallsFromUnknown(step.step, names);
+  }
+  return names;
+}
+
+function withExecuteGuard(
+  original: any,
+  shouldBlock: () => boolean,
+  errorMessage: string,
+  onSuccess?: (input: any, output: any) => void
+): any {
+  if (!original || typeof original.execute !== "function") return original;
+  return aiTool({
+    description: String(original.description ?? ""),
+    inputSchema: original.inputSchema,
+    execute: async (input: any) => {
+      if (shouldBlock()) {
+        throw new Error(errorMessage);
+      }
+      const out = await original.execute(input);
+      onSuccess?.(input, out);
+      return out;
+    },
+  });
+}
+
 function createToolsWithTracing(
   ctx: ToolContext,
   steps: TracedStep[],
   limiter: RateLimiter,
-  getModelImpl: typeof realGetModel
+  getModelImpl: typeof realGetModel,
+  skillGuard?: SkillGuardConfig
 ): Record<string, any> {
   // Capture sub-agent model calls (spawnAgent uses its own generateText invocation).
   const tracedForSubAgent = makeTracedGenerateText(steps, "spawnAgent", limiter);
 
-  return {
+  const baseTools = {
     bash: createBashTool(ctx),
     read: createReadTool(ctx),
     write: createWriteTool(ctx),
@@ -271,6 +376,38 @@ function createToolsWithTracing(
     skill: createSkillTool(ctx),
     memory: createMemoryTool(ctx),
   };
+
+  if (!skillGuard?.requiredSkillName || !skillGuard.guardedToolNames || skillGuard.guardedToolNames.length === 0) {
+    return baseTools;
+  }
+
+  let requiredSkillLoaded = false;
+  const required = skillGuard.requiredSkillName;
+  const guarded = new Set(skillGuard.guardedToolNames);
+
+  const wrapped: Record<string, any> = { ...baseTools };
+  wrapped.skill = withExecuteGuard(
+    baseTools.skill,
+    () => false,
+    "",
+    (input) => {
+      if (input && typeof input.skillName === "string" && input.skillName === required) {
+        requiredSkillLoaded = true;
+      }
+    }
+  );
+
+  for (const toolName of guarded) {
+    if (toolName === "skill") continue;
+    const original = wrapped[toolName];
+    wrapped[toolName] = withExecuteGuard(
+      original,
+      () => !requiredSkillLoaded,
+      `Required skill "${required}" must be loaded via the skill tool before calling "${toolName}".`
+    );
+  }
+
+  return wrapped;
 }
 
 async function ensureDir(p: string) {
@@ -384,6 +521,16 @@ function resolveAnthropicAlias(
   requestedModel: string,
   availableIds: string[]
 ): { requestedModel: string; resolvedModel: string; resolvedFrom: "alias" | "passthrough" | "fallback" } {
+  if (requestedModel === "claude-4-6-opus") {
+    // Pick newest dated opus-4-6 model id when the alias form is used.
+    const candidates = availableIds.filter((id) => id.startsWith("claude-opus-4-6-"));
+    if (candidates.length > 0) {
+      const resolvedModel = candidates.slice().sort().at(-1)!;
+      return { requestedModel, resolvedModel, resolvedFrom: "alias" };
+    }
+    return { requestedModel, resolvedModel: "claude-opus-4-6", resolvedFrom: "fallback" };
+  }
+
   if (requestedModel !== "claude-4-5-haiku") {
     return { requestedModel, resolvedModel: requestedModel, resolvedFrom: "passthrough" };
   }
@@ -397,6 +544,313 @@ function resolveAnthropicAlias(
 
   // Reasonable fallback based on known model catalogs (kept as a last-resort).
   return { requestedModel, resolvedModel: "claude-haiku-4-5-20251001", resolvedFrom: "fallback" };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function cloneRecord(record: Record<string, any> | undefined): Record<string, any> {
+  if (!record) return {};
+  return JSON.parse(JSON.stringify(record)) as Record<string, any>;
+}
+
+function deepMergeRecords(base: Record<string, any>, override: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = { ...base };
+  for (const [k, v] of Object.entries(override)) {
+    if (isPlainObject(out[k]) && isPlainObject(v)) {
+      out[k] = deepMergeRecords(out[k] as Record<string, any>, v as Record<string, any>);
+      continue;
+    }
+    out[k] = v;
+  }
+  return out;
+}
+
+function mergeProviderOptions(
+  defaults: Record<string, any>,
+  override?: Record<string, any>
+): Record<string, any> {
+  const merged = cloneRecord(defaults);
+  if (!override) return merged;
+  return deepMergeRecords(merged, override);
+}
+
+function buildNvidiaDcfPrompt(runDir: string, model: string, modelGuidance: string): string {
+  return `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+
+Task: Build an NVIDIA DCF valuation workbook (XLSX) and machine-readable validation output.
+
+Model target: "${model}".
+Model-specific guidance: ${modelGuidance}
+
+Critical first action:
+- Before any other non-todo tool call, call: skill { "skillName": "spreadsheet" }.
+- Do not call write/edit/bash/glob/read until the skill call has completed.
+- The harness enforces this ordering and will reject write/edit/bash/glob/read calls made before loading the skill.
+
+Hard requirements:
+- Your FIRST non-todo tool call MUST be exactly: skill { "skillName": "spreadsheet" }.
+- You MUST call tool "skill" with skillName="spreadsheet" before any write/bash/glob/read calls.
+- Use realistic but clearly labeled assumptions as placeholders; do not claim live market accuracy.
+- Use formulas for all projected values and valuation outputs (do not hardcode projected numeric outcomes).
+- Final response must be a raw JSON object (no markdown fences, no extra text) and must end with "<<END_RUN>>" in the "end" field.
+
+Steps (must use tools):
+1) As the first non-todo tool call, use skill to load skillName="spreadsheet".
+2) Immediately after step 1, continue by using write to create "build_nvda_dcf.py" that generates "nvda_dcf.xlsx" with sheets:
+   - "Inputs": assumption labels and values (BaseRevenue, GrowthY1..GrowthY5, OperatingMargin, TaxRate, DA_PctRevenue, Capex_PctRevenue, NWC_PctRevenue, WACC, TerminalGrowth, NetCash, SharesOutstanding).
+   - "Forecast": Year 1..5 rows with formula-driven columns (Revenue, EBIT, NOPAT, D&A, Capex, ChangeNWC, UFCF).
+   - "DCF": discount factors, PV of each UFCF, terminal value, enterprise value, equity value, implied price per share.
+   Add currency/percent formatting, freeze header rows, and include a plain-text source note URL for the terminal value formula.
+   The script must also write "dcf_validation.json" with:
+   - "workbook": absolute path to xlsx
+   - "sheets": workbook sheet names
+   - "formulaChecks": object with at least 8 key cells and their formulas (or null if missing)
+   - "impliedPricePerShareCell": sheet+cell reference
+   - "timestampUtc"
+3) Use bash to run: python3 build_nvda_dcf.py
+4) Use glob to confirm "nvda_dcf.xlsx" and "dcf_validation.json" exist.
+5) Use read to read back "dcf_validation.json" (limit=260, offset=1).
+6) Ensure your final JSON includes "skillToolCalled": true only if the skill tool call actually happened.
+
+Final response must be a JSON object:
+{ "xlsx": "<absolute path>", "validation": "<absolute path>", "skillToolCalled": true, "end": "<<END_RUN>>" }`;
+}
+
+function buildSkillReliabilityPrompt(
+  runDir: string,
+  model: string,
+  skillName: "spreadsheet" | "doc" | "slides" | "pdf",
+  task: string,
+  primaryFileName: string,
+  primaryFileRequirements: string
+): string {
+  const checkFileName = `${skillName}_skill_check.json`;
+  return `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+
+Task: ${task}
+
+Model target: "${model}".
+This run is measuring skill-loading reliability across different task types.
+
+Critical first action:
+- Before any other non-todo tool call, call: skill { "skillName": "${skillName}" }.
+- Do not call write/edit/bash/glob/read until the skill call has completed.
+
+Hard requirements:
+- Your FIRST non-todo tool call MUST be exactly: skill { "skillName": "${skillName}" }.
+- You MUST call tool "skill" with skillName="${skillName}" before any write/bash/glob/read calls.
+- Keep all output paths absolute and inside workingDirectory.
+- Final response must be raw JSON only (no markdown fences) and include "<<END_RUN>>".
+
+Steps (must use tools):
+1) As the first non-todo tool call, use skill to load skillName="${skillName}".
+2) Use write to create "${primaryFileName}" with the following requirements:
+${primaryFileRequirements}
+3) Use write to create "${checkFileName}" with JSON fields:
+   - "skillName": "${skillName}"
+   - "primaryFile": absolute path to "${primaryFileName}"
+   - "checkType": "skill-reliability"
+   - "timestampUtc": ISO-8601 timestamp string
+4) Use glob to confirm "${primaryFileName}" and "${checkFileName}" exist.
+5) Use read to read back "${checkFileName}" (limit=220, offset=1).
+
+Final response must be a JSON object:
+{ "primary": "<absolute path>", "check": "<absolute path>", "skillName": "${skillName}", "skillToolCalled": true, "end": "<<END_RUN>>" }`;
+}
+
+function buildDcfModelMatrixRuns(): RunSpec[] {
+  const profiles: Array<{
+    id: string;
+    provider: ProviderName;
+    model: string;
+    modelGuidance: string;
+    maxSteps: number;
+    maxAttempts: number;
+    providerOptionsOverride?: Record<string, any>;
+  }> = [
+    {
+      id: "dcf-01-openai-gpt-5.2",
+      provider: "openai",
+      model: "gpt-5.2",
+      modelGuidance:
+        "Follow user step order exactly. First non-todo tool call must be skill(skillName=spreadsheet), then continue with required steps and fence-free final JSON.",
+      maxSteps: 170,
+      maxAttempts: 4,
+      providerOptionsOverride: {
+        openai: {
+          reasoningEffort: "medium",
+          reasoningSummary: "detailed",
+          textVerbosity: "medium",
+        },
+      },
+    },
+    {
+      id: "dcf-02-anthropic-claude-4-6-opus",
+      provider: "anthropic",
+      model: "claude-4-6-opus",
+      modelGuidance:
+        "Prefer concise deterministic scripting over exploration, and avoid prose outside the required final JSON.",
+      maxSteps: 180,
+      maxAttempts: 4,
+    },
+    {
+      id: "dcf-03-google-gemini-3-flash-preview",
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      modelGuidance:
+        "Keep the script compact and straightforward; avoid optional enhancements that risk timeout or tool drift.",
+      maxSteps: 150,
+      maxAttempts: 4,
+    },
+    {
+      id: "dcf-04-google-gemini-3-pro-preview",
+      provider: "google",
+      model: "gemini-3-pro-preview",
+      modelGuidance:
+        "Include explicit formula references in validation output and stay strict about required artifact names.",
+      maxSteps: 180,
+      maxAttempts: 4,
+    },
+    {
+      id: "dcf-05-anthropic-claude-4-5-haiku",
+      provider: "anthropic",
+      model: "claude-4-5-haiku",
+      modelGuidance:
+        "Favor simple, robust formulas and minimize branchy logic in the generated Python script.",
+      maxSteps: 150,
+      maxAttempts: 4,
+    },
+  ];
+
+  return profiles.map((profile) => ({
+    id: profile.id,
+    provider: profile.provider,
+    model: profile.model,
+    maxSteps: profile.maxSteps,
+    maxAttempts: profile.maxAttempts,
+    providerOptionsOverride: profile.providerOptionsOverride,
+    requiredToolCalls: ["skill"],
+    requiredSkillBeforeTools: "spreadsheet",
+    guardedToolsBeforeSkill: ["write", "edit", "bash", "glob", "read"],
+    prompt: ({ runDir }) => buildNvidiaDcfPrompt(runDir, profile.model, profile.modelGuidance),
+  }));
+}
+
+function buildGptSkillReliabilityRuns(): RunSpec[] {
+  const model = "gpt-5.2";
+  const sharedGuardedTools = ["write", "edit", "bash", "glob", "read"];
+  const providerOptionsOverride = {
+    openai: {
+      reasoningEffort: "medium",
+      reasoningSummary: "detailed",
+      textVerbosity: "medium",
+    },
+  };
+
+  return [
+    {
+      id: "gpt-skill-01-spreadsheet",
+      provider: "openai",
+      model,
+      maxSteps: 90,
+      maxAttempts: 4,
+      providerOptionsOverride,
+      requiredToolCalls: ["skill"],
+      requiredFirstNonTodoToolCall: "skill",
+      requiredSkillBeforeTools: "spreadsheet",
+      guardedToolsBeforeSkill: sharedGuardedTools,
+      prompt: ({ runDir }) =>
+        buildSkillReliabilityPrompt(
+          runDir,
+          model,
+          "spreadsheet",
+          "Create a spreadsheet-planning note with concrete formula examples.",
+          "spreadsheet_plan.md",
+          [
+            '- Include sections: "Objective", "Inputs", and "Formula Skeleton".',
+            '- In "Formula Skeleton", include at least 3 Excel-style formulas using cell references (e.g., =B2*(1+C2)).',
+            '- Keep content concise and implementation-oriented.',
+          ].join("\n")
+        ),
+    },
+    {
+      id: "gpt-skill-02-doc",
+      provider: "openai",
+      model,
+      maxSteps: 90,
+      maxAttempts: 4,
+      providerOptionsOverride,
+      requiredToolCalls: ["skill"],
+      requiredFirstNonTodoToolCall: "skill",
+      requiredSkillBeforeTools: "doc",
+      guardedToolsBeforeSkill: sharedGuardedTools,
+      prompt: ({ runDir }) =>
+        buildSkillReliabilityPrompt(
+          runDir,
+          model,
+          "doc",
+          "Create a DOCX execution brief as plain text guidance.",
+          "docx_execution_brief.txt",
+          [
+            '- Include a title and exactly 5 numbered implementation steps.',
+            '- Mention both "python-docx" and "render_docx.py" explicitly.',
+            '- End with a short "Verification" paragraph.',
+          ].join("\n")
+        ),
+    },
+    {
+      id: "gpt-skill-03-slides",
+      provider: "openai",
+      model,
+      maxSteps: 90,
+      maxAttempts: 4,
+      providerOptionsOverride,
+      requiredToolCalls: ["skill"],
+      requiredFirstNonTodoToolCall: "skill",
+      requiredSkillBeforeTools: "slides",
+      guardedToolsBeforeSkill: sharedGuardedTools,
+      prompt: ({ runDir }) =>
+        buildSkillReliabilityPrompt(
+          runDir,
+          model,
+          "slides",
+          "Create a slide deck outline with speaker notes guidance.",
+          "slides_outline.md",
+          [
+            '- Include 6 slides as a numbered list with title + one-line purpose.',
+            '- Add a "Speaker Notes Strategy" section with 3 bullets.',
+            '- Keep tone internal and practical.',
+          ].join("\n")
+        ),
+    },
+    {
+      id: "gpt-skill-04-pdf",
+      provider: "openai",
+      model,
+      maxSteps: 90,
+      maxAttempts: 4,
+      providerOptionsOverride,
+      requiredToolCalls: ["skill"],
+      requiredFirstNonTodoToolCall: "skill",
+      requiredSkillBeforeTools: "pdf",
+      guardedToolsBeforeSkill: sharedGuardedTools,
+      prompt: ({ runDir }) =>
+        buildSkillReliabilityPrompt(
+          runDir,
+          model,
+          "pdf",
+          "Create a PDF layout specification document.",
+          "pdf_layout_spec.md",
+          [
+            '- Include sections: "Page Structure", "Table Rules", and "Quality Checks".',
+            '- In "Table Rules", include at least 4 concrete rules.',
+            '- In "Quality Checks", include 3 pass/fail checks.',
+          ].join("\n")
+        ),
+    },
+  ];
 }
 
 function computeRetryDelayMs(err: unknown, attempt: number): number {
@@ -439,26 +893,31 @@ async function main() {
   const openaiApiKey = process.env.OPENAI_API_KEY || "";
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY || "";
 
-  if (!googleApiKey) {
-    throw new Error("Missing GEMINI_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY env var (required for Gemini runs).");
-  }
-  if (!openaiApiKey) {
-    throw new Error("Missing OPENAI_API_KEY env var (required for GPT runs).");
-  }
-  if (!anthropicApiKey) {
-    throw new Error("Missing ANTHROPIC_API_KEY env var (required for Claude runs).");
-  }
-
   // Force API keys from env so we don't accidentally use older stored keys from ~/.cowork/auth/connections.json.
-  const googleProvider = createGoogleGenerativeAI({ apiKey: googleApiKey });
-  const openaiProvider = createOpenAI({ apiKey: openaiApiKey });
-  const anthropicProvider = createAnthropic({ apiKey: anthropicApiKey });
+  const googleProvider = googleApiKey ? createGoogleGenerativeAI({ apiKey: googleApiKey }) : null;
+  const openaiProvider = openaiApiKey ? createOpenAI({ apiKey: openaiApiKey }) : null;
+  const anthropicProvider = anthropicApiKey ? createAnthropic({ apiKey: anthropicApiKey }) : null;
 
   const forcedGetModel: typeof realGetModel = (config: AgentConfig, id?: string) => {
     const modelId = id || config.model;
-    if (config.provider === "google") return googleProvider(modelId);
-    if (config.provider === "openai") return openaiProvider(modelId);
-    if (config.provider === "anthropic") return anthropicProvider(modelId);
+    if (config.provider === "google") {
+      if (!googleProvider) {
+        throw new Error("Missing GEMINI_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY env var (required for Gemini runs).");
+      }
+      return googleProvider(modelId);
+    }
+    if (config.provider === "openai") {
+      if (!openaiProvider) {
+        throw new Error("Missing OPENAI_API_KEY env var (required for GPT runs).");
+      }
+      return openaiProvider(modelId);
+    }
+    if (config.provider === "anthropic") {
+      if (!anthropicProvider) {
+        throw new Error("Missing ANTHROPIC_API_KEY env var (required for Claude runs).");
+      }
+      return anthropicProvider(modelId);
+    }
     return realGetModel(config, modelId);
   };
 
@@ -470,36 +929,20 @@ async function main() {
     },
   });
 
-  const runRoot = path.join(baseConfig.outputDirectory, `raw-agent-loop_mixed_${safeStamp()}`);
+  const runRootPrefix =
+    cliArgs.scenario === "mixed"
+      ? "raw-agent-loop_mixed"
+      : cliArgs.scenario === "dcf-model-matrix"
+        ? "raw-agent-loop_dcf-model-matrix"
+        : "raw-agent-loop_gpt-skill-reliability";
+  const runRoot = path.join(baseConfig.outputDirectory, `${runRootPrefix}_${safeStamp()}`);
   await ensureDir(runRoot);
 
-  // Cache Anthropic model ids for alias resolution and persist the raw response.
   let anthropicModelIds: string[] = [];
-  try {
-    const modelsRes = await fetchAnthropicModels(anthropicApiKey);
-    await fs.writeFile(path.join(runRoot, "anthropic_models_raw.json"), modelsRes.bodyText, "utf-8");
-    if (modelsRes.ok) {
-      const parsed = JSON.parse(modelsRes.bodyText) as any;
-      anthropicModelIds = Array.isArray(parsed?.data) ? parsed.data.map((m: any) => String(m?.id || "")).filter(Boolean) : [];
-    }
-  } catch (err) {
-    await fs.writeFile(path.join(runRoot, "anthropic_models_raw_error.txt"), String(err), "utf-8");
-    anthropicModelIds = [];
-  }
 
   const limiter = new RateLimiter(1000);
 
-  type RunSpec = {
-    id: string;
-    provider: ProviderName;
-    model: string; // may be an alias; resolved per provider
-    maxSteps?: number;
-    maxAttempts?: number;
-    minIntervalMs?: number;
-    prompt: (ctx: { runId: string; runDir: string; repoDir: string }) => string;
-  };
-
-  const runs: RunSpec[] = [
+  const mixedRuns: RunSpec[] = [
     {
       id: "run-01",
       provider: "google",
@@ -747,6 +1190,56 @@ Final response must be a JSON object:
     },
   ];
 
+  const scenarioRuns =
+    cliArgs.scenario === "mixed"
+      ? mixedRuns
+      : cliArgs.scenario === "dcf-model-matrix"
+        ? buildDcfModelMatrixRuns()
+        : buildGptSkillReliabilityRuns();
+  const runs = scenarioRuns.filter((run) => {
+    if (cliArgs.onlyRunIds.length > 0 && !cliArgs.onlyRunIds.includes(run.id)) {
+      return false;
+    }
+    if (cliArgs.onlyModels.length > 0 && !cliArgs.onlyModels.includes(run.model)) {
+      return false;
+    }
+    return true;
+  });
+
+  if (runs.length === 0) {
+    throw new Error(
+      `No runs selected for scenario="${cliArgs.scenario}". Try --only-run/--only-model values that exist in this scenario.`
+    );
+  }
+
+  const requiredProviders = new Set(runs.map((run) => run.provider));
+  if (requiredProviders.has("google") && !googleApiKey) {
+    throw new Error("Missing GEMINI_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY env var (required for Gemini runs).");
+  }
+  if (requiredProviders.has("openai") && !openaiApiKey) {
+    throw new Error("Missing OPENAI_API_KEY env var (required for GPT runs).");
+  }
+  if (requiredProviders.has("anthropic") && !anthropicApiKey) {
+    throw new Error("Missing ANTHROPIC_API_KEY env var (required for Claude runs).");
+  }
+
+  if (requiredProviders.has("anthropic")) {
+    // Cache Anthropic model ids for alias resolution and persist the raw response.
+    try {
+      const modelsRes = await fetchAnthropicModels(anthropicApiKey);
+      await fs.writeFile(path.join(runRoot, "anthropic_models_raw.json"), modelsRes.bodyText, "utf-8");
+      if (modelsRes.ok) {
+        const parsed = JSON.parse(modelsRes.bodyText) as any;
+        anthropicModelIds = Array.isArray(parsed?.data)
+          ? parsed.data.map((m: any) => String(m?.id || "")).filter(Boolean)
+          : [];
+      }
+    } catch (err) {
+      await fs.writeFile(path.join(runRoot, "anthropic_models_raw_error.txt"), String(err), "utf-8");
+      anthropicModelIds = [];
+    }
+  }
+
   for (let i = 0; i < runs.length; i++) {
     const runIndex = i + 1;
     const run = runs[i]!;
@@ -794,7 +1287,7 @@ Final response must be a JSON object:
       };
 
       const config = await loadConfig({ cwd: repoDir, env });
-      config.providerOptions = DEFAULT_PROVIDER_OPTIONS;
+      config.providerOptions = mergeProviderOptions(DEFAULT_PROVIDER_OPTIONS as Record<string, any>, run.providerOptionsOverride);
       config.enableMcp = false;
       config.provider = run.provider;
       config.model = resolved.resolvedModel;
@@ -894,7 +1387,10 @@ Final response must be a JSON object:
         const tracedFinalizeGenerateText = makeTracedGenerateText(steps, "finalize", runLimiter);
 
         const createToolsOverride = (ctx: ToolContext) =>
-          createToolsWithTracing(ctx, steps, runLimiter, forcedGetModel);
+          createToolsWithTracing(ctx, steps, runLimiter, forcedGetModel, {
+            requiredSkillName: run.requiredSkillBeforeTools,
+            guardedToolNames: run.guardedToolsBeforeSkill,
+          });
 
         try {
           const res = await runTurnWithDeps(
@@ -916,6 +1412,29 @@ Final response must be a JSON object:
               getModel: forcedGetModel as any,
             }
           );
+
+          if (Array.isArray(run.requiredToolCalls) && run.requiredToolCalls.length > 0) {
+            const tracedToolCalls = collectTracedToolCallNames(steps);
+            const missing = run.requiredToolCalls.filter((toolName) => {
+              const prefix = `tool> ${toolName} `;
+              if (toolLogLines.some((line) => line.startsWith(prefix))) return false;
+              return !tracedToolCalls.includes(toolName);
+            });
+            if (missing.length > 0) {
+              throw new Error(`Missing required tool call(s): ${missing.join(", ")}`);
+            }
+          }
+
+          if (run.requiredFirstNonTodoToolCall) {
+            const tracedToolCalls = collectTracedToolCallNames(steps);
+            const nonTodoCalls = tracedToolCalls.filter((name) => name !== "todoWrite");
+            const first = nonTodoCalls[0] ?? "";
+            if (first !== run.requiredFirstNonTodoToolCall) {
+              throw new Error(
+                `First non-todo tool call must be "${run.requiredFirstNonTodoToolCall}", got "${first || "none"}".`
+              );
+            }
+          }
 
           let finalText = String(res?.text ?? "");
           let finalReasoningText = res?.reasoningText;
@@ -1088,6 +1607,9 @@ Final response must be a JSON object:
       const artifacts = await collectArtifacts(runDir);
       await fs.writeFile(path.join(runDir, "artifacts_index.json"), safeJsonStringify(artifacts), "utf-8");
 
+      const runFailureError =
+        !finalRes && finalError ? new Error(`Run ${run.id} failed after ${maxAttempts} attempts: ${String(finalError)}`) : undefined;
+
       const runMeta = {
         runId: run.id,
         provider: run.provider,
@@ -1100,12 +1622,15 @@ Final response must be a JSON object:
         startedAt,
         finishedAt,
         observabilityEnabled: !!stack,
-        ...(strictSloError ? { error: strictSloError.message } : {}),
+        ...(strictSloError ? { error: strictSloError.message } : runFailureError ? { error: runFailureError.message } : {}),
       };
       await fs.writeFile(path.join(runDir, "run_meta.json"), safeJsonStringify(runMeta), "utf-8");
 
       if (strictSloError) {
         throw strictSloError;
+      }
+      if (runFailureError) {
+        throw runFailureError;
       }
     } finally {
       if (stack && !cliArgs.keepStack) {
@@ -1123,10 +1648,13 @@ Final response must be a JSON object:
     cwd: repoDir,
     runRoot,
     harness: {
+      scenario: cliArgs.scenario,
       observability: cliArgs.observability,
       reportOnly: cliArgs.reportOnly,
       strictMode: cliArgs.strictMode,
       keepStack: cliArgs.keepStack,
+      onlyRunIds: cliArgs.onlyRunIds,
+      onlyModels: cliArgs.onlyModels,
     },
     apiKeys: {
       google: maskApiKey(googleApiKey),

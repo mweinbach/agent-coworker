@@ -1,5 +1,6 @@
 import { isProviderName } from "../types";
 import type {
+  ApprovalRiskCode,
   AgentConfig,
   HarnessContextPayload,
   HarnessSloCheck,
@@ -62,6 +63,7 @@ export type ServerEvent =
       requestId: string;
       command: string;
       dangerous: boolean;
+      reasonCode?: ApprovalRiskCode;
     }
   | {
       type: "config_updated";

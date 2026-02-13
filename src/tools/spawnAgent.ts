@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { getModel as realGetModel } from "../config";
 import { loadSubAgentPrompt as realLoadSubAgentPrompt } from "../prompt";
-import { classifyCommand as realClassifyCommand } from "../utils/approval";
+import { classifyCommandDetailed as realClassifyCommandDetailed } from "../utils/approval";
 
 import type { ToolContext } from "./context";
 import { createBashTool } from "./bash";
@@ -19,13 +19,15 @@ import { createSkillTool } from "./skill";
 import { createNotebookEditTool } from "./notebookEdit";
 
 type AgentType = "explore" | "research" | "general";
+const MAX_SUB_AGENT_DEPTH = 2;
+const MAX_SUB_AGENT_TASK_CHARS = 20_000;
 
 export type SpawnAgentDeps = Partial<{
   streamText: typeof realStreamText;
   stepCountIs: typeof realStepCountIs;
   getModel: typeof realGetModel;
   loadSubAgentPrompt: typeof realLoadSubAgentPrompt;
-  classifyCommand: typeof realClassifyCommand;
+  classifyCommandDetailed: typeof realClassifyCommandDetailed;
 }>;
 
 function createSubAgentTools(
@@ -40,6 +42,7 @@ function createSubAgentTools(
       throw new Error("Sub-agent cannot ask the user directly.");
     },
     approveCommand: async (command) => safeApprove(command),
+    spawnDepth: (parent.spawnDepth ?? 0) + 1,
   };
 
   if (agentType === "explore") {
@@ -79,22 +82,33 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
   const stepCountIs = deps.stepCountIs ?? realStepCountIs;
   const getModel = deps.getModel ?? realGetModel;
   const loadSubAgentPrompt = deps.loadSubAgentPrompt ?? realLoadSubAgentPrompt;
-  const classifyCommand = deps.classifyCommand ?? realClassifyCommand;
-
-  const safeApprove = (command: string) => classifyCommand(command).kind === "auto";
+  const classifyCommandDetailed = deps.classifyCommandDetailed ?? realClassifyCommandDetailed;
+  const safeApprove = (command: string) => classifyCommandDetailed(command).kind === "auto";
 
   return tool({
     description:
       "Launch a sub-agent for a focused task (explore, research, or general). Sub-agents run with their own prompt and restricted tools and return their result.",
     inputSchema: z.object({
-      task: z.string().describe("What the sub-agent should accomplish"),
+      task: z
+        .string()
+        .min(1)
+        .max(MAX_SUB_AGENT_TASK_CHARS)
+        .describe("What the sub-agent should accomplish"),
       agentType: z.enum(["explore", "research", "general"]).optional().default("general"),
     }),
     execute: async ({ task, agentType }) => {
       ctx.log(`tool> spawnAgent ${JSON.stringify({ agentType })}`);
+      if ((ctx.spawnDepth ?? 0) >= MAX_SUB_AGENT_DEPTH) {
+        throw new Error(
+          `Sub-agent recursion depth exceeded (max depth ${MAX_SUB_AGENT_DEPTH}).`
+        );
+      }
+      const normalizedTask = task.trim();
+      if (!normalizedTask) throw new Error("spawnAgent task must not be empty");
 
       const system = await loadSubAgentPrompt(ctx.config, agentType);
-      const modelId = agentType === "research" ? ctx.config.model : ctx.config.subAgentModel;
+      const modelId =
+        agentType === "research" ? ctx.config.model : ctx.config.subAgentModel;
 
       const tools = createSubAgentTools(ctx, agentType, safeApprove);
 
@@ -104,7 +118,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
         tools,
         stopWhen: stepCountIs(50),
         providerOptions: ctx.config.providerOptions,
-        prompt: task,
+        prompt: normalizedTask,
       } as any);
       const text = await streamResult.text;
 

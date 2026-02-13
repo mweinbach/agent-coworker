@@ -10,7 +10,7 @@ import type { AgentConfig, HarnessContextPayload, HarnessSloCheck, Observability
 import { runTurn } from "../agent";
 import { loadSystemPromptWithSkills } from "../prompt";
 import { createTools } from "../tools";
-import { classifyCommand } from "../utils/approval";
+import { classifyCommandDetailed } from "../utils/approval";
 import { HarnessContextStore } from "../harness/contextStore";
 import { emitObservabilityEvent } from "../observability/otel";
 import { runObservabilityQuery } from "../observability/query";
@@ -610,7 +610,7 @@ export class AgentSession {
   private async approveCommand(command: string) {
     if (this.yolo) return true;
 
-    const classification = classifyCommand(command);
+    const classification = classifyCommandDetailed(command);
     if (classification.kind === "auto") return true;
 
     const requestId = makeId();
@@ -623,6 +623,7 @@ export class AgentSession {
       requestId,
       command,
       dangerous: classification.dangerous,
+      reasonCode: classification.riskCode,
     });
 
     return await d.promise;
@@ -760,6 +761,7 @@ export class AgentSession {
         discoveredSkills: this.discoveredSkills,
         maxSteps: 100,
         enableMcp: this.config.enableMcp,
+        spawnDepth: 0,
         abortSignal: this.abortController.signal,
       });
 

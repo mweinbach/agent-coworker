@@ -626,7 +626,8 @@ Agent wants to run a command and needs permission. **Blocks the agent** until yo
   "sessionId": "...",
   "requestId": "req-approval-001",
   "command": "rm -rf /tmp/old-builds",
-  "dangerous": true
+  "dangerous": true,
+  "reasonCode": "matches_dangerous_pattern" // optional machine-readable reason
 }
 ```
 

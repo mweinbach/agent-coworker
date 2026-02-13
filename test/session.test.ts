@@ -1098,6 +1098,7 @@ describe("AgentSession", () => {
       const approvalEvt = events.find((e) => e.type === "approval") as any;
       expect(approvalEvt).toBeDefined();
       expect(approvalEvt.command).toBe("npm install");
+      expect(approvalEvt.reasonCode).toBe("requires_manual_review");
 
       session.handleApprovalResponse(approvalEvt.requestId, true);
       await sendPromise;
@@ -1167,6 +1168,7 @@ describe("AgentSession", () => {
       const approvalEvt = events.find((e) => e.type === "approval") as any;
       expect(approvalEvt).toBeDefined();
       expect(approvalEvt.dangerous).toBe(true);
+      expect(approvalEvt.reasonCode).toBe("matches_dangerous_pattern");
 
       session.handleApprovalResponse(approvalEvt.requestId, true);
       await sendPromise;

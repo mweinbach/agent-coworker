@@ -33,10 +33,18 @@ export async function loadMCPTools(
   const tools: Record<string, any> = {};
   const errors: string[] = [];
   const clients: Array<{ name: string; close: () => Promise<void> }> = [];
+  let closed = false;
+
+  const retriesFor = (v: unknown): number => {
+    if (typeof v !== "number" || !Number.isFinite(v)) return 3;
+    return Math.max(0, Math.floor(v));
+  };
 
   const close = async () => {
+    if (closed) return;
+    closed = true;
     // Close in reverse order (last opened, first closed), in case transports depend on ordering.
-    for (const c of clients.reverse()) {
+    for (const c of [...clients].reverse()) {
       try {
         await c.close();
       } catch {
@@ -46,7 +54,7 @@ export async function loadMCPTools(
   };
 
   for (const server of servers) {
-    const retries = server.retries ?? 3;
+    const retries = retriesFor(server.retries);
 
     for (let attempt = 0; attempt <= retries; attempt++) {
       let client: any | null = null;
@@ -91,7 +99,10 @@ export async function loadMCPTools(
           const msg = `[MCP] Failed to connect to ${server.name} after ${attempt + 1} attempts: ${String(
             err
           )}`;
-          if (server.required) throw new Error(msg);
+          if (server.required) {
+            await close();
+            throw new Error(msg);
+          }
           errors.push(msg);
           opts.log?.(msg);
         } else {

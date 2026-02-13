@@ -516,6 +516,46 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("set_enable_mcp updates session_settings deterministically", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const result = await new Promise<any>((resolve, reject) => {
+        const ws = new WebSocket(url);
+        let sessionId = "";
+        const timer = setTimeout(() => {
+          ws.close();
+          reject(new Error("Timed out waiting for session_settings update"));
+        }, 5000);
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+          if (!sessionId && msg.type === "server_hello") {
+            sessionId = msg.sessionId;
+            ws.send(JSON.stringify({ type: "set_enable_mcp", sessionId, enableMcp: false }));
+            return;
+          }
+          if (msg.type === "session_settings" && msg.enableMcp === false) {
+            clearTimeout(timer);
+            ws.close();
+            resolve(msg);
+          }
+        };
+
+        ws.onerror = (e) => {
+          clearTimeout(timer);
+          ws.close();
+          reject(new Error(`WebSocket error: ${e}`));
+        };
+      });
+
+      expect(result.type).toBe("session_settings");
+      expect(result.enableMcp).toBe(false);
+    } finally {
+      server.stop();
+    }
+  });
+
   test("harness_context_set returns harness_context", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -964,6 +1004,71 @@ describe("Server Resilience", () => {
       // Server should still work
       const messages = await collectMessages(url, 1);
       expect(messages[0].type).toBe("server_hello");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("handles 5 parallel sessions with concurrent user_message/cancel/checkpoint traffic", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    const runTraffic = (label: string): Promise<{ sessionId: string; messages: any[] }> =>
+      new Promise((resolve, reject) => {
+        const ws = new WebSocket(url);
+        const messages: any[] = [];
+        let sessionId = "";
+        const timer = setTimeout(() => {
+          ws.close();
+          reject(new Error(`Timed out in traffic run ${label}`));
+        }, 7000);
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+          messages.push(msg);
+
+          if (!sessionId && msg.type === "server_hello") {
+            sessionId = msg.sessionId;
+            ws.send(JSON.stringify({ type: "user_message", sessionId, text: `hello-${label}` }));
+            ws.send(JSON.stringify({ type: "cancel", sessionId }));
+            ws.send(JSON.stringify({ type: "session_backup_checkpoint", sessionId }));
+            setTimeout(() => {
+              clearTimeout(timer);
+              ws.close();
+              resolve({ sessionId, messages });
+            }, 1200);
+          }
+        };
+
+        ws.onerror = (e) => {
+          clearTimeout(timer);
+          ws.close();
+          reject(new Error(`WebSocket error in ${label}: ${e}`));
+        };
+      });
+
+    try {
+      const runs = await Promise.all(
+        Array.from({ length: 5 }, (_x, i) => runTraffic(`s${i + 1}`))
+      );
+
+      const ids = runs.map((r) => r.sessionId);
+      expect(new Set(ids).size).toBe(5);
+
+      for (const run of runs) {
+        expect(run.messages.some((m) => m.type === "server_hello")).toBe(true);
+        expect(
+          run.messages.some(
+            (m) =>
+              typeof m.sessionId === "string" &&
+              m.sessionId !== "" &&
+              m.sessionId !== run.sessionId
+          )
+        ).toBe(false);
+      }
+
+      const hello = await collectMessages(url, 1);
+      expect(hello[0].type).toBe("server_hello");
     } finally {
       server.stop();
     }

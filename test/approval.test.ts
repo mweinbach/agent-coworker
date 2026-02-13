@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   classifyCommand,
+  classifyCommandDetailed,
   approveCommand,
 } from "../src/utils/approval";
 
@@ -294,6 +295,32 @@ describe("classifyCommand", () => {
   });
 });
 
+describe("classifyCommandDetailed", () => {
+  test("returns safe_auto_approved for auto-approved commands", () => {
+    expect(classifyCommandDetailed("ls -la")).toEqual({
+      kind: "auto",
+      dangerous: false,
+      riskCode: "safe_auto_approved",
+    });
+  });
+
+  test("returns matches_dangerous_pattern for dangerous commands", () => {
+    expect(classifyCommandDetailed("rm -rf /")).toEqual({
+      kind: "prompt",
+      dangerous: true,
+      riskCode: "matches_dangerous_pattern",
+    });
+  });
+
+  test("returns contains_shell_control_operator for chained commands", () => {
+    expect(classifyCommandDetailed("ls && pwd")).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "contains_shell_control_operator",
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // approveCommand
 // ---------------------------------------------------------------------------
@@ -360,6 +387,7 @@ describe("approveCommand", () => {
       return "n";
     });
     expect(capturedMessage).toStartWith("DANGEROUS: ");
+    expect(capturedMessage).toContain("Risk: matches_dangerous_pattern");
     expect(capturedMessage).toContain("rm -rf /");
     expect(capturedMessage).toContain("Approve? [y/N]");
   });
@@ -371,6 +399,7 @@ describe("approveCommand", () => {
       return "n";
     });
     expect(capturedMessage).toStartWith("Run: ");
+    expect(capturedMessage).toContain("Risk: requires_manual_review");
     expect(capturedMessage).toContain("npm install");
     expect(capturedMessage).toContain("Approve? [y/N]");
   });

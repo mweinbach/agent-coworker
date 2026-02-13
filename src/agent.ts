@@ -46,6 +46,9 @@ export interface RunTurnParams {
   /** Lightweight skill metadata for dynamic tool descriptions. */
   discoveredSkills?: Array<{ name: string; description: string }>;
 
+  /** Sub-agent nesting depth (0 for root session turn). */
+  spawnDepth?: number;
+
   maxSteps?: number;
   enableMcp?: boolean;
   abortSignal?: AbortSignal;
@@ -78,7 +81,15 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
   }> {
     const { config, system, messages, log, askUser, approveCommand, updateTodos, discoveredSkills, abortSignal } = params;
 
-    const toolCtx = { config, log, askUser, approveCommand, updateTodos, availableSkills: discoveredSkills };
+    const toolCtx = {
+      config,
+      log,
+      askUser,
+      approveCommand,
+      updateTodos,
+      spawnDepth: params.spawnDepth ?? 0,
+      availableSkills: discoveredSkills,
+    };
     const builtInTools = deps.createTools(toolCtx);
 
     let mcpTools: Record<string, any> = {};

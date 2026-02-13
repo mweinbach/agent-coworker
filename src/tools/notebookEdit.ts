@@ -5,14 +5,14 @@ import { z } from "zod";
 
 import type { ToolContext } from "./context";
 import { resolveMaybeRelative } from "../utils/paths";
-import { isWritePathAllowed } from "../utils/permissions";
+import { assertWritePathAllowed } from "../utils/permissions";
 
 export function createNotebookEditTool(ctx: ToolContext) {
   return tool({
     description:
       "Edit a Jupyter notebook (.ipynb) cell. Supports replace, insert, and delete operations.",
     inputSchema: z.object({
-      notebookPath: z.string().describe("Path to the .ipynb file (prefer absolute)"),
+      notebookPath: z.string().min(1).describe("Path to the .ipynb file (prefer absolute)"),
       cellIndex: z.number().int().min(0).describe("0-indexed cell index"),
       newSource: z.string().describe("New content for the cell"),
       cellType: z.enum(["code", "markdown"]).optional(),
@@ -23,15 +23,17 @@ export function createNotebookEditTool(ctx: ToolContext) {
         `tool> notebookEdit ${JSON.stringify({ notebookPath, cellIndex, cellType, editMode })}`
       );
 
-      const abs = resolveMaybeRelative(notebookPath, ctx.config.workingDirectory);
-      if (!isWritePathAllowed(abs, ctx.config)) {
-        throw new Error(
-          `Notebook edit blocked: path is outside workingDirectory/outputDirectory: ${abs}`
-        );
+      const abs = await assertWritePathAllowed(
+        resolveMaybeRelative(notebookPath, ctx.config.workingDirectory),
+        ctx.config,
+        "notebookEdit"
+      );
+      if (abs.toLowerCase().endsWith(".ipynb") === false) {
+        throw new Error(`Notebook edit blocked: expected a .ipynb file: ${abs}`);
       }
       const raw = await fs.readFile(abs, "utf-8");
       const nb = JSON.parse(raw);
-      const cells = nb.cells;
+      const cells = nb?.cells;
 
       if (!Array.isArray(cells)) throw new Error(`Invalid notebook format: ${abs}`);
 
@@ -40,8 +42,10 @@ export function createNotebookEditTool(ctx: ToolContext) {
         .map((l, i, a) => l + (i < a.length - 1 ? "\n" : ""));
 
       if (editMode === "delete") {
+        if (cellIndex >= cells.length) throw new Error(`Cell ${cellIndex} out of range (${cells.length})`);
         cells.splice(cellIndex, 1);
       } else if (editMode === "insert") {
+        if (cellIndex > cells.length) throw new Error(`Cell ${cellIndex} out of range (${cells.length})`);
         const ct = cellType || "code";
         cells.splice(cellIndex, 0, {
           cell_type: ct,

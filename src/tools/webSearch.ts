@@ -19,10 +19,17 @@ function formatResults(results: Array<{ title?: string; url?: string; descriptio
   );
 }
 
+function getExaSnippet(result: unknown): string {
+  const text = (result as any)?.text;
+  if (typeof text === "string") return text;
+  if (text && typeof text === "object" && typeof text.text === "string") return text.text;
+  return "";
+}
+
 function createCustomWebSearchTool(ctx: ToolContext) {
   return tool({
     description:
-      "Search the web for current information. Requires BRAVE_API_KEY or TAVILY_API_KEY. Returns titles, URLs, and snippets.",
+      "Search the web for current information. Requires BRAVE_API_KEY or EXA_API_KEY. Returns titles, URLs, and snippets.",
     inputSchema: z.object({
       query: z.string().describe("Search query"),
       maxResults: z.number().int().min(1).max(20).optional().default(10),
@@ -60,41 +67,44 @@ function createCustomWebSearchTool(ctx: ToolContext) {
         return out;
       }
 
-      if (process.env.TAVILY_API_KEY) {
-        const res = await fetch("https://api.tavily.com/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            api_key: process.env.TAVILY_API_KEY,
-            query,
-            max_results: maxResults,
-            search_depth: "basic",
-            include_answer: false,
-            include_images: false,
-            include_raw_content: false,
-          }),
-        });
+      if (process.env.EXA_API_KEY) {
+        try {
+          const res = await fetch("https://api.exa.ai/search", {
+            method: "POST",
+            headers: {
+              "x-api-key": process.env.EXA_API_KEY,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              query,
+              numResults: maxResults,
+            }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            const msg = `Exa search failed: ${res.status} ${res.statusText}: ${text.slice(0, 500)}`;
+            ctx.log(`tool< webSearch ${JSON.stringify({ ok: false })}`);
+            return msg;
+          }
 
-        if (!res.ok) {
-          const text = await res.text();
-          const msg = `Tavily search failed: ${res.status} ${res.statusText}: ${text.slice(0, 500)}`;
+          const data = (await res.json()) as any;
+          const results = (data?.results || []).map((r: any) => ({
+            title: r.title || undefined,
+            url: r.url || "",
+            description: getExaSnippet(r),
+          }));
+
+          const out = formatResults(results);
+          ctx.log(`tool< webSearch ${JSON.stringify({ provider: "exa" })}`);
+          return out;
+        } catch (error) {
+          const msg = `Exa search failed: ${error instanceof Error ? error.message : String(error)}`;
           ctx.log(`tool< webSearch ${JSON.stringify({ ok: false })}`);
           return msg;
         }
-
-        const data = (await res.json()) as any;
-        const results = (data?.results || []).map((r: any) => ({
-          title: r.title,
-          url: r.url,
-          description: r.content,
-        }));
-
-        const out = formatResults(results);
-        ctx.log(`tool< webSearch ${JSON.stringify({ provider: "tavily" })}`);
-        return out;
       }
 
-      const out = "webSearch disabled: set BRAVE_API_KEY or TAVILY_API_KEY";
+      const out = "webSearch disabled: set BRAVE_API_KEY or EXA_API_KEY";
       ctx.log(`tool< webSearch ${JSON.stringify({ disabled: true })}`);
       return out;
     },

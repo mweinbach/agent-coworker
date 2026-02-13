@@ -886,9 +886,9 @@ describe("webSearch tool", () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     delete process.env.BRAVE_API_KEY;
-    delete process.env.TAVILY_API_KEY;
+    delete process.env.EXA_API_KEY;
 
     try {
       const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
@@ -896,7 +896,7 @@ describe("webSearch tool", () => {
       expect(out).toContain("webSearch disabled");
     } finally {
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
     }
   });
 
@@ -904,9 +904,9 @@ describe("webSearch tool", () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     process.env.BRAVE_API_KEY = "test-brave-key";
-    delete process.env.TAVILY_API_KEY;
+    delete process.env.EXA_API_KEY;
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async (url: any) => {
@@ -936,27 +936,28 @@ describe("webSearch tool", () => {
       globalThis.fetch = originalFetch;
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
       else delete process.env.BRAVE_API_KEY;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
     }
   });
 
-  test("uses TAVILY_API_KEY as fallback", async () => {
+  test("uses EXA_API_KEY as fallback", async () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     delete process.env.BRAVE_API_KEY;
-    process.env.TAVILY_API_KEY = "test-tavily-key";
+    process.env.EXA_API_KEY = "test-exa-key";
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async (url: any) => {
+      expect(String(url)).toContain("api.exa.ai/search");
       return new Response(
         JSON.stringify({
           results: [
             {
-              title: "Tavily Result",
-              url: "https://tavily.com",
-              content: "Tavily content",
+              title: "Exa Result",
+              url: "https://exa.com",
+              text: { text: "Exa content" },
             },
           ],
         }),
@@ -967,14 +968,14 @@ describe("webSearch tool", () => {
     try {
       const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test query", maxResults: 5 });
-      expect(out).toContain("Tavily Result");
-      expect(out).toContain("https://tavily.com");
-      expect(out).toContain("Tavily content");
+      expect(out).toContain("Exa Result");
+      expect(out).toContain("https://exa.com");
+      expect(out).toContain("Exa content");
     } finally {
       globalThis.fetch = originalFetch;
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
-      else delete process.env.TAVILY_API_KEY;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
     }
   });
 
@@ -982,9 +983,9 @@ describe("webSearch tool", () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     process.env.BRAVE_API_KEY = "test-brave-key";
-    delete process.env.TAVILY_API_KEY;
+    delete process.env.EXA_API_KEY;
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
@@ -1000,21 +1001,21 @@ describe("webSearch tool", () => {
       globalThis.fetch = originalFetch;
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
       else delete process.env.BRAVE_API_KEY;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
     }
   });
 
-  test("handles Tavily API error response", async () => {
+  test("handles Exa API error response", async () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     delete process.env.BRAVE_API_KEY;
-    process.env.TAVILY_API_KEY = "test-tavily-key";
+    process.env.EXA_API_KEY = "test-exa-key";
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
-      return new Response("Internal Server Error", {
+      return new Response(JSON.stringify({ message: "Internal Server Error" }), {
         status: 500,
         statusText: "Internal Server Error",
       });
@@ -1023,13 +1024,13 @@ describe("webSearch tool", () => {
     try {
       const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test", maxResults: 1 });
-      expect(out).toContain("Tavily search failed");
-      expect(out).toContain("500");
+      expect(out).toContain("Exa search failed");
+      expect(out).toContain("Internal Server Error");
     } finally {
       globalThis.fetch = originalFetch;
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
-      else delete process.env.TAVILY_API_KEY;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
     }
   });
 
@@ -1037,9 +1038,9 @@ describe("webSearch tool", () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     process.env.BRAVE_API_KEY = "test-brave-key";
-    delete process.env.TAVILY_API_KEY;
+    delete process.env.EXA_API_KEY;
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
@@ -1057,17 +1058,17 @@ describe("webSearch tool", () => {
       globalThis.fetch = originalFetch;
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
       else delete process.env.BRAVE_API_KEY;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
     }
   });
 
-  test("Brave is preferred over Tavily when both keys exist", async () => {
+  test("Brave is preferred over Exa when both keys exist", async () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     process.env.BRAVE_API_KEY = "test-brave-key";
-    process.env.TAVILY_API_KEY = "test-tavily-key";
+    process.env.EXA_API_KEY = "test-exa-key";
 
     const originalFetch = globalThis.fetch;
     let calledUrl = "";
@@ -1092,8 +1093,8 @@ describe("webSearch tool", () => {
       globalThis.fetch = originalFetch;
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
       else delete process.env.BRAVE_API_KEY;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
-      else delete process.env.TAVILY_API_KEY;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
     }
   });
 });

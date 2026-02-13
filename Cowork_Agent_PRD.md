@@ -31,7 +31,7 @@ The goal is a functional agent core — not a UI. The agent should be usable fro
 | Model Providers | `@ai-sdk/anthropic`, `@ai-sdk/openai`, `@ai-sdk/google`, etc. | Swap providers without changing tool code |
 | MCP Integration | `@ai-sdk/mcp` | Native MCP client for connecting external tool servers |
 | File Utilities | `fast-glob`, Node `fs/path` | Glob pattern matching, file operations |
-| Search Backend | Brave Search API or Tavily | Web search tool backend (API key required) |
+| Search Backend | Brave Search API or Exa | Web search tool backend (API key required) |
 | HTML Processing | `@mozilla/readability` + `turndown` | WebFetch: HTML → markdown conversion |
 
 ---
@@ -385,7 +385,7 @@ export const grep = tool({
 
 ### 3.7 webSearch
 
-Search the web. Backed by Brave Search API, Tavily, or any search provider you configure.
+Search the web. Backed by Brave Search API, Exa, or any search provider you configure.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -813,7 +813,7 @@ Complete the task and return your results. Be thorough but concise.
 
 ### Phase 3: Web Tools (Day 4)
 
-- Implement `webSearch.ts` (get a Brave Search or Tavily API key)
+- Implement `webSearch.ts` (get a Brave Search or Exa API key)
 - Implement `webFetch.ts` (install `@mozilla/readability`, `jsdom`, `turndown`)
 - **Verify:** agent can search the web and read documentation pages
 

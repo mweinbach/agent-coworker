@@ -25,6 +25,12 @@ function isPrivateIpv4(host: string): boolean {
 
 function isPrivateIpv6(host: string): boolean {
   const normalized = host.toLowerCase().split("%")[0] || host.toLowerCase();
+  const hextets = parseIpv6Hextets(normalized);
+  if (hextets && isIpv4MappedIpv6(hextets)) {
+    const mappedIpv4 = `${(hextets[6] >> 8) & 0xff}.${hextets[6] & 0xff}.${(hextets[7] >> 8) & 0xff}.${hextets[7] & 0xff}`;
+    return isPrivateIpv4(mappedIpv4);
+  }
+
   if (normalized === "::" || normalized === "::1") return true;
   if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
   if (
@@ -40,7 +46,7 @@ function isPrivateIpv6(host: string): boolean {
 }
 
 function isBlockedHost(hostname: string): boolean {
-  const host = hostname.toLowerCase();
+  const host = hostname.toLowerCase().replace(/\.+$/, "");
   const hostForIpCheck = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
 
   if (BLOCKED_HOSTS.has(host)) return true;
@@ -52,6 +58,48 @@ function isBlockedHost(hostname: string): boolean {
   if (ipKind === 4) return isPrivateIpv4(hostForIpCheck);
   if (ipKind === 6) return isPrivateIpv6(hostForIpCheck);
   return false;
+}
+
+function parseIpv6Hextets(host: string): number[] | null {
+  if (!host) return null;
+
+  const [left, right] = host.split("::");
+  if (host.split("::").length > 2) return null;
+
+  const leftParts = expandIpv6Parts(left);
+  const rightParts = expandIpv6Parts(right);
+  if (!leftParts || !rightParts) return null;
+
+  const compressedCount = 8 - (leftParts.length + rightParts.length);
+  if (compressedCount < 0) return null;
+  if (!host.includes("::") && compressedCount !== 0) return null;
+
+  return [...leftParts, ...new Array(compressedCount).fill(0), ...rightParts];
+}
+
+function expandIpv6Parts(segment: string | undefined): number[] | null {
+  if (!segment) return [];
+
+  const pieces = segment.split(":");
+  const result: number[] = [];
+  for (const piece of pieces) {
+    if (!piece) return null;
+    if (piece.includes(".")) {
+      if (isIP(piece) !== 4) return null;
+      const ipv4Octets = piece.split(".").map((octet) => Number(octet));
+      result.push((ipv4Octets[0] << 8) | ipv4Octets[1], (ipv4Octets[2] << 8) | ipv4Octets[3]);
+      continue;
+    }
+
+    if (!/^[0-9a-f]{1,4}$/i.test(piece)) return null;
+    result.push(Number.parseInt(piece, 16));
+  }
+
+  return result;
+}
+
+function isIpv4MappedIpv6(hextets: number[]): boolean {
+  return hextets.length === 8 && hextets.slice(0, 5).every((part) => part === 0) && hextets[5] === 0xffff;
 }
 
 export function assertSafeWebUrl(urlRaw: string): URL {

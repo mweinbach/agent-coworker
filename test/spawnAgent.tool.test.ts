@@ -51,7 +51,7 @@ function makeCtx(dir: string, overrides: Partial<ToolContext> = {}): ToolContext
 describe("spawnAgent tool", () => {
   let lastGenerateTextArgs: any = null;
 
-  const mockGenerateText = mock(async (args: any) => {
+  const mockStreamText = mock(async (args: any) => {
     lastGenerateTextArgs = args;
     return { text: "subagent result" };
   });
@@ -66,7 +66,7 @@ describe("spawnAgent tool", () => {
 
   beforeEach(() => {
     lastGenerateTextArgs = null;
-    mockGenerateText.mockClear();
+    mockStreamText.mockClear();
     mockStepCountIs.mockClear();
     mockGetModel.mockClear();
     mockLoadSubAgentPrompt.mockClear();
@@ -80,7 +80,7 @@ describe("spawnAgent tool", () => {
     });
 
     const t: any = createSpawnAgentTool(ctx, {
-      generateText: mockGenerateText as any,
+      streamText: mockStreamText as any,
       stepCountIs: mockStepCountIs as any,
       getModel: mockGetModel as any,
       loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
@@ -110,7 +110,7 @@ describe("spawnAgent tool", () => {
     const ctx = makeCtx(dir);
 
     const t: any = createSpawnAgentTool(ctx, {
-      generateText: mockGenerateText as any,
+      streamText: mockStreamText as any,
       stepCountIs: mockStepCountIs as any,
       getModel: mockGetModel as any,
       loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
@@ -131,7 +131,7 @@ describe("spawnAgent tool", () => {
     const ctx = makeCtx(dir);
 
     const t: any = createSpawnAgentTool(ctx, {
-      generateText: mockGenerateText as any,
+      streamText: mockStreamText as any,
       stepCountIs: mockStepCountIs as any,
       getModel: mockGetModel as any,
       loadSubAgentPrompt: mockLoadSubAgentPrompt as any,

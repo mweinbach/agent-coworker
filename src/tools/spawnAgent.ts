@@ -1,4 +1,4 @@
-import { generateText as realGenerateText, stepCountIs as realStepCountIs, tool } from "ai";
+import { stepCountIs as realStepCountIs, streamText as realStreamText, tool } from "ai";
 import { z } from "zod";
 
 import { getModel as realGetModel } from "../config";
@@ -21,7 +21,7 @@ import { createNotebookEditTool } from "./notebookEdit";
 type AgentType = "explore" | "research" | "general";
 
 export type SpawnAgentDeps = Partial<{
-  generateText: typeof realGenerateText;
+  streamText: typeof realStreamText;
   stepCountIs: typeof realStepCountIs;
   getModel: typeof realGetModel;
   loadSubAgentPrompt: typeof realLoadSubAgentPrompt;
@@ -75,7 +75,7 @@ function createSubAgentTools(
 }
 
 export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}) {
-  const generateText = deps.generateText ?? realGenerateText;
+  const streamText = deps.streamText ?? realStreamText;
   const stepCountIs = deps.stepCountIs ?? realStepCountIs;
   const getModel = deps.getModel ?? realGetModel;
   const loadSubAgentPrompt = deps.loadSubAgentPrompt ?? realLoadSubAgentPrompt;
@@ -98,7 +98,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
 
       const tools = createSubAgentTools(ctx, agentType, safeApprove);
 
-      const { text } = await generateText({
+      const streamResult = await streamText({
         model: getModel(ctx.config, modelId),
         system,
         tools,
@@ -106,6 +106,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
         providerOptions: ctx.config.providerOptions,
         prompt: task,
       } as any);
+      const text = await streamResult.text;
 
       ctx.log(`tool< spawnAgent ${JSON.stringify({ chars: text.length })}`);
       return text;

@@ -36,7 +36,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 // and deterministic.  We use mock.module() for each dependency.
 // ---------------------------------------------------------------------------
 
-const mockGenerateText = mock(async () => ({
+const mockStreamText = mock(async () => ({
   text: "hello from model",
   reasoningText: undefined as string | undefined,
   response: { messages: [{ role: "assistant", content: "hi" }] },
@@ -81,7 +81,7 @@ describe("runTurn", () => {
   let runTurn: typeof import("../src/agent").runTurn;
 
   beforeEach(() => {
-    mockGenerateText.mockClear();
+    mockStreamText.mockClear();
     mockStepCountIs.mockClear();
     mockGetModel.mockClear();
     mockCreateTools.mockClear();
@@ -89,7 +89,7 @@ describe("runTurn", () => {
     mockLoadMCPTools.mockClear();
 
     // Reset to default return value
-    mockGenerateText.mockImplementation(async () => ({
+    mockStreamText.mockImplementation(async () => ({
       text: "hello from model",
       reasoningText: undefined as string | undefined,
       response: { messages: [{ role: "assistant", content: "hi" }] },
@@ -107,7 +107,7 @@ describe("runTurn", () => {
     }));
 
     runTurn = createRunTurn({
-      generateText: mockGenerateText,
+      streamText: mockStreamText,
       stepCountIs: mockStepCountIs,
       getModel: mockGetModel,
       createTools: mockCreateTools,
@@ -124,12 +124,12 @@ describe("runTurn", () => {
   // System prompt
   // -------------------------------------------------------------------------
 
-  test("calls generateText with the correct system prompt", async () => {
+  test("calls streamText with the correct system prompt", async () => {
     const params = makeParams({ system: "Custom system prompt" });
     await runTurn(params);
 
-    expect(mockGenerateText).toHaveBeenCalledTimes(1);
-    const callArg = mockGenerateText.mock.calls[0][0] as any;
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+    const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.system).toBe("Custom system prompt");
   });
 
@@ -137,7 +137,7 @@ describe("runTurn", () => {
   // Messages
   // -------------------------------------------------------------------------
 
-  test("calls generateText with the correct messages", async () => {
+  test("calls streamText with the correct messages", async () => {
     const msgs = [
       { role: "user", content: [{ type: "text", text: "hello" }] },
       { role: "assistant", content: [{ type: "text", text: "world" }] },
@@ -145,7 +145,7 @@ describe("runTurn", () => {
     const params = makeParams({ messages: msgs });
     await runTurn(params);
 
-    const callArg = mockGenerateText.mock.calls[0][0] as any;
+    const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.messages).toBe(msgs);
   });
 
@@ -153,8 +153,8 @@ describe("runTurn", () => {
   // Return text
   // -------------------------------------------------------------------------
 
-  test("returns text from generateText result", async () => {
-    mockGenerateText.mockImplementation(async () => ({
+  test("returns text from streamText result", async () => {
+    mockStreamText.mockImplementation(async () => ({
       text: "model output text",
       reasoningText: undefined,
       response: { messages: [] },
@@ -165,7 +165,7 @@ describe("runTurn", () => {
   });
 
   test("returns empty string when text is null/undefined", async () => {
-    mockGenerateText.mockImplementation(async () => ({
+    mockStreamText.mockImplementation(async () => ({
       text: undefined,
       reasoningText: undefined,
       response: { messages: [] },
@@ -180,7 +180,7 @@ describe("runTurn", () => {
   // -------------------------------------------------------------------------
 
   test("returns reasoningText when available", async () => {
-    mockGenerateText.mockImplementation(async () => ({
+    mockStreamText.mockImplementation(async () => ({
       text: "answer",
       reasoningText: "Let me think...",
       response: { messages: [] },
@@ -191,7 +191,7 @@ describe("runTurn", () => {
   });
 
   test("returns undefined when reasoningText is undefined", async () => {
-    mockGenerateText.mockImplementation(async () => ({
+    mockStreamText.mockImplementation(async () => ({
       text: "answer",
       reasoningText: undefined,
       response: { messages: [] },
@@ -202,7 +202,7 @@ describe("runTurn", () => {
   });
 
   test("returns undefined when reasoningText is not a string", async () => {
-    mockGenerateText.mockImplementation(async () => ({
+    mockStreamText.mockImplementation(async () => ({
       text: "answer",
       reasoningText: 42,
       response: { messages: [] },
@@ -221,7 +221,7 @@ describe("runTurn", () => {
       { role: "assistant", content: "first" },
       { role: "assistant", content: "second" },
     ];
-    mockGenerateText.mockImplementation(async () => ({
+    mockStreamText.mockImplementation(async () => ({
       text: "ok",
       reasoningText: undefined,
       response: { messages: fakeMsgs },
@@ -232,7 +232,7 @@ describe("runTurn", () => {
   });
 
   test("returns empty array when responseMessages is undefined", async () => {
-    mockGenerateText.mockImplementation(async () => ({
+    mockStreamText.mockImplementation(async () => ({
       text: "ok",
       reasoningText: undefined,
       response: {},
@@ -243,7 +243,7 @@ describe("runTurn", () => {
   });
 
   test("returns empty array when response is undefined", async () => {
-    mockGenerateText.mockImplementation(async () => ({
+    mockStreamText.mockImplementation(async () => ({
       text: "ok",
       reasoningText: undefined,
       response: undefined,
@@ -272,7 +272,7 @@ describe("runTurn", () => {
   test("stopWhen receives the result of stepCountIs", async () => {
     await runTurn(makeParams());
 
-    const callArg = mockGenerateText.mock.calls[0][0] as any;
+    const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.stopWhen).toBe("step-count-sentinel");
   });
 
@@ -282,7 +282,7 @@ describe("runTurn", () => {
       { role: "user", content: [{ type: "text", text: "add 7+11" }] },
     ] as any[];
 
-    mockGenerateText
+    mockStreamText
       .mockImplementationOnce(async () => ({
         text: "",
         reasoningText: undefined,
@@ -318,11 +318,11 @@ describe("runTurn", () => {
 
     const result = await runTurn(makeParams({ config, messages: initialMessages, maxSteps: 5 }));
 
-    expect(mockGenerateText).toHaveBeenCalledTimes(2);
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
     expect(mockStepCountIs).toHaveBeenCalledWith(1);
     expect(mockStepCountIs).toHaveBeenCalledWith(1);
 
-    const secondCallArg = mockGenerateText.mock.calls[1][0] as any;
+    const secondCallArg = mockStreamText.mock.calls[1][0] as any;
     const secondMessages = secondCallArg.messages as any[];
     const hasAssistantToolCall = secondMessages.some(
       (m) =>
@@ -348,11 +348,11 @@ describe("runTurn", () => {
     expect(mockGetModel.mock.calls[0][0]).toBe(config);
   });
 
-  test("uses getModel result as model in generateText", async () => {
+  test("uses getModel result as model in streamText", async () => {
     mockGetModel.mockReturnValue("special-model");
     await runTurn(makeParams());
 
-    const callArg = mockGenerateText.mock.calls[0][0] as any;
+    const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.model).toBe("special-model");
   });
 
@@ -360,12 +360,12 @@ describe("runTurn", () => {
   // providerOptions
   // -------------------------------------------------------------------------
 
-  test("passes providerOptions from config to generateText", async () => {
+  test("passes providerOptions from config to streamText", async () => {
     const providerOptions = { anthropic: { thinking: { type: "enabled", budgetTokens: 5000 } } };
     const config = makeConfig({ providerOptions });
     await runTurn(makeParams({ config }));
 
-    const callArg = mockGenerateText.mock.calls[0][0] as any;
+    const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.providerOptions).toBe(providerOptions);
   });
 
@@ -374,7 +374,7 @@ describe("runTurn", () => {
     delete config.providerOptions;
     await runTurn(makeParams({ config }));
 
-    const callArg = mockGenerateText.mock.calls[0][0] as any;
+    const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.providerOptions).toBeUndefined();
   });
 
@@ -400,11 +400,11 @@ describe("runTurn", () => {
     expect(ctx.updateTodos).toBe(updateTodos);
   });
 
-  test("builtin tools are included in tools passed to generateText", async () => {
+  test("builtin tools are included in tools passed to streamText", async () => {
     mockCreateTools.mockReturnValue({ myTool: { type: "custom" } });
     await runTurn(makeParams());
 
-    const callArg = mockGenerateText.mock.calls[0][0] as any;
+    const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.tools).toHaveProperty("myTool");
   });
 
@@ -442,7 +442,7 @@ describe("runTurn", () => {
     expect(mockLoadMCPTools.mock.calls[0][0]).toBe(mcpServers);
   });
 
-  test("MCP tools are merged into tools passed to generateText", async () => {
+  test("MCP tools are merged into tools passed to streamText", async () => {
     mockCreateTools.mockReturnValue({ bash: { type: "builtin" } });
     mockLoadMCPServers.mockResolvedValue([{ name: "s", transport: { type: "stdio", command: "x", args: [] } }]);
     mockLoadMCPTools.mockResolvedValue({
@@ -452,7 +452,7 @@ describe("runTurn", () => {
 
     await runTurn(makeParams({ enableMcp: true }));
 
-    const callArg = mockGenerateText.mock.calls[0][0] as any;
+    const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.tools).toHaveProperty("bash");
     expect(callArg.tools).toHaveProperty("mcp__s__doThing");
   });
@@ -481,8 +481,8 @@ describe("runTurn", () => {
   // Error propagation
   // -------------------------------------------------------------------------
 
-  test("propagates errors from generateText", async () => {
-    mockGenerateText.mockRejectedValue(new Error("API rate limit exceeded"));
+  test("propagates errors from streamText", async () => {
+    mockStreamText.mockRejectedValue(new Error("API rate limit exceeded"));
 
     await expect(runTurn(makeParams())).rejects.toThrow("API rate limit exceeded");
   });

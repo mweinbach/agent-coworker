@@ -1,4 +1,4 @@
-import { generateText, stepCountIs } from "ai";
+import { stepCountIs, streamText } from "ai";
 import type { ModelMessage } from "ai";
 
 import { getModel } from "./config";
@@ -52,7 +52,7 @@ export interface RunTurnParams {
 }
 
 type RunTurnDeps = {
-  generateText: typeof generateText;
+  streamText: typeof streamText;
   stepCountIs: typeof stepCountIs;
   getModel: typeof getModel;
   createTools: typeof createTools;
@@ -62,7 +62,7 @@ type RunTurnDeps = {
 
 export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
   const deps: RunTurnDeps = {
-    generateText,
+    streamText,
     stepCountIs,
     getModel,
     createTools,
@@ -107,7 +107,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           let text = "";
 
           for (let step = 0; step < maxSteps; step++) {
-            const stepResult = await deps.generateText({
+            const stepResult = await deps.streamText({
               model: deps.getModel(config),
               system,
               messages: rollingMessages,
@@ -117,21 +117,23 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
               abortSignal,
             } as any);
 
+            const stepResponse = await stepResult.response;
             const stepResponseMessages = sanitizeGeminiToolCallReplay(
-              (stepResult.response?.messages || []) as ModelMessage[]
+              (stepResponse?.messages || []) as ModelMessage[]
             );
             if (stepResponseMessages.length > 0) {
               responseMessages.push(...stepResponseMessages);
               rollingMessages.push(...stepResponseMessages);
             }
 
-            const stepReasoning = typeof stepResult.reasoningText === "string" ? stepResult.reasoningText.trim() : "";
+            const stepReasoningText = await stepResult.reasoningText;
+            const stepReasoning = typeof stepReasoningText === "string" ? stepReasoningText.trim() : "";
             if (stepReasoning) reasoningChunks.push(stepReasoning);
 
-            const stepText = String(stepResult.text ?? "").trim();
+            const stepText = String((await stepResult.text) ?? "").trim();
             if (stepText) text = text ? `${text}\n${stepText}` : stepText;
 
-            const finish = unifiedFinishReason((stepResult as any).finishReason);
+            const finish = unifiedFinishReason(await stepResult.finishReason);
             const hasToolResult = stepResponseMessages.some((m) => m.role === "tool");
             if (finish !== "tool-calls") break;
             if (!hasToolResult) break;
@@ -144,7 +146,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           } as any;
         }
 
-        return await deps.generateText({
+        const streamResult = await deps.streamText({
           model: deps.getModel(config),
           system,
           messages,
@@ -153,6 +155,14 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           stopWhen: deps.stepCountIs(params.maxSteps ?? 100),
           abortSignal,
         } as any);
+
+        const [text, reasoningText, response] = await Promise.all([
+          streamResult.text,
+          streamResult.reasoningText,
+          streamResult.response,
+        ]);
+
+        return { text, reasoningText, response } as any;
       } finally {
         try {
           await closeMcp?.();

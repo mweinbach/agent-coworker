@@ -41,14 +41,16 @@ function isPrivateIpv6(host: string): boolean {
 
 function isBlockedHost(hostname: string): boolean {
   const host = hostname.toLowerCase();
+  const hostForIpCheck = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+
   if (BLOCKED_HOSTS.has(host)) return true;
   if (host.endsWith(".localhost")) return true;
   if (host.endsWith(".local")) return true;
   if (host.endsWith(".internal")) return true;
 
-  const ipKind = isIP(host);
-  if (ipKind === 4) return isPrivateIpv4(host);
-  if (ipKind === 6) return isPrivateIpv6(host);
+  const ipKind = isIP(hostForIpCheck);
+  if (ipKind === 4) return isPrivateIpv4(hostForIpCheck);
+  if (ipKind === 6) return isPrivateIpv6(hostForIpCheck);
   return false;
 }
 

@@ -19,6 +19,14 @@ function formatResults(results: Array<{ title?: string; url?: string; descriptio
   );
 }
 
+function sanitizeQuery(raw: string): string {
+  const query = raw.replace(/\s+/g, " ").trim();
+  if (!query) throw new Error("webSearch requires a non-empty query");
+  if (query.length > 1000) throw new Error("webSearch query is too long (max 1000 characters)");
+  if (/[\u0000-\u001f]/.test(query)) throw new Error("webSearch query contains unsupported control characters");
+  return query;
+}
+
 function getExaSnippet(result: unknown): string {
   const text = (result as any)?.text;
   if (typeof text === "string") return text;
@@ -35,11 +43,12 @@ function createCustomWebSearchTool(ctx: ToolContext) {
       maxResults: z.number().int().min(1).max(20).optional().default(10),
     }),
     execute: async ({ query, maxResults }) => {
-      ctx.log(`tool> webSearch ${JSON.stringify({ query, maxResults })}`);
+      const safeQuery = sanitizeQuery(query);
+      ctx.log(`tool> webSearch ${JSON.stringify({ query: safeQuery, maxResults })}`);
 
       if (process.env.BRAVE_API_KEY) {
         const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(
-          query
+          safeQuery
         )}&count=${maxResults}`;
         const res = await fetch(url, {
           headers: {
@@ -76,7 +85,7 @@ function createCustomWebSearchTool(ctx: ToolContext) {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              query,
+              query: safeQuery,
               numResults: maxResults,
             }),
           });

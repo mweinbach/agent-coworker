@@ -59,9 +59,13 @@ describe("spawnAgent tool", () => {
   const mockStepCountIs = mock((n: number) => `stepCountIs:${n}`);
   const mockGetModel = mock((_config: AgentConfig, id?: string) => ({ modelId: id ?? "" }));
   const mockLoadSubAgentPrompt = mock(async (_config: AgentConfig, agentType: string) => `SYSTEM:${agentType}`);
-  const mockClassifyCommand = mock((command: string) => {
+  const mockClassifyCommandDetailed = mock((command: string) => {
     if (command === "pwd") return { kind: "auto" as const };
-    return { kind: "prompt" as const, dangerous: false as const };
+    return {
+      kind: "prompt" as const,
+      dangerous: false as const,
+      riskCode: "requires_manual_review" as const,
+    };
   });
 
   beforeEach(() => {
@@ -70,7 +74,7 @@ describe("spawnAgent tool", () => {
     mockStepCountIs.mockClear();
     mockGetModel.mockClear();
     mockLoadSubAgentPrompt.mockClear();
-    mockClassifyCommand.mockClear();
+    mockClassifyCommandDetailed.mockClear();
   });
 
   test("general uses subAgentModel and general tool set", async () => {
@@ -84,7 +88,7 @@ describe("spawnAgent tool", () => {
       stepCountIs: mockStepCountIs as any,
       getModel: mockGetModel as any,
       loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
-      classifyCommand: mockClassifyCommand as any,
+      classifyCommandDetailed: mockClassifyCommandDetailed as any,
     });
 
     const out = await t.execute({ task: "do the thing", agentType: "general" });
@@ -116,7 +120,7 @@ describe("spawnAgent tool", () => {
       stepCountIs: mockStepCountIs as any,
       getModel: mockGetModel as any,
       loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
-      classifyCommand: mockClassifyCommand as any,
+      classifyCommandDetailed: mockClassifyCommandDetailed as any,
     });
 
     await t.execute({ task: "research it", agentType: "research" });
@@ -139,7 +143,7 @@ describe("spawnAgent tool", () => {
       stepCountIs: mockStepCountIs as any,
       getModel: mockGetModel as any,
       loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
-      classifyCommand: mockClassifyCommand as any,
+      classifyCommandDetailed: mockClassifyCommandDetailed as any,
     });
 
     await t.execute({ task: "explore it", agentType: "explore" });
@@ -153,5 +157,22 @@ describe("spawnAgent tool", () => {
     const rejected = await tools.bash.execute({ command: "touch /tmp/should-not-run", timeout: 5000 });
     expect(rejected.exitCode).toBe(1);
     expect(rejected.stderr).toContain("rejected");
+  });
+
+  test("rejects sub-agent recursion beyond configured depth", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-depth-"));
+    const ctx = makeCtx(dir, { spawnDepth: 2 });
+
+    const t: any = createSpawnAgentTool(ctx, {
+      streamText: mockStreamText as any,
+      stepCountIs: mockStepCountIs as any,
+      getModel: mockGetModel as any,
+      loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
+      classifyCommandDetailed: mockClassifyCommandDetailed as any,
+    });
+
+    await expect(t.execute({ task: "any task", agentType: "general" })).rejects.toThrow(
+      /recursion depth exceeded/i
+    );
   });
 });

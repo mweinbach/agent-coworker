@@ -88,6 +88,15 @@ export interface TodoItem {
   activeForm: string;
 }
 
+export const APPROVAL_RISK_CODES = [
+  "safe_auto_approved",
+  "matches_dangerous_pattern",
+  "contains_shell_control_operator",
+  "requires_manual_review",
+] as const;
+
+export type ApprovalRiskCode = (typeof APPROVAL_RISK_CODES)[number];
+
 export type ObservabilityQueryType = "logql" | "promql" | "traceql";
 
 export interface ObservabilityQueryApi {

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import type { AgentConfig } from "../src/types";
-import { isWritePathAllowed } from "../src/utils/permissions";
+import { assertWritePathAllowed, isWritePathAllowed } from "../src/utils/permissions";
 
 function makeConfig(dir: string): AgentConfig {
   return {
@@ -242,5 +244,29 @@ describe("isWritePathAllowed", () => {
       expect(isWritePathAllowed(path.join(root, "etc", "passwd"), cfg)).toBe(true);
       expect(isWritePathAllowed(path.join(root, "any", "path", "at", "all"), cfg)).toBe(true);
     });
+  });
+});
+
+describe("assertWritePathAllowed", () => {
+  test("allows a regular path inside workingDirectory", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-allow-"));
+    const cfg = makeConfig(dir);
+    const target = path.join(dir, "src", "file.txt");
+    await expect(assertWritePathAllowed(target, cfg, "write")).resolves.toBe(path.resolve(target));
+  });
+
+  test("rejects symlink segment escapes", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-symlink-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "perm-outside-"));
+    const cfg = makeConfig(dir);
+
+    const link = path.join(dir, "linked-outside");
+    await fs.symlink(outside, link);
+
+    await expect(
+      assertWritePathAllowed(path.join(link, "pwned.txt"), cfg, "write")
+    ).rejects.toThrow(/blocked/i);
   });
 });

@@ -6,7 +6,12 @@ import { loadConfig } from "../config";
 import { loadSystemPromptWithSkills } from "../prompt";
 
 import { AgentSession } from "./session";
-import { safeParseClientMessage, type ClientMessage, type ServerEvent } from "./protocol";
+import {
+  WEBSOCKET_PROTOCOL_VERSION,
+  safeParseClientMessage,
+  type ClientMessage,
+  type ServerEvent,
+} from "./protocol";
 
 export interface StartAgentServerOptions {
   cwd: string;
@@ -28,6 +33,14 @@ export async function startAgentServer(
   system: string;
   url: string;
 }> {
+  function protocolErrorCode(error: string): string {
+    if (error === "Invalid JSON") return "invalid_json";
+    if (error === "Expected object") return "invalid_payload";
+    if (error === "Missing type") return "missing_type";
+    if (error.startsWith("Unknown type:")) return "unknown_type";
+    return "invalid_message";
+  }
+
   const hostname = opts.hostname ?? "127.0.0.1";
   const env = opts.env ?? { ...process.env, AGENT_WORKING_DIR: opts.cwd };
 
@@ -80,6 +93,7 @@ export async function startAgentServer(
           const hello: ServerEvent = {
             type: "server_hello",
             sessionId: session.id,
+            protocolVersion: WEBSOCKET_PROTOCOL_VERSION,
             config: session.getPublicConfig(),
           };
 
@@ -106,6 +120,8 @@ export async function startAgentServer(
                 type: "error",
                 sessionId: session.id,
                 message: parsed.error,
+                code: protocolErrorCode(parsed.error),
+                source: "protocol",
               } satisfies ServerEvent)
             );
             return;
@@ -130,6 +146,8 @@ export async function startAgentServer(
                 type: "error",
                 sessionId: session.id,
                 message: `Unknown sessionId: ${msg.sessionId}`,
+                code: "unknown_session",
+                source: "protocol",
               } satisfies ServerEvent)
             );
             return;

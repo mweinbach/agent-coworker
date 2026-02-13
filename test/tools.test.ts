@@ -253,6 +253,20 @@ describe("write tool", () => {
     const written = await fs.readFile(p, "utf-8");
     expect(written).toBe("output content");
   });
+
+  test("rejects write through symlink segment to outside directory", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    const link = path.join(dir, "outside-link");
+    await fs.symlink(outsideDir, link);
+
+    const t: any = createWriteTool(makeCtx(dir));
+    await expect(
+      t.execute({ filePath: path.join(link, "blocked.txt"), content: "nope" })
+    ).rejects.toThrow(/blocked/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -348,6 +362,28 @@ describe("edit tool", () => {
     const t: any = createEditTool(makeCtx(dir));
     await expect(
       t.execute({ filePath: p, oldString: "content", newString: "new", replaceAll: false })
+    ).rejects.toThrow(/blocked/i);
+  });
+
+  test("rejects edit through symlink segment to outside directory", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    const outsideFile = path.join(outsideDir, "outside.txt");
+    await fs.writeFile(outsideFile, "outside", "utf-8");
+
+    const link = path.join(dir, "outside-link");
+    await fs.symlink(outsideDir, link);
+
+    const t: any = createEditTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        filePath: path.join(link, "outside.txt"),
+        oldString: "outside",
+        newString: "new",
+        replaceAll: false,
+      })
     ).rejects.toThrow(/blocked/i);
   });
 
@@ -900,6 +936,14 @@ describe("webSearch tool", () => {
     }
   });
 
+  test("rejects empty or whitespace-only query", async () => {
+    const dir = await tmpDir();
+    const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
+    await expect(t.execute({ query: "   ", maxResults: 1 })).rejects.toThrow(
+      /non-empty query/i
+    );
+  });
+
   test("uses BRAVE_API_KEY when available", async () => {
     const dir = await tmpDir();
 
@@ -1142,6 +1186,14 @@ describe("webFetch tool", () => {
     }
   });
 
+  test("blocks localhost/private URLs", async () => {
+    const dir = await tmpDir();
+    const t: any = createWebFetchTool(makeCtx(dir));
+    await expect(
+      t.execute({ url: "http://127.0.0.1/internal", maxLength: 50000 })
+    ).rejects.toThrow(/private\/internal host/i);
+  });
+
   test("truncates content to maxLength", async () => {
     const dir = await tmpDir();
     const longContent = "<html><body><p>" + "x".repeat(10000) + "</p></body></html>";
@@ -1200,6 +1252,66 @@ describe("webFetch tool", () => {
       const out: string = await t.execute({ url: "https://example.com", maxLength: 50000 });
       // Even without Readability parse, the fallback turndown should work
       expect(out).toContain("Simple content");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("rejects redirect to blocked private host", async () => {
+    const dir = await tmpDir();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response(null, {
+        status: 302,
+        headers: { Location: "http://127.0.0.1/admin" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      await expect(
+        t.execute({ url: "https://example.com", maxLength: 50000 })
+      ).rejects.toThrow(/private\/internal host/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("rejects non-text content types", async () => {
+    const dir = await tmpDir();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response("binary", {
+        status: 200,
+        headers: { "Content-Type": "application/octet-stream" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      await expect(
+        t.execute({ url: "https://example.com/file.bin", maxLength: 50000 })
+      ).rejects.toThrow(/non-text content type/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("throws on non-2xx HTTP responses", async () => {
+    const dir = await tmpDir();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response("Not Found", { status: 404, statusText: "Not Found" });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      await expect(
+        t.execute({ url: "https://example.com/missing", maxLength: 50000 })
+      ).rejects.toThrow(/webFetch failed: 404/i);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1463,6 +1575,25 @@ describe("notebookEdit tool", () => {
     ).rejects.toThrow(/out of range/);
   });
 
+  test("rejects non-.ipynb file paths", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "notebook.json");
+    await fs.writeFile(
+      p,
+      makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }])
+    );
+
+    const t: any = createNotebookEditTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        notebookPath: p,
+        cellIndex: 0,
+        newSource: "x = 2",
+        editMode: "replace",
+      })
+    ).rejects.toThrow(/expected a \.ipynb file/i);
+  });
+
   test("rejects path outside allowed dirs", async () => {
     const dir = await tmpDir();
     const outsideDir = await tmpDir();
@@ -1478,6 +1609,31 @@ describe("notebookEdit tool", () => {
         notebookPath: p,
         cellIndex: 0,
         newSource: "nope",
+        editMode: "replace",
+      })
+    ).rejects.toThrow(/blocked/i);
+  });
+
+  test("rejects notebook edits through symlink segment", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    const outsideNotebook = path.join(outsideDir, "outside.ipynb");
+    await fs.writeFile(
+      outsideNotebook,
+      makeNotebook([{ cell_type: "code", source: ["print('x')\n"] }])
+    );
+
+    const link = path.join(dir, "outside-link");
+    await fs.symlink(outsideDir, link);
+
+    const t: any = createNotebookEditTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        notebookPath: path.join(link, "outside.ipynb"),
+        cellIndex: 0,
+        newSource: "print('nope')",
         editMode: "replace",
       })
     ).rejects.toThrow(/blocked/i);

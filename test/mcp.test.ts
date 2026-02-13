@@ -357,6 +357,46 @@ describe("loadMCPTools", () => {
     await expect(loadMCPTools(servers)).rejects.toThrow("critical");
   });
 
+  test("required server failure closes previously connected optional clients", async () => {
+    const optionalClose = mock(async () => {});
+    let call = 0;
+    mockCreateMCPClient.mockImplementation(async () => {
+      call++;
+      if (call === 1) {
+        return {
+          tools: mock(async () => ({ optionalTool: {} })),
+          close: optionalClose,
+        };
+      }
+      throw new Error("required-down");
+    });
+
+    const servers: MCPServerConfig[] = [
+      { name: "optional-first", transport: { type: "stdio", command: "x", args: [] }, retries: 0 },
+      {
+        name: "required-second",
+        transport: { type: "stdio", command: "y", args: [] },
+        required: true,
+        retries: 0,
+      },
+    ];
+
+    await expect(loadMCPTools(servers)).rejects.toThrow("required-second");
+    expect(optionalClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("negative retries are clamped to 0", async () => {
+    mockCreateMCPClient.mockRejectedValue(new Error("fail-fast"));
+    const servers: MCPServerConfig[] = [
+      { name: "negative-retry", transport: { type: "stdio", command: "x", args: [] }, retries: -5 },
+    ];
+
+    const result = await loadMCPTools(servers);
+    expect(mockCreateMCPClient).toHaveBeenCalledTimes(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("1 attempts");
+  });
+
   test("optional servers add to errors array on failure", async () => {
     mockCreateMCPClient.mockRejectedValue(new Error("Cannot connect"));
 
@@ -550,5 +590,23 @@ describe("loadMCPTools().close", () => {
 
     const result = await loadMCPTools(servers);
     await expect(result.close()).resolves.toBeUndefined();
+  });
+
+  test("is idempotent when called more than once", async () => {
+    const closeFn = mock(async () => {});
+    mockCreateMCPClient.mockImplementation(async () => ({
+      tools: mock(async () => ({ t: {} })),
+      close: closeFn,
+    }));
+
+    const servers: MCPServerConfig[] = [
+      { name: "idempotent-close", transport: { type: "stdio", command: "x", args: [] } },
+    ];
+
+    const result = await loadMCPTools(servers);
+    await result.close();
+    await result.close();
+
+    expect(closeFn).toHaveBeenCalledTimes(1);
   });
 });

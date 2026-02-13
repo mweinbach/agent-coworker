@@ -5,10 +5,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startAgentServer, type StartAgentServerOptions } from "../src/server/startServer";
+import { CLIENT_MESSAGE_TYPES, SERVER_EVENT_TYPES, WEBSOCKET_PROTOCOL_VERSION } from "../src/server/protocol";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "..");
+}
+
+function extractProtocolHeadings(doc: string, startMarker: string, endMarker: string): string[] {
+  const startIdx = doc.indexOf(startMarker);
+  if (startIdx < 0) return [];
+  const endIdx = doc.indexOf(endMarker, startIdx + startMarker.length);
+  const section = endIdx >= 0 ? doc.slice(startIdx, endIdx) : doc.slice(startIdx);
+  return Array.from(section.matchAll(/^### ([a-z_]+)\s*$/gm)).map((m) => m[1]);
 }
 
 /** Create an isolated temp directory that mimics a valid project for the agent. */
@@ -290,6 +299,7 @@ describe("WebSocket Lifecycle", () => {
       expect(hello.type).toBe("server_hello");
       expect(typeof hello.sessionId).toBe("string");
       expect(hello.sessionId.length).toBeGreaterThan(0);
+      expect(hello.protocolVersion).toBe(WEBSOCKET_PROTOCOL_VERSION);
     } finally {
       server.stop();
     }
@@ -392,6 +402,8 @@ describe("WebSocket Lifecycle", () => {
 
       expect(result.type).toBe("error");
       expect(result.message).toContain("Invalid JSON");
+      expect(result.code).toBe("invalid_json");
+      expect(result.source).toBe("protocol");
     } finally {
       server.stop();
     }
@@ -441,6 +453,8 @@ describe("WebSocket Lifecycle", () => {
       expect(responses[0].type).toBe("error");
       expect(responses[0].message).toContain("Unknown sessionId");
       expect(responses[0].message).toContain("wrong-session-id");
+      expect(responses[0].code).toBe("unknown_session");
+      expect(responses[0].source).toBe("protocol");
     } finally {
       server.stop();
     }
@@ -497,6 +511,46 @@ describe("WebSocket Lifecycle", () => {
       expect(backupEvt.backup).toBeDefined();
       expect(typeof backupEvt.backup.status).toBe("string");
       expect(backupEvt.sessionId).toBeDefined();
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("set_enable_mcp updates session_settings deterministically", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const result = await new Promise<any>((resolve, reject) => {
+        const ws = new WebSocket(url);
+        let sessionId = "";
+        const timer = setTimeout(() => {
+          ws.close();
+          reject(new Error("Timed out waiting for session_settings update"));
+        }, 5000);
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+          if (!sessionId && msg.type === "server_hello") {
+            sessionId = msg.sessionId;
+            ws.send(JSON.stringify({ type: "set_enable_mcp", sessionId, enableMcp: false }));
+            return;
+          }
+          if (msg.type === "session_settings" && msg.enableMcp === false) {
+            clearTimeout(timer);
+            ws.close();
+            resolve(msg);
+          }
+        };
+
+        ws.onerror = (e) => {
+          clearTimeout(timer);
+          ws.close();
+          reject(new Error(`WebSocket error: ${e}`));
+        };
+      });
+
+      expect(result.type).toBe("session_settings");
+      expect(result.enableMcp).toBe(false);
     } finally {
       server.stop();
     }
@@ -955,6 +1009,71 @@ describe("Server Resilience", () => {
     }
   });
 
+  test("handles 5 parallel sessions with concurrent user_message/cancel/checkpoint traffic", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+
+    const runTraffic = (label: string): Promise<{ sessionId: string; messages: any[] }> =>
+      new Promise((resolve, reject) => {
+        const ws = new WebSocket(url);
+        const messages: any[] = [];
+        let sessionId = "";
+        const timer = setTimeout(() => {
+          ws.close();
+          reject(new Error(`Timed out in traffic run ${label}`));
+        }, 7000);
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+          messages.push(msg);
+
+          if (!sessionId && msg.type === "server_hello") {
+            sessionId = msg.sessionId;
+            ws.send(JSON.stringify({ type: "user_message", sessionId, text: `hello-${label}` }));
+            ws.send(JSON.stringify({ type: "cancel", sessionId }));
+            ws.send(JSON.stringify({ type: "session_backup_checkpoint", sessionId }));
+            setTimeout(() => {
+              clearTimeout(timer);
+              ws.close();
+              resolve({ sessionId, messages });
+            }, 1200);
+          }
+        };
+
+        ws.onerror = (e) => {
+          clearTimeout(timer);
+          ws.close();
+          reject(new Error(`WebSocket error in ${label}: ${e}`));
+        };
+      });
+
+    try {
+      const runs = await Promise.all(
+        Array.from({ length: 5 }, (_x, i) => runTraffic(`s${i + 1}`))
+      );
+
+      const ids = runs.map((r) => r.sessionId);
+      expect(new Set(ids).size).toBe(5);
+
+      for (const run of runs) {
+        expect(run.messages.some((m) => m.type === "server_hello")).toBe(true);
+        expect(
+          run.messages.some(
+            (m) =>
+              typeof m.sessionId === "string" &&
+              m.sessionId !== "" &&
+              m.sessionId !== run.sessionId
+          )
+        ).toBe(false);
+      }
+
+      const hello = await collectMessages(url, 1);
+      expect(hello[0].type).toBe("server_hello");
+    } finally {
+      server.stop();
+    }
+  });
+
   test("server.stop() prevents new connections", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -984,5 +1103,47 @@ describe("Server Resilience", () => {
     });
 
     expect(failed).toBe(true);
+  });
+});
+
+describe("Protocol Doc Parity", () => {
+  test("documented client/server message headings match protocol type exports", async () => {
+    const docPath = path.join(repoRoot(), "docs", "websocket-protocol.md");
+    const doc = await fs.readFile(docPath, "utf-8");
+
+    const documentedClientTypes = extractProtocolHeadings(
+      doc,
+      "## Client -> Server Messages",
+      "## Server -> Client Events",
+    );
+    const documentedServerTypes = extractProtocolHeadings(
+      doc,
+      "## Server -> Client Events",
+      "## Message Flow Examples",
+    );
+
+    expect([...documentedClientTypes].sort()).toEqual([...Array.from(CLIENT_MESSAGE_TYPES)].sort());
+    expect([...documentedServerTypes].sort()).toEqual([...Array.from(SERVER_EVENT_TYPES)].sort());
+  });
+
+  test("documented control flows remain executable", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const ping = await sendAndCollect(url, () => ({ type: "ping" }), 1);
+      expect(ping.responses[0].type).toBe("pong");
+
+      const tools = await sendAndCollect(url, (sessionId) => ({ type: "list_tools", sessionId }), 1);
+      expect(tools.responses[0].type).toBe("tools");
+
+      const model = await sendAndCollect(
+        url,
+        (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.2" }),
+        1,
+      );
+      expect(model.responses[0].type).toBe("config_updated");
+    } finally {
+      server.stop();
+    }
   });
 });

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { safeParseClientMessage } from "../src/server/protocol";
+import {
+  CLIENT_MESSAGE_TYPES,
+  SERVER_EVENT_TYPES,
+  safeParseClientMessage,
+  type ServerEvent,
+} from "../src/server/protocol";
 
 function expectOk(raw: string) {
   const result = safeParseClientMessage(raw);
@@ -54,6 +59,20 @@ describe("safeParseClientMessage", () => {
         expect(msg.version).toBeUndefined();
       }
     });
+
+    test("client_hello missing/invalid client fails", () => {
+      expect(expectErr(JSON.stringify({ type: "client_hello" }))).toBe(
+        "client_hello missing/invalid client",
+      );
+      expect(expectErr(JSON.stringify({ type: "client_hello", client: "" }))).toBe(
+        "client_hello missing/invalid client",
+      );
+    });
+
+    test("client_hello invalid version type fails", () => {
+      const err = expectErr(JSON.stringify({ type: "client_hello", client: "tui", version: 1 }));
+      expect(err).toBe("client_hello invalid version");
+    });
   });
 
   describe("user_message", () => {
@@ -98,6 +117,18 @@ describe("safeParseClientMessage", () => {
       if (msg.type === "user_message") {
         expect(msg.text).toBe("line1\nline2\nline3");
       }
+    });
+
+    test("user_message invalid clientMessageId fails", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "user_message",
+          sessionId: "s1",
+          text: "hello",
+          clientMessageId: 123,
+        }),
+      );
+      expect(err).toBe("user_message invalid clientMessageId");
     });
   });
 
@@ -215,17 +246,15 @@ describe("safeParseClientMessage", () => {
       }
     );
 
-    test("set_model with empty model still parses", () => {
-      const msg = expectOk(
+    test("set_model with empty model fails", () => {
+      const err = expectErr(
         JSON.stringify({
           type: "set_model",
           sessionId: "s1",
           model: "",
         }),
       );
-      if (msg.type === "set_model") {
-        expect(msg.model).toBe("");
-      }
+      expect(err).toContain("set_model missing/invalid model");
     });
 
     test("set_model with invalid provider fails", () => {
@@ -371,7 +400,7 @@ describe("safeParseClientMessage", () => {
 
     test("read_skill missing skillName fails", () => {
       const err = expectErr(JSON.stringify({ type: "read_skill", sessionId: "s1" }));
-      expect(err).toBe("read_skill missing skillName");
+      expect(err).toBe("read_skill missing/invalid skillName");
     });
   });
 
@@ -387,7 +416,7 @@ describe("safeParseClientMessage", () => {
 
     test("disable_skill missing fields fail", () => {
       expect(expectErr(JSON.stringify({ type: "disable_skill", skillName: "pdf" }))).toBe("disable_skill missing sessionId");
-      expect(expectErr(JSON.stringify({ type: "disable_skill", sessionId: "s1" }))).toBe("disable_skill missing skillName");
+      expect(expectErr(JSON.stringify({ type: "disable_skill", sessionId: "s1" }))).toBe("disable_skill missing/invalid skillName");
     });
   });
 
@@ -403,7 +432,7 @@ describe("safeParseClientMessage", () => {
 
     test("enable_skill missing fields fail", () => {
       expect(expectErr(JSON.stringify({ type: "enable_skill", skillName: "pdf" }))).toBe("enable_skill missing sessionId");
-      expect(expectErr(JSON.stringify({ type: "enable_skill", sessionId: "s1" }))).toBe("enable_skill missing skillName");
+      expect(expectErr(JSON.stringify({ type: "enable_skill", sessionId: "s1" }))).toBe("enable_skill missing/invalid skillName");
     });
   });
 
@@ -419,7 +448,7 @@ describe("safeParseClientMessage", () => {
 
     test("delete_skill missing fields fail", () => {
       expect(expectErr(JSON.stringify({ type: "delete_skill", skillName: "pdf" }))).toBe("delete_skill missing sessionId");
-      expect(expectErr(JSON.stringify({ type: "delete_skill", sessionId: "s1" }))).toBe("delete_skill missing skillName");
+      expect(expectErr(JSON.stringify({ type: "delete_skill", sessionId: "s1" }))).toBe("delete_skill missing/invalid skillName");
     });
   });
 
@@ -527,6 +556,17 @@ describe("safeParseClientMessage", () => {
       );
       expect(err).toContain("observability_query invalid query.queryType");
     });
+
+    test("observability_query rejects invalid limit", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "observability_query",
+          sessionId: "s1",
+          query: { queryType: "promql", query: "up", limit: 0 },
+        }),
+      );
+      expect(err).toContain("observability_query invalid query.limit");
+    });
   });
 
   describe("harness_slo_evaluate", () => {
@@ -573,6 +613,17 @@ describe("safeParseClientMessage", () => {
         })
       );
       expect(err).toContain("harness_slo_evaluate invalid check.op");
+    });
+
+    test("harness_slo_evaluate rejects empty checks", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "harness_slo_evaluate",
+          sessionId: "s1",
+          checks: [],
+        }),
+      );
+      expect(err).toContain("harness_slo_evaluate missing/invalid checks");
     });
   });
 
@@ -765,14 +816,13 @@ describe("safeParseClientMessage", () => {
     });
 
     test("JSON array", () => {
-      // Arrays pass typeof === "object" && !== null, so they reach the type check
       const err = expectErr('[{"type":"reset"}]');
-      expect(err).toBe("Missing type");
+      expect(err).toBe("Expected object");
     });
 
     test("JSON empty array", () => {
       const err = expectErr("[]");
-      expect(err).toBe("Missing type");
+      expect(err).toBe("Expected object");
     });
   });
 
@@ -902,6 +952,46 @@ describe("safeParseClientMessage", () => {
       );
       const obj = msg as any;
       expect(obj.confidence).toBe(0.95);
+    });
+  });
+
+  describe("protocol exports and additive server event fields", () => {
+    test("client/server type lists are unique", () => {
+      expect(new Set(CLIENT_MESSAGE_TYPES).size).toBe(CLIENT_MESSAGE_TYPES.length);
+      expect(new Set(SERVER_EVENT_TYPES).size).toBe(SERVER_EVENT_TYPES.length);
+    });
+
+    test("server_hello supports optional protocolVersion", () => {
+      const evt: ServerEvent = {
+        type: "server_hello",
+        sessionId: "s1",
+        protocolVersion: "1.0",
+        config: {
+          provider: "openai",
+          model: "gpt-5.2",
+          workingDirectory: "/tmp",
+          outputDirectory: "/tmp/output",
+        },
+      };
+      expect(evt.type).toBe("server_hello");
+      if (evt.type === "server_hello") {
+        expect(evt.protocolVersion).toBe("1.0");
+      }
+    });
+
+    test("error supports optional code/source", () => {
+      const evt: ServerEvent = {
+        type: "error",
+        sessionId: "s1",
+        message: "Invalid JSON",
+        code: "invalid_json",
+        source: "protocol",
+      };
+      expect(evt.type).toBe("error");
+      if (evt.type === "error") {
+        expect(evt.code).toBe("invalid_json");
+        expect(evt.source).toBe("protocol");
+      }
     });
   });
 

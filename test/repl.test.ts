@@ -2,16 +2,7 @@ import { describe, expect, test, mock, beforeEach } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-/**
- * The REPL module (src/cli/repl.ts) only exports `runCliRepl`.
- * The helper functions resolveAndValidateDir, renderTodos, and createQuestion
- * are module-private.  We test them indirectly where possible and replicate
- * their logic in standalone unit tests where direct testing is impractical.
- *
- * Integration-level tests that start the full REPL are limited because
- * runCliRepl depends on loadConfig, loadSystemPrompt, readline, and runTurn.
- */
+import { __internal as replInternal } from "../src/cli/repl";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -20,20 +11,8 @@ async function makeTmpDir(prefix = "repl-test-"): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
-// ---------------------------------------------------------------------------
-// resolveAndValidateDir logic (replicated from src/cli/repl.ts since it is
-// not exported -- we verify the exact same algorithm here)
-// ---------------------------------------------------------------------------
 async function resolveAndValidateDir(dirArg: string): Promise<string> {
-  const resolved = path.resolve(dirArg);
-  let st: { isDirectory: () => boolean } | null = null;
-  try {
-    st = await fs.stat(resolved);
-  } catch {
-    st = null;
-  }
-  if (!st || !st.isDirectory()) throw new Error(`--dir is not a directory: ${resolved}`);
-  return resolved;
+  return await replInternal.resolveAndValidateDir(dirArg);
 }
 
 describe("resolveAndValidateDir", () => {
@@ -91,9 +70,6 @@ describe("resolveAndValidateDir", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// renderTodos logic (replicated from src/cli/repl.ts)
-// ---------------------------------------------------------------------------
 interface TodoItem {
   content: string;
   status: "pending" | "in_progress" | "completed";
@@ -101,18 +77,7 @@ interface TodoItem {
 }
 
 function renderTodosToLines(todos: TodoItem[]): string[] {
-  if (todos.length === 0) return [];
-
-  const lines: string[] = [];
-  lines.push("\n--- Progress ---");
-  for (const todo of todos) {
-    const icon = todo.status === "completed" ? "x" : todo.status === "in_progress" ? ">" : "-";
-    lines.push(`  ${icon} ${todo.content}`);
-  }
-  const active = todos.find((t) => t.status === "in_progress");
-  if (active) lines.push(`\n  ${active.activeForm}...`);
-  lines.push("");
-  return lines;
+  return replInternal.renderTodosToLines(todos);
 }
 
 describe("renderTodos", () => {
@@ -196,44 +161,8 @@ describe("renderTodos", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Command parsing logic (replicated from the REPL's while-loop)
-// ---------------------------------------------------------------------------
-interface ParsedCommand {
-  type:
-    | "help"
-    | "exit"
-    | "new"
-    | "restart"
-    | "model"
-    | "provider"
-    | "connect"
-    | "cwd"
-    | "tools"
-    | "unknown"
-    | "message";
-  arg?: string;
-}
-
-function parseReplInput(input: string): ParsedCommand {
-  const line = input.trim();
-  if (!line) return { type: "message", arg: "" };
-
-  if (!line.startsWith("/")) return { type: "message", arg: line };
-
-  const [cmd, ...rest] = line.slice(1).split(/\s+/);
-
-  if (cmd === "help") return { type: "help" };
-  if (cmd === "exit") return { type: "exit" };
-  if (cmd === "new") return { type: "new" };
-  if (cmd === "restart") return { type: "restart" };
-  if (cmd === "model") return { type: "model", arg: rest.join(" ").trim() };
-  if (cmd === "provider") return { type: "provider", arg: rest[0] };
-  if (cmd === "connect") return { type: "connect", arg: rest.join(" ").trim() };
-  if (cmd === "cwd") return { type: "cwd", arg: rest.join(" ").trim() };
-  if (cmd === "tools") return { type: "tools" };
-
-  return { type: "unknown", arg: cmd };
+function parseReplInput(input: string) {
+  return replInternal.parseReplInput(input);
 }
 
 describe("REPL command parsing", () => {
@@ -296,7 +225,10 @@ describe("REPL command parsing", () => {
   test("unknown slash command is parsed as unknown", () => {
     const result = parseReplInput("/foobar");
     expect(result.type).toBe("unknown");
-    expect(result.arg).toBe("foobar");
+    if (result.type === "unknown") {
+      expect(result.name).toBe("foobar");
+      expect(result.arg).toBe("");
+    }
   });
 
   test("regular text is parsed as message", () => {

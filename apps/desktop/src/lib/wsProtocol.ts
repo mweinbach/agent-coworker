@@ -1,7 +1,14 @@
 import type { ServerEvent as CoreServerEvent } from "@cowork/server/protocol";
 
 export { PROVIDER_NAMES } from "@cowork/types";
-export type { ProviderName, SkillEntry, TodoItem } from "@cowork/types";
+export type {
+  ApprovalRiskCode,
+  ProviderName,
+  ServerErrorCode,
+  ServerErrorSource,
+  SkillEntry,
+  TodoItem,
+} from "@cowork/types";
 
 export type { ClientMessage, ServerEvent } from "@cowork/server/protocol";
 
@@ -15,4 +22,3 @@ export function safeJsonParse(raw: unknown): any | null {
     return null;
   }
 }
-

@@ -37,28 +37,12 @@ describe("classifyCommand", () => {
       expect(classifyCommand("echo")).toEqual({ kind: "auto" });
     });
 
-    test("cat with file", () => {
-      expect(classifyCommand("cat README.md")).toEqual({ kind: "auto" });
-    });
-
-    test("head with flags", () => {
-      expect(classifyCommand("head -n 20 file.txt")).toEqual({ kind: "auto" });
-    });
-
-    test("tail with flags", () => {
-      expect(classifyCommand("tail -f /var/log/syslog")).toEqual({ kind: "auto" });
-    });
-
     test("which", () => {
       expect(classifyCommand("which node")).toEqual({ kind: "auto" });
     });
 
     test("type", () => {
       expect(classifyCommand("type bash")).toEqual({ kind: "auto" });
-    });
-
-    test("man", () => {
-      expect(classifyCommand("man ls")).toEqual({ kind: "auto" });
     });
 
     test("git status", () => {
@@ -193,6 +177,18 @@ describe("classifyCommand", () => {
   // ---- Unknown / prompt (not dangerous) ------------------------------------
 
   describe("unknown commands classified as prompt but not dangerous", () => {
+    test.each(["cat README.md", "head -n 20 file.txt", "tail -f /var/log/syslog", "man ls"])(
+      "%s requires manual review with file-read risk code",
+      (command) => {
+        const c = classifyCommandDetailed(command);
+        expect(c).toEqual({
+          kind: "prompt",
+          dangerous: false,
+          riskCode: "file_read_command_requires_review",
+        });
+      }
+    );
+
     test("npm install", () => {
       const c = classifyCommand("npm install express");
       expect(c.kind).toBe("prompt");
@@ -317,6 +313,26 @@ describe("classifyCommandDetailed", () => {
       kind: "prompt",
       dangerous: false,
       riskCode: "contains_shell_control_operator",
+    });
+  });
+
+  test("returns outside_allowed_scope for absolute paths outside allowed roots", () => {
+    expect(
+      classifyCommandDetailed("ls /etc", {
+        allowedRoots: ["/home/user/project", "/home/user/project/output"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+  });
+
+  test("outside_allowed_scope is ignored when no allowedRoots are provided", () => {
+    expect(classifyCommandDetailed("ls /etc")).toEqual({
+      kind: "auto",
+      dangerous: false,
+      riskCode: "safe_auto_approved",
     });
   });
 });

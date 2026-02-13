@@ -1174,6 +1174,26 @@ describe("AgentSession", () => {
       await sendPromise;
     });
 
+    test("marks outside-scope absolute paths with outside_allowed_scope", async () => {
+      const { session, events } = makeSession();
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        await params.approveCommand("ls /etc");
+        return { text: "done", reasoningText: undefined, responseMessages: [] };
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const approvalEvt = events.find((e) => e.type === "approval") as any;
+      expect(approvalEvt).toBeDefined();
+      expect(approvalEvt.dangerous).toBe(false);
+      expect(approvalEvt.reasonCode).toBe("outside_allowed_scope");
+
+      session.handleApprovalResponse(approvalEvt.requestId, true);
+      await sendPromise;
+    });
+
     test("auto-approved commands skip the approval flow entirely", async () => {
       const { session, events } = makeSession();
 

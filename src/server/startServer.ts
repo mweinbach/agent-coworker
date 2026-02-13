@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
 import type { AgentConfig } from "../types";
+import type { ServerErrorCode } from "../types";
 import { loadConfig } from "../config";
 import { loadSystemPromptWithSkills } from "../prompt";
 
@@ -33,12 +34,12 @@ export async function startAgentServer(
   system: string;
   url: string;
 }> {
-  function protocolErrorCode(error: string): string {
+  function protocolErrorCode(error: string): ServerErrorCode {
     if (error === "Invalid JSON") return "invalid_json";
     if (error === "Expected object") return "invalid_payload";
     if (error === "Missing type") return "missing_type";
     if (error.startsWith("Unknown type:")) return "unknown_type";
-    return "invalid_message";
+    return "validation_failed";
   }
 
   const hostname = opts.hostname ?? "127.0.0.1";
@@ -130,16 +131,6 @@ export async function startAgentServer(
           const msg: ClientMessage = parsed.msg;
           if (msg.type === "client_hello") return;
 
-          // Lightweight keepalive (no session required).
-          if (msg.type === "ping") {
-            try {
-              ws.send(JSON.stringify({ type: "pong", sessionId: "" } satisfies ServerEvent));
-            } catch {
-              // ignore
-            }
-            return;
-          }
-
           if (msg.sessionId !== session.id) {
             ws.send(
               JSON.stringify({
@@ -150,6 +141,15 @@ export async function startAgentServer(
                 source: "protocol",
               } satisfies ServerEvent)
             );
+            return;
+          }
+
+          if (msg.type === "ping") {
+            try {
+              ws.send(JSON.stringify({ type: "pong", sessionId: msg.sessionId } satisfies ServerEvent));
+            } catch {
+              // ignore
+            }
             return;
           }
 

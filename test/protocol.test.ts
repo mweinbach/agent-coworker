@@ -196,6 +196,21 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("ping", () => {
+    test("valid ping requires sessionId", () => {
+      const msg = expectOk(JSON.stringify({ type: "ping", sessionId: "s1" }));
+      expect(msg.type).toBe("ping");
+      if (msg.type === "ping") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("ping missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "ping" }));
+      expect(err).toBe("ping missing sessionId");
+    });
+  });
+
   describe("set_model", () => {
     test("valid set_model message", () => {
       const msg = expectOk(
@@ -961,11 +976,11 @@ describe("safeParseClientMessage", () => {
       expect(new Set(SERVER_EVENT_TYPES).size).toBe(SERVER_EVENT_TYPES.length);
     });
 
-    test("server_hello supports optional protocolVersion", () => {
+    test("server_hello supports protocolVersion", () => {
       const evt: ServerEvent = {
         type: "server_hello",
         sessionId: "s1",
-        protocolVersion: "1.0",
+        protocolVersion: "2.0",
         config: {
           provider: "openai",
           model: "gpt-5.2",
@@ -975,11 +990,11 @@ describe("safeParseClientMessage", () => {
       };
       expect(evt.type).toBe("server_hello");
       if (evt.type === "server_hello") {
-        expect(evt.protocolVersion).toBe("1.0");
+        expect(evt.protocolVersion).toBe("2.0");
       }
     });
 
-    test("error supports optional code/source", () => {
+    test("error requires code/source", () => {
       const evt: ServerEvent = {
         type: "error",
         sessionId: "s1",

@@ -6,7 +6,15 @@ import { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../
 import { getProviderStatuses } from "../providerStatus";
 import { discoverSkills, stripSkillFrontMatter } from "../skills";
 import { isProviderName } from "../types";
-import type { AgentConfig, HarnessContextPayload, HarnessSloCheck, ObservabilityQueryRequest, TodoItem } from "../types";
+import type {
+  AgentConfig,
+  HarnessContextPayload,
+  HarnessSloCheck,
+  ObservabilityQueryRequest,
+  ServerErrorCode,
+  ServerErrorSource,
+  TodoItem,
+} from "../types";
 import { runTurn } from "../agent";
 import { loadSystemPromptWithSkills } from "../prompt";
 import { createTools } from "../tools";
@@ -141,9 +149,53 @@ export class AgentSession {
     };
   }
 
+  private emitError(code: ServerErrorCode, source: ServerErrorSource, message: string) {
+    this.emit({
+      type: "error",
+      sessionId: this.id,
+      message,
+      code,
+      source,
+    });
+  }
+
+  private classifyTurnError(message: string): { code: ServerErrorCode; source: ServerErrorSource } {
+    const m = message.toLowerCase();
+
+    if (
+      m.includes("blocked: path is outside") ||
+      m.includes("blocked: canonical target resolves outside") ||
+      m.includes("outside allowed directories") ||
+      m.includes("outside allowed roots") ||
+      m.includes("blocked private/internal host") ||
+      m.includes("blocked url protocol") ||
+      m.includes("blocked url credentials")
+    ) {
+      return { code: "permission_denied", source: "permissions" };
+    }
+
+    if (m.includes("checkpoint") || m.includes("session backup") || m.includes("backup")) {
+      return { code: "backup_error", source: "backup" };
+    }
+
+    if (m.includes("observability") || m.includes("traceql") || m.includes("promql") || m.includes("logql")) {
+      return { code: "observability_error", source: "observability" };
+    }
+
+    if (m.includes("provider") || m.includes("oauth") || m.includes("api key") || m.includes("unsupported provider")) {
+      return { code: "provider_error", source: "provider" };
+    }
+
+    if (m.includes("is required") || m.includes("invalid") || m.includes("unknown checkpoint id")) {
+      return { code: "validation_failed", source: "session" };
+    }
+
+    return { code: "internal_error", source: "session" };
+  }
+
   reset() {
     if (this.running) {
-      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      this.emitError("busy", "session", "Agent is busy");
       return;
     }
     this.messages = [];
@@ -169,14 +221,14 @@ export class AgentSession {
       const skills = await discoverSkills(this.config.skillsDirs, { includeDisabled: true });
       this.emit({ type: "skills_list", sessionId: this.id, skills });
     } catch (err) {
-      this.emit({ type: "error", sessionId: this.id, message: `Failed to list skills: ${String(err)}` });
+      this.emitError("internal_error", "session", `Failed to list skills: ${String(err)}`);
     }
   }
 
   async readSkill(skillNameRaw: string) {
     const skillName = skillNameRaw.trim();
     if (!skillName) {
-      this.emit({ type: "error", sessionId: this.id, message: "Skill name is required" });
+      this.emitError("validation_failed", "session", "Skill name is required");
       return;
     }
 
@@ -184,14 +236,14 @@ export class AgentSession {
       const skills = await discoverSkills(this.config.skillsDirs, { includeDisabled: true });
       const skill = skills.find((s) => s.name === skillName);
       if (!skill) {
-        this.emit({ type: "error", sessionId: this.id, message: `Skill "${skillName}" not found.` });
+        this.emitError("validation_failed", "session", `Skill "${skillName}" not found.`);
         return;
       }
 
       const content = await fs.readFile(skill.path, "utf-8");
       this.emit({ type: "skill_content", sessionId: this.id, skill, content: stripSkillFrontMatter(content) });
     } catch (err) {
-      this.emit({ type: "error", sessionId: this.id, message: `Failed to read skill: ${String(err)}` });
+      this.emitError("internal_error", "session", `Failed to read skill: ${String(err)}`);
     }
   }
 
@@ -214,17 +266,17 @@ export class AgentSession {
   async disableSkill(skillNameRaw: string) {
     const skillName = skillNameRaw.trim();
     if (!skillName) {
-      this.emit({ type: "error", sessionId: this.id, message: "Skill name is required" });
+      this.emitError("validation_failed", "session", "Skill name is required");
       return;
     }
     if (this.running) {
-      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      this.emitError("busy", "session", "Agent is busy");
       return;
     }
 
     const { enabledDir, disabledDir } = this.globalSkillsDirs();
     if (!enabledDir || !disabledDir) {
-      this.emit({ type: "error", sessionId: this.id, message: "Global skills directory is not configured." });
+      this.emitError("validation_failed", "session", "Global skills directory is not configured.");
       return;
     }
 
@@ -232,11 +284,11 @@ export class AgentSession {
       const skills = await discoverSkills(this.config.skillsDirs, { includeDisabled: true });
       const skill = skills.find((s) => s.name === skillName);
       if (!skill) {
-        this.emit({ type: "error", sessionId: this.id, message: `Skill "${skillName}" not found.` });
+        this.emitError("validation_failed", "session", `Skill "${skillName}" not found.`);
         return;
       }
       if (skill.source !== "global") {
-        this.emit({ type: "error", sessionId: this.id, message: "Only global skills can be disabled in v1." });
+        this.emitError("validation_failed", "session", "Only global skills can be disabled in v1.");
         return;
       }
       if (!skill.enabled) {
@@ -250,24 +302,24 @@ export class AgentSession {
       await fs.rename(from, to);
       await this.refreshSkillsList();
     } catch (err) {
-      this.emit({ type: "error", sessionId: this.id, message: `Failed to disable skill: ${String(err)}` });
+      this.emitError("internal_error", "session", `Failed to disable skill: ${String(err)}`);
     }
   }
 
   async enableSkill(skillNameRaw: string) {
     const skillName = skillNameRaw.trim();
     if (!skillName) {
-      this.emit({ type: "error", sessionId: this.id, message: "Skill name is required" });
+      this.emitError("validation_failed", "session", "Skill name is required");
       return;
     }
     if (this.running) {
-      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      this.emitError("busy", "session", "Agent is busy");
       return;
     }
 
     const { enabledDir, disabledDir } = this.globalSkillsDirs();
     if (!enabledDir || !disabledDir) {
-      this.emit({ type: "error", sessionId: this.id, message: "Global skills directory is not configured." });
+      this.emitError("validation_failed", "session", "Global skills directory is not configured.");
       return;
     }
 
@@ -275,11 +327,11 @@ export class AgentSession {
       const skills = await discoverSkills(this.config.skillsDirs, { includeDisabled: true });
       const skill = skills.find((s) => s.name === skillName);
       if (!skill) {
-        this.emit({ type: "error", sessionId: this.id, message: `Skill "${skillName}" not found.` });
+        this.emitError("validation_failed", "session", `Skill "${skillName}" not found.`);
         return;
       }
       if (skill.source !== "global") {
-        this.emit({ type: "error", sessionId: this.id, message: "Only global skills can be enabled in v1." });
+        this.emitError("validation_failed", "session", "Only global skills can be enabled in v1.");
         return;
       }
       if (skill.enabled) {
@@ -293,18 +345,18 @@ export class AgentSession {
       await fs.rename(from, to);
       await this.refreshSkillsList();
     } catch (err) {
-      this.emit({ type: "error", sessionId: this.id, message: `Failed to enable skill: ${String(err)}` });
+      this.emitError("internal_error", "session", `Failed to enable skill: ${String(err)}`);
     }
   }
 
   async deleteSkill(skillNameRaw: string) {
     const skillName = skillNameRaw.trim();
     if (!skillName) {
-      this.emit({ type: "error", sessionId: this.id, message: "Skill name is required" });
+      this.emitError("validation_failed", "session", "Skill name is required");
       return;
     }
     if (this.running) {
-      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      this.emitError("busy", "session", "Agent is busy");
       return;
     }
 
@@ -312,11 +364,11 @@ export class AgentSession {
       const skills = await discoverSkills(this.config.skillsDirs, { includeDisabled: true });
       const skill = skills.find((s) => s.name === skillName);
       if (!skill) {
-        this.emit({ type: "error", sessionId: this.id, message: `Skill "${skillName}" not found.` });
+        this.emitError("validation_failed", "session", `Skill "${skillName}" not found.`);
         return;
       }
       if (skill.source !== "global") {
-        this.emit({ type: "error", sessionId: this.id, message: "Only global skills can be deleted in v1." });
+        this.emitError("validation_failed", "session", "Only global skills can be deleted in v1.");
         return;
       }
 
@@ -325,13 +377,13 @@ export class AgentSession {
       await fs.rm(skillDir, { recursive: true, force: true });
       await this.refreshSkillsList();
     } catch (err) {
-      this.emit({ type: "error", sessionId: this.id, message: `Failed to delete skill: ${String(err)}` });
+      this.emitError("internal_error", "session", `Failed to delete skill: ${String(err)}`);
     }
   }
 
   setEnableMcp(enableMcp: boolean) {
     if (this.running) {
-      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      this.emitError("busy", "session", "Agent is busy");
       return;
     }
 
@@ -428,11 +480,11 @@ export class AgentSession {
   async setModel(modelIdRaw: string, providerRaw?: AgentConfig["provider"]) {
     const modelId = modelIdRaw.trim();
     if (!modelId) {
-      this.emit({ type: "error", sessionId: this.id, message: "Model id is required" });
+      this.emitError("validation_failed", "session", "Model id is required");
       return;
     }
     if (this.running) {
-      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      this.emitError("busy", "session", "Agent is busy");
       return;
     }
 
@@ -443,7 +495,7 @@ export class AgentSession {
           ? providerRaw
           : null;
     if (!nextProvider) {
-      this.emit({ type: "error", sessionId: this.id, message: `Unsupported provider: ${String(providerRaw)}` });
+      this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
       return;
     }
 
@@ -460,11 +512,7 @@ export class AgentSession {
       this.system = result.prompt;
       this.discoveredSkills = result.discoveredSkills;
     } catch (err) {
-      this.emit({
-        type: "error",
-        sessionId: this.id,
-        message: `Model updated but failed to refresh prompt: ${String(err)}`,
-      });
+      this.emitError("internal_error", "session", `Model updated but failed to refresh prompt: ${String(err)}`);
     }
 
     this.emit({
@@ -476,15 +524,15 @@ export class AgentSession {
 
   async connectProvider(providerRaw: AgentConfig["provider"], apiKeyRaw?: string) {
     if (this.running) {
-      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      this.emitError("busy", "session", "Agent is busy");
       return;
     }
     if (this.connecting) {
-      this.emit({ type: "error", sessionId: this.id, message: "Connection flow already running" });
+      this.emitError("busy", "session", "Connection flow already running");
       return;
     }
     if (!isProviderName(providerRaw)) {
-      this.emit({ type: "error", sessionId: this.id, message: `Unsupported provider: ${String(providerRaw)}` });
+      this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
       return;
     }
 
@@ -503,11 +551,7 @@ export class AgentSession {
       });
 
       if (!result.ok) {
-        this.emit({
-          type: "error",
-          sessionId: this.id,
-          message: result.message,
-        });
+        this.emitError("provider_error", "provider", result.message);
         return;
       }
 
@@ -521,7 +565,7 @@ export class AgentSession {
         text: lines.join("\n"),
       });
     } catch (err) {
-      this.emit({ type: "error", sessionId: this.id, message: `connect failed: ${String(err)}` });
+      this.emitError("provider_error", "provider", `connect failed: ${String(err)}`);
     } finally {
       this.connecting = false;
     }
@@ -536,7 +580,7 @@ export class AgentSession {
       const providers = await this.getProviderStatusesImpl({ paths });
       this.emit({ type: "provider_status", sessionId: this.id, providers });
     } catch (err) {
-      this.emit({ type: "error", sessionId: this.id, message: `Failed to refresh provider status: ${String(err)}` });
+      this.emitError("provider_error", "provider", `Failed to refresh provider status: ${String(err)}`);
     } finally {
       this.refreshingProviderStatus = false;
     }
@@ -610,7 +654,13 @@ export class AgentSession {
   private async approveCommand(command: string) {
     if (this.yolo) return true;
 
-    const classification = classifyCommandDetailed(command);
+    const classification = classifyCommandDetailed(command, {
+      allowedRoots: [
+        path.dirname(this.config.projectAgentDir),
+        this.config.workingDirectory,
+        this.config.outputDirectory,
+      ],
+    });
     if (classification.kind === "auto") return true;
 
     const requestId = makeId();
@@ -641,14 +691,14 @@ export class AgentSession {
 
   async createManualSessionCheckpoint() {
     if (this.running) {
-      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      this.emitError("busy", "session", "Agent is busy");
       return;
     }
 
     await this.sessionBackupInit;
     if (!this.sessionBackup) {
       const reason = this.sessionBackupState.failureReason ?? "Session backup is unavailable";
-      this.emit({ type: "error", sessionId: this.id, message: reason });
+      this.emitError("backup_error", "backup", reason);
       return;
     }
 
@@ -657,20 +707,20 @@ export class AgentSession {
       this.sessionBackupState = this.sessionBackup.getPublicState();
       this.emitSessionBackupState("manual_checkpoint");
     } catch (err) {
-      this.emit({ type: "error", sessionId: this.id, message: `manual checkpoint failed: ${String(err)}` });
+      this.emitError("backup_error", "backup", `manual checkpoint failed: ${String(err)}`);
     }
   }
 
   async restoreSessionBackup(checkpointId?: string) {
     if (this.running) {
-      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      this.emitError("busy", "session", "Agent is busy");
       return;
     }
 
     await this.sessionBackupInit;
     if (!this.sessionBackup) {
       const reason = this.sessionBackupState.failureReason ?? "Session backup is unavailable";
-      this.emit({ type: "error", sessionId: this.id, message: reason });
+      this.emitError("backup_error", "backup", reason);
       return;
     }
 
@@ -683,43 +733,39 @@ export class AgentSession {
       this.sessionBackupState = this.sessionBackup.getPublicState();
       this.emitSessionBackupState("restore");
     } catch (err) {
-      this.emit({ type: "error", sessionId: this.id, message: `restore failed: ${String(err)}` });
+      this.emitError("backup_error", "backup", `restore failed: ${String(err)}`);
     }
   }
 
   async deleteSessionCheckpoint(checkpointId: string) {
     if (this.running) {
-      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      this.emitError("busy", "session", "Agent is busy");
       return;
     }
 
     await this.sessionBackupInit;
     if (!this.sessionBackup) {
       const reason = this.sessionBackupState.failureReason ?? "Session backup is unavailable";
-      this.emit({ type: "error", sessionId: this.id, message: reason });
+      this.emitError("backup_error", "backup", reason);
       return;
     }
 
     try {
       const removed = await this.sessionBackup.deleteCheckpoint(checkpointId);
       if (!removed) {
-        this.emit({
-          type: "error",
-          sessionId: this.id,
-          message: `Unknown checkpoint id: ${checkpointId}`,
-        });
+        this.emitError("validation_failed", "backup", `Unknown checkpoint id: ${checkpointId}`);
         return;
       }
       this.sessionBackupState = this.sessionBackup.getPublicState();
       this.emitSessionBackupState("delete");
     } catch (err) {
-      this.emit({ type: "error", sessionId: this.id, message: `delete checkpoint failed: ${String(err)}` });
+      this.emitError("backup_error", "backup", `delete checkpoint failed: ${String(err)}`);
     }
   }
 
   async sendUserMessage(text: string, clientMessageId?: string) {
     if (this.running) {
-      this.emit({ type: "error", sessionId: this.id, message: "Agent is busy" });
+      this.emitError("busy", "session", "Agent is busy");
       return;
     }
 
@@ -791,7 +837,8 @@ export class AgentSession {
       const msg = String(err);
       // Don't emit error for user-initiated cancellation.
       if (!msg.includes("abort") && !msg.includes("cancel")) {
-        this.emit({ type: "error", sessionId: this.id, message: msg });
+        const classified = this.classifyTurnError(msg);
+        this.emitError(classified.code, classified.source, msg);
       }
       // Telemetry is best-effort; don't block turn execution on network I/O.
       void emitObservabilityEvent(this.config, {
@@ -854,7 +901,7 @@ export class AgentSession {
       this.sessionBackupState = this.sessionBackup.getPublicState();
       this.emitSessionBackupState("auto_checkpoint");
     } catch (err) {
-      this.emit({ type: "error", sessionId: this.id, message: `automatic checkpoint failed: ${String(err)}` });
+      this.emitError("backup_error", "backup", `automatic checkpoint failed: ${String(err)}`);
     }
   }
 

@@ -11,7 +11,7 @@ import { ensureAiCoworkerHome, getAiCoworkerPaths, isOauthCliProvider, maskApiKe
 import type { ConnectionStore } from "../connect";
 import { modelChoicesByProvider } from "../providers";
 import { PROVIDER_NAMES } from "../types";
-import type { ProviderName, TodoItem } from "../types";
+import type { ApprovalRiskCode, ProviderName, ServerErrorCode, ServerErrorSource, TodoItem } from "../types";
 import type { ClientMessage, ServerEvent } from "../server/protocol";
 
 // Keep output clean.
@@ -58,7 +58,7 @@ type FeedItem =
   | { id: string; type: "harness_slo_result"; result: HarnessSloResultPayload }
   | { id: string; type: "system"; line: string }
   | { id: string; type: "log"; line: string }
-  | { id: string; type: "error"; message: string };
+  | { id: string; type: "error"; message: string; code: ServerErrorCode; source: ServerErrorSource };
 
 type HarnessContextPayload = Extract<ServerEvent, { type: "harness_context" }>["context"];
 type ObservabilityQueryResultPayload = Extract<ServerEvent, { type: "observability_query_result" }>["result"];
@@ -543,7 +543,7 @@ function toolSummary(item: Extract<FeedItem, { type: "tool" }>): string | null {
 type UiMode =
   | { kind: "chat" }
   | { kind: "ask"; requestId: string; question: string; options?: string[] }
-  | { kind: "approval"; requestId: string; command: string; dangerous: boolean };
+  | { kind: "approval"; requestId: string; command: string; dangerous: boolean; reasonCode: ApprovalRiskCode };
 
 type ModalFocus = "select" | "input";
 
@@ -919,6 +919,8 @@ function App(props: { serverUrl: string }) {
           id: nextFeedId(),
           type: "error",
           message: "connect failed: unable to send websocket request",
+          code: "internal_error",
+          source: "session",
         });
         return;
       }
@@ -937,6 +939,8 @@ function App(props: { serverUrl: string }) {
         id: nextFeedId(),
         type: "error",
         message: `connect failed: ${String(err)}`,
+        code: "internal_error",
+        source: "session",
       });
     }
   };
@@ -998,7 +1002,13 @@ function App(props: { serverUrl: string }) {
     }
     const ok = send({ type: "harness_context_get", sessionId: sid });
     if (!ok) {
-      appendFeed({ id: nextFeedId(), type: "error", message: "failed to request harness context" });
+      appendFeed({
+        id: nextFeedId(),
+        type: "error",
+        message: "failed to request harness context",
+        code: "internal_error",
+        source: "session",
+      });
       return false;
     }
     appendFeed({ id: nextFeedId(), type: "system", line: "requesting harness context..." });
@@ -1023,7 +1033,13 @@ function App(props: { serverUrl: string }) {
     };
     const ok = send({ type: "harness_context_set", sessionId: sid, context });
     if (!ok) {
-      appendFeed({ id: nextFeedId(), type: "error", message: "failed to set harness context" });
+      appendFeed({
+        id: nextFeedId(),
+        type: "error",
+        message: "failed to set harness context",
+        code: "internal_error",
+        source: "session",
+      });
       return false;
     }
     appendFeed({ id: nextFeedId(), type: "system", line: `harness context set (${context.runId})` });
@@ -1060,7 +1076,13 @@ function App(props: { serverUrl: string }) {
 
     const ok = send({ type: "harness_slo_evaluate", sessionId: sid, checks });
     if (!ok) {
-      appendFeed({ id: nextFeedId(), type: "error", message: "failed to run harness SLO checks" });
+      appendFeed({
+        id: nextFeedId(),
+        type: "error",
+        message: "failed to run harness SLO checks",
+        code: "internal_error",
+        source: "session",
+      });
       return false;
     }
     appendFeed({ id: nextFeedId(), type: "system", line: `running SLO checks (${checks.length})...` });
@@ -1443,6 +1465,7 @@ function App(props: { serverUrl: string }) {
             requestId: parsed.requestId,
             command: parsed.command,
             dangerous: parsed.dangerous,
+            reasonCode: parsed.reasonCode,
           });
           setModalFocus("select");
           setResponseInput("");
@@ -1499,7 +1522,13 @@ function App(props: { serverUrl: string }) {
           });
           break;
         case "error":
-          appendFeed({ id: nextFeedId(), type: "error", message: parsed.message });
+          appendFeed({
+            id: nextFeedId(),
+            type: "error",
+            message: parsed.message,
+            code: parsed.code,
+            source: parsed.source,
+          });
           break;
       }
     };
@@ -1761,6 +1790,9 @@ function App(props: { serverUrl: string }) {
         >
           <text fg={theme.danger}>
             <strong>error</strong>
+          </text>
+          <text fg={theme.muted}>
+            {item.source}/{item.code}
           </text>
           <text fg={theme.danger}>{item.message}</text>
         </box>
@@ -2326,6 +2358,7 @@ function App(props: { serverUrl: string }) {
               <strong>{mode.dangerous ? "Dangerous command approval" : "Command approval"}</strong>
             </text>
             <text fg={theme.text}>{mode.command}</text>
+            <text fg={theme.muted}>risk: {mode.reasonCode}</text>
 
             <select
               options={[

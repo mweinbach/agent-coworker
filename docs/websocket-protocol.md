@@ -8,7 +8,7 @@ This document is the canonical external protocol contract for all clients. Thin 
 
 - **URL**: `ws://127.0.0.1:{port}/ws` (default port `7337`)
 - **No authentication** — server binds to localhost only
-- **Ping/pong keepalive** — clients may send `ping` messages; the server responds with `pong`
+- **Ping/pong keepalive** — clients may send `ping` with `sessionId`; the server responds with `pong`
 - **One session per connection** — disconnecting destroys the session; there is no resumption
 
 ## Public Capabilities
@@ -44,6 +44,23 @@ Client                          Server
 
 ---
 
+## Protocol v2 Migration (from v1)
+
+Protocol version `2.0` introduces explicit breaking changes:
+
+- `ping` now requires `sessionId`
+- `pong.sessionId` now echoes the client-provided `sessionId`
+- `error.code` is required
+- `error.source` is required
+- `approval.reasonCode` is required
+
+Recommended migration order for clients:
+
+1. Update parser/types to require the new fields.
+2. Send `sessionId` on every `ping`.
+3. Render `error.code` / `error.source` and `approval.reasonCode` in UI.
+4. Assert `server_hello.protocolVersion === "2.0"` at connect time.
+
 ## Type Definitions
 
 ```typescript
@@ -64,7 +81,7 @@ interface ConfigSubset {
   outputDirectory: string;
 }
 
-type ProtocolVersion = string; // current server value: "1.0"
+type ProtocolVersion = string; // current server value: "2.0"
 
 interface TodoItem {
   content: string;
@@ -127,7 +144,7 @@ interface HarnessSloCheck {
 
 ## Client -> Server Messages
 
-All messages are JSON. Every message (except `client_hello` and `ping`) must include `sessionId`.
+All messages are JSON. Every message (except `client_hello`) must include `sessionId`.
 
 ### client_hello
 
@@ -402,10 +419,10 @@ Abort the currently running agent turn. The server aborts the underlying LLM cal
 
 ### ping
 
-Lightweight keepalive probe. Does **not** require a `sessionId` — can be sent at any time, even before `server_hello`. The server responds with `pong`.
+Lightweight keepalive probe. Requires a valid `sessionId` for this connection. The server responds with `pong` echoing that same `sessionId`.
 
 ```jsonc
-{ "type": "ping" }
+{ "type": "ping", "sessionId": "..." }
 ```
 
 ### session_backup_get
@@ -475,7 +492,7 @@ First message after connection. Contains the session ID, protocol version, and c
 {
   "type": "server_hello",
   "sessionId": "550e8400-e29b-41d4-a716-446655440000",
-  "protocolVersion": "1.0",
+  "protocolVersion": "2.0",
   "config": {
     "provider": "openai",
     "model": "gpt-5.2",
@@ -627,9 +644,18 @@ Agent wants to run a command and needs permission. **Blocks the agent** until yo
   "requestId": "req-approval-001",
   "command": "rm -rf /tmp/old-builds",
   "dangerous": true,
-  "reasonCode": "matches_dangerous_pattern" // optional machine-readable reason
+  "reasonCode": "matches_dangerous_pattern"
 }
 ```
+
+`reasonCode` values:
+
+- `safe_auto_approved`
+- `matches_dangerous_pattern`
+- `contains_shell_control_operator`
+- `requires_manual_review`
+- `file_read_command_requires_review`
+- `outside_allowed_scope`
 
 ### config_updated
 
@@ -856,19 +882,42 @@ Any error condition.
   "type": "error",
   "sessionId": "...",
   "message": "Agent is busy",
-  "code": "agent_busy",  // optional machine-readable code
-  "source": "session"    // optional subsystem name
+  "code": "busy",
+  "source": "session"
 }
 ```
 
-When `code` is present, clients should branch on `code` and treat `message` as user-facing context.
+`code` values:
+
+- `invalid_json`
+- `invalid_payload`
+- `missing_type`
+- `unknown_type`
+- `unknown_session`
+- `busy`
+- `validation_failed`
+- `permission_denied`
+- `provider_error`
+- `backup_error`
+- `observability_error`
+- `internal_error`
+
+`source` values:
+
+- `protocol`
+- `session`
+- `tool`
+- `provider`
+- `backup`
+- `observability`
+- `permissions`
 
 ### pong
 
-Keepalive response to a client `ping`. The `sessionId` is always an empty string.
+Keepalive response to a client `ping`. The `sessionId` echoes the incoming ping `sessionId`.
 
 ```jsonc
-{ "type": "pong", "sessionId": "" }
+{ "type": "pong", "sessionId": "..." }
 ```
 
 ---
@@ -923,8 +972,8 @@ server  <- session_busy { busy: false }
 ### Keepalive Ping/Pong
 
 ```
-client  -> ping
-server  <- pong { sessionId: "" }
+client  -> ping { sessionId: "..." }
+server  <- pong { sessionId: "..." }
 ```
 
 ### Model Change
@@ -952,26 +1001,30 @@ server  <- session_backup_state { reason: "restore", backup: {...} }
 
 ## Error Reference
 
-| Error Message | Cause |
+| `code` | Typical Cause |
 |---|---|
-| `Invalid JSON` | Malformed JSON |
-| `Expected object` | Parsed JSON is not an object |
-| `Missing type` | No `type` field or not a string |
-| `Unknown type: X` | Unrecognized message type |
-| `Unknown sessionId: X` | `sessionId` doesn't match this connection |
-| `Agent is busy` | Sent `user_message` / `reset` / `set_model` while agent is processing |
-| `Connection flow already running` | Another `connect_provider` is in progress |
-| `Unsupported provider: X` | Invalid provider name |
-| `set_model missing/invalid model` | Empty/invalid model string in `set_model` payload |
-| `client_hello missing/invalid client` | Missing/blank `client` value |
-| `connect failed: X` | Provider connection/auth failed |
-| `session_backup_get missing sessionId` | Invalid `session_backup_get` payload |
-| `session_backup_checkpoint missing sessionId` | Invalid `session_backup_checkpoint` payload |
-| `session_backup_restore missing sessionId` | Invalid `session_backup_restore` payload |
-| `session_backup_restore invalid checkpointId` | `checkpointId` is present but not a string |
-| `session_backup_delete_checkpoint missing sessionId` | Invalid `session_backup_delete_checkpoint` payload |
-| `session_backup_delete_checkpoint missing checkpointId` | Missing/empty checkpoint id |
-| `Unknown checkpoint id: X` | Requested delete/restore checkpoint does not exist |
+| `invalid_json` | Malformed JSON payload |
+| `invalid_payload` | Parsed JSON is not an object |
+| `missing_type` | Missing/non-string `type` |
+| `unknown_type` | Unrecognized `type` |
+| `unknown_session` | `sessionId` mismatch for this connection |
+| `busy` | Request sent while session is actively running |
+| `validation_failed` | Required field missing/invalid |
+| `permission_denied` | Path/URL/policy guard blocked action |
+| `provider_error` | Provider auth or model operation failure |
+| `backup_error` | Session backup/checkpoint operation failure |
+| `observability_error` | Query/evaluation or observability failure |
+| `internal_error` | Unexpected runtime failure |
+
+| `source` | Subsystem |
+|---|---|
+| `protocol` | Parse/shape/session validation in websocket handler |
+| `session` | Core `AgentSession` logic |
+| `tool` | Tool execution lifecycle |
+| `provider` | Provider connect/model operations |
+| `backup` | Backup/checkpoint manager |
+| `observability` | Observability/harness query path |
+| `permissions` | Permission and scope guards |
 
 ---
 

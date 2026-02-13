@@ -1,4 +1,13 @@
-import type { ConfigSubset, ProviderName, ServerEvent, SkillEntry, TodoItem } from "../lib/wsProtocol";
+import type {
+  ApprovalRiskCode,
+  ConfigSubset,
+  ProviderName,
+  ServerErrorCode,
+  ServerErrorSource,
+  ServerEvent,
+  SkillEntry,
+  TodoItem,
+} from "../lib/wsProtocol";
 
 export type WorkspaceRecord = {
   id: string;
@@ -47,7 +56,7 @@ export type FeedItem =
   | { id: string; kind: "observabilityQueryResult"; ts: string; result: ObservabilityQueryResultPayload }
   | { id: string; kind: "harnessSloResult"; ts: string; result: HarnessSloResultPayload }
   | { id: string; kind: "log"; ts: string; line: string }
-  | { id: string; kind: "error"; ts: string; message: string }
+  | { id: string; kind: "error"; ts: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { id: string; kind: "system"; ts: string; line: string };
 
 export type ViewId = "chat" | "skills" | "automations" | "settings";
@@ -117,6 +126,7 @@ export type ApprovalPrompt = {
   requestId: string;
   command: string;
   dangerous: boolean;
+  reasonCode: ApprovalRiskCode;
 };
 
 export type PromptModalState =

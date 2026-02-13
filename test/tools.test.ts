@@ -165,6 +165,16 @@ describe("read tool", () => {
     const out: string = await t.execute({ filePath: p, offset: 100, limit: 10 });
     expect(out).toBe("");
   });
+
+  test("rejects reads outside allowed directories", async () => {
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    const outsideFile = path.join(outsideDir, "outside.txt");
+    await fs.writeFile(outsideFile, "secret", "utf-8");
+
+    const t: any = createReadTool(makeCtx(dir));
+    await expect(t.execute({ filePath: outsideFile, limit: 10 })).rejects.toThrow(/blocked/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -601,6 +611,15 @@ describe("glob tool", () => {
     expect(res).toContain("b.js");
     expect(res).not.toContain("c.py");
   });
+
+  test("rejects glob with cwd outside allowed directories", async () => {
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    await fs.writeFile(path.join(outsideDir, "x.ts"), "", "utf-8");
+
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: "*.ts", cwd: outsideDir })).rejects.toThrow(/blocked/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -724,6 +743,24 @@ describe("grep tool", () => {
     });
     expect(res).toContain("needle");
     expect(res).toContain("haystack.txt");
+  });
+
+  test("rejects grep path outside allowed directories", async () => {
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    await fs.writeFile(path.join(outsideDir, "file.txt"), "secret\n", "utf-8");
+
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+    await expect(
+      t.execute({
+        pattern: "secret",
+        path: outsideDir,
+        caseSensitive: true,
+      })
+    ).rejects.toThrow(/blocked/i);
   });
 
   test("returns 'No matches' on no results", async () => {

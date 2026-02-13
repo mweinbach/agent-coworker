@@ -7,6 +7,8 @@ import type {
   HarnessSloOperator,
   ObservabilityQueryRequest,
   ObservabilityQueryType,
+  ServerErrorCode,
+  ServerErrorSource,
   SkillEntry,
   TodoItem,
 } from "../types";
@@ -29,7 +31,7 @@ export type ClientMessage =
   | { type: "delete_skill"; sessionId: string; skillName: string }
   | { type: "set_enable_mcp"; sessionId: string; enableMcp: boolean }
   | { type: "cancel"; sessionId: string }
-  | { type: "ping" }
+  | { type: "ping"; sessionId: string }
   | { type: "session_backup_get"; sessionId: string }
   | { type: "session_backup_checkpoint"; sessionId: string }
   | { type: "session_backup_restore"; sessionId: string; checkpointId?: string }
@@ -63,7 +65,7 @@ export type ServerEvent =
       requestId: string;
       command: string;
       dangerous: boolean;
-      reasonCode?: ApprovalRiskCode;
+      reasonCode: ApprovalRiskCode;
     }
   | {
       type: "config_updated";
@@ -117,10 +119,10 @@ export type ServerEvent =
         }>;
       };
     }
-  | { type: "error"; sessionId: string; message: string; code?: string; source?: string }
-  | { type: "pong"; sessionId: "" };
+  | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
+  | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "1.0";
+export const WEBSOCKET_PROTOCOL_VERSION = "2.0";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -212,8 +214,10 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
       }
       return { ok: true, msg: obj as ClientMessage };
     }
-    case "ping":
-      return { ok: true, msg: obj };
+    case "ping": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "ping missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
     case "user_message": {
       if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "user_message missing sessionId" };
       if (typeof obj.text !== "string") return { ok: false, error: "user_message missing text" };

@@ -93,9 +93,40 @@ export const APPROVAL_RISK_CODES = [
   "matches_dangerous_pattern",
   "contains_shell_control_operator",
   "requires_manual_review",
+  "file_read_command_requires_review",
+  "outside_allowed_scope",
 ] as const;
 
 export type ApprovalRiskCode = (typeof APPROVAL_RISK_CODES)[number];
+
+export const SERVER_ERROR_SOURCES = [
+  "protocol",
+  "session",
+  "tool",
+  "provider",
+  "backup",
+  "observability",
+  "permissions",
+] as const;
+
+export type ServerErrorSource = (typeof SERVER_ERROR_SOURCES)[number];
+
+export const SERVER_ERROR_CODES = [
+  "invalid_json",
+  "invalid_payload",
+  "missing_type",
+  "unknown_type",
+  "unknown_session",
+  "busy",
+  "validation_failed",
+  "permission_denied",
+  "provider_error",
+  "backup_error",
+  "observability_error",
+  "internal_error",
+] as const;
+
+export type ServerErrorCode = (typeof SERVER_ERROR_CODES)[number];
 
 export type ObservabilityQueryType = "logql" | "promql" | "traceql";
 

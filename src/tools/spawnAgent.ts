@@ -1,4 +1,5 @@
 import { stepCountIs as realStepCountIs, streamText as realStreamText, tool } from "ai";
+import path from "node:path";
 import { z } from "zod";
 
 import { getModel as realGetModel } from "../config";
@@ -83,7 +84,14 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
   const getModel = deps.getModel ?? realGetModel;
   const loadSubAgentPrompt = deps.loadSubAgentPrompt ?? realLoadSubAgentPrompt;
   const classifyCommandDetailed = deps.classifyCommandDetailed ?? realClassifyCommandDetailed;
-  const safeApprove = (command: string) => classifyCommandDetailed(command).kind === "auto";
+  const safeApprove = (command: string) =>
+    classifyCommandDetailed(command, {
+      allowedRoots: [
+        path.dirname(ctx.config.projectAgentDir),
+        ctx.config.workingDirectory,
+        ctx.config.outputDirectory,
+      ],
+    }).kind === "auto";
 
   return tool({
     description:

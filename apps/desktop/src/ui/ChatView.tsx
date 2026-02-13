@@ -423,8 +423,8 @@ export function ChatView() {
   return (
     <div className="chatLayout">
       <div className="feed" ref={feedRef}>
-        <div className="inlineCard" style={{ marginBottom: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <div className="metaLine" style={{ marginRight: 4 }}>
+        <div className="chatUtilityBar">
+          <div className="metaLine">
             Harness
           </div>
           <button
@@ -457,11 +457,9 @@ export function ChatView() {
         </div>
 
         {transcriptOnly ? (
-          <div className="inlineCard" style={{ marginBottom: 14 }}>
-            <div style={{ fontWeight: 650, marginBottom: 6 }}>Transcript view</div>
-            <div style={{ color: "rgba(0,0,0,0.65)" }}>
-              Sending a message will continue in a new live thread.
-            </div>
+          <div className="chatNoticeBar">
+            <div className="chatNoticeTitle">Transcript view</div>
+            <div className="chatNoticeText">Sending a message will continue in a new live thread.</div>
           </div>
         ) : null}
 

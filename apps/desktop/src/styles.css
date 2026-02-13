@@ -2076,56 +2076,34 @@ select:focus-visible {
    --------------------------------------------------------------------------- */
 
 :root {
-  --app-bg: #f3ede3;
-  --sidebar-bg: rgba(248, 242, 233, 0.84);
-  --panel-bg: rgba(252, 249, 243, 0.84);
-  --panel-bg-2: rgba(247, 241, 232, 0.8);
-  --border: rgba(67, 47, 32, 0.14);
-  --border-2: rgba(67, 47, 32, 0.24);
-  --text: #23180f;
-  --muted: rgba(35, 24, 15, 0.64);
-  --muted-2: rgba(35, 24, 15, 0.44);
-  --accent: #bc6530;
-  --danger: #ca5444;
-  --danger-bg: rgba(202, 84, 68, 0.14);
-  --warn: #996227;
-  --warn-bg: rgba(153, 98, 39, 0.12);
-  --radius: 18px;
-  --radius-sm: 12px;
-  --shadow: 0 24px 56px rgba(84, 56, 34, 0.14);
-  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  --app-bg: #e7dfd4;
+  --sidebar-bg: #eee3d4;
+  --panel-bg: #f6eee4;
+  --panel-bg-2: #f0e5d7;
+  --border: rgba(94, 67, 41, 0.14);
+  --border-2: rgba(94, 67, 41, 0.24);
+  --text: #2f2318;
+  --muted: rgba(47, 35, 24, 0.66);
+  --muted-2: rgba(47, 35, 24, 0.46);
+  --accent: #9a6640;
+  --danger: #bb3e3e;
+  --danger-bg: rgba(187, 62, 62, 0.12);
+  --warn: #9a6112;
+  --warn-bg: rgba(154, 97, 18, 0.12);
+  --radius: 6px;
+  --radius-sm: 4px;
+  --shadow: none;
+  font-family: "SF Pro Text", "Avenir Next", "Helvetica Neue", "Segoe UI", sans-serif;
 }
 
 body {
   position: relative;
-  background:
-    radial-gradient(1200px 560px at -8% -12%, rgba(214, 162, 103, 0.23), transparent 62%),
-    radial-gradient(920px 460px at 108% -8%, rgba(151, 126, 96, 0.19), transparent 66%),
-    linear-gradient(160deg, #f7f2e9 0%, #f1e9de 56%, #ebe2d5 100%);
+  background: var(--app-bg);
 }
 
 body::before,
 body::after {
-  content: "";
-  position: fixed;
-  width: 560px;
-  height: 560px;
-  border-radius: 50%;
-  pointer-events: none;
-  z-index: 0;
-  filter: blur(40px);
-}
-
-body::before {
-  left: -220px;
-  bottom: -260px;
-  background: radial-gradient(circle, rgba(225, 195, 155, 0.36) 0%, transparent 72%);
-}
-
-body::after {
-  right: -220px;
-  top: -260px;
-  background: radial-gradient(circle, rgba(179, 150, 114, 0.28) 0%, transparent 72%);
+  display: none;
 }
 
 #root {
@@ -2134,284 +2112,325 @@ body::after {
 }
 
 .app {
-  gap: 14px;
-  padding: 14px;
-  background: transparent;
-  grid-template-columns: minmax(272px, 320px) 1fr;
+  gap: 0;
+  padding: 0;
+  background: var(--app-bg);
+  grid-template-columns: minmax(252px, 304px) 1fr;
 }
 
 .main,
 .sidebar,
 .settingsNav,
 .settingsPage {
-  border: 1px solid var(--border);
-  border-radius: 22px;
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(18px);
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .sidebar {
-  padding: 18px 14px 14px;
-  gap: 16px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(248, 241, 232, 0.72)),
-    var(--sidebar-bg);
+  padding: 14px 12px 12px;
+  gap: 14px;
+  background: var(--sidebar-bg);
+  border-right: 1px solid rgba(101, 72, 46, 0.16);
 }
 
 .sidebarHeader {
-  padding: 0 4px 6px;
+  padding: 2px 4px 4px;
 }
 
 .brandMark {
-  width: 34px;
-  height: 34px;
-  border-radius: 12px;
-  border-color: rgba(166, 104, 53, 0.3);
-  background: linear-gradient(145deg, #f4c080 0%, #d7894f 52%, #bb6432 100%);
-  box-shadow: 0 10px 20px rgba(122, 75, 41, 0.25);
-}
-
-.brandName,
-.topbarTitle,
-.heroTitle,
-.skillHeaderTitle,
-.settingsPageTitle {
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  border-color: rgba(121, 87, 56, 0.24);
+  background: linear-gradient(145deg, #d59a67 0%, #b67c4a 52%, #8d5d35 100%);
+  box-shadow: 0 8px 16px rgba(113, 78, 47, 0.25);
 }
 
 .brandName {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: -0.02em;
-  color: rgba(41, 26, 15, 0.92);
+  letter-spacing: -0.015em;
+  color: rgba(44, 32, 21, 0.94);
 }
 
 .navItem {
   border-color: transparent;
-  border-radius: 14px;
-  padding: 11px 12px;
-  background: rgba(255, 255, 255, 0.42);
-  font-weight: 560;
+  border-radius: 6px;
+  padding: 9px 10px;
+  background: transparent;
+  font-weight: 530;
+  color: rgba(60, 43, 28, 0.82);
 }
 
 .navItem:hover {
-  background: rgba(255, 255, 255, 0.72);
-  border-color: rgba(188, 101, 48, 0.18);
+  background: rgba(255, 255, 255, 0.32);
+  border-color: transparent;
 }
 
 .navItemActive {
-  background: linear-gradient(150deg, rgba(243, 220, 194, 0.88), rgba(255, 255, 255, 0.92));
-  border-color: rgba(188, 101, 48, 0.3);
-  color: rgba(34, 21, 12, 0.95);
+  background: rgba(255, 255, 255, 0.54);
+  border-color: transparent;
+  color: rgba(43, 31, 21, 0.95);
 }
 
 .navDot {
-  width: 9px;
-  height: 9px;
-  background: rgba(188, 101, 48, 0.46);
+  width: 7px;
+  height: 7px;
+  background: rgba(120, 86, 53, 0.42);
 }
 
 .navItemActive .navDot {
   background: var(--accent);
-  box-shadow: 0 0 0 4px rgba(188, 101, 48, 0.2);
+  box-shadow: none;
 }
 
 .iconButton {
-  border-color: rgba(118, 81, 53, 0.2);
-  background: rgba(255, 255, 255, 0.68);
-  color: rgba(58, 39, 24, 0.76);
+  border-color: rgba(101, 73, 47, 0.2);
+  border-radius: 6px;
+  padding: 6px 9px;
+  background: rgba(255, 255, 255, 0.35);
+  color: rgba(55, 40, 27, 0.74);
 }
 
 .iconButton:hover {
-  border-color: rgba(188, 101, 48, 0.28);
+  border-color: rgba(126, 89, 57, 0.28);
   background: rgba(255, 255, 255, 0.9);
 }
 
 .workspaceList {
-  padding-right: 6px;
+  padding-right: 4px;
 }
 
 .workspaceRow {
-  border-radius: 14px;
-  padding: 10px 10px;
-  border-color: rgba(118, 81, 53, 0.05);
-  background: rgba(255, 255, 255, 0.38);
+  border-radius: 0;
+  padding: 8px 4px;
+  border-color: transparent;
+  background: transparent;
+  border-bottom: 1px solid rgba(101, 72, 46, 0.14);
 }
 
 .workspaceRow:hover {
-  background: rgba(255, 255, 255, 0.68);
-  border-color: rgba(188, 101, 48, 0.2);
+  background: rgba(255, 255, 255, 0.28);
+  border-color: transparent;
 }
 
 .workspaceRowActive {
-  background: rgba(255, 255, 255, 0.92);
-  border-color: rgba(188, 101, 48, 0.28);
+  background: transparent;
+  border-color: transparent;
+  border-left: 2px solid rgba(137, 96, 61, 0.52);
+  padding-left: 6px;
 }
 
 .workspaceName {
-  font-weight: 650;
-  color: rgba(39, 25, 14, 0.92);
+  font-weight: 620;
+  color: rgba(45, 32, 21, 0.94);
 }
 
 .workspacePath {
-  color: rgba(58, 39, 24, 0.52);
+  color: rgba(66, 48, 32, 0.5);
+}
+
+.threadList {
+  margin-top: 6px;
+  gap: 0;
 }
 
 .threadRow {
-  border-radius: 13px;
-  padding: 9px 10px;
+  border-radius: 0;
+  padding: 8px 6px;
+  border-color: transparent;
+  border-top: 1px solid rgba(101, 72, 46, 0.12);
 }
 
 .threadRow:hover {
-  border-color: rgba(188, 101, 48, 0.2);
-  background: rgba(246, 233, 217, 0.7);
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.24);
 }
 
 .threadRowActive {
-  border-color: rgba(188, 101, 48, 0.28);
-  background: linear-gradient(145deg, rgba(245, 229, 210, 0.82), rgba(255, 255, 255, 0.9));
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .threadTitleMain {
-  font-weight: 600;
+  font-weight: 560;
 }
 
 .main {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(248, 240, 231, 0.82)),
-    var(--panel-bg);
-  grid-template-rows: 62px 1fr;
+  background: var(--panel-bg);
+  grid-template-rows: 58px 1fr;
 }
 
 .topbar {
-  border-bottom: 1px solid rgba(96, 66, 43, 0.18);
-  padding: 10px 18px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(250, 245, 238, 0.7));
-  backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(106, 75, 48, 0.16);
+  padding: 10px 16px;
+  background: var(--panel-bg);
+  backdrop-filter: none;
 }
 
 .topbarTitle {
-  font-size: 17px;
-  font-weight: 680;
-  color: rgba(35, 24, 15, 0.94);
+  font-size: 16px;
+  font-weight: 640;
+  color: rgba(45, 33, 22, 0.95);
 }
 
-.topbar .chip {
-  padding: 8px 12px;
-  border-radius: 999px;
-  border-color: rgba(110, 78, 52, 0.22);
-  background: rgba(255, 255, 255, 0.75);
+.topbarRight {
+  gap: 6px;
+}
+
+.chip {
+  padding: 7px 10px;
+  border-radius: 6px;
+  border-color: rgba(101, 72, 46, 0.18);
+  background: rgba(255, 255, 255, 0.26);
   font-size: 12px;
-  font-weight: 560;
-  color: rgba(51, 34, 21, 0.8);
+  font-weight: 520;
+  color: rgba(58, 42, 28, 0.8);
 }
 
-.topbar .chip input {
-  width: 172px;
+.chip input {
+  width: 160px;
 }
 
-.topbar .chipButton:hover {
-  background: rgba(188, 101, 48, 0.1);
+.chipButton:hover {
+  background: rgba(235, 223, 209, 0.75);
 }
 
 .pill {
-  font-weight: 600;
-  border-color: rgba(110, 78, 52, 0.2);
-  background: rgba(255, 255, 255, 0.76);
-  color: rgba(56, 38, 23, 0.72);
+  font-weight: 550;
+  border-color: rgba(107, 76, 49, 0.18);
+  background: rgba(255, 255, 255, 0.24);
+  color: rgba(68, 48, 30, 0.68);
+  border-radius: 6px;
 }
 
 .pillBusy {
-  border-color: rgba(188, 101, 48, 0.25);
-  background: rgba(208, 129, 71, 0.14);
-  color: rgba(130, 73, 33, 0.95);
+  border-color: rgba(127, 89, 55, 0.25);
+  background: rgba(201, 148, 99, 0.18);
+  color: rgba(67, 46, 27, 0.94);
 }
 
 .heroMark {
-  border-color: rgba(188, 101, 48, 0.28);
-  background: radial-gradient(circle at 28% 20%, #ffe5c7, #d39256 55%, #be6934 100%);
-  box-shadow: 0 16px 30px rgba(115, 74, 41, 0.22);
+  border-color: rgba(126, 89, 56, 0.3);
+  background: radial-gradient(circle at 28% 20%, #f2d0af, #d49b66 55%, #9f6b42 100%);
+  box-shadow: 0 12px 24px rgba(96, 67, 40, 0.2);
 }
 
 .heroTitle {
-  color: rgba(35, 24, 15, 0.88);
+  color: rgba(47, 34, 22, 0.88);
 }
 
 .heroSub {
-  color: rgba(53, 36, 23, 0.57);
+  color: rgba(67, 47, 30, 0.58);
 }
 
 .feed {
-  padding: 22px 22px 0;
-  background:
-    radial-gradient(900px 440px at 85% -20%, rgba(255, 224, 185, 0.18), transparent 62%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(248, 241, 231, 0.9) 100%);
+  padding: 18px 20px 0;
+  background: var(--panel-bg);
 }
 
 .feedItem {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .bubble {
-  border-radius: 18px 18px 18px 8px;
-  border-color: rgba(112, 78, 51, 0.18);
-  background: rgba(255, 255, 255, 0.84);
-  box-shadow: 0 14px 28px rgba(100, 67, 40, 0.09);
+  border-radius: 8px;
+  border-color: rgba(96, 68, 44, 0.14);
+  background: rgba(255, 255, 255, 0.42);
+  box-shadow: none;
 }
 
 .bubbleUser {
-  border-radius: 18px 18px 8px 18px;
-  border-color: rgba(44, 29, 18, 0.4);
-  background: linear-gradient(150deg, #47362b 0%, #2e231c 100%);
-  color: #fbf5eb;
+  border-radius: 8px;
+  border-color: rgba(93, 61, 37, 0.28);
+  background: #765134;
+  color: #fdf7f0;
 }
 
 .metaLine {
-  color: rgba(68, 46, 29, 0.54);
+  color: rgba(79, 57, 38, 0.56);
 }
 
 .inlineCard {
-  border-color: rgba(110, 78, 52, 0.18);
-  background: rgba(255, 255, 255, 0.62);
+  border: none;
+  border-left: 2px solid rgba(100, 72, 46, 0.24);
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 8px 10px;
+}
+
+.chatUtilityBar {
+  margin-bottom: 12px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid rgba(109, 77, 50, 0.14);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.chatUtilityBar .metaLine {
+  margin-right: 4px;
+  font-weight: 600;
+  color: rgba(72, 51, 33, 0.74);
+}
+
+.chatNoticeBar {
+  margin-bottom: 12px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid rgba(109, 77, 50, 0.14);
+}
+
+.chatNoticeTitle {
+  margin-bottom: 4px;
+  font-weight: 620;
+  color: rgba(43, 30, 20, 0.86);
+}
+
+.chatNoticeText {
+  color: rgba(75, 54, 36, 0.68);
 }
 
 .toolCallCard {
-  border-color: rgba(110, 78, 52, 0.2);
-  background: rgba(255, 255, 255, 0.74);
+  border-color: rgba(103, 74, 46, 0.17);
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
 }
 
 .toolCallCardOut {
-  border-left-color: rgba(118, 81, 53, 0.36);
-  background: rgba(123, 87, 56, 0.07);
+  border-left-color: rgba(91, 66, 44, 0.28);
+  background: rgba(83, 62, 44, 0.06);
 }
 
 .toolCallCardIn {
-  border-left-color: rgba(188, 101, 48, 0.45);
-  background: rgba(188, 101, 48, 0.08);
+  border-left-color: rgba(143, 96, 56, 0.45);
+  background: rgba(171, 125, 84, 0.1);
 }
 
 .toolCallName {
-  background: rgba(188, 101, 48, 0.12);
-  color: rgba(71, 45, 23, 0.88);
+  background: rgba(155, 109, 67, 0.14);
+  color: rgba(46, 34, 22, 0.88);
 }
 
 .composerWrap {
-  padding: 16px 22px 20px;
-  background: linear-gradient(to bottom, rgba(247, 240, 231, 0), rgba(247, 240, 231, 0.94) 36%, #f7f0e7 100%);
+  padding: 14px 20px 18px;
+  background: var(--panel-bg);
+  border-top: 1px solid rgba(106, 75, 48, 0.14);
 }
 
 .composer {
-  border-radius: 20px;
-  border-color: rgba(109, 77, 50, 0.22);
-  background: rgba(255, 255, 255, 0.86);
-  box-shadow: 0 20px 36px rgba(84, 56, 34, 0.14);
+  border-radius: 6px;
+  border-color: rgba(96, 68, 43, 0.2);
+  background: rgba(255, 255, 255, 0.32);
+  box-shadow: none;
 }
 
 .composer:focus-within {
-  border-color: rgba(188, 101, 48, 0.44);
-  box-shadow:
-    0 0 0 3px rgba(188, 101, 48, 0.14),
-    0 20px 36px rgba(84, 56, 34, 0.15);
+  border-color: rgba(137, 96, 61, 0.44);
+  box-shadow: 0 0 0 2px rgba(190, 145, 102, 0.14);
 }
 
 .composer textarea {
@@ -2419,13 +2438,14 @@ body::after {
 }
 
 .composer textarea::placeholder {
-  color: rgba(52, 34, 20, 0.48);
+  color: rgba(83, 60, 39, 0.44);
 }
 
 .sendButton {
-  border-color: rgba(120, 67, 31, 0.42);
-  background: linear-gradient(155deg, #d08147, #b95f2f);
-  color: #fff7eb;
+  border-color: rgba(96, 68, 43, 0.32);
+  background: #6f4a2f;
+  color: #fff7ef;
+  border-radius: 6px;
 }
 
 .sendButton:hover:not(:disabled) {
@@ -2433,8 +2453,8 @@ body::after {
 }
 
 .stopButton {
-  background: linear-gradient(155deg, #da6b5c, #c04f40);
-  border-color: rgba(163, 56, 42, 0.4);
+  background: #b14949;
+  border-color: rgba(153, 52, 52, 0.4);
 }
 
 .stopButton:hover {
@@ -2443,178 +2463,197 @@ body::after {
 }
 
 .sendArrow {
-  border-bottom-color: #fff7eb;
+  border-bottom-color: #fff7ef;
 }
 
 .toggleRow {
-  color: rgba(51, 34, 21, 0.7);
+  color: rgba(83, 60, 39, 0.68);
 }
 
 .modalOverlay {
-  background: rgba(42, 29, 19, 0.24);
+  background: rgba(33, 23, 15, 0.24);
   backdrop-filter: blur(3px);
 }
 
 .modal {
-  border-color: rgba(95, 66, 43, 0.2);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 240, 231, 0.95));
+  border-color: rgba(97, 68, 43, 0.2);
+  background: var(--panel-bg);
+  border-radius: 6px;
 }
 
 .modalButton {
-  border-color: rgba(110, 78, 52, 0.22);
-  background: rgba(255, 255, 255, 0.84);
+  border-color: rgba(97, 68, 43, 0.2);
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 6px;
 }
 
 .modalButtonPrimary {
-  background: linear-gradient(155deg, #d08147, #b95f2f);
-  border-color: rgba(126, 71, 34, 0.42);
-  color: #fff8ee;
+  background: #6f4a2f;
+  border-color: rgba(96, 68, 43, 0.38);
+  color: #fff8ef;
 }
 
 .modalButtonOutline {
-  border-color: rgba(110, 78, 52, 0.3);
+  border-color: rgba(97, 68, 43, 0.28);
 }
 
 .modalButtonOutline:hover {
-  border-color: rgba(188, 101, 48, 0.42);
-  background: rgba(188, 101, 48, 0.09);
+  border-color: rgba(137, 96, 61, 0.42);
+  background: rgba(157, 111, 69, 0.1);
 }
 
 .ctxMenu {
-  border-color: rgba(95, 66, 43, 0.24);
-  background: rgba(255, 251, 245, 0.94);
+  border-color: rgba(97, 68, 43, 0.22);
+  background: rgba(250, 243, 234, 0.95);
+  border-radius: 6px;
 }
 
 .ctxMenuItem:hover {
-  border-color: rgba(188, 101, 48, 0.2);
-  background: rgba(188, 101, 48, 0.09);
+  border-color: rgba(137, 96, 61, 0.24);
+  background: rgba(157, 111, 69, 0.09);
 }
 
 .skillsLayout {
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: 286px 1fr;
 }
 
 .skillsList {
-  border-right-color: rgba(95, 66, 43, 0.16);
-  background: linear-gradient(180deg, rgba(251, 247, 241, 0.94), rgba(246, 238, 228, 0.82));
+  border-right-color: rgba(97, 68, 43, 0.14);
+  background: var(--panel-bg-2);
 }
 
 .skillsItem {
-  border-radius: 15px;
-  background: rgba(255, 255, 255, 0.45);
+  border-radius: 0;
+  border: none;
+  border-bottom: 1px solid rgba(101, 72, 46, 0.12);
+  background: transparent;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .skillsItem:hover {
-  border-color: rgba(188, 101, 48, 0.22);
-  background: rgba(255, 255, 255, 0.78);
+  border-color: rgba(101, 72, 46, 0.12);
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .skillsItemActive {
-  border-color: rgba(188, 101, 48, 0.3);
-  background: linear-gradient(145deg, rgba(247, 233, 214, 0.84), rgba(255, 255, 255, 0.88));
+  border-color: rgba(101, 72, 46, 0.12);
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .skillsDesc {
-  color: rgba(59, 39, 24, 0.54);
+  color: rgba(75, 54, 36, 0.56);
 }
 
 .skillHeader {
-  border-color: rgba(110, 78, 52, 0.18);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 240, 231, 0.92));
+  border-color: rgba(97, 68, 43, 0.16);
+  background: var(--panel-bg);
 }
 
 .skillHeaderSub {
-  color: rgba(56, 37, 22, 0.62);
+  color: rgba(75, 54, 36, 0.58);
 }
 
 .skillChips .chip {
   font-size: 11px;
-  color: rgba(61, 40, 24, 0.72);
-  border-color: rgba(110, 78, 52, 0.2);
-  background: rgba(255, 255, 255, 0.72);
+  color: rgba(66, 48, 33, 0.72);
+  border-color: rgba(101, 72, 46, 0.18);
+  background: rgba(255, 255, 255, 0.68);
   padding: 2px 9px;
 }
 
 .skillPrompt {
-  border-color: rgba(110, 78, 52, 0.18);
-  background: rgba(255, 255, 255, 0.62);
+  border-color: rgba(97, 68, 43, 0.16);
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 6px;
 }
 
 .skillPromptLabel {
-  color: rgba(60, 39, 23, 0.5);
+  color: rgba(75, 54, 36, 0.52);
 }
 
 .skillPromptText {
-  color: rgba(44, 29, 18, 0.8);
+  color: rgba(54, 39, 26, 0.82);
 }
 
-.settingsRoot {
-  background: transparent;
-}
+.settingsRoot { background: var(--app-bg); }
 
 .settingsApp {
-  padding: 14px;
-  gap: 14px;
-  background: transparent;
-  grid-template-columns: 272px 1fr;
+  padding: 0;
+  gap: 0;
+  background: var(--app-bg);
+  grid-template-columns: 260px 1fr;
 }
 
 .settingsNav {
-  border-right: 1px solid var(--border);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(248, 241, 232, 0.72)),
-    var(--sidebar-bg);
+  border-right: 1px solid rgba(101, 72, 46, 0.16);
+  background: var(--sidebar-bg);
 }
 
 .settingsBackButton,
 .settingsNavItem {
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.44);
+  border-radius: 6px;
+  border-color: transparent;
+  background: transparent;
 }
 
 .settingsBackButton:hover,
 .settingsNavItem:hover {
-  border-color: rgba(188, 101, 48, 0.2);
-  background: rgba(255, 255, 255, 0.74);
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.32);
 }
 
 .settingsNavItemActive {
-  border-color: rgba(188, 101, 48, 0.3);
-  background: linear-gradient(150deg, rgba(243, 220, 194, 0.86), rgba(255, 255, 255, 0.9));
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.5);
 }
 
 .settingsPage {
-  background:
-    radial-gradient(840px 400px at 90% -12%, rgba(255, 226, 191, 0.16), transparent 64%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(247, 239, 230, 0.82));
+  background: var(--panel-bg);
+}
+
+.settingsPageTitle {
+  color: rgba(45, 32, 21, 0.9);
+  font-size: 25px;
+  font-weight: 720;
+}
+
+.settingsPageSub {
+  color: rgba(73, 52, 34, 0.62);
 }
 
 .settingsCard,
 .settingsProviderCard {
-  border-color: rgba(110, 78, 52, 0.18);
-  background: rgba(255, 255, 255, 0.8);
+  border: none;
+  border-top: 1px solid rgba(97, 68, 43, 0.15);
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .settingsSelect,
 .settingsTextInput {
-  border-color: rgba(110, 78, 52, 0.22);
-  background: rgba(255, 255, 255, 0.86);
-  color: rgba(35, 24, 15, 0.86);
+  border-color: rgba(99, 70, 45, 0.22);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.28);
+  color: rgba(52, 38, 25, 0.86);
 }
 
 .settingsProviderHelp {
-  border-color: rgba(110, 78, 52, 0.2);
-  background: rgba(255, 255, 255, 0.62);
+  border-color: rgba(99, 70, 45, 0.14);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .settingsRow,
 .settingsProviderListRow,
 .settingsSessionRow {
-  border-top-color: rgba(95, 66, 43, 0.12);
+  border-top-color: rgba(95, 68, 42, 0.12);
 }
 
 .settingsProviderListRow:hover {
-  background: rgba(188, 101, 48, 0.08);
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 0;
 }
 
 @keyframes coworkEnter {
@@ -2630,7 +2669,7 @@ body::after {
 
 .app,
 .settingsApp {
-  animation: coworkEnter 260ms ease-out;
+  animation: none;
 }
 
 @media (max-width: 1260px) {
@@ -2647,13 +2686,13 @@ body::after {
   .app {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(220px, 42vh) 1fr;
-    padding: 10px;
-    gap: 10px;
+    padding: 0;
+    gap: 0;
   }
 
   .sidebar,
   .main {
-    border-radius: 18px;
+    border-radius: 0;
   }
 
   .topbar {
@@ -2679,22 +2718,22 @@ body::after {
   .settingsApp {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr;
-    padding: 10px;
-    gap: 10px;
+    padding: 0;
+    gap: 0;
   }
 
   .settingsNav,
   .settingsPage {
-    border-radius: 18px;
+    border-radius: 0;
   }
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --app-bg: #1f1913;
-    --sidebar-bg: rgba(37, 31, 24, 0.86);
-    --panel-bg: rgba(45, 38, 30, 0.84);
-    --panel-bg-2: rgba(38, 32, 26, 0.8);
+    --sidebar-bg: #29221b;
+    --panel-bg: #332a22;
+    --panel-bg-2: #2c241d;
     --border: rgba(255, 233, 212, 0.12);
     --border-2: rgba(255, 233, 212, 0.24);
     --text: #f6ece0;
@@ -2706,10 +2745,7 @@ body::after {
   }
 
   body {
-    background:
-      radial-gradient(1200px 560px at -8% -12%, rgba(200, 132, 72, 0.2), transparent 62%),
-      radial-gradient(920px 460px at 108% -8%, rgba(156, 114, 76, 0.16), transparent 66%),
-      linear-gradient(160deg, #1f1913 0%, #19140f 56%, #16110d 100%);
+    background: var(--app-bg);
   }
 }
 

@@ -325,6 +325,17 @@ describe("edit tool", () => {
     expect(content).toBe("hello");
   });
 
+  test("throws when oldString is empty", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "file.txt");
+    await fs.writeFile(p, "content", "utf-8");
+
+    const t: any = createEditTool(makeCtx(dir));
+    await expect(
+      t.execute({ filePath: p, oldString: "", newString: "new", replaceAll: false })
+    ).rejects.toThrow("oldString cannot be empty");
+  });
+
   test("case-sensitive matching", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "file.txt");

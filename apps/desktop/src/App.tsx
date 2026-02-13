@@ -2,7 +2,6 @@ import { useEffect, useMemo } from "react";
 
 import { useAppStore } from "./app/store";
 import type { ProviderName } from "./lib/wsProtocol";
-import { PROVIDER_NAMES } from "./lib/wsProtocol";
 import { MODEL_CHOICES, UI_DISABLED_PROVIDERS } from "./lib/modelChoices";
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 
@@ -12,18 +11,6 @@ import { SkillsView } from "./ui/SkillsView";
 import { SettingsShell } from "./ui/settings/SettingsShell";
 import { PromptModal } from "./ui/PromptModal";
 import { CheckpointsModal } from "./ui/CheckpointsModal";
-
-function ProviderSelect(props: { value: ProviderName; onChange: (v: ProviderName) => void }) {
-  return (
-    <select value={props.value} onChange={(e) => props.onChange(e.currentTarget.value as ProviderName)}>
-      {PROVIDER_NAMES.map((p) => (
-        <option key={p} value={p} disabled={UI_DISABLED_PROVIDERS.has(p)}>
-          {p}
-        </option>
-      ))}
-    </select>
-  );
-}
 
 export default function App() {
   const ready = useAppStore((s) => s.ready);
@@ -106,7 +93,6 @@ export default function App() {
   const enableMcp = activeWorkspace?.defaultEnableMcp ?? true;
 
   const modelOptions = MODEL_CHOICES[provider] ?? [];
-  const modelListId = `models-top-${provider}`;
 
   const showChatTopbarControls = view === "chat";
   const canShowBackups = showChatTopbarControls && activeThread?.status === "active";
@@ -198,59 +184,6 @@ export default function App() {
                   </>
                 ) : null}
 
-                {activeWorkspace ? (
-                  <>
-                    <div className="chip" title="Provider and model (workspace default)">
-                      <ProviderSelect
-                        value={provider}
-                        onChange={(v) => {
-                          if (!activeWorkspace) return;
-                          if (UI_DISABLED_PROVIDERS.has(v)) return;
-                          void updateWorkspaceDefaults(activeWorkspace.id, {
-                            defaultProvider: v,
-                            defaultModel: defaultModelForProvider(v),
-                          }).then(async () => {
-                            if (activeThread) await applyWorkspaceDefaultsToThread(activeThread.id);
-                          });
-                        }}
-                      />
-                      <span style={{ color: "rgba(0,0,0,0.3)" }}>/</span>
-                      <input
-                        list={modelListId}
-                        value={model}
-                        onChange={(e) => {
-                          if (!activeWorkspace) return;
-                          const next = e.currentTarget.value;
-                          void updateWorkspaceDefaults(activeWorkspace.id, { defaultModel: next }).then(async () => {
-                            if (activeThread) await applyWorkspaceDefaultsToThread(activeThread.id);
-                          });
-                        }}
-                        placeholder="model"
-                      />
-                      <datalist id={modelListId}>
-                        {modelOptions.map((m) => (
-                          <option key={m} value={m} />
-                        ))}
-                      </datalist>
-                    </div>
-
-                    <label className="chip" title="MCP (workspace default + session toggle)">
-                      <input
-                        type="checkbox"
-                        checked={enableMcp}
-                        onChange={(e) => {
-                          if (!activeWorkspace) return;
-                          const next = e.currentTarget.checked;
-                          void updateWorkspaceDefaults(activeWorkspace.id, { defaultEnableMcp: next }).then(async () => {
-                            if (activeThread) await applyWorkspaceDefaultsToThread(activeThread.id);
-                          });
-                        }}
-                      />
-                      <span>MCP</span>
-                    </label>
-                  </>
-                ) : null}
-
                 <button className="iconButton" type="button" onClick={() => void newThread()} title="New thread (Cmd+N)" aria-label="New thread">
                   New
                 </button>
@@ -281,7 +214,35 @@ export default function App() {
               <div className="heroSub">Not implemented in v1.</div>
             </div>
           ) : (
-            <ChatView />
+            <ChatView
+              hasWorkspace={Boolean(activeWorkspace)}
+              provider={provider}
+              model={model}
+              modelOptions={modelOptions}
+              enableMcp={enableMcp}
+              onProviderChange={(v) => {
+                if (!activeWorkspace) return;
+                if (UI_DISABLED_PROVIDERS.has(v)) return;
+                void updateWorkspaceDefaults(activeWorkspace.id, {
+                  defaultProvider: v,
+                  defaultModel: defaultModelForProvider(v),
+                }).then(async () => {
+                  if (activeThread) await applyWorkspaceDefaultsToThread(activeThread.id);
+                });
+              }}
+              onModelChange={(next) => {
+                if (!activeWorkspace) return;
+                void updateWorkspaceDefaults(activeWorkspace.id, { defaultModel: next }).then(async () => {
+                  if (activeThread) await applyWorkspaceDefaultsToThread(activeThread.id);
+                });
+              }}
+              onEnableMcpChange={(next) => {
+                if (!activeWorkspace) return;
+                void updateWorkspaceDefaults(activeWorkspace.id, { defaultEnableMcp: next }).then(async () => {
+                  if (activeThread) await applyWorkspaceDefaultsToThread(activeThread.id);
+                });
+              }}
+            />
           )}
         </div>
       </main>

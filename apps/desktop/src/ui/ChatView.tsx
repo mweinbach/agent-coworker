@@ -6,6 +6,20 @@ import rehypeSanitize from "rehype-sanitize";
 
 import { useAppStore } from "../app/store";
 import type { FeedItem } from "../app/types";
+import type { ProviderName } from "../lib/wsProtocol";
+import { PROVIDER_NAMES } from "../lib/wsProtocol";
+import { UI_DISABLED_PROVIDERS } from "../lib/modelChoices";
+
+type ChatViewProps = {
+  hasWorkspace: boolean;
+  provider: ProviderName;
+  model: string;
+  modelOptions: string[];
+  enableMcp: boolean;
+  onProviderChange: (provider: ProviderName) => void;
+  onModelChange: (model: string) => void;
+  onEnableMcpChange: (enabled: boolean) => void;
+};
 
 // Stable plugin arrays — avoids recreating on every render which would
 // force ReactMarkdown to re-parse even when the text hasn't changed.
@@ -298,7 +312,7 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
   return null;
 });
 
-export function ChatView() {
+export function ChatView(props: ChatViewProps) {
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   // Narrow selector: only re-render when the *selected* thread record changes,
   // not when any thread in the array changes (Finding 7.1).
@@ -419,6 +433,8 @@ export function ChatView() {
     if (!selectedThreadId) return;
     runHarnessSloChecks(selectedThreadId);
   };
+
+  const modelListId = `models-composer-${props.provider}`;
 
   return (
     <div className="chatLayout">
@@ -542,6 +558,44 @@ export function ChatView() {
             </button>
           )}
         </div>
+
+        {props.hasWorkspace ? (
+          <div className="composerControlsRow">
+            <div className="composerModelControl" title="Workspace default model">
+              <input
+                list={modelListId}
+                value={props.model}
+                onChange={(e) => props.onModelChange(e.currentTarget.value)}
+                placeholder="Model"
+                aria-label="Workspace default model"
+              />
+              <datalist id={modelListId}>
+                {props.modelOptions.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+            </div>
+
+            <label className="composerProviderChip" title="Workspace default provider">
+              <select value={props.provider} onChange={(e) => props.onProviderChange(e.currentTarget.value as ProviderName)}>
+                {PROVIDER_NAMES.map((p) => (
+                  <option key={p} value={p} disabled={UI_DISABLED_PROVIDERS.has(p)}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="composerMcpChip" title="MCP (workspace default + session toggle)">
+              <input
+                type="checkbox"
+                checked={props.enableMcp}
+                onChange={(e) => props.onEnableMcpChange(e.currentTarget.checked)}
+              />
+              <span>MCP</span>
+            </label>
+          </div>
+        ) : null}
 
         <label className="toggleRow">
           <input type="checkbox" checked={injectContext} onChange={(e) => setInjectContext(e.currentTarget.checked)} />

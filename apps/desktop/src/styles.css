@@ -2441,6 +2441,65 @@ body::after {
   color: rgba(83, 60, 39, 0.44);
 }
 
+.composerControlsRow {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.composerModelControl {
+  flex: 1 1 320px;
+  min-width: 220px;
+  display: flex;
+  align-items: center;
+  border: 1px solid rgba(96, 68, 43, 0.2);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.28);
+  padding: 6px 10px;
+}
+
+.composerModelControl input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: rgba(52, 38, 25, 0.9);
+  font-weight: 520;
+}
+
+.composerModelControl input::placeholder {
+  color: rgba(83, 60, 39, 0.44);
+}
+
+.composerProviderChip,
+.composerMcpChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(96, 68, 43, 0.2);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.24);
+  color: rgba(58, 42, 28, 0.82);
+  font-size: 12px;
+  font-weight: 520;
+}
+
+.composerProviderChip select {
+  border: none;
+  background: transparent;
+  outline: none;
+  color: inherit;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.composerMcpChip input {
+  margin: 0;
+}
+
 .sendButton {
   border-color: rgba(96, 68, 43, 0.32);
   background: #6f4a2f;

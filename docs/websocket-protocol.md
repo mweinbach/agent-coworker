@@ -2,12 +2,26 @@
 
 Complete documentation of the agent-coworker WebSocket protocol for building alternative UIs on top of the existing server/agent logic.
 
+This document is the canonical external protocol contract for all clients. Thin clients should rely on this file and `src/server/protocol.ts` for message names and payload shapes.
+
 ## Connection
 
 - **URL**: `ws://127.0.0.1:{port}/ws` (default port `7337`)
 - **No authentication** — server binds to localhost only
 - **Ping/pong keepalive** — clients may send `ping` messages; the server responds with `pong`
 - **One session per connection** — disconnecting destroys the session; there is no resumption
+
+## Public Capabilities
+
+- Session lifecycle: `server_hello`, `session_settings`, `session_busy`, `reset`
+- Conversational turn streaming: `user_message`, `assistant_message`, `reasoning`, `log`, `todos`
+- Human-in-the-loop control: `ask`/`ask_response`, `approval`/`approval_response`, `cancel`
+- Provider/model control: `connect_provider`, `set_model`, `refresh_provider_status`, `provider_status`
+- Tool and skill metadata: `list_tools`, `tools`, `list_skills`, `read_skill`, `enable_skill`, `disable_skill`, `delete_skill`
+- MCP runtime toggling: `set_enable_mcp`
+- Session backup/restore: `session_backup_get`, `session_backup_checkpoint`, `session_backup_restore`, `session_backup_delete_checkpoint`
+- Observability + harness: `observability_status`, `observability_query`, `observability_query_result`, `harness_context_get`, `harness_context_set`, `harness_slo_evaluate`, `harness_slo_result`
+- Keepalive and structured errors: `ping`/`pong`, `error`
 
 ## Handshake Flow
 
@@ -16,7 +30,7 @@ Client                          Server
   |                               |
   |-------- WS Connect ---------->|
   |                               | creates AgentSession
-  |<------ server_hello ----------|  (sessionId + config)
+  |<------ server_hello ----------|  (sessionId + protocolVersion + config)
   |                               |
   |---- client_hello (optional) ->|  (silently acknowledged)
   |                               |
@@ -49,6 +63,8 @@ interface ConfigSubset {
   workingDirectory: string;
   outputDirectory: string;
 }
+
+type ProtocolVersion = string; // current server value: "1.0"
 
 interface TodoItem {
   content: string;
@@ -111,7 +127,7 @@ interface HarnessSloCheck {
 
 ## Client -> Server Messages
 
-All messages are JSON. Every message (except `client_hello`) must include `sessionId`.
+All messages are JSON. Every message (except `client_hello` and `ping`) must include `sessionId`.
 
 ### client_hello
 
@@ -172,7 +188,7 @@ Switch AI model and/or provider at runtime.
 {
   "type": "set_model",
   "sessionId": "...",
-  "model": "gpt-4-turbo",
+  "model": "gpt-5.2",
   "provider": "openai"  // optional
 }
 ```
@@ -453,15 +469,16 @@ All events are JSON with a `type` and `sessionId`.
 
 ### server_hello
 
-First message after connection. Contains the session ID and current configuration.
+First message after connection. Contains the session ID, protocol version, and current configuration.
 
 ```jsonc
 {
   "type": "server_hello",
   "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "protocolVersion": "1.0",
   "config": {
     "provider": "openai",
-    "model": "gpt-4-turbo",
+    "model": "gpt-5.2",
     "workingDirectory": "/Users/user/project",
     "outputDirectory": "/Users/user/project/output"
   }
@@ -837,9 +854,13 @@ Any error condition.
 {
   "type": "error",
   "sessionId": "...",
-  "message": "Agent is busy"
+  "message": "Agent is busy",
+  "code": "agent_busy",  // optional machine-readable code
+  "source": "session"    // optional subsystem name
 }
 ```
+
+When `code` is present, clients should branch on `code` and treat `message` as user-facing context.
 
 ### pong
 
@@ -908,8 +929,8 @@ server  <- pong { sessionId: "" }
 ### Model Change
 
 ```
-client  -> set_model { model: "gpt-4-turbo", provider: "openai" }
-server  <- config_updated { config: { provider: "openai", model: "gpt-4-turbo", ... } }
+client  -> set_model { model: "gpt-5.2", provider: "openai" }
+server  <- config_updated { config: { provider: "openai", model: "gpt-5.2", ... } }
 ```
 
 ### Backup / Checkpoint Flow
@@ -940,7 +961,8 @@ server  <- session_backup_state { reason: "restore", backup: {...} }
 | `Agent is busy` | Sent `user_message` / `reset` / `set_model` while agent is processing |
 | `Connection flow already running` | Another `connect_provider` is in progress |
 | `Unsupported provider: X` | Invalid provider name |
-| `Model id is required` | Empty model string in `set_model` |
+| `set_model missing/invalid model` | Empty/invalid model string in `set_model` payload |
+| `client_hello missing/invalid client` | Missing/blank `client` value |
 | `connect failed: X` | Provider connection/auth failed |
 | `session_backup_get missing sessionId` | Invalid `session_backup_get` payload |
 | `session_backup_checkpoint missing sessionId` | Invalid `session_backup_checkpoint` payload |

@@ -317,6 +317,7 @@ function normalizeProviderChoice(provider: ProviderName): ProviderName {
 
 export type AppStoreState = {
   ready: boolean;
+  startupError: string | null;
   view: ViewId;
 
   settingsPage: SettingsPageId;
@@ -1096,6 +1097,7 @@ function handleThreadEvent(
 
 export const useAppStore = create<AppStoreState>((set, get) => ({
   ready: false,
+  startupError: null,
   view: "chat",
 
   settingsPage: "providers",
@@ -1122,32 +1124,58 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   injectContext: false,
 
   init: async () => {
-    const state = await loadState();
-    const normalizedWorkspaces: WorkspaceRecord[] = (state.workspaces || []).map((w) => {
-      const provider = w.defaultProvider && isProviderName(w.defaultProvider) ? w.defaultProvider : "google";
-      const model =
-        typeof w.defaultModel === "string" && w.defaultModel.trim() ? w.defaultModel : defaultModelForProvider(provider);
-      return {
-        ...w,
-        defaultProvider: provider,
-        defaultModel: model,
-        defaultEnableMcp: typeof w.defaultEnableMcp === "boolean" ? w.defaultEnableMcp : true,
-        yolo: typeof w.yolo === "boolean" ? w.yolo : false,
-      };
-    });
+    set({ startupError: null });
+    try {
+      const state = await loadState();
+      const normalizedWorkspaces: WorkspaceRecord[] = (state.workspaces || []).map((w) => {
+        const provider = w.defaultProvider && isProviderName(w.defaultProvider) ? w.defaultProvider : "google";
+        const model =
+          typeof w.defaultModel === "string" && w.defaultModel.trim() ? w.defaultModel : defaultModelForProvider(provider);
+        return {
+          ...w,
+          defaultProvider: provider,
+          defaultModel: model,
+          defaultEnableMcp: typeof w.defaultEnableMcp === "boolean" ? w.defaultEnableMcp : true,
+          yolo: typeof w.yolo === "boolean" ? w.yolo : false,
+        };
+      });
 
-    const normalizedThreads: ThreadRecord[] = (state.threads || []).map((t) => ({
-      ...t,
-      status: (["active", "disconnected", "archived"] as const).includes(t.status as any)
-        ? (t.status as ThreadStatus)
-        : "disconnected",
-    }));
+      const normalizedThreads: ThreadRecord[] = (state.threads || []).map((t) => ({
+        ...t,
+        status: (["active", "disconnected", "archived"] as const).includes(t.status as any)
+          ? (t.status as ThreadStatus)
+          : "disconnected",
+      }));
 
-    set({
-      workspaces: normalizedWorkspaces,
-      threads: normalizedThreads,
-      ready: true,
-    });
+      set({
+        workspaces: normalizedWorkspaces,
+        threads: normalizedThreads,
+        ready: true,
+        startupError: null,
+      });
+      return;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error("Desktop init failed:", error);
+      set((s) => ({
+        workspaces: [],
+        threads: [],
+        selectedWorkspaceId: null,
+        selectedThreadId: null,
+        workspaceRuntimeById: {},
+        threadRuntimeById: {},
+        ready: true,
+        startupError: detail,
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Startup recovery mode",
+          detail,
+        }),
+      }));
+      return;
+    }
   },
 
   openSettings: (page) => {

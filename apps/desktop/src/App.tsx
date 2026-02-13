@@ -27,6 +27,7 @@ function ProviderSelect(props: { value: ProviderName; onChange: (v: ProviderName
 
 export default function App() {
   const ready = useAppStore((s) => s.ready);
+  const startupError = useAppStore((s) => s.startupError);
   const init = useAppStore((s) => s.init);
 
   const view = useAppStore((s) => s.view);
@@ -133,7 +134,19 @@ export default function App() {
             <div className="heroSub">Loading state and warming up.</div>
           </div>
         ) : (
-          <SettingsShell />
+          <>
+            {startupError ? (
+              <div className="startupBanner" role="alert">
+                <div className="startupBannerText">
+                  Running with fresh local state due to an initialization error.
+                </div>
+                <button className="iconButton" type="button" onClick={() => void init()}>
+                  Retry load
+                </button>
+              </div>
+            ) : null}
+            <SettingsShell />
+          </>
         )}
         <PromptModal />
         <CheckpointsModal />
@@ -251,6 +264,14 @@ export default function App() {
             <div className="hero">
               <div className="heroTitle">Starting…</div>
               <div className="heroSub">Loading state and warming up.</div>
+            </div>
+          ) : startupError ? (
+            <div className="hero">
+              <div className="heroTitle">Recovered with defaults</div>
+              <div className="heroSub">{startupError}</div>
+              <button className="iconButton" type="button" onClick={() => void init()}>
+                Retry state load
+              </button>
             </div>
           ) : view === "skills" ? (
             <SkillsView />

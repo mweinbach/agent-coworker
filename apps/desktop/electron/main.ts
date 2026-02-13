@@ -14,6 +14,11 @@ const serverManager = new ServerManager();
 const persistence = new PersistenceService();
 let unregisterIpc = () => {};
 
+if (!app.isPackaged) {
+  const port = process.env.COWORK_ELECTRON_REMOTE_DEBUG_PORT?.trim() || "9222";
+  app.commandLine.appendSwitch("remote-debugging-port", port);
+}
+
 async function createWindow(): Promise<void> {
   const win = new BrowserWindow({
     title: "Cowork",

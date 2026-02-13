@@ -126,8 +126,17 @@ export function Sidebar() {
 
         <div className="workspaceList" role="list" aria-labelledby="workspaces-label">
           {workspaces.length === 0 ? (
-            <div style={{ padding: 10, color: "rgba(0,0,0,0.45)" }}>
-              Add a workspace to start.
+            <div className="workspaceEmpty">
+              <div className="workspaceEmptyTitle">No workspaces yet</div>
+              <div className="workspaceEmptySub">Add a local folder to start a session.</div>
+              <div className="workspaceEmptyActions">
+                <button className="iconButton" type="button" onClick={() => void addWorkspace()}>
+                  Add workspace
+                </button>
+                <button className="iconButton" type="button" onClick={() => openSettings("workspaces")}>
+                  Open settings
+                </button>
+              </div>
             </div>
           ) : null}
 

@@ -46,6 +46,20 @@ describe("assertSafeWebUrl", () => {
     );
   });
 
+  test("blocks CGNAT range (100.64.x.x)", async () => {
+    await expect(assertSafeWebUrl("http://100.64.0.1/")).rejects.toThrow(/private\/internal host/i);
+    await expect(assertSafeWebUrl("http://100.127.255.254/")).rejects.toThrow(
+      /private\/internal host/i
+    );
+  });
+
+  test("blocks benchmark range (198.18.x.x)", async () => {
+    await expect(assertSafeWebUrl("http://198.18.0.1/")).rejects.toThrow(/private\/internal host/i);
+    await expect(assertSafeWebUrl("http://198.19.255.254/")).rejects.toThrow(
+      /private\/internal host/i
+    );
+  });
+
   test("allows public HTTPS URLs", async () => {
     __internal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
     expect((await assertSafeWebUrl("https://example.com/")).hostname).toBe("example.com");

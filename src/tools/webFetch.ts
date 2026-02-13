@@ -1,6 +1,5 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { Agent } from "undici";
 
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
@@ -27,37 +26,36 @@ function assertReadableContentType(contentType: string | null): void {
   throw new Error(`Blocked non-text content type: ${contentType}`);
 }
 
+function buildPinnedUrl(resolved: { url: URL; addresses: { address: string; family: number }[] }): {
+  pinnedUrl: URL;
+  hostHeader: string;
+} {
+  const addr = resolved.addresses[0];
+  if (!addr) throw new Error(`Blocked unresolved host: ${resolved.url.hostname}`);
+
+  const pinnedUrl = new URL(resolved.url.toString());
+  const hostHeader = pinnedUrl.host;
+  pinnedUrl.hostname = addr.family === 6 ? `[${addr.address}]` : addr.address;
+  return { pinnedUrl, hostHeader };
+}
+
 async function fetchWithSafeRedirects(url: string): Promise<Response> {
   let current = await resolveSafeWebUrl(url);
 
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+  for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    const dispatcher = new Agent({
-      connect: {
-        lookup(hostname, _options, callback) {
-          if (hostname !== current.url.hostname) {
-            callback(new Error(`Blocked DNS lookup for unexpected host: ${hostname}`), "", 0);
-            return;
-          }
 
-          const first = current.addresses[0];
-          if (!first) {
-            callback(new Error(`Blocked unresolved host: ${hostname}`), "", 0);
-            return;
-          }
-
-          callback(null, first.address, first.family);
-        },
-      },
-    });
+    const { pinnedUrl, hostHeader } = buildPinnedUrl(current);
 
     try {
-      const res = await fetch(current.url, {
+      const res = await fetch(pinnedUrl, {
         redirect: "manual",
-        headers: { "User-Agent": "agent-coworker/0.1" },
+        headers: {
+          "User-Agent": "agent-coworker/0.1",
+          Host: hostHeader,
+        },
         signal: controller.signal,
-        dispatcher,
       });
 
       if (!isRedirectStatus(res.status)) return res;

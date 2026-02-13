@@ -158,6 +158,14 @@ export function Sidebar() {
                 role="listitem"
                 className={"workspaceRow" + (active ? " workspaceRowActive" : "")}
                 onClick={() => void selectWorkspace(ws.id)}
+                tabIndex={0}
+                aria-current={active ? "true" : undefined}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    void selectWorkspace(ws.id);
+                  }
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();

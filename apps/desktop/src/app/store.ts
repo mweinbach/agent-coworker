@@ -69,6 +69,15 @@ const PERSIST_DEBOUNCE_MS = 300;
 /** Batch interval for transcript events — buffers writes then flushes once. */
 const TRANSCRIPT_BATCH_MS = 200;
 
+/** If a run stays busy too long, attempt auto-cancel + socket recovery. */
+const BUSY_STUCK_MS = 90_000;
+
+/** Grace period after cancel before force-recovering the socket. */
+const BUSY_CANCEL_GRACE_MS = 15_000;
+
+/** Timeout provider status refreshes so UI cannot stay stuck in "Checking…". */
+const PROVIDER_STATUS_TIMEOUT_MS = 20_000;
+
 type ProviderStatusEvent = Extract<ServerEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
 
@@ -76,12 +85,18 @@ type RuntimeMaps = {
   controlSockets: Map<string, AgentSocket>;
   threadSockets: Map<string, AgentSocket>;
   optimisticUserMessageIds: Map<string, Set<string>>;
+  busyWatchdogTimers: Map<string, ReturnType<typeof setTimeout>>;
+  busyCancelGraceTimers: Map<string, ReturnType<typeof setTimeout>>;
+  providerRefreshTimers: Map<string, ReturnType<typeof setTimeout>>;
 };
 
 const RUNTIME: RuntimeMaps = {
   controlSockets: new Map(),
   threadSockets: new Map(),
   optimisticUserMessageIds: new Map(),
+  busyWatchdogTimers: new Map(),
+  busyCancelGraceTimers: new Map(),
+  providerRefreshTimers: new Map(),
 };
 
 function defaultWorkspaceRuntime(): WorkspaceRuntime {
@@ -148,6 +163,27 @@ function ensureThreadRuntime(
       [threadId]: defaultThreadRuntime(),
     },
   }));
+}
+
+function clearBusyTimers(threadId: string) {
+  const watchdog = RUNTIME.busyWatchdogTimers.get(threadId);
+  if (watchdog) {
+    clearTimeout(watchdog);
+    RUNTIME.busyWatchdogTimers.delete(threadId);
+  }
+  const grace = RUNTIME.busyCancelGraceTimers.get(threadId);
+  if (grace) {
+    clearTimeout(grace);
+    RUNTIME.busyCancelGraceTimers.delete(threadId);
+  }
+}
+
+function clearProviderRefreshTimer(workspaceId: string) {
+  const timer = RUNTIME.providerRefreshTimers.get(workspaceId);
+  if (timer) {
+    clearTimeout(timer);
+    RUNTIME.providerRefreshTimers.delete(workspaceId);
+  }
 }
 
 function pushFeedItem(set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void, threadId: string, item: FeedItem) {
@@ -524,6 +560,7 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
           },
           providerStatusRefreshing: true,
         }));
+        startProviderRefreshTimeout(get, set, workspaceId);
 
         // Immediately hydrate skills on connect so the Skills screen doesn't require a second click.
         try {
@@ -587,6 +624,7 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
       if (evt.type === "provider_status") {
         const byName: Partial<Record<ProviderName, ProviderStatus>> = {};
         for (const p of evt.providers) byName[p.provider] = p;
+        clearProviderRefreshTimer(workspaceId);
         set((s) => ({
           providerStatusByName: { ...s.providerStatusByName, ...byName },
           providerStatusLastUpdatedAt: nowIso(),
@@ -596,6 +634,7 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
       }
 
       if (evt.type === "error") {
+        clearProviderRefreshTimer(workspaceId);
         set((s) => ({
           notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Control session error", detail: evt.message }),
           providerStatusRefreshing: false,
@@ -613,11 +652,13 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
     },
     onClose: () => {
       RUNTIME.controlSockets.delete(workspaceId);
+      clearProviderRefreshTimer(workspaceId);
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
           [workspaceId]: { ...s.workspaceRuntimeById[workspaceId], controlSessionId: null, controlConfig: null },
         },
+        providerStatusRefreshing: false,
       }));
     },
   });
@@ -655,6 +696,7 @@ function ensureThreadSocket(
     onEvent: (evt) => handleThreadEvent(get, set, threadId, evt, pendingFirstMessage),
     onClose: () => {
       RUNTIME.threadSockets.delete(threadId);
+      clearBusyTimers(threadId);
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
         if (!rt) return {};
@@ -708,6 +750,29 @@ function sendThread(
   return sock.send(build(sessionId));
 }
 
+function startProviderRefreshTimeout(
+  get: () => AppStoreState,
+  set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void,
+  workspaceId: string
+) {
+  clearProviderRefreshTimer(workspaceId);
+  const timer = setTimeout(() => {
+    const state = get();
+    if (!state.providerStatusRefreshing) return;
+    set((s) => ({
+      providerStatusRefreshing: false,
+      notifications: pushNotification(s.notifications, {
+        id: makeId(),
+        ts: nowIso(),
+        kind: "error",
+        title: "Provider status timed out",
+        detail: "Status check took too long. Try Refresh again.",
+      }),
+    }));
+  }, PROVIDER_STATUS_TIMEOUT_MS);
+  RUNTIME.providerRefreshTimers.set(workspaceId, timer);
+}
+
 function appendThreadTranscript(threadId: string, direction: "server" | "client", payload: unknown) {
   appendThreadTranscriptBatched(threadId, direction, payload);
 }
@@ -719,6 +784,83 @@ function pushNotification(notifications: Notification[], entry: Notification): N
     return next.slice(next.length - MAX_NOTIFICATIONS);
   }
   return next;
+}
+
+function queueBusyRecoveryAfterCancel(
+  get: () => AppStoreState,
+  set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void,
+  threadId: string,
+  reason: "manual" | "watchdog"
+) {
+  const existing = RUNTIME.busyCancelGraceTimers.get(threadId);
+  if (existing) clearTimeout(existing);
+
+  const timer = setTimeout(() => {
+    const rt = get().threadRuntimeById[threadId];
+    if (!rt?.busy) return;
+
+    const sock = RUNTIME.threadSockets.get(threadId);
+    try {
+      sock?.close();
+    } catch {
+      // ignore
+    }
+
+    set((s) => {
+      const current = s.threadRuntimeById[threadId];
+      if (!current) return {};
+      return {
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Run recovery",
+          detail:
+            reason === "manual"
+              ? "Cancel was slow; connection was reset so you can continue."
+              : "Run appeared stuck; connection was reset so you can continue.",
+        }),
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: { ...current, busy: false, connected: false, sessionId: null },
+        },
+        threads: s.threads.map((t) =>
+          t.id === threadId
+            ? { ...t, status: t.status === "archived" ? "archived" : "disconnected" }
+            : t
+        ),
+      };
+    });
+  }, BUSY_CANCEL_GRACE_MS);
+
+  RUNTIME.busyCancelGraceTimers.set(threadId, timer);
+}
+
+function startBusyWatchdog(
+  get: () => AppStoreState,
+  set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void,
+  threadId: string
+) {
+  clearBusyTimers(threadId);
+  const timer = setTimeout(() => {
+    const rt = get().threadRuntimeById[threadId];
+    if (!rt?.busy || !rt.sessionId) return;
+
+    const sent = sendThread(get, threadId, (sessionId) => ({ type: "cancel", sessionId }));
+    set((s) => ({
+      notifications: pushNotification(s.notifications, {
+        id: makeId(),
+        ts: nowIso(),
+        kind: "info",
+        title: "Run taking longer than expected",
+        detail: sent ? "Attempting automatic cancel…" : "Attempting connection recovery…",
+      }),
+    }));
+
+    queueBusyRecoveryAfterCancel(get, set, threadId, "watchdog");
+  }, BUSY_STUCK_MS);
+
+  RUNTIME.busyWatchdogTimers.set(threadId, timer);
 }
 
 function sendUserMessageToThread(
@@ -848,6 +990,11 @@ function handleThreadEvent(
   }
 
   if (evt.type === "session_busy") {
+    if (evt.busy) {
+      startBusyWatchdog(get, set, threadId);
+    } else {
+      clearBusyTimers(threadId);
+    }
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
@@ -1147,9 +1294,17 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
           : "disconnected",
       }));
 
+      const selectedWorkspaceId = normalizedWorkspaces[0]?.id ?? null;
+      const selectedThreadId =
+        selectedWorkspaceId
+          ? normalizedThreads.find((t) => t.workspaceId === selectedWorkspaceId && t.status !== "archived")?.id ?? null
+          : null;
+
       set({
         workspaces: normalizedWorkspaces,
         threads: normalizedThreads,
+        selectedWorkspaceId,
+        selectedThreadId,
         ready: true,
         startupError: null,
       });
@@ -1222,6 +1377,28 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   },
 
   removeWorkspace: async (workspaceId: string) => {
+    const control = RUNTIME.controlSockets.get(workspaceId);
+    RUNTIME.controlSockets.delete(workspaceId);
+    clearProviderRefreshTimer(workspaceId);
+    try {
+      control?.close();
+    } catch {
+      // ignore
+    }
+
+    for (const thread of get().threads) {
+      if (thread.workspaceId !== workspaceId) continue;
+      const sock = RUNTIME.threadSockets.get(thread.id);
+      RUNTIME.threadSockets.delete(thread.id);
+      RUNTIME.optimisticUserMessageIds.delete(thread.id);
+      clearBusyTimers(thread.id);
+      try {
+        sock?.close();
+      } catch {
+        // ignore
+      }
+    }
+
     try {
       await stopWorkspaceServer({ workspaceId });
     } catch {
@@ -1249,6 +1426,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const sock = RUNTIME.threadSockets.get(threadId);
     RUNTIME.threadSockets.delete(threadId);
     RUNTIME.optimisticUserMessageIds.delete(threadId);
+    clearBusyTimers(threadId);
     try {
       sock?.close();
     } catch {
@@ -1302,10 +1480,15 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   },
 
   newThread: async (opts) => {
-    const workspaceId = opts?.workspaceId ?? get().selectedWorkspaceId;
+    let workspaceId = opts?.workspaceId ?? get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
     if (!workspaceId) {
       await get().addWorkspace();
-      return;
+      workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+      if (!workspaceId) return;
+    }
+
+    if (get().selectedWorkspaceId !== workspaceId) {
+      set({ selectedWorkspaceId: workspaceId });
     }
 
     await ensureServerRunning(get, set, workspaceId);
@@ -1356,6 +1539,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const sock = RUNTIME.threadSockets.get(threadId);
     RUNTIME.threadSockets.delete(threadId);
     RUNTIME.optimisticUserMessageIds.delete(threadId);
+    clearBusyTimers(threadId);
     try {
       sock?.close();
     } catch {
@@ -1437,17 +1621,56 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   },
 
   cancelThread: (threadId: string) => {
-    sendThread(get, threadId, (sid) => ({ type: "cancel", sessionId: sid }));
+    const ok = sendThread(get, threadId, (sid) => ({ type: "cancel", sessionId: sid }));
+    if (!ok) {
+      set((s) => {
+        const rt = s.threadRuntimeById[threadId];
+        const isBusy = rt?.busy === true;
+        return {
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: isBusy ? "Run connection lost. Resetting session state." : "Unable to cancel this run.",
+          }),
+          threadRuntimeById:
+            isBusy && rt
+              ? {
+                  ...s.threadRuntimeById,
+                  [threadId]: { ...rt, busy: false, connected: false, sessionId: null },
+                }
+              : s.threadRuntimeById,
+          threads: isBusy
+            ? s.threads.map((t) => (t.id === threadId && t.status !== "archived" ? { ...t, status: "disconnected" } : t))
+            : s.threads,
+        };
+      });
+      return;
+    }
+    queueBusyRecoveryAfterCancel(get, set, threadId, "manual");
   },
 
   setComposerText: (text) => set({ composerText: text }),
   setInjectContext: (v) => set({ injectContext: v }),
 
   openSkills: async () => {
-    const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+    let workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
     if (!workspaceId) {
       await get().addWorkspace();
-      return;
+      workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+      if (!workspaceId) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "info",
+            title: "Skills need a workspace",
+            detail: "Add or select a workspace first.",
+          }),
+        }));
+        return;
+      }
     }
 
     set({ view: "skills", selectedWorkspaceId: workspaceId });
@@ -1564,6 +1787,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const control = RUNTIME.controlSockets.get(workspaceId);
     control?.close();
     RUNTIME.controlSockets.delete(workspaceId);
+    clearProviderRefreshTimer(workspaceId);
 
     // Disconnect thread sockets for this workspace.
     for (const thread of get().threads) {
@@ -1571,6 +1795,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       const sock = RUNTIME.threadSockets.get(thread.id);
       sock?.close();
       RUNTIME.threadSockets.delete(thread.id);
+      clearBusyTimers(thread.id);
     }
 
     try {
@@ -1619,10 +1844,12 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     ensureControlSocket(get, set, workspaceId);
 
     set({ providerStatusRefreshing: true });
+    startProviderRefreshTimeout(get, set, workspaceId);
     const sid = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
     const sock = RUNTIME.controlSockets.get(workspaceId);
     if (!sid || !sock) {
       // Control socket is still handshaking. server_hello will trigger a refresh automatically.
+      clearProviderRefreshTimer(workspaceId);
       set({ providerStatusRefreshing: false });
       return;
     }
@@ -1630,6 +1857,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     try {
       sock.send({ type: "refresh_provider_status", sessionId: sid });
     } catch {
+      clearProviderRefreshTimer(workspaceId);
       set((s) => ({
         providerStatusRefreshing: false,
         notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to refresh provider status." }),

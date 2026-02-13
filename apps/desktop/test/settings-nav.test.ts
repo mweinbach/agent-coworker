@@ -114,6 +114,7 @@ describe("settings nav (store)", () => {
           config: null,
           enableMcp: null,
           busy: true,
+          busySince: "2024-01-01T00:00:00.000Z",
           feed: [],
           backup: null,
           backupReason: null,
@@ -136,5 +137,64 @@ describe("settings nav (store)", () => {
     expect(state.threadRuntimeById.t1?.connected).toBe(false);
     expect(state.threads[0]?.status).toBe("disconnected");
     expect(state.notifications.at(-1)?.title).toBe("Not connected");
+  });
+
+  test("reconnectThread clears busy and keeps active thread selected", async () => {
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/ws-1",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastOpenedAt: "2024-01-01T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "t1",
+          workspaceId: "ws-1",
+          title: "Thread",
+          createdAt: "2024-01-01T00:00:00.000Z",
+          lastMessageAt: "2024-01-01T00:00:00.000Z",
+          status: "active",
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "t1",
+      threadRuntimeById: {
+        t1: {
+          wsUrl: "ws://mock",
+          connected: true,
+          sessionId: "sid-1",
+          config: null,
+          enableMcp: null,
+          busy: true,
+          busySince: "2024-01-01T00:00:00.000Z",
+          feed: [],
+          backup: null,
+          backupReason: null,
+          backupUi: {
+            refreshing: false,
+            checkpointing: false,
+            restoring: false,
+            deletingById: {},
+            error: null,
+          },
+          transcriptOnly: false,
+        },
+      },
+      notifications: [],
+    });
+
+    await useAppStore.getState().reconnectThread("t1");
+    const state = useAppStore.getState();
+    expect(state.selectedThreadId).toBe("t1");
+    expect(state.threadRuntimeById.t1?.busy).toBe(false);
+    expect(state.threadRuntimeById.t1?.busySince).toBeNull();
+    expect(state.threads[0]?.status).toBe("active");
+    expect(state.notifications.at(-1)?.title).toBe("Reconnecting thread");
   });
 });

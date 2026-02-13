@@ -732,6 +732,26 @@ a {
   background: var(--warn-bg);
 }
 
+.busyBanner {
+  display: grid;
+  gap: 8px;
+}
+
+.busyBannerTitle {
+  font-weight: 650;
+}
+
+.busyBannerText {
+  color: rgba(0, 0, 0, 0.72);
+  font-size: 13px;
+}
+
+.busyBannerActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 /* ---------------------------------------------------------------------------
    Tool call cards (parsed log items)
    --------------------------------------------------------------------------- */

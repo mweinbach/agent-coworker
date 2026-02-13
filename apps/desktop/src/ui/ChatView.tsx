@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -324,10 +324,12 @@ export function ChatView() {
   const requestHarnessContext = useAppStore((s) => s.requestHarnessContext);
   const setHarnessContext = useAppStore((s) => s.setHarnessContext);
   const runHarnessSloChecks = useAppStore((s) => s.runHarnessSloChecks);
+  const reconnectThread = useAppStore((s) => s.reconnectThread);
 
   const feedRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const lastCountRef = useRef<number>(0);
+  const [busyClock, setBusyClock] = useState(0);
 
   const feed = rt?.feed ?? [];
 
@@ -350,6 +352,12 @@ export function ChatView() {
       textareaRef.current.focus();
     }
   }, [selectedThreadId]);
+
+  useEffect(() => {
+    if (!rt?.busy) return;
+    const timer = setInterval(() => setBusyClock((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, [rt?.busy]);
 
   // Stable callback to avoid re-creating the keyboard handler each render.
   const onComposerKeyDown = useCallback(
@@ -379,6 +387,10 @@ export function ChatView() {
   const disabled = busy || hasPromptModal;
   const transcriptOnly = rt?.transcriptOnly === true || thread.status !== "active";
   const harnessDisabled = disabled || !selectedThreadId;
+  const busySince = rt?.busySince ? Date.parse(rt.busySince) : NaN;
+  const busyElapsedSec = Number.isFinite(busySince) ? Math.max(0, Math.floor((Date.now() - busySince) / 1000)) : null;
+  const busyEtaSec = busyElapsedSec === null ? null : Math.max(0, 90 - busyElapsedSec);
+  void busyClock;
 
   const onRequestHarnessContext = () => {
     if (!selectedThreadId) return;
@@ -449,6 +461,36 @@ export function ChatView() {
             <div style={{ fontWeight: 650, marginBottom: 6 }}>Transcript view</div>
             <div style={{ color: "rgba(0,0,0,0.65)" }}>
               Sending a message will continue in a new live thread.
+            </div>
+          </div>
+        ) : null}
+
+        {busy ? (
+          <div className="inlineCard inlineCardWarn busyBanner" style={{ marginBottom: 14 }}>
+            <div className="busyBannerTitle">Generation in progress</div>
+            <div className="busyBannerText">
+              {busyElapsedSec === null ? "Working…" : `Running for ${busyElapsedSec}s.`}{" "}
+              {busyEtaSec === null
+                ? "If this looks stuck, stop or reconnect the session."
+                : busyEtaSec > 0
+                  ? `Auto-recovery starts in about ${busyEtaSec}s if needed.`
+                  : "Auto-recovery should trigger shortly if needed."}
+            </div>
+            <div className="busyBannerActions">
+              <button
+                className="modalButton modalButtonOutline"
+                type="button"
+                onClick={() => cancelThread(selectedThreadId)}
+              >
+                Stop generation
+              </button>
+              <button
+                className="modalButton modalButtonOutline"
+                type="button"
+                onClick={() => void reconnectThread(selectedThreadId)}
+              >
+                Reconnect session
+              </button>
             </div>
           </div>
         ) : null}

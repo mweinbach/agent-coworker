@@ -85,6 +85,7 @@ type RuntimeMaps = {
   controlSockets: Map<string, AgentSocket>;
   threadSockets: Map<string, AgentSocket>;
   optimisticUserMessageIds: Map<string, Set<string>>;
+  reconnectingThreads: Set<string>;
   busyWatchdogTimers: Map<string, ReturnType<typeof setTimeout>>;
   busyCancelGraceTimers: Map<string, ReturnType<typeof setTimeout>>;
   providerRefreshTimers: Map<string, ReturnType<typeof setTimeout>>;
@@ -94,6 +95,7 @@ const RUNTIME: RuntimeMaps = {
   controlSockets: new Map(),
   threadSockets: new Map(),
   optimisticUserMessageIds: new Map(),
+  reconnectingThreads: new Set(),
   busyWatchdogTimers: new Map(),
   busyCancelGraceTimers: new Map(),
   providerRefreshTimers: new Map(),
@@ -121,6 +123,7 @@ function defaultThreadRuntime(): ThreadRuntime {
     config: null,
     enableMcp: null,
     busy: false,
+    busySince: null,
     feed: [],
     backup: null,
     backupReason: null,
@@ -397,6 +400,7 @@ export type AppStoreState = {
 
   sendMessage: (text: string) => Promise<void>;
   cancelThread: (threadId: string) => void;
+  reconnectThread: (threadId: string) => Promise<void>;
   setComposerText: (text: string) => void;
   setInjectContext: (v: boolean) => void;
 
@@ -697,6 +701,10 @@ function ensureThreadSocket(
     onClose: () => {
       RUNTIME.threadSockets.delete(threadId);
       clearBusyTimers(threadId);
+      const reconnecting = RUNTIME.reconnectingThreads.has(threadId);
+      if (reconnecting) {
+        RUNTIME.reconnectingThreads.delete(threadId);
+      }
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
         if (!rt) return {};
@@ -708,6 +716,7 @@ function ensureThreadSocket(
               connected: false,
               sessionId: null,
               busy: false,
+              busySince: null,
               backupUi: {
                 ...rt.backupUi,
                 refreshing: false,
@@ -719,7 +728,7 @@ function ensureThreadSocket(
           },
           threads: s.threads.map((t) =>
             t.id === threadId
-              ? { ...t, status: t.status === "archived" ? "archived" : "disconnected" }
+              ? { ...t, status: t.status === "archived" || reconnecting ? t.status : "disconnected" }
               : t
           ),
         };
@@ -822,7 +831,7 @@ function queueBusyRecoveryAfterCancel(
         }),
         threadRuntimeById: {
           ...s.threadRuntimeById,
-          [threadId]: { ...current, busy: false, connected: false, sessionId: null },
+          [threadId]: { ...current, busy: false, busySince: null, connected: false, sessionId: null },
         },
         threads: s.threads.map((t) =>
           t.id === threadId
@@ -1001,7 +1010,7 @@ function handleThreadEvent(
       return {
         threadRuntimeById: {
           ...s.threadRuntimeById,
-          [threadId]: { ...rt, busy: evt.busy },
+          [threadId]: { ...rt, busy: evt.busy, busySince: evt.busy ? rt.busySince ?? nowIso() : null },
         },
       };
     });
@@ -1638,7 +1647,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
             isBusy && rt
               ? {
                   ...s.threadRuntimeById,
-                  [threadId]: { ...rt, busy: false, connected: false, sessionId: null },
+                  [threadId]: { ...rt, busy: false, busySince: null, connected: false, sessionId: null },
                 }
               : s.threadRuntimeById,
           threads: isBusy
@@ -1649,6 +1658,76 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       return;
     }
     queueBusyRecoveryAfterCancel(get, set, threadId, "manual");
+  },
+
+  reconnectThread: async (threadId: string) => {
+    const thread = get().threads.find((t) => t.id === threadId);
+    if (!thread || thread.status === "archived") return;
+
+    const workspaceId = thread.workspaceId;
+    const socket = RUNTIME.threadSockets.get(threadId);
+    if (socket) {
+      RUNTIME.reconnectingThreads.add(threadId);
+      RUNTIME.threadSockets.delete(threadId);
+      clearBusyTimers(threadId);
+      try {
+        socket.close();
+      } catch {
+        // ignore
+      }
+    }
+
+    set((s) => {
+      const rt = s.threadRuntimeById[threadId];
+      if (!rt) return {};
+      return {
+        selectedWorkspaceId: workspaceId,
+        selectedThreadId: threadId,
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: {
+            ...rt,
+            connected: false,
+            sessionId: null,
+            busy: false,
+            busySince: null,
+          },
+        },
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "info",
+          title: "Reconnecting thread",
+          detail: "Attempting to restore live session connection.",
+        }),
+      };
+    });
+
+    await ensureServerRunning(get, set, workspaceId);
+    ensureControlSocket(get, set, workspaceId);
+    const url = get().workspaceRuntimeById[workspaceId]?.serverUrl;
+    if (!url) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Reconnect failed",
+          detail: "Workspace server is not available.",
+        }),
+      }));
+      return;
+    }
+
+    ensureThreadSocket(get, set, threadId, url);
+    set((s) => ({
+      threads: s.threads.map((t) =>
+        t.id === threadId && t.status !== "archived"
+          ? { ...t, status: "active" }
+          : t
+      ),
+    }));
+    void persist(get);
   },
 
   setComposerText: (text) => set({ composerText: text }),

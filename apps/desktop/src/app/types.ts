@@ -73,6 +73,7 @@ export type ThreadRuntime = {
   config: ConfigSubset | null;
   enableMcp: boolean | null;
   busy: boolean;
+  busySince: string | null;
   feed: FeedItem[];
   backup: SessionBackupPublicState | null;
   backupReason: SessionBackupReason | null;

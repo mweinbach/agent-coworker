@@ -19,6 +19,7 @@ export function createEditTool(ctx: ToolContext) {
     }),
     execute: async ({ filePath, oldString, newString, replaceAll }) => {
       ctx.log(`tool> edit ${JSON.stringify({ filePath, replaceAll })}`);
+      if (oldString === "") throw new Error("oldString cannot be empty");
 
       const abs = resolveMaybeRelative(filePath, ctx.config.workingDirectory);
       if (!isWritePathAllowed(abs, ctx.config)) {

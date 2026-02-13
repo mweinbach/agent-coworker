@@ -8,6 +8,14 @@ const BLOCKED_HOSTS = new Set([
   "host.docker.internal",
 ]);
 
+function normalizeHost(hostname: string): string {
+  const host = hostname.toLowerCase().replace(/\.+$/, "");
+  if (host.startsWith("[") && host.endsWith("]")) {
+    return host.slice(1, -1);
+  }
+  return host;
+}
+
 function isPrivateIpv4(host: string): boolean {
   const parts = host.split(".").map((p) => Number(p));
   if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
@@ -46,17 +54,15 @@ function isPrivateIpv6(host: string): boolean {
 }
 
 function isBlockedHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/\.+$/, "");
-  const hostForIpCheck = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
-
+  const host = normalizeHost(hostname);
   if (BLOCKED_HOSTS.has(host)) return true;
   if (host.endsWith(".localhost")) return true;
   if (host.endsWith(".local")) return true;
   if (host.endsWith(".internal")) return true;
 
-  const ipKind = isIP(hostForIpCheck);
-  if (ipKind === 4) return isPrivateIpv4(hostForIpCheck);
-  if (ipKind === 6) return isPrivateIpv6(hostForIpCheck);
+  const ipKind = isIP(host);
+  if (ipKind === 4) return isPrivateIpv4(host);
+  if (ipKind === 6) return isPrivateIpv6(host);
   return false;
 }
 

@@ -1,3 +1,6 @@
+import { anthropic } from "@ai-sdk/anthropic";
+import { google } from "@ai-sdk/google";
+import { openai } from "@ai-sdk/openai";
 import { tool } from "ai";
 import { z } from "zod";
 
@@ -16,7 +19,7 @@ function formatResults(results: Array<{ title?: string; url?: string; descriptio
   );
 }
 
-export function createWebSearchTool(ctx: ToolContext) {
+function createCustomWebSearchTool(ctx: ToolContext) {
   return tool({
     description:
       "Search the web for current information. Requires BRAVE_API_KEY or TAVILY_API_KEY. Returns titles, URLs, and snippets.",
@@ -96,4 +99,19 @@ export function createWebSearchTool(ctx: ToolContext) {
       return out;
     },
   });
+}
+
+export function createWebSearchTool(ctx: ToolContext) {
+  switch (ctx.config.provider) {
+    case "openai":
+      return openai.tools.webSearch({});
+    case "google":
+      return google.tools.googleSearch({});
+    case "anthropic":
+      return anthropic.tools.webSearch_20250305({});
+    case "codex-cli":
+    case "gemini-cli":
+    case "claude-code":
+      return createCustomWebSearchTool(ctx);
+  }
 }

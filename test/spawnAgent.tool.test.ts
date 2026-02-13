@@ -103,6 +103,8 @@ describe("spawnAgent tool", () => {
     expect(toolNames).toEqual(
       ["edit", "glob", "grep", "memory", "notebookEdit", "read", "skill", "webFetch", "webSearch", "write"].sort()
     );
+    expect(lastGenerateTextArgs.tools.webSearch.type).toBe("provider");
+    expect(lastGenerateTextArgs.tools.webSearch.id).toBe("google.google_search");
   });
 
   test("research uses main model and web-only tool set", async () => {
@@ -124,6 +126,8 @@ describe("spawnAgent tool", () => {
 
     const toolNames = Object.keys(lastGenerateTextArgs.tools).sort();
     expect(toolNames).toEqual(["read", "webFetch", "webSearch"].sort());
+    expect(lastGenerateTextArgs.tools.webSearch.type).toBe("provider");
+    expect(lastGenerateTextArgs.tools.webSearch.id).toBe("google.google_search");
   });
 
   test("explore includes bash tool and uses safe auto-approval only", async () => {
@@ -151,4 +155,3 @@ describe("spawnAgent tool", () => {
     expect(rejected.stderr).toContain("rejected");
   });
 });
-

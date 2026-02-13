@@ -25,7 +25,7 @@ import { createTools } from "../src/tools/index";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeConfig(dir: string): AgentConfig {
+function makeConfig(dir: string, overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
@@ -42,15 +42,17 @@ function makeConfig(dir: string): AgentConfig {
     skillsDirs: [],
     memoryDirs: [],
     configDirs: [],
+    ...overrides,
   };
 }
 
-function makeCtx(dir: string): ToolContext {
+function makeCtx(dir: string, overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     config: makeConfig(dir),
     log: () => {},
     askUser: async () => "",
     approveCommand: async () => true,
+    ...overrides,
   };
 }
 
@@ -830,6 +832,56 @@ describe("grep tool", () => {
 // ---------------------------------------------------------------------------
 
 describe("webSearch tool", () => {
+  const makeCustomSearchCtx = (dir: string) =>
+    makeCtx(dir, {
+      config: makeConfig(dir, {
+        provider: "codex-cli",
+        model: "gpt-5.3-codex",
+        subAgentModel: "gpt-5.3-codex",
+      }),
+    });
+
+  test("uses OpenAI provider-native web search for openai provider", async () => {
+    const dir = await tmpDir();
+    const t: any = createWebSearchTool(
+      makeCtx(dir, {
+        config: makeConfig(dir, { provider: "openai", model: "gpt-5.2", subAgentModel: "gpt-5.2" }),
+      })
+    );
+    expect(t.type).toBe("provider");
+    expect(t.id).toBe("openai.web_search");
+  });
+
+  test("uses Google provider-native web search for google provider", async () => {
+    const dir = await tmpDir();
+    const t: any = createWebSearchTool(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          subAgentModel: "gemini-3-flash-preview",
+        }),
+      })
+    );
+    expect(t.type).toBe("provider");
+    expect(t.id).toBe("google.google_search");
+  });
+
+  test("uses Anthropic provider-native web search for anthropic provider", async () => {
+    const dir = await tmpDir();
+    const t: any = createWebSearchTool(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          subAgentModel: "claude-opus-4-6",
+        }),
+      })
+    );
+    expect(t.type).toBe("provider");
+    expect(t.id).toBe("anthropic.web_search_20250305");
+  });
+
   test("returns disabled message without API keys", async () => {
     const dir = await tmpDir();
 
@@ -839,7 +891,7 @@ describe("webSearch tool", () => {
     delete process.env.TAVILY_API_KEY;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test", maxResults: 1 });
       expect(out).toContain("webSearch disabled");
     } finally {
@@ -875,7 +927,7 @@ describe("webSearch tool", () => {
     }) as any;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test query", maxResults: 5 });
       expect(out).toContain("Test Result");
       expect(out).toContain("https://example.com");
@@ -913,7 +965,7 @@ describe("webSearch tool", () => {
     }) as any;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test query", maxResults: 5 });
       expect(out).toContain("Tavily Result");
       expect(out).toContain("https://tavily.com");
@@ -940,7 +992,7 @@ describe("webSearch tool", () => {
     }) as any;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test", maxResults: 1 });
       expect(out).toContain("Brave search failed");
       expect(out).toContain("401");
@@ -969,7 +1021,7 @@ describe("webSearch tool", () => {
     }) as any;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test", maxResults: 1 });
       expect(out).toContain("Tavily search failed");
       expect(out).toContain("500");
@@ -998,7 +1050,7 @@ describe("webSearch tool", () => {
     }) as any;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "nothing", maxResults: 5 });
       expect(out).toBe("No results");
     } finally {
@@ -1032,7 +1084,7 @@ describe("webSearch tool", () => {
     }) as any;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test", maxResults: 1 });
       expect(calledUrl).toContain("brave");
       expect(out).toContain("Brave Hit");
@@ -1893,10 +1945,14 @@ describe("createTools", () => {
     expect(Object.keys(tools).length).toBe(14);
   });
 
-  test("each tool has execute function", async () => {
+  test("each tool is executable or provider-native", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));
-    for (const [_name, tool] of Object.entries(tools)) {
+    for (const [name, tool] of Object.entries(tools)) {
+      if (name === "webSearch") {
+        expect((tool as any).type === "provider" || typeof (tool as any).execute === "function").toBe(true);
+        continue;
+      }
       expect(typeof (tool as any).execute).toBe("function");
     }
   });

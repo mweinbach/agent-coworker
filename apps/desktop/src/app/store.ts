@@ -78,6 +78,9 @@ const BUSY_CANCEL_GRACE_MS = 15_000;
 /** Timeout provider status refreshes so UI cannot stay stuck in "Checking…". */
 const PROVIDER_STATUS_TIMEOUT_MS = 20_000;
 
+/** Guard workspace server startup so UI cannot stay in "starting" forever. */
+const WORKSPACE_START_TIMEOUT_MS = 25_000;
+
 type ProviderStatusEvent = Extract<ServerEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
 
@@ -89,6 +92,8 @@ type RuntimeMaps = {
   busyWatchdogTimers: Map<string, ReturnType<typeof setTimeout>>;
   busyCancelGraceTimers: Map<string, ReturnType<typeof setTimeout>>;
   providerRefreshTimers: Map<string, ReturnType<typeof setTimeout>>;
+  workspaceStartPromises: Map<string, Promise<void>>;
+  workspacePickerOpen: boolean;
 };
 
 const RUNTIME: RuntimeMaps = {
@@ -99,7 +104,25 @@ const RUNTIME: RuntimeMaps = {
   busyWatchdogTimers: new Map(),
   busyCancelGraceTimers: new Map(),
   providerRefreshTimers: new Map(),
+  workspaceStartPromises: new Map(),
+  workspacePickerOpen: false,
 };
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
 
 function defaultWorkspaceRuntime(): WorkspaceRuntime {
   return {
@@ -248,6 +271,17 @@ function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
         mode: payload.kind === "summary" ? "summary" : "reasoning",
         ts: evt.ts,
         text: String(payload.text ?? ""),
+      });
+      continue;
+    }
+
+    if (type === "reasoning_summary" || type === "assistant_reasoning") {
+      out.push({
+        id: makeId(),
+        kind: "reasoning",
+        mode: "summary",
+        ts: evt.ts,
+        text: String(payload.text ?? payload.summary ?? ""),
       });
       continue;
     }
@@ -508,6 +542,12 @@ async function ensureServerRunning(get: () => AppStoreState, set: (fn: (s: AppSt
   if (!rt) return;
   if (rt.serverUrl && !rt.error) return;
 
+  const inFlight = RUNTIME.workspaceStartPromises.get(workspaceId);
+  if (inFlight) {
+    await inFlight;
+    return;
+  }
+
   const ws = get().workspaces.find((w) => w.id === workspaceId);
   if (!ws) return;
 
@@ -518,25 +558,46 @@ async function ensureServerRunning(get: () => AppStoreState, set: (fn: (s: AppSt
     },
   }));
 
-  try {
-    const res = await startWorkspaceServer({ workspaceId, workspacePath: ws.path, yolo: ws.yolo });
-    set((s) => ({
-      workspaceRuntimeById: {
-        ...s.workspaceRuntimeById,
-        [workspaceId]: { ...s.workspaceRuntimeById[workspaceId], serverUrl: res.url, starting: false, error: null },
-      },
-    }));
-  } catch (err) {
-    set((s) => ({
-      workspaceRuntimeById: {
-        ...s.workspaceRuntimeById,
-        [workspaceId]: {
-          ...s.workspaceRuntimeById[workspaceId],
-          starting: false,
-          error: String(err),
+  const startPromise = (async () => {
+    try {
+      const res = await withTimeout(
+        startWorkspaceServer({ workspaceId, workspacePath: ws.path, yolo: ws.yolo }),
+        WORKSPACE_START_TIMEOUT_MS,
+        `Starting workspace server for ${ws.name}`
+      );
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: { ...s.workspaceRuntimeById[workspaceId], serverUrl: res.url, starting: false, error: null },
         },
-      },
-    }));
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Workspace server unavailable",
+          detail: message,
+        }),
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            starting: false,
+            error: message,
+          },
+        },
+      }));
+    }
+  })();
+
+  RUNTIME.workspaceStartPromises.set(workspaceId, startPromise);
+  try {
+    await startPromise;
+  } finally {
+    RUNTIME.workspaceStartPromises.delete(workspaceId);
   }
 }
 
@@ -1359,8 +1420,22 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   setSettingsPage: (page) => set({ settingsPage: page }),
 
   addWorkspace: async () => {
-    const dir = await pickWorkspaceDirectory();
+    if (RUNTIME.workspacePickerOpen) return;
+    RUNTIME.workspacePickerOpen = true;
+
+    let dir: string | null = null;
+    try {
+      dir = await pickWorkspaceDirectory();
+    } finally {
+      RUNTIME.workspacePickerOpen = false;
+    }
     if (!dir) return;
+
+    const existing = get().workspaces.find((w) => w.path === dir);
+    if (existing) {
+      await get().selectWorkspace(existing.id);
+      return;
+    }
 
     const stayInSettings = get().view === "settings";
     const ws: WorkspaceRecord = {
@@ -1505,7 +1580,18 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
     const wsRt = get().workspaceRuntimeById[workspaceId];
     const url = wsRt?.serverUrl;
-    if (!url) return;
+    if (!url) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Unable to create session",
+          detail: wsRt?.error ?? "Workspace server is not ready.",
+        }),
+      }));
+      return;
+    }
 
     const threadId = makeId();
     const createdAt = nowIso();

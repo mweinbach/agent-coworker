@@ -53,8 +53,18 @@ function parseToolLogLine(line: string): ParsedToolLog | null {
   return { sub: m.groups.sub, dir, name, payload };
 }
 
+function stringifyToolValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    const json = JSON.stringify(value);
+    return typeof json === "string" ? json : String(value);
+  } catch {
+    return String(value);
+  }
+}
+
 function truncateValue(value: unknown, maxLen = 48): string {
-  const s = typeof value === "string" ? value : JSON.stringify(value);
+  const s = stringifyToolValue(value);
   if (s.length <= maxLen) return s;
   return s.slice(0, maxLen - 1) + "\u2026";
 }
@@ -80,6 +90,26 @@ function formatSloActual(value: number | null): string {
   return Number(value.toFixed(4)).toString();
 }
 
+function toolPreviewEntry(
+  entries: Array<[string, unknown]>,
+  preferredKeys: readonly string[]
+): [string, unknown] | null {
+  for (const key of preferredKeys) {
+    const found = entries.find(([entryKey]) => entryKey === key);
+    if (found) return found;
+  }
+  return entries[0] ?? null;
+}
+
+function hasToolIssue(payload: Record<string, unknown> | string): boolean {
+  if (typeof payload !== "object" || payload === null) return false;
+  if (typeof payload.exitCode === "number" && payload.exitCode !== 0) return true;
+  if (payload.ok === false) return true;
+  if (typeof payload.error === "string" && payload.error.trim()) return true;
+  if (typeof payload.stderr === "string" && payload.stderr.trim()) return true;
+  return false;
+}
+
 const Markdown = memo(function Markdown(props: { text: string }) {
   return (
     <div className="markdown">
@@ -91,35 +121,63 @@ const Markdown = memo(function Markdown(props: { text: string }) {
 });
 
 const ToolCallCard = memo(function ToolCallCard(props: { parsed: ParsedToolLog }) {
-  const { dir, name, payload } = props.parsed;
+  const { dir, name, payload, sub } = props.parsed;
   const isCall = dir === ">";
-  const arrow = isCall ? "\u2192" : "\u2190";
-  const cardClass = "toolCallCard" + (isCall ? " toolCallCardOut" : " toolCallCardIn");
+  const directionLabel = isCall ? "call" : "result";
+  const cardClass = "toolCallCard" + (isCall ? " toolCallCardOut" : " toolCallCardIn") + (hasToolIssue(payload) ? " toolCallCardIssue" : "");
 
   const entries: Array<[string, unknown]> =
     typeof payload === "object" && payload !== null ? Object.entries(payload) : [];
+  const visibleEntries = entries.slice(0, 6);
+  const hiddenCount = Math.max(0, entries.length - visibleEntries.length);
+  const subLabel = sub ? sub.replace(/^sub:/, "") : null;
+  const previewPair = toolPreviewEntry(
+    entries,
+    isCall
+      ? ["command", "query", "filePath", "pattern", "url", "action", "count", "requestId"]
+      : ["error", "stderr", "exitCode", "ok", "count", "status", "provider"]
+  );
+  const previewText = previewPair ? `${previewPair[0]}: ${truncateValue(previewPair[1], 80)}` : truncateValue(payload, 80);
 
   return (
-    <div className={cardClass}>
-      <div className="toolCallHeader">
-        <span className="toolCallArrow">{arrow}</span>
-        <span className="toolCallName">{name}</span>
-      </div>
-      {entries.length > 0 ? (
-        <div className="toolCallParams">
-          {entries.map(([key, val]) => (
-            <div key={key} className="toolCallParam">
-              <span className="toolCallParamKey">{key}:</span>{" "}
-              <span className="toolCallParamVal">{truncateValue(val)}</span>
+    <details className={cardClass}>
+      <summary className="toolCallSummary">
+        <div className="toolCallIdentity">
+          <span className={"toolCallDirBadge" + (isCall ? " toolCallDirBadgeOut" : " toolCallDirBadgeIn")}>{directionLabel}</span>
+          <span className="toolCallName">{name}</span>
+          {subLabel ? <span className="toolCallSub">{subLabel}</span> : null}
+          <span className="toolCallPreview">{previewText}</span>
+          {hasToolIssue(payload) ? <span className="toolCallStatus toolCallStatusIssue">issue</span> : null}
+        </div>
+      </summary>
+      <div className="toolCallBody">
+        {visibleEntries.length > 0 ? (
+          <div className="toolCallParams">
+            {visibleEntries.map(([key, val]) => {
+              const preview = truncateValue(val, 96);
+              return (
+                <div key={key} className={"toolCallParam" + (preview.length > 40 ? " toolCallParamWide" : "")}>
+                  <span className="toolCallParamKey">{key}</span>
+                  <span className="toolCallParamSep">:</span>
+                  <span className="toolCallParamVal" title={stringifyToolValue(val)}>
+                    {preview}
+                  </span>
+                </div>
+              );
+            })}
+            {hiddenCount > 0 ? <div className="toolCallMore">+{hiddenCount} more fields</div> : null}
+          </div>
+        ) : typeof payload === "string" ? (
+          <div className="toolCallParams">
+            <div className="toolCallParam toolCallParamWide">
+              <span className="toolCallParamVal" title={payload}>
+                {truncateValue(payload, 140)}
+              </span>
             </div>
-          ))}
-        </div>
-      ) : typeof payload === "string" ? (
-        <div className="toolCallParams">
-          <span className="toolCallParamVal">{truncateValue(payload, 80)}</span>
-        </div>
-      ) : null}
-    </div>
+          </div>
+        ) : null}
+      </div>
+    </details>
   );
 });
 
@@ -143,8 +201,8 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
   if (item.kind === "reasoning") {
     return (
       <div className="feedItem">
-        <div className="inlineCard">
-          <div className="metaLine">{item.mode === "summary" ? "Reasoning summary" : "Reasoning"}</div>
+        <div className="inlineCard inlineCardReasoning">
+          <div className="metaLine">Reasoning summary</div>
           <div style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{item.text}</div>
         </div>
       </div>
@@ -273,7 +331,7 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
     const parsed = parseToolLogLine(item.line);
     if (parsed) {
       return (
-        <div className="feedItem">
+        <div className="feedItem feedItemTool">
           <ToolCallCard parsed={parsed} />
         </div>
       );

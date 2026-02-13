@@ -1,4 +1,4 @@
-import { dialog, ipcMain } from "electron";
+import { BrowserWindow, dialog, ipcMain } from "electron";
 
 import { DESKTOP_IPC_CHANNELS, type StartWorkspaceServerInput, type StopWorkspaceServerInput, type DeleteTranscriptInput, type ReadTranscriptInput, type TranscriptBatchInput } from "../src/lib/desktopApi";
 import type { PersistedState } from "../src/app/types";
@@ -83,8 +83,9 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
     }
   });
 
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory, async () => {
-    const result = await dialog.showOpenDialog({
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory, async (event) => {
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined;
+    const result = await dialog.showOpenDialog(ownerWindow, {
       title: "Select a workspace directory",
       properties: ["openDirectory"],
     });

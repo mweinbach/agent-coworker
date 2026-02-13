@@ -328,6 +328,18 @@ describe("classifyCommandDetailed", () => {
     });
   });
 
+  test("returns outside_allowed_scope for Windows absolute paths outside allowed roots", () => {
+    expect(
+      classifyCommandDetailed("ls C:\\Windows\\System32", {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+  });
+
   test("outside_allowed_scope is ignored when no allowedRoots are provided", () => {
     expect(classifyCommandDetailed("ls /etc")).toEqual({
       kind: "auto",

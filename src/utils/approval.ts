@@ -84,7 +84,7 @@ function hasOutsideAllowedScope(command: string, allowedRoots?: string[]): boole
   if (!allowedRoots || allowedRoots.length === 0) return false;
   const normalizedRoots = allowedRoots.map((root) => path.resolve(root));
   for (const token of tokenizeCommand(command)) {
-    if (!token.startsWith("/")) continue;
+    if (!path.posix.isAbsolute(token) && !path.win32.isAbsolute(token)) continue;
     const resolved = path.resolve(token);
     const inside = normalizedRoots.some((root) => isPathInside(root, resolved));
     if (!inside) return true;

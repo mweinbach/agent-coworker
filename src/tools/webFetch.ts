@@ -27,7 +27,7 @@ function assertReadableContentType(contentType: string | null): void {
 }
 
 async function fetchWithSafeRedirects(url: string): Promise<Response> {
-  let current = assertSafeWebUrl(url).toString();
+  let current = (await assertSafeWebUrl(url)).toString();
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const controller = new AbortController();
@@ -47,7 +47,7 @@ async function fetchWithSafeRedirects(url: string): Promise<Response> {
       }
 
       const next = new URL(location, current).toString();
-      current = assertSafeWebUrl(next).toString();
+      current = (await assertSafeWebUrl(next)).toString();
     } finally {
       clearTimeout(timeout);
     }
@@ -74,7 +74,7 @@ export function createWebFetchTool(ctx: ToolContext) {
       assertReadableContentType(res.headers.get("content-type"));
       const html = await res.text();
 
-      const finalUrl = assertSafeWebUrl(res.url || url).toString();
+      const finalUrl = (await assertSafeWebUrl(res.url || url)).toString();
       const dom = new JSDOM(html, { url: finalUrl });
       const article = new Readability(dom.window.document).parse();
 

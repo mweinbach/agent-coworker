@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { __internal, assertSafeWebUrl } from "../src/utils/webSafety";
+import { __internal, assertSafeWebUrl, resolveSafeWebUrl } from "../src/utils/webSafety";
 
 afterEach(() => {
   __internal.resetDnsLookup();
@@ -64,5 +64,19 @@ describe("assertSafeWebUrl", () => {
       { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 },
     ]);
     expect((await assertSafeWebUrl("https://public.example/")).hostname).toBe("public.example");
+  });
+
+
+  test("returns resolved public addresses for pinned fetch use", async () => {
+    __internal.setDnsLookup(async () => [
+      { address: "93.184.216.34", family: 4 },
+      { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 },
+    ]);
+    const resolved = await resolveSafeWebUrl("https://public.example/");
+    expect(resolved.url.hostname).toBe("public.example");
+    expect(resolved.addresses).toEqual([
+      { address: "93.184.216.34", family: 4 },
+      { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 },
+    ]);
   });
 });

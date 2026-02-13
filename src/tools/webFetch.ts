@@ -1,5 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
+import { Agent } from "undici";
 
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
@@ -7,7 +8,7 @@ import TurndownService from "turndown";
 
 import type { ToolContext } from "./context";
 import { truncateText } from "../utils/paths";
-import { assertSafeWebUrl } from "../utils/webSafety";
+import { resolveSafeWebUrl } from "../utils/webSafety";
 
 const MAX_REDIRECTS = 5;
 const FETCH_TIMEOUT_MS = 15_000;
@@ -27,27 +28,47 @@ function assertReadableContentType(contentType: string | null): void {
 }
 
 async function fetchWithSafeRedirects(url: string): Promise<Response> {
-  let current = (await assertSafeWebUrl(url)).toString();
+  let current = await resolveSafeWebUrl(url);
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const dispatcher = new Agent({
+      connect: {
+        lookup(hostname, _options, callback) {
+          if (hostname !== current.url.hostname) {
+            callback(new Error(`Blocked DNS lookup for unexpected host: ${hostname}`), "", 0);
+            return;
+          }
+
+          const first = current.addresses[0];
+          if (!first) {
+            callback(new Error(`Blocked unresolved host: ${hostname}`), "", 0);
+            return;
+          }
+
+          callback(null, first.address, first.family);
+        },
+      },
+    });
+
     try {
-      const res = await fetch(current, {
+      const res = await fetch(current.url, {
         redirect: "manual",
         headers: { "User-Agent": "agent-coworker/0.1" },
         signal: controller.signal,
+        dispatcher,
       });
 
       if (!isRedirectStatus(res.status)) return res;
 
       const location = res.headers.get("location");
       if (!location) {
-        throw new Error(`Redirect missing location header: ${current}`);
+        throw new Error(`Redirect missing location header: ${current.url.toString()}`);
       }
 
-      const next = new URL(location, current).toString();
-      current = (await assertSafeWebUrl(next)).toString();
+      const next = new URL(location, current.url).toString();
+      current = await resolveSafeWebUrl(next);
     } finally {
       clearTimeout(timeout);
     }
@@ -74,7 +95,7 @@ export function createWebFetchTool(ctx: ToolContext) {
       assertReadableContentType(res.headers.get("content-type"));
       const html = await res.text();
 
-      const finalUrl = (await assertSafeWebUrl(res.url || url)).toString();
+      const finalUrl = (await resolveSafeWebUrl(res.url || url)).url.toString();
       const dom = new JSDOM(html, { url: finalUrl });
       const article = new Readability(dom.window.document).parse();
 

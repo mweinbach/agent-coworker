@@ -70,11 +70,19 @@ function isBlockedHost(hostname: string): boolean {
 type LookupResult = { address: string; family: number };
 type DnsLookup = (hostname: string) => Promise<LookupResult[]>;
 
+export type SafeWebResolution = {
+  url: URL;
+  addresses: LookupResult[];
+};
+
 let dnsLookup: DnsLookup = async (hostname: string) => lookup(hostname, { all: true, verbatim: true });
 
-async function assertHostResolvesToPublicAddress(hostname: string): Promise<void> {
+
+async function resolvePublicAddresses(hostname: string): Promise<LookupResult[]> {
   const host = normalizeHost(hostname);
-  if (isIP(host) !== 0) return;
+  if (isIP(host) !== 0) {
+    return [{ address: host, family: isIP(host) }];
+  }
 
   const results = await dnsLookup(host);
   if (results.length === 0) {
@@ -86,6 +94,8 @@ async function assertHostResolvesToPublicAddress(hostname: string): Promise<void
       throw new Error(`Blocked private/internal host: ${hostname}`);
     }
   }
+
+  return results;
 }
 
 function parseIpv6Hextets(host: string): number[] | null {
@@ -131,6 +141,11 @@ function isIpv4MappedIpv6(hextets: number[]): boolean {
 }
 
 export async function assertSafeWebUrl(urlRaw: string): Promise<URL> {
+  const { url } = await resolveSafeWebUrl(urlRaw);
+  return url;
+}
+
+export async function resolveSafeWebUrl(urlRaw: string): Promise<SafeWebResolution> {
   const parsed = new URL(urlRaw);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(`Blocked URL protocol: ${parsed.protocol}`);
@@ -141,8 +156,12 @@ export async function assertSafeWebUrl(urlRaw: string): Promise<URL> {
   if (isBlockedHost(parsed.hostname)) {
     throw new Error(`Blocked private/internal host: ${parsed.hostname}`);
   }
-  await assertHostResolvesToPublicAddress(parsed.hostname);
-  return parsed;
+
+  const addresses = await resolvePublicAddresses(parsed.hostname);
+  return {
+    url: parsed,
+    addresses,
+  };
 }
 
 export const __internal = {

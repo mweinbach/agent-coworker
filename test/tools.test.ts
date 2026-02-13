@@ -620,6 +620,21 @@ describe("glob tool", () => {
     const t: any = createGlobTool(makeCtx(dir));
     await expect(t.execute({ pattern: "*.ts", cwd: outsideDir })).rejects.toThrow(/blocked/i);
   });
+
+  test("rejects glob with parent-relative pattern escaping cwd", async () => {
+    const dir = await tmpDir();
+
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: "../outside/*.ts" })).rejects.toThrow(/blocked/i);
+  });
+
+  test("rejects glob with absolute pattern", async () => {
+    const dir = await tmpDir();
+    const absolutePattern = path.join(dir, "*.ts");
+
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: absolutePattern })).rejects.toThrow(/blocked/i);
+  });
 });
 
 // ---------------------------------------------------------------------------

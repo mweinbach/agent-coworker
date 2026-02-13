@@ -1,4 +1,5 @@
 import fg from "fast-glob";
+import path from "node:path";
 
 import { tool } from "ai";
 import { z } from "zod";
@@ -6,6 +7,19 @@ import { z } from "zod";
 import type { ToolContext } from "./context";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertReadPathAllowed } from "../utils/permissions";
+
+function assertSafeGlobPattern(pattern: string): void {
+  const normalizedPattern = pattern.replace(/\\/g, "/");
+  const maybeNegatedPattern = normalizedPattern.startsWith("!") ? normalizedPattern.slice(1) : normalizedPattern;
+
+  if (path.isAbsolute(maybeNegatedPattern) || /^[A-Za-z]:\//.test(maybeNegatedPattern)) {
+    throw new Error("glob blocked: pattern must be relative to cwd");
+  }
+
+  if (/^\.\.(\/|$)/.test(maybeNegatedPattern) || maybeNegatedPattern.includes("/../")) {
+    throw new Error("glob blocked: pattern cannot escape cwd");
+  }
+}
 
 export function createGlobTool(ctx: ToolContext) {
   return tool({
@@ -16,6 +30,8 @@ export function createGlobTool(ctx: ToolContext) {
     }),
     execute: async ({ pattern, cwd }) => {
       ctx.log(`tool> glob ${JSON.stringify({ pattern, cwd })}`);
+
+      assertSafeGlobPattern(pattern);
 
       const searchCwd = await assertReadPathAllowed(
         resolveMaybeRelative(cwd || ctx.config.workingDirectory, ctx.config.workingDirectory),

@@ -10,8 +10,20 @@ export const PROVIDER_NAMES = [
 
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 
+export const PROVIDER_LEGACY_ALIASES = {
+  "gemini-cli": "google",
+} as const satisfies Record<string, ProviderName>;
+
+export type LegacyProviderName = keyof typeof PROVIDER_LEGACY_ALIASES;
+
 export function isProviderName(v: unknown): v is ProviderName {
   return typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
+}
+
+export function resolveProviderName(v: unknown): ProviderName | null {
+  if (isProviderName(v)) return v;
+  if (typeof v !== "string") return null;
+  return PROVIDER_LEGACY_ALIASES[v as LegacyProviderName] ?? null;
 }
 
 export interface AgentConfig {

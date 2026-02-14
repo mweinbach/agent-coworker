@@ -420,6 +420,25 @@ describe("loadConfig", () => {
 
     expect(cfg.provider).toBe("anthropic");
   });
+
+  test("legacy gemini-cli provider maps to google", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      provider: "gemini-cli",
+      model: "gemini-test",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.provider).toBe("google");
+    expect(cfg.model).toBe("gemini-test");
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { getAiCoworkerPaths } from "./connect";
 import { defaultModelForProvider, getModelForProvider, getProviderKeyCandidates } from "./providers";
-import { isProviderName } from "./types";
+import { resolveProviderName } from "./types";
 import type { AgentConfig, ProviderName } from "./types";
 
 export { defaultModelForProvider } from "./providers";
@@ -49,8 +49,7 @@ function resolveBuiltInDir(): string {
 }
 
 function asProviderName(v: unknown): ProviderName | null {
-  if (isProviderName(v)) return v;
-  return null;
+  return resolveProviderName(v);
 }
 
 function asBoolean(v: unknown): boolean | null {

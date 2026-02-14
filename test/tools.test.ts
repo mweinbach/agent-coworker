@@ -599,7 +599,7 @@ describe("glob tool", () => {
     expect(res).not.toContain("outer.txt");
   });
 
-  test("finds multiple file types with brace expansion", async () => {
+  test("treats brace patterns literally when brace expansion is disabled", async () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "a.ts"), "", "utf-8");
     await fs.writeFile(path.join(dir, "b.js"), "", "utf-8");
@@ -607,9 +607,17 @@ describe("glob tool", () => {
 
     const t: any = createGlobTool(makeCtx(dir));
     const res: string = await t.execute({ pattern: "*.{ts,js}" });
-    expect(res).toContain("a.ts");
-    expect(res).toContain("b.js");
-    expect(res).not.toContain("c.py");
+    expect(res).toBe("No files found.");
+  });
+
+  test("does not expand brace patterns containing absolute paths", async () => {
+    const dir = await tmpDir();
+    await fs.writeFile(path.join(dir, "a.ts"), "", "utf-8");
+
+    const t: any = createGlobTool(makeCtx(dir));
+    const res: string = await t.execute({ pattern: "{/etc/passwd,*.ts}" });
+    expect(res).toBe("No files found.");
+    expect(res).not.toContain("/etc/passwd");
   });
 
   test("rejects glob with cwd outside allowed directories", async () => {

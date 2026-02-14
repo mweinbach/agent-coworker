@@ -42,6 +42,7 @@ export function createGlobTool(ctx: ToolContext) {
         cwd: searchCwd,
         dot: false,
         stats: true,
+        braceExpansion: false,
         followSymbolicLinks: false,
       });
       files.sort((a, b) => (b.stats?.mtimeMs || 0) - (a.stats?.mtimeMs || 0));

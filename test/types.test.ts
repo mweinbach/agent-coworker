@@ -5,15 +5,14 @@ import { isProviderName, PROVIDER_NAMES } from "../src/types";
 // PROVIDER_NAMES
 // ---------------------------------------------------------------------------
 describe("PROVIDER_NAMES", () => {
-  test("contains exactly 6 providers", () => {
-    expect(PROVIDER_NAMES).toHaveLength(6);
+  test("contains exactly 5 providers", () => {
+    expect(PROVIDER_NAMES).toHaveLength(5);
   });
 
   test("contains expected provider names", () => {
     expect(PROVIDER_NAMES).toContain("google");
     expect(PROVIDER_NAMES).toContain("openai");
     expect(PROVIDER_NAMES).toContain("anthropic");
-    expect(PROVIDER_NAMES).toContain("gemini-cli");
     expect(PROVIDER_NAMES).toContain("codex-cli");
     expect(PROVIDER_NAMES).toContain("claude-code");
   });
@@ -35,10 +34,6 @@ describe("isProviderName", () => {
 
     test("anthropic", () => {
       expect(isProviderName("anthropic")).toBe(true);
-    });
-
-    test("gemini-cli", () => {
-      expect(isProviderName("gemini-cli")).toBe(true);
     });
 
     test("codex-cli", () => {

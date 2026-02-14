@@ -192,18 +192,13 @@ export function maskApiKey(value: string): string {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
-export function isOauthCliProvider(service: ConnectService): service is "gemini-cli" | "codex-cli" | "claude-code" {
-  return service === "gemini-cli" || service === "codex-cli" || service === "claude-code";
+export function isOauthCliProvider(service: ConnectService): service is "codex-cli" | "claude-code" {
+  return service === "codex-cli" || service === "claude-code";
 }
 
 function oauthCredentialCandidates(service: ConnectService, paths: AiCoworkerPaths): readonly string[] {
   const homeDir = path.dirname(paths.rootDir);
   switch (service) {
-    case "gemini-cli":
-      return [
-        path.join(paths.authDir, "gemini-cli", "oauth_creds.json"),
-        path.join(homeDir, ".gemini", "oauth_creds.json"),
-      ];
     case "codex-cli":
       return [path.join(paths.authDir, "codex-cli", "auth.json"), path.join(homeDir, ".codex", "auth.json")];
     case "claude-code":
@@ -293,8 +288,6 @@ function oauthCredentialSourceCandidates(service: ConnectService, paths: AiCowor
   // Prefer the upstream CLI's canonical location as the source of truth.
   const homeDir = path.dirname(paths.rootDir);
   switch (service) {
-    case "gemini-cli":
-      return [path.join(homeDir, ".gemini", "oauth_creds.json")];
     case "codex-cli":
       return [path.join(homeDir, ".codex", "auth.json")];
     case "claude-code":
@@ -365,9 +358,6 @@ function oauthCommandCandidates(
   service: ConnectService
 ): readonly { command: string; args: string[]; display: string }[] {
   switch (service) {
-    case "gemini-cli":
-      // Gemini CLI does not expose `gemini auth login`; run `gemini` for interactive auth setup.
-      return [{ command: "gemini", args: [], display: "gemini" }];
     case "codex-cli":
       return [{ command: "codex", args: ["login"], display: "codex login" }];
     case "claude-code":
@@ -487,15 +477,6 @@ export async function connectProvider(opts: {
       storageFile: paths.connectionsFile,
       message: "Existing OAuth credentials detected.",
       oauthCredentialsFile: oauthCredentialsFile ?? undefined,
-    };
-  }
-
-  if (provider === "gemini-cli" && stdioMode !== "inherit") {
-    return {
-      ok: false,
-      provider,
-      message:
-        "Gemini CLI OAuth is interactive and requires a TTY. Run `gemini` in a terminal to complete login, then retry /connect.",
     };
   }
 

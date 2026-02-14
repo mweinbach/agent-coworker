@@ -69,7 +69,6 @@ type ProviderName =
   | "google"
   | "openai"
   | "anthropic"
-  | "gemini-cli"
   | "codex-cli"
   | "claude-code";
 

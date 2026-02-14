@@ -101,33 +101,6 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
     });
   });
 
-  test("gemini-cli provider can reuse saved google key", async () => {
-    const { home } = await makeTmpDirs();
-    const savedKey = "saved-google-key";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        google: {
-          service: "google",
-          mode: "api_key",
-          apiKey: savedKey,
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    const cfg = makeConfig({
-      provider: "gemini-cli",
-      model: "gemini-3-flash-preview",
-      userAgentDir: path.join(home, ".agent"),
-    });
-
-    const model = getModel(cfg) as any;
-    expect(model.providerOptions?.apiKey).toBe(savedKey);
-  });
-
   test("codex-cli provider can reuse saved openai key", async () => {
     const { home } = await makeTmpDirs();
     const savedKey = "saved-openai-key";

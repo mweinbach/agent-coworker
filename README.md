@@ -20,7 +20,6 @@ Set an API key for the provider you want:
 - Anthropic: `ANTHROPIC_API_KEY`
 
 Or use OAuth-capable community providers:
-- Gemini CLI: install `@google/gemini-cli` and run `gemini` login flow
 - Codex CLI: install `@openai/codex` and run `codex login`
 - Claude Code: install `@anthropic-ai/claude-code` and run `claude login`
 
@@ -58,7 +57,7 @@ bun run serve
 Config precedence: built-in defaults < user < project < environment variables.
 
 Environment variables:
-- `AGENT_PROVIDER` (`google|openai|anthropic|gemini-cli|codex-cli|claude-code`)
+- `AGENT_PROVIDER` (`google|openai|anthropic|codex-cli|claude-code`)
 - `AGENT_MODEL` (main model id)
 - `AGENT_WORKING_DIR` (directory the agent should operate in)
 - `AGENT_OUTPUT_DIR`, `AGENT_UPLOADS_DIR`

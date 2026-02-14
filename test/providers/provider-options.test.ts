@@ -10,8 +10,6 @@ describe("Provider options structure", () => {
   test("all expected providers have options defined", () => {
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("openai");
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("google");
-    expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("gemini-cli-core");
-    expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("gemini-cli");
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("anthropic");
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("codex-cli");
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("claude-code");
@@ -22,8 +20,6 @@ describe("Provider options structure", () => {
     expect(providers).toEqual([
       "openai",
       "google",
-      "gemini-cli-core",
-      "gemini-cli",
       "anthropic",
       "codex-cli",
       "claude-code",
@@ -54,9 +50,6 @@ describe("Provider options structure", () => {
 
     // Google: thinkingConfig.includeThoughts is true
     expect(DEFAULT_PROVIDER_OPTIONS.google.thinkingConfig.includeThoughts).toBe(true);
-
-    // Gemini CLI: keep tool-call loops safe by disabling thought parts.
-    expect(DEFAULT_PROVIDER_OPTIONS["gemini-cli-core"].thinkingConfig.includeThoughts).toBe(false);
 
     // Anthropic: thinking.type is "enabled"
     expect(DEFAULT_PROVIDER_OPTIONS.anthropic.thinking.type).toBe("enabled");

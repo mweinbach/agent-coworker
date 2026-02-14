@@ -4,7 +4,6 @@ export const PROVIDER_NAMES = [
   "google",
   "openai",
   "anthropic",
-  "gemini-cli",
   "codex-cli",
   "claude-code",
 ] as const;

@@ -26,7 +26,6 @@ describe("connect helpers", () => {
   });
 
   test("isOauthCliProvider returns true for oauth cli providers", () => {
-    expect(isOauthCliProvider("gemini-cli")).toBe(true);
     expect(isOauthCliProvider("codex-cli")).toBe(true);
     expect(isOauthCliProvider("claude-code")).toBe(true);
   });
@@ -78,53 +77,6 @@ describe("connectProvider", () => {
     const entry = store.services.google;
     expect(entry).toBeDefined();
     expect(entry?.mode).toBe("oauth_pending");
-    expect(entry?.apiKey).toBeUndefined();
-  });
-
-  test("gemini-cli oauth in pipe mode requires interactive tty", async () => {
-    const home = await makeTmpHome();
-    const paths = getAiCoworkerPaths({ homedir: home });
-
-    const runner = async () => ({ exitCode: 0 as number | null, signal: null as NodeJS.Signals | null });
-    const result = await connectProvider({
-      provider: "gemini-cli",
-      paths,
-      oauthStdioMode: "pipe",
-      oauthRunner: runner,
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.message).toContain("requires a TTY");
-  });
-
-  test("gemini-cli marks oauth when cached credentials exist", async () => {
-    const home = await makeTmpHome();
-    const paths = getAiCoworkerPaths({ homedir: home });
-    const geminiCreds = path.join(home, ".gemini", "oauth_creds.json");
-    await fs.mkdir(path.dirname(geminiCreds), { recursive: true });
-    await fs.writeFile(geminiCreds, JSON.stringify({ access_token: "x" }), "utf-8");
-
-    const result = await connectProvider({
-      provider: "gemini-cli",
-      paths,
-      oauthStdioMode: "pipe",
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.mode).toBe("oauth");
-    expect(result.message).toContain("Existing OAuth credentials detected");
-    expect(result.oauthCredentialsFile).toBe(path.join(home, ".cowork", "auth", "gemini-cli", "oauth_creds.json"));
-
-    // Credentials are also persisted under ~/.cowork/auth for centralized storage.
-    const persisted = await fs.readFile(path.join(home, ".cowork", "auth", "gemini-cli", "oauth_creds.json"), "utf-8");
-    expect(persisted).toContain("access_token");
-
-    const store = await readConnectionStore(paths);
-    const entry = store.services["gemini-cli"];
-    expect(entry).toBeDefined();
-    expect(entry?.mode).toBe("oauth");
     expect(entry?.apiKey).toBeUndefined();
   });
 

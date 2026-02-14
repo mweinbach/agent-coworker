@@ -276,66 +276,6 @@ describe("runTurn", () => {
     expect(callArg.stopWhen).toBe("step-count-sentinel");
   });
 
-  test("gemini-cli uses single-step tool loop and strips assistant tool-call replay", async () => {
-    const config = makeConfig({ provider: "gemini-cli", model: "gemini-3-flash-preview" });
-    const initialMessages = [
-      { role: "user", content: [{ type: "text", text: "add 7+11" }] },
-    ] as any[];
-
-    mockStreamText
-      .mockImplementationOnce(async () => ({
-        text: "",
-        reasoningText: undefined,
-        finishReason: "tool-calls",
-        response: {
-          messages: [
-            {
-              role: "assistant",
-              content: [{ type: "tool-call", toolCallId: "tc1", toolName: "add", input: { a: 7, b: 11 } }],
-            },
-            {
-              role: "tool",
-              content: [
-                {
-                  type: "tool-result",
-                  toolCallId: "tc1",
-                  toolName: "add",
-                  output: { type: "json", value: { sum: 18 } },
-                },
-              ],
-            },
-          ],
-        },
-      }))
-      .mockImplementationOnce(async () => ({
-        text: "18",
-        reasoningText: undefined,
-        finishReason: "stop",
-        response: {
-          messages: [{ role: "assistant", content: [{ type: "text", text: "18" }] }],
-        },
-      }));
-
-    const result = await runTurn(makeParams({ config, messages: initialMessages, maxSteps: 5 }));
-
-    expect(mockStreamText).toHaveBeenCalledTimes(2);
-    expect(mockStepCountIs).toHaveBeenCalledWith(1);
-    expect(mockStepCountIs).toHaveBeenCalledWith(1);
-
-    const secondCallArg = mockStreamText.mock.calls[1][0] as any;
-    const secondMessages = secondCallArg.messages as any[];
-    const hasAssistantToolCall = secondMessages.some(
-      (m) =>
-        m.role === "assistant" &&
-        Array.isArray(m.content) &&
-        m.content.some((p: any) => p?.type === "tool-call")
-    );
-
-    expect(hasAssistantToolCall).toBe(false);
-    expect(secondMessages.some((m) => m.role === "tool")).toBe(true);
-    expect(result.text).toBe("18");
-  });
-
   // -------------------------------------------------------------------------
   // Config -> getModel
   // -------------------------------------------------------------------------

@@ -629,6 +629,25 @@ describe("glob tool", () => {
     await expect(t.execute({ pattern: "*.ts", cwd: outsideDir })).rejects.toThrow(/blocked/i);
   });
 
+  test("rejects matches that escape allowed scope via symlink path segments", async () => {
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    const linkPath = path.join(dir, "link");
+    await fs.writeFile(path.join(outsideDir, "secret.txt"), "", "utf-8");
+
+    try {
+      const symlinkType = process.platform === "win32" ? "junction" : "dir";
+      await fs.symlink(outsideDir, linkPath, symlinkType);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") return;
+      throw err;
+    }
+
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: "link/*.txt" })).rejects.toThrow(/blocked/i);
+  });
+
   test("rejects glob with parent-relative pattern escaping cwd", async () => {
     const dir = await tmpDir();
 

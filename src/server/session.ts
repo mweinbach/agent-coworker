@@ -174,10 +174,6 @@ export class AgentSession {
       return { code: "permission_denied", source: "permissions" };
     }
 
-    if (m.includes("checkpoint") || m.includes("session backup") || m.includes("backup")) {
-      return { code: "backup_error", source: "backup" };
-    }
-
     if (m.includes("observability") || m.includes("traceql") || m.includes("promql") || m.includes("logql")) {
       return { code: "observability_error", source: "observability" };
     }
@@ -188,6 +184,10 @@ export class AgentSession {
 
     if (m.includes("is required") || m.includes("invalid") || m.includes("unknown checkpoint id")) {
       return { code: "validation_failed", source: "session" };
+    }
+
+    if (m.includes("checkpoint") || m.includes("session backup")) {
+      return { code: "backup_error", source: "backup" };
     }
 
     return { code: "internal_error", source: "session" };

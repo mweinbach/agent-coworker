@@ -1696,6 +1696,38 @@ describe("AgentSession", () => {
       expect(errorEvt.sessionId).toBe(session.id);
     });
 
+    test("classifies unknown checkpoint id failures as validation_failed", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("Unknown checkpoint id: cp-404");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("validation_failed");
+        expect(errorEvt.source).toBe("session");
+      }
+    });
+
+    test("does not classify generic backup mentions as backup subsystem errors", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("failed to create backup before editing");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("internal_error");
+        expect(errorEvt.source).toBe("session");
+      }
+    });
+
     test("catches non-Error throws and emits error event", async () => {
       mockRunTurn.mockImplementation(async () => {
         throw "string error";

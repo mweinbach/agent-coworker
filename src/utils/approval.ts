@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 
 import type { ApprovalRiskCode } from "../types";
@@ -80,12 +81,54 @@ function tokenizeCommand(command: string): string[] {
   return tokens;
 }
 
+function canonicalizeExistingPrefixSync(targetPath: string): string {
+  const resolved = path.resolve(targetPath);
+  const tail: string[] = [];
+  let cursor = resolved;
+
+  while (true) {
+    try {
+      const canonical = fs.realpathSync.native(cursor);
+      return tail.length > 0 ? path.join(canonical, ...tail.reverse()) : canonical;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT") throw err;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return resolved;
+      tail.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+function canonicalizeRootSync(rootPath: string): string {
+  const resolved = path.resolve(rootPath);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code !== "ENOENT") throw err;
+    return resolved;
+  }
+}
+
 function hasOutsideAllowedScope(command: string, allowedRoots?: string[]): boolean {
   if (!allowedRoots || allowedRoots.length === 0) return false;
-  const normalizedRoots = allowedRoots.map((root) => path.resolve(root));
+  const normalizedRoots = allowedRoots.map((root) => {
+    try {
+      return canonicalizeRootSync(root);
+    } catch {
+      return path.resolve(root);
+    }
+  });
   for (const token of tokenizeCommand(command)) {
     if (!path.posix.isAbsolute(token) && !path.win32.isAbsolute(token)) continue;
-    const resolved = path.resolve(token);
+    let resolved: string;
+    try {
+      resolved = canonicalizeExistingPrefixSync(token);
+    } catch {
+      return true;
+    }
     const inside = normalizedRoots.some((root) => isPathInside(root, resolved));
     if (!inside) return true;
   }

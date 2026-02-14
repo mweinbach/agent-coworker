@@ -47,6 +47,13 @@ export function createGlobTool(ctx: ToolContext) {
       });
       files.sort((a, b) => (b.stats?.mtimeMs || 0) - (a.stats?.mtimeMs || 0));
 
+      await Promise.all(
+        files.map(async (f) => {
+          const absoluteMatchPath = path.resolve(searchCwd, f.path);
+          await assertReadPathAllowed(absoluteMatchPath, ctx.config, "glob");
+        })
+      );
+
       const res = files.map((f) => f.path).join("\n") || "No files found.";
       ctx.log(`tool< glob ${JSON.stringify({ count: files.length })}`);
       return res;

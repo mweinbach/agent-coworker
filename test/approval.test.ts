@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import {
   classifyCommand,
@@ -345,6 +348,32 @@ describe("classifyCommandDetailed", () => {
       kind: "auto",
       dangerous: false,
       riskCode: "safe_auto_approved",
+    });
+  });
+
+  test("resolves symlinked absolute paths before scope checks", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-approval-root-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-approval-outside-"));
+    const linkPath = path.join(rootDir, "external");
+    await fs.mkdir(path.join(outsideDir, "nested"), { recursive: true });
+
+    try {
+      const symlinkType = process.platform === "win32" ? "junction" : "dir";
+      await fs.symlink(outsideDir, linkPath, symlinkType);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") return;
+      throw err;
+    }
+
+    expect(
+      classifyCommandDetailed(`ls "${path.join(linkPath, "nested")}"`, {
+        allowedRoots: [rootDir],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
     });
   });
 });

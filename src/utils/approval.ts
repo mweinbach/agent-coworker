@@ -112,6 +112,19 @@ function canonicalizeRootSync(rootPath: string): string {
   }
 }
 
+/** Extract path-like values from option-assigned forms: --option=/path or -o=/path */
+function extractPathsFromToken(token: string): string[] {
+  const paths: string[] = [];
+  const optionValueMatch = token.match(/^(?:--[a-zA-Z0-9-]+|-[a-zA-Z0-9])=(.+)$/);
+  if (optionValueMatch) {
+    const value = optionValueMatch[1];
+    if (path.posix.isAbsolute(value) || path.win32.isAbsolute(value)) {
+      paths.push(value);
+    }
+  }
+  return paths;
+}
+
 function hasOutsideAllowedScope(command: string, allowedRoots?: string[]): boolean {
   if (!allowedRoots || allowedRoots.length === 0) return false;
   const normalizedRoots = allowedRoots.map((root) => {
@@ -122,15 +135,21 @@ function hasOutsideAllowedScope(command: string, allowedRoots?: string[]): boole
     }
   });
   for (const token of tokenizeCommand(command)) {
-    if (!path.posix.isAbsolute(token) && !path.win32.isAbsolute(token)) continue;
-    let resolved: string;
-    try {
-      resolved = canonicalizeExistingPrefixSync(token);
-    } catch {
-      return true;
+    const pathsToCheck: string[] = [];
+    if (path.posix.isAbsolute(token) || path.win32.isAbsolute(token)) {
+      pathsToCheck.push(token);
     }
-    const inside = normalizedRoots.some((root) => isPathInside(root, resolved));
-    if (!inside) return true;
+    pathsToCheck.push(...extractPathsFromToken(token));
+    for (const p of pathsToCheck) {
+      let resolved: string;
+      try {
+        resolved = canonicalizeExistingPrefixSync(p);
+      } catch {
+        return true;
+      }
+      const inside = normalizedRoots.some((root) => isPathInside(root, resolved));
+      if (!inside) return true;
+    }
   }
   return false;
 }

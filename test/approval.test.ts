@@ -343,6 +343,27 @@ describe("classifyCommandDetailed", () => {
     });
   });
 
+  test("returns outside_allowed_scope for option-assigned paths outside allowed roots", () => {
+    expect(
+      classifyCommandDetailed("ls --directory=/etc", {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+    expect(
+      classifyCommandDetailed("cmd --file=/abs/path", {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+  });
+
   test("outside_allowed_scope is ignored when no allowedRoots are provided", () => {
     expect(classifyCommandDetailed("ls /etc")).toEqual({
       kind: "auto",

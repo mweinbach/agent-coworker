@@ -364,6 +364,33 @@ describe("classifyCommandDetailed", () => {
     });
   });
 
+  test("returns outside_allowed_scope for file-read commands outside allowed roots", () => {
+    expect(
+      classifyCommandDetailed("cat /etc/passwd", {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+  });
+
+  test("returns file_read_command_requires_review for in-scope file-read commands", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-approval-in-scope-"));
+    const filePath = path.join(rootDir, "allowed.txt");
+    await fs.writeFile(filePath, "ok");
+    expect(
+      classifyCommandDetailed(`cat "${filePath}"`, {
+        allowedRoots: [rootDir],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "file_read_command_requires_review",
+    });
+  });
+
   test("outside_allowed_scope is ignored when no allowedRoots are provided", () => {
     expect(classifyCommandDetailed("ls /etc")).toEqual({
       kind: "auto",

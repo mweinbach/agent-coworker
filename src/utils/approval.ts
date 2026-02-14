@@ -167,12 +167,12 @@ export function classifyCommandDetailed(
     return { kind: "prompt", dangerous: false, riskCode: "contains_shell_control_operator" };
   }
 
-  if (FILE_READ_REVIEW_PATTERNS.some((p) => p.test(command))) {
-    return { kind: "prompt", dangerous: false, riskCode: "file_read_command_requires_review" };
-  }
-
   if (hasOutsideAllowedScope(command, ctx.allowedRoots)) {
     return { kind: "prompt", dangerous: false, riskCode: "outside_allowed_scope" };
+  }
+
+  if (FILE_READ_REVIEW_PATTERNS.some((p) => p.test(command))) {
+    return { kind: "prompt", dangerous: false, riskCode: "file_read_command_requires_review" };
   }
 
   if (AUTO_APPROVE_PATTERNS.some((p) => p.test(command))) {

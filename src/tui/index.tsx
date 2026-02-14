@@ -100,10 +100,7 @@ type ModelChoice = { provider: ConnectService; model: string };
 
 type CommandWindow = { kind: "slash" } | { kind: "help" } | { kind: "models" } | { kind: "connect" } | null;
 
-const UI_DISABLED_CONNECT_SERVICES = new Set<ConnectService>(["gemini-cli"]);
-const CONNECT_SERVICES: readonly ConnectService[] = PROVIDER_NAMES.filter(
-  (provider) => !UI_DISABLED_CONNECT_SERVICES.has(provider)
-);
+const CONNECT_SERVICES: readonly ConnectService[] = PROVIDER_NAMES;
 
 const MODEL_CHOICES: Record<ConnectService, readonly string[]> = modelChoicesByProvider();
 
@@ -232,11 +229,6 @@ function asConnectService(v: string): ConnectService | null {
   if (!normalized) return null;
   if ((CONNECT_SERVICES as readonly string[]).includes(normalized)) return normalized as ConnectService;
   return null;
-}
-
-function isUiDisabledConnectService(v: string): boolean {
-  const normalized = v.trim().toLowerCase();
-  return UI_DISABLED_CONNECT_SERVICES.has(normalized as ConnectService);
 }
 
 function parseModelChoiceArg(raw: string, currentProvider?: string): ModelChoice | null {
@@ -858,7 +850,6 @@ function App(props: { serverUrl: string }) {
     lines.push(
       `- \`/connect <${CONNECT_SERVICES.join("|")}>\` (runs OAuth for ${oauthUiServices.join("/")}; otherwise marks pending)`
     );
-    lines.push("- note: gemini-cli is temporarily disabled in the UI.");
     return lines.join("\n");
   };
 
@@ -874,15 +865,6 @@ function App(props: { serverUrl: string }) {
           type: "message",
           role: "assistant",
           text: renderConnectStatus(store),
-        });
-        return;
-      }
-
-      if (isUiDisabledConnectService(serviceToken)) {
-        appendFeed({
-          id: nextFeedId(),
-          type: "system",
-          line: `${serviceToken} is temporarily disabled in the UI.`,
         });
         return;
       }

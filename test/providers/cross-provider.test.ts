@@ -14,7 +14,6 @@ describe("Cross-provider model creation", () => {
     { name: "anthropic", providerPrefix: "anthropic.messages" },
     { name: "openai", providerPrefix: "openai.responses" },
     { name: "google", providerPrefix: "google.generative-ai" },
-    { name: "gemini-cli", providerPrefix: "gemini-cli-core" },
     { name: "codex-cli", providerPrefix: "codex-cli" },
     { name: "claude-code", providerPrefix: "claude-code" },
   ];
@@ -86,10 +85,6 @@ describe("Session reasoning kind mapping", () => {
 
   test("codex-cli provider maps to 'summary' reasoning kind", () => {
     expect(reasoningKind("codex-cli")).toBe("summary");
-  });
-
-  test("gemini-cli provider maps to 'reasoning' kind", () => {
-    expect(reasoningKind("gemini-cli")).toBe("reasoning");
   });
 
   test("claude-code provider maps to 'reasoning' kind", () => {

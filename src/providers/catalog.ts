@@ -18,10 +18,6 @@ export const PROVIDER_MODEL_CATALOG = {
     defaultModel: "gpt-5.3-codex",
     availableModels: ["gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.2"],
   },
-  "gemini-cli": {
-    defaultModel: "gemini-3-flash-preview",
-    availableModels: ["gemini-3-flash-preview", "gemini-3-pro-preview"],
-  },
   google: {
     defaultModel: "gemini-3-flash-preview",
     availableModels: ["gemini-3-flash-preview", "gemini-3-pro-preview"],
@@ -44,7 +40,6 @@ export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   anthropic: PROVIDER_MODEL_CATALOG.anthropic.availableModels,
   "claude-code": PROVIDER_MODEL_CATALOG["claude-code"].availableModels,
   "codex-cli": PROVIDER_MODEL_CATALOG["codex-cli"].availableModels,
-  "gemini-cli": PROVIDER_MODEL_CATALOG["gemini-cli"].availableModels,
   google: PROVIDER_MODEL_CATALOG.google.availableModels,
   openai: PROVIDER_MODEL_CATALOG.openai.availableModels,
 };

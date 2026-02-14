@@ -6,33 +6,6 @@ import type { AgentConfig, TodoItem } from "./types";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
 
-function sanitizeGeminiToolCallReplay(messages: ModelMessage[]): ModelMessage[] {
-  const out: ModelMessage[] = [];
-
-  for (const message of messages) {
-    if (message.role !== "assistant" || !Array.isArray(message.content)) {
-      out.push(message);
-      continue;
-    }
-
-    // Gemini CLI currently drops function-call thought signatures when AI SDK
-    // replays assistant tool-call parts. Keep only non-tool-call assistant parts.
-    const filtered = message.content.filter((part: any) => part?.type !== "tool-call");
-    if (filtered.length === 0) continue;
-    out.push({ ...message, content: filtered } as ModelMessage);
-  }
-
-  return out;
-}
-
-function unifiedFinishReason(v: unknown): string | undefined {
-  if (typeof v === "string") return v;
-  if (typeof v === "object" && v !== null && typeof (v as any).unified === "string") {
-    return (v as any).unified;
-  }
-  return undefined;
-}
-
 export interface RunTurnParams {
   config: AgentConfig;
   system: string;
@@ -108,55 +81,6 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
 
     const result = await (async () => {
       try {
-        if (config.provider === "gemini-cli") {
-          // Workaround for Gemini CLI provider tool-call replay:
-          // keep model calls single-step and manually continue with sanitized history.
-          const maxSteps = params.maxSteps ?? 100;
-          const rollingMessages = sanitizeGeminiToolCallReplay(messages);
-          const responseMessages: ModelMessage[] = [];
-          const reasoningChunks: string[] = [];
-          let text = "";
-
-          for (let step = 0; step < maxSteps; step++) {
-            const stepResult = await deps.streamText({
-              model: deps.getModel(config),
-              system,
-              messages: rollingMessages,
-              tools,
-              providerOptions: config.providerOptions,
-              stopWhen: deps.stepCountIs(1),
-              abortSignal,
-            } as any);
-
-            const stepResponse = await stepResult.response;
-            const stepResponseMessages = sanitizeGeminiToolCallReplay(
-              (stepResponse?.messages || []) as ModelMessage[]
-            );
-            if (stepResponseMessages.length > 0) {
-              responseMessages.push(...stepResponseMessages);
-              rollingMessages.push(...stepResponseMessages);
-            }
-
-            const stepReasoningText = await stepResult.reasoningText;
-            const stepReasoning = typeof stepReasoningText === "string" ? stepReasoningText.trim() : "";
-            if (stepReasoning) reasoningChunks.push(stepReasoning);
-
-            const stepText = String((await stepResult.text) ?? "").trim();
-            if (stepText) text = text ? `${text}\n${stepText}` : stepText;
-
-            const finish = unifiedFinishReason(await stepResult.finishReason);
-            const hasToolResult = stepResponseMessages.some((m) => m.role === "tool");
-            if (finish !== "tool-calls") break;
-            if (!hasToolResult) break;
-          }
-
-          return {
-            text,
-            reasoningText: reasoningChunks.length > 0 ? reasoningChunks.join("\n\n") : undefined,
-            response: { messages: responseMessages },
-          } as any;
-        }
-
         const streamResult = await deps.streamText({
           model: deps.getModel(config),
           system,

@@ -1,4 +1,4 @@
-import type { AgentConfig, ProviderName } from "../types";
+import type { AgentConfig, LegacyProviderName, ProviderName } from "../types";
 
 import { anthropicProvider } from "./anthropic";
 import { claudeCodeProvider } from "./claude-code";
@@ -16,7 +16,7 @@ export {
 } from "./catalog";
 
 export type ProviderRuntimeDefinition = {
-  keyCandidates: readonly ProviderName[];
+  keyCandidates: readonly (ProviderName | LegacyProviderName)[];
   createModel: (options: { config: AgentConfig; modelId: string; savedKey?: string }) => unknown;
 };
 
@@ -25,24 +25,10 @@ export type ProviderDefinition = {
   availableModels: readonly string[];
 } & ProviderRuntimeDefinition;
 
-const DESKTOP_BUNDLE = process.env.COWORK_DESKTOP_BUNDLE === "1";
-
-const geminiCliProvider: ProviderRuntimeDefinition = DESKTOP_BUNDLE
-  ? {
-      keyCandidates: ["google"] as const,
-      createModel: () => {
-        throw new Error(
-          "The gemini-cli provider is disabled in the desktop bundle. Connect via google/openai/anthropic instead."
-        );
-      },
-    }
-  : (await import("./gemini-cli")).geminiCliProvider;
-
 const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   anthropic: anthropicProvider,
   "claude-code": claudeCodeProvider,
   "codex-cli": codexCliProvider,
-  "gemini-cli": geminiCliProvider,
   google: googleProvider,
   openai: openaiProvider,
 };
@@ -51,7 +37,6 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   anthropic: { ...PROVIDER_RUNTIMES.anthropic, ...PROVIDER_MODEL_CATALOG.anthropic },
   "claude-code": { ...PROVIDER_RUNTIMES["claude-code"], ...PROVIDER_MODEL_CATALOG["claude-code"] },
   "codex-cli": { ...PROVIDER_RUNTIMES["codex-cli"], ...PROVIDER_MODEL_CATALOG["codex-cli"] },
-  "gemini-cli": { ...PROVIDER_RUNTIMES["gemini-cli"], ...PROVIDER_MODEL_CATALOG["gemini-cli"] },
   google: { ...PROVIDER_RUNTIMES.google, ...PROVIDER_MODEL_CATALOG.google },
   openai: { ...PROVIDER_RUNTIMES.openai, ...PROVIDER_MODEL_CATALOG.openai },
 };
@@ -60,6 +45,6 @@ export function getModelForProvider(config: AgentConfig, modelId: string, savedK
   return PROVIDERS[config.provider].createModel({ config, modelId, savedKey });
 }
 
-export function getProviderKeyCandidates(provider: ProviderName): readonly ProviderName[] {
+export function getProviderKeyCandidates(provider: ProviderName): readonly (ProviderName | LegacyProviderName)[] {
   return PROVIDERS[provider].keyCandidates;
 }

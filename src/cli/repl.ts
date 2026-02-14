@@ -12,8 +12,7 @@ import type { AgentConfig, ApprovalRiskCode, TodoItem } from "../types";
 // Keep CLI output clean by default.
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
 
-const UI_DISABLED_PROVIDERS = new Set<string>(["gemini-cli"]);
-const UI_PROVIDER_NAMES = PROVIDER_NAMES.filter((name) => !UI_DISABLED_PROVIDERS.has(name));
+const UI_PROVIDER_NAMES = PROVIDER_NAMES;
 
 type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
 
@@ -188,7 +187,6 @@ export async function runCliRepl(
     console.log(`  /connect <name> [key]  Save provider key or run OAuth (${UI_PROVIDER_NAMES.join("|")})`);
     console.log("  /cwd <path>            Set working directory for this session");
     console.log("  /tools                List tool names\n");
-    console.log("  note: gemini-cli is temporarily disabled in the UI.");
   };
 
   const showConnectStatus = async () => {
@@ -550,11 +548,6 @@ export async function runCliRepl(
 
         if (cmd === "provider") {
           const name = (rest[0] ?? "").trim();
-          if (UI_DISABLED_PROVIDERS.has(name)) {
-            console.log(`${name} is temporarily disabled in the UI.`);
-            activateNextPrompt(rl);
-            return;
-          }
           if (!isProviderName(name)) {
             console.log(`usage: /provider <${UI_PROVIDER_NAMES.join("|")}>`);
             activateNextPrompt(rl);
@@ -592,12 +585,6 @@ export async function runCliRepl(
 
           if (!serviceToken || serviceToken === "help" || serviceToken === "list") {
             await showConnectStatus();
-            activateNextPrompt(rl);
-            return;
-          }
-
-          if (UI_DISABLED_PROVIDERS.has(serviceToken)) {
-            console.log(`${serviceToken} is temporarily disabled in the UI.`);
             activateNextPrompt(rl);
             return;
           }

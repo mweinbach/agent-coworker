@@ -70,6 +70,34 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
     });
   });
 
+  test("google provider uses legacy gemini-cli saved key", async () => {
+    const { home } = await makeTmpDirs();
+    const savedKey = "saved-gemini-cli-key";
+
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        "gemini-cli": {
+          service: "gemini-cli",
+          mode: "api_key",
+          apiKey: savedKey,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const cfg = makeConfig({
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      userAgentDir: path.join(home, ".agent"),
+    });
+
+    const model = getModel(cfg) as any;
+    const headers = await model.config.headers();
+    expect(headers["x-goog-api-key"]).toBe(savedKey);
+  });
+
   test("anthropic saved key overrides ANTHROPIC_API_KEY", async () => {
     const { home } = await makeTmpDirs();
     const savedKey = "saved-anthropic-key";
@@ -99,33 +127,6 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const headers = await model.config.headers();
       expect(headers["x-api-key"]).toBe(savedKey);
     });
-  });
-
-  test("gemini-cli provider can reuse saved google key", async () => {
-    const { home } = await makeTmpDirs();
-    const savedKey = "saved-google-key";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        google: {
-          service: "google",
-          mode: "api_key",
-          apiKey: savedKey,
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    const cfg = makeConfig({
-      provider: "gemini-cli",
-      model: "gemini-3-flash-preview",
-      userAgentDir: path.join(home, ".agent"),
-    });
-
-    const model = getModel(cfg) as any;
-    expect(model.providerOptions?.apiKey).toBe(savedKey);
   });
 
   test("codex-cli provider can reuse saved openai key", async () => {

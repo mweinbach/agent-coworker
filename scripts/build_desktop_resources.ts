@@ -66,18 +66,9 @@ async function main() {
       "build",
       entry,
       // Inline this env var into the bundle so provider modules can DCE
-      // desktop-only branches (ex: gemini-cli provider depends on wasm assets
-      // Bun's bundler currently can't resolve).
+      // desktop-only branches.
       "--env",
       "COWORK_DESKTOP_BUNDLE*",
-      // These dependencies currently pull in wasm assets using `?binary` import
-      // specifiers which Bun's bundler cannot resolve. They are unused in the
-      // desktop bundle (provider is gated), so keep them external to unblock
-      // building the server resources.
-      "--external",
-      "ai-sdk-provider-gemini-cli",
-      "--external",
-      "@google/gemini-cli-core",
       "--outdir",
       serverOutDir,
       "--target",
@@ -115,10 +106,6 @@ async function main() {
     sidecarOutfile,
     "--env",
     "COWORK_DESKTOP_BUNDLE*",
-    "--external",
-    "ai-sdk-provider-gemini-cli",
-    "--external",
-    "@google/gemini-cli-core",
     "--target",
     "bun",
   ];

@@ -32,7 +32,7 @@ The project goal is release-readiness and behavioral safety for the existing pro
 | Session orchestration | `src/server/session.ts` |
 | Protocol contract | `src/server/protocol.ts` + `docs/websocket-protocol.md` |
 | Clients | OpenTUI React client (`src/tui/index.tsx`), CLI REPL (`src/cli/repl.ts`) |
-| Providers | `google`, `openai`, `anthropic`, `gemini-cli`, `codex-cli`, `claude-code` |
+| Providers | `google`, `openai`, `anthropic`, `codex-cli`, `claude-code` |
 | MCP | Runtime-discovered and namespaced via `src/mcp/index.ts` |
 | Observability/Harness | `src/observability/*`, `src/harness/contextStore.ts`, `docs/harness/index.md` |
 | Continuity | Session backup/checkpoints in `src/server/sessionBackup.ts` |
@@ -113,7 +113,7 @@ agent-coworker/
 
 Model/provider behavior is runtime-configurable and no longer tied to static boot-time examples.
 
-- Provider set: `google`, `openai`, `anthropic`, `gemini-cli`, `codex-cli`, `claude-code`.
+- Provider set: `google`, `openai`, `anthropic`, `codex-cli`, `claude-code`.
 - Default models are defined in `src/providers/catalog.ts` and resolved per provider.
 - Config resolution is layered (`config/defaults.json` → `~/.agent/config.json` → `<cwd>/.agent/config.json` → env overrides).
 - Runtime switches:

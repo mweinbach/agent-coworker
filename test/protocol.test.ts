@@ -243,7 +243,7 @@ describe("safeParseClientMessage", () => {
       }
     });
 
-    test.each(["gemini-cli", "codex-cli", "claude-code"])(
+    test.each(["codex-cli", "claude-code"])(
       "set_model accepts %s provider",
       (provider) => {
         const msg = expectOk(
@@ -317,7 +317,7 @@ describe("safeParseClientMessage", () => {
       }
     });
 
-    test.each(["gemini-cli", "codex-cli", "claude-code"])(
+    test.each(["codex-cli", "claude-code"])(
       "connect_provider accepts %s provider",
       (provider) => {
         const msg = expectOk(

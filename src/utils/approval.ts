@@ -76,7 +76,9 @@ function tokenizeCommand(command: string): string[] {
     /((?:--[a-zA-Z0-9-]+|-[a-zA-Z0-9])=(?:"[^"]*"|'[^']*'|`[^`]*`|\S+)|"([^"]*)"|'([^']*)'|`([^`]*)`|(\S+))/g;
   let m: RegExpExecArray | null = null;
   while ((m = re.exec(command)) !== null) {
-    const token = m[1] ?? m[2] ?? m[3] ?? m[4] ?? "";
+    // Prefer de-quoted captures first so absolute path checks work for
+    // commands like: ls "/tmp/path"
+    const token = m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[1] ?? "";
     if (token) tokens.push(token);
   }
   return tokens;

@@ -151,6 +151,72 @@ describe("loadSystemPrompt", () => {
     expect(unreplaced).toBeNull();
   });
 
+  test("uses model-specific system template for gpt-5.2 when present", async () => {
+    const { builtIn } = await makeTmpDirs();
+
+    await writeFile(
+      path.join(builtIn, "prompts", "system.md"),
+      "DEFAULT SYSTEM TEMPLATE {{modelName}}"
+    );
+    await writeFile(
+      path.join(builtIn, "prompts", "system-models", "gpt-5.2.md"),
+      "GPT-5.2 SYSTEM TEMPLATE {{modelName}}"
+    );
+
+    const config = makeConfig({
+      builtInDir: builtIn,
+      model: "gpt-5.2",
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expect(prompt).toContain("GPT-5.2 SYSTEM TEMPLATE gpt-5.2");
+    expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
+  });
+
+  test("uses model-specific system template for Anthropic alias IDs", async () => {
+    const { builtIn } = await makeTmpDirs();
+
+    await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
+    await writeFile(
+      path.join(builtIn, "prompts", "system-models", "claude-4-6-opus.md"),
+      "OPUS TEMPLATE {{modelName}}"
+    );
+
+    const config = makeConfig({
+      builtInDir: builtIn,
+      model: "claude-opus-4-6-20260201",
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expect(prompt).toContain("OPUS TEMPLATE claude-opus-4-6-20260201");
+    expect(prompt).not.toContain("DEFAULT");
+  });
+
+  test("falls back to default system template when model template is missing", async () => {
+    const { builtIn } = await makeTmpDirs();
+    await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT TEMPLATE {{modelName}}");
+
+    const config = makeConfig({
+      builtInDir: builtIn,
+      model: "gpt-5.2",
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expect(prompt).toContain("DEFAULT TEMPLATE gpt-5.2");
+  });
+
+  test("always appends strict skill loading policy", async () => {
+    const config = makeConfig({
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+    expect(prompt).toContain("## Skill Loading Policy (Strict)");
+    expect(prompt).toContain("call the `skill` tool first");
+  });
+
   test("appends skills section when skills are found", async () => {
     const { tmp } = await makeTmpDirs();
     const skillsDir = path.join(tmp, "test-skills");

@@ -1,0 +1,37 @@
+{
+  "name": "desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Cowork desktop app",
+  "author": "Cowork",
+  "type": "module",
+  "main": "out/main/main.js",
+  "scripts": {
+    "dev": "bun run --cwd ../.. build:desktop-resources && electron-vite dev",
+    "build": "bun run --cwd ../.. build:desktop-resources && electron-vite build && electron-builder --config electron-builder.yml",
+    "build:dir": "bun run --cwd ../.. build:desktop-resources && electron-vite build && electron-builder --dir --config electron-builder.yml",
+    "preview": "electron-vite preview",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@react-grab/mcp": "^0.1.13",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^5.0.0",
+    "react-grab": "^0.1.13",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4"
+  }
+}

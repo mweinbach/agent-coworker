@@ -1,4 +1,6 @@
 import { describe, expect, test, mock, beforeEach, afterAll } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import type { AgentConfig, TodoItem } from "../src/types";
@@ -144,12 +146,16 @@ function makeSession(
       logsDir: string;
       connectionsFile: string;
     };
+    getProviderStatusesImpl: (opts: any) => Promise<any>;
     sessionBackupFactory: (opts: SessionBackupInitOptions) => Promise<SessionBackupHandle>;
+    runObservabilityQueryImpl: (config: AgentConfig, query: any) => Promise<any>;
+    evaluateHarnessSloImpl: (config: AgentConfig, checks: any[]) => Promise<any>;
   }>
 ) {
   const dir = "/tmp/test-session";
   const { emit, events } = makeEmit();
   const sessionBackupFactory = overrides?.sessionBackupFactory ?? makeSessionBackupFactory();
+  const getProviderStatusesImpl = overrides?.getProviderStatusesImpl ?? (async () => []);
   const session = new AgentSession({
     config: overrides?.config ?? makeConfig(dir),
     system: overrides?.system ?? "You are a test assistant.",
@@ -157,7 +163,10 @@ function makeSession(
     emit: overrides?.emit ?? emit,
     connectProviderImpl: overrides?.connectProviderImpl,
     getAiCoworkerPathsImpl: overrides?.getAiCoworkerPathsImpl,
+    getProviderStatusesImpl,
     sessionBackupFactory,
+    runObservabilityQueryImpl: overrides?.runObservabilityQueryImpl as any,
+    evaluateHarnessSloImpl: overrides?.evaluateHarnessSloImpl as any,
   });
   return { session, emit, events, sessionBackupFactory };
 }
@@ -319,6 +328,311 @@ describe("AgentSession", () => {
       const { session } = makeSession();
       const pub = session.getPublicConfig() as any;
       expect(pub.skillsDirs).toBeUndefined();
+    });
+  });
+
+  describe("enableMcp settings", () => {
+    test("getEnableMcp reflects config.enableMcp", () => {
+      const dir = "/tmp/test-session";
+      const cfg = { ...makeConfig(dir), enableMcp: false };
+      const { session } = makeSession({ config: cfg });
+      expect(session.getEnableMcp()).toBe(false);
+    });
+
+    test("setEnableMcp updates config and emits session_settings", () => {
+      const dir = "/tmp/test-session";
+      const cfg = { ...makeConfig(dir), enableMcp: true };
+      const { session, events } = makeSession({ config: cfg });
+
+      session.setEnableMcp(false);
+
+      expect(session.getEnableMcp()).toBe(false);
+      const evt = events.find((e) => e.type === "session_settings") as any;
+      expect(evt).toBeDefined();
+      expect(evt.enableMcp).toBe(false);
+    });
+
+    test("setEnableMcp while running emits Agent is busy", async () => {
+      const { session, events } = makeSession();
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          })
+      );
+
+      const first = session.sendUserMessage("first");
+      await new Promise((r) => setTimeout(r, 10));
+
+      session.setEnableMcp(false);
+      const errEvt = events.find((e) => e.type === "error") as any;
+      expect(errEvt).toBeDefined();
+      expect(errEvt.message).toBe("Agent is busy");
+
+      resolveRunTurn();
+      await first;
+    });
+  });
+
+  describe("harness/observability", () => {
+    test("getObservabilityStatusEvent reflects config", () => {
+      const dir = "/tmp/test-session";
+      const cfg: AgentConfig = {
+        ...makeConfig(dir),
+        observabilityEnabled: true,
+        observability: {
+          mode: "local_docker",
+          otlpHttpEndpoint: "http://127.0.0.1:14318",
+          queryApi: {
+            logsBaseUrl: "http://127.0.0.1:19428",
+            metricsBaseUrl: "http://127.0.0.1:18428",
+            tracesBaseUrl: "http://127.0.0.1:10428",
+          },
+          defaultWindowSec: 300,
+        },
+      };
+      const { session } = makeSession({ config: cfg });
+      const evt = session.getObservabilityStatusEvent();
+      expect(evt.type).toBe("observability_status");
+      expect(evt.enabled).toBe(true);
+      expect(evt.observability?.otlpHttpEndpoint).toBe("http://127.0.0.1:14318");
+    });
+
+    test("setHarnessContext + getHarnessContext emit harness_context", () => {
+      const { session, events } = makeSession();
+      session.setHarnessContext({
+        runId: "run-01",
+        objective: "Improve startup reliability",
+        acceptanceCriteria: ["startup < 800ms"],
+        constraints: ["no API changes"],
+      });
+      session.getHarnessContext();
+
+      const emitted = events.filter((evt) => evt.type === "harness_context") as any[];
+      expect(emitted.length).toBeGreaterThan(0);
+      expect(emitted.at(-1)?.context?.runId).toBe("run-01");
+    });
+
+    test("queryObservability emits observability_query_result", async () => {
+      const runObservabilityQueryImpl = mock(async () => ({
+        queryType: "promql",
+        query: "up",
+        fromMs: 1,
+        toMs: 2,
+        status: "ok",
+        data: { status: "success" },
+      }));
+      const { session, events } = makeSession({ runObservabilityQueryImpl: runObservabilityQueryImpl as any });
+
+      await session.queryObservability({ queryType: "promql", query: "up" });
+
+      const evt = events.find((e) => e.type === "observability_query_result") as any;
+      expect(evt).toBeDefined();
+      expect(evt.result.status).toBe("ok");
+      expect(runObservabilityQueryImpl).toHaveBeenCalledTimes(1);
+    });
+
+    test("queryObservability emits error result envelope when query impl throws", async () => {
+      const runObservabilityQueryImpl = mock(async () => {
+        throw new Error("invalid observability endpoint");
+      });
+      const { session, events } = makeSession({ runObservabilityQueryImpl: runObservabilityQueryImpl as any });
+
+      await session.queryObservability({
+        queryType: "promql",
+        query: " up ",
+        fromMs: 10,
+        toMs: 20,
+      });
+
+      const evt = events.find((e) => e.type === "observability_query_result") as any;
+      expect(evt).toBeDefined();
+      expect(evt.result.status).toBe("error");
+      expect(evt.result.query).toBe("up");
+      expect(evt.result.fromMs).toBe(10);
+      expect(evt.result.toMs).toBe(20);
+      expect(String(evt.result.error)).toContain("Failed to run observability query: invalid observability endpoint");
+      expect(runObservabilityQueryImpl).toHaveBeenCalledTimes(1);
+    });
+
+    test("evaluateHarnessSloChecks emits harness_slo_result", async () => {
+      const evaluateHarnessSloImpl = mock(async () => ({
+        reportOnly: true,
+        strictMode: false,
+        passed: true,
+        fromMs: 1,
+        toMs: 2,
+        checks: [],
+      }));
+      const { session, events } = makeSession({ evaluateHarnessSloImpl: evaluateHarnessSloImpl as any });
+
+      await session.evaluateHarnessSloChecks([]);
+
+      const evt = events.find((e) => e.type === "harness_slo_result") as any;
+      expect(evt).toBeDefined();
+      expect(evt.result.passed).toBe(true);
+      expect(evaluateHarnessSloImpl).toHaveBeenCalledTimes(1);
+    });
+
+    test("evaluateHarnessSloChecks emits failing result envelope when evaluator throws", async () => {
+      const evaluateHarnessSloImpl = mock(async () => {
+        throw new Error("slo evaluation failed");
+      });
+      const { session, events } = makeSession({ evaluateHarnessSloImpl: evaluateHarnessSloImpl as any });
+      const checks = [
+        {
+          id: "vector_errors",
+          type: "custom" as const,
+          queryType: "promql" as const,
+          query: "sum(rate(vector_component_errors_total[5m]))",
+          op: "<=" as const,
+          threshold: 0,
+          windowSec: 300,
+        },
+      ];
+
+      await session.evaluateHarnessSloChecks(checks);
+
+      const evt = events.find((e) => e.type === "harness_slo_result") as any;
+      expect(evt).toBeDefined();
+      expect(evt.result.passed).toBe(false);
+      expect(evt.result.checks).toHaveLength(1);
+      expect(evt.result.checks[0].id).toBe("vector_errors");
+      expect(evt.result.checks[0].pass).toBe(false);
+      expect(evt.result.checks[0].actual).toBeNull();
+      expect(String(evt.result.checks[0].reason)).toContain("Failed to evaluate SLO checks: slo evaluation failed");
+      expect(evaluateHarnessSloImpl).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("skills", () => {
+    async function makeTmpDir(prefix = "session-skills-test-"): Promise<string> {
+      return await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    }
+
+    async function createSkill(parentDir: string, name: string, content: string): Promise<string> {
+      const skillDir = path.join(parentDir, name);
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(path.join(skillDir, "SKILL.md"), content, "utf-8");
+      return skillDir;
+    }
+
+    test("listSkills emits skills_list with discovered entries", async () => {
+      const tmp = await makeTmpDir();
+      await createSkill(tmp, "alpha", "# Alpha Skill\nTRIGGERS: a\n");
+
+      const cfg: AgentConfig = { ...makeConfig(tmp), skillsDirs: [tmp] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.listSkills();
+
+      const evt = events.find((e) => e.type === "skills_list") as any;
+      expect(evt).toBeDefined();
+      expect(Array.isArray(evt.skills)).toBe(true);
+      expect(evt.skills.some((s: any) => s.name === "alpha")).toBe(true);
+
+      const alpha = evt.skills.find((s: any) => s.name === "alpha");
+      expect(alpha.source).toBe("project");
+      expect(alpha.enabled).toBe(true);
+      expect(String(alpha.path)).toContain(path.join("alpha", "SKILL.md"));
+    });
+
+    test("readSkill emits skill_content with content", async () => {
+      const tmp = await makeTmpDir();
+      await createSkill(tmp, "alpha", "# Alpha Skill\nTRIGGERS: a\n");
+
+      const cfg: AgentConfig = { ...makeConfig(tmp), skillsDirs: [tmp] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.readSkill("alpha");
+
+      const evt = events.find((e) => e.type === "skill_content") as any;
+      expect(evt).toBeDefined();
+      expect(evt.skill.name).toBe("alpha");
+      expect(evt.skill.enabled).toBe(true);
+      expect(String(evt.content)).toContain("# Alpha Skill");
+    });
+
+    test("readSkill missing skill emits error", async () => {
+      const tmp = await makeTmpDir();
+      const cfg: AgentConfig = { ...makeConfig(tmp), skillsDirs: [tmp] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.readSkill("missing");
+
+      const evt = events.find((e) => e.type === "error") as any;
+      expect(evt).toBeDefined();
+      expect(evt.message).toContain('Skill "missing" not found.');
+    });
+
+    test("disableSkill moves global skill to disabled-skills and marks it disabled", async () => {
+      const root = await makeTmpDir();
+      const project = path.join(root, "project-skills");
+      const global = path.join(root, "skills");
+      await fs.mkdir(project, { recursive: true });
+      await fs.mkdir(global, { recursive: true });
+
+      await createSkill(global, "alpha", "# Alpha Skill\nTRIGGERS: a\n");
+
+      const cfg: AgentConfig = { ...makeConfig(root), skillsDirs: [project, global] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.disableSkill("alpha");
+
+      const evt = events.filter((e) => e.type === "skills_list").at(-1) as any;
+      expect(evt).toBeDefined();
+      const alpha = evt.skills.find((s: any) => s.name === "alpha");
+      expect(alpha).toBeDefined();
+      expect(alpha.source).toBe("global");
+      expect(alpha.enabled).toBe(false);
+      expect(String(alpha.path)).toContain(path.join("disabled-skills", "alpha", "SKILL.md"));
+      await fs.access(path.join(root, "disabled-skills", "alpha", "SKILL.md"));
+    });
+
+    test("enableSkill moves global skill back to skills and marks it enabled", async () => {
+      const root = await makeTmpDir();
+      const project = path.join(root, "project-skills");
+      const global = path.join(root, "skills");
+      const disabled = path.join(root, "disabled-skills");
+      await fs.mkdir(project, { recursive: true });
+      await fs.mkdir(disabled, { recursive: true });
+
+      await createSkill(disabled, "alpha", "# Alpha Skill\nTRIGGERS: a\n");
+
+      const cfg: AgentConfig = { ...makeConfig(root), skillsDirs: [project, global] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.enableSkill("alpha");
+
+      const evt = events.filter((e) => e.type === "skills_list").at(-1) as any;
+      expect(evt).toBeDefined();
+      const alpha = evt.skills.find((s: any) => s.name === "alpha");
+      expect(alpha).toBeDefined();
+      expect(alpha.source).toBe("global");
+      expect(alpha.enabled).toBe(true);
+      expect(String(alpha.path)).toContain(path.join("skills", "alpha", "SKILL.md"));
+      await fs.access(path.join(root, "skills", "alpha", "SKILL.md"));
+    });
+
+    test("deleteSkill removes global skill directory", async () => {
+      const root = await makeTmpDir();
+      const project = path.join(root, "project-skills");
+      const global = path.join(root, "skills");
+      await fs.mkdir(project, { recursive: true });
+      await fs.mkdir(global, { recursive: true });
+      await createSkill(global, "alpha", "# Alpha Skill\nTRIGGERS: a\n");
+
+      const cfg: AgentConfig = { ...makeConfig(root), skillsDirs: [project, global] };
+      const { session, events } = makeSession({ config: cfg });
+
+      await session.deleteSkill("alpha");
+
+      const evt = events.filter((e) => e.type === "skills_list").at(-1) as any;
+      expect(evt).toBeDefined();
+      expect(evt.skills.some((s: any) => s.name === "alpha")).toBe(false);
+      await expect(fs.access(path.join(root, "skills", "alpha"))).rejects.toBeDefined();
     });
   });
 
@@ -576,6 +890,43 @@ describe("AgentSession", () => {
     });
   });
 
+  describe("refreshProviderStatus", () => {
+    test("emits provider_status with computed statuses", async () => {
+      const dir = "/tmp/test-session-provider-status";
+      const config = makeConfig(dir);
+      const statuses = [
+        {
+          provider: "codex-cli",
+          authorized: true,
+          verified: true,
+          mode: "oauth",
+          account: { email: "user@example.com", name: "User" },
+          message: "ok",
+          checkedAt: "2026-02-09T00:00:00.000Z",
+        },
+      ];
+
+      const mockGetProviderStatuses = mock(async () => statuses);
+      const { session, events } = makeSession({
+        config,
+        getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
+        getProviderStatusesImpl: mockGetProviderStatuses,
+      });
+
+      await session.refreshProviderStatus();
+
+      expect(mockGetAiCoworkerPaths).toHaveBeenCalledWith({ homedir: path.dirname(config.userAgentDir) });
+      expect(mockGetProviderStatuses).toHaveBeenCalledTimes(1);
+
+      const evt = events.find((e) => e.type === "provider_status");
+      expect(evt).toBeDefined();
+      if (evt && evt.type === "provider_status") {
+        expect(evt.sessionId).toBe(session.id);
+        expect(evt.providers).toEqual(statuses);
+      }
+    });
+  });
+
   // =========================================================================
   // reset
   // =========================================================================
@@ -747,6 +1098,7 @@ describe("AgentSession", () => {
       const approvalEvt = events.find((e) => e.type === "approval") as any;
       expect(approvalEvt).toBeDefined();
       expect(approvalEvt.command).toBe("npm install");
+      expect(approvalEvt.reasonCode).toBe("requires_manual_review");
 
       session.handleApprovalResponse(approvalEvt.requestId, true);
       await sendPromise;
@@ -816,6 +1168,27 @@ describe("AgentSession", () => {
       const approvalEvt = events.find((e) => e.type === "approval") as any;
       expect(approvalEvt).toBeDefined();
       expect(approvalEvt.dangerous).toBe(true);
+      expect(approvalEvt.reasonCode).toBe("matches_dangerous_pattern");
+
+      session.handleApprovalResponse(approvalEvt.requestId, true);
+      await sendPromise;
+    });
+
+    test("marks outside-scope absolute paths with outside_allowed_scope", async () => {
+      const { session, events } = makeSession();
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        await params.approveCommand("ls /etc");
+        return { text: "done", reasoningText: undefined, responseMessages: [] };
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const approvalEvt = events.find((e) => e.type === "approval") as any;
+      expect(approvalEvt).toBeDefined();
+      expect(approvalEvt.dangerous).toBe(false);
+      expect(approvalEvt.reasonCode).toBe("outside_allowed_scope");
 
       session.handleApprovalResponse(approvalEvt.requestId, true);
       await sendPromise;
@@ -1321,6 +1694,86 @@ describe("AgentSession", () => {
       expect(errorEvt).toBeDefined();
       expect(errorEvt.message).toContain("Model API failure");
       expect(errorEvt.sessionId).toBe(session.id);
+    });
+
+    test("classifies unknown checkpoint id failures as validation_failed", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("Unknown checkpoint id: cp-404");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("validation_failed");
+        expect(errorEvt.source).toBe("session");
+      }
+    });
+
+    test("classifies glob guard rejections as permission_denied", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("glob blocked: pattern cannot escape cwd");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("permission_denied");
+        expect(errorEvt.source).toBe("permissions");
+      }
+    });
+
+    test("classifies backup errors containing invalid as backup_error", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("session backup has invalid state");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("backup_error");
+        expect(errorEvt.source).toBe("backup");
+      }
+    });
+
+    test("classifies checkpoint errors as backup_error even when message includes provider", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("session backup checkpoint failed for provider reconnect flow");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("backup_error");
+        expect(errorEvt.source).toBe("backup");
+      }
+    });
+
+    test("does not classify generic backup mentions as backup subsystem errors", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("failed to create backup before editing");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("internal_error");
+        expect(errorEvt.source).toBe("session");
+      }
     });
 
     test("catches non-Error throws and emits error event", async () => {

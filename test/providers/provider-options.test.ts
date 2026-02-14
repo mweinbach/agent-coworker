@@ -92,10 +92,10 @@ describe("Agent providerOptions pass-through", () => {
     expect(cfg.providerOptions!.anthropic.thinking.budgetTokens).toBe(32_000);
   });
 
-  test("providerOptions is referenced in agent.ts generateText call", () => {
+  test("providerOptions is referenced in agent.ts streamText call", () => {
     // This test verifies the shape expected by agent.ts:
     //   providerOptions: config.providerOptions
-    // The agent passes providerOptions directly from config to generateText.
+    // The agent passes providerOptions directly from config to streamText.
     const cfg = makeConfig({
       provider: "openai",
       model: "gpt-5.2",
@@ -103,7 +103,7 @@ describe("Agent providerOptions pass-through", () => {
     });
 
     // Simulate what agent.ts does
-    const generateTextArgs: any = {
+    const streamTextArgs: any = {
       model: getModel(cfg),
       system: "test",
       messages: [],
@@ -111,8 +111,8 @@ describe("Agent providerOptions pass-through", () => {
       providerOptions: cfg.providerOptions,
     };
 
-    expect(generateTextArgs.providerOptions).toBeDefined();
-    expect(generateTextArgs.providerOptions.openai.reasoningEffort).toBe("high");
-    expect(generateTextArgs.model.modelId).toBe("gpt-5.2");
+    expect(streamTextArgs.providerOptions).toBeDefined();
+    expect(streamTextArgs.providerOptions.openai.reasoningEffort).toBe("high");
+    expect(streamTextArgs.model.modelId).toBe("gpt-5.2");
   });
 });

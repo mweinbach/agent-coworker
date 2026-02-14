@@ -25,7 +25,6 @@ export const DEFAULT_GOOGLE_PROVIDER_OPTIONS = {
 } as const satisfies GoogleGenerativeAIProviderOptions;
 
 export const googleProvider = {
-  defaultModel: "gemini-3-flash-preview",
   keyCandidates: ["google"] as const,
   createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) => {
     const provider = savedKey ? createGoogleGenerativeAI({ apiKey: savedKey }) : google;

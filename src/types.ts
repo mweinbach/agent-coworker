@@ -47,20 +47,174 @@ export interface AgentConfig {
    * Defaults to true when not specified.
    */
   enableMcp?: boolean;
+
+  /**
+   * Whether local observability integration is enabled for this session/run.
+   * Defaults to false when not specified.
+   */
+  observabilityEnabled?: boolean;
+
+  /**
+   * Optional observability endpoint and runtime settings.
+   */
+  observability?: ObservabilityConfig;
+
+  /**
+   * Optional harness policy flags.
+   */
+  harness?: HarnessConfig;
 }
 
 export interface SkillEntry {
   name: string;
   path: string;
-  source: "project" | "user" | "built-in";
+  source: "project" | "user" | "global" | "built-in";
+  enabled: boolean;
   triggers: string[];
   description: string;
+  interface?: {
+    displayName?: string;
+    shortDescription?: string;
+    iconSmall?: string; // data: URI (best-effort)
+    iconLarge?: string; // data: URI (best-effort)
+    defaultPrompt?: string;
+    agents?: string[];
+  };
 }
 
 export interface TodoItem {
   content: string;
   status: "pending" | "in_progress" | "completed";
   activeForm: string;
+}
+
+export const APPROVAL_RISK_CODES = [
+  "safe_auto_approved",
+  "matches_dangerous_pattern",
+  "contains_shell_control_operator",
+  "requires_manual_review",
+  "file_read_command_requires_review",
+  "outside_allowed_scope",
+] as const;
+
+export type ApprovalRiskCode = (typeof APPROVAL_RISK_CODES)[number];
+
+export const SERVER_ERROR_SOURCES = [
+  "protocol",
+  "session",
+  "tool",
+  "provider",
+  "backup",
+  "observability",
+  "permissions",
+] as const;
+
+export type ServerErrorSource = (typeof SERVER_ERROR_SOURCES)[number];
+
+export const SERVER_ERROR_CODES = [
+  "invalid_json",
+  "invalid_payload",
+  "missing_type",
+  "unknown_type",
+  "unknown_session",
+  "busy",
+  "validation_failed",
+  "permission_denied",
+  "provider_error",
+  "backup_error",
+  "observability_error",
+  "internal_error",
+] as const;
+
+export type ServerErrorCode = (typeof SERVER_ERROR_CODES)[number];
+
+export type ObservabilityQueryType = "logql" | "promql" | "traceql";
+
+export interface ObservabilityQueryApi {
+  logsBaseUrl: string;
+  metricsBaseUrl: string;
+  tracesBaseUrl: string;
+}
+
+export interface ObservabilityConfig {
+  mode: "local_docker";
+  otlpHttpEndpoint: string;
+  queryApi: ObservabilityQueryApi;
+  defaultWindowSec: number;
+}
+
+export interface HarnessConfig {
+  reportOnly: boolean;
+  strictMode: boolean;
+}
+
+export interface HarnessContextMetadata {
+  [key: string]: string;
+}
+
+export interface HarnessContextPayload {
+  runId: string;
+  taskId?: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  constraints: string[];
+  metadata?: HarnessContextMetadata;
+}
+
+export interface HarnessContextState extends HarnessContextPayload {
+  updatedAt: string;
+}
+
+export type HarnessSloOperator = "<" | "<=" | ">" | ">=" | "==" | "!=";
+
+export interface HarnessSloCheck {
+  id: string;
+  type: "latency" | "error_rate" | "custom";
+  queryType: ObservabilityQueryType;
+  query: string;
+  op: HarnessSloOperator;
+  threshold: number;
+  windowSec: number;
+}
+
+export interface ObservabilityQueryRequest {
+  queryType: ObservabilityQueryType;
+  query: string;
+  fromMs?: number;
+  toMs?: number;
+  limit?: number;
+}
+
+export interface ObservabilityQueryResult {
+  queryType: ObservabilityQueryType;
+  query: string;
+  fromMs: number;
+  toMs: number;
+  status: "ok" | "error";
+  data: unknown;
+  error?: string;
+}
+
+export interface HarnessSloCheckResult {
+  id: string;
+  type: HarnessSloCheck["type"];
+  queryType: ObservabilityQueryType;
+  query: string;
+  op: HarnessSloOperator;
+  threshold: number;
+  windowSec: number;
+  actual: number | null;
+  pass: boolean;
+  reason?: string;
+}
+
+export interface HarnessSloResult {
+  reportOnly: boolean;
+  strictMode: boolean;
+  passed: boolean;
+  fromMs: number;
+  toMs: number;
+  checks: HarnessSloCheckResult[];
 }
 
 export type AgentMessages = ModelMessage[];

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { safeParseClientMessage } from "../src/server/protocol";
+import {
+  CLIENT_MESSAGE_TYPES,
+  SERVER_EVENT_TYPES,
+  safeParseClientMessage,
+  type ServerEvent,
+} from "../src/server/protocol";
 
 function expectOk(raw: string) {
   const result = safeParseClientMessage(raw);
@@ -54,6 +59,20 @@ describe("safeParseClientMessage", () => {
         expect(msg.version).toBeUndefined();
       }
     });
+
+    test("client_hello missing/invalid client fails", () => {
+      expect(expectErr(JSON.stringify({ type: "client_hello" }))).toBe(
+        "client_hello missing/invalid client",
+      );
+      expect(expectErr(JSON.stringify({ type: "client_hello", client: "" }))).toBe(
+        "client_hello missing/invalid client",
+      );
+    });
+
+    test("client_hello invalid version type fails", () => {
+      const err = expectErr(JSON.stringify({ type: "client_hello", client: "tui", version: 1 }));
+      expect(err).toBe("client_hello invalid version");
+    });
   });
 
   describe("user_message", () => {
@@ -98,6 +117,18 @@ describe("safeParseClientMessage", () => {
       if (msg.type === "user_message") {
         expect(msg.text).toBe("line1\nline2\nline3");
       }
+    });
+
+    test("user_message invalid clientMessageId fails", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "user_message",
+          sessionId: "s1",
+          text: "hello",
+          clientMessageId: 123,
+        }),
+      );
+      expect(err).toBe("user_message invalid clientMessageId");
     });
   });
 
@@ -165,6 +196,21 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("ping", () => {
+    test("valid ping requires sessionId", () => {
+      const msg = expectOk(JSON.stringify({ type: "ping", sessionId: "s1" }));
+      expect(msg.type).toBe("ping");
+      if (msg.type === "ping") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("ping missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "ping" }));
+      expect(err).toBe("ping missing sessionId");
+    });
+  });
+
   describe("set_model", () => {
     test("valid set_model message", () => {
       const msg = expectOk(
@@ -215,17 +261,15 @@ describe("safeParseClientMessage", () => {
       }
     );
 
-    test("set_model with empty model still parses", () => {
-      const msg = expectOk(
+    test("set_model with empty model fails", () => {
+      const err = expectErr(
         JSON.stringify({
           type: "set_model",
           sessionId: "s1",
           model: "",
         }),
       );
-      if (msg.type === "set_model") {
-        expect(msg.model).toBe("");
-      }
+      expect(err).toContain("set_model missing/invalid model");
     });
 
     test("set_model with invalid provider fails", () => {
@@ -321,6 +365,280 @@ describe("safeParseClientMessage", () => {
         })
       );
       expect(err).toContain("connect_provider invalid apiKey");
+    });
+  });
+
+  describe("refresh_provider_status", () => {
+    test("valid refresh_provider_status", () => {
+      const msg = expectOk(JSON.stringify({ type: "refresh_provider_status", sessionId: "s1" }));
+      expect(msg.type).toBe("refresh_provider_status");
+      if (msg.type === "refresh_provider_status") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("refresh_provider_status missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "refresh_provider_status" }));
+      expect(err).toBe("refresh_provider_status missing sessionId");
+    });
+  });
+
+  describe("list_skills", () => {
+    test("valid list_skills message", () => {
+      const msg = expectOk(JSON.stringify({ type: "list_skills", sessionId: "s1" }));
+      expect(msg.type).toBe("list_skills");
+      if (msg.type === "list_skills") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("list_skills missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "list_skills" }));
+      expect(err).toBe("list_skills missing sessionId");
+    });
+  });
+
+  describe("read_skill", () => {
+    test("valid read_skill message", () => {
+      const msg = expectOk(JSON.stringify({ type: "read_skill", sessionId: "s1", skillName: "pdf" }));
+      expect(msg.type).toBe("read_skill");
+      if (msg.type === "read_skill") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.skillName).toBe("pdf");
+      }
+    });
+
+    test("read_skill missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "read_skill", skillName: "pdf" }));
+      expect(err).toBe("read_skill missing sessionId");
+    });
+
+    test("read_skill missing skillName fails", () => {
+      const err = expectErr(JSON.stringify({ type: "read_skill", sessionId: "s1" }));
+      expect(err).toBe("read_skill missing/invalid skillName");
+    });
+  });
+
+  describe("disable_skill", () => {
+    test("valid disable_skill message", () => {
+      const msg = expectOk(JSON.stringify({ type: "disable_skill", sessionId: "s1", skillName: "pdf" }));
+      expect(msg.type).toBe("disable_skill");
+      if (msg.type === "disable_skill") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.skillName).toBe("pdf");
+      }
+    });
+
+    test("disable_skill missing fields fail", () => {
+      expect(expectErr(JSON.stringify({ type: "disable_skill", skillName: "pdf" }))).toBe("disable_skill missing sessionId");
+      expect(expectErr(JSON.stringify({ type: "disable_skill", sessionId: "s1" }))).toBe("disable_skill missing/invalid skillName");
+    });
+  });
+
+  describe("enable_skill", () => {
+    test("valid enable_skill message", () => {
+      const msg = expectOk(JSON.stringify({ type: "enable_skill", sessionId: "s1", skillName: "pdf" }));
+      expect(msg.type).toBe("enable_skill");
+      if (msg.type === "enable_skill") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.skillName).toBe("pdf");
+      }
+    });
+
+    test("enable_skill missing fields fail", () => {
+      expect(expectErr(JSON.stringify({ type: "enable_skill", skillName: "pdf" }))).toBe("enable_skill missing sessionId");
+      expect(expectErr(JSON.stringify({ type: "enable_skill", sessionId: "s1" }))).toBe("enable_skill missing/invalid skillName");
+    });
+  });
+
+  describe("delete_skill", () => {
+    test("valid delete_skill message", () => {
+      const msg = expectOk(JSON.stringify({ type: "delete_skill", sessionId: "s1", skillName: "pdf" }));
+      expect(msg.type).toBe("delete_skill");
+      if (msg.type === "delete_skill") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.skillName).toBe("pdf");
+      }
+    });
+
+    test("delete_skill missing fields fail", () => {
+      expect(expectErr(JSON.stringify({ type: "delete_skill", skillName: "pdf" }))).toBe("delete_skill missing sessionId");
+      expect(expectErr(JSON.stringify({ type: "delete_skill", sessionId: "s1" }))).toBe("delete_skill missing/invalid skillName");
+    });
+  });
+
+  describe("set_enable_mcp", () => {
+    test("valid set_enable_mcp message", () => {
+      const msg = expectOk(JSON.stringify({ type: "set_enable_mcp", sessionId: "s1", enableMcp: true }));
+      expect(msg.type).toBe("set_enable_mcp");
+      if (msg.type === "set_enable_mcp") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.enableMcp).toBe(true);
+      }
+    });
+
+    test("set_enable_mcp missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "set_enable_mcp", enableMcp: true }));
+      expect(err).toBe("set_enable_mcp missing sessionId");
+    });
+
+    test("set_enable_mcp missing/invalid enableMcp fails", () => {
+      const err = expectErr(JSON.stringify({ type: "set_enable_mcp", sessionId: "s1", enableMcp: "true" }));
+      expect(err).toBe("set_enable_mcp missing/invalid enableMcp");
+    });
+  });
+
+  describe("harness context messages", () => {
+    test("harness_context_get parses", () => {
+      const msg = expectOk(JSON.stringify({ type: "harness_context_get", sessionId: "s1" }));
+      expect(msg.type).toBe("harness_context_get");
+      if (msg.type === "harness_context_get") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("harness_context_get missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "harness_context_get" }));
+      expect(err).toBe("harness_context_get missing sessionId");
+    });
+
+    test("harness_context_set parses", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "harness_context_set",
+          sessionId: "s1",
+          context: {
+            runId: "run-01",
+            objective: "Improve startup reliability",
+            acceptanceCriteria: ["startup < 800ms"],
+            constraints: ["no API changes"],
+            metadata: { owner: "platform" },
+          },
+        })
+      );
+      expect(msg.type).toBe("harness_context_set");
+      if (msg.type === "harness_context_set") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.context.runId).toBe("run-01");
+      }
+    });
+
+    test("harness_context_set validates required fields", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "harness_context_set",
+          sessionId: "s1",
+          context: {
+            runId: "",
+            objective: "x",
+            acceptanceCriteria: [],
+            constraints: [],
+          },
+        })
+      );
+      expect(err).toContain("harness_context_set invalid context.runId");
+    });
+  });
+
+  describe("observability_query", () => {
+    test("observability_query parses", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "observability_query",
+          sessionId: "s1",
+          query: {
+            queryType: "promql",
+            query: "sum(rate(vector_component_errors_total[5m]))",
+            fromMs: 1000,
+            toMs: 2000,
+            limit: 10,
+          },
+        })
+      );
+      expect(msg.type).toBe("observability_query");
+      if (msg.type === "observability_query") {
+        expect(msg.query.queryType).toBe("promql");
+      }
+    });
+
+    test("observability_query rejects invalid queryType", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "observability_query",
+          sessionId: "s1",
+          query: { queryType: "sql", query: "select *" },
+        })
+      );
+      expect(err).toContain("observability_query invalid query.queryType");
+    });
+
+    test("observability_query rejects invalid limit", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "observability_query",
+          sessionId: "s1",
+          query: { queryType: "promql", query: "up", limit: 0 },
+        }),
+      );
+      expect(err).toContain("observability_query invalid query.limit");
+    });
+  });
+
+  describe("harness_slo_evaluate", () => {
+    test("harness_slo_evaluate parses", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "harness_slo_evaluate",
+          sessionId: "s1",
+          checks: [
+            {
+              id: "vector_errors",
+              type: "custom",
+              queryType: "promql",
+              query: "sum(rate(vector_component_errors_total[5m]))",
+              op: "<=",
+              threshold: 0,
+              windowSec: 300,
+            },
+          ],
+        })
+      );
+      expect(msg.type).toBe("harness_slo_evaluate");
+      if (msg.type === "harness_slo_evaluate") {
+        expect(msg.checks).toHaveLength(1);
+      }
+    });
+
+    test("harness_slo_evaluate rejects invalid check operator", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "harness_slo_evaluate",
+          sessionId: "s1",
+          checks: [
+            {
+              id: "c1",
+              type: "custom",
+              queryType: "promql",
+              query: "x",
+              op: "lte",
+              threshold: 1,
+              windowSec: 10,
+            },
+          ],
+        })
+      );
+      expect(err).toContain("harness_slo_evaluate invalid check.op");
+    });
+
+    test("harness_slo_evaluate rejects empty checks", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "harness_slo_evaluate",
+          sessionId: "s1",
+          checks: [],
+        }),
+      );
+      expect(err).toContain("harness_slo_evaluate missing/invalid checks");
     });
   });
 
@@ -513,14 +831,13 @@ describe("safeParseClientMessage", () => {
     });
 
     test("JSON array", () => {
-      // Arrays pass typeof === "object" && !== null, so they reach the type check
       const err = expectErr('[{"type":"reset"}]');
-      expect(err).toBe("Missing type");
+      expect(err).toBe("Expected object");
     });
 
     test("JSON empty array", () => {
       const err = expectErr("[]");
-      expect(err).toBe("Missing type");
+      expect(err).toBe("Expected object");
     });
   });
 
@@ -650,6 +967,46 @@ describe("safeParseClientMessage", () => {
       );
       const obj = msg as any;
       expect(obj.confidence).toBe(0.95);
+    });
+  });
+
+  describe("protocol exports and additive server event fields", () => {
+    test("client/server type lists are unique", () => {
+      expect(new Set(CLIENT_MESSAGE_TYPES).size).toBe(CLIENT_MESSAGE_TYPES.length);
+      expect(new Set(SERVER_EVENT_TYPES).size).toBe(SERVER_EVENT_TYPES.length);
+    });
+
+    test("server_hello supports protocolVersion", () => {
+      const evt: ServerEvent = {
+        type: "server_hello",
+        sessionId: "s1",
+        protocolVersion: "2.0",
+        config: {
+          provider: "openai",
+          model: "gpt-5.2",
+          workingDirectory: "/tmp",
+          outputDirectory: "/tmp/output",
+        },
+      };
+      expect(evt.type).toBe("server_hello");
+      if (evt.type === "server_hello") {
+        expect(evt.protocolVersion).toBe("2.0");
+      }
+    });
+
+    test("error requires code/source", () => {
+      const evt: ServerEvent = {
+        type: "error",
+        sessionId: "s1",
+        message: "Invalid JSON",
+        code: "invalid_json",
+        source: "protocol",
+      };
+      expect(evt.type).toBe("error");
+      if (evt.type === "error") {
+        expect(evt.code).toBe("invalid_json");
+        expect(evt.source).toBe("protocol");
+      }
     });
   });
 

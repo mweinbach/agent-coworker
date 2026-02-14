@@ -9,8 +9,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { ensureAiCoworkerHome, getAiCoworkerPaths, isOauthCliProvider, maskApiKey, readConnectionStore } from "../connect";
 import type { ConnectionStore } from "../connect";
+import { modelChoicesByProvider } from "../providers";
 import { PROVIDER_NAMES } from "../types";
-import type { ProviderName, TodoItem } from "../types";
+import type { ApprovalRiskCode, ProviderName, ServerErrorCode, ServerErrorSource, TodoItem } from "../types";
 import type { ClientMessage, ServerEvent } from "../server/protocol";
 
 // Keep output clean.
@@ -51,9 +52,17 @@ type FeedItem =
       result?: any;
     }
   | { id: string; type: "todos"; todos: TodoItem[] }
+  | { id: string; type: "observability_status"; enabled: boolean; summary: string }
+  | { id: string; type: "harness_context"; context: HarnessContextPayload | null }
+  | { id: string; type: "observability_query_result"; result: ObservabilityQueryResultPayload }
+  | { id: string; type: "harness_slo_result"; result: HarnessSloResultPayload }
   | { id: string; type: "system"; line: string }
   | { id: string; type: "log"; line: string }
-  | { id: string; type: "error"; message: string };
+  | { id: string; type: "error"; message: string; code: ServerErrorCode; source: ServerErrorSource };
+
+type HarnessContextPayload = Extract<ServerEvent, { type: "harness_context" }>["context"];
+type ObservabilityQueryResultPayload = Extract<ServerEvent, { type: "observability_query_result" }>["result"];
+type HarnessSloResultPayload = Extract<ServerEvent, { type: "harness_slo_result" }>["result"];
 
 type ParsedToolLog = { sub?: string; dir: ">" | "<"; name: string; payload: any };
 
@@ -73,7 +82,7 @@ type Theme = {
   cursor: string;
 };
 
-type SlashCommandId = "help" | "new" | "status" | "models" | "connect" | "clear" | "exit";
+type SlashCommandId = "help" | "new" | "status" | "models" | "connect" | "hctx" | "slo" | "clear" | "exit";
 
 type ConnectService = ProviderName;
 
@@ -96,14 +105,7 @@ const CONNECT_SERVICES: readonly ConnectService[] = PROVIDER_NAMES.filter(
   (provider) => !UI_DISABLED_CONNECT_SERVICES.has(provider)
 );
 
-const MODEL_CHOICES: Record<ConnectService, readonly string[]> = {
-  google: ["gemini-3-flash-preview", "gemini-3-pro-preview"],
-  "gemini-cli": ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-pro"],
-  anthropic: ["claude-4-6-opus", "claude-4-5-sonnet", "claude-4-5-haiku"],
-  "claude-code": ["sonnet", "opus", "haiku"],
-  openai: ["gpt-5.2", "gpt-5.2-codex", "gpt-5.1", "gpt-5-mini", "gpt-5", "gpt-5.2-pro"],
-  "codex-cli": ["gpt-5.2-codex", "gpt-5.2-codex-max", "gpt-5.2-codex-mini", "gpt-5.1-codex"],
-};
+const MODEL_CHOICES: Record<ConnectService, readonly string[]> = modelChoicesByProvider();
 
 const ALL_MODEL_CHOICES: readonly ModelChoice[] = CONNECT_SERVICES.flatMap((provider) =>
   MODEL_CHOICES[provider].map((model) => ({ provider, model }))
@@ -172,6 +174,26 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
       "/connect codex-cli",
       "/connect claude-code",
     ],
+  },
+  {
+    id: "hctx",
+    name: "hctx",
+    aliases: ["context"],
+    summary: "Get or set harness context for this session.",
+    usage: "/hctx [set]",
+    details:
+      "With no args, fetches current harness context. Use /hctx set to write a default context payload for this session.",
+    examples: ["/hctx", "/hctx set"],
+  },
+  {
+    id: "slo",
+    name: "slo",
+    aliases: ["checks"],
+    summary: "Run default harness SLO checks.",
+    usage: "/slo",
+    details:
+      "Runs default PromQL/LogQL checks through harness_slo_evaluate and shows pass/fail results in the feed.",
+    examples: ["/slo"],
   },
   {
     id: "clear",
@@ -247,6 +269,25 @@ function parseModelChoiceArg(raw: string, currentProvider?: string): ModelChoice
 function truncateUiText(s: string, maxChars: number): string {
   if (s.length <= maxChars) return s;
   return s.slice(0, maxChars) + `\n… (${s.length - maxChars} more chars)`;
+}
+
+function jsonPreview(value: unknown, maxChars = 12_000): string {
+  let raw: string;
+  if (typeof value === "string") raw = value;
+  else {
+    try {
+      raw = JSON.stringify(value, null, 2) ?? String(value);
+    } catch {
+      raw = String(value);
+    }
+  }
+  return truncateUiText(raw, maxChars);
+}
+
+function formatSloActual(value: number | null): string {
+  if (value === null || Number.isNaN(value)) return "n/a";
+  if (!Number.isFinite(value)) return String(value);
+  return Number(value.toFixed(4)).toString();
 }
 
 function parseToolLogLine(line: string): ParsedToolLog | null {
@@ -502,7 +543,7 @@ function toolSummary(item: Extract<FeedItem, { type: "tool" }>): string | null {
 type UiMode =
   | { kind: "chat" }
   | { kind: "ask"; requestId: string; question: string; options?: string[] }
-  | { kind: "approval"; requestId: string; command: string; dangerous: boolean };
+  | { kind: "approval"; requestId: string; command: string; dangerous: boolean; reasonCode: ApprovalRiskCode };
 
 type ModalFocus = "select" | "input";
 
@@ -712,7 +753,15 @@ function App(props: { serverUrl: string }) {
     const clientMessageId = crypto.randomUUID();
     sentMessageIdsRef.current.add(clientMessageId);
     // Prevent unbounded growth if the server never echoes ids (e.g. disconnects mid-flight).
-    if (sentMessageIdsRef.current.size > 500) sentMessageIdsRef.current.clear();
+    // Trim oldest entries instead of clearing all to avoid duplicating in-flight messages.
+    if (sentMessageIdsRef.current.size > 500) {
+      const iter = sentMessageIdsRef.current.values();
+      for (let i = 0; i < 250; i++) {
+        const next = iter.next();
+        if (next.done) break;
+        sentMessageIdsRef.current.delete(next.value);
+      }
+    }
 
     const ok = send({ type: "user_message", sessionId: sid, text, clientMessageId });
     if (!ok) return false;
@@ -870,6 +919,8 @@ function App(props: { serverUrl: string }) {
           id: nextFeedId(),
           type: "error",
           message: "connect failed: unable to send websocket request",
+          code: "internal_error",
+          source: "session",
         });
         return;
       }
@@ -888,6 +939,8 @@ function App(props: { serverUrl: string }) {
         id: nextFeedId(),
         type: "error",
         message: `connect failed: ${String(err)}`,
+        code: "internal_error",
+        source: "session",
       });
     }
   };
@@ -939,6 +992,101 @@ function App(props: { serverUrl: string }) {
     setCommandWindow(null);
     setConnectApiKeyInput("");
     setConnectFocus("select");
+  };
+
+  const requestHarnessContext = () => {
+    const sid = sessionIdRef.current;
+    if (!sid) {
+      appendFeed({ id: nextFeedId(), type: "system", line: "not connected: cannot request harness context yet" });
+      return false;
+    }
+    const ok = send({ type: "harness_context_get", sessionId: sid });
+    if (!ok) {
+      appendFeed({
+        id: nextFeedId(),
+        type: "error",
+        message: "failed to request harness context",
+        code: "internal_error",
+        source: "session",
+      });
+      return false;
+    }
+    appendFeed({ id: nextFeedId(), type: "system", line: "requesting harness context..." });
+    return true;
+  };
+
+  const setDefaultHarnessContext = () => {
+    const sid = sessionIdRef.current;
+    if (!sid) {
+      appendFeed({ id: nextFeedId(), type: "system", line: "not connected: cannot set harness context yet" });
+      return false;
+    }
+    const context = {
+      runId: `tui-${Date.now()}`,
+      objective: `Ship requested changes for ${cwd || "current workspace"}.`,
+      acceptanceCriteria: ["Requested behavior is implemented.", "Affected tests and docs are updated as needed."],
+      constraints: ["Keep scope limited to requested work.", "Use websocket protocol controls for runtime actions."],
+      taskId: sid,
+      metadata: {
+        source: "tui",
+      },
+    };
+    const ok = send({ type: "harness_context_set", sessionId: sid, context });
+    if (!ok) {
+      appendFeed({
+        id: nextFeedId(),
+        type: "error",
+        message: "failed to set harness context",
+        code: "internal_error",
+        source: "session",
+      });
+      return false;
+    }
+    appendFeed({ id: nextFeedId(), type: "system", line: `harness context set (${context.runId})` });
+    return true;
+  };
+
+  const runDefaultSloChecks = () => {
+    const sid = sessionIdRef.current;
+    if (!sid) {
+      appendFeed({ id: nextFeedId(), type: "system", line: "not connected: cannot run SLO checks yet" });
+      return false;
+    }
+
+    const checks = [
+      {
+        id: "vector_errors",
+        type: "custom" as const,
+        queryType: "promql" as const,
+        query: "sum(rate(vector_component_errors_total[5m]))",
+        op: "<=" as const,
+        threshold: 0,
+        windowSec: 300,
+      },
+      {
+        id: "log_errors",
+        type: "error_rate" as const,
+        queryType: "logql" as const,
+        query: "_time:[now-5m, now] level:error",
+        op: "==" as const,
+        threshold: 0,
+        windowSec: 300,
+      },
+    ];
+
+    const ok = send({ type: "harness_slo_evaluate", sessionId: sid, checks });
+    if (!ok) {
+      appendFeed({
+        id: nextFeedId(),
+        type: "error",
+        message: "failed to run harness SLO checks",
+        code: "internal_error",
+        source: "session",
+      });
+      return false;
+    }
+    appendFeed({ id: nextFeedId(), type: "system", line: `running SLO checks (${checks.length})...` });
+    return true;
   };
 
   const executeSlashCommand = (raw: string, fallback?: SlashCommand | null) => {
@@ -1017,6 +1165,13 @@ function App(props: { serverUrl: string }) {
         openConnectWindow();
         return true;
       }
+      case "hctx":
+        if (args.toLowerCase() === "set") setDefaultHarnessContext();
+        else requestHarnessContext();
+        return true;
+      case "slo":
+        runDefaultSloChecks();
+        return true;
       case "clear":
         clearComposer();
         return true;
@@ -1196,6 +1351,7 @@ function App(props: { serverUrl: string }) {
         setProvider(parsed.config.provider);
         setModel(parsed.config.model);
         setCwd(parsed.config.workingDirectory);
+        ws.send(JSON.stringify({ type: "harness_context_get", sessionId: parsed.sessionId } satisfies ClientMessage));
         appendSessionLog(`connected session=${parsed.sessionId} model=${parsed.config.model}`);
         void updateSessionStateFile({
           sessionId: parsed.sessionId,
@@ -1309,6 +1465,7 @@ function App(props: { serverUrl: string }) {
             requestId: parsed.requestId,
             command: parsed.command,
             dangerous: parsed.dangerous,
+            reasonCode: parsed.reasonCode,
           });
           setModalFocus("select");
           setResponseInput("");
@@ -1330,8 +1487,48 @@ function App(props: { serverUrl: string }) {
             line: `model updated: ${parsed.config.provider}/${parsed.config.model}`,
           });
           break;
+        case "observability_status": {
+          const summary =
+            parsed.enabled && parsed.observability
+              ? `logs=${parsed.observability.queryApi.logsBaseUrl} metrics=${parsed.observability.queryApi.metricsBaseUrl} traces=${parsed.observability.queryApi.tracesBaseUrl}`
+              : "disabled";
+          appendFeed({
+            id: nextFeedId(),
+            type: "observability_status",
+            enabled: parsed.enabled,
+            summary,
+          });
+          break;
+        }
+        case "harness_context":
+          appendFeed({
+            id: nextFeedId(),
+            type: "harness_context",
+            context: parsed.context,
+          });
+          break;
+        case "observability_query_result":
+          appendFeed({
+            id: nextFeedId(),
+            type: "observability_query_result",
+            result: parsed.result,
+          });
+          break;
+        case "harness_slo_result":
+          appendFeed({
+            id: nextFeedId(),
+            type: "harness_slo_result",
+            result: parsed.result,
+          });
+          break;
         case "error":
-          appendFeed({ id: nextFeedId(), type: "error", message: parsed.message });
+          appendFeed({
+            id: nextFeedId(),
+            type: "error",
+            message: parsed.message,
+            code: parsed.code,
+            source: parsed.source,
+          });
           break;
       }
     };
@@ -1462,6 +1659,122 @@ function App(props: { serverUrl: string }) {
       );
     }
 
+    if (item.type === "observability_status") {
+      return (
+        <box
+          key={item.id}
+          border
+          borderStyle="single"
+          borderColor={item.enabled ? theme.borderDim : theme.warn}
+          backgroundColor={theme.panelBg}
+          padding={1}
+          flexDirection="column"
+          gap={0}
+          marginBottom={1}
+        >
+          <text fg={theme.muted}>
+            <strong>observability</strong> {item.enabled ? "enabled" : "disabled"}
+          </text>
+          <text fg={theme.text}>{item.summary}</text>
+        </box>
+      );
+    }
+
+    if (item.type === "harness_context") {
+      if (!item.context) {
+        return (
+          <box
+            key={item.id}
+            border
+            borderStyle="single"
+            borderColor={theme.warn}
+            backgroundColor={theme.panelBg}
+            padding={1}
+            flexDirection="column"
+            gap={0}
+            marginBottom={1}
+          >
+            <text fg={theme.warn}>
+              <strong>harness context</strong> none
+            </text>
+            <text fg={theme.muted}>Run /hctx set to create default context for this session.</text>
+          </box>
+        );
+      }
+
+      return (
+        <box
+          key={item.id}
+          border
+          borderStyle="single"
+          borderColor={theme.borderDim}
+          backgroundColor={theme.panelBg}
+          padding={1}
+          flexDirection="column"
+          gap={0}
+          marginBottom={1}
+        >
+          <text fg={theme.muted}>
+            <strong>harness context</strong>
+          </text>
+          <text fg={theme.text}>runId: {item.context.runId}</text>
+          <text fg={theme.text}>objective: {item.context.objective}</text>
+          <text fg={theme.text}>acceptance: {item.context.acceptanceCriteria.length}</text>
+          <text fg={theme.text}>constraints: {item.context.constraints.length}</text>
+          <text fg={theme.muted}>updated: {item.context.updatedAt}</text>
+        </box>
+      );
+    }
+
+    if (item.type === "observability_query_result") {
+      return (
+        <box
+          key={item.id}
+          border
+          borderStyle="single"
+          borderColor={item.result.status === "ok" ? theme.borderDim : theme.danger}
+          backgroundColor={theme.panelBg}
+          padding={1}
+          flexDirection="column"
+          gap={0}
+          marginBottom={1}
+        >
+          <text fg={theme.muted}>
+            <strong>query</strong> {item.result.queryType} ({item.result.status})
+          </text>
+          <text fg={theme.text}>{truncateUiText(item.result.query, 500)}</text>
+          {item.result.error ? <text fg={theme.danger}>{item.result.error}</text> : null}
+          <text fg={theme.text}>{jsonPreview(item.result.data, 10_000)}</text>
+        </box>
+      );
+    }
+
+    if (item.type === "harness_slo_result") {
+      const passCount = item.result.checks.filter((check) => check.pass).length;
+      return (
+        <box
+          key={item.id}
+          border
+          borderStyle="single"
+          borderColor={item.result.passed ? theme.borderDim : theme.danger}
+          backgroundColor={theme.panelBg}
+          padding={1}
+          flexDirection="column"
+          gap={0}
+          marginBottom={1}
+        >
+          <text fg={item.result.passed ? theme.agent : theme.danger}>
+            <strong>slo</strong> {item.result.passed ? "pass" : "fail"} ({passCount}/{item.result.checks.length})
+          </text>
+          {item.result.checks.map((check) => (
+            <text key={check.id} fg={check.pass ? theme.text : theme.danger}>
+              {check.pass ? "[pass]" : "[fail]"} {check.id} {formatSloActual(check.actual)} {check.op} {check.threshold}
+            </text>
+          ))}
+        </box>
+      );
+    }
+
     if (item.type === "error") {
       return (
         <box
@@ -1477,6 +1790,9 @@ function App(props: { serverUrl: string }) {
         >
           <text fg={theme.danger}>
             <strong>error</strong>
+          </text>
+          <text fg={theme.muted}>
+            {item.source}/{item.code}
           </text>
           <text fg={theme.danger}>{item.message}</text>
         </box>
@@ -1995,7 +2311,7 @@ function App(props: { serverUrl: string }) {
 
             <input
               value={responseInput}
-              onChange={(v) => setResponseInput(v)}
+              onChange={(v) => setResponseInput(normalizeInputValue(v))}
               onSubmit={(v) => {
                 const text = typeof v === "string" ? v : responseInput;
                 sendAskAnswer(text);
@@ -2042,6 +2358,7 @@ function App(props: { serverUrl: string }) {
               <strong>{mode.dangerous ? "Dangerous command approval" : "Command approval"}</strong>
             </text>
             <text fg={theme.text}>{mode.command}</text>
+            <text fg={theme.muted}>risk: {mode.reasonCode}</text>
 
             <select
               options={[

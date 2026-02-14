@@ -17,13 +17,28 @@ async function readIfExists(p: string): Promise<string | null> {
 }
 
 export function createSkillTool(ctx: ToolContext) {
-  return tool({
-    description: `Load a skill (a SKILL.md file) to get specialized instructions.
+  const skills = ctx.availableSkills ?? [];
 
-Use this before producing deliverables like spreadsheets, slides, PDFs, or Word docs.
-Skills are searched in project, user, then built-in directories.`,
+  // Build description dynamically from discovered skills so models see actual skill names.
+  let description =
+    "Load a skill (a SKILL.md file) to get specialized instructions for producing a specific type of deliverable.\n\n" +
+    "IMPORTANT: Always call this tool BEFORE creating any deliverable. Do NOT skip this step.\n" +
+    "Skills are searched in project, global (~/.cowork/skills), user (~/.agent/skills), then built-in directories.";
+
+  let paramDesc: string;
+  if (skills.length > 0) {
+    const skillList = skills.map((s) => `- "${s.name}": ${s.description}`).join("\n");
+    description += `\n\nAvailable skills:\n${skillList}`;
+    const names = skills.map((s) => `'${s.name}'`).join(", ");
+    paramDesc = `The skill to load. Available: ${names}`;
+  } else {
+    paramDesc = "The skill to load (use the exact name from the Available Skills section of the system prompt)";
+  }
+
+  return tool({
+    description,
     inputSchema: z.object({
-      skillName: z.string().describe("The skill to load (e.g. 'xlsx', 'pptx', 'pdf', 'docx')"),
+      skillName: z.string().describe(paramDesc),
     }),
     execute: async ({ skillName }) => {
       if (loadedSkills.has(skillName)) return loadedSkills.get(skillName)!;

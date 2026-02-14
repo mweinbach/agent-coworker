@@ -1,7 +1,7 @@
 import { DEFAULT_ANTHROPIC_PROVIDER_OPTIONS } from "./anthropic";
 import { DEFAULT_CLAUDE_CODE_PROVIDER_OPTIONS } from "./claude-code";
 import { DEFAULT_CODEX_CLI_PROVIDER_OPTIONS } from "./codex-cli";
-import { DEFAULT_GEMINI_CLI_CORE_PROVIDER_OPTIONS } from "./gemini-cli";
+import { DEFAULT_GEMINI_CLI_CORE_PROVIDER_OPTIONS } from "./gemini-cli-options";
 import { DEFAULT_GOOGLE_PROVIDER_OPTIONS } from "./google";
 import { DEFAULT_OPENAI_PROVIDER_OPTIONS } from "./openai";
 

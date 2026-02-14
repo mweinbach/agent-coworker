@@ -1,13 +1,61 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 
 import type { ToolContext } from "./context";
 import { truncateText } from "../utils/paths";
 
+type ExecResult = { stdout: string; stderr: string; exitCode: number; errorCode?: string };
+
+function execFileAsync(
+  file: string,
+  args: string[],
+  opts: { cwd: string; timeout: number; maxBuffer: number }
+): Promise<ExecResult> {
+  return new Promise((resolve) => {
+    execFile(
+      file,
+      args,
+      {
+        cwd: opts.cwd,
+        timeout: opts.timeout,
+        maxBuffer: opts.maxBuffer,
+        windowsHide: true,
+      },
+      (err, stdout, stderr) => {
+        const code = (err as any)?.code;
+        const errorCode = typeof code === "string" ? code : undefined;
+        const exitCode = typeof code === "number" ? code : err ? 1 : 0;
+        resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? ""), exitCode, errorCode });
+      }
+    );
+  });
+}
+
+async function runShellCommand(opts: { command: string; cwd: string; timeout: number }): Promise<ExecResult> {
+  const maxBuffer = 1024 * 1024 * 10;
+
+  if (process.platform === "win32") {
+    // Prefer PowerShell on Windows. `powershell.exe` is available by default on supported versions.
+    const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", opts.command];
+    const primary = await execFileAsync("powershell.exe", args, { cwd: opts.cwd, timeout: opts.timeout, maxBuffer });
+    if (primary.errorCode !== "ENOENT") return primary;
+    return await execFileAsync("pwsh", args, { cwd: opts.cwd, timeout: opts.timeout, maxBuffer });
+  }
+
+  // macOS/Linux: prefer bash; fall back to sh.
+  const bash = await execFileAsync("bash", ["-lc", opts.command], { cwd: opts.cwd, timeout: opts.timeout, maxBuffer });
+  if (bash.errorCode !== "ENOENT") return bash;
+  return await execFileAsync("sh", ["-lc", opts.command], { cwd: opts.cwd, timeout: opts.timeout, maxBuffer });
+}
+
 export function createBashTool(ctx: ToolContext) {
   return tool({
-    description: `Execute a bash command with optional timeout. Use for git, npm, docker, system operations, and anything requiring the shell.
+    description: `Execute a shell command with optional timeout. Use for git, npm, docker, system operations, and anything requiring the shell.
+
+Platform notes:
+- Windows: runs in PowerShell
+- macOS/Linux: runs in bash (or sh fallback)
 
 IMPORTANT: Prefer dedicated tools over bash equivalents:
 - Reading files: use read (not cat/head/tail)
@@ -43,24 +91,15 @@ Rules:
       }
 
       return await new Promise((resolve) => {
-        exec(
-          command,
-          {
-            cwd: ctx.config.workingDirectory,
-            timeout,
-            maxBuffer: 1024 * 1024 * 10,
-          },
-          (err, stdout, stderr) => {
-            const exitCode = typeof (err as any)?.code === "number" ? (err as any).code : 0;
-            const res = {
-              stdout: truncateText(String(stdout ?? ""), 30000),
-              stderr: truncateText(String(stderr ?? ""), 10000),
-              exitCode,
-            };
-            ctx.log(`tool< bash ${JSON.stringify(res)}`);
-            resolve(res);
-          }
-        );
+        void runShellCommand({ command, cwd: ctx.config.workingDirectory, timeout }).then(({ stdout, stderr, exitCode }) => {
+          const res = {
+            stdout: truncateText(String(stdout ?? ""), 30000),
+            stderr: truncateText(String(stderr ?? ""), 10000),
+            exitCode,
+          };
+          ctx.log(`tool< bash ${JSON.stringify(res)}`);
+          resolve(res);
+        });
       });
     },
   });

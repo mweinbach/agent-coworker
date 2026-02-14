@@ -9,7 +9,7 @@ import { startAgentServer } from "./startServer";
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
 
 function printUsage() {
-  console.log("Usage: bun src/server/index.ts [--dir <directory_path>] [--port <port>] [--yolo]");
+  console.log("Usage: bun src/server/index.ts [--dir <directory_path>] [--port <port>] [--yolo] [--json]");
 }
 
 async function resolveAndValidateDir(dirArg: string): Promise<string> {
@@ -19,10 +19,11 @@ async function resolveAndValidateDir(dirArg: string): Promise<string> {
   return resolved;
 }
 
-function parseArgs(argv: string[]): { dir?: string; port: number; yolo: boolean } {
+function parseArgs(argv: string[]): { dir?: string; port: number; yolo: boolean; json: boolean } {
   let dir: string | undefined;
   let port = 7337;
   let yolo = false;
+  let json = false;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -42,7 +43,8 @@ function parseArgs(argv: string[]): { dir?: string; port: number; yolo: boolean 
       const v = argv[i + 1];
       if (!v) throw new Error(`Missing value for ${a}`);
       port = Number(v);
-      if (!Number.isFinite(port) || port <= 0 || port > 65535) throw new Error(`Invalid port: ${v}`);
+      // port=0 requests an ephemeral port from the OS.
+      if (!Number.isFinite(port) || port < 0 || port > 65535) throw new Error(`Invalid port: ${v}`);
       i++;
       continue;
     }
@@ -50,19 +52,23 @@ function parseArgs(argv: string[]): { dir?: string; port: number; yolo: boolean 
       yolo = true;
       continue;
     }
+    if (a === "--json" || a === "-j") {
+      json = true;
+      continue;
+    }
     throw new Error(`Unknown argument: ${a}`);
   }
 
-  return { dir, port, yolo };
+  return { dir, port, yolo, json };
 }
 
 async function main() {
-  const { dir, port, yolo } = parseArgs(process.argv.slice(2));
+  const { dir, port, yolo, json } = parseArgs(process.argv.slice(2));
 
   const cwd = dir ? await resolveAndValidateDir(dir) : process.cwd();
   if (dir) process.chdir(cwd);
 
-  const { server, config } = await startAgentServer({
+  const { server, config, url } = await startAgentServer({
     cwd,
     hostname: "127.0.0.1",
     port,
@@ -70,7 +76,19 @@ async function main() {
     yolo,
   });
 
-  console.log(`[server] ws://127.0.0.1:${server.port}/ws (cwd=${config.workingDirectory})`);
+  if (json) {
+    console.log(
+      JSON.stringify({
+        type: "server_listening",
+        url,
+        port: server.port,
+        cwd: config.workingDirectory,
+      })
+    );
+    return;
+  }
+
+  console.log(`[server] ${url} (cwd=${config.workingDirectory})`);
 }
 
 if (import.meta.main) {

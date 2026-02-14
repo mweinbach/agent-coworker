@@ -2,12 +2,26 @@
 
 Complete documentation of the agent-coworker WebSocket protocol for building alternative UIs on top of the existing server/agent logic.
 
+This document is the canonical external protocol contract for all clients. Thin clients should rely on this file and `src/server/protocol.ts` for message names and payload shapes.
+
 ## Connection
 
 - **URL**: `ws://127.0.0.1:{port}/ws` (default port `7337`)
 - **No authentication** — server binds to localhost only
-- **No heartbeat/keepalive** — relies on the WebSocket layer
+- **Ping/pong keepalive** — clients may send `ping` with `sessionId`; the server responds with `pong`
 - **One session per connection** — disconnecting destroys the session; there is no resumption
+
+## Public Capabilities
+
+- Session lifecycle: `server_hello`, `session_settings`, `session_busy`, `reset`
+- Conversational turn streaming: `user_message`, `assistant_message`, `reasoning`, `log`, `todos`
+- Human-in-the-loop control: `ask`/`ask_response`, `approval`/`approval_response`, `cancel`
+- Provider/model control: `connect_provider`, `set_model`, `refresh_provider_status`, `provider_status`
+- Tool and skill metadata: `list_tools`, `tools`, `list_skills`, `read_skill`, `enable_skill`, `disable_skill`, `delete_skill`
+- MCP runtime toggling: `set_enable_mcp`
+- Session backup/restore: `session_backup_get`, `session_backup_checkpoint`, `session_backup_restore`, `session_backup_delete_checkpoint`
+- Observability + harness: `observability_status`, `observability_query`, `observability_query_result`, `harness_context_get`, `harness_context_set`, `harness_slo_evaluate`, `harness_slo_result`
+- Keepalive and structured errors: `ping`/`pong`, `error`
 
 ## Handshake Flow
 
@@ -16,7 +30,7 @@ Client                          Server
   |                               |
   |-------- WS Connect ---------->|
   |                               | creates AgentSession
-  |<------ server_hello ----------|  (sessionId + config)
+  |<------ server_hello ----------|  (sessionId + protocolVersion + config)
   |                               |
   |---- client_hello (optional) ->|  (silently acknowledged)
   |                               |
@@ -29,6 +43,23 @@ Client                          Server
 4. Client includes `sessionId` in **every** subsequent message
 
 ---
+
+## Protocol v2 Migration (from v1)
+
+Protocol version `2.0` introduces explicit breaking changes:
+
+- `ping` now requires `sessionId`
+- `pong.sessionId` now echoes the client-provided `sessionId`
+- `error.code` is required
+- `error.source` is required
+- `approval.reasonCode` is required
+
+Recommended migration order for clients:
+
+1. Update parser/types to require the new fields.
+2. Send `sessionId` on every `ping`.
+3. Render `error.code` / `error.source` and `approval.reasonCode` in UI.
+4. Assert `server_hello.protocolVersion === "2.0"` at connect time.
 
 ## Type Definitions
 
@@ -49,6 +80,8 @@ interface ConfigSubset {
   workingDirectory: string;
   outputDirectory: string;
 }
+
+type ProtocolVersion = string; // current server value: "2.0"
 
 interface TodoItem {
   content: string;
@@ -74,6 +107,36 @@ interface SessionBackupState {
   originalSnapshot: { kind: "pending" | "directory" | "tar_gz" };
   checkpoints: SessionBackupCheckpoint[];
   failureReason?: string;
+}
+
+type ObservabilityQueryType = "logql" | "promql" | "traceql";
+type HarnessSloOperator = "<" | "<=" | ">" | ">=" | "==" | "!=";
+
+interface HarnessContextPayload {
+  runId: string;
+  taskId?: string;
+  objective: string;
+  acceptanceCriteria: string[];
+  constraints: string[];
+  metadata?: Record<string, string>;
+}
+
+interface ObservabilityQueryRequest {
+  queryType: ObservabilityQueryType;
+  query: string;
+  fromMs?: number;
+  toMs?: number;
+  limit?: number;
+}
+
+interface HarnessSloCheck {
+  id: string;
+  type: "latency" | "error_rate" | "custom";
+  queryType: ObservabilityQueryType;
+  query: string;
+  op: HarnessSloOperator;
+  threshold: number;
+  windowSec: number;
 }
 ```
 
@@ -142,7 +205,7 @@ Switch AI model and/or provider at runtime.
 {
   "type": "set_model",
   "sessionId": "...",
-  "model": "gpt-4-turbo",
+  "model": "gpt-5.2",
   "provider": "openai"  // optional
 }
 ```
@@ -168,6 +231,17 @@ Authenticate with a provider (API key or OAuth).
 }
 ```
 
+### refresh_provider_status
+
+Request the server's latest provider authorization/verification status (and account identity where available).
+
+```jsonc
+{
+  "type": "refresh_provider_status",
+  "sessionId": "..."
+}
+```
+
 ### list_tools
 
 Request the list of available tools.
@@ -176,6 +250,148 @@ Request the list of available tools.
 {
   "type": "list_tools",
   "sessionId": "..."
+}
+```
+
+### list_skills
+
+Request the list of discovered skills. Desktop UIs may also surface disabled global skills
+from `~/.cowork/disabled-skills` (they are marked with `"enabled": false`).
+
+```jsonc
+{
+  "type": "list_skills",
+  "sessionId": "..."
+}
+```
+
+### read_skill
+
+Read the contents of a single skill's `SKILL.md`.
+
+```jsonc
+{
+  "type": "read_skill",
+  "sessionId": "...",
+  "skillName": "pdf"
+}
+```
+
+### disable_skill
+
+Disable a global skill by moving it from `~/.cowork/skills/<name>` to `~/.cowork/disabled-skills/<name>`.
+
+```jsonc
+{
+  "type": "disable_skill",
+  "sessionId": "...",
+  "skillName": "pdf"
+}
+```
+
+### enable_skill
+
+Enable a global skill by moving it from `~/.cowork/disabled-skills/<name>` back to `~/.cowork/skills/<name>`.
+
+```jsonc
+{
+  "type": "enable_skill",
+  "sessionId": "...",
+  "skillName": "pdf"
+}
+```
+
+### delete_skill
+
+Delete a global skill directory permanently.
+
+```jsonc
+{
+  "type": "delete_skill",
+  "sessionId": "...",
+  "skillName": "pdf"
+}
+```
+
+### set_enable_mcp
+
+Enable/disable MCP tool discovery/execution for this session.
+
+```jsonc
+{
+  "type": "set_enable_mcp",
+  "sessionId": "...",
+  "enableMcp": true
+}
+```
+
+### harness_context_get
+
+Fetch the current harness context payload for this session.
+
+```jsonc
+{
+  "type": "harness_context_get",
+  "sessionId": "..."
+}
+```
+
+### harness_context_set
+
+Set/replace the harness context payload for this session.
+
+```jsonc
+{
+  "type": "harness_context_set",
+  "sessionId": "...",
+  "context": {
+    "runId": "run-01",
+    "taskId": "task-123",
+    "objective": "Improve startup reliability",
+    "acceptanceCriteria": ["startup < 800ms", "no startup errors"],
+    "constraints": ["no product behavior changes"],
+    "metadata": { "owner": "platform" }
+  }
+}
+```
+
+### observability_query
+
+Run an observability query (`logql` / `promql` / `traceql`) using configured local endpoints.
+
+```jsonc
+{
+  "type": "observability_query",
+  "sessionId": "...",
+  "query": {
+    "queryType": "promql",
+    "query": "sum(rate(vector_component_errors_total[5m]))",
+    "fromMs": 1738736400000,
+    "toMs": 1738736700000,
+    "limit": 200
+  }
+}
+```
+
+### harness_slo_evaluate
+
+Evaluate one or more SLO checks against observability data.
+
+```jsonc
+{
+  "type": "harness_slo_evaluate",
+  "sessionId": "...",
+  "checks": [
+    {
+      "id": "vector_errors",
+      "type": "custom",
+      "queryType": "promql",
+      "query": "sum(rate(vector_component_errors_total[5m]))",
+      "op": "<=",
+      "threshold": 0,
+      "windowSec": 300
+    }
+  ]
 }
 ```
 
@@ -188,6 +404,25 @@ Clear conversation history and todos.
   "type": "reset",
   "sessionId": "..."
 }
+```
+
+### cancel
+
+Abort the currently running agent turn. The server aborts the underlying LLM call and rejects any pending ask/approval deferreds. A `session_busy { busy: false }` event is emitted once the cancellation completes.
+
+```jsonc
+{
+  "type": "cancel",
+  "sessionId": "..."
+}
+```
+
+### ping
+
+Lightweight keepalive probe. Requires a valid `sessionId` for this connection. The server responds with `pong` echoing that same `sessionId`.
+
+```jsonc
+{ "type": "ping", "sessionId": "..." }
 ```
 
 ### session_backup_get
@@ -251,18 +486,53 @@ All events are JSON with a `type` and `sessionId`.
 
 ### server_hello
 
-First message after connection. Contains the session ID and current configuration.
+First message after connection. Contains the session ID, protocol version, and current configuration.
 
 ```jsonc
 {
   "type": "server_hello",
   "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "protocolVersion": "2.0",
   "config": {
     "provider": "openai",
-    "model": "gpt-4-turbo",
+    "model": "gpt-5.2",
     "workingDirectory": "/Users/user/project",
     "outputDirectory": "/Users/user/project/output"
   }
+}
+```
+
+### session_settings
+
+Session-level toggles/settings. Sent on connect (after `server_hello`) and whenever they change.
+
+```jsonc
+{
+  "type": "session_settings",
+  "sessionId": "...",
+  "enableMcp": true
+}
+```
+
+### provider_status
+
+Provider authorization / verification status. Sent in response to `refresh_provider_status`.
+
+```jsonc
+{
+  "type": "provider_status",
+  "sessionId": "...",
+  "providers": [
+    {
+      "provider": "codex-cli",
+      "authorized": true,
+      "verified": true,
+      "mode": "oauth",
+      "account": { "email": "user@example.com", "name": "User Name" },
+      "message": "Verified via OIDC userinfo.",
+      "checkedAt": "2026-02-09T21:37:00.000Z"
+    }
+  ]
 }
 ```
 
@@ -373,9 +643,19 @@ Agent wants to run a command and needs permission. **Blocks the agent** until yo
   "sessionId": "...",
   "requestId": "req-approval-001",
   "command": "rm -rf /tmp/old-builds",
-  "dangerous": true
+  "dangerous": true,
+  "reasonCode": "matches_dangerous_pattern"
 }
 ```
+
+`reasonCode` values:
+
+- `safe_auto_approved`
+- `matches_dangerous_pattern`
+- `contains_shell_control_operator`
+- `requires_manual_review`
+- `file_read_command_requires_review`
+- `outside_allowed_scope`
 
 ### config_updated
 
@@ -403,6 +683,65 @@ List of available tool names (response to `list_tools`).
   "type": "tools",
   "sessionId": "...",
   "tools": ["bash", "edit", "glob", "grep", "read", "write"]
+}
+```
+
+### skills_list
+
+List of discovered skills (response to `list_skills`).
+
+```jsonc
+{
+  "type": "skills_list",
+  "sessionId": "...",
+  "skills": [
+    {
+      "name": "pdf",
+      "path": "/Users/user/project/.agent/skills/pdf/SKILL.md",
+      "source": "project", // or "global" (from ~/.cowork/skills), "user" (~/.agent/skills), "built-in"
+      "enabled": true,
+      "triggers": ["pdf", ".pdf", "form"],
+      "description": "Use when tasks involve reading, creating, or reviewing PDF files...",
+      // Optional UI metadata loaded from skillDir/agents/*.yaml (best-effort).
+      "interface": {
+        "displayName": "PDF Skill",
+        "shortDescription": "Create, edit, and review PDFs",
+        "iconSmall": "data:image/svg+xml;base64,...",
+        "iconLarge": "data:image/png;base64,...",
+        "defaultPrompt": "Create, edit, or review this PDF and summarize the key output or changes.",
+        "agents": ["openai"]
+      }
+    }
+  ]
+}
+```
+
+### skill_content
+
+Skill metadata + its `SKILL.md` content (response to `read_skill`).
+
+```jsonc
+{
+  "type": "skill_content",
+  "sessionId": "...",
+  "skill": {
+    "name": "pdf",
+    "path": "/Users/user/project/.agent/skills/pdf/SKILL.md",
+    "source": "project",
+    "enabled": true,
+    "triggers": ["pdf", ".pdf", "form"],
+    "description": "Use when tasks involve reading, creating, or reviewing PDF files...",
+    "interface": {
+      "displayName": "PDF Skill",
+      "shortDescription": "Create, edit, and review PDFs",
+      "iconSmall": "data:image/svg+xml;base64,...",
+      "iconLarge": "data:image/png;base64,...",
+      "defaultPrompt": "Create, edit, or review this PDF and summarize the key output or changes.",
+      "agents": ["openai"]
+    }
+  },
+  // SKILL.md content with any leading YAML front matter stripped (so it renders cleanly in UIs).
+  "content": "# PDF Skill\\n\\n..."
 }
 ```
 
@@ -436,6 +775,96 @@ Backup/checkpoint status update. Emitted on explicit requests and whenever check
 }
 ```
 
+### observability_status
+
+Emitted on connection with the session's observability configuration.
+
+```jsonc
+{
+  "type": "observability_status",
+  "sessionId": "...",
+  "enabled": true,
+  "observability": {
+    "mode": "local_docker",
+    "otlpHttpEndpoint": "http://127.0.0.1:14318",
+    "queryApi": {
+      "logsBaseUrl": "http://127.0.0.1:19428",
+      "metricsBaseUrl": "http://127.0.0.1:18428",
+      "tracesBaseUrl": "http://127.0.0.1:10428"
+    },
+    "defaultWindowSec": 300
+  }
+}
+```
+
+### harness_context
+
+Current harness context payload for the session (`null` if unset).
+
+```jsonc
+{
+  "type": "harness_context",
+  "sessionId": "...",
+  "context": {
+    "runId": "run-01",
+    "objective": "Improve startup reliability",
+    "acceptanceCriteria": ["startup < 800ms"],
+    "constraints": ["no product behavior changes"],
+    "updatedAt": "2026-02-11T12:00:00.000Z"
+  }
+}
+```
+
+### observability_query_result
+
+Result envelope for a single observability query.
+
+```jsonc
+{
+  "type": "observability_query_result",
+  "sessionId": "...",
+  "result": {
+    "queryType": "promql",
+    "query": "sum(rate(vector_component_errors_total[5m]))",
+    "fromMs": 1738736400000,
+    "toMs": 1738736700000,
+    "status": "ok",
+    "data": { "status": "success", "data": { "resultType": "vector", "result": [] } }
+  }
+}
+```
+
+### harness_slo_result
+
+Evaluation summary for one or more SLO checks.
+
+```jsonc
+{
+  "type": "harness_slo_result",
+  "sessionId": "...",
+  "result": {
+    "reportOnly": true,
+    "strictMode": false,
+    "passed": true,
+    "fromMs": 1738736400000,
+    "toMs": 1738736700000,
+    "checks": [
+      {
+        "id": "vector_errors",
+        "type": "custom",
+        "queryType": "promql",
+        "query": "sum(rate(vector_component_errors_total[5m]))",
+        "op": "<=",
+        "threshold": 0,
+        "windowSec": 300,
+        "actual": 0,
+        "pass": true
+      }
+    ]
+  }
+}
+```
+
 ### reset_done
 
 Confirms the conversation was cleared (response to `reset`).
@@ -452,8 +881,43 @@ Any error condition.
 {
   "type": "error",
   "sessionId": "...",
-  "message": "Agent is busy"
+  "message": "Agent is busy",
+  "code": "busy",
+  "source": "session"
 }
+```
+
+`code` values:
+
+- `invalid_json`
+- `invalid_payload`
+- `missing_type`
+- `unknown_type`
+- `unknown_session`
+- `busy`
+- `validation_failed`
+- `permission_denied`
+- `provider_error`
+- `backup_error`
+- `observability_error`
+- `internal_error`
+
+`source` values:
+
+- `protocol`
+- `session`
+- `tool`
+- `provider`
+- `backup`
+- `observability`
+- `permissions`
+
+### pong
+
+Keepalive response to a client `ping`. The `sessionId` echoes the incoming ping `sessionId`.
+
+```jsonc
+{ "type": "pong", "sessionId": "..." }
 ```
 
 ---
@@ -494,11 +958,29 @@ client  -> ask_response { requestId: "r2", answer: "PostgreSQL" }
          ... agent continues ...
 ```
 
+### Cancel In-Flight Turn
+
+```
+client  -> user_message { text: "Refactor the entire codebase" }
+server  <- session_busy { busy: true }
+server  <- reasoning { ... }
+client  -> cancel { sessionId: "..." }
+         ... server aborts LLM call ...
+server  <- session_busy { busy: false }
+```
+
+### Keepalive Ping/Pong
+
+```
+client  -> ping { sessionId: "..." }
+server  <- pong { sessionId: "..." }
+```
+
 ### Model Change
 
 ```
-client  -> set_model { model: "gpt-4-turbo", provider: "openai" }
-server  <- config_updated { config: { provider: "openai", model: "gpt-4-turbo", ... } }
+client  -> set_model { model: "gpt-5.2", provider: "openai" }
+server  <- config_updated { config: { provider: "openai", model: "gpt-5.2", ... } }
 ```
 
 ### Backup / Checkpoint Flow
@@ -519,25 +1001,30 @@ server  <- session_backup_state { reason: "restore", backup: {...} }
 
 ## Error Reference
 
-| Error Message | Cause |
+| `code` | Typical Cause |
 |---|---|
-| `Invalid JSON` | Malformed JSON |
-| `Expected object` | Parsed JSON is not an object |
-| `Missing type` | No `type` field or not a string |
-| `Unknown type: X` | Unrecognized message type |
-| `Unknown sessionId: X` | `sessionId` doesn't match this connection |
-| `Agent is busy` | Sent `user_message` / `reset` / `set_model` while agent is processing |
-| `Connection flow already running` | Another `connect_provider` is in progress |
-| `Unsupported provider: X` | Invalid provider name |
-| `Model id is required` | Empty model string in `set_model` |
-| `connect failed: X` | Provider connection/auth failed |
-| `session_backup_get missing sessionId` | Invalid `session_backup_get` payload |
-| `session_backup_checkpoint missing sessionId` | Invalid `session_backup_checkpoint` payload |
-| `session_backup_restore missing sessionId` | Invalid `session_backup_restore` payload |
-| `session_backup_restore invalid checkpointId` | `checkpointId` is present but not a string |
-| `session_backup_delete_checkpoint missing sessionId` | Invalid `session_backup_delete_checkpoint` payload |
-| `session_backup_delete_checkpoint missing checkpointId` | Missing/empty checkpoint id |
-| `Unknown checkpoint id: X` | Requested delete/restore checkpoint does not exist |
+| `invalid_json` | Malformed JSON payload |
+| `invalid_payload` | Parsed JSON is not an object |
+| `missing_type` | Missing/non-string `type` |
+| `unknown_type` | Unrecognized `type` |
+| `unknown_session` | `sessionId` mismatch for this connection |
+| `busy` | Request sent while session is actively running |
+| `validation_failed` | Required field missing/invalid |
+| `permission_denied` | Path/URL/policy guard blocked action |
+| `provider_error` | Provider auth or model operation failure |
+| `backup_error` | Session backup/checkpoint operation failure |
+| `observability_error` | Query/evaluation or observability failure |
+| `internal_error` | Unexpected runtime failure |
+
+| `source` | Subsystem |
+|---|---|
+| `protocol` | Parse/shape/session validation in websocket handler |
+| `session` | Core `AgentSession` logic |
+| `tool` | Tool execution lifecycle |
+| `provider` | Provider connect/model operations |
+| `backup` | Backup/checkpoint manager |
+| `observability` | Observability/harness query path |
+| `permissions` | Permission and scope guards |
 
 ---
 
@@ -548,6 +1035,29 @@ server  <- session_backup_state { reason: "restore", backup: {...} }
 - **Session = connection**: disconnecting disposes the session and rejects all pending ask/approval deferreds. There is no reconnection or session resumption.
 - **Localhost only**: the server binds to `127.0.0.1`; no auth, no TLS.
 - **Automatic snapshots/checkpoints**: on session start, the server snapshots the working directory into `~/.cowork/session-backups/{sessionId}`. After every agent turn completion, it stores a compressed binary diff checkpoint against the original snapshot.
+
+---
+
+## Desktop / Wrapper Integration
+
+### Server CLI (machine-readable)
+
+For desktop wrappers (e.g. Electron), the server supports:
+
+- Ephemeral ports with `--port 0`
+- JSON startup output with `--json`
+
+Example:
+
+```bash
+bun src/server/index.ts --dir /path/to/project --port 0 --json
+```
+
+On success, stdout prints a single JSON line:
+
+```json
+{"type":"server_listening","url":"ws://127.0.0.1:12345/ws","port":12345,"cwd":"/path/to/project"}
+```
 
 ---
 

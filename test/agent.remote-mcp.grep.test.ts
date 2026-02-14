@@ -36,12 +36,12 @@ function makeConfig(baseDir: string, configDir: string): AgentConfig {
 
 describe("runTurn + remote MCP (mcp.grep.app)", () => {
   it(
-    "loads the remote MCP tools and can execute them via the tools passed to generateText",
+    "loads the remote MCP tools and can execute them via the tools passed to streamText",
     async () => {
       // We don't want to call a real LLM, but we do want to exercise the real
       // MCP loading + tool execution path. Use dependency injection to avoid
       // global module mocks leaking across concurrent test files.
-      const mockGenerateText = mock(async (args: any) => {
+      const mockStreamText = mock(async (args: any) => {
         const tool = args?.tools?.["mcp__grep__searchGitHub"];
         expect(tool).toBeDefined();
 
@@ -93,7 +93,7 @@ describe("runTurn + remote MCP (mcp.grep.app)", () => {
             maxSteps: 5,
           },
           {
-            generateText: mockGenerateText as any,
+            streamText: mockStreamText as any,
             stepCountIs: mock((_n: number) => "step-count-sentinel") as any,
             getModel: mock((_config: AgentConfig, _id?: string) => "model-sentinel") as any,
             // Keep only MCP tools in the tools map to reduce accidental coupling to built-ins.
@@ -101,7 +101,7 @@ describe("runTurn + remote MCP (mcp.grep.app)", () => {
           }
         );
 
-        expect(mockGenerateText).toHaveBeenCalledTimes(1);
+        expect(mockStreamText).toHaveBeenCalledTimes(1);
         expect(typeof res.text).toBe("string");
         expect(res.text.trim().length).toBeGreaterThan(0);
       } finally {

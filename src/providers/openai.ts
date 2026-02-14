@@ -29,7 +29,6 @@ export const DEFAULT_OPENAI_PROVIDER_OPTIONS = {
 } as const satisfies OpenAIResponsesProviderOptions;
 
 export const openaiProvider = {
-  defaultModel: "gpt-5.2",
   keyCandidates: ["openai"] as const,
   createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) => {
     const provider = savedKey ? createOpenAI({ apiKey: savedKey }) : openai;

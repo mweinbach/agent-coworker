@@ -1,3 +1,6 @@
+import { anthropic } from "@ai-sdk/anthropic";
+import { google } from "@ai-sdk/google";
+import { openai } from "@ai-sdk/openai";
 import { tool } from "ai";
 import { z } from "zod";
 
@@ -16,20 +19,36 @@ function formatResults(results: Array<{ title?: string; url?: string; descriptio
   );
 }
 
-export function createWebSearchTool(ctx: ToolContext) {
+function sanitizeQuery(raw: string): string {
+  const query = raw.replace(/\s+/g, " ").trim();
+  if (!query) throw new Error("webSearch requires a non-empty query");
+  if (query.length > 1000) throw new Error("webSearch query is too long (max 1000 characters)");
+  if (/[\u0000-\u001f]/.test(query)) throw new Error("webSearch query contains unsupported control characters");
+  return query;
+}
+
+function getExaSnippet(result: unknown): string {
+  const text = (result as any)?.text;
+  if (typeof text === "string") return text;
+  if (text && typeof text === "object" && typeof text.text === "string") return text.text;
+  return "";
+}
+
+function createCustomWebSearchTool(ctx: ToolContext) {
   return tool({
     description:
-      "Search the web for current information. Requires BRAVE_API_KEY or TAVILY_API_KEY. Returns titles, URLs, and snippets.",
+      "Search the web for current information. Requires BRAVE_API_KEY or EXA_API_KEY. Returns titles, URLs, and snippets.",
     inputSchema: z.object({
       query: z.string().describe("Search query"),
       maxResults: z.number().int().min(1).max(20).optional().default(10),
     }),
     execute: async ({ query, maxResults }) => {
-      ctx.log(`tool> webSearch ${JSON.stringify({ query, maxResults })}`);
+      const safeQuery = sanitizeQuery(query);
+      ctx.log(`tool> webSearch ${JSON.stringify({ query: safeQuery, maxResults })}`);
 
       if (process.env.BRAVE_API_KEY) {
         const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(
-          query
+          safeQuery
         )}&count=${maxResults}`;
         const res = await fetch(url, {
           headers: {
@@ -57,43 +76,61 @@ export function createWebSearchTool(ctx: ToolContext) {
         return out;
       }
 
-      if (process.env.TAVILY_API_KEY) {
-        const res = await fetch("https://api.tavily.com/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            api_key: process.env.TAVILY_API_KEY,
-            query,
-            max_results: maxResults,
-            search_depth: "basic",
-            include_answer: false,
-            include_images: false,
-            include_raw_content: false,
-          }),
-        });
+      if (process.env.EXA_API_KEY) {
+        try {
+          const res = await fetch("https://api.exa.ai/search", {
+            method: "POST",
+            headers: {
+              "x-api-key": process.env.EXA_API_KEY,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              query: safeQuery,
+              numResults: maxResults,
+            }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            const msg = `Exa search failed: ${res.status} ${res.statusText}: ${text.slice(0, 500)}`;
+            ctx.log(`tool< webSearch ${JSON.stringify({ ok: false })}`);
+            return msg;
+          }
 
-        if (!res.ok) {
-          const text = await res.text();
-          const msg = `Tavily search failed: ${res.status} ${res.statusText}: ${text.slice(0, 500)}`;
+          const data = (await res.json()) as any;
+          const results = (data?.results || []).map((r: any) => ({
+            title: r.title || undefined,
+            url: r.url || "",
+            description: getExaSnippet(r),
+          }));
+
+          const out = formatResults(results);
+          ctx.log(`tool< webSearch ${JSON.stringify({ provider: "exa" })}`);
+          return out;
+        } catch (error) {
+          const msg = `Exa search failed: ${error instanceof Error ? error.message : String(error)}`;
           ctx.log(`tool< webSearch ${JSON.stringify({ ok: false })}`);
           return msg;
         }
-
-        const data = (await res.json()) as any;
-        const results = (data?.results || []).map((r: any) => ({
-          title: r.title,
-          url: r.url,
-          description: r.content,
-        }));
-
-        const out = formatResults(results);
-        ctx.log(`tool< webSearch ${JSON.stringify({ provider: "tavily" })}`);
-        return out;
       }
 
-      const out = "webSearch disabled: set BRAVE_API_KEY or TAVILY_API_KEY";
+      const out = "webSearch disabled: set BRAVE_API_KEY or EXA_API_KEY";
       ctx.log(`tool< webSearch ${JSON.stringify({ disabled: true })}`);
       return out;
     },
   });
+}
+
+export function createWebSearchTool(ctx: ToolContext) {
+  switch (ctx.config.provider) {
+    case "openai":
+      return openai.tools.webSearch({});
+    case "google":
+      return google.tools.googleSearch({});
+    case "anthropic":
+      return anthropic.tools.webSearch_20250305({});
+    case "codex-cli":
+    case "gemini-cli":
+    case "claude-code":
+      return createCustomWebSearchTool(ctx);
+  }
 }

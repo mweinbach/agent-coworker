@@ -25,7 +25,7 @@ import { createTools } from "../src/tools/index";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeConfig(dir: string): AgentConfig {
+function makeConfig(dir: string, overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
@@ -42,15 +42,17 @@ function makeConfig(dir: string): AgentConfig {
     skillsDirs: [],
     memoryDirs: [],
     configDirs: [],
+    ...overrides,
   };
 }
 
-function makeCtx(dir: string): ToolContext {
+function makeCtx(dir: string, overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     config: makeConfig(dir),
     log: () => {},
     askUser: async () => "",
     approveCommand: async () => true,
+    ...overrides,
   };
 }
 
@@ -163,6 +165,16 @@ describe("read tool", () => {
     const out: string = await t.execute({ filePath: p, offset: 100, limit: 10 });
     expect(out).toBe("");
   });
+
+  test("rejects reads outside allowed directories", async () => {
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    const outsideFile = path.join(outsideDir, "outside.txt");
+    await fs.writeFile(outsideFile, "secret", "utf-8");
+
+    const t: any = createReadTool(makeCtx(dir));
+    await expect(t.execute({ filePath: outsideFile, limit: 10 })).rejects.toThrow(/blocked/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -250,6 +262,20 @@ describe("write tool", () => {
     await t.execute({ filePath: p, content: "output content" });
     const written = await fs.readFile(p, "utf-8");
     expect(written).toBe("output content");
+  });
+
+  test("rejects write through symlink segment to outside directory", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    const link = path.join(dir, "outside-link");
+    await fs.symlink(outsideDir, link);
+
+    const t: any = createWriteTool(makeCtx(dir));
+    await expect(
+      t.execute({ filePath: path.join(link, "blocked.txt"), content: "nope" })
+    ).rejects.toThrow(/blocked/i);
   });
 });
 
@@ -360,6 +386,28 @@ describe("edit tool", () => {
     ).rejects.toThrow(/blocked/i);
   });
 
+  test("rejects edit through symlink segment to outside directory", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    const outsideFile = path.join(outsideDir, "outside.txt");
+    await fs.writeFile(outsideFile, "outside", "utf-8");
+
+    const link = path.join(dir, "outside-link");
+    await fs.symlink(outsideDir, link);
+
+    const t: any = createEditTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        filePath: path.join(link, "outside.txt"),
+        oldString: "outside",
+        newString: "new",
+        replaceAll: false,
+      })
+    ).rejects.toThrow(/blocked/i);
+  });
+
   test("preserves file content around the edit", async () => {
     const dir = await tmpDir();
     const p = path.join(dir, "file.txt");
@@ -444,14 +492,17 @@ describe("bash tool", () => {
   test("handles stderr output", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
-    const res = await t.execute({ command: "echo error >&2", timeout: 5000 });
+    const res = await t.execute({
+      command: `bun -e "console.error('error')"`,
+      timeout: 5000,
+    });
     expect(res.stderr.trim()).toBe("error");
   });
 
   test("uses workingDirectory as cwd", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
-    const res = await t.execute({ command: "pwd", timeout: 5000 });
+    const res = await t.execute({ command: `bun -e "console.log(process.cwd())"`, timeout: 5000 });
     // Resolve symlinks for macOS /private/var/... vs /var/...
     const normalizedStdout = await fs.realpath(res.stdout.trim());
     const normalizedDir = await fs.realpath(dir);
@@ -461,9 +512,8 @@ describe("bash tool", () => {
   test("truncates large stdout", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
-    // Generate output larger than 30000 chars using a simple shell approach
     const res = await t.execute({
-      command: "python3 -c \"print('x' * 50000)\" 2>/dev/null || printf '%0.sx' $(seq 1 50000)",
+      command: `bun -e "process.stdout.write('x'.repeat(50000))"`,
       timeout: 15000,
     });
     expect(res.stdout.length).toBeLessThanOrEqual(30000);
@@ -473,7 +523,7 @@ describe("bash tool", () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
     const res = await t.execute({
-      command: "echo out && echo err >&2",
+      command: `bun -e "console.log('out'); console.error('err')"`,
       timeout: 5000,
     });
     expect(res.stdout.trim()).toBe("out");
@@ -560,7 +610,7 @@ describe("glob tool", () => {
     expect(res).not.toContain("outer.txt");
   });
 
-  test("finds multiple file types with brace expansion", async () => {
+  test("treats brace patterns literally when brace expansion is disabled", async () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "a.ts"), "", "utf-8");
     await fs.writeFile(path.join(dir, "b.js"), "", "utf-8");
@@ -568,9 +618,60 @@ describe("glob tool", () => {
 
     const t: any = createGlobTool(makeCtx(dir));
     const res: string = await t.execute({ pattern: "*.{ts,js}" });
-    expect(res).toContain("a.ts");
-    expect(res).toContain("b.js");
-    expect(res).not.toContain("c.py");
+    expect(res).toBe("No files found.");
+  });
+
+  test("does not expand brace patterns containing absolute paths", async () => {
+    const dir = await tmpDir();
+    await fs.writeFile(path.join(dir, "a.ts"), "", "utf-8");
+
+    const t: any = createGlobTool(makeCtx(dir));
+    const res: string = await t.execute({ pattern: "{/etc/passwd,*.ts}" });
+    expect(res).toBe("No files found.");
+    expect(res).not.toContain("/etc/passwd");
+  });
+
+  test("rejects glob with cwd outside allowed directories", async () => {
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    await fs.writeFile(path.join(outsideDir, "x.ts"), "", "utf-8");
+
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: "*.ts", cwd: outsideDir })).rejects.toThrow(/blocked/i);
+  });
+
+  test("rejects matches that escape allowed scope via symlink path segments", async () => {
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    const linkPath = path.join(dir, "link");
+    await fs.writeFile(path.join(outsideDir, "secret.txt"), "", "utf-8");
+
+    try {
+      const symlinkType = process.platform === "win32" ? "junction" : "dir";
+      await fs.symlink(outsideDir, linkPath, symlinkType);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") return;
+      throw err;
+    }
+
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: "link/*.txt" })).rejects.toThrow(/blocked/i);
+  });
+
+  test("rejects glob with parent-relative pattern escaping cwd", async () => {
+    const dir = await tmpDir();
+
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: "../outside/*.ts" })).rejects.toThrow(/blocked/i);
+  });
+
+  test("rejects glob with absolute pattern", async () => {
+    const dir = await tmpDir();
+    const absolutePattern = path.join(dir, "*.ts");
+
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: absolutePattern })).rejects.toThrow(/blocked/i);
   });
 });
 
@@ -579,6 +680,103 @@ describe("glob tool", () => {
 // ---------------------------------------------------------------------------
 
 describe("grep tool", () => {
+  const fakeEnsureRipgrep: any = async () => "rg";
+
+  function globToRegExp(glob: string): RegExp {
+    // Minimal glob support for tests (enough for patterns like "*.ts").
+    const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    const re = "^" + escaped.replace(/\*/g, ".*").replace(/\?/g, ".") + "$";
+    return new RegExp(re);
+  }
+
+  const fakeExecFile: any = (_cmd: string, args: string[], _opts: any, cb: any) => {
+    void (async () => {
+      try {
+        let caseInsensitive = false;
+        let contextLines = 0;
+        let fileGlob: string | undefined;
+
+        const rest = [...args];
+        while (rest.length > 0) {
+          const a = rest[0];
+          if (a === "--line-number") {
+            rest.shift();
+            continue;
+          }
+          if (a === "-i") {
+            rest.shift();
+            caseInsensitive = true;
+            continue;
+          }
+          if (a === "-C") {
+            rest.shift();
+            const v = rest.shift();
+            contextLines = v ? Number(v) : 0;
+            continue;
+          }
+          if (a === "--glob") {
+            rest.shift();
+            fileGlob = rest.shift();
+            continue;
+          }
+          break;
+        }
+
+        const pattern = rest.shift();
+        const searchPath = rest.shift();
+        if (!pattern || !searchPath) throw new Error("fake rg: missing pattern or searchPath");
+
+        const re = new RegExp(pattern, caseInsensitive ? "i" : "");
+        const globRe = fileGlob ? globToRegExp(fileGlob) : null;
+
+        const files: string[] = [];
+        const walk = async (p: string) => {
+          const st = await fs.stat(p);
+          if (st.isFile()) {
+            if (!globRe || globRe.test(path.basename(p))) files.push(p);
+            return;
+          }
+          if (!st.isDirectory()) return;
+          const entries = await fs.readdir(p, { withFileTypes: true });
+          for (const e of entries) {
+            if (e.isSymbolicLink()) continue;
+            await walk(path.join(p, e.name));
+          }
+        };
+
+        await walk(searchPath);
+
+        const outLines: string[] = [];
+        for (const filePath of files) {
+          const raw = await fs.readFile(filePath, "utf-8");
+          const lines = raw.split("\n");
+
+          const addLine = (idx: number) => {
+            if (idx < 0 || idx >= lines.length) return;
+            const lineNo = idx + 1;
+            outLines.push(`${filePath}:${lineNo}:${lines[idx]}`);
+          };
+
+          for (let i = 0; i < lines.length; i++) {
+            if (!re.test(lines[i] ?? "")) continue;
+            for (let j = i - contextLines; j <= i + contextLines; j++) addLine(j);
+          }
+        }
+
+        if (outLines.length === 0) {
+          const err: any = new Error("no matches");
+          err.code = 1;
+          cb(err, "", "");
+          return;
+        }
+
+        cb(null, outLines.join("\n") + "\n", "");
+      } catch (err) {
+        cb(err, "", "");
+      }
+    })();
+  };
+
   test("returns matches for pattern", async () => {
     const dir = await tmpDir();
     await fs.writeFile(
@@ -587,7 +785,10 @@ describe("grep tool", () => {
       "utf-8"
     );
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "needle",
       path: dir,
@@ -597,11 +798,32 @@ describe("grep tool", () => {
     expect(res).toContain("haystack.txt");
   });
 
+  test("rejects grep path outside allowed directories", async () => {
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    await fs.writeFile(path.join(outsideDir, "file.txt"), "secret\n", "utf-8");
+
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+    await expect(
+      t.execute({
+        pattern: "secret",
+        path: outsideDir,
+        caseSensitive: true,
+      })
+    ).rejects.toThrow(/blocked/i);
+  });
+
   test("returns 'No matches' on no results", async () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "file.txt"), "some content\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "zzz_impossible_pattern_zzz",
       path: dir,
@@ -614,7 +836,10 @@ describe("grep tool", () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "file.txt"), "Hello World\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "hello",
       path: dir,
@@ -627,7 +852,10 @@ describe("grep tool", () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "file.txt"), "Hello World\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "hello",
       path: dir,
@@ -640,7 +868,10 @@ describe("grep tool", () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "found.txt"), "target_pattern\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "target_pattern",
       caseSensitive: true,
@@ -653,7 +884,10 @@ describe("grep tool", () => {
     await fs.writeFile(path.join(dir, "match.ts"), "pattern_here\n", "utf-8");
     await fs.writeFile(path.join(dir, "skip.js"), "pattern_here\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "pattern_here",
       path: dir,
@@ -668,7 +902,10 @@ describe("grep tool", () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "ctx.txt"), "before\ntarget\nafter\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "target",
       path: dir,
@@ -684,7 +921,10 @@ describe("grep tool", () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "numbered.txt"), "aaa\nbbb\nccc\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "bbb",
       path: dir,
@@ -699,7 +939,10 @@ describe("grep tool", () => {
     await fs.mkdir(path.join(dir, "sub"), { recursive: true });
     await fs.writeFile(path.join(dir, "sub", "deep.txt"), "deep_match\n", "utf-8");
 
-    const t: any = createGrepTool(makeCtx(dir));
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
     const res: string = await t.execute({
       pattern: "deep_match",
       path: dir,
@@ -715,31 +958,89 @@ describe("grep tool", () => {
 // ---------------------------------------------------------------------------
 
 describe("webSearch tool", () => {
+  const makeCustomSearchCtx = (dir: string) =>
+    makeCtx(dir, {
+      config: makeConfig(dir, {
+        provider: "codex-cli",
+        model: "gpt-5.3-codex",
+        subAgentModel: "gpt-5.3-codex",
+      }),
+    });
+
+  test("uses OpenAI provider-native web search for openai provider", async () => {
+    const dir = await tmpDir();
+    const t: any = createWebSearchTool(
+      makeCtx(dir, {
+        config: makeConfig(dir, { provider: "openai", model: "gpt-5.2", subAgentModel: "gpt-5.2" }),
+      })
+    );
+    expect(t.type).toBe("provider");
+    expect(t.id).toBe("openai.web_search");
+  });
+
+  test("uses Google provider-native web search for google provider", async () => {
+    const dir = await tmpDir();
+    const t: any = createWebSearchTool(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          subAgentModel: "gemini-3-flash-preview",
+        }),
+      })
+    );
+    expect(t.type).toBe("provider");
+    expect(t.id).toBe("google.google_search");
+  });
+
+  test("uses Anthropic provider-native web search for anthropic provider", async () => {
+    const dir = await tmpDir();
+    const t: any = createWebSearchTool(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          subAgentModel: "claude-opus-4-6",
+        }),
+      })
+    );
+    expect(t.type).toBe("provider");
+    expect(t.id).toBe("anthropic.web_search_20250305");
+  });
+
   test("returns disabled message without API keys", async () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     delete process.env.BRAVE_API_KEY;
-    delete process.env.TAVILY_API_KEY;
+    delete process.env.EXA_API_KEY;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test", maxResults: 1 });
       expect(out).toContain("webSearch disabled");
     } finally {
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
     }
+  });
+
+  test("rejects empty or whitespace-only query", async () => {
+    const dir = await tmpDir();
+    const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
+    await expect(t.execute({ query: "   ", maxResults: 1 })).rejects.toThrow(
+      /non-empty query/i
+    );
   });
 
   test("uses BRAVE_API_KEY when available", async () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     process.env.BRAVE_API_KEY = "test-brave-key";
-    delete process.env.TAVILY_API_KEY;
+    delete process.env.EXA_API_KEY;
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async (url: any) => {
@@ -760,7 +1061,7 @@ describe("webSearch tool", () => {
     }) as any;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test query", maxResults: 5 });
       expect(out).toContain("Test Result");
       expect(out).toContain("https://example.com");
@@ -769,27 +1070,28 @@ describe("webSearch tool", () => {
       globalThis.fetch = originalFetch;
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
       else delete process.env.BRAVE_API_KEY;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
     }
   });
 
-  test("uses TAVILY_API_KEY as fallback", async () => {
+  test("uses EXA_API_KEY as fallback", async () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     delete process.env.BRAVE_API_KEY;
-    process.env.TAVILY_API_KEY = "test-tavily-key";
+    process.env.EXA_API_KEY = "test-exa-key";
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async (url: any) => {
+      expect(String(url)).toContain("api.exa.ai/search");
       return new Response(
         JSON.stringify({
           results: [
             {
-              title: "Tavily Result",
-              url: "https://tavily.com",
-              content: "Tavily content",
+              title: "Exa Result",
+              url: "https://exa.com",
+              text: { text: "Exa content" },
             },
           ],
         }),
@@ -798,16 +1100,16 @@ describe("webSearch tool", () => {
     }) as any;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test query", maxResults: 5 });
-      expect(out).toContain("Tavily Result");
-      expect(out).toContain("https://tavily.com");
-      expect(out).toContain("Tavily content");
+      expect(out).toContain("Exa Result");
+      expect(out).toContain("https://exa.com");
+      expect(out).toContain("Exa content");
     } finally {
       globalThis.fetch = originalFetch;
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
-      else delete process.env.TAVILY_API_KEY;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
     }
   });
 
@@ -815,9 +1117,9 @@ describe("webSearch tool", () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     process.env.BRAVE_API_KEY = "test-brave-key";
-    delete process.env.TAVILY_API_KEY;
+    delete process.env.EXA_API_KEY;
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
@@ -825,7 +1127,7 @@ describe("webSearch tool", () => {
     }) as any;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test", maxResults: 1 });
       expect(out).toContain("Brave search failed");
       expect(out).toContain("401");
@@ -833,36 +1135,36 @@ describe("webSearch tool", () => {
       globalThis.fetch = originalFetch;
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
       else delete process.env.BRAVE_API_KEY;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
     }
   });
 
-  test("handles Tavily API error response", async () => {
+  test("handles Exa API error response", async () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     delete process.env.BRAVE_API_KEY;
-    process.env.TAVILY_API_KEY = "test-tavily-key";
+    process.env.EXA_API_KEY = "test-exa-key";
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
-      return new Response("Internal Server Error", {
+      return new Response(JSON.stringify({ message: "Internal Server Error" }), {
         status: 500,
         statusText: "Internal Server Error",
       });
     }) as any;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test", maxResults: 1 });
-      expect(out).toContain("Tavily search failed");
-      expect(out).toContain("500");
+      expect(out).toContain("Exa search failed");
+      expect(out).toContain("Internal Server Error");
     } finally {
       globalThis.fetch = originalFetch;
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
-      else delete process.env.TAVILY_API_KEY;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
     }
   });
 
@@ -870,9 +1172,9 @@ describe("webSearch tool", () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     process.env.BRAVE_API_KEY = "test-brave-key";
-    delete process.env.TAVILY_API_KEY;
+    delete process.env.EXA_API_KEY;
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
@@ -883,24 +1185,24 @@ describe("webSearch tool", () => {
     }) as any;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "nothing", maxResults: 5 });
       expect(out).toBe("No results");
     } finally {
       globalThis.fetch = originalFetch;
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
       else delete process.env.BRAVE_API_KEY;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
     }
   });
 
-  test("Brave is preferred over Tavily when both keys exist", async () => {
+  test("Brave is preferred over Exa when both keys exist", async () => {
     const dir = await tmpDir();
 
     const oldBrave = process.env.BRAVE_API_KEY;
-    const oldTavily = process.env.TAVILY_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
     process.env.BRAVE_API_KEY = "test-brave-key";
-    process.env.TAVILY_API_KEY = "test-tavily-key";
+    process.env.EXA_API_KEY = "test-exa-key";
 
     const originalFetch = globalThis.fetch;
     let calledUrl = "";
@@ -917,7 +1219,7 @@ describe("webSearch tool", () => {
     }) as any;
 
     try {
-      const t: any = createWebSearchTool(makeCtx(dir));
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ query: "test", maxResults: 1 });
       expect(calledUrl).toContain("brave");
       expect(out).toContain("Brave Hit");
@@ -925,8 +1227,8 @@ describe("webSearch tool", () => {
       globalThis.fetch = originalFetch;
       if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
       else delete process.env.BRAVE_API_KEY;
-      if (oldTavily) process.env.TAVILY_API_KEY = oldTavily;
-      else delete process.env.TAVILY_API_KEY;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
     }
   });
 });
@@ -972,6 +1274,14 @@ describe("webFetch tool", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("blocks localhost/private URLs", async () => {
+    const dir = await tmpDir();
+    const t: any = createWebFetchTool(makeCtx(dir));
+    await expect(
+      t.execute({ url: "http://127.0.0.1/internal", maxLength: 50000 })
+    ).rejects.toThrow(/private\/internal host/i);
   });
 
   test("truncates content to maxLength", async () => {
@@ -1032,6 +1342,66 @@ describe("webFetch tool", () => {
       const out: string = await t.execute({ url: "https://example.com", maxLength: 50000 });
       // Even without Readability parse, the fallback turndown should work
       expect(out).toContain("Simple content");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("rejects redirect to blocked private host", async () => {
+    const dir = await tmpDir();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response(null, {
+        status: 302,
+        headers: { Location: "http://127.0.0.1/admin" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      await expect(
+        t.execute({ url: "https://example.com", maxLength: 50000 })
+      ).rejects.toThrow(/private\/internal host/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("rejects non-text content types", async () => {
+    const dir = await tmpDir();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response("binary", {
+        status: 200,
+        headers: { "Content-Type": "application/octet-stream" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      await expect(
+        t.execute({ url: "https://example.com/file.bin", maxLength: 50000 })
+      ).rejects.toThrow(/non-text content type/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("throws on non-2xx HTTP responses", async () => {
+    const dir = await tmpDir();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response("Not Found", { status: 404, statusText: "Not Found" });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      await expect(
+        t.execute({ url: "https://example.com/missing", maxLength: 50000 })
+      ).rejects.toThrow(/webFetch failed: 404/i);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1295,6 +1665,25 @@ describe("notebookEdit tool", () => {
     ).rejects.toThrow(/out of range/);
   });
 
+  test("rejects non-.ipynb file paths", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "notebook.json");
+    await fs.writeFile(
+      p,
+      makeNotebook([{ cell_type: "code", source: ["x = 1\n"] }])
+    );
+
+    const t: any = createNotebookEditTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        notebookPath: p,
+        cellIndex: 0,
+        newSource: "x = 2",
+        editMode: "replace",
+      })
+    ).rejects.toThrow(/expected a \.ipynb file/i);
+  });
+
   test("rejects path outside allowed dirs", async () => {
     const dir = await tmpDir();
     const outsideDir = await tmpDir();
@@ -1310,6 +1699,31 @@ describe("notebookEdit tool", () => {
         notebookPath: p,
         cellIndex: 0,
         newSource: "nope",
+        editMode: "replace",
+      })
+    ).rejects.toThrow(/blocked/i);
+  });
+
+  test("rejects notebook edits through symlink segment", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    const outsideNotebook = path.join(outsideDir, "outside.ipynb");
+    await fs.writeFile(
+      outsideNotebook,
+      makeNotebook([{ cell_type: "code", source: ["print('x')\n"] }])
+    );
+
+    const link = path.join(dir, "outside-link");
+    await fs.symlink(outsideDir, link);
+
+    const t: any = createNotebookEditTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        notebookPath: path.join(link, "outside.ipynb"),
+        cellIndex: 0,
+        newSource: "print('nope')",
         editMode: "replace",
       })
     ).rejects.toThrow(/blocked/i);
@@ -1778,10 +2192,14 @@ describe("createTools", () => {
     expect(Object.keys(tools).length).toBe(14);
   });
 
-  test("each tool has execute function", async () => {
+  test("each tool is executable or provider-native", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));
-    for (const [_name, tool] of Object.entries(tools)) {
+    for (const [name, tool] of Object.entries(tools)) {
+      if (name === "webSearch") {
+        expect((tool as any).type === "provider" || typeof (tool as any).execute === "function").toBe(true);
+        continue;
+      }
       expect(typeof (tool as any).execute).toBe("function");
     }
   });

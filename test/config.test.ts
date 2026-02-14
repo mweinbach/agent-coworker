@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../src/config";
+import { PROVIDER_MODEL_CATALOG } from "../src/providers";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -515,7 +516,7 @@ describe("directory resolution", () => {
     expect(cfg.uploadsDirectory).toBe(path.join(cwd, "uploads"));
   });
 
-  test("skillsDirs populated with 3 paths (project, user, built-in)", async () => {
+  test("skillsDirs populated with 4 paths (project, global, user, built-in)", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -525,10 +526,11 @@ describe("directory resolution", () => {
       env: {},
     });
 
-    expect(cfg.skillsDirs).toHaveLength(3);
+    expect(cfg.skillsDirs).toHaveLength(4);
     expect(cfg.skillsDirs[0]).toBe(path.join(cwd, ".agent", "skills"));
-    expect(cfg.skillsDirs[1]).toBe(path.join(home, ".agent", "skills"));
-    expect(cfg.skillsDirs[2]).toBe(path.join(repoRoot(), "skills"));
+    expect(cfg.skillsDirs[1]).toBe(path.join(home, ".cowork", "skills"));
+    expect(cfg.skillsDirs[2]).toBe(path.join(home, ".agent", "skills"));
+    expect(cfg.skillsDirs[3]).toBe(path.join(repoRoot(), "skills"));
   });
 
   test("memoryDirs populated correctly", async () => {
@@ -671,29 +673,11 @@ describe("getModel", () => {
 // defaultModelForProvider
 // ---------------------------------------------------------------------------
 describe("defaultModelForProvider", () => {
-  test("returns correct default for google", () => {
-    expect(defaultModelForProvider("google")).toBe("gemini-3-flash-preview");
-  });
-
-  test("returns correct default for gemini-cli", () => {
-    expect(defaultModelForProvider("gemini-cli")).toBe("gemini-3-flash-preview");
-  });
-
-  test("returns correct default for openai", () => {
-    expect(defaultModelForProvider("openai")).toBe("gpt-5.2");
-  });
-
-  test("returns correct default for codex-cli", () => {
-    expect(defaultModelForProvider("codex-cli")).toBe("gpt-5.2-codex");
-  });
-
-  test("returns correct default for anthropic", () => {
-    expect(defaultModelForProvider("anthropic")).toBe("claude-opus-4-6");
-  });
-
-  test("returns correct default for claude-code", () => {
-    expect(defaultModelForProvider("claude-code")).toBe("sonnet");
-  });
+  for (const providerName of Object.keys(PROVIDER_MODEL_CATALOG) as (keyof typeof PROVIDER_MODEL_CATALOG)[]) {
+    test(`returns correct default for ${providerName}`, () => {
+      expect(defaultModelForProvider(providerName)).toBe(PROVIDER_MODEL_CATALOG[providerName].defaultModel);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

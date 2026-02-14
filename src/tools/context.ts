@@ -10,4 +10,10 @@ export interface ToolContext {
   approveCommand: (command: string) => Promise<boolean>;
 
   updateTodos?: (todos: TodoItem[]) => void;
+
+  /** Current sub-agent nesting depth (0 = root session). */
+  spawnDepth?: number;
+
+  /** Lightweight skill metadata for dynamic tool descriptions. Populated from skill discovery. */
+  availableSkills?: Array<{ name: string; description: string }>;
 }

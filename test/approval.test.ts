@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import {
   classifyCommand,
+  classifyCommandDetailed,
   approveCommand,
 } from "../src/utils/approval";
 
@@ -36,28 +40,12 @@ describe("classifyCommand", () => {
       expect(classifyCommand("echo")).toEqual({ kind: "auto" });
     });
 
-    test("cat with file", () => {
-      expect(classifyCommand("cat README.md")).toEqual({ kind: "auto" });
-    });
-
-    test("head with flags", () => {
-      expect(classifyCommand("head -n 20 file.txt")).toEqual({ kind: "auto" });
-    });
-
-    test("tail with flags", () => {
-      expect(classifyCommand("tail -f /var/log/syslog")).toEqual({ kind: "auto" });
-    });
-
     test("which", () => {
       expect(classifyCommand("which node")).toEqual({ kind: "auto" });
     });
 
     test("type", () => {
       expect(classifyCommand("type bash")).toEqual({ kind: "auto" });
-    });
-
-    test("man", () => {
-      expect(classifyCommand("man ls")).toEqual({ kind: "auto" });
     });
 
     test("git status", () => {
@@ -192,6 +180,18 @@ describe("classifyCommand", () => {
   // ---- Unknown / prompt (not dangerous) ------------------------------------
 
   describe("unknown commands classified as prompt but not dangerous", () => {
+    test.each(["cat README.md", "head -n 20 file.txt", "tail -f /var/log/syslog", "man ls"])(
+      "%s requires manual review with file-read risk code",
+      (command) => {
+        const c = classifyCommandDetailed(command);
+        expect(c).toEqual({
+          kind: "prompt",
+          dangerous: false,
+          riskCode: "file_read_command_requires_review",
+        });
+      }
+    );
+
     test("npm install", () => {
       const c = classifyCommand("npm install express");
       expect(c.kind).toBe("prompt");
@@ -294,6 +294,168 @@ describe("classifyCommand", () => {
   });
 });
 
+describe("classifyCommandDetailed", () => {
+  test("returns safe_auto_approved for auto-approved commands", () => {
+    expect(classifyCommandDetailed("ls -la")).toEqual({
+      kind: "auto",
+      dangerous: false,
+      riskCode: "safe_auto_approved",
+    });
+  });
+
+  test("returns matches_dangerous_pattern for dangerous commands", () => {
+    expect(classifyCommandDetailed("rm -rf /")).toEqual({
+      kind: "prompt",
+      dangerous: true,
+      riskCode: "matches_dangerous_pattern",
+    });
+  });
+
+  test("returns contains_shell_control_operator for chained commands", () => {
+    expect(classifyCommandDetailed("ls && pwd")).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "contains_shell_control_operator",
+    });
+  });
+
+  test("returns outside_allowed_scope for absolute paths outside allowed roots", () => {
+    expect(
+      classifyCommandDetailed("ls /etc", {
+        allowedRoots: ["/home/user/project", "/home/user/project/output"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+  });
+
+  test("returns outside_allowed_scope for Windows absolute paths outside allowed roots", () => {
+    expect(
+      classifyCommandDetailed("ls C:\\Windows\\System32", {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+  });
+
+  test("returns outside_allowed_scope for option-assigned paths outside allowed roots", () => {
+    expect(
+      classifyCommandDetailed("ls --directory=/etc", {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+    expect(
+      classifyCommandDetailed("cmd --file=/abs/path", {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+  });
+
+  test("returns outside_allowed_scope for quoted option-assigned absolute paths", () => {
+    expect(
+      classifyCommandDetailed('ls --directory="/etc"', {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+    expect(
+      classifyCommandDetailed("ls --directory='/etc'", {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+    expect(
+      classifyCommandDetailed('ls --directory="C:\\Program Files"', {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+  });
+
+  test("returns outside_allowed_scope for file-read commands outside allowed roots", () => {
+    expect(
+      classifyCommandDetailed("cat /etc/passwd", {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+  });
+
+  test("returns file_read_command_requires_review for in-scope file-read commands", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-approval-in-scope-"));
+    const filePath = path.join(rootDir, "allowed.txt");
+    await fs.writeFile(filePath, "ok");
+    expect(
+      classifyCommandDetailed(`cat "${filePath}"`, {
+        allowedRoots: [rootDir],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "file_read_command_requires_review",
+    });
+  });
+
+  test("outside_allowed_scope is ignored when no allowedRoots are provided", () => {
+    expect(classifyCommandDetailed("ls /etc")).toEqual({
+      kind: "auto",
+      dangerous: false,
+      riskCode: "safe_auto_approved",
+    });
+  });
+
+  test("resolves symlinked absolute paths before scope checks", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-approval-root-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-approval-outside-"));
+    const linkPath = path.join(rootDir, "external");
+    await fs.mkdir(path.join(outsideDir, "nested"), { recursive: true });
+
+    try {
+      const symlinkType = process.platform === "win32" ? "junction" : "dir";
+      await fs.symlink(outsideDir, linkPath, symlinkType);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") return;
+      throw err;
+    }
+
+    expect(
+      classifyCommandDetailed(`ls "${path.join(linkPath, "nested")}"`, {
+        allowedRoots: [rootDir],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // approveCommand
 // ---------------------------------------------------------------------------
@@ -360,6 +522,7 @@ describe("approveCommand", () => {
       return "n";
     });
     expect(capturedMessage).toStartWith("DANGEROUS: ");
+    expect(capturedMessage).toContain("Risk: matches_dangerous_pattern");
     expect(capturedMessage).toContain("rm -rf /");
     expect(capturedMessage).toContain("Approve? [y/N]");
   });
@@ -371,6 +534,7 @@ describe("approveCommand", () => {
       return "n";
     });
     expect(capturedMessage).toStartWith("Run: ");
+    expect(capturedMessage).toContain("Risk: requires_manual_review");
     expect(capturedMessage).toContain("npm install");
     expect(capturedMessage).toContain("Approve? [y/N]");
   });

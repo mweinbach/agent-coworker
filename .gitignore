@@ -1,4 +1,5 @@
 node_modules/
+dist/
 
 # Build output
 dist/
@@ -11,10 +12,6 @@ coverage/
 **/.vite-temp/
 .turbo/
 .cache/
-
-# Tauri / Rust build output
-**/src-tauri/target/
-**/src-tauri/gen/
 
 # Agent runtime dirs
 output/

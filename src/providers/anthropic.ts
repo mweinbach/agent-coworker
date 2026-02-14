@@ -37,7 +37,6 @@ export const DEFAULT_ANTHROPIC_PROVIDER_OPTIONS = {
 } as const satisfies AnthropicProviderOptions;
 
 export const anthropicProvider = {
-  defaultModel: "claude-opus-4-6",
   keyCandidates: ["anthropic"] as const,
   createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) => {
     const provider = savedKey ? createAnthropic({ apiKey: savedKey }) : anthropic;

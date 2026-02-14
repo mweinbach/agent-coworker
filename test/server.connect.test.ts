@@ -56,6 +56,8 @@ function sendConnectAndCollect(
         return;
       }
 
+      if (msg.type === "session_settings" || msg.type === "observability_status") return;
+
       responses.push(msg);
       if (responses.length >= responseCount) {
         clearTimeout(timer);

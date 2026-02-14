@@ -1,4 +1,4 @@
-import { generateText, stepCountIs } from "ai";
+import { stepCountIs, streamText } from "ai";
 import type { ModelMessage } from "ai";
 
 import { getModel } from "./config";
@@ -43,12 +43,19 @@ export interface RunTurnParams {
   approveCommand: (command: string) => Promise<boolean>;
   updateTodos?: (todos: TodoItem[]) => void;
 
+  /** Lightweight skill metadata for dynamic tool descriptions. */
+  discoveredSkills?: Array<{ name: string; description: string }>;
+
+  /** Sub-agent nesting depth (0 for root session turn). */
+  spawnDepth?: number;
+
   maxSteps?: number;
   enableMcp?: boolean;
+  abortSignal?: AbortSignal;
 }
 
 type RunTurnDeps = {
-  generateText: typeof generateText;
+  streamText: typeof streamText;
   stepCountIs: typeof stepCountIs;
   getModel: typeof getModel;
   createTools: typeof createTools;
@@ -58,7 +65,7 @@ type RunTurnDeps = {
 
 export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
   const deps: RunTurnDeps = {
-    generateText,
+    streamText,
     stepCountIs,
     getModel,
     createTools,
@@ -72,9 +79,17 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
     reasoningText?: string;
     responseMessages: ModelMessage[];
   }> {
-    const { config, system, messages, log, askUser, approveCommand, updateTodos } = params;
+    const { config, system, messages, log, askUser, approveCommand, updateTodos, discoveredSkills, abortSignal } = params;
 
-    const toolCtx = { config, log, askUser, approveCommand, updateTodos };
+    const toolCtx = {
+      config,
+      log,
+      askUser,
+      approveCommand,
+      updateTodos,
+      spawnDepth: params.spawnDepth ?? 0,
+      availableSkills: discoveredSkills,
+    };
     const builtInTools = deps.createTools(toolCtx);
 
     let mcpTools: Record<string, any> = {};
@@ -103,30 +118,33 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           let text = "";
 
           for (let step = 0; step < maxSteps; step++) {
-            const stepResult = await deps.generateText({
+            const stepResult = await deps.streamText({
               model: deps.getModel(config),
               system,
               messages: rollingMessages,
               tools,
               providerOptions: config.providerOptions,
               stopWhen: deps.stepCountIs(1),
+              abortSignal,
             } as any);
 
+            const stepResponse = await stepResult.response;
             const stepResponseMessages = sanitizeGeminiToolCallReplay(
-              (stepResult.response?.messages || []) as ModelMessage[]
+              (stepResponse?.messages || []) as ModelMessage[]
             );
             if (stepResponseMessages.length > 0) {
               responseMessages.push(...stepResponseMessages);
               rollingMessages.push(...stepResponseMessages);
             }
 
-            const stepReasoning = typeof stepResult.reasoningText === "string" ? stepResult.reasoningText.trim() : "";
+            const stepReasoningText = await stepResult.reasoningText;
+            const stepReasoning = typeof stepReasoningText === "string" ? stepReasoningText.trim() : "";
             if (stepReasoning) reasoningChunks.push(stepReasoning);
 
-            const stepText = String(stepResult.text ?? "").trim();
+            const stepText = String((await stepResult.text) ?? "").trim();
             if (stepText) text = text ? `${text}\n${stepText}` : stepText;
 
-            const finish = unifiedFinishReason((stepResult as any).finishReason);
+            const finish = unifiedFinishReason(await stepResult.finishReason);
             const hasToolResult = stepResponseMessages.some((m) => m.role === "tool");
             if (finish !== "tool-calls") break;
             if (!hasToolResult) break;
@@ -139,14 +157,23 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           } as any;
         }
 
-        return await deps.generateText({
+        const streamResult = await deps.streamText({
           model: deps.getModel(config),
           system,
           messages,
           tools,
           providerOptions: config.providerOptions,
           stopWhen: deps.stepCountIs(params.maxSteps ?? 100),
+          abortSignal,
         } as any);
+
+        const [text, reasoningText, response] = await Promise.all([
+          streamResult.text,
+          streamResult.reasoningText,
+          streamResult.response,
+        ]);
+
+        return { text, reasoningText, response } as any;
       } finally {
         try {
           await closeMcp?.();

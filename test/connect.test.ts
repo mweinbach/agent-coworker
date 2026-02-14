@@ -175,11 +175,13 @@ describe("connectProvider", () => {
       oauthRunner: async () => ({ exitCode: 2, signal: null }),
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.message).toContain("OAuth sign-in failed");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.mode).toBe("oauth_pending");
+    expect(result.message).toContain("requires a terminal TTY");
 
     const store = await readConnectionStore(paths);
-    expect(store.services["claude-code"]).toBeUndefined();
+    expect(store.services["claude-code"]).toBeDefined();
+    expect(store.services["claude-code"]?.mode).toBe("oauth_pending");
   });
 });

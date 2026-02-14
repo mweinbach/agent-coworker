@@ -51,7 +51,7 @@ function makeCtx(dir: string, overrides: Partial<ToolContext> = {}): ToolContext
 describe("spawnAgent tool", () => {
   let lastGenerateTextArgs: any = null;
 
-  const mockGenerateText = mock(async (args: any) => {
+  const mockStreamText = mock(async (args: any) => {
     lastGenerateTextArgs = args;
     return { text: "subagent result" };
   });
@@ -59,18 +59,22 @@ describe("spawnAgent tool", () => {
   const mockStepCountIs = mock((n: number) => `stepCountIs:${n}`);
   const mockGetModel = mock((_config: AgentConfig, id?: string) => ({ modelId: id ?? "" }));
   const mockLoadSubAgentPrompt = mock(async (_config: AgentConfig, agentType: string) => `SYSTEM:${agentType}`);
-  const mockClassifyCommand = mock((command: string) => {
+  const mockClassifyCommandDetailed = mock((command: string) => {
     if (command === "pwd") return { kind: "auto" as const };
-    return { kind: "prompt" as const, dangerous: false as const };
+    return {
+      kind: "prompt" as const,
+      dangerous: false as const,
+      riskCode: "requires_manual_review" as const,
+    };
   });
 
   beforeEach(() => {
     lastGenerateTextArgs = null;
-    mockGenerateText.mockClear();
+    mockStreamText.mockClear();
     mockStepCountIs.mockClear();
     mockGetModel.mockClear();
     mockLoadSubAgentPrompt.mockClear();
-    mockClassifyCommand.mockClear();
+    mockClassifyCommandDetailed.mockClear();
   });
 
   test("general uses subAgentModel and general tool set", async () => {
@@ -80,11 +84,11 @@ describe("spawnAgent tool", () => {
     });
 
     const t: any = createSpawnAgentTool(ctx, {
-      generateText: mockGenerateText as any,
+      streamText: mockStreamText as any,
       stepCountIs: mockStepCountIs as any,
       getModel: mockGetModel as any,
       loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
-      classifyCommand: mockClassifyCommand as any,
+      classifyCommandDetailed: mockClassifyCommandDetailed as any,
     });
 
     const out = await t.execute({ task: "do the thing", agentType: "general" });
@@ -103,6 +107,8 @@ describe("spawnAgent tool", () => {
     expect(toolNames).toEqual(
       ["edit", "glob", "grep", "memory", "notebookEdit", "read", "skill", "webFetch", "webSearch", "write"].sort()
     );
+    expect(lastGenerateTextArgs.tools.webSearch.type).toBe("provider");
+    expect(lastGenerateTextArgs.tools.webSearch.id).toBe("google.google_search");
   });
 
   test("research uses main model and web-only tool set", async () => {
@@ -110,11 +116,11 @@ describe("spawnAgent tool", () => {
     const ctx = makeCtx(dir);
 
     const t: any = createSpawnAgentTool(ctx, {
-      generateText: mockGenerateText as any,
+      streamText: mockStreamText as any,
       stepCountIs: mockStepCountIs as any,
       getModel: mockGetModel as any,
       loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
-      classifyCommand: mockClassifyCommand as any,
+      classifyCommandDetailed: mockClassifyCommandDetailed as any,
     });
 
     await t.execute({ task: "research it", agentType: "research" });
@@ -124,6 +130,8 @@ describe("spawnAgent tool", () => {
 
     const toolNames = Object.keys(lastGenerateTextArgs.tools).sort();
     expect(toolNames).toEqual(["read", "webFetch", "webSearch"].sort());
+    expect(lastGenerateTextArgs.tools.webSearch.type).toBe("provider");
+    expect(lastGenerateTextArgs.tools.webSearch.id).toBe("google.google_search");
   });
 
   test("explore includes bash tool and uses safe auto-approval only", async () => {
@@ -131,11 +139,11 @@ describe("spawnAgent tool", () => {
     const ctx = makeCtx(dir);
 
     const t: any = createSpawnAgentTool(ctx, {
-      generateText: mockGenerateText as any,
+      streamText: mockStreamText as any,
       stepCountIs: mockStepCountIs as any,
       getModel: mockGetModel as any,
       loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
-      classifyCommand: mockClassifyCommand as any,
+      classifyCommandDetailed: mockClassifyCommandDetailed as any,
     });
 
     await t.execute({ task: "explore it", agentType: "explore" });
@@ -150,5 +158,21 @@ describe("spawnAgent tool", () => {
     expect(rejected.exitCode).toBe(1);
     expect(rejected.stderr).toContain("rejected");
   });
-});
 
+  test("rejects sub-agent recursion beyond configured depth", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-depth-"));
+    const ctx = makeCtx(dir, { spawnDepth: 2 });
+
+    const t: any = createSpawnAgentTool(ctx, {
+      streamText: mockStreamText as any,
+      stepCountIs: mockStepCountIs as any,
+      getModel: mockGetModel as any,
+      loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
+      classifyCommandDetailed: mockClassifyCommandDetailed as any,
+    });
+
+    await expect(t.execute({ task: "any task", agentType: "general" })).rejects.toThrow(
+      /recursion depth exceeded/i
+    );
+  });
+});

@@ -2,11 +2,17 @@ import fs from "node:fs/promises";
 
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
 import type { AgentConfig } from "../types";
+import type { ServerErrorCode } from "../types";
 import { loadConfig } from "../config";
-import { loadSystemPrompt } from "../prompt";
+import { loadSystemPromptWithSkills } from "../prompt";
 
 import { AgentSession } from "./session";
-import { safeParseClientMessage, type ClientMessage, type ServerEvent } from "./protocol";
+import {
+  WEBSOCKET_PROTOCOL_VERSION,
+  safeParseClientMessage,
+  type ClientMessage,
+  type ServerEvent,
+} from "./protocol";
 
 export interface StartAgentServerOptions {
   cwd: string;
@@ -28,17 +34,29 @@ export async function startAgentServer(
   system: string;
   url: string;
 }> {
+  function protocolErrorCode(error: string): ServerErrorCode {
+    if (error === "Invalid JSON") return "invalid_json";
+    if (error === "Expected object") return "invalid_payload";
+    if (error === "Missing type") return "missing_type";
+    if (error.startsWith("Unknown type:")) return "unknown_type";
+    return "validation_failed";
+  }
+
   const hostname = opts.hostname ?? "127.0.0.1";
   const env = opts.env ?? { ...process.env, AGENT_WORKING_DIR: opts.cwd };
 
-  const config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir });
+  const builtInDir =
+    typeof env.COWORK_BUILTIN_DIR === "string" && env.COWORK_BUILTIN_DIR.trim()
+      ? env.COWORK_BUILTIN_DIR
+      : undefined;
+  const config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
   if (opts.providerOptions) config.providerOptions = opts.providerOptions;
 
   await fs.mkdir(config.projectAgentDir, { recursive: true });
   await fs.mkdir(config.outputDirectory, { recursive: true });
   await fs.mkdir(config.uploadsDirectory, { recursive: true });
 
-  const system = await loadSystemPrompt(config);
+  const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
 
   function createServer(port: number): ReturnType<typeof Bun.serve> {
     return Bun.serve<{ session?: AgentSession }>({
@@ -58,6 +76,7 @@ export async function startAgentServer(
           const session = new AgentSession({
             config,
             system,
+            discoveredSkills,
             yolo: opts.yolo,
             connectProviderImpl: opts.connectProviderImpl,
             getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl,
@@ -75,10 +94,20 @@ export async function startAgentServer(
           const hello: ServerEvent = {
             type: "server_hello",
             sessionId: session.id,
+            protocolVersion: WEBSOCKET_PROTOCOL_VERSION,
             config: session.getPublicConfig(),
           };
 
           ws.send(JSON.stringify(hello));
+
+          const settings: ServerEvent = {
+            type: "session_settings",
+            sessionId: session.id,
+            enableMcp: session.getEnableMcp(),
+          };
+          ws.send(JSON.stringify(settings));
+
+          ws.send(JSON.stringify(session.getObservabilityStatusEvent()));
         },
         message(ws, raw) {
           const session = ws.data.session;
@@ -92,6 +121,8 @@ export async function startAgentServer(
                 type: "error",
                 sessionId: session.id,
                 message: parsed.error,
+                code: protocolErrorCode(parsed.error),
+                source: "protocol",
               } satisfies ServerEvent)
             );
             return;
@@ -106,13 +137,24 @@ export async function startAgentServer(
                 type: "error",
                 sessionId: session.id,
                 message: `Unknown sessionId: ${msg.sessionId}`,
+                code: "unknown_session",
+                source: "protocol",
               } satisfies ServerEvent)
             );
             return;
           }
 
+          if (msg.type === "ping") {
+            try {
+              ws.send(JSON.stringify({ type: "pong", sessionId: msg.sessionId } satisfies ServerEvent));
+            } catch {
+              // ignore
+            }
+            return;
+          }
+
           if (msg.type === "user_message") {
-            session.sendUserMessage(msg.text, msg.clientMessageId);
+            void session.sendUserMessage(msg.text, msg.clientMessageId);
             return;
           }
 
@@ -136,6 +178,16 @@ export async function startAgentServer(
             return;
           }
 
+          if (msg.type === "refresh_provider_status") {
+            void session.refreshProviderStatus();
+            return;
+          }
+
+          if (msg.type === "cancel") {
+            session.cancel();
+            return;
+          }
+
           if (msg.type === "reset") {
             session.reset();
             return;
@@ -143,6 +195,56 @@ export async function startAgentServer(
 
           if (msg.type === "list_tools") {
             session.listTools();
+            return;
+          }
+
+          if (msg.type === "list_skills") {
+            void session.listSkills();
+            return;
+          }
+
+          if (msg.type === "read_skill") {
+            void session.readSkill(msg.skillName);
+            return;
+          }
+
+          if (msg.type === "disable_skill") {
+            void session.disableSkill(msg.skillName);
+            return;
+          }
+
+          if (msg.type === "enable_skill") {
+            void session.enableSkill(msg.skillName);
+            return;
+          }
+
+          if (msg.type === "delete_skill") {
+            void session.deleteSkill(msg.skillName);
+            return;
+          }
+
+          if (msg.type === "set_enable_mcp") {
+            session.setEnableMcp(msg.enableMcp);
+            return;
+          }
+
+          if (msg.type === "harness_context_get") {
+            session.getHarnessContext();
+            return;
+          }
+
+          if (msg.type === "harness_context_set") {
+            session.setHarnessContext(msg.context);
+            return;
+          }
+
+          if (msg.type === "observability_query") {
+            void session.queryObservability(msg.query);
+            return;
+          }
+
+          if (msg.type === "harness_slo_evaluate") {
+            void session.evaluateHarnessSloChecks(msg.checks);
             return;
           }
 

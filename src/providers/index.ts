@@ -2,19 +2,43 @@ import type { AgentConfig, ProviderName } from "../types";
 
 import { anthropicProvider } from "./anthropic";
 import { claudeCodeProvider } from "./claude-code";
+import { PROVIDER_MODEL_CATALOG } from "./catalog";
 import { codexCliProvider } from "./codex-cli";
-import { geminiCliProvider } from "./gemini-cli";
 import { googleProvider } from "./google";
 import { openaiProvider } from "./openai";
 export { DEFAULT_PROVIDER_OPTIONS } from "./providerOptions";
+export {
+  PROVIDER_MODEL_CATALOG,
+  PROVIDER_MODEL_CHOICES,
+  availableModelsForProvider,
+  defaultModelForProvider,
+  modelChoicesByProvider,
+} from "./catalog";
 
-export type ProviderDefinition = {
-  defaultModel: string;
+export type ProviderRuntimeDefinition = {
   keyCandidates: readonly ProviderName[];
   createModel: (options: { config: AgentConfig; modelId: string; savedKey?: string }) => unknown;
 };
 
-export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
+export type ProviderDefinition = {
+  defaultModel: string;
+  availableModels: readonly string[];
+} & ProviderRuntimeDefinition;
+
+const DESKTOP_BUNDLE = process.env.COWORK_DESKTOP_BUNDLE === "1";
+
+const geminiCliProvider: ProviderRuntimeDefinition = DESKTOP_BUNDLE
+  ? {
+      keyCandidates: ["google"] as const,
+      createModel: () => {
+        throw new Error(
+          "The gemini-cli provider is disabled in the desktop bundle. Connect via google/openai/anthropic instead."
+        );
+      },
+    }
+  : (await import("./gemini-cli")).geminiCliProvider;
+
+const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   anthropic: anthropicProvider,
   "claude-code": claudeCodeProvider,
   "codex-cli": codexCliProvider,
@@ -23,9 +47,14 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   openai: openaiProvider,
 };
 
-export function defaultModelForProvider(provider: ProviderName): string {
-  return PROVIDERS[provider].defaultModel;
-}
+export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
+  anthropic: { ...PROVIDER_RUNTIMES.anthropic, ...PROVIDER_MODEL_CATALOG.anthropic },
+  "claude-code": { ...PROVIDER_RUNTIMES["claude-code"], ...PROVIDER_MODEL_CATALOG["claude-code"] },
+  "codex-cli": { ...PROVIDER_RUNTIMES["codex-cli"], ...PROVIDER_MODEL_CATALOG["codex-cli"] },
+  "gemini-cli": { ...PROVIDER_RUNTIMES["gemini-cli"], ...PROVIDER_MODEL_CATALOG["gemini-cli"] },
+  google: { ...PROVIDER_RUNTIMES.google, ...PROVIDER_MODEL_CATALOG.google },
+  openai: { ...PROVIDER_RUNTIMES.openai, ...PROVIDER_MODEL_CATALOG.openai },
+};
 
 export function getModelForProvider(config: AgentConfig, modelId: string, savedKey?: string) {
   return PROVIDERS[config.provider].createModel({ config, modelId, savedKey });

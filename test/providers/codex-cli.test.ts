@@ -3,29 +3,32 @@ import { describe, expect, test } from "bun:test";
 import { codexCli } from "ai-sdk-provider-codex-cli";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
+import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
 import { makeConfig, makeTmpDirs, repoRoot } from "./helpers";
 
+const DEFAULT_CODEX_MODEL = PROVIDER_MODEL_CATALOG["codex-cli"].defaultModel;
+
 // ---------------------------------------------------------------------------
-// Codex CLI provider - gpt-5.2-codex (OAuth/API key via Codex CLI)
+// Codex CLI provider (OAuth/API key via Codex CLI)
 // ---------------------------------------------------------------------------
-describe("Codex CLI provider (gpt-5.2-codex)", () => {
-  test("defaultModelForProvider returns gpt-5.2-codex", () => {
-    expect(defaultModelForProvider("codex-cli")).toBe("gpt-5.2-codex");
+describe(`Codex CLI provider (${DEFAULT_CODEX_MODEL})`, () => {
+  test(`defaultModelForProvider returns ${DEFAULT_CODEX_MODEL}`, () => {
+    expect(defaultModelForProvider("codex-cli")).toBe(DEFAULT_CODEX_MODEL);
   });
 
-  test("getModel creates codex-cli model with default gpt-5.2-codex", () => {
-    const cfg = makeConfig({ provider: "codex-cli", model: "gpt-5.2-codex" });
+  test(`getModel creates codex-cli model with default ${DEFAULT_CODEX_MODEL}`, () => {
+    const cfg = makeConfig({ provider: "codex-cli", model: DEFAULT_CODEX_MODEL });
     const model = getModel(cfg);
 
     expect(model).toBeDefined();
-    expect(model.modelId).toBe("gpt-5.2-codex");
+    expect(model.modelId).toBe(DEFAULT_CODEX_MODEL);
     expect(model.provider).toBe("codex-cli");
     expect(model.specificationVersion).toBe("v3");
   });
 
   test("directly created codex-cli model matches getModel output", () => {
-    const direct = codexCli("gpt-5.2-codex");
-    const cfg = makeConfig({ provider: "codex-cli", model: "gpt-5.2-codex" });
+    const direct = codexCli(DEFAULT_CODEX_MODEL);
+    const cfg = makeConfig({ provider: "codex-cli", model: DEFAULT_CODEX_MODEL });
     const viaGetModel = getModel(cfg);
 
     expect(viaGetModel.modelId).toBe(direct.modelId);
@@ -33,7 +36,7 @@ describe("Codex CLI provider (gpt-5.2-codex)", () => {
     expect(viaGetModel.specificationVersion).toBe(direct.specificationVersion);
   });
 
-  test("loadConfig with codex-cli provider returns gpt-5.2-codex model", async () => {
+  test(`loadConfig with codex-cli provider returns ${DEFAULT_CODEX_MODEL} model`, async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -44,6 +47,6 @@ describe("Codex CLI provider (gpt-5.2-codex)", () => {
     });
 
     expect(cfg.provider).toBe("codex-cli");
-    expect(cfg.model).toBe("gpt-5.2-codex");
+    expect(cfg.model).toBe(DEFAULT_CODEX_MODEL);
   });
 });

@@ -1,9 +1,22 @@
 {
   "provider": "google",
-  "model": "gemini-3-flash-preview",
-  "subAgentModel": "gemini-3-flash-preview",
   "outputDirectory": "output",
   "uploadsDirectory": "uploads",
   "userName": "",
-  "knowledgeCutoff": "End of May 2025"
+  "knowledgeCutoff": "End of May 2025",
+  "observabilityEnabled": false,
+  "observability": {
+    "mode": "local_docker",
+    "otlpHttpEndpoint": "http://127.0.0.1:4318",
+    "queryApi": {
+      "logsBaseUrl": "http://127.0.0.1:9428",
+      "metricsBaseUrl": "http://127.0.0.1:8428",
+      "tracesBaseUrl": "http://127.0.0.1:10428"
+    },
+    "defaultWindowSec": 300
+  },
+  "harness": {
+    "reportOnly": true,
+    "strictMode": false
+  }
 }

@@ -45,6 +45,14 @@ Run the server directly:
 bun run serve
 ```
 
+## WebSocket Protocol Notes
+
+- Current protocol version is `2.0` (sent in `server_hello.protocolVersion`).
+- `ping` now requires `sessionId`, and `pong.sessionId` echoes it.
+- `error` events always include required `code` and `source`.
+- `approval` events always include required `reasonCode`.
+- Full message contract and migration details: `docs/websocket-protocol.md`.
+
 ## Configuration
 
 Config precedence: built-in defaults < user < project < environment variables.
@@ -56,6 +64,11 @@ Environment variables:
 - `AGENT_OUTPUT_DIR`, `AGENT_UPLOADS_DIR`
 - `AGENT_USER_NAME`
 - `AGENT_ENABLE_MCP` (`true|false`, defaults to `true`)
+- `AGENT_OBSERVABILITY_ENABLED` (`true|false`, defaults to `false`)
+- `AGENT_OBS_OTLP_HTTP` (OTLP HTTP endpoint)
+- `AGENT_OBS_LOGS_URL`, `AGENT_OBS_METRICS_URL`, `AGENT_OBS_TRACES_URL` (query API base URLs)
+- `AGENT_HARNESS_REPORT_ONLY` (`true|false`, defaults to `true`)
+- `AGENT_HARNESS_STRICT_MODE` (`true|false`, defaults to `false`)
 
 Config files (optional):
 - `./.agent/config.json` (project)
@@ -105,3 +118,26 @@ Watch mode:
 ```bash
 bun run dev
 ```
+
+Harness + observability helpers:
+```bash
+bun run obs:up
+bun run obs:status
+bun run harness:smoke
+bun run harness:run
+bun run obs:down
+```
+
+Harness web portal (Next.js realtime dashboard):
+```bash
+bun run portal:dev
+# build/start:
+bun run portal:build
+bun run portal:start
+```
+
+Full operational runbook:
+- `docs/harness/runbook.md`
+- `docs/harness/runbook.md` section `9.4 End-to-end: run in a target directory + watch live traces`
+- `docs/harness/runbook.md` section `17. Next.js Web Portal (Realtime)`
+- `docs/harness/runbook.md` section `18. GitHub CI In Testing Environment`

@@ -72,7 +72,8 @@ export function classifyCommand(command: string): CommandApprovalClassification 
 
 function tokenizeCommand(command: string): string[] {
   const tokens: string[] = [];
-  const re = /"([^"]*)"|'([^']*)'|`([^`]*)`|(\S+)/g;
+  const re =
+    /((?:--[a-zA-Z0-9-]+|-[a-zA-Z0-9])=(?:"[^"]*"|'[^']*'|`[^`]*`|\S+)|"([^"]*)"|'([^']*)'|`([^`]*)`|(\S+))/g;
   let m: RegExpExecArray | null = null;
   while ((m = re.exec(command)) !== null) {
     const token = m[1] ?? m[2] ?? m[3] ?? m[4] ?? "";

@@ -383,6 +383,15 @@ describe("classifyCommandDetailed", () => {
       dangerous: false,
       riskCode: "outside_allowed_scope",
     });
+    expect(
+      classifyCommandDetailed('ls --directory="C:\\Program Files"', {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
   });
 
   test("returns outside_allowed_scope for file-read commands outside allowed roots", () => {

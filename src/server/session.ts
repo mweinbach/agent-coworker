@@ -161,33 +161,41 @@ export class AgentSession {
 
   private classifyTurnError(message: string): { code: ServerErrorCode; source: ServerErrorSource } {
     const m = message.toLowerCase();
+    const includesAny = (...needles: string[]) => needles.some((needle) => m.includes(needle));
 
     if (
-      m.includes("blocked: path is outside") ||
-      m.includes("blocked: canonical target resolves outside") ||
-      m.includes("outside allowed directories") ||
-      m.includes("outside allowed roots") ||
-      m.includes("blocked private/internal host") ||
-      m.includes("blocked url protocol") ||
-      m.includes("blocked url credentials")
+      includesAny(
+        "blocked: path is outside",
+        "blocked: canonical target resolves outside",
+        "outside allowed directories",
+        "outside allowed roots",
+        "blocked private/internal host",
+        "blocked url protocol",
+        "blocked url credentials",
+        "glob blocked:"
+      )
     ) {
       return { code: "permission_denied", source: "permissions" };
     }
 
-    if (m.includes("observability") || m.includes("traceql") || m.includes("promql") || m.includes("logql")) {
+    if (includesAny("observability", "traceql", "promql", "logql")) {
       return { code: "observability_error", source: "observability" };
     }
 
-    if (m.includes("provider") || m.includes("oauth") || m.includes("api key") || m.includes("unsupported provider")) {
+    if (includesAny("provider", "oauth", "api key", "unsupported provider")) {
       return { code: "provider_error", source: "provider" };
     }
 
-    if (m.includes("is required") || m.includes("invalid") || m.includes("unknown checkpoint id")) {
+    if (m.includes("unknown checkpoint id")) {
       return { code: "validation_failed", source: "session" };
     }
 
-    if (m.includes("checkpoint") || m.includes("session backup")) {
+    if (includesAny("checkpoint", "session backup")) {
       return { code: "backup_error", source: "backup" };
+    }
+
+    if (includesAny("is required", "invalid ")) {
+      return { code: "validation_failed", source: "session" };
     }
 
     return { code: "internal_error", source: "session" };

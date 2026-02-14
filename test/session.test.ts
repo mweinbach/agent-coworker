@@ -1712,6 +1712,38 @@ describe("AgentSession", () => {
       }
     });
 
+    test("classifies glob guard rejections as permission_denied", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("glob blocked: pattern cannot escape cwd");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("permission_denied");
+        expect(errorEvt.source).toBe("permissions");
+      }
+    });
+
+    test("classifies backup errors containing invalid as backup_error", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("session backup has invalid state");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("backup_error");
+        expect(errorEvt.source).toBe("backup");
+      }
+    });
+
     test("does not classify generic backup mentions as backup subsystem errors", async () => {
       mockRunTurn.mockImplementation(async () => {
         throw new Error("failed to create backup before editing");

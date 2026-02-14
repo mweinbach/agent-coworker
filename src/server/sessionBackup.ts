@@ -92,6 +92,7 @@ function normalizeDiffPatchPaths(diffPatch: string, originalDir: string, working
 
   const replacePrefix = (line: string, prefix: string) =>
     line.replace(`a/${prefix}`, "a/").replace(`b/${prefix}`, "b/");
+  const normalizePathSlashes = (line: string) => line.replace(/\\/g, "/").replace(/\/+/g, "/");
 
   return diffPatch
     .split("\n")
@@ -99,7 +100,8 @@ function normalizeDiffPatchPaths(diffPatch: string, originalDir: string, working
       if (!line.startsWith("diff --git ") && !line.startsWith("--- ") && !line.startsWith("+++ ")) {
         return line;
       }
-      return replacePrefix(replacePrefix(line, originalPrefix), workingPrefix);
+      const normalizedLine = normalizePathSlashes(line);
+      return replacePrefix(replacePrefix(normalizedLine, originalPrefix), workingPrefix);
     })
     .join("\n");
 }
@@ -580,6 +582,9 @@ export class SessionBackupManager implements SessionBackupHandle {
     let blobsDir: string | undefined;
 
     try {
+      if (process.platform === "win32") {
+        throw new Error("prefer manifest checkpoints on Windows");
+      }
       const diffPatch = await createDiffPatch(originalDir, this.metadata.workingDirectory);
       changed = diffPatch.trim().length > 0;
 

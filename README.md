@@ -45,6 +45,14 @@ Run the server directly:
 bun run serve
 ```
 
+## WebSocket Protocol Notes
+
+- Current protocol version is `2.0` (sent in `server_hello.protocolVersion`).
+- `ping` now requires `sessionId`, and `pong.sessionId` echoes it.
+- `error` events always include required `code` and `source`.
+- `approval` events always include required `reasonCode`.
+- Full message contract and migration details: `docs/websocket-protocol.md`.
+
 ## Configuration
 
 Config precedence: built-in defaults < user < project < environment variables.

@@ -343,7 +343,14 @@ function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     }
 
     if (type === "error") {
-      out.push({ id: makeId(), kind: "error", ts: evt.ts, message: String(payload.message ?? "") });
+      out.push({
+        id: makeId(),
+        kind: "error",
+        ts: evt.ts,
+        message: String(payload.message ?? ""),
+        code: String(payload.code ?? "internal_error") as any,
+        source: String(payload.source ?? "session") as any,
+      });
       continue;
     }
 
@@ -701,7 +708,13 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
       if (evt.type === "error") {
         clearProviderRefreshTimer(workspaceId);
         set((s) => ({
-          notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Control session error", detail: evt.message }),
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Control session error",
+            detail: `${evt.source}/${evt.code}: ${evt.message}`,
+          }),
           providerStatusRefreshing: false,
         }));
         return;
@@ -1205,7 +1218,12 @@ function handleThreadEvent(
   }
 
   if (evt.type === "approval") {
-    const prompt: ApprovalPrompt = { requestId: evt.requestId, command: evt.command, dangerous: evt.dangerous };
+    const prompt: ApprovalPrompt = {
+      requestId: evt.requestId,
+      command: evt.command,
+      dangerous: evt.dangerous,
+      reasonCode: evt.reasonCode,
+    };
     set(() => ({ promptModal: { kind: "approval", threadId, prompt } }));
     return;
   }
@@ -1278,7 +1296,14 @@ function handleThreadEvent(
   }
 
   if (evt.type === "error") {
-    pushFeedItem(set, threadId, { id: makeId(), kind: "error", ts: nowIso(), message: evt.message });
+    pushFeedItem(set, threadId, {
+      id: makeId(),
+      kind: "error",
+      ts: nowIso(),
+      message: evt.message,
+      code: evt.code,
+      source: evt.source,
+    });
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       const isBackupError = /\b(checkpoint|backup)\b/i.test(evt.message);
@@ -1288,7 +1313,7 @@ function handleThreadEvent(
           ts: nowIso(),
           kind: "error",
           title: "Agent error",
-          detail: evt.message,
+          detail: `${evt.source}/${evt.code}: ${evt.message}`,
         }),
         threadRuntimeById: rt
           ? {

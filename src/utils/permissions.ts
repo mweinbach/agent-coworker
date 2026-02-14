@@ -3,7 +3,7 @@ import path from "node:path";
 import type { AgentConfig } from "../types";
 import { isPathInside } from "./paths";
 
-export function isWritePathAllowed(filePath: string, config: AgentConfig): boolean {
+function isPathAllowed(filePath: string, config: AgentConfig): boolean {
   const resolved = path.resolve(filePath);
 
   // v0.1: allow writes within the current project, working directory, or output directory.
@@ -14,6 +14,14 @@ export function isWritePathAllowed(filePath: string, config: AgentConfig): boole
   if (isPathInside(config.outputDirectory, resolved)) return true;
 
   return false;
+}
+
+export function isWritePathAllowed(filePath: string, config: AgentConfig): boolean {
+  return isPathAllowed(filePath, config);
+}
+
+export function isReadPathAllowed(filePath: string, config: AgentConfig): boolean {
+  return isPathAllowed(filePath, config);
 }
 
 async function canonicalizeExistingPrefix(targetPath: string): Promise<string> {
@@ -53,7 +61,7 @@ export async function assertWritePathAllowed(
   action: "write" | "edit" | "notebookEdit"
 ): Promise<string> {
   const resolved = path.resolve(filePath);
-  if (!isWritePathAllowed(resolved, config)) {
+  if (!isPathAllowed(resolved, config)) {
     throw new Error(
       `${action} blocked: path is outside workingDirectory/outputDirectory/project root: ${resolved}`
     );
@@ -61,6 +69,40 @@ export async function assertWritePathAllowed(
 
   // Guard against symlink escapes such as:
   // <workingDirectory>/link -> /etc and target <workingDirectory>/link/passwd
+  const projectRoot = path.dirname(config.projectAgentDir);
+  const [canonicalTarget, canonicalProjectRoot, canonicalWorkingDirectory, canonicalOutputDirectory] =
+    await Promise.all([
+      canonicalizeExistingPrefix(resolved),
+      canonicalizeRoot(projectRoot),
+      canonicalizeRoot(config.workingDirectory),
+      canonicalizeRoot(config.outputDirectory),
+    ]);
+
+  if (
+    !isPathInside(canonicalProjectRoot, canonicalTarget) &&
+    !isPathInside(canonicalWorkingDirectory, canonicalTarget) &&
+    !isPathInside(canonicalOutputDirectory, canonicalTarget)
+  ) {
+    throw new Error(
+      `${action} blocked: canonical target resolves outside allowed directories: ${canonicalTarget}`
+    );
+  }
+
+  return resolved;
+}
+
+export async function assertReadPathAllowed(
+  filePath: string,
+  config: AgentConfig,
+  action: "read" | "glob" | "grep"
+): Promise<string> {
+  const resolved = path.resolve(filePath);
+  if (!isPathAllowed(resolved, config)) {
+    throw new Error(
+      `${action} blocked: path is outside workingDirectory/outputDirectory/project root: ${resolved}`
+    );
+  }
+
   const projectRoot = path.dirname(config.projectAgentDir);
   const [canonicalTarget, canonicalProjectRoot, canonicalWorkingDirectory, canonicalOutputDirectory] =
     await Promise.all([

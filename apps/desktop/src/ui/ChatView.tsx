@@ -353,6 +353,9 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
       <div className="feedItem">
         <div className="inlineCard inlineCardDanger">
           <div className="metaLine">Error</div>
+          <div className="metaLine">
+            {item.source}/{item.code}
+          </div>
           <div style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{item.message}</div>
         </div>
       </div>

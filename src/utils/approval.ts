@@ -1,15 +1,15 @@
+import fs from "node:fs";
+import path from "node:path";
+
 import type { ApprovalRiskCode } from "../types";
+import { isPathInside } from "./paths";
 
 export const AUTO_APPROVE_PATTERNS: RegExp[] = [
   /^ls\b/,
   /^pwd$/,
   /^echo\b/,
-  /^cat\b/,
-  /^head\b/,
-  /^tail\b/,
   /^which\b/,
   /^type\b/,
-  /^man\b/,
   /^git\s+(status|log|diff|branch)\b/,
   /^node\s+--version$/,
   /^bun\s+--version$/,
@@ -39,6 +39,12 @@ export type CommandApprovalClassificationDetailed =
       riskCode: Exclude<ApprovalRiskCode, "safe_auto_approved">;
     };
 
+export type CommandApprovalContext = {
+  allowedRoots?: string[];
+};
+
+const FILE_READ_REVIEW_PATTERNS: RegExp[] = [/^cat\b/, /^head\b/, /^tail\b/, /^man\b/];
+
 function hasShellControlOperators(command: string): boolean {
   // Conservative: if the command contains obvious shell control operators or
   // redirections, don't auto-approve even if it starts with a "safe" command.
@@ -64,7 +70,103 @@ export function classifyCommand(command: string): CommandApprovalClassification 
   return { kind: "prompt", dangerous: detailed.dangerous };
 }
 
-export function classifyCommandDetailed(command: string): CommandApprovalClassificationDetailed {
+function tokenizeCommand(command: string): string[] {
+  const tokens: string[] = [];
+  const re =
+    /((?:--[a-zA-Z0-9-]+|-[a-zA-Z0-9])=(?:"[^"]*"|'[^']*'|`[^`]*`|\S+)|"([^"]*)"|'([^']*)'|`([^`]*)`|(\S+))/g;
+  let m: RegExpExecArray | null = null;
+  while ((m = re.exec(command)) !== null) {
+    const token = m[1] ?? m[2] ?? m[3] ?? m[4] ?? "";
+    if (token) tokens.push(token);
+  }
+  return tokens;
+}
+
+function canonicalizeExistingPrefixSync(targetPath: string): string {
+  const resolved = path.resolve(targetPath);
+  const tail: string[] = [];
+  let cursor = resolved;
+
+  while (true) {
+    try {
+      const canonical = fs.realpathSync.native(cursor);
+      return tail.length > 0 ? path.join(canonical, ...tail.reverse()) : canonical;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT") throw err;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return resolved;
+      tail.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+function canonicalizeRootSync(rootPath: string): string {
+  const resolved = path.resolve(rootPath);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code !== "ENOENT") throw err;
+    return resolved;
+  }
+}
+
+/** Extract path-like values from option-assigned forms: --option=/path or -o=/path */
+function extractPathsFromToken(token: string): string[] {
+  const paths: string[] = [];
+  const optionValueMatch = token.match(/^(?:--[a-zA-Z0-9-]+|-[a-zA-Z0-9])=(.+)$/);
+  if (optionValueMatch) {
+    let value = optionValueMatch[1];
+    while (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")) ||
+        (value.startsWith("`") && value.endsWith("`")))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (path.posix.isAbsolute(value) || path.win32.isAbsolute(value)) {
+      paths.push(value);
+    }
+  }
+  return paths;
+}
+
+function hasOutsideAllowedScope(command: string, allowedRoots?: string[]): boolean {
+  if (!allowedRoots || allowedRoots.length === 0) return false;
+  const normalizedRoots = allowedRoots.map((root) => {
+    try {
+      return canonicalizeRootSync(root);
+    } catch {
+      return path.resolve(root);
+    }
+  });
+  for (const token of tokenizeCommand(command)) {
+    const pathsToCheck: string[] = [];
+    if (path.posix.isAbsolute(token) || path.win32.isAbsolute(token)) {
+      pathsToCheck.push(token);
+    }
+    pathsToCheck.push(...extractPathsFromToken(token));
+    for (const p of pathsToCheck) {
+      let resolved: string;
+      try {
+        resolved = canonicalizeExistingPrefixSync(p);
+      } catch {
+        return true;
+      }
+      const inside = normalizedRoots.some((root) => isPathInside(root, resolved));
+      if (!inside) return true;
+    }
+  }
+  return false;
+}
+
+export function classifyCommandDetailed(
+  command: string,
+  ctx: CommandApprovalContext = {}
+): CommandApprovalClassificationDetailed {
   const dangerous = ALWAYS_WARN_PATTERNS.some((p) => p.test(command));
   if (dangerous) {
     return { kind: "prompt", dangerous: true, riskCode: "matches_dangerous_pattern" };
@@ -72,6 +174,14 @@ export function classifyCommandDetailed(command: string): CommandApprovalClassif
 
   if (hasShellControlOperators(command)) {
     return { kind: "prompt", dangerous: false, riskCode: "contains_shell_control_operator" };
+  }
+
+  if (hasOutsideAllowedScope(command, ctx.allowedRoots)) {
+    return { kind: "prompt", dangerous: false, riskCode: "outside_allowed_scope" };
+  }
+
+  if (FILE_READ_REVIEW_PATTERNS.some((p) => p.test(command))) {
+    return { kind: "prompt", dangerous: false, riskCode: "file_read_command_requires_review" };
   }
 
   if (AUTO_APPROVE_PATTERNS.some((p) => p.test(command))) {

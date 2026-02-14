@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import type { ToolContext } from "./context";
 import { resolveMaybeRelative, truncateLine } from "../utils/paths";
+import { assertReadPathAllowed } from "../utils/permissions";
 
 export function createReadTool(ctx: ToolContext) {
   return tool({
@@ -18,7 +19,11 @@ export function createReadTool(ctx: ToolContext) {
     execute: async ({ filePath, offset, limit }) => {
       ctx.log(`tool> read ${JSON.stringify({ filePath, offset, limit })}`);
 
-      const abs = resolveMaybeRelative(filePath, ctx.config.workingDirectory);
+      const abs = await assertReadPathAllowed(
+        resolveMaybeRelative(filePath, ctx.config.workingDirectory),
+        ctx.config,
+        "read"
+      );
       const raw = await fs.readFile(abs, "utf-8");
       const lines = raw.split("\n");
       const start = (offset || 1) - 1;

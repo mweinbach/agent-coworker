@@ -87,6 +87,9 @@ export function PromptModal() {
               {danger ? "Dangerous command" : "Command"}
             </div>
             <code className="approvalCommandCode">{modal.prompt.command}</code>
+            <div className="metaLine" style={{ marginTop: 8 }}>
+              Risk: {modal.prompt.reasonCode}
+            </div>
           </div>
           <div className="modalActions" style={{ justifyContent: "center" }}>
             <button className="modalButton" type="button" onClick={() => answerApproval(modal.threadId, modal.prompt.requestId, false)}>
@@ -114,4 +117,3 @@ export function PromptModal() {
     </div>
   );
 }
-

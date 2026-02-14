@@ -237,8 +237,10 @@ export class AgentSocket {
     if (this.pingIntervalMs <= 0) return;
     this.pingTimer = setInterval(() => {
       if (this.ws && this.ws.readyState === this.WebSocketImpl.OPEN) {
+        const sessionId = this._sessionId;
+        if (!sessionId) return;
         try {
-          this.ws.send(JSON.stringify({ type: "ping" }));
+          this.ws.send(JSON.stringify({ type: "ping", sessionId } satisfies ClientMessage));
         } catch {
           // ignore
         }

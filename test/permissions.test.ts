@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 
 import type { AgentConfig } from "../src/types";
-import { assertWritePathAllowed, isWritePathAllowed } from "../src/utils/permissions";
+import {
+  assertReadPathAllowed,
+  assertWritePathAllowed,
+  isReadPathAllowed,
+  isWritePathAllowed,
+} from "../src/utils/permissions";
 
 function makeConfig(dir: string): AgentConfig {
   return {
@@ -268,5 +273,42 @@ describe("assertWritePathAllowed", () => {
     await expect(
       assertWritePathAllowed(path.join(link, "pwned.txt"), cfg, "write")
     ).rejects.toThrow(/blocked/i);
+  });
+});
+
+describe("isReadPathAllowed", () => {
+  const PROJECT = process.platform === "win32" ? "C:\\home\\user\\project" : "/home/user/project";
+
+  test("allows reads inside project roots", () => {
+    const cfg = makeConfig(PROJECT);
+    expect(isReadPathAllowed(path.join(PROJECT, "src", "index.ts"), cfg)).toBe(true);
+    expect(isReadPathAllowed(path.join(PROJECT, "output", "result.json"), cfg)).toBe(true);
+  });
+
+  test("denies reads outside allowed roots", () => {
+    const cfg = makeConfig(PROJECT);
+    expect(isReadPathAllowed("/etc/passwd", cfg)).toBe(false);
+  });
+});
+
+describe("assertReadPathAllowed", () => {
+  test("allows a regular path inside workingDirectory", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-allow-"));
+    const cfg = makeConfig(dir);
+    const target = path.join(dir, "src", "file.txt");
+    await expect(assertReadPathAllowed(target, cfg, "read")).resolves.toBe(path.resolve(target));
+  });
+
+  test("rejects symlink segment escapes", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-symlink-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "perm-read-outside-"));
+    const cfg = makeConfig(dir);
+
+    const link = path.join(dir, "linked-outside");
+    await fs.symlink(outside, link);
+
+    await expect(assertReadPathAllowed(path.join(link, "pwned.txt"), cfg, "read")).rejects.toThrow(/blocked/i);
   });
 });

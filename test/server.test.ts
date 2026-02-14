@@ -928,6 +928,8 @@ describe("Message Parsing (via protocol)", () => {
 
       // The error event should carry the same sessionId as the hello
       expect(result.error.sessionId).toBe(result.hello.sessionId);
+      expect(typeof result.error.code).toBe("string");
+      expect(typeof result.error.source).toBe("string");
     } finally {
       server.stop();
     }
@@ -1065,6 +1067,17 @@ describe("Server Resilience", () => {
               m.sessionId !== run.sessionId
           )
         ).toBe(false);
+
+        const busyTrueIdx = run.messages.findIndex((m) => m.type === "session_busy" && m.busy === true);
+        const busyFalseIdx = run.messages.findIndex((m) => m.type === "session_busy" && m.busy === false);
+        if (busyTrueIdx >= 0) {
+          expect(busyFalseIdx).toBeGreaterThan(busyTrueIdx);
+        }
+
+        const backupEvents = run.messages.filter((m) => m.type === "session_backup_state");
+        for (const evt of backupEvents) {
+          expect(evt.sessionId).toBe(run.sessionId);
+        }
       }
 
       const hello = await collectMessages(url, 1);
@@ -1130,8 +1143,9 @@ describe("Protocol Doc Parity", () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
     try {
-      const ping = await sendAndCollect(url, () => ({ type: "ping" }), 1);
+      const ping = await sendAndCollect(url, (sessionId) => ({ type: "ping", sessionId }), 1);
       expect(ping.responses[0].type).toBe("pong");
+      expect(ping.responses[0].sessionId).toBe(ping.hello.sessionId);
 
       const tools = await sendAndCollect(url, (sessionId) => ({ type: "list_tools", sessionId }), 1);
       expect(tools.responses[0].type).toBe("tools");

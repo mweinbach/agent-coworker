@@ -2,7 +2,7 @@
 
 An open-source, model-agnostic coworker agent built on Bun + TypeScript with a websocket-first server and thin TUI/CLI clients.
 
-**Version:** 1.0
+**Version:** 2.0
 **Date:** February 2026
 
 ---
@@ -11,7 +11,7 @@ An open-source, model-agnostic coworker agent built on Bun + TypeScript with a w
 
 This PRD is now aligned to the implemented `agent-coworker` architecture in this repository (Bun + TypeScript, websocket-first server, thin TUI/CLI clients, MCP integration, observability + harness, and session backup).
 
-The project goal is release-readiness and behavioral safety for the existing product surface, with additive protocol evolution only.
+The project goal is release-readiness and behavioral safety for the existing product surface. This revision includes the protocol v2 compatibility break approved for the Reliability Sprint R2 window.
 
 ### 1.1 Design Principles
 
@@ -43,16 +43,18 @@ The project goal is release-readiness and behavioral safety for the existing pro
 |---|---|---|
 | Websocket server + per-connection session lifecycle | `implemented` | `startServer` creates `AgentSession`, emits `server_hello`, settings, observability status. |
 | Thin TUI/CLI consuming server protocol | `implemented` | UI logic is protocol-driven; server holds business logic. |
+| Desktop client consuming server protocol | `implemented` | Desktop store + UI consume the same `ServerEvent`/`ClientMessage` contract. |
 | Provider runtime switching (`connect_provider`, `set_model`) | `implemented` | Works across API-key and CLI OAuth provider modes. |
 | MCP lifecycle + namespacing + enable/disable at runtime | `implemented with divergence` | More complete than original PRD baseline; includes dynamic lifecycle controls. |
 | Observability + harness query/evaluation surface | `implemented with divergence` | Added after original baseline; now part of public API surface. |
 | Session backup/checkpoint/restore/delete | `implemented with divergence` | Not in initial baseline; now integrated into core session behavior. |
 | Approval gating for risky commands | `implemented` | Command classifier + approval event flow are active. |
-| Structured protocol error codes/sources | `implemented` | Additive `error.code`/`error.source` fields introduced for deterministic handling. |
-| Protocol version field (`server_hello.protocolVersion`) | `implemented` | Additive handshake metadata introduced. |
+| Structured protocol error codes/sources | `implemented` | `error.code` + `error.source` are required in protocol v2. |
+| Protocol version field (`server_hello.protocolVersion`) | `implemented` | Server now advertises protocol version `2.0`. |
 | Protocol-doc parity regression checks | `implemented` | Integration tests verify docs headings and executable flows. |
-| Typed approval risk codes across all risky actions | `planned` | Incremental hardening work remains for broader policy coverage. |
-| Concurrency stress suite (5 parallel sessions mixed traffic) | `pending` | Planned for reliability sprint milestone. |
+| Typed approval risk codes across risky actions | `implemented` | `approval.reasonCode` is required; includes scope and file-read review causes. |
+| Read/search path-bounded policy (`read`/`glob`/`grep`) | `implemented` | Read/search tools now enforce project-root policy parity with write protections. |
+| Concurrency stress suite (5 parallel sessions mixed traffic) | `implemented` | Tests assert session isolation and busy reset behavior under concurrent traffic. |
 
 ### 1.4 Legacy Assumptions (Historical)
 
@@ -128,8 +130,22 @@ Protocol references in this PRD must use the exact message names and payload sha
 
 - Handshake and session metadata: `server_hello` (`sessionId`, `protocolVersion`, `config`), `session_settings`.
 - Human loop controls: `ask`/`ask_response`, `approval`/`approval_response`.
-- Errors: `error` with required `message` and additive optional `code`/`source`.
+- Errors: `error` with required `message`, `code`, and `source`.
 - Keepalive: `ping`/`pong`.
+
+### 2.5 Protocol v2 Migration (v1 -> v2)
+
+Protocol v2 intentionally introduced a compatibility break in the reliability hardening sprint.
+
+Breaking changes:
+
+1. `server_hello.protocolVersion` now reports `2.0`.
+2. Client `ping` now requires `sessionId`.
+3. Server `pong.sessionId` now echoes the ping `sessionId` (no empty-string fallback).
+4. Server `error` events now require `code` and `source`.
+5. Server `approval` events now require `reasonCode`.
+
+Migration targets for first-party clients are complete in this revision (CLI, TUI, Desktop).
 
 ---
 
@@ -931,7 +947,9 @@ Approval behavior is implemented in production via command classification + webs
 - `AUTO_APPROVE_PATTERNS` allow deterministic low-risk commands.
 - `ALWAYS_WARN_PATTERNS` force explicit approval for high-risk commands.
 - Shell control operators (pipes, chaining, redirection, subshells) disable auto-approval.
-- `AgentSession.approveCommand()` emits `approval` events with `requestId`, `command`, and `dangerous`, then blocks until `approval_response`.
+- File-content read commands (`cat`, `head`, `tail`, `man`) require manual review.
+- Out-of-scope absolute paths trigger explicit review (`outside_allowed_scope`).
+- `AgentSession.approveCommand()` emits `approval` events with `requestId`, `command`, `dangerous`, and `reasonCode`, then blocks until `approval_response`.
 - `--yolo` bypasses approval in local/explicit bypass mode only.
 
 ### 14.2 Protocol Contract
@@ -945,7 +963,8 @@ Approval events and replies are part of the public websocket API:
   "sessionId": "...",
   "requestId": "req-approval-001",
   "command": "rm -rf /tmp/old-builds",
-  "dangerous": true
+  "dangerous": true,
+  "reasonCode": "matches_dangerous_pattern"
 }
 
 // client -> server
@@ -961,10 +980,10 @@ Approval events and replies are part of the public websocket API:
 
 The older `onToolCall` examples using inline CLI `readline` approval remain historical reference only. The actual host integration point is websocket `approval`/`approval_response`.
 
-### 14.4 Planned Hardening
+### 14.4 Current Backlog
 
-- Expand machine-readable error/approval reason codes across all risky action categories.
-- Ensure every risky action path emits deterministic approval intent without silent fallback.
+- Expand scope-aware approval checks to classify complex quoted/escaped shell paths with fewer false negatives.
+- Add policy configuration presets (balanced/strict) without changing protocol contracts.
 - Keep policy logic centralized and test-covered.
 
 ---

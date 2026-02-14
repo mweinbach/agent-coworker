@@ -1174,6 +1174,26 @@ describe("AgentSession", () => {
       await sendPromise;
     });
 
+    test("marks outside-scope absolute paths with outside_allowed_scope", async () => {
+      const { session, events } = makeSession();
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        await params.approveCommand("ls /etc");
+        return { text: "done", reasoningText: undefined, responseMessages: [] };
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const approvalEvt = events.find((e) => e.type === "approval") as any;
+      expect(approvalEvt).toBeDefined();
+      expect(approvalEvt.dangerous).toBe(false);
+      expect(approvalEvt.reasonCode).toBe("outside_allowed_scope");
+
+      session.handleApprovalResponse(approvalEvt.requestId, true);
+      await sendPromise;
+    });
+
     test("auto-approved commands skip the approval flow entirely", async () => {
       const { session, events } = makeSession();
 
@@ -1674,6 +1694,86 @@ describe("AgentSession", () => {
       expect(errorEvt).toBeDefined();
       expect(errorEvt.message).toContain("Model API failure");
       expect(errorEvt.sessionId).toBe(session.id);
+    });
+
+    test("classifies unknown checkpoint id failures as validation_failed", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("Unknown checkpoint id: cp-404");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("validation_failed");
+        expect(errorEvt.source).toBe("session");
+      }
+    });
+
+    test("classifies glob guard rejections as permission_denied", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("glob blocked: pattern cannot escape cwd");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("permission_denied");
+        expect(errorEvt.source).toBe("permissions");
+      }
+    });
+
+    test("classifies backup errors containing invalid as backup_error", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("session backup has invalid state");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("backup_error");
+        expect(errorEvt.source).toBe("backup");
+      }
+    });
+
+    test("classifies checkpoint errors as backup_error even when message includes provider", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("session backup checkpoint failed for provider reconnect flow");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("backup_error");
+        expect(errorEvt.source).toBe("backup");
+      }
+    });
+
+    test("does not classify generic backup mentions as backup subsystem errors", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("failed to create backup before editing");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("internal_error");
+        expect(errorEvt.source).toBe("session");
+      }
     });
 
     test("catches non-Error throws and emits error event", async () => {

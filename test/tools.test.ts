@@ -165,6 +165,16 @@ describe("read tool", () => {
     const out: string = await t.execute({ filePath: p, offset: 100, limit: 10 });
     expect(out).toBe("");
   });
+
+  test("rejects reads outside allowed directories", async () => {
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    const outsideFile = path.join(outsideDir, "outside.txt");
+    await fs.writeFile(outsideFile, "secret", "utf-8");
+
+    const t: any = createReadTool(makeCtx(dir));
+    await expect(t.execute({ filePath: outsideFile, limit: 10 })).rejects.toThrow(/blocked/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -589,7 +599,7 @@ describe("glob tool", () => {
     expect(res).not.toContain("outer.txt");
   });
 
-  test("finds multiple file types with brace expansion", async () => {
+  test("treats brace patterns literally when brace expansion is disabled", async () => {
     const dir = await tmpDir();
     await fs.writeFile(path.join(dir, "a.ts"), "", "utf-8");
     await fs.writeFile(path.join(dir, "b.js"), "", "utf-8");
@@ -597,9 +607,60 @@ describe("glob tool", () => {
 
     const t: any = createGlobTool(makeCtx(dir));
     const res: string = await t.execute({ pattern: "*.{ts,js}" });
-    expect(res).toContain("a.ts");
-    expect(res).toContain("b.js");
-    expect(res).not.toContain("c.py");
+    expect(res).toBe("No files found.");
+  });
+
+  test("does not expand brace patterns containing absolute paths", async () => {
+    const dir = await tmpDir();
+    await fs.writeFile(path.join(dir, "a.ts"), "", "utf-8");
+
+    const t: any = createGlobTool(makeCtx(dir));
+    const res: string = await t.execute({ pattern: "{/etc/passwd,*.ts}" });
+    expect(res).toBe("No files found.");
+    expect(res).not.toContain("/etc/passwd");
+  });
+
+  test("rejects glob with cwd outside allowed directories", async () => {
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    await fs.writeFile(path.join(outsideDir, "x.ts"), "", "utf-8");
+
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: "*.ts", cwd: outsideDir })).rejects.toThrow(/blocked/i);
+  });
+
+  test("rejects matches that escape allowed scope via symlink path segments", async () => {
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    const linkPath = path.join(dir, "link");
+    await fs.writeFile(path.join(outsideDir, "secret.txt"), "", "utf-8");
+
+    try {
+      const symlinkType = process.platform === "win32" ? "junction" : "dir";
+      await fs.symlink(outsideDir, linkPath, symlinkType);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") return;
+      throw err;
+    }
+
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: "link/*.txt" })).rejects.toThrow(/blocked/i);
+  });
+
+  test("rejects glob with parent-relative pattern escaping cwd", async () => {
+    const dir = await tmpDir();
+
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: "../outside/*.ts" })).rejects.toThrow(/blocked/i);
+  });
+
+  test("rejects glob with absolute pattern", async () => {
+    const dir = await tmpDir();
+    const absolutePattern = path.join(dir, "*.ts");
+
+    const t: any = createGlobTool(makeCtx(dir));
+    await expect(t.execute({ pattern: absolutePattern })).rejects.toThrow(/blocked/i);
   });
 });
 
@@ -724,6 +785,24 @@ describe("grep tool", () => {
     });
     expect(res).toContain("needle");
     expect(res).toContain("haystack.txt");
+  });
+
+  test("rejects grep path outside allowed directories", async () => {
+    const dir = await tmpDir();
+    const outsideDir = await tmpDir();
+    await fs.writeFile(path.join(outsideDir, "file.txt"), "secret\n", "utf-8");
+
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: fakeExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+    await expect(
+      t.execute({
+        pattern: "secret",
+        path: outsideDir,
+        caseSensitive: true,
+      })
+    ).rejects.toThrow(/blocked/i);
   });
 
   test("returns 'No matches' on no results", async () => {

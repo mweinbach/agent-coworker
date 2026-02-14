@@ -7,7 +7,7 @@ import { defaultModelForProvider } from "../config";
 import { startAgentServer } from "../server/startServer";
 import type { ClientMessage, ServerEvent } from "../server/protocol";
 import { isProviderName, PROVIDER_NAMES } from "../types";
-import type { AgentConfig, TodoItem } from "../types";
+import type { AgentConfig, ApprovalRiskCode, TodoItem } from "../types";
 
 // Keep CLI output clean by default.
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
@@ -18,23 +18,29 @@ const UI_PROVIDER_NAMES = PROVIDER_NAMES.filter((name) => !UI_DISABLED_PROVIDERS
 type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
 
 type AskPrompt = { requestId: string; question: string; options?: string[] };
-type ApprovalPrompt = { requestId: string; command: string; dangerous: boolean };
+type ApprovalPrompt = { requestId: string; command: string; dangerous: boolean; reasonCode: ApprovalRiskCode };
 
-function renderTodos(todos: TodoItem[]) {
-  if (todos.length === 0) return;
+export function renderTodosToLines(todos: TodoItem[]): string[] {
+  if (todos.length === 0) return [];
 
-  console.log("\n--- Progress ---");
+  const lines = ["\n--- Progress ---"];
   for (const todo of todos) {
     const icon = todo.status === "completed" ? "x" : todo.status === "in_progress" ? ">" : "-";
-    const line = `  ${icon} ${todo.content}`;
-    console.log(line);
+    lines.push(`  ${icon} ${todo.content}`);
   }
   const active = todos.find((t) => t.status === "in_progress");
-  if (active) console.log(`\n  ${active.activeForm}...`);
-  console.log("");
+  if (active) lines.push(`\n  ${active.activeForm}...`);
+  lines.push("");
+  return lines;
 }
 
-async function resolveAndValidateDir(dirArg: string): Promise<string> {
+function renderTodos(todos: TodoItem[]) {
+  for (const line of renderTodosToLines(todos)) {
+    console.log(line);
+  }
+}
+
+export async function resolveAndValidateDir(dirArg: string): Promise<string> {
   const resolved = path.resolve(dirArg);
   let st: { isDirectory: () => boolean } | null = null;
   try {
@@ -63,6 +69,44 @@ function normalizeApprovalAnswer(raw: string): boolean {
   if (["n", "no", "deny", "denied"].includes(trimmed)) return false;
   return false;
 }
+
+export type ParsedCommand =
+  | { type: "help" | "exit" | "new" | "restart" | "tools" }
+  | { type: "model" | "provider" | "connect" | "cwd"; arg: string }
+  | { type: "unknown"; name: string; arg: string }
+  | { type: "message"; arg: string };
+
+export function parseReplInput(input: string): ParsedCommand {
+  const line = input.trim();
+  if (!line) return { type: "message", arg: "" };
+  if (!line.startsWith("/")) return { type: "message", arg: line };
+
+  const [cmd = "", ...rest] = line.slice(1).split(/\s+/);
+  const arg = rest.join(" ").trim();
+  switch (cmd) {
+    case "help":
+    case "exit":
+    case "new":
+    case "restart":
+    case "tools":
+      return { type: cmd };
+    case "model":
+    case "provider":
+    case "connect":
+    case "cwd":
+      return { type: cmd, arg };
+    default:
+      return { type: "unknown", name: cmd, arg };
+  }
+}
+
+export const __internal = {
+  renderTodosToLines,
+  resolveAndValidateDir,
+  resolveAskAnswer,
+  normalizeApprovalAnswer,
+  parseReplInput,
+};
 
 export async function runCliRepl(
   opts: {
@@ -172,13 +216,14 @@ export async function runCliRepl(
   };
 
   const activateNextPrompt = (rl: readline.Interface) => {
-    if (pendingApproval.length > 0) {
+      if (pendingApproval.length > 0) {
       activeApproval = pendingApproval.shift() ?? null;
       activeAsk = null;
       promptMode = "approval";
       if (activeApproval) {
         console.log(`\nApproval requested: ${activeApproval.command}`);
         console.log(activeApproval.dangerous ? "Dangerous command." : "Standard command.");
+        console.log(`Risk: ${activeApproval.reasonCode}`);
       }
       rl.setPrompt("approve (y/n)> ");
       rl.prompt();
@@ -279,7 +324,12 @@ export async function runCliRepl(
         activateNextPrompt(rl);
         break;
       case "approval":
-        pendingApproval.push({ requestId: evt.requestId, command: evt.command, dangerous: evt.dangerous });
+        pendingApproval.push({
+          requestId: evt.requestId,
+          command: evt.command,
+          dangerous: evt.dangerous,
+          reasonCode: evt.reasonCode,
+        });
         activateNextPrompt(rl);
         break;
       case "config_updated":
@@ -290,7 +340,7 @@ export async function runCliRepl(
         console.log(`\nTools:\n${evt.tools.map((t) => `  - ${t}`).join("\n")}\n`);
         break;
       case "error":
-        console.error(`\nError: ${evt.message}\n`);
+        console.error(`\nError [${evt.source}/${evt.code}]: ${evt.message}\n`);
         break;
       default:
         break;

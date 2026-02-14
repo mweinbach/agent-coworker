@@ -4,8 +4,9 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 
 import type { ToolContext } from "./context";
-import { truncateText } from "../utils/paths";
+import { resolveMaybeRelative, truncateText } from "../utils/paths";
 import { ensureRipgrep } from "../utils/ripgrep";
+import { assertReadPathAllowed } from "../utils/permissions";
 
 export function createGrepTool(
   ctx: ToolContext,
@@ -33,8 +34,15 @@ export function createGrepTool(
       if (!caseSensitive) args.push("-i");
       if (typeof contextLines === "number") args.push("-C", String(contextLines));
       if (fileGlob) args.push("--glob", fileGlob);
+
+      const validatedSearchPath = await assertReadPathAllowed(
+        resolveMaybeRelative(searchPath || ctx.config.workingDirectory, ctx.config.workingDirectory),
+        ctx.config,
+        "grep"
+      );
+
       args.push(pattern);
-      args.push(searchPath || ctx.config.workingDirectory);
+      args.push(validatedSearchPath);
 
       let rgPath: string;
       try {

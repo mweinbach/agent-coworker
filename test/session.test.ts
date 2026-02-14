@@ -1744,6 +1744,22 @@ describe("AgentSession", () => {
       }
     });
 
+    test("classifies checkpoint errors as backup_error even when message includes provider", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("session backup checkpoint failed for provider reconnect flow");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("backup_error");
+        expect(errorEvt.source).toBe("backup");
+      }
+    });
+
     test("does not classify generic backup mentions as backup subsystem errors", async () => {
       mockRunTurn.mockImplementation(async () => {
         throw new Error("failed to create backup before editing");

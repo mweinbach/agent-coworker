@@ -364,6 +364,27 @@ describe("classifyCommandDetailed", () => {
     });
   });
 
+  test("returns outside_allowed_scope for quoted option-assigned absolute paths", () => {
+    expect(
+      classifyCommandDetailed('ls --directory="/etc"', {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+    expect(
+      classifyCommandDetailed("ls --directory='/etc'", {
+        allowedRoots: ["/home/user/project"],
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+  });
+
   test("returns outside_allowed_scope for file-read commands outside allowed roots", () => {
     expect(
       classifyCommandDetailed("cat /etc/passwd", {

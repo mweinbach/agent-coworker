@@ -117,7 +117,15 @@ function extractPathsFromToken(token: string): string[] {
   const paths: string[] = [];
   const optionValueMatch = token.match(/^(?:--[a-zA-Z0-9-]+|-[a-zA-Z0-9])=(.+)$/);
   if (optionValueMatch) {
-    const value = optionValueMatch[1];
+    let value = optionValueMatch[1];
+    while (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")) ||
+        (value.startsWith("`") && value.endsWith("`")))
+    ) {
+      value = value.slice(1, -1);
+    }
     if (path.posix.isAbsolute(value) || path.win32.isAbsolute(value)) {
       paths.push(value);
     }

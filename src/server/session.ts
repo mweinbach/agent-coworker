@@ -182,7 +182,7 @@ export class AgentSession {
       return { code: "observability_error", source: "observability" };
     }
 
-    if (includesAny("provider", "oauth", "api key", "unsupported provider")) {
+    if (includesAny("oauth", "api key", "unsupported provider")) {
       return { code: "provider_error", source: "provider" };
     }
 

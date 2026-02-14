@@ -31,7 +31,7 @@ There is no linter or formatter configured. TypeScript strict mode is the primar
 
 ### Core Loop
 
-`src/agent.ts` contains the agent turn logic. `createRunTurn()` is a factory that accepts injectable dependencies (for testing) and returns `runTurn()`. Each turn calls `generateText()` from the Vercel AI SDK with the model, system prompt, message history, and tools. The Gemini CLI provider has a special single-step loop workaround due to tool-call replay issues.
+`src/agent.ts` contains the agent turn logic. `createRunTurn()` is a factory that accepts injectable dependencies (for testing) and returns `runTurn()`. Each turn calls `generateText()` from the Vercel AI SDK with the model, system prompt, message history, and tools.
 
 ### Server & Protocol
 

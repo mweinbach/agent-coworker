@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import type { ProviderName } from "../../../lib/wsProtocol";
@@ -25,6 +25,8 @@ function providerStatusLabel(status: any): string {
 export function ProvidersPage() {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const hasWorkspace = workspaces.length > 0;
+  const canConnectProvider = hasWorkspace || selectedWorkspaceId !== null;
 
   const connectProvider = useAppStore((s) => s.connectProvider);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
@@ -34,11 +36,13 @@ export function ProvidersPage() {
   const [apiKeysByProvider, setApiKeysByProvider] = useState<Partial<Record<ProviderName, string>>>({});
   const [expandedProvider, setExpandedProvider] = useState<ProviderName | null>(null);
 
-  useEffect(() => {
-    void refreshProviderStatus();
-  }, [refreshProviderStatus]);
-
   const providerRows = PROVIDER_NAMES.filter((p) => !UI_DISABLED_PROVIDERS.has(p));
+
+  const requestProviderConnect = (provider: ProviderName, apiKey?: string) => {
+    if (!canConnectProvider) return;
+    void connectProvider(provider, apiKey);
+    setTimeout(() => void refreshProviderStatus(), 1500);
+  };
 
   return (
     <div className="settingsStack">
@@ -48,6 +52,11 @@ export function ProvidersPage() {
       </div>
 
       <div className="settingsCard">
+        {!canConnectProvider && (
+          <div className="settingsMeta" style={{ marginBottom: 10 }}>
+            No workspace configured. Add or select a workspace first.
+          </div>
+        )}
         <div className="settingsCardHeader">
           <div className="settingsCardTitle">Providers</div>
           <button
@@ -94,9 +103,10 @@ export function ProvidersPage() {
                         <button
                           className="modalButton modalButtonPrimary"
                           type="button"
+                          disabled={!canConnectProvider}
+                          title={!canConnectProvider ? "Add or select a workspace first." : undefined}
                           onClick={() => {
-                            void connectProvider(p);
-                            setTimeout(() => void refreshProviderStatus(), 1500);
+                            requestProviderConnect(p);
                           }}
                         >
                           {status?.authorized ? "Re-auth" : "Sign in"}
@@ -117,9 +127,10 @@ export function ProvidersPage() {
                         <button
                           className="modalButton modalButtonPrimary"
                           type="button"
+                          disabled={!canConnectProvider}
+                          title={!canConnectProvider ? "Add or select a workspace first." : undefined}
                           onClick={() => {
-                            void connectProvider(p, apiKey);
-                            setTimeout(() => void refreshProviderStatus(), 1500);
+                            requestProviderConnect(p, apiKey);
                           }}
                         >
                           Save

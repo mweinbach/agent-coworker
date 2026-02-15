@@ -1650,7 +1650,18 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   connectProvider: async (provider, apiKey) => {
     const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-    if (!workspaceId) return;
+    if (!workspaceId) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "info",
+          title: "Workspace required",
+          detail: "Add or select a workspace first.",
+        }),
+      }));
+      return;
+    }
 
     await ensureServerRunning(get, set, workspaceId);
     ensureControlSocket(get, set, workspaceId);

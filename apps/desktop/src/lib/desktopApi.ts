@@ -25,6 +25,16 @@ export type TranscriptBatchInput = {
   payload: unknown;
 };
 
+export type ContextMenuItem = {
+  id: string;
+  label: string;
+  enabled?: boolean;
+};
+
+export type ShowContextMenuInput = {
+  items: ContextMenuItem[];
+};
+
 export interface DesktopApi {
   startWorkspaceServer(opts: StartWorkspaceServerInput): Promise<{ url: string }>;
   stopWorkspaceServer(opts: StopWorkspaceServerInput): Promise<void>;
@@ -35,6 +45,11 @@ export interface DesktopApi {
   appendTranscriptBatch(events: TranscriptBatchInput[]): Promise<void>;
   deleteTranscript(opts: DeleteTranscriptInput): Promise<void>;
   pickWorkspaceDirectory(): Promise<string | null>;
+  showContextMenu(opts: ShowContextMenuInput): Promise<string | null>;
+  windowMinimize(): Promise<void>;
+  windowMaximize(): Promise<void>;
+  windowClose(): Promise<void>;
+  getPlatform(): Promise<string>;
 }
 
 export const DESKTOP_IPC_CHANNELS = {
@@ -47,4 +62,9 @@ export const DESKTOP_IPC_CHANNELS = {
   appendTranscriptBatch: "desktop:appendTranscriptBatch",
   deleteTranscript: "desktop:deleteTranscript",
   pickWorkspaceDirectory: "desktop:pickWorkspaceDirectory",
+  showContextMenu: "desktop:showContextMenu",
+  windowMinimize: "desktop:windowMinimize",
+  windowMaximize: "desktop:windowMaximize",
+  windowClose: "desktop:windowClose",
+  getPlatform: "desktop:getPlatform",
 } as const;

@@ -57,3 +57,23 @@ export async function deleteTranscript(opts: { threadId: string }): Promise<void
 export async function pickWorkspaceDirectory(): Promise<string | null> {
   return await requireDesktopApi().pickWorkspaceDirectory();
 }
+
+export async function showContextMenu(items: { id: string; label: string; enabled?: boolean }[]): Promise<string | null> {
+  return await requireDesktopApi().showContextMenu({ items });
+}
+
+export async function windowMinimize(): Promise<void> {
+  await requireDesktopApi().windowMinimize();
+}
+
+export async function windowMaximize(): Promise<void> {
+  await requireDesktopApi().windowMaximize();
+}
+
+export async function windowClose(): Promise<void> {
+  await requireDesktopApi().windowClose();
+}
+
+export async function getPlatform(): Promise<string> {
+  return await requireDesktopApi().getPlatform();
+}

@@ -5,7 +5,7 @@ import { defaultModelForProvider } from "@cowork/providers/catalog";
 import { useAppStore } from "../../../app/store";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
-import { MODEL_CHOICES, UI_DISABLED_PROVIDERS } from "../../../lib/modelChoices";
+import { MODEL_CHOICES, modelOptionsForProvider, UI_DISABLED_PROVIDERS } from "../../../lib/modelChoices";
 
 export function WorkspacesPage() {
   const workspaces = useAppStore((s) => s.workspaces);
@@ -23,11 +23,13 @@ export function WorkspacesPage() {
   );
 
   const provider = (ws?.defaultProvider ?? "google") as ProviderName;
-  const model = ws?.defaultModel ?? "";
+  const model = (ws?.defaultModel ?? "").trim();
   const enableMcp = ws?.defaultEnableMcp ?? true;
   const yolo = ws?.yolo ?? false;
 
-  const modelOptions = MODEL_CHOICES[provider] ?? [];
+  const curatedModels = MODEL_CHOICES[provider] ?? [];
+  const modelOptions = modelOptionsForProvider(provider, model);
+  const hasCustomModel = Boolean(model && !curatedModels.includes(model));
 
   return (
     <div className="settingsStack">
@@ -122,7 +124,7 @@ export function WorkspacesPage() {
                   onChange={(e) => ws && void updateWorkspaceDefaults(ws.id, { defaultModel: e.currentTarget.value })}
                 >
                   {modelOptions.map((m) => (
-                    <option key={m} value={m}>{m}</option>
+                    <option key={m} value={m}>{hasCustomModel && m === model ? `${m} (custom)` : m}</option>
                   ))}
                 </select>
               </div>

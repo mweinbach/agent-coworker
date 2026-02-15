@@ -139,6 +139,7 @@ export function ChatView() {
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
   const cancelThread = useAppStore((s) => s.cancelThread);
+  const reconnectThread = useAppStore((s) => s.reconnectThread);
   const newThread = useAppStore((s) => s.newThread);
 
   const feedRef = useRef<HTMLDivElement | null>(null);
@@ -189,7 +190,8 @@ export function ChatView() {
 
   const busy = rt?.busy === true;
   const disabled = busy || hasPromptModal;
-  const transcriptOnly = rt?.transcriptOnly === true || thread.status !== "active";
+  const transcriptOnly = rt?.transcriptOnly === true;
+  const disconnected = !transcriptOnly && thread.status !== "active";
 
   return (
     <div className="chatLayout">
@@ -198,6 +200,16 @@ export function ChatView() {
           <div style={{ marginBottom: 12, padding: 8, background: "rgba(255,255,255,0.1)", borderRadius: 6 }}>
             <div style={{ fontWeight: 600 }}>Transcript view</div>
             <div style={{ fontSize: 13, color: "var(--muted)" }}>Sending a message will continue in a new thread.</div>
+          </div>
+        ) : disconnected ? (
+          <div style={{ marginBottom: 12, padding: 8, background: "rgba(255,255,255,0.1)", borderRadius: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+            <div>
+              <div style={{ fontWeight: 600 }}>Disconnected</div>
+              <div style={{ fontSize: 13, color: "var(--muted)" }}>Reconnect to continue this thread.</div>
+            </div>
+            <button className="iconButton" type="button" onClick={() => void reconnectThread(selectedThreadId!)}>
+              Reconnect
+            </button>
           </div>
         ) : null}
 
@@ -219,7 +231,7 @@ export function ChatView() {
             ref={textareaRef}
             value={composerText}
             onChange={(e) => setComposerText(e.currentTarget.value)}
-            placeholder={transcriptOnly ? "Continue in a new thread…" : busy ? "Working…" : "Message…"}
+            placeholder={transcriptOnly ? "Continue in a new thread…" : disconnected ? "Reconnect to continue…" : busy ? "Working…" : "Message…"}
             disabled={disabled}
             onKeyDown={onComposerKeyDown}
           />

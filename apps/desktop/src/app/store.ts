@@ -69,6 +69,7 @@ type RuntimeMaps = {
   controlSockets: Map<string, AgentSocket>;
   threadSockets: Map<string, AgentSocket>;
   optimisticUserMessageIds: Map<string, Set<string>>;
+  pendingThreadMessages: Map<string, string[]>;
   busyWatchdogTimers: Map<string, ReturnType<typeof setTimeout>>;
   busyCancelGraceTimers: Map<string, ReturnType<typeof setTimeout>>;
   providerRefreshTimers: Map<string, ReturnType<typeof setTimeout>>;
@@ -80,12 +81,28 @@ const RUNTIME: RuntimeMaps = {
   controlSockets: new Map(),
   threadSockets: new Map(),
   optimisticUserMessageIds: new Map(),
+  pendingThreadMessages: new Map(),
   busyWatchdogTimers: new Map(),
   busyCancelGraceTimers: new Map(),
   providerRefreshTimers: new Map(),
   workspaceStartPromises: new Map(),
   workspacePickerOpen: false,
 };
+
+function queuePendingThreadMessage(threadId: string, text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  const existing = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
+  existing.push(trimmed);
+  RUNTIME.pendingThreadMessages.set(threadId, existing);
+}
+
+function drainPendingThreadMessages(threadId: string): string[] {
+  const existing = RUNTIME.pendingThreadMessages.get(threadId);
+  if (!existing || existing.length === 0) return [];
+  RUNTIME.pendingThreadMessages.delete(threadId);
+  return existing;
+}
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -365,6 +382,7 @@ export type AppStoreState = {
   newThread: (opts?: { workspaceId?: string; titleHint?: string; firstMessage?: string }) => Promise<void>;
   removeThread: (threadId: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
+  reconnectThread: (threadId: string, firstMessage?: string) => Promise<void>;
 
   sendMessage: (text: string) => Promise<void>;
   cancelThread: (threadId: string) => void;
@@ -878,7 +896,7 @@ function sendUserMessageToThread(
       id: makeId(),
       kind: "error",
       ts: nowIso(),
-      message: "Not connected. Select the workspace again to reconnect.",
+      message: "Not connected. Reconnect to continue.",
     });
     return false;
   }
@@ -907,15 +925,23 @@ function handleThreadEvent(
             connected: true,
             sessionId: evt.sessionId,
             config: evt.config,
+            transcriptOnly: false,
           },
         },
+        threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "active" } : t)),
       };
     });
+    persist(get);
 
     void useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
 
     if (pendingFirstMessage && pendingFirstMessage.trim()) {
       sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
+    }
+
+    const queued = drainPendingThreadMessages(threadId);
+    for (const msg of queued) {
+      sendUserMessageToThread(get, set, threadId, msg);
     }
     return;
   }
@@ -1246,6 +1272,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       const sock = RUNTIME.threadSockets.get(thread.id);
       RUNTIME.threadSockets.delete(thread.id);
       RUNTIME.optimisticUserMessageIds.delete(thread.id);
+      RUNTIME.pendingThreadMessages.delete(thread.id);
       clearBusyTimers(thread.id);
       try {
         sock?.close();
@@ -1280,6 +1307,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const sock = RUNTIME.threadSockets.get(threadId);
     RUNTIME.threadSockets.delete(threadId);
     RUNTIME.optimisticUserMessageIds.delete(threadId);
+    RUNTIME.pendingThreadMessages.delete(threadId);
     clearBusyTimers(threadId);
     try {
       sock?.close();
@@ -1406,28 +1434,49 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       set((s) => ({
         threadRuntimeById: {
           ...s.threadRuntimeById,
-          [threadId]: { ...s.threadRuntimeById[threadId], feed, transcriptOnly: thread.status !== "active" },
+          [threadId]: { ...s.threadRuntimeById[threadId], feed, transcriptOnly: false },
         },
       }));
     }
 
-    if (thread.status === "active") {
-      await get().selectWorkspace(thread.workspaceId);
-      await ensureServerRunning(get, set, thread.workspaceId);
-      ensureControlSocket(get, set, thread.workspaceId);
+    set((s) => ({
+      threadRuntimeById: {
+        ...s.threadRuntimeById,
+        [threadId]: { ...s.threadRuntimeById[threadId], transcriptOnly: false },
+      },
+    }));
 
-      const url = get().workspaceRuntimeById[thread.workspaceId]?.serverUrl;
-      if (url) {
-        ensureThreadSocket(get, set, threadId, url);
-      }
-    } else {
+    await get().reconnectThread(threadId);
+  },
+
+  reconnectThread: async (threadId: string, firstMessage?: string) => {
+    ensureThreadRuntime(get, set, threadId);
+
+    const thread = get().threads.find((t) => t.id === threadId);
+    if (!thread) return;
+
+    await get().selectWorkspace(thread.workspaceId);
+    await ensureServerRunning(get, set, thread.workspaceId);
+    ensureControlSocket(get, set, thread.workspaceId);
+
+    const url = get().workspaceRuntimeById[thread.workspaceId]?.serverUrl;
+    if (!url) {
       set((s) => ({
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: { ...s.threadRuntimeById[threadId], transcriptOnly: true },
-        },
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Workspace server unavailable",
+          detail: "Workspace server is not ready.",
+        }),
       }));
+      return;
     }
+
+    if (firstMessage && firstMessage.trim()) {
+      queuePendingThreadMessage(threadId, firstMessage);
+    }
+    ensureThreadSocket(get, set, threadId, url);
   },
 
   sendMessage: async (text: string) => {
@@ -1441,7 +1490,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    if (rt?.transcriptOnly || thread.status !== "active") {
+    if (rt?.transcriptOnly) {
       const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
       const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
       await get().newThread({ workspaceId: thread.workspaceId, titleHint: thread.title, firstMessage });
@@ -1449,7 +1498,15 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       return;
     }
 
-    if (!rt?.sessionId || rt.busy) return;
+    if (thread.status !== "active" || !rt?.sessionId) {
+      const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
+      const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
+      await get().reconnectThread(activeThreadId, firstMessage);
+      set({ composerText: "" });
+      return;
+    }
+
+    if (rt.busy) return;
 
     const ok = sendUserMessageToThread(get, set, activeThreadId, trimmed);
     if (!ok) return;

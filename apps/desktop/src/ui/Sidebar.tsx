@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../app/store";
-import { formatThreadTime } from "../lib/time";
+import { formatRelativeAge } from "../lib/time";
 import { selectSidebarThreadsForWorkspace } from "./sidebarSelectors";
 
 function NavButton(props: {
@@ -44,6 +44,8 @@ export function Sidebar() {
   const openCheckpointsModal = useAppStore((s) => s.openCheckpointsModal);
   const checkpointThread = useAppStore((s) => s.checkpointThread);
 
+  const [sessionLimitByWorkspaceId, setSessionLimitByWorkspaceId] = useState<Record<string, number>>({});
+
   const [ctxMenu, setCtxMenu] = useState<
     | {
         kind: "workspace";
@@ -79,6 +81,11 @@ export function Sidebar() {
       window.removeEventListener("keydown", onKey);
     };
   }, [ctxMenu]);
+
+  useEffect(() => {
+    if (!selectedWorkspaceId) return;
+    setSessionLimitByWorkspaceId((s) => (s[selectedWorkspaceId] ? s : { ...s, [selectedWorkspaceId]: 12 }));
+  }, [selectedWorkspaceId]);
 
   const ctxStyle = useMemo(() => {
     if (!ctxMenu) return null;
@@ -116,15 +123,21 @@ export function Sidebar() {
         />
       </nav>
 
-      <div className="sidebarSection" role="region" aria-label="Workspaces">
+      <div className="sidebarSection" role="region" aria-label="Threads">
         <div className="sectionTitleRow">
-          <div className="sectionTitle" id="workspaces-label">Workspaces</div>
-          <button className="iconButton" type="button" onClick={() => void addWorkspace()} title="Add workspace" aria-label="Add workspace">
+          <div className="sectionTitle" id="threads-label">Threads</div>
+          <button
+            className="iconButton threadsAddButton"
+            type="button"
+            onClick={() => void addWorkspace()}
+            title="Add workspace"
+            aria-label="Add workspace"
+          >
             +
           </button>
         </div>
 
-        <div className="workspaceList" role="list" aria-labelledby="workspaces-label">
+        <div className="workspaceList" role="list" aria-labelledby="threads-label">
           {workspaces.length === 0 ? (
             <div className="workspaceEmpty">
               <div className="workspaceEmptyTitle">No workspaces yet</div>
@@ -146,84 +159,114 @@ export function Sidebar() {
             const serverPill =
               rt?.starting ? (
                 <span className="pill">starting</span>
-              ) : rt?.serverUrl ? (
-                <span className="pill">ready</span>
               ) : rt?.error ? (
                 <span className="pill">error</span>
               ) : null;
 
+            const workspaceSessions = active ? selectSidebarThreadsForWorkspace(threads, ws.id) : [];
+            const sessionLimit = sessionLimitByWorkspaceId[ws.id] ?? 12;
+
             return (
-              <div
-                key={ws.id}
-                role="listitem"
-                className={"workspaceRow" + (active ? " workspaceRowActive" : "")}
-                onClick={() => void selectWorkspace(ws.id)}
-                tabIndex={0}
-                aria-current={active ? "true" : undefined}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
+              <Fragment key={ws.id}>
+                <div
+                  role="listitem"
+                  className={"workspaceRow" + (active ? " workspaceRowActive" : "")}
+                  onClick={() => void selectWorkspace(ws.id)}
+                  tabIndex={0}
+                  aria-current={active ? "true" : undefined}
+                  title={ws.path}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      void selectWorkspace(ws.id);
+                    }
+                  }}
+                  onContextMenu={(e) => {
                     e.preventDefault();
-                    void selectWorkspace(ws.id);
-                  }
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setCtxMenu({
-                    kind: "workspace",
-                    x: e.clientX,
-                    y: e.clientY,
-                    workspaceId: ws.id,
-                    workspaceName: ws.name,
-                    workspacePath: ws.path,
-                  });
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                  <div className="workspaceName">{ws.name}</div>
-                  {serverPill}
+                    e.stopPropagation();
+                    setCtxMenu({
+                      kind: "workspace",
+                      x: e.clientX,
+                      y: e.clientY,
+                      workspaceId: ws.id,
+                      workspaceName: ws.name,
+                      workspacePath: ws.path,
+                    });
+                  }}
+                >
+                  <div className="workspaceRowTop">
+                    <div className="workspaceRowLeft">
+                      <span className="workspaceFolderIcon" aria-hidden="true" />
+                      <div className="workspaceName">{ws.name}</div>
+                    </div>
+                    {serverPill}
+                  </div>
                 </div>
-                <div className="workspacePath">{ws.path}</div>
 
                 {active ? (
-                  <div className="threadList">
-                    {selectSidebarThreadsForWorkspace(threads, ws.id).map((t) => {
-                      const tr = threadRuntimeById[t.id];
-                      const busy = tr?.busy === true;
-                      return (
-                        <div
-                          key={t.id}
-                          className={"threadRow" + (t.id === selectedThreadId ? " threadRowActive" : "")}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void selectThread(t.id);
-                          }}
-                          onContextMenu={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setCtxMenu({
-                              kind: "thread",
-                              x: e.clientX,
-                              y: e.clientY,
-                              threadId: t.id,
-                              threadTitle: t.title || "New thread",
-                              workspaceName: ws.name,
-                            });
-                          }}
-                        >
-                          <div className="threadTitle">
-                            <div className="threadTitleMain">{t.title || "New thread"}</div>
-                            <div className="threadTitleMeta">
-                              {t.status === "active" ? "Active" : "Transcript"} · {formatThreadTime(t.lastMessageAt)}
-                            </div>
-                          </div>
-                          {busy ? <span className="pill pillBusy">busy</span> : null}
-                        </div>
-                      );
-                    })}
+                  <div className="workspaceSessions" role="group" aria-label={`Sessions in ${ws.name}`}>
+                    {workspaceSessions.length === 0 ? (
+                      <div className="workspaceSessionsEmpty">No sessions yet. Click New thread to start one.</div>
+                    ) : (
+                      <>
+                        {workspaceSessions.slice(0, sessionLimit).map((t) => {
+                          const tr = threadRuntimeById[t.id];
+                          const busy = tr?.busy === true;
+                          const isActive = t.id === selectedThreadId;
+                          const age = formatRelativeAge(t.lastMessageAt);
+                          const statusLabel = t.status === "active" ? null : "Transcript";
+                          return (
+                            <button
+                              key={t.id}
+                              className={"threadRow" + (isActive ? " threadRowActive" : "")}
+                              type="button"
+                              aria-current={isActive ? "true" : undefined}
+                              onClick={() => {
+                                void selectThread(t.id);
+                              }}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setCtxMenu({
+                                  kind: "thread",
+                                  x: e.clientX,
+                                  y: e.clientY,
+                                  threadId: t.id,
+                                  threadTitle: t.title || "New thread",
+                                  workspaceName: ws.name,
+                                });
+                              }}
+                            >
+                              <div className="threadRowMain">
+                                <div className="threadTitleMain">{t.title || "New thread"}</div>
+                              </div>
+
+                              <div className="threadRowMeta">
+                                {busy ? <span className="threadBusyDot" aria-hidden="true" title="Busy" /> : null}
+                                {statusLabel ? <span className="threadStatusTag">{statusLabel}</span> : null}
+                                {age ? <span className="threadAge">{age}</span> : null}
+                              </div>
+                            </button>
+                          );
+                        })}
+
+                        {workspaceSessions.length > sessionLimit ? (
+                          <button
+                            className="sessionsShowMore"
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSessionLimitByWorkspaceId((s) => ({ ...s, [ws.id]: sessionLimit + 24 }));
+                            }}
+                          >
+                            Show more
+                          </button>
+                        ) : null}
+                      </>
+                    )}
                   </div>
                 ) : null}
-              </div>
+              </Fragment>
             );
           })}
         </div>

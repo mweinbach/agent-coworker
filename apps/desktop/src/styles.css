@@ -74,8 +74,8 @@
   .workspacePath { color: rgba(255, 255, 255, 0.42); }
 
   .threadRow:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.06); }
-  .threadRowActive { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.08); }
-  .threadTitleMeta { color: rgba(255, 255, 255, 0.42); }
+  .threadRowActive { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.08); box-shadow: inset 3px 0 0 rgba(255, 255, 255, 0.22); }
+  .sessionsShowMore:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.06); }
 
   .sectionTitle { color: rgba(255, 255, 255, 0.42); }
 
@@ -341,6 +341,61 @@ a {
   padding-right: 4px;
 }
 
+.workspaceRowTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.workspaceRowLeft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.workspaceFolderIcon {
+  width: 18px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.5);
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.workspaceFolderIcon::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: -4px;
+  width: 10px;
+  height: 5px;
+  border-radius: 4px 4px 0 0;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.workspaceSessions {
+  margin: 4px 0 10px;
+  padding-left: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workspaceSessionsEmpty {
+  padding: 6px 10px;
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.4);
+  border: 1px solid var(--border);
+}
+
 .workspaceRow {
   display: flex;
   flex-direction: column;
@@ -400,52 +455,85 @@ a {
   gap: 8px;
 }
 
-.threadList {
-  margin-top: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
 .threadRow {
+  appearance: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px 10px;
-  border-radius: 12px;
+  padding: 10px 10px;
+  border-radius: 10px;
   cursor: pointer;
   background: transparent;
   border: 1px solid transparent;
+  width: 100%;
+  text-align: left;
 }
 
 .threadRow:hover {
-  background: rgba(255, 255, 255, 0.55);
-  border-color: rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.5);
+  border-color: rgba(0, 0, 0, 0.05);
 }
 
 .threadRowActive {
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.84);
   border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: inset 3px 0 0 rgba(0, 0, 0, 0.22);
 }
 
-.threadTitle {
+.threadRowMain {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex: 1 1 auto;
 }
 
 .threadTitleMain {
-  font-weight: 520;
+  font-weight: 560;
+  letter-spacing: -0.01em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.threadTitleMeta {
+.threadRowMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  color: var(--muted-2);
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.42);
+  font-variant-numeric: tabular-nums;
+}
+
+.threadAge {
+  color: inherit;
+}
+
+.threadStatusTag {
+  color: inherit;
+}
+
+.threadBusyDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--warn);
+  box-shadow: 0 0 0 3px var(--warn-bg);
+}
+
+.sessionsShowMore {
+  margin-top: 4px;
+  padding: 10px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.sessionsShowMore:hover {
+  background: rgba(255, 255, 255, 0.5);
+  border-color: rgba(0, 0, 0, 0.05);
 }
 
 .pill {
@@ -2332,32 +2420,79 @@ body::after {
   background: rgba(255, 255, 255, 0.9);
 }
 
+.sectionTitle {
+  font-size: 15px;
+  text-transform: none;
+  letter-spacing: -0.01em;
+  font-weight: 540;
+  color: rgba(60, 43, 28, 0.62);
+}
+
+.threadsAddButton {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 10px;
+  border-color: transparent;
+  background: transparent;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.threadsAddButton:hover {
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.24);
+}
+
 .workspaceList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   padding-right: 4px;
 }
 
 .workspaceRow {
-  border-radius: 0;
-  padding: 8px 4px;
+  border-radius: 14px;
+  padding: 10px 10px;
   border-color: transparent;
   background: transparent;
-  border-bottom: 1px solid rgba(101, 72, 46, 0.14);
 }
 
 .workspaceRow:hover {
-  background: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.18);
   border-color: transparent;
 }
 
 .workspaceRowActive {
-  background: transparent;
+  background: rgba(255, 255, 255, 0.26);
   border-color: transparent;
-  border-left: 2px solid rgba(137, 96, 61, 0.52);
-  padding-left: 6px;
+}
+
+.workspaceFolderIcon,
+.workspaceFolderIcon::before {
+  border-color: rgba(60, 43, 28, 0.22);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.workspaceSessions {
+  margin: 4px 0 12px;
+  padding-left: 28px;
+  gap: 2px;
+}
+
+.workspaceSessionsEmpty {
+  padding: 6px 10px;
+  border-radius: 14px;
+  border-color: rgba(60, 43, 28, 0.12);
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(66, 48, 32, 0.6);
 }
 
 .workspaceName {
-  font-weight: 620;
+  font-size: 16px;
+  font-weight: 540;
   color: rgba(45, 32, 21, 0.94);
 }
 
@@ -2371,24 +2506,43 @@ body::after {
 }
 
 .threadRow {
-  border-radius: 0;
-  padding: 8px 6px;
+  border-radius: 14px;
+  padding: 11px 12px;
   border-color: transparent;
-  border-top: 1px solid rgba(101, 72, 46, 0.12);
 }
 
 .threadRow:hover {
   border-color: transparent;
-  background: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.18);
 }
 
 .threadRowActive {
   border-color: transparent;
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.32);
 }
 
 .threadTitleMain {
-  font-weight: 560;
+  font-size: 16px;
+  font-weight: 520;
+}
+
+.threadRowMeta {
+  font-size: 14px;
+  color: rgba(66, 48, 32, 0.52);
+}
+
+.sessionsShowMore {
+  padding: 11px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 14px;
+  color: rgba(66, 48, 32, 0.6);
+}
+
+.sessionsShowMore:hover {
+  border-color: transparent;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .main {

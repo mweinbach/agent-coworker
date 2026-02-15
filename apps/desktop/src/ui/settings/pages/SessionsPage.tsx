@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 
 import { useAppStore } from "../../../app/store";
-import { formatThreadTime } from "../../../lib/time";
+import { formatRelativeAge } from "../../../lib/time";
 
 import { SettingsCard, SettingsPageHeader } from "../components";
 import { selectArchivedThreadsSorted } from "../sessionSelectors";
@@ -38,7 +38,7 @@ export function SessionsPage() {
                   <div className="settingsSessionMain">
                     <div className="settingsSessionTitle">{t.title || "New thread"}</div>
                     <div className="settingsSessionMeta">
-                      {wsName} · {formatThreadTime(t.lastMessageAt)}
+                      {wsName} · {formatRelativeAge(t.lastMessageAt)}
                     </div>
                   </div>
 
@@ -69,4 +69,3 @@ export function SessionsPage() {
     </div>
   );
 }
-

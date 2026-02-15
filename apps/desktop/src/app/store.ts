@@ -53,32 +53,13 @@ function truncateTitle(s: string, max = 34) {
   return trimmed.slice(0, max - 1) + "…";
 }
 
-// ---------------------------------------------------------------------------
-// Performance constants (Findings 8.1, 8.2, 8.3)
-// ---------------------------------------------------------------------------
-
-/** Maximum number of feed items to keep per thread. Older items are trimmed. */
 const MAX_FEED_ITEMS = 2000;
-
-/** Maximum number of notifications before oldest are pruned. */
 const MAX_NOTIFICATIONS = 50;
-
-/** Debounce interval for persist() — batches rapid state saves. */
 const PERSIST_DEBOUNCE_MS = 300;
-
-/** Batch interval for transcript events — buffers writes then flushes once. */
 const TRANSCRIPT_BATCH_MS = 200;
-
-/** If a run stays busy too long, attempt auto-cancel + socket recovery. */
 const BUSY_STUCK_MS = 90_000;
-
-/** Grace period after cancel before force-recovering the socket. */
 const BUSY_CANCEL_GRACE_MS = 15_000;
-
-/** Timeout provider status refreshes so UI cannot stay stuck in "Checking…". */
 const PROVIDER_STATUS_TIMEOUT_MS = 20_000;
-
-/** Guard workspace server startup so UI cannot stay in "starting" forever. */
 const WORKSPACE_START_TIMEOUT_MS = 25_000;
 
 type ProviderStatusEvent = Extract<ServerEvent, { type: "provider_status" }>;
@@ -88,7 +69,7 @@ type RuntimeMaps = {
   controlSockets: Map<string, AgentSocket>;
   threadSockets: Map<string, AgentSocket>;
   optimisticUserMessageIds: Map<string, Set<string>>;
-  reconnectingThreads: Set<string>;
+  pendingThreadMessages: Map<string, string[]>;
   busyWatchdogTimers: Map<string, ReturnType<typeof setTimeout>>;
   busyCancelGraceTimers: Map<string, ReturnType<typeof setTimeout>>;
   providerRefreshTimers: Map<string, ReturnType<typeof setTimeout>>;
@@ -100,13 +81,28 @@ const RUNTIME: RuntimeMaps = {
   controlSockets: new Map(),
   threadSockets: new Map(),
   optimisticUserMessageIds: new Map(),
-  reconnectingThreads: new Set(),
+  pendingThreadMessages: new Map(),
   busyWatchdogTimers: new Map(),
   busyCancelGraceTimers: new Map(),
   providerRefreshTimers: new Map(),
   workspaceStartPromises: new Map(),
   workspacePickerOpen: false,
 };
+
+function queuePendingThreadMessage(threadId: string, text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  const existing = RUNTIME.pendingThreadMessages.get(threadId) ?? [];
+  existing.push(trimmed);
+  RUNTIME.pendingThreadMessages.set(threadId, existing);
+}
+
+function drainPendingThreadMessages(threadId: string): string[] {
+  const existing = RUNTIME.pendingThreadMessages.get(threadId);
+  if (!existing || existing.length === 0) return [];
+  RUNTIME.pendingThreadMessages.delete(threadId);
+  return existing;
+}
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -148,15 +144,6 @@ function defaultThreadRuntime(): ThreadRuntime {
     busy: false,
     busySince: null,
     feed: [],
-    backup: null,
-    backupReason: null,
-    backupUi: {
-      refreshing: false,
-      checkpointing: false,
-      restoring: false,
-      deletingById: {},
-      error: null,
-    },
     transcriptOnly: false,
   };
 }
@@ -216,7 +203,6 @@ function pushFeedItem(set: (fn: (s: AppStoreState) => Partial<AppStoreState>) =>
   set((s) => {
     const rt = s.threadRuntimeById[threadId];
     if (!rt) return {};
-    // Cap feed to MAX_FEED_ITEMS (Finding 8.3: prevent unbounded growth).
     let nextFeed = [...rt.feed, item];
     if (nextFeed.length > MAX_FEED_ITEMS) {
       nextFeed = nextFeed.slice(nextFeed.length - MAX_FEED_ITEMS);
@@ -296,47 +282,6 @@ function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
       continue;
     }
 
-    if (type === "observability_status") {
-      const enabled = payload.enabled === true;
-      const obs = payload.observability as any;
-      const summary =
-        enabled && obs?.queryApi
-          ? `logs=${String(obs.queryApi.logsBaseUrl ?? "")} metrics=${String(obs.queryApi.metricsBaseUrl ?? "")} traces=${String(obs.queryApi.tracesBaseUrl ?? "")}`
-          : "Observability disabled";
-      out.push({ id: makeId(), kind: "observabilityStatus", ts: evt.ts, enabled, summary });
-      continue;
-    }
-
-    if (type === "harness_context") {
-      out.push({
-        id: makeId(),
-        kind: "harnessContext",
-        ts: evt.ts,
-        context: (payload.context ?? null) as any,
-      });
-      continue;
-    }
-
-    if (type === "observability_query_result") {
-      out.push({
-        id: makeId(),
-        kind: "observabilityQueryResult",
-        ts: evt.ts,
-        result: payload.result as any,
-      });
-      continue;
-    }
-
-    if (type === "harness_slo_result") {
-      out.push({
-        id: makeId(),
-        kind: "harnessSloResult",
-        ts: evt.ts,
-        result: payload.result as any,
-      });
-      continue;
-    }
-
     if (type === "log") {
       out.push({ id: makeId(), kind: "log", ts: evt.ts, line: String(payload.line ?? "") });
       continue;
@@ -354,7 +299,6 @@ function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
       continue;
     }
 
-    // Everything else is a system breadcrumb (handshake/config/prompts).
     out.push({
       id: makeId(),
       kind: "system",
@@ -413,7 +357,6 @@ export type AppStoreState = {
   threadRuntimeById: Record<string, ThreadRuntime>;
 
   promptModal: PromptModalState;
-  checkpointsModalThreadId: string | null;
   notifications: Notification[];
 
   providerStatusByName: Partial<Record<ProviderName, ProviderStatus>>;
@@ -422,6 +365,9 @@ export type AppStoreState = {
 
   composerText: string;
   injectContext: boolean;
+
+  sidebarCollapsed: boolean;
+  sidebarWidth: number;
 
   init: () => Promise<void>;
 
@@ -434,14 +380,12 @@ export type AppStoreState = {
   selectWorkspace: (workspaceId: string) => Promise<void>;
 
   newThread: (opts?: { workspaceId?: string; titleHint?: string; firstMessage?: string }) => Promise<void>;
-  archiveThread: (threadId: string) => Promise<void>;
-  unarchiveThread: (threadId: string) => Promise<void>;
   removeThread: (threadId: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
+  reconnectThread: (threadId: string, firstMessage?: string) => Promise<void>;
 
   sendMessage: (text: string) => Promise<void>;
   cancelThread: (threadId: string) => void;
-  reconnectThread: (threadId: string) => Promise<void>;
   setComposerText: (text: string) => void;
   setInjectContext: (v: boolean) => void;
 
@@ -462,28 +406,9 @@ export type AppStoreState = {
   answerApproval: (threadId: string, requestId: string, approved: boolean) => void;
   dismissPrompt: () => void;
 
-  requestHarnessContext: (threadId: string) => void;
-  setHarnessContext: (threadId: string, payload: {
-    runId: string;
-    objective: string;
-    acceptanceCriteria: string[];
-    constraints: string[];
-    taskId?: string;
-    metadata?: Record<string, string>;
-  }) => void;
-  runHarnessSloChecks: (threadId: string) => void;
-
-  openCheckpointsModal: (threadId: string) => void;
-  closeCheckpointsModal: () => void;
-  refreshThreadBackups: (threadId: string) => void;
-  checkpointThread: (threadId: string) => void;
-  restoreThreadBackup: (threadId: string, checkpointId?: string) => void;
-  deleteThreadCheckpoint: (threadId: string, checkpointId: string) => void;
+  toggleSidebar: () => void;
+  setSidebarWidth: (width: number) => void;
 };
-
-// ---------------------------------------------------------------------------
-// Debounced persist (Finding 8.1: reduce IPC on rapid state changes)
-// ---------------------------------------------------------------------------
 
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -500,7 +425,6 @@ function persist(get: () => AppStoreState) {
   }, PERSIST_DEBOUNCE_MS);
 }
 
-/** Force an immediate persist (for critical writes like thread creation). */
 async function persistNow(get: () => AppStoreState) {
   if (_persistTimer) {
     clearTimeout(_persistTimer);
@@ -513,10 +437,6 @@ async function persistNow(get: () => AppStoreState) {
   };
   await saveState(state);
 }
-
-// ---------------------------------------------------------------------------
-// Batched transcript writes (Finding 8.2: reduce file I/O overhead)
-// ---------------------------------------------------------------------------
 
 type PendingTranscriptEntry = {
   ts: string;
@@ -634,7 +554,6 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
         }));
         startProviderRefreshTimeout(get, set, workspaceId);
 
-        // Immediately hydrate skills on connect so the Skills screen doesn't require a second click.
         try {
           socket.send({ type: "list_skills", sessionId: evt.sessionId });
           const selected = get().workspaceRuntimeById[workspaceId]?.selectedSkillName;
@@ -775,10 +694,6 @@ function ensureThreadSocket(
     onClose: () => {
       RUNTIME.threadSockets.delete(threadId);
       clearBusyTimers(threadId);
-      const reconnecting = RUNTIME.reconnectingThreads.has(threadId);
-      if (reconnecting) {
-        RUNTIME.reconnectingThreads.delete(threadId);
-      }
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
         if (!rt) return {};
@@ -791,19 +706,10 @@ function ensureThreadSocket(
               sessionId: null,
               busy: false,
               busySince: null,
-              backupUi: {
-                ...rt.backupUi,
-                refreshing: false,
-                checkpointing: false,
-                restoring: false,
-                deletingById: {},
-              },
             },
           },
           threads: s.threads.map((t) =>
-            t.id === threadId
-              ? { ...t, status: t.status === "archived" || reconnecting ? t.status : "disconnected" }
-              : t
+            t.id === threadId ? { ...t, status: "disconnected" } : t
           ),
         };
       });
@@ -860,7 +766,6 @@ function appendThreadTranscript(threadId: string, direction: "server" | "client"
   appendThreadTranscriptBatched(threadId, direction, payload);
 }
 
-/** Append a notification, capping the list to MAX_NOTIFICATIONS. */
 function pushNotification(notifications: Notification[], entry: Notification): Notification[] {
   const next = [...notifications, entry];
   if (next.length > MAX_NOTIFICATIONS) {
@@ -908,9 +813,7 @@ function queueBusyRecoveryAfterCancel(
           [threadId]: { ...current, busy: false, busySince: null, connected: false, sessionId: null },
         },
         threads: s.threads.map((t) =>
-          t.id === threadId
-            ? { ...t, status: t.status === "archived" ? "archived" : "disconnected" }
-            : t
+          t.id === threadId ? { ...t, status: "disconnected" } : t
         ),
       };
     });
@@ -993,7 +896,7 @@ function sendUserMessageToThread(
       id: makeId(),
       kind: "error",
       ts: nowIso(),
-      message: "Not connected. Select the workspace again to reconnect.",
+      message: "Not connected. Reconnect to continue.",
     });
     return false;
   }
@@ -1022,39 +925,28 @@ function handleThreadEvent(
             connected: true,
             sessionId: evt.sessionId,
             config: evt.config,
-            backupUi: { ...rt.backupUi, refreshing: true, error: null },
+            transcriptOnly: false,
           },
         },
+        threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "active" } : t)),
       };
     });
+    persist(get);
 
-    // Apply workspace defaults.
     void useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
 
-    // Sync session backup/checkpoint state (auto-snapshots happen on the server).
-    sendThread(get, threadId, (sessionId) => ({ type: "session_backup_get", sessionId }));
-    // Hydrate harness context for this session.
-    sendThread(get, threadId, (sessionId) => ({ type: "harness_context_get", sessionId }));
-
-    // If we queued a first message (fork/continue), send it after handshake.
     if (pendingFirstMessage && pendingFirstMessage.trim()) {
       sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
+    }
+
+    const queued = drainPendingThreadMessages(threadId);
+    for (const msg of queued) {
+      sendUserMessageToThread(get, set, threadId, msg);
     }
     return;
   }
 
   if (evt.type === "observability_status") {
-    const summary =
-      evt.enabled && evt.observability
-        ? `logs=${evt.observability.queryApi.logsBaseUrl} metrics=${evt.observability.queryApi.metricsBaseUrl} traces=${evt.observability.queryApi.tracesBaseUrl}`
-        : "Observability disabled";
-    pushFeedItem(set, threadId, {
-      id: makeId(),
-      kind: "observabilityStatus",
-      ts: nowIso(),
-      enabled: evt.enabled,
-      summary,
-    });
     return;
   }
 
@@ -1105,109 +997,7 @@ function handleThreadEvent(
     return;
   }
 
-  if (evt.type === "session_backup_state") {
-    set((s) => {
-      const rt = s.threadRuntimeById[threadId];
-      if (!rt) return {};
-
-      let nextNotifications = s.notifications;
-
-      // Avoid noisy notifications for auto checkpoints; surface manual actions and failures.
-      if (evt.backup.status === "failed") {
-        const reason = evt.backup.failureReason ?? "Session backup failed.";
-        nextNotifications = pushNotification(nextNotifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Backups unavailable",
-          detail: reason,
-        });
-      } else if (evt.reason === "manual_checkpoint") {
-        const last = evt.backup.checkpoints[evt.backup.checkpoints.length - 1];
-        nextNotifications = pushNotification(nextNotifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "info",
-          title: "Checkpoint created",
-          detail: last ? `${last.id} (${last.trigger})` : undefined,
-        });
-      } else if (evt.reason === "restore") {
-        nextNotifications = pushNotification(nextNotifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "info",
-          title: "Workspace restored",
-        });
-      } else if (evt.reason === "delete") {
-        nextNotifications = pushNotification(nextNotifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "info",
-          title: "Checkpoint deleted",
-        });
-      }
-
-      const failureReason = evt.backup.status === "failed" ? evt.backup.failureReason ?? "Session backup failed." : null;
-
-      return {
-        notifications: nextNotifications,
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: {
-            ...rt,
-            backup: evt.backup,
-            backupReason: evt.reason,
-            backupUi: {
-              ...rt.backupUi,
-              refreshing: false,
-              checkpointing: false,
-              restoring: false,
-              deletingById: {},
-              error: failureReason,
-            },
-          },
-        },
-      };
-    });
-    return;
-  }
-
-  if (evt.type === "harness_context") {
-    pushFeedItem(set, threadId, {
-      id: makeId(),
-      kind: "harnessContext",
-      ts: nowIso(),
-      context: evt.context,
-    });
-    return;
-  }
-
-  if (evt.type === "observability_query_result") {
-    pushFeedItem(set, threadId, {
-      id: makeId(),
-      kind: "observabilityQueryResult",
-      ts: nowIso(),
-      result: evt.result,
-    });
-    return;
-  }
-
-  if (evt.type === "harness_slo_result") {
-    pushFeedItem(set, threadId, {
-      id: makeId(),
-      kind: "harnessSloResult",
-      ts: nowIso(),
-      result: evt.result,
-    });
-    set((s) => ({
-      notifications: pushNotification(s.notifications, {
-        id: makeId(),
-        ts: nowIso(),
-        kind: evt.result.passed ? "info" : "error",
-        title: evt.result.passed ? "SLO checks passed" : "SLO checks failed",
-        detail: `${evt.result.checks.filter((c) => c.pass).length}/${evt.result.checks.length} checks passed`,
-      }),
-    }));
+  if (evt.type === "session_backup_state" || evt.type === "harness_context" || evt.type === "observability_query_result" || evt.type === "harness_slo_result") {
     return;
   }
 
@@ -1304,35 +1094,15 @@ function handleThreadEvent(
       code: evt.code,
       source: evt.source,
     });
-    set((s) => {
-      const rt = s.threadRuntimeById[threadId];
-      const isBackupError = /\b(checkpoint|backup)\b/i.test(evt.message);
-      return {
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Agent error",
-          detail: `${evt.source}/${evt.code}: ${evt.message}`,
-        }),
-        threadRuntimeById: rt
-          ? {
-              ...s.threadRuntimeById,
-              [threadId]: {
-                ...rt,
-                backupUi: {
-                  ...rt.backupUi,
-                  refreshing: false,
-                  checkpointing: false,
-                  restoring: false,
-                  deletingById: {},
-                  error: isBackupError ? evt.message : rt.backupUi.error,
-                },
-              },
-            }
-          : s.threadRuntimeById,
-      };
-    });
+    set((s) => ({
+      notifications: pushNotification(s.notifications, {
+        id: makeId(),
+        ts: nowIso(),
+        kind: "error",
+        title: "Agent error",
+        detail: `${evt.source}/${evt.code}: ${evt.message}`,
+      }),
+    }));
     return;
   }
 }
@@ -1355,7 +1125,6 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   threadRuntimeById: {},
 
   promptModal: null,
-  checkpointsModalThreadId: null,
   notifications: [],
 
   providerStatusByName: {},
@@ -1364,6 +1133,9 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   composerText: "",
   injectContext: false,
+
+  sidebarCollapsed: false,
+  sidebarWidth: 280,
 
   init: async () => {
     set({ startupError: null });
@@ -1384,7 +1156,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
       const normalizedThreads: ThreadRecord[] = (state.threads || []).map((t) => ({
         ...t,
-        status: (["active", "disconnected", "archived"] as const).includes(t.status as any)
+        status: (["active", "disconnected"] as const).includes(t.status as any)
           ? (t.status as ThreadStatus)
           : "disconnected",
       }));
@@ -1392,7 +1164,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       const selectedWorkspaceId = normalizedWorkspaces[0]?.id ?? null;
       const selectedThreadId =
         selectedWorkspaceId
-          ? normalizedThreads.find((t) => t.workspaceId === selectedWorkspaceId && t.status !== "archived")?.id ?? null
+          ? normalizedThreads.find((t) => t.workspaceId === selectedWorkspaceId && t.status === "active")?.id ?? null
           : null;
 
       set({
@@ -1500,6 +1272,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       const sock = RUNTIME.threadSockets.get(thread.id);
       RUNTIME.threadSockets.delete(thread.id);
       RUNTIME.optimisticUserMessageIds.delete(thread.id);
+      RUNTIME.pendingThreadMessages.delete(thread.id);
       clearBusyTimers(thread.id);
       try {
         sock?.close();
@@ -1531,10 +1304,10 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   },
 
   removeThread: async (threadId: string) => {
-    // Best-effort disconnect.
     const sock = RUNTIME.threadSockets.get(threadId);
     RUNTIME.threadSockets.delete(threadId);
     RUNTIME.optimisticUserMessageIds.delete(threadId);
+    RUNTIME.pendingThreadMessages.delete(threadId);
     clearBusyTimers(threadId);
     try {
       sock?.close();
@@ -1546,7 +1319,6 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       const remainingThreads = s.threads.filter((t) => t.id !== threadId);
       const selectedThreadId = s.selectedThreadId === threadId ? null : s.selectedThreadId;
       const nextPromptModal = s.promptModal?.threadId === threadId ? null : s.promptModal;
-      const nextCheckpointsModalThreadId = s.checkpointsModalThreadId === threadId ? null : s.checkpointsModalThreadId;
 
       const nextThreadRuntimeById = { ...s.threadRuntimeById };
       delete nextThreadRuntimeById[threadId];
@@ -1555,7 +1327,6 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
         threads: remainingThreads,
         selectedThreadId,
         promptModal: nextPromptModal,
-        checkpointsModalThreadId: nextCheckpointsModalThreadId,
         threadRuntimeById: nextThreadRuntimeById,
       };
     });
@@ -1648,32 +1419,6 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     ensureThreadSocket(get, set, threadId, url, opts?.firstMessage);
   },
 
-  archiveThread: async (threadId: string) => {
-    // Mark archived first so any socket close handler preserves status.
-    set((s) => ({
-      threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "archived" } : t)),
-    }));
-    await persistNow(get);
-
-    // Best-effort disconnect.
-    const sock = RUNTIME.threadSockets.get(threadId);
-    RUNTIME.threadSockets.delete(threadId);
-    RUNTIME.optimisticUserMessageIds.delete(threadId);
-    clearBusyTimers(threadId);
-    try {
-      sock?.close();
-    } catch {
-      // ignore
-    }
-  },
-
-  unarchiveThread: async (threadId: string) => {
-    set((s) => ({
-      threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "disconnected" } : t)),
-    }));
-    await persistNow(get);
-  },
-
   selectThread: async (threadId: string) => {
     set({ selectedThreadId: threadId, view: "chat" });
     ensureThreadRuntime(get, set, threadId);
@@ -1689,28 +1434,49 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       set((s) => ({
         threadRuntimeById: {
           ...s.threadRuntimeById,
-          [threadId]: { ...s.threadRuntimeById[threadId], feed, transcriptOnly: thread.status !== "active" },
+          [threadId]: { ...s.threadRuntimeById[threadId], feed, transcriptOnly: false },
         },
       }));
     }
 
-    if (thread.status === "active") {
-      await get().selectWorkspace(thread.workspaceId);
-      await ensureServerRunning(get, set, thread.workspaceId);
-      ensureControlSocket(get, set, thread.workspaceId);
+    set((s) => ({
+      threadRuntimeById: {
+        ...s.threadRuntimeById,
+        [threadId]: { ...s.threadRuntimeById[threadId], transcriptOnly: false },
+      },
+    }));
 
-      const url = get().workspaceRuntimeById[thread.workspaceId]?.serverUrl;
-      if (url) {
-        ensureThreadSocket(get, set, threadId, url);
-      }
-    } else {
+    await get().reconnectThread(threadId);
+  },
+
+  reconnectThread: async (threadId: string, firstMessage?: string) => {
+    ensureThreadRuntime(get, set, threadId);
+
+    const thread = get().threads.find((t) => t.id === threadId);
+    if (!thread) return;
+
+    await get().selectWorkspace(thread.workspaceId);
+    await ensureServerRunning(get, set, thread.workspaceId);
+    ensureControlSocket(get, set, thread.workspaceId);
+
+    const url = get().workspaceRuntimeById[thread.workspaceId]?.serverUrl;
+    if (!url) {
       set((s) => ({
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: { ...s.threadRuntimeById[threadId], transcriptOnly: true },
-        },
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Workspace server unavailable",
+          detail: "Workspace server is not ready.",
+        }),
       }));
+      return;
     }
+
+    if (firstMessage && firstMessage.trim()) {
+      queuePendingThreadMessage(threadId, firstMessage);
+    }
+    ensureThreadSocket(get, set, threadId, url);
   },
 
   sendMessage: async (text: string) => {
@@ -1724,8 +1490,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    // Fork if we're viewing transcript-only thread.
-    if (rt?.transcriptOnly || thread.status !== "active") {
+    if (rt?.transcriptOnly) {
       const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
       const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
       await get().newThread({ workspaceId: thread.workspaceId, titleHint: thread.title, firstMessage });
@@ -1733,10 +1498,19 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       return;
     }
 
-    if (!rt?.sessionId || rt.busy) return;
+    if (thread.status !== "active" || !rt?.sessionId) {
+      const preamble = get().injectContext ? buildContextPreamble(rt?.feed ?? []) : "";
+      const firstMessage = preamble ? `${preamble}${trimmed}` : trimmed;
+      await get().reconnectThread(activeThreadId, firstMessage);
+      set({ composerText: "" });
+      return;
+    }
+
+    if (rt.busy) return;
 
     const ok = sendUserMessageToThread(get, set, activeThreadId, trimmed);
     if (!ok) return;
+
     set({ composerText: "" });
   },
 
@@ -1762,83 +1536,13 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
                 }
               : s.threadRuntimeById,
           threads: isBusy
-            ? s.threads.map((t) => (t.id === threadId && t.status !== "archived" ? { ...t, status: "disconnected" } : t))
+            ? s.threads.map((t) => (t.id === threadId ? { ...t, status: "disconnected" } : t))
             : s.threads,
         };
       });
       return;
     }
     queueBusyRecoveryAfterCancel(get, set, threadId, "manual");
-  },
-
-  reconnectThread: async (threadId: string) => {
-    const thread = get().threads.find((t) => t.id === threadId);
-    if (!thread || thread.status === "archived") return;
-
-    const workspaceId = thread.workspaceId;
-    const socket = RUNTIME.threadSockets.get(threadId);
-    if (socket) {
-      RUNTIME.reconnectingThreads.add(threadId);
-      RUNTIME.threadSockets.delete(threadId);
-      clearBusyTimers(threadId);
-      try {
-        socket.close();
-      } catch {
-        // ignore
-      }
-    }
-
-    set((s) => {
-      const rt = s.threadRuntimeById[threadId];
-      if (!rt) return {};
-      return {
-        selectedWorkspaceId: workspaceId,
-        selectedThreadId: threadId,
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: {
-            ...rt,
-            connected: false,
-            sessionId: null,
-            busy: false,
-            busySince: null,
-          },
-        },
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "info",
-          title: "Reconnecting thread",
-          detail: "Attempting to restore live session connection.",
-        }),
-      };
-    });
-
-    await ensureServerRunning(get, set, workspaceId);
-    ensureControlSocket(get, set, workspaceId);
-    const url = get().workspaceRuntimeById[workspaceId]?.serverUrl;
-    if (!url) {
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Reconnect failed",
-          detail: "Workspace server is not available.",
-        }),
-      }));
-      return;
-    }
-
-    ensureThreadSocket(get, set, threadId, url);
-    set((s) => ({
-      threads: s.threads.map((t) =>
-        t.id === threadId && t.status !== "archived"
-          ? { ...t, status: "active" }
-          : t
-      ),
-    }));
-    void persist(get);
   },
 
   setComposerText: (text) => set({ composerText: text }),
@@ -1868,8 +1572,6 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     await ensureServerRunning(get, set, workspaceId);
     ensureControlSocket(get, set, workspaceId);
 
-    // If the control session is already established, refresh immediately; otherwise the
-    // server_hello handler above will trigger a list_skills as soon as it connects.
     const sid = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
     if (sid) {
       const sock = RUNTIME.controlSockets.get(workspaceId);
@@ -1973,13 +1675,11 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   },
 
   restartWorkspaceServer: async (workspaceId) => {
-    // Disconnect control socket.
     const control = RUNTIME.controlSockets.get(workspaceId);
     control?.close();
     RUNTIME.controlSockets.delete(workspaceId);
     clearProviderRefreshTimer(workspaceId);
 
-    // Disconnect thread sockets for this workspace.
     for (const thread of get().threads) {
       if (thread.workspaceId !== workspaceId) continue;
       const sock = RUNTIME.threadSockets.get(thread.id);
@@ -1994,7 +1694,6 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       // ignore
     }
 
-    // Clear runtime url so ensureServerRunning restarts.
     set((s) => ({
       workspaceRuntimeById: {
         ...s.workspaceRuntimeById,
@@ -2008,7 +1707,18 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   connectProvider: async (provider, apiKey) => {
     const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
-    if (!workspaceId) return;
+    if (!workspaceId) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "info",
+          title: "Workspace required",
+          detail: "Add or select a workspace first.",
+        }),
+      }));
+      return;
+    }
 
     await ensureServerRunning(get, set, workspaceId);
     ensureControlSocket(get, set, workspaceId);
@@ -2038,7 +1748,6 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     const sid = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
     const sock = RUNTIME.controlSockets.get(workspaceId);
     if (!sid || !sock) {
-      // Control socket is still handshaking. server_hello will trigger a refresh automatically.
       clearProviderRefreshTimer(workspaceId);
       set({ providerStatusRefreshing: false });
       return;
@@ -2069,297 +1778,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   dismissPrompt: () => set({ promptModal: null }),
 
-  requestHarnessContext: (threadId) => {
-    const rt = get().threadRuntimeById[threadId];
-    if (!rt?.sessionId) return;
-    const ok = sendThread(get, threadId, (sessionId) => ({ type: "harness_context_get", sessionId }));
-    if (!ok) {
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Not connected",
-          detail: "Unable to request harness context.",
-        }),
-      }));
-      return;
-    }
-    appendThreadTranscript(threadId, "client", { type: "harness_context_get", sessionId: rt.sessionId });
-  },
+  toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
-  setHarnessContext: (threadId, payload) => {
-    const rt = get().threadRuntimeById[threadId];
-    if (!rt?.sessionId) return;
-    const ok = sendThread(get, threadId, (sessionId) => ({
-      type: "harness_context_set",
-      sessionId,
-      context: payload,
-    }));
-    if (!ok) {
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Not connected",
-          detail: "Unable to set harness context.",
-        }),
-      }));
-      return;
-    }
-    appendThreadTranscript(threadId, "client", { type: "harness_context_set", sessionId: rt.sessionId, context: payload });
-  },
-
-  runHarnessSloChecks: (threadId) => {
-    const rt = get().threadRuntimeById[threadId];
-    if (!rt?.sessionId) return;
-    const checks = [
-      {
-        id: "vector_errors",
-        type: "custom" as const,
-        queryType: "promql" as const,
-        query: "sum(rate(vector_component_errors_total[5m]))",
-        op: "<=" as const,
-        threshold: 0,
-        windowSec: 300,
-      },
-      {
-        id: "log_errors",
-        type: "error_rate" as const,
-        queryType: "logql" as const,
-        query: "_time:[now-5m, now] level:error",
-        op: "==" as const,
-        threshold: 0,
-        windowSec: 300,
-      },
-    ];
-
-    const ok = sendThread(get, threadId, (sessionId) => ({
-      type: "harness_slo_evaluate",
-      sessionId,
-      checks,
-    }));
-    if (!ok) {
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Not connected",
-          detail: "Unable to run SLO checks.",
-        }),
-      }));
-      return;
-    }
-    appendThreadTranscript(threadId, "client", { type: "harness_slo_evaluate", sessionId: rt.sessionId, checks });
-  },
-
-  openCheckpointsModal: (threadId: string) => {
-    set({ checkpointsModalThreadId: threadId });
-    get().refreshThreadBackups(threadId);
-  },
-
-  closeCheckpointsModal: () => set({ checkpointsModalThreadId: null }),
-
-  refreshThreadBackups: (threadId: string) => {
-    const thread = get().threads.find((t) => t.id === threadId);
-    if (!thread || thread.status !== "active") {
-      set((s) => ({
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "info",
-          title: "Backups are session-scoped",
-          detail: "Backups/checkpoints are available only while a session is active and connected.",
-        }),
-      }));
-      return;
-    }
-
-    const rt = get().threadRuntimeById[threadId];
-    set((s) => {
-      const cur = s.threadRuntimeById[threadId];
-      if (!cur) return {};
-      return {
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: { ...cur, backupUi: { ...cur.backupUi, refreshing: true, error: null } },
-        },
-      };
-    });
-
-    const ok = sendThread(get, threadId, (sessionId) => ({ type: "session_backup_get", sessionId }));
-    if (!ok) {
-      set((s) => {
-        const cur = s.threadRuntimeById[threadId];
-        return {
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to request backup state. Reconnect the session and try again.",
-          }),
-          threadRuntimeById: cur
-            ? {
-                ...s.threadRuntimeById,
-                [threadId]: { ...cur, backupUi: { ...cur.backupUi, refreshing: false } },
-              }
-            : s.threadRuntimeById,
-        };
-      });
-      return;
-    }
-
-    appendThreadTranscript(threadId, "client", { type: "session_backup_get", sessionId: rt?.sessionId });
-  },
-
-  checkpointThread: (threadId: string) => {
-    const thread = get().threads.find((t) => t.id === threadId);
-    if (!thread || thread.status !== "active") return;
-
-    const rt = get().threadRuntimeById[threadId];
-    if (!rt?.sessionId || rt.busy) return;
-
-    set((s) => {
-      const cur = s.threadRuntimeById[threadId];
-      if (!cur) return {};
-      return {
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: { ...cur, backupUi: { ...cur.backupUi, checkpointing: true, error: null } },
-        },
-      };
-    });
-
-    const ok = sendThread(get, threadId, (sessionId) => ({ type: "session_backup_checkpoint", sessionId }));
-    if (!ok) {
-      set((s) => {
-        const cur = s.threadRuntimeById[threadId];
-        return {
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to create checkpoint.",
-          }),
-          threadRuntimeById: cur
-            ? {
-                ...s.threadRuntimeById,
-                [threadId]: { ...cur, backupUi: { ...cur.backupUi, checkpointing: false } },
-              }
-            : s.threadRuntimeById,
-        };
-      });
-      return;
-    }
-
-    appendThreadTranscript(threadId, "client", { type: "session_backup_checkpoint", sessionId: rt.sessionId });
-  },
-
-  restoreThreadBackup: (threadId: string, checkpointId?: string) => {
-    const thread = get().threads.find((t) => t.id === threadId);
-    if (!thread || thread.status !== "active") return;
-
-    const rt = get().threadRuntimeById[threadId];
-    if (!rt?.sessionId || rt.busy) return;
-
-    set((s) => {
-      const cur = s.threadRuntimeById[threadId];
-      if (!cur) return {};
-      return {
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: { ...cur, backupUi: { ...cur.backupUi, restoring: true, error: null } },
-        },
-      };
-    });
-
-    const ok = sendThread(get, threadId, (sessionId) => ({
-      type: "session_backup_restore",
-      sessionId,
-      checkpointId,
-    }));
-    if (!ok) {
-      set((s) => {
-        const cur = s.threadRuntimeById[threadId];
-        return {
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to restore checkpoint.",
-          }),
-          threadRuntimeById: cur
-            ? {
-                ...s.threadRuntimeById,
-                [threadId]: { ...cur, backupUi: { ...cur.backupUi, restoring: false } },
-              }
-            : s.threadRuntimeById,
-        };
-      });
-      return;
-    }
-
-    appendThreadTranscript(threadId, "client", { type: "session_backup_restore", sessionId: rt.sessionId, checkpointId });
-  },
-
-  deleteThreadCheckpoint: (threadId: string, checkpointId: string) => {
-    const thread = get().threads.find((t) => t.id === threadId);
-    if (!thread || thread.status !== "active") return;
-
-    const rt = get().threadRuntimeById[threadId];
-    if (!rt?.sessionId || rt.busy) return;
-
-    set((s) => {
-      const cur = s.threadRuntimeById[threadId];
-      if (!cur) return {};
-      return {
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: {
-            ...cur,
-            backupUi: {
-              ...cur.backupUi,
-              deletingById: { ...cur.backupUi.deletingById, [checkpointId]: true },
-              error: null,
-            },
-          },
-        },
-      };
-    });
-
-    const ok = sendThread(get, threadId, (sessionId) => ({
-      type: "session_backup_delete_checkpoint",
-      sessionId,
-      checkpointId,
-    }));
-    if (!ok) {
-      set((s) => {
-        const cur = s.threadRuntimeById[threadId];
-        if (!cur) return {};
-        const nextDeleting = { ...cur.backupUi.deletingById };
-        delete nextDeleting[checkpointId];
-        return {
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Not connected",
-            detail: "Unable to delete checkpoint.",
-          }),
-          threadRuntimeById: {
-            ...s.threadRuntimeById,
-            [threadId]: { ...cur, backupUi: { ...cur.backupUi, deletingById: nextDeleting } },
-          },
-        };
-      });
-      return;
-    }
-
-    appendThreadTranscript(threadId, "client", { type: "session_backup_delete_checkpoint", sessionId: rt.sessionId, checkpointId });
-  },
+  setSidebarWidth: (width: number) => set({ sidebarWidth: Math.max(180, Math.min(500, width)) }),
 }));

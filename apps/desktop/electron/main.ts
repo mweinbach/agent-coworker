@@ -20,10 +20,14 @@ if (!app.isPackaged) {
 }
 
 async function createWindow(): Promise<void> {
+  const isMac = process.platform === "darwin";
+
   const win = new BrowserWindow({
     title: "Cowork",
     width: 1240,
     height: 820,
+    titleBarStyle: isMac ? "hidden" : "default",
+    trafficLightPosition: isMac ? { x: 16, y: 16 } : undefined,
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,

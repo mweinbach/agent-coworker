@@ -10,7 +10,6 @@ export function PromptModal() {
 
   const [freeText, setFreeText] = useState("");
 
-  // Reset free-text input when a new prompt appears (Finding 9.1).
   const requestId = modal?.kind === "ask" ? modal.prompt.requestId : null;
   useEffect(() => {
     setFreeText("");
@@ -22,13 +21,14 @@ export function PromptModal() {
     if (modal.kind === "ask") {
       const opts = modal.prompt.options ?? [];
       const hasOptions = opts.length > 0;
+
       return (
         <div className="modal">
-          <div className="modalTitle modalTitleCenter">Question</div>
-          <div className="modalBody modalBodyCenter">{modal.prompt.question}</div>
+          <div className="modalTitle">Question</div>
+          <div className="modalBody">{modal.prompt.question}</div>
 
-          {hasOptions ? (
-            <div className="modalOptionsRow">
+          {hasOptions && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
               {opts.map((o) => (
                 <button
                   key={o}
@@ -40,9 +40,9 @@ export function PromptModal() {
                 </button>
               ))}
             </div>
-          ) : null}
+          )}
 
-          <div className="modalTextInputGroup">
+          <div style={{ display: "flex", gap: 8 }}>
             <input
               value={freeText}
               onChange={(e) => setFreeText(e.currentTarget.value)}
@@ -52,7 +52,7 @@ export function PromptModal() {
                   answerAsk(modal.threadId, modal.prompt.requestId, freeText);
                 }
               }}
-              placeholder={hasOptions ? "Or type a custom answer\u2026" : "Type your answer\u2026"}
+              placeholder={hasOptions ? "Or type a custom answer…" : "Type your answer…"}
               className="modalTextInput"
               autoFocus={!hasOptions}
             />
@@ -66,37 +66,36 @@ export function PromptModal() {
             </button>
           </div>
 
-          {!hasOptions ? (
+          {!hasOptions && (
             <div className="modalActions">
               <button className="modalButton" type="button" onClick={dismiss}>
                 Cancel
               </button>
             </div>
-          ) : null}
+          )}
         </div>
       );
     }
 
     if (modal.kind === "approval") {
-      const danger = modal.prompt.dangerous === true;
       return (
         <div className="modal">
-          <div className="modalTitle modalTitleCenter">Command approval</div>
-          <div className={"approvalCommandCard" + (danger ? " approvalCommandCardDanger" : "")}>
-            <div className="approvalCommandLabel">
-              {danger ? "Dangerous command" : "Command"}
+          <div className="modalTitle">Command approval</div>
+          <div className={"approvalCard" + (modal.prompt.dangerous ? "" : "")}>
+            <div style={{ fontSize: 11, textTransform: "uppercase", marginBottom: 6 }}>
+              {modal.prompt.dangerous ? "Dangerous" : "Command"}
             </div>
-            <code className="approvalCommandCode">{modal.prompt.command}</code>
+            <code className="approvalCode">{modal.prompt.command}</code>
             <div className="metaLine" style={{ marginTop: 8 }}>
               Risk: {modal.prompt.reasonCode}
             </div>
           </div>
-          <div className="modalActions" style={{ justifyContent: "center" }}>
+          <div className="modalActions">
             <button className="modalButton" type="button" onClick={() => answerApproval(modal.threadId, modal.prompt.requestId, false)}>
               Deny
             </button>
             <button
-              className={"modalButton " + (danger ? "modalButtonDanger" : "modalButtonPrimary")}
+              className={"modalButton " + (modal.prompt.dangerous ? "modalButtonDanger" : "modalButtonPrimary")}
               type="button"
               onClick={() => answerApproval(modal.threadId, modal.prompt.requestId, true)}
             >
@@ -111,8 +110,9 @@ export function PromptModal() {
   }, [answerApproval, answerAsk, dismiss, freeText, modal]);
 
   if (!modal) return null;
+
   return (
-    <div className="modalOverlay" role="dialog" aria-modal="true" aria-label={modal.kind === "ask" ? "Question" : "Command approval"} onMouseDown={dismiss}>
+    <div className="modalOverlay" onMouseDown={dismiss}>
       <div onMouseDown={(e) => e.stopPropagation()}>{content}</div>
     </div>
   );

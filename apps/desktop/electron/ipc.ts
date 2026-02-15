@@ -1,6 +1,6 @@
-import { BrowserWindow, dialog, ipcMain } from "electron";
+import { BrowserWindow, dialog, ipcMain, Menu } from "electron";
 
-import { DESKTOP_IPC_CHANNELS, type StartWorkspaceServerInput, type StopWorkspaceServerInput, type DeleteTranscriptInput, type ReadTranscriptInput, type TranscriptBatchInput } from "../src/lib/desktopApi";
+import { DESKTOP_IPC_CHANNELS, type StartWorkspaceServerInput, type StopWorkspaceServerInput, type DeleteTranscriptInput, type ReadTranscriptInput, type TranscriptBatchInput, type ShowContextMenuInput } from "../src/lib/desktopApi";
 import type { PersistedState } from "../src/app/types";
 
 import { PersistenceService } from "./services/persistence";
@@ -95,6 +95,51 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
     }
 
     return result.filePaths[0] ?? null;
+  });
+
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.showContextMenu, async (event, args: ShowContextMenuInput) => {
+    return new Promise<string | null>((resolve) => {
+      const menu = Menu.buildFromTemplate(
+        args.items.map((item) => ({
+          id: item.id,
+          label: item.label,
+          enabled: item.enabled !== false,
+          click: () => resolve(item.id),
+        }))
+      );
+
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
+      if (!ownerWindow) {
+        resolve(null);
+        return;
+      }
+
+      menu.popup({ window: ownerWindow, callback: () => resolve(null) });
+    });
+  });
+
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.windowMinimize, (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    win?.minimize();
+  });
+
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.windowMaximize, (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return;
+    if (win.isMaximized()) {
+      win.unmaximize();
+    } else {
+      win.maximize();
+    }
+  });
+
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.windowClose, (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    win?.close();
+  });
+
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.getPlatform, () => {
+    return process.platform;
   });
 
   return () => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "./app/store";
 import type { ProviderName } from "./lib/wsProtocol";
@@ -10,7 +10,51 @@ import { ChatView } from "./ui/ChatView";
 import { SkillsView } from "./ui/SkillsView";
 import { SettingsShell } from "./ui/settings/SettingsShell";
 import { PromptModal } from "./ui/PromptModal";
-import { CheckpointsModal } from "./ui/CheckpointsModal";
+import { TitleBar } from "./ui/TitleBar";
+
+function SidebarResizer() {
+  const sidebarWidth = useAppStore((s) => s.sidebarWidth);
+  const setSidebarWidth = useAppStore((s) => s.setSidebarWidth);
+  const [dragging, setDragging] = useState(false);
+
+  const startXRef = useRef(0);
+  const startWidthRef = useRef(0);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    startXRef.current = e.clientX;
+    startWidthRef.current = sidebarWidth;
+    setDragging(true);
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (!dragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = e.clientX - startXRef.current;
+      setSidebarWidth(startWidthRef.current + delta);
+    };
+
+    const handleMouseUp = () => {
+      setDragging(false);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [dragging, setSidebarWidth]);
+
+  return (
+    <div
+      className={"sidebarResizer" + (dragging ? " sidebarResizerActive" : "")}
+      onMouseDown={handleMouseDown}
+    />
+  );
+}
 
 export default function App() {
   const ready = useAppStore((s) => s.ready);
@@ -23,12 +67,11 @@ export default function App() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
+  const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
+  const sidebarWidth = useAppStore((s) => s.sidebarWidth);
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
 
-  const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
-  const applyWorkspaceDefaultsToThread = useAppStore((s) => s.applyWorkspaceDefaultsToThread);
   const newThread = useAppStore((s) => s.newThread);
-  const openCheckpointsModal = useAppStore((s) => s.openCheckpointsModal);
-  const checkpointThread = useAppStore((s) => s.checkpointThread);
 
   useEffect(() => {
     if (ready) return;
@@ -37,25 +80,24 @@ export default function App() {
     });
   }, [init, ready]);
 
-  // Global keyboard shortcuts (Finding 11.1).
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      // Cmd/Ctrl+N → new thread
       if ((e.metaKey || e.ctrlKey) && e.key === "n") {
         e.preventDefault();
         void newThread();
         return;
       }
 
-      // Escape → close modal / cancel busy agent / close settings
+      if ((e.metaKey || e.ctrlKey) && e.key === "b") {
+        e.preventDefault();
+        toggleSidebar();
+        return;
+      }
+
       if (e.key === "Escape") {
         const state = useAppStore.getState();
         if (state.promptModal) {
           state.dismissPrompt();
-          return;
-        }
-        if (state.checkpointsModalThreadId) {
-          state.closeCheckpointsModal();
           return;
         }
         if (state.view === "settings") {
@@ -73,7 +115,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [newThread]);
+  }, [newThread, toggleSidebar]);
 
   const activeThread = useMemo(
     () => threads.find((t) => t.id === selectedThreadId) ?? null,
@@ -90,165 +132,95 @@ export default function App() {
 
   const provider = (activeWorkspace?.defaultProvider ?? "google") as ProviderName;
   const model = activeWorkspace?.defaultModel ?? "";
-  const enableMcp = activeWorkspace?.defaultEnableMcp ?? true;
 
-  const modelOptions = MODEL_CHOICES[provider] ?? [];
-
-  const showChatTopbarControls = view === "chat";
-  const canShowBackups = showChatTopbarControls && activeThread?.status === "active";
-  const backup = canShowBackups ? rt?.backup ?? null : null;
-  const backupStatus = backup?.status ?? (canShowBackups && rt?.connected ? "initializing" : "offline");
-  const lastCheckpoint = backup?.checkpoints?.[backup.checkpoints.length - 1] ?? null;
-  const backupLabel =
-    backupStatus === "ready"
-      ? `Backups: ready${lastCheckpoint ? ` · ${lastCheckpoint.id}` : ""}`
-      : backupStatus === "failed"
-        ? "Backups: failed"
-        : backupStatus === "initializing"
-          ? "Backups: starting…"
-          : "Backups: offline";
-  const backupTitle =
-    backup?.status === "failed" ? backup.failureReason ?? "Backups are unavailable for this session." : undefined;
-  const backupActionsDisabled = !canShowBackups || !rt?.connected || !rt?.sessionId || busy;
+  const title = view === "skills" ? "Skills" : activeThread?.title || "New thread";
 
   if (view === "settings") {
     return (
       <div className="settingsRoot">
-        {!ready ? (
-          <div className="hero">
-            <div className="heroTitle">Starting…</div>
-            <div className="heroSub">Loading state and warming up.</div>
-          </div>
-        ) : (
-          <>
-            {startupError ? (
-              <div className="startupBanner" role="alert">
-                <div className="startupBannerText">
-                  Running with fresh local state due to an initialization error.
+        <TitleBar />
+        <div className="appContent">
+          {!ready ? (
+            <div className="hero">
+              <div className="heroTitle">Starting…</div>
+            </div>
+          ) : (
+            <>
+              {startupError ? (
+                <div style={{ margin: 12, padding: 10, border: "1px solid var(--border)", borderRadius: 6, background: "var(--danger-bg)" }}>
+                  <div>Running with fresh state due to an error.</div>
+                  <button className="iconButton" type="button" onClick={() => void init()} style={{ marginTop: 8 }}>
+                    Retry
+                  </button>
                 </div>
-                <button className="iconButton" type="button" onClick={() => void init()}>
-                  Retry load
-                </button>
-              </div>
-            ) : null}
-            <SettingsShell />
-          </>
-        )}
+              ) : null}
+              <SettingsShell />
+            </>
+          )}
+        </div>
         <PromptModal />
-        <CheckpointsModal />
       </div>
     );
   }
 
-  const title =
-    view === "skills"
-      ? "Skills"
-      : view === "automations"
-        ? "Automations"
-        : activeThread?.title || "New thread";
-
   return (
     <div className="app">
-      <Sidebar />
+      <TitleBar />
+      <div className="appContent">
+        <div
+          className={"sidebarContainer" + (sidebarCollapsed ? " sidebarCollapsed" : "")}
+          style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
+        >
+          {!sidebarCollapsed && <Sidebar />}
+          {!sidebarCollapsed && <SidebarResizer />}
+        </div>
 
-      <main className="main" role="main" aria-label="Chat area">
-        <div className="topbar" role="toolbar" aria-label="Thread controls">
-          <div className="topbarLeft">
-            <div className="topbarTitle">{title}</div>
-            {busy ? <span className="pill pillBusy">busy</span> : null}
-          </div>
-
-          <div className="topbarRight">
-            {showChatTopbarControls ? (
-              <>
-                {canShowBackups && activeThread ? (
-                  <>
-                    <button
-                      className="chip chipQuiet chipButton"
-                      type="button"
-                      onClick={() => openCheckpointsModal(activeThread.id)}
-                      title={backupTitle}
-                    >
-                      {backupLabel}
-                    </button>
-
-                    <button
-                      className="iconButton"
-                      type="button"
-                      onClick={() => checkpointThread(activeThread.id)}
-                      disabled={backupActionsDisabled || rt?.backupUi?.checkpointing === true || rt?.backup?.status !== "ready"}
-                      title={rt?.backup?.status !== "ready" ? "Backups must be ready first" : "Create a checkpoint now"}
-                    >
-                      {rt?.backupUi?.checkpointing ? "Checkpointing…" : "Checkpoint"}
-                    </button>
-                  </>
-                ) : null}
-
-                <button className="iconButton" type="button" onClick={() => void newThread()} title="New thread (Cmd+N)" aria-label="New thread">
+        <main className="main">
+          <div className="topbar">
+            <div className="topbarLeft">
+              <button
+                className="sidebarToggle"
+                type="button"
+                onClick={toggleSidebar}
+                title={sidebarCollapsed ? "Show sidebar (⌘B)" : "Hide sidebar (⌘B)"}
+              >
+                {sidebarCollapsed ? "☰" : "☰"}
+              </button>
+              <div className="topbarTitle">{title}</div>
+            </div>
+            <div className="topbarRight">
+              {busy && <span className="pill pillBusy">busy</span>}
+              {view === "chat" && (
+                <button className="iconButton" type="button" onClick={() => void newThread()}>
                   New
                 </button>
-              </>
-            ) : null}
+              )}
+            </div>
           </div>
-        </div>
 
-        <div className="content">
-          {!ready ? (
-            <div className="hero">
-              <div className="heroTitle">Starting…</div>
-              <div className="heroSub">Loading state and warming up.</div>
-            </div>
-          ) : startupError ? (
-            <div className="hero">
-              <div className="heroTitle">Recovered with defaults</div>
-              <div className="heroSub">{startupError}</div>
-              <button className="iconButton" type="button" onClick={() => void init()}>
-                Retry state load
-              </button>
-            </div>
-          ) : view === "skills" ? (
-            <SkillsView />
-          ) : view === "automations" ? (
-            <div className="hero">
-              <div className="heroTitle">Automations</div>
-              <div className="heroSub">Not implemented in v1.</div>
-            </div>
-          ) : (
-            <ChatView
-              hasWorkspace={Boolean(activeWorkspace)}
-              provider={provider}
-              model={model}
-              modelOptions={modelOptions}
-              enableMcp={enableMcp}
-              onProviderChange={(v) => {
-                if (!activeWorkspace) return;
-                if (UI_DISABLED_PROVIDERS.has(v)) return;
-                void updateWorkspaceDefaults(activeWorkspace.id, {
-                  defaultProvider: v,
-                  defaultModel: defaultModelForProvider(v),
-                }).then(async () => {
-                  if (activeThread) await applyWorkspaceDefaultsToThread(activeThread.id);
-                });
-              }}
-              onModelChange={(next) => {
-                if (!activeWorkspace) return;
-                void updateWorkspaceDefaults(activeWorkspace.id, { defaultModel: next }).then(async () => {
-                  if (activeThread) await applyWorkspaceDefaultsToThread(activeThread.id);
-                });
-              }}
-              onEnableMcpChange={(next) => {
-                if (!activeWorkspace) return;
-                void updateWorkspaceDefaults(activeWorkspace.id, { defaultEnableMcp: next }).then(async () => {
-                  if (activeThread) await applyWorkspaceDefaultsToThread(activeThread.id);
-                });
-              }}
-            />
-          )}
-        </div>
-      </main>
+          <div className="content">
+            {!ready ? (
+              <div className="hero">
+                <div className="heroTitle">Starting…</div>
+              </div>
+            ) : startupError ? (
+              <div className="hero">
+                <div className="heroTitle">Recovered</div>
+                <div className="heroSub">{startupError}</div>
+                <button className="iconButton" type="button" onClick={() => void init()}>
+                  Retry
+                </button>
+              </div>
+            ) : view === "skills" ? (
+              <SkillsView />
+            ) : (
+              <ChatView />
+            )}
+          </div>
+        </main>
+      </div>
 
       <PromptModal />
-      <CheckpointsModal />
     </div>
   );
 }

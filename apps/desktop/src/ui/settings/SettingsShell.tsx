@@ -1,5 +1,4 @@
 import { ProvidersPage } from "./pages/ProvidersPage";
-import { SessionsPage } from "./pages/SessionsPage";
 import { WorkspacesPage } from "./pages/WorkspacesPage";
 
 import { useAppStore } from "../../app/store";
@@ -8,7 +7,6 @@ import type { SettingsPageId } from "../../app/types";
 const NAV_ITEMS: Array<{ id: SettingsPageId; label: string }> = [
   { id: "providers", label: "Providers" },
   { id: "workspaces", label: "Workspaces" },
-  { id: "sessions", label: "Sessions" },
 ];
 
 export function SettingsShell() {
@@ -27,7 +25,8 @@ export function SettingsShell() {
           {NAV_ITEMS.map((item) => (
             <button
               key={item.id}
-              className={"settingsNavItem" + (settingsPage === item.id ? " settingsNavItemActive" : "")}
+              className="settingsNavItem"
+              data-active={settingsPage === item.id}
               type="button"
               onClick={() => setSettingsPage(item.id)}
             >
@@ -41,14 +40,11 @@ export function SettingsShell() {
         <div className="settingsContent">
           {settingsPage === "providers" ? (
             <ProvidersPage />
-          ) : settingsPage === "workspaces" ? (
-            <WorkspacesPage />
           ) : (
-            <SessionsPage />
+            <WorkspacesPage />
           )}
         </div>
       </main>
     </div>
   );
 }
-

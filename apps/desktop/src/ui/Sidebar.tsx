@@ -18,9 +18,10 @@ export function Sidebar() {
   const openSkills = useAppStore((s) => s.openSkills);
   const openSettings = useAppStore((s) => s.openSettings);
 
-  const activeWorkspaceThreads = selectedWorkspaceId
+  const activeWorkspaceThreads = (selectedWorkspaceId
     ? threads.filter((t) => t.workspaceId === selectedWorkspaceId)
-    : [];
+    : []
+  ).sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt));
 
   const handleWorkspaceContextMenu = async (e: React.MouseEvent, wsId: string, wsName: string) => {
     e.preventDefault();

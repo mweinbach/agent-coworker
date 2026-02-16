@@ -25,6 +25,12 @@ describe("DialogSelect helpers", () => {
     expect(selected?.value).toBe("anthropic");
   });
 
+  test("Enter key resolves to submit action", () => {
+    const action = resolveDialogSelectKeyAction("enter", 1, providerItems.length);
+    expect(action.submit).toBe(true);
+    expect(action.dismiss).toBe(false);
+  });
+
   test("Escape key resolves to dismiss action", () => {
     const action = resolveDialogSelectKeyAction("escape", 0, providerItems.length);
     expect(action.dismiss).toBe(true);

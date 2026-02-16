@@ -23,8 +23,19 @@ export function DialogPrompt(props: DialogPromptProps) {
   const theme = useTheme();
   const [value, setValue] = createSignal("");
 
+  const submitValue = (raw: string) => {
+    const text = resolveDialogPromptSubmitValue(raw);
+    if (text) props.onSubmit(text);
+  };
+
   const handleKeyDown = (e: any) => {
     const key = keyNameFromEvent(e);
+    if (key === "enter") {
+      // Fallback for terminals that do not route Enter to input onSubmit reliably.
+      submitValue(value());
+      e.preventDefault?.();
+      return;
+    }
     if (shouldDismissDialogPromptForKey(key)) {
       props.onDismiss();
       e.preventDefault?.();
@@ -48,10 +59,7 @@ export function DialogPrompt(props: DialogPromptProps) {
             onChange={(v: any) => setValue(typeof v === "string" ? v : v?.value ?? "")}
             onKeyDown={handleKeyDown}
             onSubmit={(submittedValue: string) => {
-              const text = resolveDialogPromptSubmitValue(
-                typeof submittedValue === "string" ? submittedValue : value()
-              );
-              if (text) props.onSubmit(text);
+              submitValue(typeof submittedValue === "string" ? submittedValue : value());
             }}
             placeholder={props.placeholder ?? "Enter value..."}
             placeholderColor={theme.textMuted}

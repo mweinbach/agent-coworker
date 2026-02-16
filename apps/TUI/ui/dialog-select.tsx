@@ -30,21 +30,24 @@ export function resolveDialogSelectKeyAction(
   key: string,
   selectedIndex: number,
   itemCount: number
-): { nextSelectedIndex: number; dismiss: boolean } {
+): { nextSelectedIndex: number; dismiss: boolean; submit: boolean } {
   if (itemCount <= 0) {
-    if (key === "escape") return { nextSelectedIndex: selectedIndex, dismiss: true };
-    return { nextSelectedIndex: selectedIndex, dismiss: false };
+    if (key === "escape") return { nextSelectedIndex: selectedIndex, dismiss: true, submit: false };
+    return { nextSelectedIndex: selectedIndex, dismiss: false, submit: false };
   }
   if (key === "up") {
-    return { nextSelectedIndex: Math.max(0, selectedIndex - 1), dismiss: false };
+    return { nextSelectedIndex: Math.max(0, selectedIndex - 1), dismiss: false, submit: false };
   }
   if (key === "down") {
-    return { nextSelectedIndex: Math.min(itemCount - 1, selectedIndex + 1), dismiss: false };
+    return { nextSelectedIndex: Math.min(itemCount - 1, selectedIndex + 1), dismiss: false, submit: false };
+  }
+  if (key === "enter") {
+    return { nextSelectedIndex: selectedIndex, dismiss: false, submit: true };
   }
   if (key === "escape") {
-    return { nextSelectedIndex: selectedIndex, dismiss: true };
+    return { nextSelectedIndex: selectedIndex, dismiss: true, submit: false };
   }
-  return { nextSelectedIndex: selectedIndex, dismiss: false };
+  return { nextSelectedIndex: selectedIndex, dismiss: false, submit: false };
 }
 
 type DialogSelectProps = {
@@ -75,6 +78,13 @@ export function DialogSelect(props: DialogSelectProps) {
     const action = resolveDialogSelectKeyAction(key, selected(), filtered().length);
     if (action.nextSelectedIndex !== selected()) {
       setSelected(action.nextSelectedIndex);
+      e.preventDefault?.();
+      return;
+    }
+
+    if (action.submit) {
+      // Fallback for terminals that do not route Enter to input onSubmit reliably.
+      submitSelectedItem();
       e.preventDefault?.();
       return;
     }

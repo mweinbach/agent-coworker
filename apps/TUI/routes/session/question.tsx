@@ -42,7 +42,11 @@ export function QuestionPrompt(props: { ask: AskRequest }) {
         e.preventDefault?.();
       }
     } else {
-      if (key === "escape") {
+      if (key === "enter") {
+        // Fallback for terminals that do not route Enter to input onSubmit reliably.
+        handleSubmit();
+        e.preventDefault?.();
+      } else if (key === "escape") {
         actions.answerAsk(props.ask.requestId, "");
         e.preventDefault?.();
       }

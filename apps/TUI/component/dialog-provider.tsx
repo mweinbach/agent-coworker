@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal } from "solid-js";
+import { createEffect, createMemo, createSignal, Switch, Match, Show } from "solid-js";
 import { Dialog } from "../ui/dialog";
 import { DialogPrompt } from "../ui/dialog-prompt";
 import { DialogSelect, type SelectItem } from "../ui/dialog-select";
@@ -154,107 +154,95 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     beginMethodFlow(provider(), selected);
   };
 
-  if (stage() === "provider") {
-    return (
-      <DialogSelect
-        items={providerItems()}
-        onSelect={handleProviderSelect}
-        onDismiss={props.onDismiss}
-        title="Connect Provider"
-        placeholder="Select a provider..."
-      />
-    );
-  }
-
-  if (stage() === "method") {
-    return (
-      <DialogSelect
-        items={methodItems()}
-        onSelect={handleMethodSelect}
-        onDismiss={props.onDismiss}
-        title={`Auth Method: ${provider()}`}
-        placeholder="Select auth method..."
-      />
-    );
-  }
-
-  if (stage() === "api_key") {
-    return (
-      <DialogPrompt
-        title={`API Key: ${provider()}`}
-        placeholder="Paste API key and press Enter"
-        onDismiss={props.onDismiss}
-        onSubmit={(value) => {
-          const selectedMethod = method();
-          if (!selectedMethod) return;
-          setAwaitingResult(true);
-          setStage("waiting");
-          syncActions.setProviderApiKey(provider(), selectedMethod.id, value);
-        }}
-      />
-    );
-  }
-
-  if (stage() === "oauth_code") {
-    return (
-      <DialogPrompt
-        title={`OAuth Code: ${provider()}`}
-        placeholder="Paste authorization code"
-        onDismiss={props.onDismiss}
-        onSubmit={(value) => {
-          const selectedMethod = method();
-          if (!selectedMethod) return;
-          setAwaitingResult(true);
-          setStage("waiting");
-          syncActions.callbackProviderAuth(provider(), selectedMethod.id, value);
-        }}
-      />
-    );
-  }
-
-  if (stage() === "oauth_auto") {
-    const challenge = matchingChallenge();
-    const command = challenge?.command;
-    const instructions = challenge?.instructions ?? "Complete OAuth in the provider CLI, then continue.";
-    return (
-      <DialogSelect
-        items={[
-          { label: "Continue", value: "continue", description: "Run callback after completing OAuth" },
-          { label: "Cancel", value: "cancel", description: "Back out of this flow" },
-        ]}
-        onSelect={(item) => {
-          if (item.value === "cancel") {
-            props.onDismiss();
-            return;
-          }
-          const selectedMethod = method();
-          if (!selectedMethod) return;
-          setAwaitingResult(true);
-          setStage("waiting");
-          syncActions.callbackProviderAuth(provider(), selectedMethod.id);
-        }}
-        onDismiss={props.onDismiss}
-        title={command ? `OAuth: ${command}` : "OAuth: Continue"}
-        placeholder={instructions}
-      />
-    );
-  }
-
-  const result = matchingResult();
   return (
-    <Dialog onDismiss={props.onDismiss} width="55%">
-      <box flexDirection="column" gap={1}>
-        <text fg={theme.text}>
-          <strong>Connecting {provider()}...</strong>
-        </text>
-        <text fg={theme.textMuted}>
-          Waiting for provider authentication result.
-        </text>
-        {result && !result.ok ? (
-          <text fg={theme.error}>{result.message}</text>
-        ) : null}
-        <text fg={theme.textMuted}>Press Escape to close</text>
-      </box>
-    </Dialog>
+    <Switch fallback={
+      <Dialog onDismiss={props.onDismiss} width="55%">
+        <box flexDirection="column" gap={1}>
+          <text fg={theme.text}>
+            <strong>Connecting {provider()}...</strong>
+          </text>
+          <text fg={theme.textMuted}>
+            Waiting for provider authentication result.
+          </text>
+          <Show when={matchingResult() && !matchingResult()!.ok}>
+            <text fg={theme.error}>{matchingResult()!.message}</text>
+          </Show>
+          <text fg={theme.textMuted}>Press Escape to close</text>
+        </box>
+      </Dialog>
+    }>
+      <Match when={stage() === "provider"}>
+        <DialogSelect
+          items={providerItems()}
+          onSelect={handleProviderSelect}
+          onDismiss={props.onDismiss}
+          title="Connect Provider"
+          placeholder="Select a provider..."
+        />
+      </Match>
+
+      <Match when={stage() === "method"}>
+        <DialogSelect
+          items={methodItems()}
+          onSelect={handleMethodSelect}
+          onDismiss={props.onDismiss}
+          title={`Auth Method: ${provider()}`}
+          placeholder="Select auth method..."
+        />
+      </Match>
+
+      <Match when={stage() === "api_key"}>
+        <DialogPrompt
+          title={`API Key: ${provider()}`}
+          placeholder="Paste API key and press Enter"
+          onDismiss={props.onDismiss}
+          onSubmit={(value) => {
+            const selectedMethod = method();
+            if (!selectedMethod) return;
+            setAwaitingResult(true);
+            setStage("waiting");
+            syncActions.setProviderApiKey(provider(), selectedMethod.id, value);
+          }}
+        />
+      </Match>
+
+      <Match when={stage() === "oauth_code"}>
+        <DialogPrompt
+          title={`OAuth Code: ${provider()}`}
+          placeholder="Paste authorization code"
+          onDismiss={props.onDismiss}
+          onSubmit={(value) => {
+            const selectedMethod = method();
+            if (!selectedMethod) return;
+            setAwaitingResult(true);
+            setStage("waiting");
+            syncActions.callbackProviderAuth(provider(), selectedMethod.id, value);
+          }}
+        />
+      </Match>
+
+      <Match when={stage() === "oauth_auto"}>
+        <DialogSelect
+          items={[
+            { label: "Continue", value: "continue", description: "Run callback after completing OAuth" },
+            { label: "Cancel", value: "cancel", description: "Back out of this flow" },
+          ]}
+          onSelect={(item) => {
+            if (item.value === "cancel") {
+              props.onDismiss();
+              return;
+            }
+            const selectedMethod = method();
+            if (!selectedMethod) return;
+            setAwaitingResult(true);
+            setStage("waiting");
+            syncActions.callbackProviderAuth(provider(), selectedMethod.id);
+          }}
+          onDismiss={props.onDismiss}
+          title={matchingChallenge()?.command ? `OAuth: ${matchingChallenge()!.command}` : "OAuth: Continue"}
+          placeholder={matchingChallenge()?.instructions ?? "Complete OAuth in the provider CLI, then continue."}
+        />
+      </Match>
+    </Switch>
   );
 }

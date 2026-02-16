@@ -50,7 +50,8 @@ export function PermissionPrompt(props: { approval: ApprovalRequest }) {
       marginBottom={1}
       padding={1}
       onKeyDown={handleKeyDown}
-      autoFocus
+      focused
+      focusable
     >
       <box flexDirection="row" gap={1} marginBottom={1}>
         <text fg={props.approval.dangerous ? theme.error : theme.warning}>

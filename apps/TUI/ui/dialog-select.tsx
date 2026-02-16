@@ -16,7 +16,7 @@ type DialogSelectProps = {
   onDismiss: () => void;
   title?: string;
   placeholder?: string;
-  width?: number | string;
+  width?: number | "auto" | `${number}%`;
 };
 
 export function DialogSelect(props: DialogSelectProps) {
@@ -80,8 +80,8 @@ export function DialogSelect(props: DialogSelectProps) {
             onKeyDown={handleKeyDown}
             placeholder={props.placeholder ?? "Search..."}
             placeholderColor={theme.textMuted}
-            fg={theme.text}
-            autoFocus
+            textColor={theme.text}
+            focused
             flexGrow={1}
           />
         </box>

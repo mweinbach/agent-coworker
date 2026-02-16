@@ -11,7 +11,7 @@ export type Command = {
   id: string;
   name: string;
   description: string;
-  category: "session" | "display" | "navigation" | "system";
+  category: "session" | "display" | "navigation" | "system" | "prompt";
   keybind?: KeyCombo;
   action: () => void;
 };

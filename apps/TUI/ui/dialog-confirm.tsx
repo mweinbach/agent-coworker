@@ -40,7 +40,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
 
   return (
     <Dialog onDismiss={props.onCancel} width={50}>
-      <box flexDirection="column" onKeyDown={handleKeyDown} autoFocus>
+      <box flexDirection="column" onKeyDown={handleKeyDown} focused focusable>
         <text fg={theme.text} marginBottom={1}>
           <strong>{props.title}</strong>
         </text>

@@ -46,6 +46,8 @@ type SyncState = {
   provider: string;
   model: string;
   cwd: string;
+  enableMcp: boolean;
+  tools: string[];
   busy: boolean;
   feed: FeedItem[];
   todos: TodoItem[];
@@ -59,6 +61,8 @@ type SyncActions = {
   respondApproval: (requestId: string, approved: boolean) => void;
   setModel: (provider: string, model: string) => void;
   connectProvider: (provider: string, apiKey?: string) => void;
+  setEnableMcp: (enabled: boolean) => void;
+  refreshTools: () => void;
   reset: () => void;
   cancel: () => void;
 };
@@ -108,6 +112,8 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     provider: "",
     model: "",
     cwd: "",
+    enableMcp: true,
+    tools: [],
     busy: false,
     feed: [],
     todos: [],
@@ -131,12 +137,15 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         s.provider = evt.config.provider;
         s.model = evt.config.model;
         s.cwd = evt.config.workingDirectory;
+        s.enableMcp = true;
+        s.tools = [];
         s.busy = false;
         s.feed = [{ id: nextFeedId(), type: "system", line: `connected: ${evt.sessionId}` }];
         s.todos = [];
         s.pendingAsk = null;
         s.pendingApproval = null;
       }));
+      socket?.send({ type: "list_tools", sessionId: evt.sessionId });
       return;
     }
 
@@ -146,6 +155,10 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     switch (evt.type) {
       case "session_busy":
         setState("busy", evt.busy);
+        break;
+
+      case "session_settings":
+        setState("enableMcp", evt.enableMcp);
         break;
 
       case "reset_done":
@@ -260,6 +273,10 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         }]);
         break;
 
+      case "tools":
+        setState("tools", evt.tools);
+        break;
+
       case "error":
         setState("feed", (f) => [...f, {
           id: nextFeedId(),
@@ -287,6 +304,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           s.status = "disconnected";
           s.sessionId = null;
           s.busy = false;
+          s.tools = [];
           s.pendingAsk = null;
           s.pendingApproval = null;
         }));
@@ -364,6 +382,26 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         sessionId: sid,
         provider: provider as any,
         apiKey,
+      });
+    },
+
+    setEnableMcp(enabled: boolean) {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({
+        type: "set_enable_mcp",
+        sessionId: sid,
+        enableMcp: enabled,
+      });
+      setState("enableMcp", enabled);
+    },
+
+    refreshTools() {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({
+        type: "list_tools",
+        sessionId: sid,
       });
     },
 

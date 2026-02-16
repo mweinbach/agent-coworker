@@ -1,10 +1,14 @@
-import { createSignal, createMemo, Show, type JSX } from "solid-js";
+import path from "node:path";
+import fg from "fast-glob";
+import { createMemo, Show, type JSX } from "solid-js";
 import { useTheme } from "../../context/theme";
 import { usePrompt } from "../../context/prompt";
 import { useSyncState, useSyncActions } from "../../context/sync";
 import { useRoute } from "../../context/route";
+import { useDialog } from "../../context/dialog";
+import { useExit } from "../../context/exit";
 import { createPromptHistory } from "./history";
-import { createAutocomplete, AutocompleteDropdown } from "./autocomplete";
+import { createAutocomplete, AutocompleteDropdown, type AutocompleteItem } from "./autocomplete";
 import { getTextareaAction } from "../textarea-keybindings";
 
 const PLACEHOLDERS = [
@@ -22,6 +26,59 @@ const SHELL_PLACEHOLDERS = [
 ];
 
 const history = createPromptHistory();
+const FILE_AUTOCOMPLETE_AGE_MS = 5000;
+const FILE_AUTOCOMPLETE_LIMIT = 600;
+const FILE_AUTOCOMPLETE_IGNORE = [
+  "**/.git/**",
+  "**/node_modules/**",
+  "**/.agent/**",
+  "**/output/**",
+  "**/uploads/**",
+];
+
+let fileCache: {
+  cwd: string;
+  at: number;
+  items: AutocompleteItem[];
+} | null = null;
+
+function getFileAutocompleteItems(cwd: string): AutocompleteItem[] {
+  const now = Date.now();
+  if (
+    fileCache &&
+    fileCache.cwd === cwd &&
+    now - fileCache.at < FILE_AUTOCOMPLETE_AGE_MS
+  ) {
+    return fileCache.items;
+  }
+
+  try {
+    const files = fg
+      .sync(["**/*"], {
+        cwd,
+        onlyFiles: true,
+        dot: true,
+        deep: 6,
+        unique: true,
+        suppressErrors: true,
+        ignore: FILE_AUTOCOMPLETE_IGNORE,
+      })
+      .slice(0, FILE_AUTOCOMPLETE_LIMIT);
+
+    const items = files.map((p) => ({
+      label: path.basename(p) || p,
+      value: p,
+      description: p,
+      category: "file",
+      icon: "@",
+    }));
+
+    fileCache = { cwd, at: now, items };
+    return items;
+  } catch {
+    return [];
+  }
+}
 
 export function Prompt(props: {
   hint?: JSX.Element;
@@ -33,12 +90,11 @@ export function Prompt(props: {
   const syncState = useSyncState();
   const syncActions = useSyncActions();
   const route = useRoute();
-
-  const [focused, setFocused] = createSignal(true);
-  const [shellMode, setShellMode] = createSignal(false);
+  const dialog = useDialog();
+  const exitCtx = useExit();
 
   const placeholder = () => {
-    if (shellMode()) {
+    if (prompt.shellMode()) {
       return SHELL_PLACEHOLDERS[Math.floor(Math.random() * SHELL_PLACEHOLDERS.length)]!;
     }
     return PLACEHOLDERS[Math.floor(Math.random() * PLACEHOLDERS.length)]!;
@@ -47,41 +103,114 @@ export function Prompt(props: {
   const autocomplete = createAutocomplete({
     getCommands: () => [
       { label: "/new", value: "/new", description: "New session", category: "command", icon: "+" },
-      { label: "/clear", value: "/clear", description: "Clear session", category: "command", icon: "×" },
+      { label: "/clear", value: "/clear", description: "Clear session", category: "command", icon: "x" },
       { label: "/status", value: "/status", description: "Show status", category: "command", icon: "i" },
-      { label: "/exit", value: "/exit", description: "Exit", category: "command", icon: "⏻" },
-      { label: "/models", value: "/models", description: "Switch model", category: "command", icon: "◇" },
-      { label: "/connect", value: "/connect", description: "Connect provider", category: "command", icon: "⚡" },
-      { label: "/themes", value: "/themes", description: "Change theme", category: "command", icon: "🎨" },
+      { label: "/cancel", value: "/cancel", description: "Cancel current turn", category: "command", icon: "!" },
+      { label: "/exit", value: "/exit", description: "Exit", category: "command", icon: "q" },
+      { label: "/models", value: "/models", description: "Switch model", category: "command", icon: "m" },
+      { label: "/connect", value: "/connect", description: "Connect provider", category: "command", icon: "c" },
+      { label: "/themes", value: "/themes", description: "Change theme", category: "command", icon: "t" },
+      { label: "/sessions", value: "/sessions", description: "Show sessions", category: "command", icon: "s" },
+      { label: "/mcp", value: "/mcp", description: "Show MCP status", category: "command", icon: "p" },
       { label: "/help", value: "/help", description: "Show help", category: "command", icon: "?" },
     ],
+    getFiles: () => getFileAutocompleteItems(syncState.cwd || process.cwd()),
   });
 
   const isDisabled = createMemo(() => {
     return props.disabled || syncState.busy || syncState.pendingAsk !== null || syncState.pendingApproval !== null;
   });
 
+  const runSlashCommand = (raw: string): boolean => {
+    const [cmd, ...rest] = raw.slice(1).trim().split(/\s+/);
+    const arg = rest.join(" ").trim();
+    const normalized = (cmd ?? "").toLowerCase();
+
+    switch (normalized) {
+      case "new":
+      case "reset":
+      case "clear":
+        syncActions.reset();
+        route.navigate({ route: "home" });
+        return true;
+
+      case "status":
+        import("../dialog-status").then(({ openStatusDialog }) => openStatusDialog(dialog));
+        return true;
+
+      case "help":
+        import("../../ui/dialog-help").then(({ openHelpDialog }) => openHelpDialog(dialog));
+        return true;
+
+      case "models":
+      case "model":
+        import("../dialog-model").then(({ openModelPicker }) => openModelPicker(dialog));
+        return true;
+
+      case "themes":
+      case "theme":
+        import("../dialog-theme-list").then(({ openThemePicker }) => openThemePicker(dialog));
+        return true;
+
+      case "connect":
+        if (arg) {
+          syncActions.connectProvider(arg);
+        } else {
+          import("../dialog-provider").then(({ openProviderDialog }) => openProviderDialog(dialog));
+        }
+        return true;
+
+      case "sessions":
+        import("../dialog-session-list").then(({ openSessionList }) => openSessionList(dialog));
+        return true;
+
+      case "mcp":
+        import("../dialog-mcp").then(({ openMcpDialog }) => openMcpDialog(dialog));
+        return true;
+
+      case "cancel":
+        syncActions.cancel();
+        return true;
+
+      case "exit":
+      case "quit":
+        exitCtx.exit();
+        return true;
+
+      default:
+        return false;
+    }
+  };
+
   const handleSubmit = () => {
     const text = prompt.input().trim();
     if (!text) return;
 
     // Save to persistent history
-    history.append(text, shellMode() ? "shell" : "normal");
+    history.append(text, prompt.shellMode() ? "shell" : "normal");
     // Also save to context history
     prompt.pushHistory(text);
 
     if (props.onSubmit) {
       props.onSubmit(text);
-    } else {
-      // Handle shell mode — prefix with ! if in shell mode
-      const messageText = shellMode() ? `!${text}` : text;
+      prompt.setInput("");
+      return;
+    }
 
-      if (route.current().route === "home") {
-        syncActions.sendMessage(messageText);
-        route.navigate({ route: "session", sessionId: syncState.sessionId ?? "pending" });
-      } else {
-        syncActions.sendMessage(messageText);
+    if (!prompt.shellMode() && text.startsWith("/")) {
+      const handled = runSlashCommand(text);
+      if (handled) {
+        prompt.setInput("");
+        return;
       }
+    }
+
+    const messageText = prompt.shellMode() ? `!${text}` : text;
+    if (route.current().route === "home") {
+      syncActions.sendMessage(messageText);
+      route.navigate({ route: "session", sessionId: syncState.sessionId ?? "pending" });
+    } else {
+      syncActions.sendMessage(messageText);
     }
 
     prompt.setInput("");
@@ -91,7 +220,7 @@ export function Prompt(props: {
     const key = e.key ?? e.name ?? "";
     const ctrl = e.ctrl ?? false;
     const shift = e.shift ?? false;
-    const alt = e.alt ?? false;
+    const alt = e.alt ?? e.option ?? e.meta ?? false;
 
     // Let autocomplete handle keys first
     const acState = autocomplete.state();
@@ -116,7 +245,7 @@ export function Prompt(props: {
     switch (action) {
       case "submit":
         e.preventDefault?.();
-        handleSubmit();
+        if (!isDisabled()) handleSubmit();
         return;
 
       case "newline":
@@ -124,38 +253,46 @@ export function Prompt(props: {
         return;
 
       case "clear":
+        e.preventDefault?.();
         prompt.setInput("");
         return;
 
       case "history_up": {
+        e.preventDefault?.();
         const entry = history.navigateUp(prompt.input());
         if (entry !== null) {
           prompt.setInput(entry.input);
-          if (entry.mode === "shell") setShellMode(true);
-          else if (entry.mode === "normal") setShellMode(false);
+          if (entry.mode === "shell") prompt.setShellMode(true);
+          else if (entry.mode === "normal") prompt.setShellMode(false);
         }
         return;
       }
 
       case "history_down": {
+        e.preventDefault?.();
         const entry = history.navigateDown();
         if (entry !== null) {
           prompt.setInput(entry.input);
+          if (entry.mode === "shell") prompt.setShellMode(true);
+          else if (entry.mode === "normal") prompt.setShellMode(false);
         }
         return;
       }
 
       case "cancel":
+        e.preventDefault?.();
         if (prompt.input()) {
           prompt.setInput("");
         }
         return;
 
       case "stash":
+        e.preventDefault?.();
         prompt.doStash();
         return;
 
       case "unstash": {
+        e.preventDefault?.();
         const restored = prompt.doUnstash();
         if (restored !== null) {
           prompt.setInput(restored);
@@ -164,7 +301,8 @@ export function Prompt(props: {
       }
 
       case "shell_mode":
-        setShellMode((m) => !m);
+        e.preventDefault?.();
+        prompt.toggleShellMode();
         return;
     }
   };
@@ -175,9 +313,11 @@ export function Prompt(props: {
     history.resetIndex();
 
     // Check for ! prefix to auto-enable shell mode
-    if (value.startsWith("!") && !shellMode()) {
-      setShellMode(true);
-      prompt.setInput(value.slice(1));
+    if (value.startsWith("!") && !prompt.shellMode()) {
+      const stripped = value.slice(1);
+      prompt.setShellMode(true);
+      prompt.setInput(stripped);
+      autocomplete.onInput(stripped);
       return;
     }
 
@@ -197,8 +337,8 @@ export function Prompt(props: {
       <box
         border
         borderStyle="rounded"
-        borderColor={focused() ? theme.borderActive : theme.border}
-        backgroundColor={focused() ? theme.backgroundElement : theme.backgroundPanel}
+        borderColor={isDisabled() ? theme.border : theme.borderActive}
+        backgroundColor={isDisabled() ? theme.backgroundPanel : theme.backgroundElement}
         flexDirection="column"
         padding={0}
         paddingLeft={1}
@@ -206,24 +346,21 @@ export function Prompt(props: {
       >
         <box flexDirection="row">
           {/* Mode indicator */}
-          <text fg={shellMode() ? theme.warning : theme.accent} selectable={false}>
-            {shellMode() ? "$ " : "❯ "}
+          <text fg={prompt.shellMode() ? theme.warning : theme.accent} selectable={false}>
+            {prompt.shellMode() ? "$ " : "❯ "}
           </text>
           <input
             value={prompt.input()}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
             placeholder={isDisabled() ? "Waiting..." : placeholder()}
             placeholderColor={theme.textMuted}
-            fg={theme.text}
+            textColor={theme.text}
+            focused={!isDisabled()}
             flexGrow={1}
-            autoFocus={!props.disabled}
-            disabled={isDisabled()}
           />
           {/* Shell mode badge */}
-          <Show when={shellMode()}>
+          <Show when={prompt.shellMode()}>
             <text fg={theme.warning} selectable={false}>
               {" SHELL"}
             </text>

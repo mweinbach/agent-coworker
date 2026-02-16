@@ -17,7 +17,7 @@ export function DialogAlert(props: DialogAlertProps) {
           props.onDismiss();
           e.preventDefault?.();
         }
-      }} autoFocus>
+      }} focused focusable>
         <text fg={theme.error} marginBottom={1}>
           <strong>{props.title}</strong>
         </text>

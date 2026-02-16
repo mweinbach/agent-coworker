@@ -3,7 +3,7 @@ import { useTheme } from "../../context/theme";
 import { Spinner } from "../spinner";
 import { TodoItem } from "../todo-item";
 import type { ToolPartProps } from "../message/tool-part";
-import type { TodoItem as TodoItemType } from "../../../src/types";
+import type { TodoItem as TodoItemType } from "../../../../src/types";
 
 export function TodoTool(props: ToolPartProps) {
   const theme = useTheme();

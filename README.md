@@ -100,14 +100,14 @@ Press `Ctrl+K` to open the command palette with fuzzy search. Commands are group
 
 ### Prompt Features
 
-- **History** — `Up`/`Down` arrows cycle through previous prompts (persisted across sessions in `~/.cowork/state/history.jsonl`)
+- **History** — `Up`/`Down` arrows cycle through previous prompts (persisted across sessions in `~/.cowork/state/prompt-history.jsonl`)
 - **Autocomplete** — Type `@` for file completions, `/` for command completions (fuzzy matched)
 - **Shell mode** — Start a message with `!` to run shell commands directly (e.g., `!ls -la`)
 - **Stash** — `Ctrl+Z` saves the current prompt for later, `Ctrl+Shift+Z` restores it
 
 ### Themes
 
-31 built-in themes. Switch with `Ctrl+X T` or the command palette. Your choice is persisted automatically. Themes include: catppuccin-mocha (default), catppuccin-latte, dracula, gruvbox-dark, gruvbox-light, nord, one-dark, one-light, solarized-dark, solarized-light, tokyo-night, github-dark, github-light, and more.
+31 built-in themes. Switch with `Ctrl+X T` or the command palette. Your choice is persisted automatically. Themes include: opencode (default), catppuccin-mocha, catppuccin-latte, dracula, gruvbox, nord, one-dark, solarized, tokyonight, github, and more.
 
 ### Tool Renderers
 

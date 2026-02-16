@@ -1,4 +1,4 @@
-import { For, Show, Switch, Match, createMemo } from "solid-js";
+import { For, Show, Switch, Match, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { useTheme } from "../../context/theme";
 import { useSyncState } from "../../context/sync";
 import { useKV } from "../../context/kv";
@@ -22,9 +22,15 @@ export function Session(props: { sessionId: string }) {
 
   const [sidebarOpen, setSidebarOpen] = kv.signal("sidebar_visible", true);
 
-  // Show sidebar when terminal is wide enough
-  // TODO: detect terminal width dynamically
-  const showSidebar = createMemo(() => sidebarOpen());
+  const [terminalWidth, setTerminalWidth] = createSignal(process.stdout.columns ?? 120);
+
+  onMount(() => {
+    const handleResize = () => setTerminalWidth(process.stdout.columns ?? 120);
+    process.stdout.on("resize", handleResize);
+    onCleanup(() => process.stdout.off("resize", handleResize));
+  });
+
+  const showSidebar = createMemo(() => sidebarOpen() && terminalWidth() > 120);
 
   const hasInteraction = createMemo(() => {
     return syncState.pendingAsk !== null || syncState.pendingApproval !== null;

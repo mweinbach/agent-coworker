@@ -4,7 +4,7 @@ import { useTheme } from "../context/theme";
 export function Dialog(props: {
   children: JSX.Element;
   onDismiss: () => void;
-  width?: number | string;
+  width?: number | "auto" | `${number}%`;
 }) {
   const theme = useTheme();
 

@@ -43,8 +43,8 @@ export function DialogPrompt(props: DialogPromptProps) {
             onKeyDown={handleKeyDown}
             placeholder={props.placeholder ?? "Enter value..."}
             placeholderColor={theme.textMuted}
-            fg={theme.text}
-            autoFocus
+            textColor={theme.text}
+            focused
             flexGrow={1}
           />
         </box>

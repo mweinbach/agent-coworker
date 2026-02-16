@@ -63,7 +63,8 @@ export function QuestionPrompt(props: { ask: AskRequest }) {
       marginBottom={1}
       padding={1}
       onKeyDown={handleKeyDown}
-      autoFocus
+      focused
+      focusable
     >
       <text fg={theme.info} marginBottom={1}>
         ? {props.ask.question}
@@ -98,9 +99,9 @@ export function QuestionPrompt(props: { ask: AskRequest }) {
             onKeyDown={handleKeyDown}
             placeholder="Type your answer..."
             placeholderColor={theme.textMuted}
-            fg={theme.text}
+            textColor={theme.text}
             flexGrow={1}
-            autoFocus
+            focused
           />
         </box>
       </Show>

@@ -1,4 +1,5 @@
 import { createSignal, For, Show, type Accessor } from "solid-js";
+import { TextAttributes } from "@opentui/core";
 import { useTheme } from "../../context/theme";
 import { createFrecencyTracker } from "./frecency";
 
@@ -265,8 +266,8 @@ export function AutocompleteDropdown(props: {
               <box flexDirection="row" gap={1}>
                 <text
                   fg={isSelected() ? theme.accent : theme.text}
-                  bold={isSelected()}
-                  backgroundColor={isSelected() ? theme.backgroundElement : undefined}
+                  attributes={isSelected() ? TextAttributes.BOLD : undefined}
+                  bg={isSelected() ? theme.backgroundElement : undefined}
                 >
                   {isSelected() ? "▸ " : "  "}
                   {item.icon ? item.icon + " " : ""}

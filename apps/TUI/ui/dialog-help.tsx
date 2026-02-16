@@ -2,10 +2,18 @@ import { For } from "solid-js";
 import { useTheme } from "../context/theme";
 import { useKeybind, formatKeybind } from "../context/keybind";
 import { Dialog } from "./dialog";
+import { useDialog } from "../context/dialog";
 
 type DialogHelpProps = {
   onDismiss: () => void;
 };
+
+export function openHelpDialog(dialog: ReturnType<typeof useDialog>) {
+  dialog.push(
+    () => <DialogHelp onDismiss={() => dialog.pop()} />,
+    () => {}
+  );
+}
 
 export function DialogHelp(props: DialogHelpProps) {
   const theme = useTheme();
@@ -29,7 +37,7 @@ export function DialogHelp(props: DialogHelpProps) {
           props.onDismiss();
           e.preventDefault?.();
         }
-      }} autoFocus>
+      }} focused focusable>
         <text fg={theme.text} marginBottom={1}>
           <strong>Keyboard Shortcuts</strong>
         </text>

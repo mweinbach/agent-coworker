@@ -233,7 +233,7 @@ function CommandPaletteDialog(props: { onDismiss: () => void }) {
         );
         break;
       case "shell_mode":
-        // Shell mode is handled in prompt component — no-op here
+        prompt.toggleShellMode();
         break;
       case "models":
         import("./dialog-model").then(({ openModelPicker }) => openModelPicker(dialog));

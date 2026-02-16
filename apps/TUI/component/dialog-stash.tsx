@@ -43,8 +43,8 @@ function StashDialog(props: {
   return (
     <Dialog onDismiss={props.onDismiss} width="60%">
       <box flexDirection="column">
-        <text fg={theme.text} bold marginBottom={1}>
-          Prompt Stash
+        <text fg={theme.text} marginBottom={1}>
+          <strong>Prompt Stash</strong>
         </text>
 
         <Show

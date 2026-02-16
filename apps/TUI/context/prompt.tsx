@@ -3,6 +3,9 @@ import { createContext, useContext, createSignal, type JSX, type Accessor } from
 type PromptContextValue = {
   input: Accessor<string>;
   setInput: (v: string) => void;
+  shellMode: Accessor<boolean>;
+  setShellMode: (v: boolean) => void;
+  toggleShellMode: () => void;
   history: Accessor<string[]>;
   historyIndex: Accessor<number>;
   navigateUp: () => string | null;
@@ -19,6 +22,7 @@ const MAX_HISTORY = 100;
 
 export function PromptProvider(props: { children: JSX.Element }) {
   const [input, setInput] = createSignal("");
+  const [shellMode, setShellModeSignal] = createSignal(false);
   const [history, setHistory] = createSignal<string[]>([]);
   const [historyIndex, setHistoryIndex] = createSignal(-1);
   const [stash, setStash] = createSignal<string | null>(null);
@@ -28,6 +32,13 @@ export function PromptProvider(props: { children: JSX.Element }) {
     setInput(v: string) {
       setInput(v);
       setHistoryIndex(-1);
+    },
+    shellMode,
+    setShellMode(v: boolean) {
+      setShellModeSignal(v);
+    },
+    toggleShellMode() {
+      setShellModeSignal((m) => !m);
     },
     history,
     historyIndex,

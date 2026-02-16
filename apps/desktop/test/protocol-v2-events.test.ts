@@ -294,7 +294,7 @@ describe("desktop protocol v2 mapping", () => {
     expect(tool.result).toEqual({ chars: 42 });
   });
 
-  test("model stream approval/source/file/raw/unknown parts render as system items", async () => {
+  test("model stream approval/source/file/unknown parts render as system items", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const threadId = useAppStore.getState().selectedThreadId;
     if (!threadId) throw new Error("Expected selected thread");
@@ -363,8 +363,62 @@ describe("desktop protocol v2 mapping", () => {
     expect(systemLines.some((line) => line.includes("Tool approval requested"))).toBe(true);
     expect(systemLines.some((line) => line.includes("Source:"))).toBe(true);
     expect(systemLines.some((line) => line.includes("File:"))).toBe(true);
-    expect(systemLines.some((line) => line.includes("Raw stream part"))).toBe(true);
     expect(systemLines.some((line) => line.includes("Unhandled stream part (future_part)"))).toBe(true);
+  });
+
+  test("raw function-call argument deltas become readable tool args and names", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-3",
+      index: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "raw",
+      part: {
+        raw: {
+          type: "response.function_call_arguments.delta",
+          item_id: "fc_ask_1",
+          delta: "{\"question\":\"What next?\",\"options\":[\"Ship fix\",\"Run tests\"]}",
+        },
+      },
+    });
+
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-3",
+      index: 1,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "raw",
+      part: {
+        raw: {
+          type: "response.function_call_arguments.done",
+          item_id: "fc_ask_1",
+          tool_name: "ask",
+        },
+      },
+    });
+
+    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
+    const tool = feed.find((item) => item.kind === "tool");
+    expect(tool?.kind).toBe("tool");
+    if (!tool || tool.kind !== "tool") throw new Error("Expected tool feed item");
+    expect(tool.name).toBe("ask");
+    expect(tool.args).toEqual({
+      question: "What next?",
+      options: ["Ship fix", "Run tests"],
+    });
   });
 
   test("ignores stale session events for control and thread sockets", async () => {
@@ -438,5 +492,25 @@ describe("desktop protocol v2 mapping", () => {
     expect(last?.kind).toBe("log");
     if (!last || last.kind !== "log") throw new Error("Expected log feed item");
     expect(last.line).toContain("tool> read");
+  });
+
+  test("suppresses raw provider debug log lines", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "log",
+      sessionId: "thread-session",
+      line: "raw stream part: {\"type\":\"response.function_call_arguments.delta\"}",
+    });
+
+    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
+    expect(feed.some((item) => item.kind === "log")).toBe(false);
   });
 });

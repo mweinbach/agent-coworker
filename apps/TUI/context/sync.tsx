@@ -142,6 +142,86 @@ function previewValue(value: unknown, maxChars = 160): string {
   }
 }
 
+function parseJsonCandidate(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseStructuredToolInput(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  const direct = parseJsonCandidate(trimmed);
+  if (direct !== undefined) return direct;
+
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const objectSlice = trimmed.slice(firstBrace, lastBrace + 1);
+    const parsedObject = parseJsonCandidate(objectSlice);
+    if (parsedObject !== undefined) return parsedObject;
+  }
+
+  const firstBracket = trimmed.indexOf("[");
+  const lastBracket = trimmed.lastIndexOf("]");
+  if (firstBracket >= 0 && lastBracket > firstBracket) {
+    const arraySlice = trimmed.slice(firstBracket, lastBracket + 1);
+    const parsedArray = parseJsonCandidate(arraySlice);
+    if (parsedArray !== undefined) return parsedArray;
+  }
+
+  return undefined;
+}
+
+function normalizeToolArgsFromInput(inputText: string, existingArgs?: unknown): unknown {
+  const parsed = parseStructuredToolInput(inputText);
+  const base = asRecord(existingArgs) ?? {};
+  const { input: _discardInput, ...rest } = base;
+
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return { ...rest, ...(parsed as Record<string, unknown>) };
+  }
+
+  if (Object.keys(rest).length > 0) {
+    return { ...rest, input: inputText };
+  }
+
+  return { input: inputText };
+}
+
+export function shouldSuppressRawDebugLogLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+
+  if (/^raw stream part:/i.test(trimmed)) return true;
+  if (/response\.function_call_arguments\./i.test(trimmed)) return true;
+  if (/response\.reasoning(?:_|\.|[a-z])/i.test(trimmed)) return true;
+  if (/"type"\s*:\s*"response\./i.test(trimmed)) return true;
+  if (/\bobfuscation\b/i.test(trimmed)) return true;
+
+  return false;
+}
+
+function normalizeQuestionPreview(question: string, maxChars = 220): string {
+  let normalized = question.trim();
+  normalized = normalized.replace(/\braw stream part:\s*\{[\s\S]*$/i, "").trim();
+  const embedded = normalized.match(/"question"\s*:\s*"((?:\\.|[^"\\])+)"/i);
+  if (embedded?.[1]) {
+    try {
+      normalized = JSON.parse(`"${embedded[1]}"`);
+    } catch {
+      // Keep original text when decoding fails.
+    }
+  }
+  normalized = normalized.replace(/^question:\s*/i, "").trim();
+  const compact = normalized.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxChars) return compact;
+  return `${compact.slice(0, maxChars - 1)}...`;
+}
+
 function modelStreamSystemLine(update: ModelStreamUpdate): string | null {
   if (update.kind === "turn_abort") {
     const reason = previewValue(update.reason);
@@ -175,11 +255,6 @@ function modelStreamSystemLine(update: ModelStreamUpdate): string | null {
   if (update.kind === "file") {
     const filePreview = previewValue(update.file);
     return filePreview ? `file: ${filePreview}` : "file";
-  }
-
-  if (update.kind === "raw") {
-    const rawPreview = previewValue(update.raw);
-    return rawPreview ? `raw stream part: ${rawPreview}` : "raw stream part";
   }
 
   if (update.kind === "unknown") {
@@ -412,8 +487,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           mapped.kind === "step_start" ||
           mapped.kind === "step_finish" ||
           mapped.kind === "assistant_text_start" ||
-          mapped.kind === "assistant_text_end" ||
-          mapped.kind === "tool_input_end"
+          mapped.kind === "assistant_text_end"
         ) {
           // Keep these as state-only boundaries to avoid noisy feed output.
           break;
@@ -498,8 +572,46 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           streamedToolInput.set(key, nextInput);
           if (existingId) {
             updateFeedItem(existingId, (item) =>
-              item.type === "tool" ? { ...item, args: { ...(item.args ?? {}), input: nextInput } } : item
+              item.type === "tool" ? { ...item, args: normalizeToolArgsFromInput(nextInput, item.args) } : item
             );
+          } else {
+            const id = nextFeedId();
+            streamedToolItemIds.set(key, id);
+            setState("feed", (f) => [...f, {
+              id,
+              type: "tool",
+              name: "tool",
+              status: "running",
+              args: normalizeToolArgsFromInput(nextInput),
+            }]);
+          }
+          break;
+        }
+
+        if (mapped.kind === "tool_input_end") {
+          const key = `${mapped.turnId}:${mapped.key}`;
+          const existingId = streamedToolItemIds.get(key);
+          const nextInput = streamedToolInput.get(key) ?? "";
+          if (existingId) {
+            updateFeedItem(existingId, (item) =>
+              item.type === "tool"
+                ? {
+                    ...item,
+                    name: mapped.name,
+                    args: nextInput ? normalizeToolArgsFromInput(nextInput, item.args) : item.args,
+                  }
+                : item
+            );
+          } else if (nextInput) {
+            const id = nextFeedId();
+            streamedToolItemIds.set(key, id);
+            setState("feed", (f) => [...f, {
+              id,
+              type: "tool",
+              name: mapped.name,
+              status: "running",
+              args: normalizeToolArgsFromInput(nextInput),
+            }]);
           }
           break;
         }
@@ -567,6 +679,10 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       }
 
       case "log": {
+        if (shouldSuppressRawDebugLogLine(evt.line)) {
+          break;
+        }
+
         const toolLog = parseToolLogLine(evt.line);
         if (toolLog) {
           const key = `${toolLog.sub ?? ""}|${toolLog.name}`;
@@ -623,7 +739,10 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           question: evt.question,
           options: evt.options,
         });
-        setState("feed", (f) => [...f, { id: nextFeedId(), type: "system", line: `question: ${evt.question}` }]);
+        setState("feed", (f) => [
+          ...f,
+          { id: nextFeedId(), type: "system", line: `question: ${normalizeQuestionPreview(evt.question)}` },
+        ]);
         break;
 
       case "approval":

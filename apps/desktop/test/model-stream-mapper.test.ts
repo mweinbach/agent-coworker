@@ -159,13 +159,50 @@ describe("desktop model stream mapper", () => {
       turnId: "t1",
       raw: { hello: "world" },
     });
-    expect(mapModelStreamChunk(chunk("unknown", { sdkType: "mystery" }, 11))).toEqual({
+
+    expect(mapModelStreamChunk(chunk("raw", { raw: { type: "response.function_call_arguments.delta", item_id: "fc_1", delta: "arg" } }, 11))).toEqual({
+      kind: "tool_input_delta",
+      turnId: "t1",
+      key: "fc_1",
+      delta: "arg",
+    });
+
+    expect(mapModelStreamChunk(chunk("raw", { raw: { type: "response.output_text.delta", item_id: "txt_9", delta: "hello" } }, 11))).toEqual({
+      kind: "assistant_delta",
+      turnId: "t1",
+      streamId: "txt_9",
+      text: "hello",
+    });
+
+    expect(mapModelStreamChunk(chunk("unknown", {
+      sdkType: "response.reasoning_summary_text.delta",
+      raw: { item_id: "r1", delta: "think" },
+    }, 12))).toEqual({
+      kind: "reasoning_delta",
+      turnId: "t1",
+      streamId: "r1",
+      mode: "summary",
+      text: "think",
+    });
+
+    expect(mapModelStreamChunk(chunk("unknown", {
+      sdkType: "response.completed",
+      raw: { response: { status: "completed" } },
+    }, 12))).toEqual({
+      kind: "turn_finish",
+      turnId: "t1",
+      finishReason: "completed",
+      rawFinishReason: undefined,
+      totalUsage: undefined,
+    });
+
+    expect(mapModelStreamChunk(chunk("unknown", { sdkType: "mystery" }, 13))).toEqual({
       kind: "unknown",
       turnId: "t1",
       partType: "unknown",
       payload: { sdkType: "mystery" },
     });
-    expect(mapModelStreamChunk(chunk("future_part_type", { experimental: true }, 12) as any)).toEqual({
+    expect(mapModelStreamChunk(chunk("future_part_type", { experimental: true }, 14) as any)).toEqual({
       kind: "unknown",
       turnId: "t1",
       partType: "future_part_type",

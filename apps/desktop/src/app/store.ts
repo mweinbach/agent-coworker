@@ -320,6 +320,69 @@ function previewValue(value: unknown, maxChars = 160): string {
   }
 }
 
+function parseJsonCandidate(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseStructuredToolInput(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  const direct = parseJsonCandidate(trimmed);
+  if (direct !== undefined) return direct;
+
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const objectSlice = trimmed.slice(firstBrace, lastBrace + 1);
+    const parsedObject = parseJsonCandidate(objectSlice);
+    if (parsedObject !== undefined) return parsedObject;
+  }
+
+  const firstBracket = trimmed.indexOf("[");
+  const lastBracket = trimmed.lastIndexOf("]");
+  if (firstBracket >= 0 && lastBracket > firstBracket) {
+    const arraySlice = trimmed.slice(firstBracket, lastBracket + 1);
+    const parsedArray = parseJsonCandidate(arraySlice);
+    if (parsedArray !== undefined) return parsedArray;
+  }
+
+  return undefined;
+}
+
+function normalizeToolArgsFromInput(inputText: string, existingArgs?: unknown): unknown {
+  const parsed = parseStructuredToolInput(inputText);
+  const base = isRecord(existingArgs) ? existingArgs : {};
+  const { input: _discardInput, ...rest } = base;
+
+  if (isRecord(parsed)) {
+    return { ...rest, ...parsed };
+  }
+
+  if (Object.keys(rest).length > 0) {
+    return { ...rest, input: inputText };
+  }
+
+  return { input: inputText };
+}
+
+function shouldSuppressRawDebugLogLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+
+  if (/^raw stream part:/i.test(trimmed)) return true;
+  if (/response\.function_call_arguments\./i.test(trimmed)) return true;
+  if (/response\.reasoning(?:_|\.|[a-z])/i.test(trimmed)) return true;
+  if (/"type"\s*:\s*"response\./i.test(trimmed)) return true;
+  if (/\bobfuscation\b/i.test(trimmed)) return true;
+
+  return false;
+}
+
 function modelStreamSystemLine(update: ModelStreamUpdate): string | null {
   if (update.kind === "turn_abort") {
     const reason = previewValue(update.reason);
@@ -356,11 +419,6 @@ function modelStreamSystemLine(update: ModelStreamUpdate): string | null {
     return filePreview ? `File: ${filePreview}` : "File";
   }
 
-  if (update.kind === "raw") {
-    const rawPreview = previewValue(update.raw);
-    return rawPreview ? `Raw stream part: ${rawPreview}` : "Raw stream part";
-  }
-
   if (update.kind === "unknown") {
     const payloadPreview = previewValue(update.payload);
     return payloadPreview
@@ -387,8 +445,7 @@ function appendModelStreamUpdateToFeed(
     update.kind === "step_start" ||
     update.kind === "step_finish" ||
     update.kind === "assistant_text_start" ||
-    update.kind === "assistant_text_end" ||
-    update.kind === "tool_input_end"
+    update.kind === "assistant_text_end"
   ) {
     // Keep these as state-only boundaries to avoid noisy transcript reconstruction.
     return;
@@ -457,11 +514,47 @@ function appendModelStreamUpdateToFeed(
     const nextInput = `${stream.toolInputByKey.get(key) ?? ""}${update.delta}`;
     stream.toolInputByKey.set(key, nextInput);
     const existing = stream.toolItemIdByKey.get(key);
-    if (!existing) return;
+    if (!existing) {
+      const id = makeId();
+      stream.toolItemIdByKey.set(key, id);
+      out.push({ id, kind: "tool", ts, name: "tool", status: "running", args: normalizeToolArgsFromInput(nextInput) });
+      return;
+    }
     replaceFeedItem(existing, (item) => {
       if (item.kind !== "tool") return item;
-      const prevArgs = isRecord(item.args) ? item.args : {};
-      return { ...item, args: { ...prevArgs, input: nextInput } };
+      return { ...item, args: normalizeToolArgsFromInput(nextInput, item.args) };
+    });
+    return;
+  }
+
+  if (update.kind === "tool_input_end") {
+    const key = `${update.turnId}:${update.key}`;
+    const existing = stream.toolItemIdByKey.get(key);
+    const nextInput = stream.toolInputByKey.get(key) ?? "";
+
+    if (existing) {
+      replaceFeedItem(existing, (item) =>
+        item.kind === "tool"
+          ? {
+              ...item,
+              name: update.name,
+              args: nextInput ? normalizeToolArgsFromInput(nextInput, item.args) : item.args,
+            }
+          : item
+      );
+      return;
+    }
+
+    if (!nextInput) return;
+    const id = makeId();
+    stream.toolItemIdByKey.set(key, id);
+    out.push({
+      id,
+      kind: "tool",
+      ts,
+      name: update.name,
+      status: "running",
+      args: normalizeToolArgsFromInput(nextInput),
     });
     return;
   }
@@ -597,7 +690,9 @@ function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     }
 
     if (type === "log") {
-      out.push({ id: makeId(), kind: "log", ts: evt.ts, line: String(payload.line ?? "") });
+      const line = String(payload.line ?? "");
+      if (shouldSuppressRawDebugLogLine(line)) continue;
+      out.push({ id: makeId(), kind: "log", ts: evt.ts, line });
       continue;
     }
 
@@ -1344,8 +1439,7 @@ function applyModelStreamUpdateToThreadFeed(
     update.kind === "step_start" ||
     update.kind === "step_finish" ||
     update.kind === "assistant_text_start" ||
-    update.kind === "assistant_text_end" ||
-    update.kind === "tool_input_end"
+    update.kind === "assistant_text_end"
   ) {
     // Keep these as state-only boundaries to avoid noisy feed output.
     return;
@@ -1429,12 +1523,55 @@ function applyModelStreamUpdateToThreadFeed(
     const nextInput = `${stream.toolInputByKey.get(key) ?? ""}${update.delta}`;
     stream.toolInputByKey.set(key, nextInput);
     const itemId = stream.toolItemIdByKey.get(key);
-    if (!itemId) return;
+    if (!itemId) {
+      const id = makeId();
+      stream.toolItemIdByKey.set(key, id);
+      pushFeedItem(set, threadId, {
+        id,
+        kind: "tool",
+        ts: nowIso(),
+        name: "tool",
+        status: "running",
+        args: normalizeToolArgsFromInput(nextInput),
+      });
+      return;
+    }
 
     updateFeedItem(set, threadId, itemId, (item) => {
       if (item.kind !== "tool") return item;
-      const prevArgs = isRecord(item.args) ? item.args : {};
-      return { ...item, args: { ...prevArgs, input: nextInput } };
+      return { ...item, args: normalizeToolArgsFromInput(nextInput, item.args) };
+    });
+    return;
+  }
+
+  if (update.kind === "tool_input_end") {
+    const key = `${update.turnId}:${update.key}`;
+    const itemId = stream.toolItemIdByKey.get(key);
+    const nextInput = stream.toolInputByKey.get(key) ?? "";
+
+    if (itemId) {
+      updateFeedItem(set, threadId, itemId, (item) =>
+        item.kind === "tool"
+          ? {
+              ...item,
+              name: update.name,
+              args: nextInput ? normalizeToolArgsFromInput(nextInput, item.args) : item.args,
+            }
+          : item
+      );
+      return;
+    }
+
+    if (!nextInput) return;
+    const id = makeId();
+    stream.toolItemIdByKey.set(key, id);
+    pushFeedItem(set, threadId, {
+      id,
+      kind: "tool",
+      ts: nowIso(),
+      name: update.name,
+      status: "running",
+      args: normalizeToolArgsFromInput(nextInput),
     });
     return;
   }
@@ -1713,6 +1850,9 @@ function handleThreadEvent(
   }
 
   if (evt.type === "log") {
+    if (shouldSuppressRawDebugLogLine(evt.line)) {
+      return;
+    }
     pushFeedItem(set, threadId, { id: makeId(), kind: "log", ts: nowIso(), line: evt.line });
     return;
   }

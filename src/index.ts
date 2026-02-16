@@ -7,7 +7,13 @@ import { parseCliArgs } from "./cli/args";
 import { runCliRepl } from "./cli/repl";
 import { DEFAULT_PROVIDER_OPTIONS } from "./providers";
 import { startAgentServer } from "./server/startServer";
-import { runTui } from "./tui/index";
+import { runTui } from "../apps/TUI/index";
+
+// Legacy TUI fallback: use --legacy-tui flag to import old React-based TUI
+const useLegacyTui = process.argv.includes("--legacy-tui");
+const legacyRunTui = useLegacyTui
+  ? (await import("./tui/index")).runTui
+  : null;
 
 // Keep output clean by default.
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
@@ -21,6 +27,7 @@ function printUsage() {
   console.log("  --dir, -d   Run the agent in the specified directory");
   console.log("  --cli, -c   Run the plain CLI instead of the TUI");
   console.log("  --yolo, -y  Skip command approvals (dangerous; use with care)");
+  console.log("  --legacy-tui Use the legacy React-based TUI");
   console.log("  --help, -h  Show help");
   console.log("");
 }
@@ -78,8 +85,9 @@ async function main() {
     }
   };
 
+  const tuiRunner = legacyRunTui ?? runTui;
   try {
-    await runTui(url, { onDestroy: stop });
+    await tuiRunner(url, { onDestroy: stop });
   } finally {
     stop();
   }

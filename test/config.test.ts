@@ -421,6 +421,53 @@ describe("loadConfig", () => {
     expect(cfg.provider).toBe("anthropic");
   });
 
+  test("reads saved API key from legacy .ai-coworker connections file", async () => {
+    const { cwd, home } = await makeTmpDirs();
+    await writeJson(path.join(home, ".ai-coworker", "config", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        openai: {
+          service: "openai",
+          mode: "api_key",
+          apiKey: "legacy-service-key",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: { AGENT_PROVIDER: "openai" },
+    });
+
+    const model = getModel(cfg) as any;
+    const headers = await model.config.headers();
+    expect(headers.authorization).toBe("Bearer legacy-service-key");
+  });
+
+  test("reads saved API key from legacy apiKeys shape", async () => {
+    const { cwd, home } = await makeTmpDirs();
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      apiKeys: {
+        openai: "legacy-shape-key",
+      },
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: { AGENT_PROVIDER: "openai" },
+    });
+
+    const model = getModel(cfg) as any;
+    const headers = await model.config.headers();
+    expect(headers.authorization).toBe("Bearer legacy-shape-key");
+  });
+
   test("loads command template config from merged config", async () => {
     const { cwd, home } = await makeTmpDirs();
 

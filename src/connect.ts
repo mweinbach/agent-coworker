@@ -169,6 +169,20 @@ export async function readConnectionStore(paths: AiCoworkerPaths): Promise<Conne
   const primary = await loadFrom(paths.connectionsFile);
   if (primary) return primary;
 
+  // Backward-compatible fallback: ~/.ai-coworker/config/connections.json
+  const homeDir = path.dirname(paths.rootDir);
+  const legacyFile = path.join(homeDir, ".ai-coworker", "config", "connections.json");
+  const legacy = await loadFrom(legacyFile);
+  if (legacy) {
+    // Best-effort migration to the new location.
+    try {
+      await writeConnectionStore(paths, legacy);
+    } catch {
+      // ignore migration failures; still return legacy view
+    }
+    return legacy;
+  }
+
   return { version: 1, updatedAt: new Date().toISOString(), services: {} };
 }
 
@@ -493,10 +507,9 @@ async function listenOnLocalhost(
   preferredPort: number,
   onRequest: Parameters<typeof createServer>[0]
 ): Promise<{ port: number; close: () => void }> {
-  const server = createServer(onRequest);
-
-  const listen = async (port: number): Promise<number> => {
-    return await new Promise<number>((resolve, reject) => {
+  const listen = async (port: number): Promise<{ port: number; close: () => void }> => {
+    const server = createServer(onRequest);
+    const resolvedPort = await new Promise<number>((resolve, reject) => {
       const onError = (err: Error & { code?: string }) => {
         server.off("listening", onListening);
         reject(err);
@@ -514,11 +527,11 @@ async function listenOnLocalhost(
       server.once("listening", onListening);
       server.listen(port, "127.0.0.1");
     });
+    return { port: resolvedPort, close: () => server.close() };
   };
 
   try {
-    const port = await listen(preferredPort);
-    return { port, close: () => server.close() };
+    return await listen(preferredPort);
   } catch (err) {
     const code = (err as { code?: string } | undefined)?.code;
     if (code !== "EADDRINUSE") {
@@ -526,8 +539,7 @@ async function listenOnLocalhost(
     }
   }
 
-  const port = await listen(0);
-  return { port, close: () => server.close() };
+  return await listen(0);
 }
 
 async function runCodexBrowserOAuth(opts: {

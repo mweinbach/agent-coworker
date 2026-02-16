@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 
@@ -48,6 +49,33 @@ describe("connect helpers", () => {
 });
 
 describe("connectProvider", () => {
+  test("readConnectionStore falls back to legacy path and migrates", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const legacyPath = path.join(home, ".ai-coworker", "config", "connections.json");
+    const legacyStore = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        openai: {
+          service: "openai",
+          mode: "api_key",
+          apiKey: "sk-legacy-openai",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    };
+
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(legacyPath, JSON.stringify(legacyStore, null, 2), "utf-8");
+
+    const store = await readConnectionStore(paths);
+    expect(store.services.openai?.apiKey).toBe("sk-legacy-openai");
+
+    const migrated = JSON.parse(await fs.readFile(paths.connectionsFile, "utf-8")) as any;
+    expect(migrated?.services?.openai?.apiKey).toBe("sk-legacy-openai");
+  });
+
   test("stores api key mode when key is provided", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
@@ -94,64 +122,95 @@ describe("connectProvider", () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
     const openedUrls: string[] = [];
-
-    const result = await connectProvider({
-      provider: "codex-cli",
-      paths,
-      openUrl: async (url) => {
-        openedUrls.push(url);
-        const parsed = new URL(url);
-        const state = parsed.searchParams.get("state");
-        const redirectUri = parsed.searchParams.get("redirect_uri");
-        expect(state).toBeTruthy();
-        expect(redirectUri).toBeTruthy();
-        if (!state || !redirectUri) return false;
-
-        const cb = new URL(redirectUri);
-        setTimeout(() => {
-          void fetch(`http://127.0.0.1:${cb.port}${cb.pathname}?code=test-auth-code&state=${state}`);
-        }, 10);
-        return true;
-      },
-      fetchImpl: async (url, init) => {
-        const u = String(url);
-        if (u === "https://auth.openai.com/oauth/token") {
-          expect(init?.method).toBe("POST");
-          return new Response(
-            JSON.stringify({
-              access_token: "codex-access-token",
-              refresh_token: "codex-refresh-token",
-              id_token: makeJwt({
-                iss: "https://auth.openai.com",
-                email: "user@example.com",
-                chatgpt_account_id: "acc_123",
-              }),
-              expires_in: 3600,
-            }),
-            { status: 200 }
-          );
-        }
-        return new Response("not found", { status: 404 });
-      },
-      oauthTimeoutMs: 10_000,
+    const blocker = createServer((_req, res) => {
+      res.statusCode = 200;
+      res.end("occupied");
     });
+    let blockerListening = false;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        blocker.once("error", reject);
+        blocker.listen(1455, "127.0.0.1", () => {
+          blockerListening = true;
+          resolve();
+        });
+      });
+    } catch (err) {
+      const code = (err as { code?: string } | undefined)?.code;
+      if (code !== "EADDRINUSE") throw err;
+    }
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.mode).toBe("oauth");
-    expect(result.message).toContain("Codex OAuth sign-in completed");
-    expect(openedUrls).toHaveLength(1);
-    expect(result.oauthCredentialsFile).toBe(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"));
+    try {
+      const result = await connectProvider({
+        provider: "codex-cli",
+        paths,
+        openUrl: async (url) => {
+          openedUrls.push(url);
+          const parsed = new URL(url);
+          const state = parsed.searchParams.get("state");
+          const redirectUri = parsed.searchParams.get("redirect_uri");
+          expect(state).toBeTruthy();
+          expect(redirectUri).toBeTruthy();
+          if (!state || !redirectUri) return false;
 
-    const persisted = JSON.parse(
-      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")
-    ) as any;
-    expect(persisted?.tokens?.access_token).toBe("codex-access-token");
+          const cb = new URL(redirectUri);
+          setTimeout(() => {
+            void fetch(`http://127.0.0.1:${cb.port}${cb.pathname}?code=test-auth-code&state=${state}`);
+          }, 10);
+          return true;
+        },
+        fetchImpl: async (url, init) => {
+          const u = String(url);
+          if (u === "https://auth.openai.com/oauth/token") {
+            expect(init?.method).toBe("POST");
+            return new Response(
+              JSON.stringify({
+                access_token: "codex-access-token",
+                refresh_token: "codex-refresh-token",
+                id_token: makeJwt({
+                  iss: "https://auth.openai.com",
+                  email: "user@example.com",
+                  chatgpt_account_id: "acc_123",
+                }),
+                expires_in: 3600,
+              }),
+              { status: 200 }
+            );
+          }
+          return new Response("not found", { status: 404 });
+        },
+        oauthTimeoutMs: 10_000,
+      });
 
-    const store = await readConnectionStore(paths);
-    const entry = store.services["codex-cli"];
-    expect(entry).toBeDefined();
-    expect(entry?.mode).toBe("oauth");
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.mode).toBe("oauth");
+      expect(result.message).toContain("Codex OAuth sign-in completed");
+      expect(openedUrls).toHaveLength(1);
+      expect(result.oauthCredentialsFile).toBe(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"));
+
+      const persisted = JSON.parse(
+        await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")
+      ) as any;
+      expect(persisted?.tokens?.access_token).toBe("codex-access-token");
+
+      const store = await readConnectionStore(paths);
+      const entry = store.services["codex-cli"];
+      expect(entry).toBeDefined();
+      expect(entry?.mode).toBe("oauth");
+    } finally {
+      if (blockerListening) {
+        await new Promise<void>((resolve) => {
+          blocker.close(() => resolve());
+        });
+      } else {
+        try {
+          blocker.close();
+        } catch {
+          // ignore
+        }
+      }
+    }
   });
 
   test("codex-cli device oauth succeeds and stores oauth mode", async () => {

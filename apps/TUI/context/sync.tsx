@@ -1,8 +1,8 @@
 import { createContext, useContext, createEffect, onCleanup, type JSX, type Accessor } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import { AgentSocket } from "../../src/client/agentSocket";
-import type { ClientMessage, ServerEvent } from "../../src/server/protocol";
-import type { ApprovalRiskCode, TodoItem, ServerErrorCode, ServerErrorSource } from "../../src/types";
+import { AgentSocket } from "../../../src/client/agentSocket";
+import type { ClientMessage, ServerEvent } from "../../../src/server/protocol";
+import type { ApprovalRiskCode, TodoItem, ServerErrorCode, ServerErrorSource } from "../../../src/types";
 
 // ── Feed item types ──────────────────────────────────────────────────────────
 

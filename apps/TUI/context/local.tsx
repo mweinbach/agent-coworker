@@ -1,8 +1,8 @@
 import { createContext, useContext, type JSX, type Accessor } from "solid-js";
 import { createStore } from "solid-js/store";
-import { modelChoicesByProvider } from "../../src/providers";
-import { PROVIDER_NAMES } from "../../src/types";
-import type { ProviderName } from "../../src/types";
+import { modelChoicesByProvider } from "../../../src/providers";
+import { PROVIDER_NAMES } from "../../../src/types";
+import type { ProviderName } from "../../../src/types";
 
 export type ModelChoice = { provider: ProviderName; model: string };
 

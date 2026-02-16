@@ -7,13 +7,17 @@ import { parseCliArgs } from "./cli/args";
 import { runCliRepl } from "./cli/repl";
 import { DEFAULT_PROVIDER_OPTIONS } from "./providers";
 import { startAgentServer } from "./server/startServer";
-import { runTui } from "../apps/TUI/index";
 
 // Legacy TUI fallback: use --legacy-tui flag to import old React-based TUI
 const useLegacyTui = process.argv.includes("--legacy-tui");
 const legacyRunTui = useLegacyTui
   ? (await import("./tui/index")).runTui
   : null;
+
+async function loadModernRunTui() {
+  await import("@opentui/solid/preload");
+  return (await import("../apps/TUI/index")).runTui;
+}
 
 // Keep output clean by default.
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
@@ -85,7 +89,7 @@ async function main() {
     }
   };
 
-  const tuiRunner = legacyRunTui ?? runTui;
+  const tuiRunner = legacyRunTui ?? await loadModernRunTui();
   try {
     await tuiRunner(url, { onDestroy: stop });
   } finally {

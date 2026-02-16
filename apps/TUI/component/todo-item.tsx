@@ -1,4 +1,4 @@
-import type { TodoItem as TodoItemType } from "../../src/types";
+import type { TodoItem as TodoItemType } from "../../../src/types";
 import { useTheme } from "../context/theme";
 
 export function TodoItem(props: { todo: TodoItemType }) {

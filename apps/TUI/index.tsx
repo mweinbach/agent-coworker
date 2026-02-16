@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
-import { createCliRenderer } from "@opentui/core";
-import { createRoot } from "@opentui/solid";
+import { CliRenderEvents, createCliRenderer } from "@opentui/core";
+import { render } from "@opentui/solid";
 import { ExitProvider } from "./context/exit";
 import { KVProvider } from "./context/kv";
 import { ThemeProvider } from "./context/theme";
@@ -16,59 +16,112 @@ import { App } from "./app";
 // Keep output clean.
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
 
+function printUsage() {
+  console.log("Usage: bun apps/TUI/index.tsx [--server <ws_url>]");
+  console.log("");
+  console.log("Options:");
+  console.log("  --server, -s  WebSocket server URL (default: ws://127.0.0.1:7337/ws)");
+  console.log("  --help, -h    Show help");
+  console.log("");
+}
+
+function parseArgs(argv: string[]): { serverUrl: string; help: boolean } {
+  let serverUrl = "ws://127.0.0.1:7337/ws";
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--server" || arg === "-s") {
+      const value = argv[i + 1];
+      if (!value) throw new Error(`Missing value for ${arg}`);
+      serverUrl = value;
+      i++;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") return { serverUrl, help: true };
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  return { serverUrl, help: false };
+}
+
 export async function runTui(
   serverUrl: string,
   opts?: { onDestroy?: () => void }
 ): Promise<void> {
-  const renderer = createCliRenderer();
+  const renderer = await createCliRenderer();
+
+  await render(() => (
+    <ExitProvider>
+      <KVProvider>
+        <ThemeProvider>
+          <DialogProvider>
+            <SyncProvider serverUrl={serverUrl}>
+              <KeybindProvider>
+                <LocalProvider>
+                  <RouteProvider>
+                    <PromptProvider>
+                      <App />
+                    </PromptProvider>
+                  </RouteProvider>
+                </LocalProvider>
+              </KeybindProvider>
+            </SyncProvider>
+          </DialogProvider>
+        </ThemeProvider>
+      </KVProvider>
+    </ExitProvider>
+  ), renderer);
 
   return new Promise<void>((resolve) => {
-    const root = createRoot(() => {
-      return (
-        <ExitProvider>
-          <KVProvider>
-            <ThemeProvider>
-              <DialogProvider>
-                <SyncProvider serverUrl={serverUrl}>
-                  <KeybindProvider>
-                    <LocalProvider>
-                      <RouteProvider>
-                        <PromptProvider>
-                          <App />
-                        </PromptProvider>
-                      </RouteProvider>
-                    </LocalProvider>
-                  </KeybindProvider>
-                </SyncProvider>
-              </DialogProvider>
-            </ThemeProvider>
-          </KVProvider>
-        </ExitProvider>
-      );
-    });
-
-    // Handle cleanup on process exit
+    let resolved = false;
     const cleanup = () => {
+      if (resolved) return;
+      resolved = true;
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      renderer.off(CliRenderEvents.DESTROY, onDestroy);
       opts?.onDestroy?.();
       resolve();
     };
+    const onDestroy = () => {
+      cleanup();
+    };
+    const onSignal = () => {
+      if (renderer.isDestroyed) {
+        cleanup();
+        return;
+      }
+      renderer.destroy();
+    };
 
-    process.on("SIGINT", cleanup);
-    process.on("SIGTERM", cleanup);
+    process.on("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+    renderer.on(CliRenderEvents.DESTROY, onDestroy);
   });
 }
 
 // Allow direct execution: bun apps/TUI/index.tsx [--server <url>]
 if (import.meta.main) {
   let serverUrl = "ws://127.0.0.1:7337/ws";
-  const argv = process.argv.slice(2);
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--server" || argv[i] === "-s") {
-      serverUrl = argv[++i] ?? serverUrl;
-    }
-  }
-  runTui(serverUrl).catch((err) => {
-    console.error(err);
+  let help = false;
+
+  try {
+    const parsed = parseArgs(process.argv.slice(2));
+    serverUrl = parsed.serverUrl;
+    help = parsed.help;
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    console.error("");
+    printUsage();
     process.exitCode = 1;
-  });
+  }
+
+  if (!help && process.exitCode !== 1) {
+    runTui(serverUrl).catch((err) => {
+      console.error(err);
+      process.exitCode = 1;
+    });
+  } else if (help) {
+    printUsage();
+  }
 }

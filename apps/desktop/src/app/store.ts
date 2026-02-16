@@ -64,6 +64,12 @@ const WORKSPACE_START_TIMEOUT_MS = 25_000;
 
 type ProviderStatusEvent = Extract<ServerEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
+type ProviderCatalogEvent = Extract<ServerEvent, { type: "provider_catalog" }>;
+type ProviderCatalogEntry = ProviderCatalogEvent["all"][number];
+type ProviderAuthMethodsEvent = Extract<ServerEvent, { type: "provider_auth_methods" }>;
+type ProviderAuthMethod = ProviderAuthMethodsEvent["methods"][string][number];
+type ProviderAuthChallengeEvent = Extract<ServerEvent, { type: "provider_auth_challenge" }>;
+type ProviderAuthResultEvent = Extract<ServerEvent, { type: "provider_auth_result" }>;
 
 type RuntimeMaps = {
   controlSockets: Map<string, AgentSocket>;
@@ -339,6 +345,28 @@ function normalizeProviderChoice(provider: ProviderName): ProviderName {
   return UI_DISABLED_PROVIDERS.has(provider) ? "google" : provider;
 }
 
+function defaultProviderAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
+  if (provider === "codex-cli") {
+    return [
+      { id: "oauth_cli", type: "oauth", label: "Sign in with Codex CLI", oauthMode: "auto" },
+      { id: "api_key", type: "api", label: "API key" },
+    ];
+  }
+  if (provider === "claude-code") {
+    return [
+      { id: "oauth_cli", type: "oauth", label: "Sign in with Claude Code", oauthMode: "auto" },
+      { id: "api_key", type: "api", label: "API key" },
+    ];
+  }
+  return [{ id: "api_key", type: "api", label: "API key" }];
+}
+
+function providerAuthMethodsFor(state: AppStoreState, provider: ProviderName): ProviderAuthMethod[] {
+  const fromState = state.providerAuthMethodsByProvider[provider];
+  if (Array.isArray(fromState) && fromState.length > 0) return fromState;
+  return defaultProviderAuthMethods(provider);
+}
+
 export type AppStoreState = {
   ready: boolean;
   startupError: string | null;
@@ -362,6 +390,12 @@ export type AppStoreState = {
   providerStatusByName: Partial<Record<ProviderName, ProviderStatus>>;
   providerStatusLastUpdatedAt: string | null;
   providerStatusRefreshing: boolean;
+  providerCatalog: ProviderCatalogEntry[];
+  providerDefaultModelByProvider: Record<string, string>;
+  providerConnected: ProviderName[];
+  providerAuthMethodsByProvider: Record<string, ProviderAuthMethod[]>;
+  providerLastAuthChallenge: ProviderAuthChallengeEvent | null;
+  providerLastAuthResult: ProviderAuthResultEvent | null;
 
   composerText: string;
   injectContext: boolean;
@@ -400,6 +434,11 @@ export type AppStoreState = {
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
 
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
+  setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;
+  authorizeProviderAuth: (provider: ProviderName, methodId: string) => Promise<void>;
+  callbackProviderAuth: (provider: ProviderName, methodId: string, code?: string) => Promise<void>;
+  requestProviderCatalog: () => Promise<void>;
+  requestProviderAuthMethods: () => Promise<void>;
   refreshProviderStatus: () => Promise<void>;
 
   answerAsk: (threadId: string, requestId: string, answer: string) => void;
@@ -558,6 +597,8 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
           socket.send({ type: "list_skills", sessionId: evt.sessionId });
           const selected = get().workspaceRuntimeById[workspaceId]?.selectedSkillName;
           if (selected) socket.send({ type: "read_skill", sessionId: evt.sessionId, skillName: selected });
+          socket.send({ type: "provider_catalog_get", sessionId: evt.sessionId });
+          socket.send({ type: "provider_auth_methods_get", sessionId: evt.sessionId });
           socket.send({ type: "refresh_provider_status", sessionId: evt.sessionId });
         } catch {
           // ignore
@@ -616,11 +657,75 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
         const byName: Partial<Record<ProviderName, ProviderStatus>> = {};
         for (const p of evt.providers) byName[p.provider] = p;
         clearProviderRefreshTimer(workspaceId);
+        const connected = evt.providers
+          .filter((p) => p.authorized)
+          .map((p) => p.provider)
+          .filter((provider): provider is ProviderName => isProviderName(provider));
         set((s) => ({
           providerStatusByName: { ...s.providerStatusByName, ...byName },
           providerStatusLastUpdatedAt: nowIso(),
           providerStatusRefreshing: false,
+          providerConnected: connected,
         }));
+        return;
+      }
+
+      if (evt.type === "provider_catalog") {
+        const connected = evt.connected.filter((provider): provider is ProviderName => isProviderName(provider));
+        set({
+          providerCatalog: evt.all,
+          providerDefaultModelByProvider: evt.default,
+          providerConnected: connected,
+        });
+        return;
+      }
+
+      if (evt.type === "provider_auth_methods") {
+        set({ providerAuthMethodsByProvider: evt.methods });
+        return;
+      }
+
+      if (evt.type === "provider_auth_challenge") {
+        const command = evt.challenge.command ? ` Command: ${evt.challenge.command}` : "";
+        set((s) => ({
+          providerLastAuthChallenge: evt,
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "info",
+            title: `Auth challenge: ${evt.provider}`,
+            detail: `${evt.challenge.instructions}${command}`,
+          }),
+        }));
+        return;
+      }
+
+      if (evt.type === "provider_auth_result") {
+        set((s) => ({
+          providerLastAuthResult: evt,
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: evt.ok ? "info" : "error",
+            title: evt.ok ? `Provider connected: ${evt.provider}` : `Provider auth failed: ${evt.provider}`,
+            detail: evt.message,
+          }),
+        }));
+
+        if (!evt.ok) return;
+
+        const sid = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
+        if (!sid) return;
+
+        set({ providerStatusRefreshing: true });
+        startProviderRefreshTimeout(get, set, workspaceId);
+        try {
+          socket.send({ type: "refresh_provider_status", sessionId: sid });
+          socket.send({ type: "provider_catalog_get", sessionId: sid });
+        } catch {
+          clearProviderRefreshTimer(workspaceId);
+          set({ providerStatusRefreshing: false });
+        }
         return;
       }
 
@@ -650,15 +755,16 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
     onClose: () => {
       RUNTIME.controlSockets.delete(workspaceId);
       clearProviderRefreshTimer(workspaceId);
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: { ...s.workspaceRuntimeById[workspaceId], controlSessionId: null, controlConfig: null },
-        },
-        providerStatusRefreshing: false,
-      }));
-    },
-  });
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: { ...s.workspaceRuntimeById[workspaceId], controlSessionId: null, controlConfig: null },
+          },
+          providerStatusRefreshing: false,
+          providerLastAuthChallenge: null,
+        }));
+      },
+    });
 
   RUNTIME.controlSockets.set(workspaceId, socket);
   socket.connect();
@@ -1130,6 +1236,12 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   providerStatusByName: {},
   providerStatusLastUpdatedAt: null,
   providerStatusRefreshing: false,
+  providerCatalog: [],
+  providerDefaultModelByProvider: {},
+  providerConnected: [],
+  providerAuthMethodsByProvider: {},
+  providerLastAuthChallenge: null,
+  providerLastAuthResult: null,
 
   composerText: "",
   injectContext: false,
@@ -1186,6 +1298,12 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
         selectedThreadId: null,
         workspaceRuntimeById: {},
         threadRuntimeById: {},
+        providerCatalog: [],
+        providerDefaultModelByProvider: {},
+        providerConnected: [],
+        providerAuthMethodsByProvider: {},
+        providerLastAuthChallenge: null,
+        providerLastAuthResult: null,
         ready: true,
         startupError: detail,
         notifications: pushNotification(s.notifications, {
@@ -1706,6 +1824,82 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   },
 
   connectProvider: async (provider, apiKey) => {
+    const methods = providerAuthMethodsFor(get(), provider);
+    const normalizedKey = (apiKey ?? "").trim();
+
+    if (normalizedKey) {
+      const apiMethod = methods.find((method) => method.type === "api") ?? { id: "api_key", type: "api", label: "API key" };
+      await get().setProviderApiKey(provider, apiMethod.id, normalizedKey);
+      return;
+    }
+
+    const oauthMethod = methods.find((method) => method.type === "oauth");
+    if (oauthMethod) {
+      await get().authorizeProviderAuth(provider, oauthMethod.id);
+      if (oauthMethod.oauthMode !== "code") {
+        await get().callbackProviderAuth(provider, oauthMethod.id);
+      }
+      return;
+    }
+
+    set((s) => ({
+      notifications: pushNotification(s.notifications, {
+        id: makeId(),
+        ts: nowIso(),
+        kind: "info",
+        title: "API key required",
+        detail: `Enter an API key to connect ${provider}.`,
+      }),
+    }));
+  },
+
+  setProviderApiKey: async (provider, methodId, apiKey) => {
+    const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+    if (!workspaceId) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "info",
+          title: "Workspace required",
+          detail: "Add or select a workspace first.",
+        }),
+      }));
+      return;
+    }
+
+    const trimmedKey = apiKey.trim();
+    if (!trimmedKey) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Missing API key",
+          detail: "Enter an API key before saving.",
+        }),
+      }));
+      return;
+    }
+
+    await ensureServerRunning(get, set, workspaceId);
+    ensureControlSocket(get, set, workspaceId);
+
+    const ok = sendControl(get, workspaceId, (sessionId) => ({
+      type: "provider_auth_set_api_key",
+      sessionId,
+      provider,
+      methodId: methodId.trim() || "api_key",
+      apiKey: trimmedKey,
+    }));
+    if (!ok) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to send provider_auth_set_api_key." }),
+      }));
+    }
+  },
+
+  authorizeProviderAuth: async (provider, methodId) => {
     const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
     if (!workspaceId) {
       set((s) => ({
@@ -1723,15 +1917,130 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     await ensureServerRunning(get, set, workspaceId);
     ensureControlSocket(get, set, workspaceId);
 
+    const normalizedMethodId = methodId.trim();
+    if (!normalizedMethodId) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Missing auth method",
+          detail: "Choose an auth method before continuing.",
+        }),
+      }));
+      return;
+    }
+
     const ok = sendControl(get, workspaceId, (sessionId) => ({
-      type: "connect_provider",
+      type: "provider_auth_authorize",
       sessionId,
       provider,
-      apiKey: apiKey && apiKey.trim() ? apiKey.trim() : undefined,
+      methodId: normalizedMethodId,
     }));
     if (!ok) {
       set((s) => ({
-        notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to send connect_provider." }),
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to send provider_auth_authorize.",
+        }),
+      }));
+    }
+  },
+
+  callbackProviderAuth: async (provider, methodId, code) => {
+    const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+    if (!workspaceId) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "info",
+          title: "Workspace required",
+          detail: "Add or select a workspace first.",
+        }),
+      }));
+      return;
+    }
+
+    await ensureServerRunning(get, set, workspaceId);
+    ensureControlSocket(get, set, workspaceId);
+
+    const normalizedMethodId = methodId.trim();
+    if (!normalizedMethodId) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Missing auth method",
+          detail: "Choose an auth method before continuing.",
+        }),
+      }));
+      return;
+    }
+
+    const normalizedCode = code?.trim();
+    const ok = sendControl(get, workspaceId, (sessionId) => ({
+      type: "provider_auth_callback",
+      sessionId,
+      provider,
+      methodId: normalizedMethodId,
+      code: normalizedCode || undefined,
+    }));
+    if (!ok) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to send provider_auth_callback.",
+        }),
+      }));
+    }
+  },
+
+  requestProviderCatalog: async () => {
+    const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+    if (!workspaceId) return;
+
+    await ensureServerRunning(get, set, workspaceId);
+    ensureControlSocket(get, set, workspaceId);
+
+    const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "provider_catalog_get", sessionId }));
+    if (!ok) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to request provider catalog.",
+        }),
+      }));
+    }
+  },
+
+  requestProviderAuthMethods: async () => {
+    const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+    if (!workspaceId) return;
+
+    await ensureServerRunning(get, set, workspaceId);
+    ensureControlSocket(get, set, workspaceId);
+
+    const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "provider_auth_methods_get", sessionId }));
+    if (!ok) {
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to request provider auth methods.",
+        }),
       }));
     }
   },
@@ -1755,6 +2064,8 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
     try {
       sock.send({ type: "refresh_provider_status", sessionId: sid });
+      sock.send({ type: "provider_catalog_get", sessionId: sid });
+      sock.send({ type: "provider_auth_methods_get", sessionId: sid });
     } catch {
       clearProviderRefreshTimer(workspaceId);
       set((s) => ({

@@ -22,8 +22,9 @@ export function openProviderDialog(dialog: ReturnType<typeof useDialog>) {
 }
 
 export function openProviderDialogForProvider(dialog: ReturnType<typeof useDialog>, provider: string) {
+  const normalized = provider.trim().toLowerCase();
   dialog.push(
-    () => <ProviderDialog onDismiss={() => dialog.pop()} initialProvider={provider} />,
+    () => <ProviderDialog onDismiss={() => dialog.pop()} initialProvider={normalized} />,
     () => {}
   );
 }
@@ -38,6 +39,7 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
   const [method, setMethod] = createSignal<AuthMethod | null>(null);
   const [stage, setStage] = createSignal<"provider" | "method" | "api_key" | "oauth_auto" | "oauth_code" | "waiting">(props.initialProvider ? "method" : "provider");
   const [awaitingResult, setAwaitingResult] = createSignal(false);
+  const [didAutoAdvanceInitial, setDidAutoAdvanceInitial] = createSignal(false);
 
   const providerItems = createMemo((): SelectItem[] => {
     if (syncState.providerCatalog.length > 0) {
@@ -55,8 +57,7 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     }));
   });
 
-  const methodsForProvider = createMemo((): AuthMethod[] => {
-    const selected = provider();
+  const getMethodsForProvider = (selected: string): AuthMethod[] => {
     if (!selected) return [];
     const fromSync = syncState.providerAuthMethods[selected];
     if (fromSync && fromSync.length > 0) return fromSync;
@@ -66,6 +67,11 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
       base.unshift({ id: "oauth_cli", type: "oauth", label: "OAuth (CLI)", oauthMode: "auto" });
     }
     return base;
+  };
+
+  const methodsForProvider = createMemo((): AuthMethod[] => {
+    const selected = provider();
+    return getMethodsForProvider(selected);
   });
 
   const matchingChallenge = createMemo(() => {
@@ -103,24 +109,49 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     }));
   });
 
+  const beginMethodFlow = (selectedProvider: string, selectedMethod: AuthMethod) => {
+    setMethod(selectedMethod);
+    setAwaitingResult(false);
+    if (selectedMethod.type === "api") {
+      setStage("api_key");
+      return;
+    }
+    syncActions.authorizeProviderAuth(selectedProvider, selectedMethod.id);
+    setStage(selectedMethod.oauthMode === "code" ? "oauth_code" : "oauth_auto");
+  };
+
   const handleProviderSelect = (item: SelectItem) => {
-    setProvider(item.value);
+    const nextProvider = item.value;
+    const nextMethods = getMethodsForProvider(nextProvider);
+    setProvider(nextProvider);
+    setAwaitingResult(false);
+
+    if (nextMethods.length === 1) {
+      beginMethodFlow(nextProvider, nextMethods[0]!);
+      return;
+    }
+
     setMethod(null);
     setStage("method");
-    setAwaitingResult(false);
   };
+
+  createEffect(() => {
+    if (!props.initialProvider || didAutoAdvanceInitial()) return;
+    if (stage() !== "method") return;
+    const selected = provider();
+    if (!selected) return;
+
+    const nextMethods = getMethodsForProvider(selected);
+    if (nextMethods.length !== 1) return;
+
+    setDidAutoAdvanceInitial(true);
+    beginMethodFlow(selected, nextMethods[0]!);
+  });
 
   const handleMethodSelect = (item: SelectItem) => {
     const selected = methodsForProvider().find((m) => m.id === item.value);
     if (!selected) return;
-    setMethod(selected);
-    setAwaitingResult(false);
-    if (selected.type === "api") {
-      setStage("api_key");
-      return;
-    }
-    syncActions.authorizeProviderAuth(provider(), selected.id);
-    setStage(selected.oauthMode === "code" ? "oauth_code" : "oauth_auto");
+    beginMethodFlow(provider(), selected);
   };
 
   if (stage() === "provider") {

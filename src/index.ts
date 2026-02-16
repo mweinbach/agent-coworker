@@ -8,12 +8,6 @@ import { runCliRepl } from "./cli/repl";
 import { DEFAULT_PROVIDER_OPTIONS } from "./providers";
 import { startAgentServer } from "./server/startServer";
 
-// Legacy TUI fallback: use --legacy-tui flag to import old React-based TUI
-const useLegacyTui = process.argv.includes("--legacy-tui");
-const legacyRunTui = useLegacyTui
-  ? (await import("./tui/index")).runTui
-  : null;
-
 async function loadModernRunTui() {
   await import("@opentui/solid/preload");
   return (await import("../apps/TUI/index")).runTui;
@@ -31,7 +25,6 @@ function printUsage() {
   console.log("  --dir, -d   Run the agent in the specified directory");
   console.log("  --cli, -c   Run the plain CLI instead of the TUI");
   console.log("  --yolo, -y  Skip command approvals (dangerous; use with care)");
-  console.log("  --legacy-tui Use the legacy React-based TUI");
   console.log("  --help, -h  Show help");
   console.log("");
 }
@@ -89,7 +82,7 @@ async function main() {
     }
   };
 
-  const tuiRunner = legacyRunTui ?? await loadModernRunTui();
+  const tuiRunner = await loadModernRunTui();
   try {
     await tuiRunner(url, { onDestroy: stop });
   } finally {

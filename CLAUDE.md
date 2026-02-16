@@ -13,7 +13,6 @@ bun install              # Install dependencies
 bun test                 # Run all tests
 bun test test/agent      # Run tests matching a pattern (e.g. agent, tools, session)
 bun run start            # Run TUI (starts server automatically)
-bun run start -- --legacy-tui  # Run legacy React TUI
 bun run tui              # Run TUI standalone (connect to existing server)
 bun run cli              # Run CLI REPL
 bun run serve            # Run WebSocket server standalone
@@ -26,9 +25,8 @@ There is no linter or formatter configured. TypeScript strict mode is the primar
 
 ### Entry Points
 
-- `src/index.ts` — Main entry; routes to TUI or CLI based on `--cli` flag. Uses `--legacy-tui` to fall back to the old React TUI.
+- `src/index.ts` — Main entry; routes to TUI or CLI based on `--cli` flag.
 - `apps/TUI/index.tsx` — TUI entry (OpenTUI + Solid.js). Default TUI. Can also run standalone with `bun run tui`.
-- `src/tui/index.tsx` — Legacy TUI entry (OpenTUI + React). Used when `--legacy-tui` is passed.
 - `src/server/index.ts` — Standalone WebSocket server
 - `src/cli/repl.ts` — CLI REPL (connects to server via WebSocket)
 

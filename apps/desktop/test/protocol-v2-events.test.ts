@@ -6,13 +6,16 @@ type MockSocketOpts = {
 };
 
 class MockAgentSocket {
+  sent: any[] = [];
+
   constructor(public readonly opts: MockSocketOpts) {
     MOCK_SOCKETS.push(this);
   }
 
   connect() {}
 
-  send() {
+  send(message?: any) {
+    this.sent.push(message);
     return true;
   }
 
@@ -92,10 +95,56 @@ describe("desktop protocol v2 mapping", () => {
       providerStatusByName: {},
       providerStatusLastUpdatedAt: null,
       providerStatusRefreshing: false,
+      providerCatalog: [],
+      providerDefaultModelByProvider: {},
+      providerConnected: [],
+      providerAuthMethodsByProvider: {},
+      providerLastAuthChallenge: null,
+      providerLastAuthResult: null,
       view: "chat",
       startupError: null,
       ready: true,
     });
+  });
+
+  test("control hello requests provider catalog/auth methods/status", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+
+    emitServerHello(controlSocket, "control-session");
+
+    const sentTypes = controlSocket.sent.map((msg) => msg?.type).filter(Boolean);
+    expect(sentTypes).toContain("provider_catalog_get");
+    expect(sentTypes).toContain("provider_auth_methods_get");
+    expect(sentTypes).toContain("refresh_provider_status");
+  });
+
+  test("connectProvider sends provider_auth_set_api_key for keyed providers", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.sent = [];
+
+    await useAppStore.getState().connectProvider("openai", "sk-test");
+
+    const sent = controlSocket.sent.find((msg) => msg?.type === "provider_auth_set_api_key");
+    expect(sent).toBeDefined();
+    expect(sent?.provider).toBe("openai");
+    expect(sent?.methodId).toBe("api_key");
+    expect(sent?.apiKey).toBe("sk-test");
+  });
+
+  test("connectProvider sends oauth authorize+callback for oauth providers", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.sent = [];
+
+    await useAppStore.getState().connectProvider("codex-cli");
+
+    const sentTypes = controlSocket.sent.map((msg) => msg?.type).filter(Boolean);
+    expect(sentTypes).toContain("provider_auth_authorize");
+    expect(sentTypes).toContain("provider_auth_callback");
   });
 
   test("approval prompt keeps required reasonCode", async () => {

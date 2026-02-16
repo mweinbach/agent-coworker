@@ -37,11 +37,6 @@ Run the TUI standalone (connect to an existing server):
 bun run tui -- --server ws://127.0.0.1:7337/ws
 ```
 
-Run the legacy React-based TUI:
-```bash
-bun run start -- --legacy-tui
-```
-
 Run the CLI REPL:
 ```bash
 bun run cli

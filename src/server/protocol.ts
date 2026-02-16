@@ -23,7 +23,6 @@ export type ClientMessage =
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
   | { type: "ask_response"; sessionId: string; requestId: string; answer: string }
   | { type: "approval_response"; sessionId: string; requestId: string; approved: boolean }
-  | { type: "connect_provider"; sessionId: string; provider: AgentConfig["provider"]; apiKey?: string }
   | { type: "set_model"; sessionId: string; model: string; provider?: AgentConfig["provider"] }
   | { type: "refresh_provider_status"; sessionId: string }
   | { type: "provider_catalog_get"; sessionId: string }
@@ -169,14 +168,13 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "2.0";
+export const WEBSOCKET_PROTOCOL_VERSION = "3.0";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
   "user_message",
   "ask_response",
   "approval_response",
-  "connect_provider",
   "set_model",
   "refresh_provider_status",
   "provider_catalog_get",
@@ -515,14 +513,6 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
       }
       if (!isNonEmptyString(obj.checkpointId)) {
         return { ok: false, error: "session_backup_delete_checkpoint missing checkpointId" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "connect_provider": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "connect_provider missing sessionId" };
-      if (!isProviderName(obj.provider)) return { ok: false, error: "connect_provider missing/invalid provider" };
-      if (obj.apiKey !== undefined && typeof obj.apiKey !== "string") {
-        return { ok: false, error: "connect_provider invalid apiKey" };
       }
       return { ok: true, msg: obj as ClientMessage };
     }

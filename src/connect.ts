@@ -160,20 +160,6 @@ export async function readConnectionStore(paths: AiCoworkerPaths): Promise<Conne
   const primary = await loadFrom(paths.connectionsFile);
   if (primary) return primary;
 
-  // Backward-compatible fallback: ~/.ai-coworker/config/connections.json
-  const homeDir = path.dirname(paths.rootDir);
-  const legacyFile = path.join(homeDir, ".ai-coworker", "config", "connections.json");
-  const legacy = await loadFrom(legacyFile);
-  if (legacy) {
-    // Best-effort migration to the new location.
-    try {
-      await writeConnectionStore(paths, legacy);
-    } catch {
-      // ignore migration failures; still return legacy view
-    }
-    return legacy;
-  }
-
   return { version: 1, updatedAt: new Date().toISOString(), services: {} };
 }
 

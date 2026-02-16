@@ -16,7 +16,7 @@ This document is the canonical external protocol contract for all clients. Thin 
 - Session lifecycle: `server_hello`, `session_settings`, `session_busy`, `reset`
 - Conversational turn streaming: `user_message`, `assistant_message`, `reasoning`, `log`, `todos`
 - Human-in-the-loop control: `ask`/`ask_response`, `approval`/`approval_response`, `cancel`
-- Provider/model control: `connect_provider` (legacy), `provider_catalog_get`, `provider_auth_methods_get`, `provider_auth_authorize`, `provider_auth_callback`, `provider_auth_set_api_key`, `set_model`, `refresh_provider_status`, `provider_catalog`, `provider_auth_methods`, `provider_auth_challenge`, `provider_auth_result`, `provider_status`
+- Provider/model control: `provider_catalog_get`, `provider_auth_methods_get`, `provider_auth_authorize`, `provider_auth_callback`, `provider_auth_set_api_key`, `set_model`, `refresh_provider_status`, `provider_catalog`, `provider_auth_methods`, `provider_auth_challenge`, `provider_auth_result`, `provider_status`
 - Tool, command, and skill metadata: `list_tools`, `tools`, `list_commands`, `commands`, `execute_command`, `list_skills`, `read_skill`, `enable_skill`, `disable_skill`, `delete_skill`
 - MCP runtime toggling: `set_enable_mcp`
 - Session backup/restore: `session_backup_get`, `session_backup_checkpoint`, `session_backup_restore`, `session_backup_delete_checkpoint`
@@ -44,22 +44,17 @@ Client                          Server
 
 ---
 
-## Protocol v2 Migration (from v1)
+## Protocol v3 Migration (from v2)
 
-Protocol version `2.0` introduces explicit breaking changes:
+Protocol version `3.0` introduces an explicit breaking change:
 
-- `ping` now requires `sessionId`
-- `pong.sessionId` now echoes the client-provided `sessionId`
-- `error.code` is required
-- `error.source` is required
-- `approval.reasonCode` is required
+- `connect_provider` is removed. Clients must use `provider_auth_authorize`, `provider_auth_callback`, and `provider_auth_set_api_key`.
 
 Recommended migration order for clients:
 
-1. Update parser/types to require the new fields.
-2. Send `sessionId` on every `ping`.
-3. Render `error.code` / `error.source` and `approval.reasonCode` in UI.
-4. Assert `server_hello.protocolVersion === "2.0"` at connect time.
+1. Remove `connect_provider` messages from client code.
+2. Route provider connection UX through `provider_auth_*` messages.
+3. Assert `server_hello.protocolVersion === "3.0"` at connect time.
 
 ## Type Definitions
 
@@ -80,7 +75,7 @@ interface ConfigSubset {
   outputDirectory: string;
 }
 
-type ProtocolVersion = string; // current server value: "2.0"
+type ProtocolVersion = string; // current server value: "3.0"
 
 interface TodoItem {
   content: string;
@@ -215,27 +210,6 @@ Switch AI model and/or provider at runtime.
   "sessionId": "...",
   "model": "gpt-5.2",
   "provider": "openai"  // optional
-}
-```
-
-### connect_provider
-
-Legacy compatibility command for provider connection. Prefer `provider_auth_*` messages for new clients.
-
-```jsonc
-// With API key
-{
-  "type": "connect_provider",
-  "sessionId": "...",
-  "provider": "openai",
-  "apiKey": "sk-proj-..."
-}
-
-// OAuth flow (no apiKey)
-{
-  "type": "connect_provider",
-  "sessionId": "...",
-  "provider": "codex-cli"
 }
 ```
 
@@ -588,7 +562,7 @@ First message after connection. Contains the session ID, protocol version, and c
 {
   "type": "server_hello",
   "sessionId": "550e8400-e29b-41d4-a716-446655440000",
-  "protocolVersion": "2.0",
+  "protocolVersion": "3.0",
   "config": {
     "provider": "openai",
     "model": "gpt-5.2",

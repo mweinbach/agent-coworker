@@ -186,18 +186,6 @@ export class AgentSession {
     });
   }
 
-  private emitLegacyConnectSummary(provider: AgentConfig["provider"], result: Extract<ConnectProviderResult, { ok: true }>) {
-    const lines = [`### /connect ${provider}`, "", result.message, "", `- Mode: ${result.mode}`, `- Storage: \`${result.storageFile}\``];
-    if (result.maskedApiKey) lines.splice(4, 0, `- Key: \`${result.maskedApiKey}\``);
-    if (result.oauthCommand) lines.push(`- OAuth command: \`${result.oauthCommand}\``);
-    if (result.oauthCredentialsFile) lines.push(`- OAuth credentials: \`${result.oauthCredentialsFile}\``);
-    this.emit({
-      type: "assistant_message",
-      sessionId: this.id,
-      text: lines.join("\n"),
-    });
-  }
-
   private emitError(code: ServerErrorCode, source: ServerErrorSource, message: string) {
     this.emit({
       type: "error",
@@ -782,67 +770,6 @@ export class AgentSession {
       }
     } catch (err) {
       this.emitError("provider_error", "provider", `Setting provider API key failed: ${String(err)}`);
-    } finally {
-      this.connecting = false;
-    }
-  }
-
-  async connectProvider(providerRaw: AgentConfig["provider"], apiKeyRaw?: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
-    if (!isProviderName(providerRaw)) {
-      this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
-      return;
-    }
-
-    this.connecting = true;
-    try {
-      const apiKey = apiKeyRaw?.trim();
-      const oauthMethod = resolveProviderAuthMethod(providerRaw, "oauth_cli");
-      const legacyOauthLine = (line: string) => this.log(`[connect ${providerRaw}] ${line}`);
-      const result = apiKey
-        ? await setProviderApiKeyMethod({
-            provider: providerRaw,
-            methodId: "api_key",
-            apiKey,
-            cwd: this.config.workingDirectory,
-            paths: this.getCoworkPaths(),
-            connect: async (opts) =>
-              await this.runProviderConnect({
-                ...opts,
-                onOauthLine: legacyOauthLine,
-              }),
-          })
-        : oauthMethod
-          ? await callbackProviderAuthMethod({
-              provider: providerRaw,
-              methodId: "oauth_cli",
-              cwd: this.config.workingDirectory,
-              paths: this.getCoworkPaths(),
-              connect: async (opts) => await this.runProviderConnect(opts),
-              oauthStdioMode: "pipe",
-              allowOpenTerminal: providerRaw === "claude-code",
-              onOauthLine: legacyOauthLine,
-            })
-          : await this.runProviderConnect({
-              provider: providerRaw,
-              onOauthLine: legacyOauthLine,
-            });
-
-      if (!result.ok) {
-        this.emitError("provider_error", "provider", result.message);
-        return;
-      }
-
-      this.emitLegacyConnectSummary(providerRaw, result);
-    } catch (err) {
-      this.emitError("provider_error", "provider", `connect failed: ${String(err)}`);
     } finally {
       this.connecting = false;
     }

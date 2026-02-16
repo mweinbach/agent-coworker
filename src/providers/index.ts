@@ -1,4 +1,4 @@
-import type { AgentConfig, LegacyProviderName, ProviderName } from "../types";
+import type { AgentConfig, ProviderName } from "../types";
 
 import { anthropicProvider } from "./anthropic";
 import { claudeCodeProvider } from "./claude-code";
@@ -27,7 +27,7 @@ export {
 export { getProviderCatalog, listProviderCatalogEntries, type ProviderCatalogEntry, type ProviderCatalogPayload } from "./connectionCatalog";
 
 export type ProviderRuntimeDefinition = {
-  keyCandidates: readonly (ProviderName | LegacyProviderName)[];
+  keyCandidates: readonly ProviderName[];
   createModel: (options: { config: AgentConfig; modelId: string; savedKey?: string }) => unknown;
 };
 
@@ -56,6 +56,6 @@ export function getModelForProvider(config: AgentConfig, modelId: string, savedK
   return PROVIDERS[config.provider].createModel({ config, modelId, savedKey });
 }
 
-export function getProviderKeyCandidates(provider: ProviderName): readonly (ProviderName | LegacyProviderName)[] {
+export function getProviderKeyCandidates(provider: ProviderName): readonly ProviderName[] {
   return PROVIDERS[provider].keyCandidates;
 }

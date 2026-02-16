@@ -176,11 +176,6 @@ export async function startAgentServer(
             return;
           }
 
-          if (msg.type === "connect_provider") {
-            void session.connectProvider(msg.provider, msg.apiKey);
-            return;
-          }
-
           if (msg.type === "refresh_provider_status") {
             void session.refreshProviderStatus();
             return;

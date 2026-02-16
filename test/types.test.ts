@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isProviderName, PROVIDER_NAMES, resolveProviderName } from "../src/types";
+import { isProviderName, PROVIDER_NAMES } from "../src/types";
 
 // ---------------------------------------------------------------------------
 // PROVIDER_NAMES
@@ -164,10 +164,4 @@ describe("isProviderName", () => {
     });
   });
 
-  // ---- Legacy aliases -----------------------------------------------------
-  describe("legacy aliases", () => {
-    test("maps gemini-cli to google", () => {
-      expect(resolveProviderName("gemini-cli")).toBe("google");
-    });
-  });
 });

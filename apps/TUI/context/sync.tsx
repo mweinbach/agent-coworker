@@ -74,7 +74,6 @@ type SyncActions = {
   answerAsk: (requestId: string, answer: string) => void;
   respondApproval: (requestId: string, approved: boolean) => void;
   setModel: (provider: string, model: string) => void;
-  connectProvider: (provider: string, apiKey?: string) => void;
   requestProviderCatalog: () => void;
   requestProviderAuthMethods: () => void;
   refreshProviderStatus: () => void;
@@ -469,37 +468,6 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         type: "set_model",
         sessionId: sid,
         model,
-        provider: provider as any,
-      });
-    },
-
-    connectProvider(provider: string, apiKey?: string) {
-      const sid = state.sessionId;
-      if (!sid || !socket) return;
-      const methods = state.providerAuthMethods[provider] ?? [];
-      const oauthMethod = methods.find((m) => m.type === "oauth");
-      if (apiKey?.trim()) {
-        socket.send({
-          type: "provider_auth_set_api_key",
-          sessionId: sid,
-          provider: provider as any,
-          methodId: "api_key",
-          apiKey: apiKey.trim(),
-        });
-        return;
-      }
-      if (oauthMethod) {
-        socket.send({
-          type: "provider_auth_authorize",
-          sessionId: sid,
-          provider: provider as any,
-          methodId: oauthMethod.id,
-        });
-        return;
-      }
-      socket.send({
-        type: "connect_provider",
-        sessionId: sid,
         provider: provider as any,
       });
     },

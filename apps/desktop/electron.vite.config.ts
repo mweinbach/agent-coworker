@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(appRoot, "../..");
@@ -33,7 +34,7 @@ export default defineConfig({
   renderer: {
     root: appRoot,
     base: "./",
-    plugins: [react()],
+    plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
         "@cowork": path.resolve(repoRoot, "src"),

@@ -119,7 +119,8 @@ function sendAndCollect(
         msg.type === "observability_status" ||
         msg.type === "provider_catalog" ||
         msg.type === "provider_auth_methods" ||
-        msg.type === "provider_status"
+        msg.type === "provider_status" ||
+        msg.type === "model_stream_chunk"
       ) {
         return;
       }
@@ -324,6 +325,20 @@ describe("WebSocket Lifecycle", () => {
       expect(typeof hello.config.model).toBe("string");
       expect(typeof hello.config.workingDirectory).toBe("string");
       expect(typeof hello.config.outputDirectory).toBe("string");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("server_hello advertises model_stream_chunk capability", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const messages = await collectMessages(url, 1);
+      const hello = messages[0];
+      expect(hello.type).toBe("server_hello");
+      expect(hello.capabilities).toBeDefined();
+      expect(hello.capabilities.modelStreamChunk).toBe("v1");
     } finally {
       server.stop();
     }
@@ -1205,6 +1220,98 @@ describe("Server Resilience", () => {
       server.stop();
     }
   });
+
+  test("websocket flow emits ordered model_stream_chunk events before legacy final events", async () => {
+    const tmpDir = await makeTmpProject();
+    const runTurnImpl = async (params: any) => {
+      await params.onModelStreamPart?.({ type: "start" });
+      await params.onModelStreamPart?.({ type: "text-delta", id: "txt_1", text: "hello" });
+      await params.onModelStreamPart?.({ type: "finish", finishReason: "stop" });
+      return {
+        text: "hello",
+        reasoningText: "thinking",
+        responseMessages: [],
+      };
+    };
+
+    const { server, url } = await startAgentServer({
+      cwd: tmpDir,
+      hostname: "127.0.0.1",
+      port: 0,
+      homedir: tmpDir,
+      env: {
+        AGENT_WORKING_DIR: tmpDir,
+        AGENT_PROVIDER: "google",
+      },
+      runTurnImpl: runTurnImpl as any,
+    });
+
+    try {
+      const events = await new Promise<any[]>((resolve, reject) => {
+        const ws = new WebSocket(url);
+        const seen: any[] = [];
+        let sessionId = "";
+        let settled = false;
+
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          ws.close();
+          const observed = seen.map((evt) => evt.type).join(", ");
+          reject(new Error(`Timed out waiting for model stream flow. observed=[${observed}]`));
+        }, 25_000);
+
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          ws.close();
+          resolve(seen);
+        };
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+          seen.push(msg);
+
+          if (!sessionId && msg.type === "server_hello") {
+            sessionId = msg.sessionId;
+            ws.send(JSON.stringify({ type: "user_message", sessionId, text: "hello server" }));
+            return;
+          }
+          if (msg.type === "model_stream_chunk" && msg.partType === "finish") {
+            setTimeout(finish, 25);
+            return;
+          }
+          if (msg.type === "assistant_message") {
+            setTimeout(finish, 25);
+          }
+        };
+
+        ws.onerror = (e) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          ws.close();
+          reject(new Error(`WebSocket error: ${e}`));
+        };
+      });
+
+      const chunks = events.filter((evt) => evt.type === "model_stream_chunk");
+      expect(chunks.map((evt: any) => evt.partType)).toEqual(["start", "text_delta", "finish"]);
+      expect(chunks.map((evt: any) => evt.index)).toEqual([0, 1, 2]);
+      expect(new Set(chunks.map((evt: any) => evt.turnId)).size).toBe(1);
+      expect(new Set(chunks.map((evt: any) => evt.sessionId)).size).toBe(1);
+
+      const streamEnd = events.map((evt) => evt.type).lastIndexOf("model_stream_chunk");
+      const reasoningIndex = events.findIndex((evt) => evt.type === "reasoning");
+      const assistantIndex = events.findIndex((evt) => evt.type === "assistant_message");
+      expect(streamEnd).toBeGreaterThanOrEqual(0);
+      expect(reasoningIndex).toBeGreaterThan(streamEnd);
+      expect(assistantIndex).toBeGreaterThan(reasoningIndex);
+    } finally {
+      server.stop();
+    }
+  }, 30_000);
 
   test("server.stop() prevents new connections", async () => {
     const tmpDir = await makeTmpProject();

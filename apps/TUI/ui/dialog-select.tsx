@@ -11,6 +11,42 @@ export type SelectItem = {
   keybind?: string;
 };
 
+export function filterSelectItems(items: SelectItem[], query: string): SelectItem[] {
+  const q = query.toLowerCase().trim();
+  if (!q) return items;
+  return items.filter((item) => {
+    const label = item.label.toLowerCase();
+    const desc = (item.description ?? "").toLowerCase();
+    const cat = (item.category ?? "").toLowerCase();
+    return label.includes(q) || desc.includes(q) || cat.includes(q);
+  });
+}
+
+export function getSelectedSelectItem(items: SelectItem[], selectedIndex: number): SelectItem | null {
+  return items[selectedIndex] ?? null;
+}
+
+export function resolveDialogSelectKeyAction(
+  key: string,
+  selectedIndex: number,
+  itemCount: number
+): { nextSelectedIndex: number; dismiss: boolean } {
+  if (itemCount <= 0) {
+    if (key === "escape") return { nextSelectedIndex: selectedIndex, dismiss: true };
+    return { nextSelectedIndex: selectedIndex, dismiss: false };
+  }
+  if (key === "up") {
+    return { nextSelectedIndex: Math.max(0, selectedIndex - 1), dismiss: false };
+  }
+  if (key === "down") {
+    return { nextSelectedIndex: Math.min(itemCount - 1, selectedIndex + 1), dismiss: false };
+  }
+  if (key === "escape") {
+    return { nextSelectedIndex: selectedIndex, dismiss: true };
+  }
+  return { nextSelectedIndex: selectedIndex, dismiss: false };
+}
+
 type DialogSelectProps = {
   items: SelectItem[];
   onSelect: (item: SelectItem) => void;
@@ -26,31 +62,24 @@ export function DialogSelect(props: DialogSelectProps) {
   const [selected, setSelected] = createSignal(0);
 
   const filtered = createMemo(() => {
-    const q = query().toLowerCase().trim();
-    if (!q) return props.items;
-    return props.items.filter((item) => {
-      const label = item.label.toLowerCase();
-      const desc = (item.description ?? "").toLowerCase();
-      const cat = (item.category ?? "").toLowerCase();
-      return label.includes(q) || desc.includes(q) || cat.includes(q);
-    });
+    return filterSelectItems(props.items, query());
   });
+
+  const submitSelectedItem = () => {
+    const item = getSelectedSelectItem(filtered(), selected());
+    if (item) props.onSelect(item);
+  };
 
   const handleKeyDown = (e: any) => {
     const key = keyNameFromEvent(e);
-    const items = filtered();
+    const action = resolveDialogSelectKeyAction(key, selected(), filtered().length);
+    if (action.nextSelectedIndex !== selected()) {
+      setSelected(action.nextSelectedIndex);
+      e.preventDefault?.();
+      return;
+    }
 
-    if (key === "up") {
-      setSelected((s) => Math.max(0, s - 1));
-      e.preventDefault?.();
-    } else if (key === "down") {
-      setSelected((s) => Math.min(items.length - 1, s + 1));
-      e.preventDefault?.();
-    } else if (key === "enter") {
-      const item = items[selected()];
-      if (item) props.onSelect(item);
-      e.preventDefault?.();
-    } else if (key === "escape") {
+    if (action.dismiss) {
       props.onDismiss();
       e.preventDefault?.();
     }
@@ -79,6 +108,7 @@ export function DialogSelect(props: DialogSelectProps) {
               setSelected(0);
             }}
             onKeyDown={handleKeyDown}
+            onSubmit={submitSelectedItem}
             placeholder={props.placeholder ?? "Search..."}
             placeholderColor={theme.textMuted}
             textColor={theme.text}

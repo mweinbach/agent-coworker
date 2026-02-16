@@ -28,6 +28,22 @@ function parseToolLogLine(line: string): ParsedToolLog | null {
   return { name, preview };
 }
 
+function previewValue(value: unknown, max = 120): string {
+  if (value === undefined) return "";
+  if (typeof value === "string") {
+    if (value.length <= max) return value;
+    return `${value.slice(0, max - 1)}…`;
+  }
+  try {
+    const raw = JSON.stringify(value);
+    if (!raw) return "";
+    if (raw.length <= max) return raw;
+    return `${raw.slice(0, max - 1)}…`;
+  } catch {
+    return String(value);
+  }
+}
+
 const Markdown = memo(function Markdown(props: { text: string }) {
   return (
     <div className="markdown">
@@ -104,6 +120,23 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
       <div className="feedItem">
         <div className="toolCall">
           <span className="toolCallPreview">{item.line}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (item.kind === "tool") {
+    const argsPreview = previewValue(item.args);
+    const resultPreview = previewValue(item.result);
+    return (
+      <div className="feedItem">
+        <div className="toolCall">
+          <span className="toolCallName">{item.name}</span>
+          <span className="toolCallPreview" style={{ marginLeft: 8 }}>
+            {item.status === "running" ? "running" : "done"}
+            {argsPreview ? ` args=${argsPreview}` : ""}
+            {resultPreview ? ` result=${resultPreview}` : ""}
+          </span>
         </div>
       </div>
     );

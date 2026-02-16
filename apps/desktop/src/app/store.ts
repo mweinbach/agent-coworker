@@ -33,6 +33,7 @@ import type {
   WorkspaceRecord,
   WorkspaceRuntime,
 } from "./types";
+import { mapModelStreamChunk, type ModelStreamChunkEvent, type ModelStreamUpdate } from "./modelStream";
 
 function nowIso() {
   return new Date().toISOString();
@@ -71,6 +72,18 @@ type ProviderAuthMethod = ProviderAuthMethodsEvent["methods"][string][number];
 type ProviderAuthChallengeEvent = Extract<ServerEvent, { type: "provider_auth_challenge" }>;
 type ProviderAuthResultEvent = Extract<ServerEvent, { type: "provider_auth_result" }>;
 
+type ThreadModelStreamRuntime = {
+  assistantItemIdByTurn: Map<string, string>;
+  assistantTextByTurn: Map<string, string>;
+  reasoningItemIdByStream: Map<string, string>;
+  reasoningTextByStream: Map<string, string>;
+  reasoningTurns: Set<string>;
+  toolItemIdByKey: Map<string, string>;
+  toolInputByKey: Map<string, string>;
+  lastAssistantTurnId: string | null;
+  lastReasoningTurnId: string | null;
+};
+
 type RuntimeMaps = {
   controlSockets: Map<string, AgentSocket>;
   threadSockets: Map<string, AgentSocket>;
@@ -80,6 +93,7 @@ type RuntimeMaps = {
   busyCancelGraceTimers: Map<string, ReturnType<typeof setTimeout>>;
   providerRefreshTimers: Map<string, ReturnType<typeof setTimeout>>;
   workspaceStartPromises: Map<string, Promise<void>>;
+  modelStreamByThread: Map<string, ThreadModelStreamRuntime>;
   workspacePickerOpen: boolean;
 };
 
@@ -92,8 +106,52 @@ const RUNTIME: RuntimeMaps = {
   busyCancelGraceTimers: new Map(),
   providerRefreshTimers: new Map(),
   workspaceStartPromises: new Map(),
+  modelStreamByThread: new Map(),
   workspacePickerOpen: false,
 };
+
+function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
+  return {
+    assistantItemIdByTurn: new Map(),
+    assistantTextByTurn: new Map(),
+    reasoningItemIdByStream: new Map(),
+    reasoningTextByStream: new Map(),
+    reasoningTurns: new Set(),
+    toolItemIdByKey: new Map(),
+    toolInputByKey: new Map(),
+    lastAssistantTurnId: null,
+    lastReasoningTurnId: null,
+  };
+}
+
+function clearThreadModelStreamRuntime(runtime: ThreadModelStreamRuntime) {
+  runtime.assistantItemIdByTurn.clear();
+  runtime.assistantTextByTurn.clear();
+  runtime.reasoningItemIdByStream.clear();
+  runtime.reasoningTextByStream.clear();
+  runtime.reasoningTurns.clear();
+  runtime.toolItemIdByKey.clear();
+  runtime.toolInputByKey.clear();
+  runtime.lastAssistantTurnId = null;
+  runtime.lastReasoningTurnId = null;
+}
+
+function getModelStreamRuntime(threadId: string): ThreadModelStreamRuntime {
+  const existing = RUNTIME.modelStreamByThread.get(threadId);
+  if (existing) return existing;
+  const next = createThreadModelStreamRuntime();
+  RUNTIME.modelStreamByThread.set(threadId, next);
+  return next;
+}
+
+function resetModelStreamRuntime(threadId: string) {
+  const existing = RUNTIME.modelStreamByThread.get(threadId);
+  if (existing) {
+    clearThreadModelStreamRuntime(existing);
+    return;
+  }
+  RUNTIME.modelStreamByThread.set(threadId, createThreadModelStreamRuntime());
+}
 
 function queuePendingThreadMessage(threadId: string, text: string) {
   const trimmed = text.trim();
@@ -222,9 +280,156 @@ function pushFeedItem(set: (fn: (s: AppStoreState) => Partial<AppStoreState>) =>
   });
 }
 
+function updateFeedItem(
+  set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void,
+  threadId: string,
+  itemId: string,
+  update: (item: FeedItem) => FeedItem
+) {
+  set((s) => {
+    const rt = s.threadRuntimeById[threadId];
+    if (!rt) return {};
+    return {
+      threadRuntimeById: {
+        ...s.threadRuntimeById,
+        [threadId]: {
+          ...rt,
+          feed: rt.feed.map((item) => (item.id === itemId ? update(item) : item)),
+        },
+      },
+    };
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function appendModelStreamUpdateToFeed(
+  out: FeedItem[],
+  ts: string,
+  stream: ThreadModelStreamRuntime,
+  update: ModelStreamUpdate
+) {
+  const replaceFeedItem = (itemId: string, updater: (item: FeedItem) => FeedItem) => {
+    const idx = out.findIndex((item) => item.id === itemId);
+    if (idx < 0) return;
+    out[idx] = updater(out[idx]!);
+  };
+
+  if (update.kind === "assistant_delta") {
+    stream.lastAssistantTurnId = update.turnId;
+    const itemId = stream.assistantItemIdByTurn.get(update.turnId);
+    const nextText = `${stream.assistantTextByTurn.get(update.turnId) ?? ""}${update.text}`;
+    stream.assistantTextByTurn.set(update.turnId, nextText);
+    if (itemId) {
+      replaceFeedItem(itemId, (item) =>
+        item.kind === "message" && item.role === "assistant" ? { ...item, text: nextText } : item
+      );
+    } else {
+      const id = makeId();
+      stream.assistantItemIdByTurn.set(update.turnId, id);
+      out.push({ id, kind: "message", role: "assistant", ts, text: update.text });
+    }
+    return;
+  }
+
+  if (update.kind === "reasoning_delta") {
+    stream.lastReasoningTurnId = update.turnId;
+    stream.reasoningTurns.add(update.turnId);
+    const key = `${update.turnId}:${update.streamId}`;
+    const itemId = stream.reasoningItemIdByStream.get(key);
+    const nextText = `${stream.reasoningTextByStream.get(key) ?? ""}${update.text}`;
+    stream.reasoningTextByStream.set(key, nextText);
+    if (itemId) {
+      replaceFeedItem(itemId, (item) =>
+        item.kind === "reasoning" ? { ...item, mode: update.mode, text: nextText } : item
+      );
+    } else {
+      const id = makeId();
+      stream.reasoningItemIdByStream.set(key, id);
+      out.push({ id, kind: "reasoning", mode: update.mode, ts, text: update.text });
+    }
+    return;
+  }
+
+  if (update.kind === "tool_input_start") {
+    const key = `${update.turnId}:${update.key}`;
+    const existing = stream.toolItemIdByKey.get(key);
+    if (existing) {
+      replaceFeedItem(existing, (item) =>
+        item.kind === "tool" ? { ...item, name: update.name, status: "running", args: update.args ?? item.args } : item
+      );
+      return;
+    }
+
+    const id = makeId();
+    stream.toolItemIdByKey.set(key, id);
+    out.push({ id, kind: "tool", ts, name: update.name, status: "running", args: update.args });
+    return;
+  }
+
+  if (update.kind === "tool_input_delta") {
+    const key = `${update.turnId}:${update.key}`;
+    const nextInput = `${stream.toolInputByKey.get(key) ?? ""}${update.delta}`;
+    stream.toolInputByKey.set(key, nextInput);
+    const existing = stream.toolItemIdByKey.get(key);
+    if (!existing) return;
+    replaceFeedItem(existing, (item) => {
+      if (item.kind !== "tool") return item;
+      const prevArgs = isRecord(item.args) ? item.args : {};
+      return { ...item, args: { ...prevArgs, input: nextInput } };
+    });
+    return;
+  }
+
+  if (update.kind === "tool_call") {
+    const key = `${update.turnId}:${update.key}`;
+    const existing = stream.toolItemIdByKey.get(key);
+    if (existing) {
+      replaceFeedItem(existing, (item) =>
+        item.kind === "tool"
+          ? { ...item, name: update.name, status: "running", args: update.args ?? item.args }
+          : item
+      );
+      return;
+    }
+
+    const id = makeId();
+    stream.toolItemIdByKey.set(key, id);
+    out.push({ id, kind: "tool", ts, name: update.name, status: "running", args: update.args });
+    return;
+  }
+
+  if (update.kind === "tool_result" || update.kind === "tool_error" || update.kind === "tool_output_denied") {
+    const key = `${update.turnId}:${update.key}`;
+    const existing = stream.toolItemIdByKey.get(key);
+    const result =
+      update.kind === "tool_result"
+        ? update.result
+        : update.kind === "tool_error"
+          ? { error: update.error }
+          : { denied: true, reason: update.reason };
+
+    if (existing) {
+      replaceFeedItem(existing, (item) =>
+        item.kind === "tool"
+          ? { ...item, name: update.name, status: "done", result }
+          : item
+      );
+      return;
+    }
+
+    const id = makeId();
+    stream.toolItemIdByKey.set(key, id);
+    out.push({ id, kind: "tool", ts, name: update.name, status: "done", result });
+  }
+}
+
 function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
   const out: FeedItem[] = [];
   const seenUser = new Set<string>();
+  const stream = createThreadModelStreamRuntime();
 
   for (const evt of events) {
     const payload: any = evt.payload;
@@ -232,6 +437,7 @@ function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     const type = payload.type as string;
 
     if (type === "user_message") {
+      clearThreadModelStreamRuntime(stream);
       const cmid = typeof payload.clientMessageId === "string" ? payload.clientMessageId : "";
       if (cmid && seenUser.has(cmid)) continue;
       if (cmid) seenUser.add(cmid);
@@ -245,18 +451,30 @@ function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
       continue;
     }
 
+    if (type === "model_stream_chunk") {
+      const mapped = mapModelStreamChunk(payload as ModelStreamChunkEvent);
+      if (mapped) appendModelStreamUpdateToFeed(out, evt.ts, stream, mapped);
+      continue;
+    }
+
     if (type === "assistant_message") {
+      const text = String(payload.text ?? "");
+      if (stream.lastAssistantTurnId) {
+        const streamed = (stream.assistantTextByTurn.get(stream.lastAssistantTurnId) ?? "").trim();
+        if (streamed && streamed === text.trim()) continue;
+      }
       out.push({
         id: makeId(),
         kind: "message",
         role: "assistant",
         ts: evt.ts,
-        text: String(payload.text ?? ""),
+        text,
       });
       continue;
     }
 
     if (type === "reasoning") {
+      if (stream.lastReasoningTurnId && stream.reasoningTurns.has(stream.lastReasoningTurnId)) continue;
       out.push({
         id: makeId(),
         kind: "reasoning",
@@ -268,6 +486,7 @@ function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     }
 
     if (type === "reasoning_summary" || type === "assistant_reasoning") {
+      if (stream.lastReasoningTurnId && stream.reasoningTurns.has(stream.lastReasoningTurnId)) continue;
       out.push({
         id: makeId(),
         kind: "reasoning",
@@ -303,6 +522,10 @@ function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
         source: String(payload.source ?? "session") as any,
       });
       continue;
+    }
+
+    if (type === "session_busy" && payload.busy === false) {
+      clearThreadModelStreamRuntime(stream);
     }
 
     out.push({
@@ -800,6 +1023,7 @@ function ensureThreadSocket(
     onClose: () => {
       RUNTIME.threadSockets.delete(threadId);
       clearBusyTimers(threadId);
+      RUNTIME.modelStreamByThread.delete(threadId);
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
         if (!rt) return {};
@@ -1010,6 +1234,157 @@ function sendUserMessageToThread(
   return true;
 }
 
+function applyModelStreamUpdateToThreadFeed(
+  set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void,
+  threadId: string,
+  stream: ThreadModelStreamRuntime,
+  update: ModelStreamUpdate
+) {
+  if (update.kind === "assistant_delta") {
+    stream.lastAssistantTurnId = update.turnId;
+    const itemId = stream.assistantItemIdByTurn.get(update.turnId);
+    const nextText = `${stream.assistantTextByTurn.get(update.turnId) ?? ""}${update.text}`;
+    stream.assistantTextByTurn.set(update.turnId, nextText);
+
+    if (itemId) {
+      updateFeedItem(set, threadId, itemId, (item) =>
+        item.kind === "message" && item.role === "assistant" ? { ...item, text: nextText } : item
+      );
+    } else {
+      const id = makeId();
+      stream.assistantItemIdByTurn.set(update.turnId, id);
+      pushFeedItem(set, threadId, {
+        id,
+        kind: "message",
+        role: "assistant",
+        ts: nowIso(),
+        text: update.text,
+      });
+    }
+    return;
+  }
+
+  if (update.kind === "reasoning_delta") {
+    stream.lastReasoningTurnId = update.turnId;
+    stream.reasoningTurns.add(update.turnId);
+    const key = `${update.turnId}:${update.streamId}`;
+    const itemId = stream.reasoningItemIdByStream.get(key);
+    const nextText = `${stream.reasoningTextByStream.get(key) ?? ""}${update.text}`;
+    stream.reasoningTextByStream.set(key, nextText);
+
+    if (itemId) {
+      updateFeedItem(set, threadId, itemId, (item) =>
+        item.kind === "reasoning" ? { ...item, mode: update.mode, text: nextText } : item
+      );
+    } else {
+      const id = makeId();
+      stream.reasoningItemIdByStream.set(key, id);
+      pushFeedItem(set, threadId, {
+        id,
+        kind: "reasoning",
+        mode: update.mode,
+        ts: nowIso(),
+        text: update.text,
+      });
+    }
+    return;
+  }
+
+  if (update.kind === "tool_input_start") {
+    const key = `${update.turnId}:${update.key}`;
+    const itemId = stream.toolItemIdByKey.get(key);
+    if (itemId) {
+      updateFeedItem(set, threadId, itemId, (item) =>
+        item.kind === "tool" ? { ...item, name: update.name, status: "running", args: update.args ?? item.args } : item
+      );
+      return;
+    }
+
+    const id = makeId();
+    stream.toolItemIdByKey.set(key, id);
+    pushFeedItem(set, threadId, {
+      id,
+      kind: "tool",
+      ts: nowIso(),
+      name: update.name,
+      status: "running",
+      args: update.args,
+    });
+    return;
+  }
+
+  if (update.kind === "tool_input_delta") {
+    const key = `${update.turnId}:${update.key}`;
+    const nextInput = `${stream.toolInputByKey.get(key) ?? ""}${update.delta}`;
+    stream.toolInputByKey.set(key, nextInput);
+    const itemId = stream.toolItemIdByKey.get(key);
+    if (!itemId) return;
+
+    updateFeedItem(set, threadId, itemId, (item) => {
+      if (item.kind !== "tool") return item;
+      const prevArgs = isRecord(item.args) ? item.args : {};
+      return { ...item, args: { ...prevArgs, input: nextInput } };
+    });
+    return;
+  }
+
+  if (update.kind === "tool_call") {
+    const key = `${update.turnId}:${update.key}`;
+    const itemId = stream.toolItemIdByKey.get(key);
+    if (itemId) {
+      updateFeedItem(set, threadId, itemId, (item) =>
+        item.kind === "tool"
+          ? { ...item, name: update.name, status: "running", args: update.args ?? item.args }
+          : item
+      );
+      return;
+    }
+
+    const id = makeId();
+    stream.toolItemIdByKey.set(key, id);
+    pushFeedItem(set, threadId, {
+      id,
+      kind: "tool",
+      ts: nowIso(),
+      name: update.name,
+      status: "running",
+      args: update.args,
+    });
+    return;
+  }
+
+  if (update.kind === "tool_result" || update.kind === "tool_error" || update.kind === "tool_output_denied") {
+    const key = `${update.turnId}:${update.key}`;
+    const itemId = stream.toolItemIdByKey.get(key);
+    const result =
+      update.kind === "tool_result"
+        ? update.result
+        : update.kind === "tool_error"
+          ? { error: update.error }
+          : { denied: true, reason: update.reason };
+
+    if (itemId) {
+      updateFeedItem(set, threadId, itemId, (item) =>
+        item.kind === "tool"
+          ? { ...item, name: update.name, status: "done", result }
+          : item
+      );
+      return;
+    }
+
+    const id = makeId();
+    stream.toolItemIdByKey.set(key, id);
+    pushFeedItem(set, threadId, {
+      id,
+      kind: "tool",
+      ts: nowIso(),
+      name: update.name,
+      status: "done",
+      result,
+    });
+  }
+}
+
 function handleThreadEvent(
   get: () => AppStoreState,
   set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void,
@@ -1018,8 +1393,10 @@ function handleThreadEvent(
   pendingFirstMessage?: string
 ) {
   appendThreadTranscript(threadId, "server", evt);
+  const stream = getModelStreamRuntime(threadId);
 
   if (evt.type === "server_hello") {
+    resetModelStreamRuntime(threadId);
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
@@ -1072,9 +1449,11 @@ function handleThreadEvent(
 
   if (evt.type === "session_busy") {
     if (evt.busy) {
+      resetModelStreamRuntime(threadId);
       startBusyWatchdog(get, set, threadId);
     } else {
       clearBusyTimers(threadId);
+      resetModelStreamRuntime(threadId);
     }
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
@@ -1124,7 +1503,14 @@ function handleThreadEvent(
     return;
   }
 
+  if (evt.type === "model_stream_chunk") {
+    const mapped = mapModelStreamChunk(evt);
+    if (mapped) applyModelStreamUpdateToThreadFeed(set, threadId, stream, mapped);
+    return;
+  }
+
   if (evt.type === "user_message") {
+    resetModelStreamRuntime(threadId);
     const cmid = typeof evt.clientMessageId === "string" ? evt.clientMessageId : null;
     if (cmid) {
       const seen = RUNTIME.optimisticUserMessageIds.get(threadId);
@@ -1155,6 +1541,13 @@ function handleThreadEvent(
   }
 
   if (evt.type === "assistant_message") {
+    if (stream.lastAssistantTurnId) {
+      const streamed = (stream.assistantTextByTurn.get(stream.lastAssistantTurnId) ?? "").trim();
+      if (streamed && streamed === evt.text.trim()) {
+        return;
+      }
+    }
+
     pushFeedItem(set, threadId, {
       id: makeId(),
       kind: "message",
@@ -1171,6 +1564,10 @@ function handleThreadEvent(
   }
 
   if (evt.type === "reasoning") {
+    if (stream.lastReasoningTurnId && stream.reasoningTurns.has(stream.lastReasoningTurnId)) {
+      return;
+    }
+
     pushFeedItem(set, threadId, {
       id: makeId(),
       kind: "reasoning",
@@ -1391,6 +1788,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
       RUNTIME.threadSockets.delete(thread.id);
       RUNTIME.optimisticUserMessageIds.delete(thread.id);
       RUNTIME.pendingThreadMessages.delete(thread.id);
+      RUNTIME.modelStreamByThread.delete(thread.id);
       clearBusyTimers(thread.id);
       try {
         sock?.close();
@@ -1426,6 +1824,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     RUNTIME.threadSockets.delete(threadId);
     RUNTIME.optimisticUserMessageIds.delete(threadId);
     RUNTIME.pendingThreadMessages.delete(threadId);
+    RUNTIME.modelStreamByThread.delete(threadId);
     clearBusyTimers(threadId);
     try {
       sock?.close();

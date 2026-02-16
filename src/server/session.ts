@@ -32,6 +32,7 @@ import { emitObservabilityEvent } from "../observability/otel";
 import { runObservabilityQuery } from "../observability/query";
 import { evaluateHarnessSlo } from "../observability/slo";
 import { expandCommandTemplate, listCommands as listServerCommands, resolveCommand } from "./commands";
+import { normalizeModelStreamPart, reasoningModeForProvider } from "./modelStream";
 
 import type { ServerEvent } from "./protocol";
 import {
@@ -82,6 +83,7 @@ export class AgentSession {
   private readonly harnessContextStore: HarnessContextStore;
   private readonly runObservabilityQueryImpl: typeof runObservabilityQuery;
   private readonly evaluateHarnessSloImpl: typeof evaluateHarnessSlo;
+  private readonly runTurnImpl: typeof runTurn;
 
   private messages: ModelMessage[] = [];
   private running = false;
@@ -111,6 +113,7 @@ export class AgentSession {
     harnessContextStore?: HarnessContextStore;
     runObservabilityQueryImpl?: typeof runObservabilityQuery;
     evaluateHarnessSloImpl?: typeof evaluateHarnessSlo;
+    runTurnImpl?: typeof runTurn;
   }) {
     this.id = makeId();
     this.config = opts.config;
@@ -127,6 +130,7 @@ export class AgentSession {
     this.harnessContextStore = opts.harnessContextStore ?? new HarnessContextStore();
     this.runObservabilityQueryImpl = opts.runObservabilityQueryImpl ?? runObservabilityQuery;
     this.evaluateHarnessSloImpl = opts.evaluateHarnessSloImpl ?? evaluateHarnessSlo;
+    this.runTurnImpl = opts.runTurnImpl ?? runTurn;
     this.sessionBackupState = {
       status: "initializing",
       sessionId: this.id,
@@ -999,7 +1003,9 @@ export class AgentSession {
         this.messages = [first, ...this.messages.slice(-(MAX_MESSAGE_HISTORY - 1))];
       }
 
-      const res = await runTurn({
+      const turnId = makeId();
+      let streamPartIndex = 0;
+      const res = await this.runTurnImpl({
         config: this.config,
         system: this.system,
         messages: this.messages,
@@ -1012,13 +1018,31 @@ export class AgentSession {
         enableMcp: this.config.enableMcp,
         spawnDepth: 0,
         abortSignal: this.abortController.signal,
+        includeRawChunks: true,
+        onModelStreamPart: async (rawPart) => {
+          const normalized = normalizeModelStreamPart(rawPart, {
+            provider: this.config.provider,
+            includeRawPart: true,
+          });
+          this.emit({
+            type: "model_stream_chunk",
+            sessionId: this.id,
+            turnId,
+            index: streamPartIndex++,
+            provider: this.config.provider,
+            model: this.config.model,
+            partType: normalized.partType,
+            part: normalized.part,
+            ...(normalized.rawPart !== undefined ? { rawPart: normalized.rawPart } : {}),
+          });
+        },
       });
 
       this.messages.push(...res.responseMessages);
 
       const reasoning = (res.reasoningText || "").trim();
       if (reasoning) {
-        const kind = this.config.provider === "openai" || this.config.provider === "codex-cli" ? "summary" : "reasoning";
+        const kind = reasoningModeForProvider(this.config.provider);
         this.emit({ type: "reasoning", sessionId: this.id, kind, text: reasoning });
       }
 

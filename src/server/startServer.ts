@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
+import type { runTurn as runTurnFn } from "../agent";
 import type { AgentConfig } from "../types";
 import type { ServerErrorCode } from "../types";
 import { loadConfig } from "../config";
@@ -24,6 +25,7 @@ export interface StartAgentServerOptions {
   homedir?: string;
   connectProviderImpl?: typeof connectModelProvider;
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
+  runTurnImpl?: typeof runTurnFn;
 }
 
 export async function startAgentServer(
@@ -80,6 +82,7 @@ export async function startAgentServer(
             yolo: opts.yolo,
             connectProviderImpl: opts.connectProviderImpl,
             getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl,
+            runTurnImpl: opts.runTurnImpl,
             emit: (evt: ServerEvent) => {
               try {
                 ws.send(JSON.stringify(evt));
@@ -95,6 +98,9 @@ export async function startAgentServer(
             type: "server_hello",
             sessionId: session.id,
             protocolVersion: WEBSOCKET_PROTOCOL_VERSION,
+            capabilities: {
+              modelStreamChunk: "v1",
+            },
             config: session.getPublicConfig(),
           };
 

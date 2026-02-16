@@ -3,6 +3,7 @@ import { createStore, produce } from "solid-js/store";
 import { AgentSocket } from "../../../src/client/agentSocket";
 import type { ClientMessage, ServerEvent } from "../../../src/server/protocol";
 import type { ApprovalRiskCode, CommandInfo, TodoItem, ServerErrorCode, ServerErrorSource } from "../../../src/types";
+import { mapModelStreamChunk } from "./modelStream";
 
 // ── Feed item types ──────────────────────────────────────────────────────────
 
@@ -152,14 +153,43 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
 
   const pendingTools = new Map<string, string[]>();
   const sentMessageIds = new Set<string>();
+  const streamedAssistantItemIds = new Map<string, string>();
+  const streamedAssistantText = new Map<string, string>();
+  const streamedReasoningItemIds = new Map<string, string>();
+  const streamedReasoningText = new Map<string, string>();
+  const streamedToolItemIds = new Map<string, string>();
+  const streamedToolInput = new Map<string, string>();
+  let lastStreamedAssistantTurnId: string | null = null;
+  let lastStreamedReasoningTurnId: string | null = null;
 
   let socket: AgentSocket | null = null;
+
+  function resetModelStreamState() {
+    streamedAssistantItemIds.clear();
+    streamedAssistantText.clear();
+    streamedReasoningItemIds.clear();
+    streamedReasoningText.clear();
+    streamedToolItemIds.clear();
+    streamedToolInput.clear();
+    lastStreamedAssistantTurnId = null;
+    lastStreamedReasoningTurnId = null;
+  }
+
+  function updateFeedItem(id: string, update: (item: FeedItem) => FeedItem) {
+    setState("feed", (f) =>
+      f.map((item) => {
+        if (item.id !== id) return item;
+        return update(item);
+      })
+    );
+  }
 
   function handleEvent(evt: ServerEvent) {
     if (evt.type === "server_hello") {
       feedSeq = 0;
       pendingTools.clear();
       sentMessageIds.clear();
+      resetModelStreamState();
       setState(produce((s) => {
         s.status = "connected";
         s.sessionId = evt.sessionId;
@@ -196,6 +226,12 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     switch (evt.type) {
       case "session_busy":
         setState("busy", evt.busy);
+        if (evt.busy) {
+          lastStreamedAssistantTurnId = null;
+          lastStreamedReasoningTurnId = null;
+        } else {
+          resetModelStreamState();
+        }
         break;
 
       case "session_settings":
@@ -249,6 +285,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         feedSeq = 0;
         pendingTools.clear();
         sentMessageIds.clear();
+        resetModelStreamState();
         setState(produce((s) => {
           s.feed = [{ id: nextFeedId(), type: "system", line: "conversation reset" }];
           s.todos = [];
@@ -269,12 +306,159 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         break;
 
       case "assistant_message":
+        if (lastStreamedAssistantTurnId) {
+          const streamed = (streamedAssistantText.get(lastStreamedAssistantTurnId) ?? "").trim();
+          if (streamed && streamed === evt.text.trim()) {
+            break;
+          }
+        }
         setState("feed", (f) => [...f, { id: nextFeedId(), type: "message", role: "assistant", text: evt.text }]);
         break;
 
       case "reasoning":
+        if (lastStreamedReasoningTurnId) {
+          const prefix = `${lastStreamedReasoningTurnId}:`;
+          const hasStreamedReasoning = Array.from(streamedReasoningText.keys()).some((key) => key.startsWith(prefix));
+          if (hasStreamedReasoning) {
+            break;
+          }
+        }
         setState("feed", (f) => [...f, { id: nextFeedId(), type: "reasoning", kind: evt.kind, text: evt.text }]);
         break;
+
+      case "model_stream_chunk": {
+        const mapped = mapModelStreamChunk(evt);
+        if (!mapped) break;
+
+        if (mapped.kind === "assistant_delta") {
+          lastStreamedAssistantTurnId = mapped.turnId;
+          const existingId = streamedAssistantItemIds.get(mapped.turnId);
+          if (existingId) {
+            const nextText = `${streamedAssistantText.get(mapped.turnId) ?? ""}${mapped.text}`;
+            streamedAssistantText.set(mapped.turnId, nextText);
+            updateFeedItem(existingId, (item) =>
+              item.type === "message" && item.role === "assistant"
+                ? { ...item, text: nextText }
+                : item
+            );
+          } else {
+            const id = nextFeedId();
+            streamedAssistantItemIds.set(mapped.turnId, id);
+            streamedAssistantText.set(mapped.turnId, mapped.text);
+            setState("feed", (f) => [...f, { id, type: "message", role: "assistant", text: mapped.text }]);
+          }
+          break;
+        }
+
+        if (mapped.kind === "reasoning_delta") {
+          lastStreamedReasoningTurnId = mapped.turnId;
+          const key = `${mapped.turnId}:${mapped.streamId}`;
+          const existingId = streamedReasoningItemIds.get(key);
+          if (existingId) {
+            const nextText = `${streamedReasoningText.get(key) ?? ""}${mapped.text}`;
+            streamedReasoningText.set(key, nextText);
+            updateFeedItem(existingId, (item) =>
+              item.type === "reasoning" ? { ...item, text: nextText, kind: mapped.mode } : item
+            );
+          } else {
+            const id = nextFeedId();
+            streamedReasoningItemIds.set(key, id);
+            streamedReasoningText.set(key, mapped.text);
+            setState("feed", (f) => [...f, { id, type: "reasoning", kind: mapped.mode, text: mapped.text }]);
+          }
+          break;
+        }
+
+        if (mapped.kind === "tool_input_start") {
+          const key = `${mapped.turnId}:${mapped.key}`;
+          const existingId = streamedToolItemIds.get(key);
+          if (!existingId) {
+            const id = nextFeedId();
+            streamedToolItemIds.set(key, id);
+            setState("feed", (f) => [...f, {
+              id,
+              type: "tool",
+              name: mapped.name,
+              status: "running",
+              args: mapped.args,
+            }]);
+          }
+          break;
+        }
+
+        if (mapped.kind === "tool_input_delta") {
+          const key = `${mapped.turnId}:${mapped.key}`;
+          const existingId = streamedToolItemIds.get(key);
+          const nextInput = `${streamedToolInput.get(key) ?? ""}${mapped.delta}`;
+          streamedToolInput.set(key, nextInput);
+          if (existingId) {
+            updateFeedItem(existingId, (item) =>
+              item.type === "tool" ? { ...item, args: { ...(item.args ?? {}), input: nextInput } } : item
+            );
+          }
+          break;
+        }
+
+        if (mapped.kind === "tool_call") {
+          const key = `${mapped.turnId}:${mapped.key}`;
+          const existingId = streamedToolItemIds.get(key);
+          if (existingId) {
+            updateFeedItem(existingId, (item) =>
+              item.type === "tool"
+                ? { ...item, name: mapped.name, status: "running", args: mapped.args ?? item.args }
+                : item
+            );
+          } else {
+            const id = nextFeedId();
+            streamedToolItemIds.set(key, id);
+            setState("feed", (f) => [...f, {
+              id,
+              type: "tool",
+              name: mapped.name,
+              status: "running",
+              args: mapped.args,
+            }]);
+          }
+          break;
+        }
+
+        if (mapped.kind === "tool_result" || mapped.kind === "tool_error" || mapped.kind === "tool_output_denied") {
+          const key = `${mapped.turnId}:${mapped.key}`;
+          const existingId = streamedToolItemIds.get(key);
+          const result =
+            mapped.kind === "tool_result"
+              ? mapped.result
+              : mapped.kind === "tool_error"
+                ? { error: mapped.error }
+                : { denied: true, reason: mapped.reason };
+
+          if (existingId) {
+            updateFeedItem(existingId, (item) =>
+              item.type === "tool"
+                ? { ...item, name: mapped.name, status: "done", result }
+                : item
+            );
+          } else {
+            const id = nextFeedId();
+            streamedToolItemIds.set(key, id);
+            setState("feed", (f) => [...f, {
+              id,
+              type: "tool",
+              name: mapped.name,
+              status: "done",
+              result,
+            }]);
+          }
+          break;
+        }
+
+        if (mapped.kind === "finish") {
+          // no-op for now: legacy assistant/reasoning events still arrive for compatibility.
+          break;
+        }
+
+        break;
+      }
 
       case "log": {
         const toolLog = parseToolLogLine(evt.line);
@@ -390,6 +574,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       version: "2.0",
       onEvent: handleEvent,
       onClose: () => {
+        resetModelStreamState();
         setState(produce((s) => {
           s.status = "disconnected";
           s.sessionId = null;

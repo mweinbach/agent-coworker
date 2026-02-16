@@ -19,6 +19,7 @@ type AskPrompt = { requestId: string; question: string; options?: string[] };
 type ApprovalPrompt = { requestId: string; command: string; dangerous: boolean; reasonCode: ApprovalRiskCode };
 type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
 type ProviderStatus = Extract<ServerEvent, { type: "provider_status" }>["providers"][number];
+type ModelStreamChunkEvent = Extract<ServerEvent, { type: "model_stream_chunk" }>;
 const DEFAULT_API_AUTH_METHOD: ProviderAuthMethod = { id: "api_key", type: "api", label: "API key" };
 
 export function renderTodosToLines(todos: TodoItem[]): string[] {
@@ -38,6 +39,22 @@ export function renderTodosToLines(todos: TodoItem[]): string[] {
 function renderTodos(todos: TodoItem[]) {
   for (const line of renderTodosToLines(todos)) {
     console.log(line);
+  }
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function previewStructured(value: unknown, max = 160): string {
+  if (value === undefined) return "";
+  if (typeof value === "string") return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+  try {
+    const raw = JSON.stringify(value);
+    if (!raw) return "";
+    return raw.length <= max ? raw : `${raw.slice(0, max - 1)}…`;
+  } catch {
+    return String(value);
   }
 }
 
@@ -195,6 +212,36 @@ export async function runCliRepl(
   let providerList: string[] = [...UI_PROVIDER_NAMES];
   let providerAuthMethods: Record<string, ProviderAuthMethod[]> = {};
   let providerStatuses: ProviderStatus[] = [];
+  let lastStreamedAssistantTurnId: string | null = null;
+  let lastStreamedReasoningTurnId: string | null = null;
+  const streamedAssistantTextByTurn = new Map<string, string>();
+  const streamedAssistantOpenTurns = new Set<string>();
+  const streamedReasoningTurns = new Set<string>();
+  const streamedToolInputByKey = new Map<string, string>();
+
+  const resetModelStreamState = () => {
+    lastStreamedAssistantTurnId = null;
+    lastStreamedReasoningTurnId = null;
+    streamedAssistantTextByTurn.clear();
+    streamedAssistantOpenTurns.clear();
+    streamedReasoningTurns.clear();
+    streamedToolInputByKey.clear();
+  };
+
+  const modelStreamToolKey = (evt: ModelStreamChunkEvent): string => {
+    const part = evt.part as Record<string, unknown>;
+    return (
+      asString(part.toolCallId) ??
+      asString(part.id) ??
+      asString(part.toolName) ??
+      `${evt.turnId}:${evt.index}`
+    );
+  };
+
+  const modelStreamToolName = (evt: ModelStreamChunkEvent): string => {
+    const part = evt.part as Record<string, unknown>;
+    return asString(part.toolName) ?? "tool";
+  };
 
   const send = (msg: ClientMessage) => {
     if (!ws || ws.readyState !== WebSocketCtor.OPEN) return false;
@@ -315,6 +362,7 @@ export async function runCliRepl(
     providerList = [...UI_PROVIDER_NAMES];
     providerAuthMethods = {};
     providerStatuses = [];
+    resetModelStreamState();
 
     pendingAsk = [];
     pendingApproval = [];
@@ -337,6 +385,7 @@ export async function runCliRepl(
       config = evt.config;
       busy = false;
       disconnectNotified = false;
+      resetModelStreamState();
       console.log(`connected: ${evt.sessionId}`);
       console.log(`provider=${evt.config.provider} model=${evt.config.model}`);
       console.log(`cwd=${evt.config.workingDirectory}`);
@@ -351,8 +400,17 @@ export async function runCliRepl(
     switch (evt.type) {
       case "session_busy":
         busy = evt.busy;
+        if (evt.busy) {
+          resetModelStreamState();
+        } else {
+          if (lastStreamedAssistantTurnId && streamedAssistantOpenTurns.delete(lastStreamedAssistantTurnId)) {
+            process.stdout.write("\n");
+          }
+          resetModelStreamState();
+        }
         break;
       case "reset_done":
+        resetModelStreamState();
         console.log("(cleared)\n");
         pendingAsk = [];
         pendingApproval = [];
@@ -362,12 +420,104 @@ export async function runCliRepl(
         rl.setPrompt("you> ");
         rl.prompt();
         break;
+      case "model_stream_chunk": {
+        const part = evt.part as Record<string, unknown>;
+        if (evt.partType === "text_delta") {
+          const text = asString(part.text);
+          if (!text) break;
+          const next = `${streamedAssistantTextByTurn.get(evt.turnId) ?? ""}${text}`;
+          streamedAssistantTextByTurn.set(evt.turnId, next);
+          lastStreamedAssistantTurnId = evt.turnId;
+          if (!streamedAssistantOpenTurns.has(evt.turnId)) {
+            process.stdout.write("\n");
+            streamedAssistantOpenTurns.add(evt.turnId);
+          }
+          process.stdout.write(text);
+          break;
+        }
+
+        if (evt.partType === "finish") {
+          if (streamedAssistantOpenTurns.delete(evt.turnId)) process.stdout.write("\n");
+          break;
+        }
+
+        if (evt.partType === "reasoning_delta") {
+          const text = asString(part.text);
+          if (!text) break;
+          const mode = part.mode === "summary" ? "summary" : "reasoning";
+          lastStreamedReasoningTurnId = evt.turnId;
+          streamedReasoningTurns.add(evt.turnId);
+          console.log(`\n[${mode}+] ${text}`);
+          break;
+        }
+
+        if (evt.partType === "tool_input_start") {
+          const name = modelStreamToolName(evt);
+          console.log(`\n[tool:start] ${name}`);
+          break;
+        }
+
+        if (evt.partType === "tool_input_delta") {
+          const key = modelStreamToolKey(evt);
+          const delta = asString(part.delta);
+          if (delta) streamedToolInputByKey.set(key, `${streamedToolInputByKey.get(key) ?? ""}${delta}`);
+          break;
+        }
+
+        if (evt.partType === "tool_call") {
+          const key = modelStreamToolKey(evt);
+          const name = modelStreamToolName(evt);
+          const input = part.input ?? (streamedToolInputByKey.get(key) ? { input: streamedToolInputByKey.get(key) } : undefined);
+          const preview = previewStructured(input);
+          console.log(preview ? `\n[tool:call] ${name} ${preview}` : `\n[tool:call] ${name}`);
+          break;
+        }
+
+        if (evt.partType === "tool_result") {
+          const name = modelStreamToolName(evt);
+          const preview = previewStructured(part.output);
+          console.log(preview ? `\n[tool:done] ${name} ${preview}` : `\n[tool:done] ${name}`);
+          break;
+        }
+
+        if (evt.partType === "tool_error") {
+          const name = modelStreamToolName(evt);
+          const preview = previewStructured(part.error);
+          console.log(preview ? `\n[tool:error] ${name} ${preview}` : `\n[tool:error] ${name}`);
+          break;
+        }
+
+        if (evt.partType === "tool_output_denied") {
+          const name = modelStreamToolName(evt);
+          const preview = previewStructured(part.reason);
+          console.log(preview ? `\n[tool:denied] ${name} ${preview}` : `\n[tool:denied] ${name}`);
+          break;
+        }
+
+        if (evt.partType === "tool_approval_request") {
+          console.log("\n[tool:approval] provider requested approval");
+        }
+        break;
+      }
       case "assistant_message": {
         const out = evt.text.trim();
-        if (out) console.log(`\n${out}\n`);
+        if (!out) break;
+        if (lastStreamedAssistantTurnId) {
+          const streamed = (streamedAssistantTextByTurn.get(lastStreamedAssistantTurnId) ?? "").trim();
+          if (streamed && streamed === out) {
+            if (streamedAssistantOpenTurns.delete(lastStreamedAssistantTurnId)) {
+              process.stdout.write("\n");
+            }
+            break;
+          }
+        }
+        console.log(`\n${out}\n`);
         break;
       }
       case "reasoning":
+        if (lastStreamedReasoningTurnId && streamedReasoningTurns.has(lastStreamedReasoningTurnId)) {
+          break;
+        }
         console.log(`\n[${evt.kind}] ${evt.text}\n`);
         break;
       case "log":

@@ -49,6 +49,7 @@ export type TranscriptEvent = {
 export type FeedItem =
   | { id: string; kind: "message"; role: "user" | "assistant"; ts: string; text: string }
   | { id: string; kind: "reasoning"; mode: "reasoning" | "summary"; ts: string; text: string }
+  | { id: string; kind: "tool"; ts: string; name: string; status: "running" | "done"; args?: unknown; result?: unknown }
   | { id: string; kind: "todos"; ts: string; todos: TodoItem[] }
   | { id: string; kind: "log"; ts: string; line: string }
   | { id: string; kind: "error"; ts: string; message: string; code: ServerErrorCode; source: ServerErrorSource }

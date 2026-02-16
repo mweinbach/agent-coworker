@@ -16,6 +16,7 @@ import type {
 import type { ProviderStatus } from "../providerStatus";
 import { resolveProviderAuthMethod, type ProviderAuthMethod, type ProviderAuthChallenge } from "../providers/authRegistry";
 import type { ProviderCatalogEntry } from "../providers/connectionCatalog";
+import type { ModelStreamPartType } from "./modelStream";
 import type { SessionBackupPublicState } from "./sessionBackup";
 
 export type ClientMessage =
@@ -74,6 +75,9 @@ export type ServerEvent =
       type: "server_hello";
       sessionId: string;
       protocolVersion?: string;
+      capabilities?: {
+        modelStreamChunk: "v1";
+      };
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
     }
   | { type: "session_settings"; sessionId: string; enableMcp: boolean }
@@ -98,6 +102,17 @@ export type ServerEvent =
   | { type: "provider_status"; sessionId: string; providers: ProviderStatus[] }
   | { type: "session_busy"; sessionId: string; busy: boolean }
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
+  | {
+      type: "model_stream_chunk";
+      sessionId: string;
+      turnId: string;
+      index: number;
+      provider: AgentConfig["provider"];
+      model: string;
+      partType: ModelStreamPartType;
+      part: Record<string, unknown>;
+      rawPart?: unknown;
+    }
   | { type: "assistant_message"; sessionId: string; text: string }
   | { type: "reasoning"; sessionId: string; kind: "reasoning" | "summary"; text: string }
   | { type: "log"; sessionId: string; line: string }
@@ -214,6 +229,7 @@ export const SERVER_EVENT_TYPES = [
   "provider_status",
   "session_busy",
   "user_message",
+  "model_stream_chunk",
   "assistant_message",
   "reasoning",
   "log",

@@ -42,10 +42,7 @@ export function QuestionPrompt(props: { ask: AskRequest }) {
         e.preventDefault?.();
       }
     } else {
-      if (key === "enter") {
-        handleSubmit();
-        e.preventDefault?.();
-      } else if (key === "escape") {
+      if (key === "escape") {
         actions.answerAsk(props.ask.requestId, "");
         e.preventDefault?.();
       }
@@ -98,6 +95,7 @@ export function QuestionPrompt(props: { ask: AskRequest }) {
             value={customInput()}
             onChange={(v: any) => setCustomInput(typeof v === "string" ? v : v?.value ?? "")}
             onKeyDown={handleKeyDown}
+            onSubmit={handleSubmit}
             placeholder="Type your answer..."
             placeholderColor={theme.textMuted}
             textColor={theme.text}

@@ -1056,6 +1056,7 @@ describe("safeParseClientMessage", () => {
       expect(SERVER_EVENT_TYPES.includes("provider_auth_methods")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_auth_challenge")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_auth_result")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("model_stream_chunk")).toBe(true);
     });
 
     test("server_hello supports protocolVersion", () => {
@@ -1063,6 +1064,9 @@ describe("safeParseClientMessage", () => {
         type: "server_hello",
         sessionId: "s1",
         protocolVersion: "3.0",
+        capabilities: {
+          modelStreamChunk: "v1",
+        },
         config: {
           provider: "openai",
           model: "gpt-5.2",
@@ -1073,6 +1077,7 @@ describe("safeParseClientMessage", () => {
       expect(evt.type).toBe("server_hello");
       if (evt.type === "server_hello") {
         expect(evt.protocolVersion).toBe("3.0");
+        expect(evt.capabilities?.modelStreamChunk).toBe("v1");
       }
     });
 

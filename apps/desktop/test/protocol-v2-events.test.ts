@@ -201,4 +201,119 @@ describe("desktop protocol v2 mapping", () => {
     expect(notif?.title).toBe("Agent error");
     expect(notif?.detail).toContain("permissions/permission_denied");
   });
+
+  test("model_stream_chunk updates assistant/reasoning/tool feed and dedupes legacy finals", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-1",
+      index: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "text_delta",
+      part: { id: "txt_1", text: "Hel" },
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-1",
+      index: 1,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "text_delta",
+      part: { id: "txt_1", text: "lo" },
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-1",
+      index: 2,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "reasoning_delta",
+      part: { id: "r1", mode: "summary", text: "thinking" },
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-1",
+      index: 3,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "tool_call",
+      part: { toolCallId: "tool-1", toolName: "read", input: { path: "README.md" } },
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-1",
+      index: 4,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "tool_result",
+      part: { toolCallId: "tool-1", toolName: "read", output: { chars: 42 } },
+    });
+
+    // Legacy compatibility events still arrive; these should be deduped.
+    threadSocket.emit({
+      type: "reasoning",
+      sessionId: "thread-session",
+      kind: "summary",
+      text: "thinking",
+    });
+    threadSocket.emit({
+      type: "assistant_message",
+      sessionId: "thread-session",
+      text: "Hello",
+    });
+
+    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
+    const assistant = feed.filter((item) => item.kind === "message" && item.role === "assistant");
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]?.text).toBe("Hello");
+
+    const reasoning = feed.filter((item) => item.kind === "reasoning");
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0]?.mode).toBe("summary");
+    expect(reasoning[0]?.text).toBe("thinking");
+
+    const tool = feed.find((item) => item.kind === "tool");
+    expect(tool?.kind).toBe("tool");
+    if (!tool || tool.kind !== "tool") throw new Error("Expected tool feed item");
+    expect(tool.name).toBe("read");
+    expect(tool.status).toBe("done");
+    expect(tool.result).toEqual({ chars: 42 });
+  });
+
+  test("legacy log events still map to log feed items when no model stream exists", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "log",
+      sessionId: "thread-session",
+      line: "tool> read {\"path\":\"README.md\"}",
+    });
+
+    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
+    const last = feed.at(-1);
+    expect(last?.kind).toBe("log");
+    if (!last || last.kind !== "log") throw new Error("Expected log feed item");
+    expect(last.line).toContain("tool> read");
+  });
 });

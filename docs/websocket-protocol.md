@@ -14,7 +14,7 @@ This document is the canonical external protocol contract for all clients. Thin 
 ## Public Capabilities
 
 - Session lifecycle: `server_hello`, `session_settings`, `session_busy`, `reset`
-- Conversational turn streaming: `user_message`, `assistant_message`, `reasoning`, `log`, `todos`
+- Conversational turn streaming: `user_message`, `model_stream_chunk`, `assistant_message`, `reasoning`, `log`, `todos`
 - Human-in-the-loop control: `ask`/`ask_response`, `approval`/`approval_response`, `cancel`
 - Provider/model control: `provider_catalog_get`, `provider_auth_methods_get`, `provider_auth_authorize`, `provider_auth_callback`, `provider_auth_set_api_key`, `set_model`, `refresh_provider_status`, `provider_catalog`, `provider_auth_methods`, `provider_auth_challenge`, `provider_auth_result`, `provider_status`
 - Tool, command, and skill metadata: `list_tools`, `tools`, `list_commands`, `commands`, `execute_command`, `list_skills`, `read_skill`, `enable_skill`, `disable_skill`, `delete_skill`
@@ -30,7 +30,7 @@ Client                          Server
   |                               |
   |-------- WS Connect ---------->|
   |                               | creates AgentSession
-  |<------ server_hello ----------|  (sessionId + protocolVersion + config)
+  |<------ server_hello ----------|  (sessionId + protocolVersion + capabilities + config)
   |                               |
   |---- client_hello (optional) ->|  (silently acknowledged)
   |                               |
@@ -56,6 +56,8 @@ Recommended migration order for clients:
 2. Route provider connection UX through `provider_auth_*` messages.
 3. Assert `server_hello.protocolVersion === "3.0"` at connect time.
 
+`model_stream_chunk` is additive and capability-gated via `server_hello.capabilities.modelStreamChunk`.
+
 ## Type Definitions
 
 ```typescript
@@ -76,6 +78,10 @@ interface ConfigSubset {
 }
 
 type ProtocolVersion = string; // current server value: "3.0"
+
+interface ServerCapabilities {
+  modelStreamChunk?: "v1";
+}
 
 interface TodoItem {
   content: string;
@@ -556,13 +562,16 @@ All events are JSON with a `type` and `sessionId`.
 
 ### server_hello
 
-First message after connection. Contains the session ID, protocol version, and current configuration.
+First message after connection. Contains the session ID, protocol version, feature capabilities, and current configuration.
 
 ```jsonc
 {
   "type": "server_hello",
   "sessionId": "550e8400-e29b-41d4-a716-446655440000",
   "protocolVersion": "3.0",
+  "capabilities": {
+    "modelStreamChunk": "v1"
+  },
   "config": {
     "provider": "openai",
     "model": "gpt-5.2",
@@ -571,6 +580,8 @@ First message after connection. Contains the session ID, protocol version, and c
   }
 }
 ```
+
+`capabilities.modelStreamChunk === "v1"` means the server emits structured `model_stream_chunk` events.
 
 ### session_settings
 
@@ -697,6 +708,65 @@ Echo of the received user message (confirmation).
   "clientMessageId": "abc-123"
 }
 ```
+
+### model_stream_chunk
+
+Structured per-part stream output from the active provider/model turn. This is additive with legacy `reasoning` and `assistant_message` events.
+
+```jsonc
+{
+  "type": "model_stream_chunk",
+  "sessionId": "...",
+  "turnId": "turn-uuid",
+  "index": 7,
+  "provider": "openai",
+  "model": "gpt-5.2",
+  "partType": "text_delta",
+  "part": {
+    "id": "txt_1",
+    "text": "Hello"
+  },
+  "rawPart": { "type": "text-delta", "id": "txt_1", "text": "Hello" } // optional
+}
+```
+
+Ordering and stability guarantees:
+
+- `turnId` is stable for all chunks in one top-level user turn.
+- `index` is monotonic (0-based) and preserves original provider emission order within that `turnId`.
+- `partType` uses stable snake_case values.
+- `part` is normalized for stable parsing and UI rendering.
+- `rawPart` is optional and sanitized JSON-safe (truncated/cycle-protected), not guaranteed verbatim.
+- Legacy `reasoning` and `assistant_message` events are still emitted for compatibility.
+
+`partType` contract (`part` required fields):
+
+| `partType` | Required `part` fields |
+|---|---|
+| `start` | `{}` |
+| `finish` | `{ finishReason, rawFinishReason?, totalUsage? }` |
+| `abort` | `{ reason? }` |
+| `error` | `{ error }` |
+| `start_step` | `{ request?, warnings? }` |
+| `finish_step` | `{ response?, usage?, finishReason, rawFinishReason?, providerMetadata? }` |
+| `text_start` | `{ id, providerMetadata? }` |
+| `text_delta` | `{ id, text, providerMetadata? }` |
+| `text_end` | `{ id, providerMetadata? }` |
+| `reasoning_start` | `{ id, mode, providerMetadata? }` |
+| `reasoning_delta` | `{ id, mode, text, providerMetadata? }` |
+| `reasoning_end` | `{ id, mode, providerMetadata? }` |
+| `tool_input_start` | `{ id, toolName, providerExecuted?, dynamic?, title?, providerMetadata? }` |
+| `tool_input_delta` | `{ id, delta, providerMetadata? }` |
+| `tool_input_end` | `{ id, providerMetadata? }` |
+| `tool_call` | `{ toolCallId, toolName, input, dynamic?, invalid?, error?, providerMetadata? }` |
+| `tool_result` | `{ toolCallId, toolName, output, dynamic?, providerMetadata? }` |
+| `tool_error` | `{ toolCallId, toolName, error, dynamic?, providerMetadata? }` |
+| `tool_output_denied` | `{ toolCallId, toolName, reason?, providerMetadata? }` |
+| `tool_approval_request` | `{ approvalId, toolCall }` |
+| `source` | `{ source }` |
+| `file` | `{ file }` |
+| `raw` | `{ raw }` |
+| `unknown` | `{ sdkType, raw? }` |
 
 ### assistant_message
 
@@ -1095,11 +1165,16 @@ Keepalive response to a client `ping`. The `sessionId` echoes the incoming ping 
 client  -> user_message { text: "Hello" }
 server  <- user_message { text: "Hello" }           (echo)
 server  <- session_busy { busy: true }
+server  <- model_stream_chunk { turnId, index, partType, part, ... } (0..N)
 server  <- todos [...]                                (0..N)
 server  <- reasoning { kind: "reasoning", text: ... } (0..N)
 server  <- assistant_message { text: "Hi! ..." }
 server  <- session_busy { busy: false }
 ```
+
+### Structured Stream Notes
+
+`model_stream_chunk` is the primary structured turn stream. `reasoning` and `assistant_message` remain for compatibility with older clients.
 
 ### Command Approval
 

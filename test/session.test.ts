@@ -78,6 +78,10 @@ function makeConfig(dir: string): AgentConfig {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function makeEmit(): { emit: (evt: ServerEvent) => void; events: ServerEvent[] } {
   const events: ServerEvent[] = [];
   const emit = (event: ServerEvent) => {
@@ -1413,6 +1417,15 @@ describe("AgentSession", () => {
       expect(call.enableMcp).toBe(true);
     });
 
+    test("passes includeRawChunks and onModelStreamPart to runTurn", async () => {
+      const { session } = makeSession();
+      await session.sendUserMessage("go");
+
+      const call = mockRunTurn.mock.calls[0][0] as any;
+      expect(call.includeRawChunks).toBe(true);
+      expect(typeof call.onModelStreamPart).toBe("function");
+    });
+
     test("adds response messages to history", async () => {
       const responseMsg = { role: "assistant" as const, content: "I helped!" };
       let callNum = 0;
@@ -1453,6 +1466,43 @@ describe("AgentSession", () => {
       expect(assistantEvt).toBeDefined();
       expect(assistantEvt.text).toBe("Here is my response.");
       expect(assistantEvt.sessionId).toBe(session.id);
+    });
+
+    test("emits ordered model_stream_chunk events with turnId/index/provider/model", async () => {
+      mockRunTurn.mockImplementation(async (params: any) => {
+        await params.onModelStreamPart?.({ type: "start" });
+        await params.onModelStreamPart?.({ type: "text-delta", id: "txt_1", text: "hel" });
+        await params.onModelStreamPart?.({ type: "text-delta", id: "txt_1", text: "lo" });
+        await params.onModelStreamPart?.({ type: "finish", finishReason: "stop" });
+        return {
+          text: "hello",
+          reasoningText: "because",
+          responseMessages: [],
+        };
+      });
+
+      const dir = "/tmp/test-session";
+      const config = { ...makeConfig(dir), provider: "openai" as const, model: "gpt-5.2" };
+      const { session, events } = makeSession({ config });
+      await session.sendUserMessage("hi");
+
+      const chunks = events.filter((e) => e.type === "model_stream_chunk") as Extract<ServerEvent, { type: "model_stream_chunk" }>[];
+      expect(chunks).toHaveLength(4);
+      expect(chunks.map((chunk) => chunk.partType)).toEqual(["start", "text_delta", "text_delta", "finish"]);
+      expect(new Set(chunks.map((chunk) => chunk.turnId)).size).toBe(1);
+      expect(chunks.map((chunk) => chunk.index)).toEqual([0, 1, 2, 3]);
+      for (const chunk of chunks) {
+        expect(chunk.sessionId).toBe(session.id);
+        expect(chunk.provider).toBe("openai");
+        expect(chunk.model).toBe("gpt-5.2");
+      }
+      expect((chunks[1]?.part.text as string) ?? "").toBe("hel");
+      expect((chunks[2]?.part.text as string) ?? "").toBe("lo");
+
+      const legacyReasoning = events.find((e) => e.type === "reasoning");
+      const legacyAssistant = events.find((e) => e.type === "assistant_message");
+      expect(legacyReasoning).toBeDefined();
+      expect(legacyAssistant).toBeDefined();
     });
 
     test("does not emit assistant_message when response text is empty", async () => {
@@ -1558,6 +1608,30 @@ describe("AgentSession", () => {
       expect(reasoningEvt.kind).toBe("summary");
     });
 
+    test('normalizes reasoning_delta mode to "summary" for openai stream parts', async () => {
+      mockRunTurn.mockImplementation(async (params: any) => {
+        await params.onModelStreamPart?.({ type: "reasoning-delta", id: "r1", text: "thinking" });
+        return {
+          text: "done",
+          reasoningText: "thinking",
+          responseMessages: [],
+        };
+      });
+
+      const dir = "/tmp/test-session";
+      const config = { ...makeConfig(dir), provider: "openai" as const };
+      const { session, events } = makeSession({ config });
+      await session.sendUserMessage("go");
+
+      const chunk = events.find((e) => e.type === "model_stream_chunk" && e.partType === "reasoning_delta") as
+        | Extract<ServerEvent, { type: "model_stream_chunk" }>
+        | undefined;
+      expect(chunk).toBeDefined();
+      if (chunk) {
+        expect(chunk.part.mode).toBe("summary");
+      }
+    });
+
     test('uses "summary" kind for codex-cli provider', async () => {
       mockRunTurn.mockImplementation(async () => ({
         text: "answer",
@@ -1589,6 +1663,60 @@ describe("AgentSession", () => {
 
       const reasoningEvt = events.find((e) => e.type === "reasoning") as any;
       expect(reasoningEvt.kind).toBe("reasoning");
+    });
+
+    test('normalizes reasoning_delta mode to "reasoning" for google stream parts', async () => {
+      mockRunTurn.mockImplementation(async (params: any) => {
+        await params.onModelStreamPart?.({ type: "reasoning-delta", id: "r1", text: "thinking" });
+        return {
+          text: "done",
+          reasoningText: "thinking",
+          responseMessages: [],
+        };
+      });
+
+      const dir = "/tmp/test-session";
+      const config = { ...makeConfig(dir), provider: "google" as const };
+      const { session, events } = makeSession({ config });
+      await session.sendUserMessage("go");
+
+      const chunk = events.find((e) => e.type === "model_stream_chunk" && e.partType === "reasoning_delta") as
+        | Extract<ServerEvent, { type: "model_stream_chunk" }>
+        | undefined;
+      expect(chunk).toBeDefined();
+      if (chunk) {
+        expect(chunk.part.mode).toBe("reasoning");
+      }
+    });
+
+    test("sanitizes non-json-safe stream raw payloads", async () => {
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const cyclic: any = { name: "root", count: 12n };
+        cyclic.self = cyclic;
+        cyclic.items = [1, 2, 3];
+        await params.onModelStreamPart?.({ type: "raw", rawValue: cyclic });
+        return {
+          text: "done",
+          reasoningText: undefined,
+          responseMessages: [],
+        };
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const chunk = events.find((e) => e.type === "model_stream_chunk") as
+        | Extract<ServerEvent, { type: "model_stream_chunk" }>
+        | undefined;
+      expect(chunk).toBeDefined();
+      if (!chunk) return;
+
+      expect(chunk.partType).toBe("raw");
+      expect(isRecord(chunk.part.raw)).toBe(true);
+      const partRaw = chunk.part.raw as Record<string, unknown>;
+      expect(partRaw.self).toBe("[circular]");
+      expect(partRaw.count).toBe("12");
+      expect(isRecord(chunk.rawPart)).toBe(true);
     });
 
     test('uses "reasoning" kind for anthropic provider', async () => {

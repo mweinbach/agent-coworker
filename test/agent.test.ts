@@ -319,6 +319,52 @@ describe("runTurn", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Model stream passthrough
+  // -------------------------------------------------------------------------
+
+  test("passes includeRawChunks=true by default to streamText", async () => {
+    await runTurn(makeParams());
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.includeRawChunks).toBe(true);
+  });
+
+  test("passes includeRawChunks override to streamText", async () => {
+    await runTurn(makeParams({ includeRawChunks: false }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.includeRawChunks).toBe(false);
+  });
+
+  test("forwards ordered fullStream parts to onModelStreamPart callback", async () => {
+    const parts = [
+      { type: "start" },
+      { type: "text-delta", id: "t1", text: "hello" },
+      { type: "finish", finishReason: "stop" },
+    ];
+
+    mockStreamText.mockImplementation(async () => ({
+      text: "hello",
+      reasoningText: undefined,
+      response: { messages: [] },
+      fullStream: (async function* () {
+        for (const part of parts) yield part;
+      })(),
+    }));
+
+    const seen: unknown[] = [];
+    await runTurn(
+      makeParams({
+        onModelStreamPart: async (part) => {
+          seen.push(part);
+        },
+      })
+    );
+
+    expect(seen).toEqual(parts);
+  });
+
+  // -------------------------------------------------------------------------
   // createTools
   // -------------------------------------------------------------------------
 

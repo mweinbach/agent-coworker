@@ -25,6 +25,8 @@ export interface RunTurnParams {
   maxSteps?: number;
   enableMcp?: boolean;
   abortSignal?: AbortSignal;
+  onModelStreamPart?: (part: unknown) => void | Promise<void>;
+  includeRawChunks?: boolean;
 }
 
 type RunTurnDeps = {
@@ -89,9 +91,20 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           providerOptions: config.providerOptions,
           stopWhen: deps.stepCountIs(params.maxSteps ?? 100),
           abortSignal,
+          includeRawChunks: params.includeRawChunks ?? true,
         } as any);
 
-        const [text, reasoningText, response] = await Promise.all([
+        const streamConsumption = (async () => {
+          if (!params.onModelStreamPart) return;
+          const fullStream = (streamResult as any).fullStream;
+          if (!fullStream || typeof fullStream[Symbol.asyncIterator] !== "function") return;
+          for await (const part of fullStream as AsyncIterable<unknown>) {
+            await params.onModelStreamPart(part);
+          }
+        })();
+
+        const [, text, reasoningText, response] = await Promise.all([
+          streamConsumption,
           streamResult.text,
           streamResult.reasoningText,
           streamResult.response,

@@ -383,6 +383,75 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("provider auth/catalog messages", () => {
+    test("provider_catalog_get validation", () => {
+      const msg = expectOk(JSON.stringify({ type: "provider_catalog_get", sessionId: "s1" }));
+      expect(msg.type).toBe("provider_catalog_get");
+      const err = expectErr(JSON.stringify({ type: "provider_catalog_get" }));
+      expect(err).toBe("provider_catalog_get missing sessionId");
+    });
+
+    test("provider_auth_methods_get validation", () => {
+      const msg = expectOk(JSON.stringify({ type: "provider_auth_methods_get", sessionId: "s1" }));
+      expect(msg.type).toBe("provider_auth_methods_get");
+      const err = expectErr(JSON.stringify({ type: "provider_auth_methods_get" }));
+      expect(err).toBe("provider_auth_methods_get missing sessionId");
+    });
+
+    test("provider_auth_authorize validation", () => {
+      const msg = expectOk(JSON.stringify({
+        type: "provider_auth_authorize",
+        sessionId: "s1",
+        provider: "codex-cli",
+        methodId: "oauth_cli",
+      }));
+      expect(msg.type).toBe("provider_auth_authorize");
+
+      expect(expectErr(JSON.stringify({
+        type: "provider_auth_authorize",
+        sessionId: "s1",
+        provider: "openai",
+        methodId: "oauth_cli",
+      }))).toBe("provider_auth_authorize unknown methodId");
+    });
+
+    test("provider_auth_callback validation", () => {
+      const msg = expectOk(JSON.stringify({
+        type: "provider_auth_callback",
+        sessionId: "s1",
+        provider: "codex-cli",
+        methodId: "oauth_cli",
+      }));
+      expect(msg.type).toBe("provider_auth_callback");
+
+      expect(expectErr(JSON.stringify({
+        type: "provider_auth_callback",
+        sessionId: "s1",
+        provider: "codex-cli",
+        methodId: "missing",
+      }))).toBe("provider_auth_callback unknown methodId");
+    });
+
+    test("provider_auth_set_api_key validation", () => {
+      const msg = expectOk(JSON.stringify({
+        type: "provider_auth_set_api_key",
+        sessionId: "s1",
+        provider: "openai",
+        methodId: "api_key",
+        apiKey: "sk-test",
+      }));
+      expect(msg.type).toBe("provider_auth_set_api_key");
+
+      expect(expectErr(JSON.stringify({
+        type: "provider_auth_set_api_key",
+        sessionId: "s1",
+        provider: "openai",
+        methodId: "api_key",
+        apiKey: "",
+      }))).toBe("provider_auth_set_api_key missing/invalid apiKey");
+    });
+  });
+
   describe("list_skills", () => {
     test("valid list_skills message", () => {
       const msg = expectOk(JSON.stringify({ type: "list_skills", sessionId: "s1" }));
@@ -1046,7 +1115,16 @@ describe("safeParseClientMessage", () => {
     test("new command message/event types are exported", () => {
       expect(CLIENT_MESSAGE_TYPES.includes("list_commands")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("execute_command")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("provider_catalog_get")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_methods_get")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_authorize")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_callback")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_set_api_key")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("commands")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("provider_catalog")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("provider_auth_methods")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("provider_auth_challenge")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("provider_auth_result")).toBe(true);
     });
 
     test("server_hello supports protocolVersion", () => {

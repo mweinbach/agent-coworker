@@ -16,7 +16,7 @@ This document is the canonical external protocol contract for all clients. Thin 
 - Session lifecycle: `server_hello`, `session_settings`, `session_busy`, `reset`
 - Conversational turn streaming: `user_message`, `assistant_message`, `reasoning`, `log`, `todos`
 - Human-in-the-loop control: `ask`/`ask_response`, `approval`/`approval_response`, `cancel`
-- Provider/model control: `connect_provider`, `set_model`, `refresh_provider_status`, `provider_status`
+- Provider/model control: `connect_provider` (legacy), `provider_catalog_get`, `provider_auth_methods_get`, `provider_auth_authorize`, `provider_auth_callback`, `provider_auth_set_api_key`, `set_model`, `refresh_provider_status`, `provider_catalog`, `provider_auth_methods`, `provider_auth_challenge`, `provider_auth_result`, `provider_status`
 - Tool, command, and skill metadata: `list_tools`, `tools`, `list_commands`, `commands`, `execute_command`, `list_skills`, `read_skill`, `enable_skill`, `disable_skill`, `delete_skill`
 - MCP runtime toggling: `set_enable_mcp`
 - Session backup/restore: `session_backup_get`, `session_backup_checkpoint`, `session_backup_restore`, `session_backup_delete_checkpoint`
@@ -220,7 +220,7 @@ Switch AI model and/or provider at runtime.
 
 ### connect_provider
 
-Authenticate with a provider (API key or OAuth).
+Legacy compatibility command for provider connection. Prefer `provider_auth_*` messages for new clients.
 
 ```jsonc
 // With API key
@@ -247,6 +247,69 @@ Request the server's latest provider authorization/verification status (and acco
 {
   "type": "refresh_provider_status",
   "sessionId": "..."
+}
+```
+
+### provider_catalog_get
+
+Request provider catalog metadata (all providers, default models, connected providers).
+
+```jsonc
+{
+  "type": "provider_catalog_get",
+  "sessionId": "..."
+}
+```
+
+### provider_auth_methods_get
+
+Request supported provider auth methods.
+
+```jsonc
+{
+  "type": "provider_auth_methods_get",
+  "sessionId": "..."
+}
+```
+
+### provider_auth_authorize
+
+Start an auth challenge for an OAuth-capable method.
+
+```jsonc
+{
+  "type": "provider_auth_authorize",
+  "sessionId": "...",
+  "provider": "codex-cli",
+  "methodId": "oauth_cli"
+}
+```
+
+### provider_auth_callback
+
+Complete an auth flow after authorize (or submit a code when required).
+
+```jsonc
+{
+  "type": "provider_auth_callback",
+  "sessionId": "...",
+  "provider": "codex-cli",
+  "methodId": "oauth_cli",
+  "code": "optional-if-method-requires-code"
+}
+```
+
+### provider_auth_set_api_key
+
+Set an API key for a provider auth method.
+
+```jsonc
+{
+  "type": "provider_auth_set_api_key",
+  "sessionId": "...",
+  "provider": "openai",
+  "methodId": "api_key",
+  "apiKey": "sk-proj-..."
 }
 ```
 
@@ -547,6 +610,76 @@ Session-level toggles/settings. Sent on connect (after `server_hello`) and whene
 }
 ```
 
+### provider_catalog
+
+Provider catalog payload (available providers, default models, connected providers).
+
+```jsonc
+{
+  "type": "provider_catalog",
+  "sessionId": "...",
+  "all": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "models": ["gpt-5.2", "gpt-5.2-codex"],
+      "defaultModel": "gpt-5.2"
+    }
+  ],
+  "default": { "openai": "gpt-5.2" },
+  "connected": ["openai"]
+}
+```
+
+### provider_auth_methods
+
+Provider auth methods keyed by provider id.
+
+```jsonc
+{
+  "type": "provider_auth_methods",
+  "sessionId": "...",
+  "methods": {
+    "openai": [{ "id": "api_key", "type": "api", "label": "API key" }],
+    "codex-cli": [{ "id": "oauth_cli", "type": "oauth", "label": "Sign in with Codex CLI", "oauthMode": "auto" }]
+  }
+}
+```
+
+### provider_auth_challenge
+
+Challenge details returned by `provider_auth_authorize`.
+
+```jsonc
+{
+  "type": "provider_auth_challenge",
+  "sessionId": "...",
+  "provider": "codex-cli",
+  "methodId": "oauth_cli",
+  "challenge": {
+    "method": "auto",
+    "instructions": "Run Codex CLI sign-in, then continue.",
+    "command": "codex login"
+  }
+}
+```
+
+### provider_auth_result
+
+Result of `provider_auth_set_api_key` or `provider_auth_callback`.
+
+```jsonc
+{
+  "type": "provider_auth_result",
+  "sessionId": "...",
+  "provider": "openai",
+  "methodId": "api_key",
+  "ok": true,
+  "mode": "api_key",
+  "message": "Provider key saved."
+}
+```
+
 ### provider_status
 
 Provider authorization / verification status. Sent in response to `refresh_provider_status`.
@@ -692,7 +825,7 @@ Agent wants to run a command and needs permission. **Blocks the agent** until yo
 
 ### config_updated
 
-Provider or model was changed (via `set_model` or `connect_provider`).
+Provider/model runtime config changed (currently emitted by `set_model`).
 
 ```jsonc
 {
@@ -1039,6 +1172,30 @@ server  <- pong { sessionId: "..." }
 ```
 client  -> set_model { model: "gpt-5.2", provider: "openai" }
 server  <- config_updated { config: { provider: "openai", model: "gpt-5.2", ... } }
+```
+
+### Provider Bootstrap
+
+```
+server  <- server_hello { sessionId: "..." }
+server  <- session_settings { ... }
+client  -> provider_catalog_get { sessionId: "..." }
+client  -> provider_auth_methods_get { sessionId: "..." }
+client  -> refresh_provider_status { sessionId: "..." }
+server  <- provider_catalog { ... }
+server  <- provider_auth_methods { ... }
+server  <- provider_status { ... }
+```
+
+### Provider Auth (OAuth)
+
+```
+client  -> provider_auth_authorize { provider: "codex-cli", methodId: "oauth_cli" }
+server  <- provider_auth_challenge { challenge: { method: "auto", command: "codex login", ... } }
+client  -> provider_auth_callback { provider: "codex-cli", methodId: "oauth_cli" }
+server  <- provider_auth_result { ok: true, mode: "oauth", ... }
+server  <- provider_status { ... }
+server  <- provider_catalog { ... }
 ```
 
 ### Command Execution

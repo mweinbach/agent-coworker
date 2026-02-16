@@ -14,6 +14,7 @@ describe("local slash command registry", () => {
         reset: () => {},
         cancel: () => {},
         connectProvider: () => {},
+        setProviderApiKey: () => {},
       },
       route: {
         navigate: () => {},
@@ -47,6 +48,7 @@ describe("local slash command registry", () => {
         },
         cancel: () => {},
         connectProvider: () => {},
+        setProviderApiKey: () => {},
       },
       route: {
         navigate: () => {

@@ -14,6 +14,8 @@ import type {
   TodoItem,
 } from "../types";
 import type { ProviderStatus } from "../providerStatus";
+import { resolveProviderAuthMethod, type ProviderAuthMethod, type ProviderAuthChallenge } from "../providers/authRegistry";
+import type { ProviderCatalogEntry } from "../providers/connectionCatalog";
 import type { SessionBackupPublicState } from "./sessionBackup";
 
 export type ClientMessage =
@@ -24,6 +26,23 @@ export type ClientMessage =
   | { type: "connect_provider"; sessionId: string; provider: AgentConfig["provider"]; apiKey?: string }
   | { type: "set_model"; sessionId: string; model: string; provider?: AgentConfig["provider"] }
   | { type: "refresh_provider_status"; sessionId: string }
+  | { type: "provider_catalog_get"; sessionId: string }
+  | { type: "provider_auth_methods_get"; sessionId: string }
+  | { type: "provider_auth_authorize"; sessionId: string; provider: AgentConfig["provider"]; methodId: string }
+  | {
+      type: "provider_auth_callback";
+      sessionId: string;
+      provider: AgentConfig["provider"];
+      methodId: string;
+      code?: string;
+    }
+  | {
+      type: "provider_auth_set_api_key";
+      sessionId: string;
+      provider: AgentConfig["provider"];
+      methodId: string;
+      apiKey: string;
+    }
   | { type: "list_tools"; sessionId: string }
   | { type: "list_commands"; sessionId: string }
   | {
@@ -59,6 +78,24 @@ export type ServerEvent =
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
     }
   | { type: "session_settings"; sessionId: string; enableMcp: boolean }
+  | { type: "provider_catalog"; sessionId: string; all: ProviderCatalogEntry[]; default: Record<string, string>; connected: string[] }
+  | { type: "provider_auth_methods"; sessionId: string; methods: Record<string, ProviderAuthMethod[]> }
+  | {
+      type: "provider_auth_challenge";
+      sessionId: string;
+      provider: AgentConfig["provider"];
+      methodId: string;
+      challenge: ProviderAuthChallenge;
+    }
+  | {
+      type: "provider_auth_result";
+      sessionId: string;
+      provider: AgentConfig["provider"];
+      methodId: string;
+      ok: boolean;
+      mode?: "api_key" | "oauth" | "oauth_pending";
+      message: string;
+    }
   | { type: "provider_status"; sessionId: string; providers: ProviderStatus[] }
   | { type: "session_busy"; sessionId: string; busy: boolean }
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
@@ -142,6 +179,11 @@ export const CLIENT_MESSAGE_TYPES = [
   "connect_provider",
   "set_model",
   "refresh_provider_status",
+  "provider_catalog_get",
+  "provider_auth_methods_get",
+  "provider_auth_authorize",
+  "provider_auth_callback",
+  "provider_auth_set_api_key",
   "list_tools",
   "list_commands",
   "execute_command",
@@ -167,6 +209,10 @@ export const CLIENT_MESSAGE_TYPES = [
 export const SERVER_EVENT_TYPES = [
   "server_hello",
   "session_settings",
+  "provider_catalog",
+  "provider_auth_methods",
+  "provider_auth_challenge",
+  "provider_auth_result",
   "provider_status",
   "session_busy",
   "user_message",
@@ -280,6 +326,61 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
     }
     case "refresh_provider_status": {
       if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "refresh_provider_status missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "provider_catalog_get": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "provider_catalog_get missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "provider_auth_methods_get": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "provider_auth_methods_get missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "provider_auth_authorize": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "provider_auth_authorize missing sessionId" };
+      if (!isProviderName(obj.provider)) {
+        return { ok: false, error: "provider_auth_authorize missing/invalid provider" };
+      }
+      if (!isNonEmptyString(obj.methodId)) {
+        return { ok: false, error: "provider_auth_authorize missing/invalid methodId" };
+      }
+      if (!resolveProviderAuthMethod(obj.provider, obj.methodId)) {
+        return { ok: false, error: "provider_auth_authorize unknown methodId" };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "provider_auth_callback": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "provider_auth_callback missing sessionId" };
+      if (!isProviderName(obj.provider)) {
+        return { ok: false, error: "provider_auth_callback missing/invalid provider" };
+      }
+      if (!isNonEmptyString(obj.methodId)) {
+        return { ok: false, error: "provider_auth_callback missing/invalid methodId" };
+      }
+      if (!resolveProviderAuthMethod(obj.provider, obj.methodId)) {
+        return { ok: false, error: "provider_auth_callback unknown methodId" };
+      }
+      if (obj.code !== undefined && typeof obj.code !== "string") {
+        return { ok: false, error: "provider_auth_callback invalid code" };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "provider_auth_set_api_key": {
+      if (!isNonEmptyString(obj.sessionId)) {
+        return { ok: false, error: "provider_auth_set_api_key missing sessionId" };
+      }
+      if (!isProviderName(obj.provider)) {
+        return { ok: false, error: "provider_auth_set_api_key missing/invalid provider" };
+      }
+      if (!isNonEmptyString(obj.methodId)) {
+        return { ok: false, error: "provider_auth_set_api_key missing/invalid methodId" };
+      }
+      if (!resolveProviderAuthMethod(obj.provider, obj.methodId)) {
+        return { ok: false, error: "provider_auth_set_api_key unknown methodId" };
+      }
+      if (!isNonEmptyString(obj.apiKey)) {
+        return { ok: false, error: "provider_auth_set_api_key missing/invalid apiKey" };
+      }
       return { ok: true, msg: obj as ClientMessage };
     }
     case "list_skills": {

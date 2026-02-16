@@ -108,6 +108,9 @@ export async function startAgentServer(
           ws.send(JSON.stringify(settings));
 
           ws.send(JSON.stringify(session.getObservabilityStatusEvent()));
+          void session.emitProviderCatalog();
+          session.emitProviderAuthMethods();
+          void session.refreshProviderStatus();
         },
         message(ws, raw) {
           const session = ws.data.session;
@@ -180,6 +183,31 @@ export async function startAgentServer(
 
           if (msg.type === "refresh_provider_status") {
             void session.refreshProviderStatus();
+            return;
+          }
+
+          if (msg.type === "provider_catalog_get") {
+            void session.emitProviderCatalog();
+            return;
+          }
+
+          if (msg.type === "provider_auth_methods_get") {
+            session.emitProviderAuthMethods();
+            return;
+          }
+
+          if (msg.type === "provider_auth_authorize") {
+            void session.authorizeProviderAuth(msg.provider, msg.methodId);
+            return;
+          }
+
+          if (msg.type === "provider_auth_callback") {
+            void session.callbackProviderAuth(msg.provider, msg.methodId, msg.code);
+            return;
+          }
+
+          if (msg.type === "provider_auth_set_api_key") {
+            void session.setProviderApiKey(msg.provider, msg.methodId, msg.apiKey);
             return;
           }
 

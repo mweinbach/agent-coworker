@@ -146,6 +146,7 @@ function makeSession(
       logsDir: string;
       connectionsFile: string;
     };
+    getProviderCatalogImpl: (opts: any) => Promise<any>;
     getProviderStatusesImpl: (opts: any) => Promise<any>;
     sessionBackupFactory: (opts: SessionBackupInitOptions) => Promise<SessionBackupHandle>;
     runObservabilityQueryImpl: (config: AgentConfig, query: any) => Promise<any>;
@@ -163,6 +164,7 @@ function makeSession(
     emit: overrides?.emit ?? emit,
     connectProviderImpl: overrides?.connectProviderImpl,
     getAiCoworkerPathsImpl: overrides?.getAiCoworkerPathsImpl,
+    getProviderCatalogImpl: overrides?.getProviderCatalogImpl as any,
     getProviderStatusesImpl,
     sessionBackupFactory,
     runObservabilityQueryImpl: overrides?.runObservabilityQueryImpl as any,
@@ -690,6 +692,125 @@ describe("AgentSession", () => {
       expect(err).toBeDefined();
       if (err && err.type === "error") {
         expect(err.message).toContain("Unsupported provider");
+      }
+    });
+  });
+
+  describe("provider catalog/auth methods", () => {
+    test("emitProviderCatalog emits provider_catalog event", async () => {
+      const catalog = {
+        all: [
+          { id: "openai", name: "OpenAI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" },
+        ],
+        default: { openai: "gpt-5.2" },
+        connected: ["openai"],
+      };
+      const getProviderCatalogImpl = mock(async () => catalog);
+      const { session, events } = makeSession({
+        getProviderCatalogImpl: getProviderCatalogImpl as any,
+      });
+
+      await session.emitProviderCatalog();
+
+      expect(getProviderCatalogImpl).toHaveBeenCalledTimes(1);
+      const evt = events.find((e) => e.type === "provider_catalog");
+      expect(evt).toBeDefined();
+      if (evt && evt.type === "provider_catalog") {
+        expect(evt.all).toEqual(catalog.all);
+        expect(evt.default).toEqual(catalog.default);
+        expect(evt.connected).toEqual(catalog.connected);
+      }
+    });
+
+    test("emitProviderAuthMethods emits provider_auth_methods event", () => {
+      const { session, events } = makeSession();
+      session.emitProviderAuthMethods();
+      const evt = events.find((e) => e.type === "provider_auth_methods");
+      expect(evt).toBeDefined();
+      if (evt && evt.type === "provider_auth_methods") {
+        expect(evt.methods.openai?.some((m) => m.id === "api_key")).toBe(true);
+      }
+    });
+
+    test("authorizeProviderAuth emits challenge for oauth method", async () => {
+      const { session, events } = makeSession();
+      await session.authorizeProviderAuth("codex-cli", "oauth_cli");
+      const evt = events.find((e) => e.type === "provider_auth_challenge");
+      expect(evt).toBeDefined();
+      if (evt && evt.type === "provider_auth_challenge") {
+        expect(evt.provider).toBe("codex-cli");
+        expect(evt.methodId).toBe("oauth_cli");
+      }
+    });
+  });
+
+  describe("provider auth actions", () => {
+    test("setProviderApiKey emits provider_auth_result and refreshes status/catalog", async () => {
+      const statuses = [
+        {
+          provider: "openai",
+          authorized: true,
+          verified: false,
+          mode: "api_key",
+          account: null,
+          message: "API key saved.",
+          checkedAt: "2026-02-16T00:00:00.000Z",
+        },
+      ];
+      const getProviderCatalogImpl = mock(async () => ({
+        all: [{ id: "openai", name: "OpenAI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" }],
+        default: { openai: "gpt-5.2" },
+        connected: ["openai"],
+      }));
+      const getProviderStatusesImpl = mock(async () => statuses);
+      const { session, events } = makeSession({
+        connectProviderImpl: mockConnectModelProvider,
+        getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
+        getProviderCatalogImpl: getProviderCatalogImpl as any,
+        getProviderStatusesImpl: getProviderStatusesImpl as any,
+      });
+
+      await session.setProviderApiKey("openai", "api_key", "sk-test");
+
+      const authEvt = events.find((e) => e.type === "provider_auth_result");
+      expect(authEvt).toBeDefined();
+      if (authEvt && authEvt.type === "provider_auth_result") {
+        expect(authEvt.ok).toBe(true);
+        expect(authEvt.provider).toBe("openai");
+        expect(authEvt.methodId).toBe("api_key");
+      }
+      expect(events.some((e) => e.type === "provider_status")).toBe(true);
+      expect(events.some((e) => e.type === "provider_catalog")).toBe(true);
+    });
+
+    test("callbackProviderAuth emits provider_auth_result for oauth method", async () => {
+      const getProviderCatalogImpl = mock(async () => ({
+        all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.3-codex"], defaultModel: "gpt-5.3-codex" }],
+        default: { "codex-cli": "gpt-5.3-codex" },
+        connected: ["codex-cli"],
+      }));
+      const getProviderStatusesImpl = mock(async () => []);
+      mockConnectModelProvider.mockImplementationOnce(async () => ({
+        ok: true,
+        provider: "codex-cli",
+        mode: "oauth",
+        storageFile: "/tmp/mock-home/.cowork/auth/connections.json",
+        message: "OAuth sign-in completed.",
+      }));
+      const { session, events } = makeSession({
+        connectProviderImpl: mockConnectModelProvider,
+        getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
+        getProviderCatalogImpl: getProviderCatalogImpl as any,
+        getProviderStatusesImpl: getProviderStatusesImpl as any,
+      });
+
+      await session.callbackProviderAuth("codex-cli", "oauth_cli");
+
+      const authEvt = events.find((e) => e.type === "provider_auth_result");
+      expect(authEvt).toBeDefined();
+      if (authEvt && authEvt.type === "provider_auth_result") {
+        expect(authEvt.ok).toBe(true);
+        expect(authEvt.provider).toBe("codex-cli");
       }
     });
   });

@@ -165,6 +165,14 @@ function parseReplInput(input: string) {
   return replInternal.parseReplInput(input);
 }
 
+function normalizeProviderAuthMethods(methods: any[] | undefined) {
+  return replInternal.normalizeProviderAuthMethods(methods as any);
+}
+
+function resolveProviderAuthMethodSelection(methods: any[], rawSelection: string) {
+  return replInternal.resolveProviderAuthMethodSelection(methods as any, rawSelection);
+}
+
 describe("REPL command parsing", () => {
   test("/help is parsed as help command", () => {
     expect(parseReplInput("/help")).toEqual({ type: "help" });
@@ -276,6 +284,66 @@ describe("REPL command parsing", () => {
   //
   // This is deferred as it requires significant setup and the command parsing
   // and helper logic is well-covered by the replicated unit tests above.
+});
+
+describe("connect auth method helpers", () => {
+  test("normalizeProviderAuthMethods falls back to api_key", () => {
+    const methods = normalizeProviderAuthMethods(undefined);
+    expect(methods).toEqual([{ id: "api_key", type: "api", label: "API key" }]);
+  });
+
+  test("normalizeProviderAuthMethods preserves provided methods", () => {
+    const methods = normalizeProviderAuthMethods([
+      { id: "oauth_cli", type: "oauth", label: "Sign in", oauthMode: "auto" },
+      { id: "api_key", type: "api", label: "API key" },
+    ]);
+    expect(methods).toHaveLength(2);
+    expect(methods[0]?.id).toBe("oauth_cli");
+  });
+
+  test("resolveProviderAuthMethodSelection defaults to first method", () => {
+    const selected = resolveProviderAuthMethodSelection(
+      [
+        { id: "oauth_cli", type: "oauth", label: "Sign in", oauthMode: "auto" },
+        { id: "api_key", type: "api", label: "API key" },
+      ],
+      ""
+    );
+    expect(selected?.id).toBe("oauth_cli");
+  });
+
+  test("resolveProviderAuthMethodSelection accepts numeric index", () => {
+    const selected = resolveProviderAuthMethodSelection(
+      [
+        { id: "oauth_cli", type: "oauth", label: "Sign in", oauthMode: "auto" },
+        { id: "api_key", type: "api", label: "API key" },
+      ],
+      "2"
+    );
+    expect(selected?.id).toBe("api_key");
+  });
+
+  test("resolveProviderAuthMethodSelection accepts method id", () => {
+    const selected = resolveProviderAuthMethodSelection(
+      [
+        { id: "oauth_cli", type: "oauth", label: "Sign in", oauthMode: "auto" },
+        { id: "api_key", type: "api", label: "API key" },
+      ],
+      "api_key"
+    );
+    expect(selected?.id).toBe("api_key");
+  });
+
+  test("resolveProviderAuthMethodSelection rejects invalid selections", () => {
+    const selected = resolveProviderAuthMethodSelection(
+      [
+        { id: "oauth_cli", type: "oauth", label: "Sign in", oauthMode: "auto" },
+        { id: "api_key", type: "api", label: "API key" },
+      ],
+      "unknown"
+    );
+    expect(selected).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

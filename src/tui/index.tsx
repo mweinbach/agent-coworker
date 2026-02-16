@@ -7,8 +7,7 @@ import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-import { ensureAiCoworkerHome, getAiCoworkerPaths, isOauthCliProvider, maskApiKey, readConnectionStore } from "../connect";
-import type { ConnectionStore } from "../connect";
+import { ensureAiCoworkerHome, getAiCoworkerPaths, isOauthCliProvider } from "../connect";
 import { modelChoicesByProvider } from "../providers";
 import { PROVIDER_NAMES } from "../types";
 import type { ApprovalRiskCode, ProviderName, ServerErrorCode, ServerErrorSource, TodoItem } from "../types";
@@ -63,6 +62,9 @@ type FeedItem =
 type HarnessContextPayload = Extract<ServerEvent, { type: "harness_context" }>["context"];
 type ObservabilityQueryResultPayload = Extract<ServerEvent, { type: "observability_query_result" }>["result"];
 type HarnessSloResultPayload = Extract<ServerEvent, { type: "harness_slo_result" }>["result"];
+type ProviderCatalogEntry = Extract<ServerEvent, { type: "provider_catalog" }>["all"][number];
+type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
+type ProviderStatusEntry = Extract<ServerEvent, { type: "provider_status" }>["providers"][number];
 
 type ParsedToolLog = { sub?: string; dir: ">" | "<"; name: string; payload: any };
 
@@ -585,6 +587,9 @@ function App(props: { serverUrl: string }) {
   const [cwd, setCwd] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
+  const [providerAuthMethods, setProviderAuthMethods] = useState<Record<string, ProviderAuthMethod[]>>({});
+  const [providerStatuses, setProviderStatuses] = useState<ProviderStatusEntry[]>([]);
 
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [todos, setTodos] = useState<TodoItem[]>([]);
@@ -597,8 +602,9 @@ function App(props: { serverUrl: string }) {
   const [slashSelectedIndex, setSlashSelectedIndex] = useState<number>(0);
   const [modelsSelectedIndex, setModelsSelectedIndex] = useState<number>(0);
   const [connectSelectedIndex, setConnectSelectedIndex] = useState<number>(0);
+  const [connectMethodSelectedIndex, setConnectMethodSelectedIndex] = useState<number>(0);
   const [connectApiKeyInput, setConnectApiKeyInput] = useState<string>("");
-  const [connectFocus, setConnectFocus] = useState<"select" | "input">("select");
+  const [connectFocus, setConnectFocus] = useState<"provider" | "method" | "input">("provider");
   const [commandWindow, setCommandWindow] = useState<CommandWindow>(null);
   const [toolDetailId, setToolDetailId] = useState<string | null>(null);
 
@@ -615,14 +621,38 @@ function App(props: { serverUrl: string }) {
     return cwd ? `${base} (${cwd})` : base;
   }, [provider, model, cwd]);
   const aiCoworkerPaths = useMemo(() => getAiCoworkerPaths(), []);
+  const connectServices = useMemo<ConnectService[]>(() => {
+    if (providerCatalog.length === 0) return [...CONNECT_SERVICES];
+    return providerCatalog
+      .map((entry) => asConnectService(entry.id))
+      .filter((entry): entry is ConnectService => entry !== null);
+  }, [providerCatalog]);
   const modelChoices = useMemo(() => {
-    const base = [...ALL_MODEL_CHOICES];
+    const fromCatalog =
+      providerCatalog.length > 0
+        ? providerCatalog.flatMap((entry) => {
+            const asProvider = asConnectService(entry.id);
+            if (!asProvider) return [] as ModelChoice[];
+            return entry.models.map((m) => ({ provider: asProvider, model: m }));
+          })
+        : ALL_MODEL_CHOICES;
+    const base = [...fromCatalog];
     if (provider && model && !base.some((m) => m.provider === provider && m.model === model)) {
       const p = asConnectService(provider);
       if (p) base.unshift({ provider: p, model });
     }
     return base;
-  }, [provider, model]);
+  }, [providerCatalog, provider, model]);
+
+  const connectMethods = useMemo<ProviderAuthMethod[]>(() => {
+    const service = connectServices[connectSelectedIndex];
+    if (!service) return [];
+    const fromServer = providerAuthMethods[service];
+    if (fromServer && fromServer.length > 0) return fromServer;
+    const fallback: ProviderAuthMethod[] = [{ id: "api_key", type: "api", label: "API key" }];
+    if (isOauthCliProvider(service)) fallback.unshift({ id: "oauth_cli", type: "oauth", label: "OAuth (CLI)", oauthMode: "auto" });
+    return fallback;
+  }, [connectServices, connectSelectedIndex, providerAuthMethods]);
 
   const slashQuery = useMemo(() => {
     if (mode.kind !== "chat" || toolDetailId) return null;
@@ -668,6 +698,24 @@ function App(props: { serverUrl: string }) {
     const idx = modelChoices.findIndex((choice) => choice.provider === provider && choice.model === model);
     setModelsSelectedIndex(idx >= 0 ? idx : 0);
   }, [modelChoices, provider, model]);
+
+  useEffect(() => {
+    setConnectSelectedIndex((idx) => {
+      if (connectServices.length === 0) return 0;
+      if (idx < 0) return 0;
+      if (idx >= connectServices.length) return connectServices.length - 1;
+      return idx;
+    });
+  }, [connectServices.length]);
+
+  useEffect(() => {
+    setConnectMethodSelectedIndex((idx) => {
+      if (connectMethods.length === 0) return 0;
+      if (idx < 0) return 0;
+      if (idx >= connectMethods.length) return connectMethods.length - 1;
+      return idx;
+    });
+  }, [connectMethods.length]);
 
   const updateSessionStateFile = async (patch: Record<string, unknown>) => {
     const p = sessionStatePathRef.current;
@@ -806,50 +854,37 @@ function App(props: { serverUrl: string }) {
     return lines.join("\n");
   };
 
-  const renderConnectStatus = (store: ConnectionStore): string => {
+  const renderConnectStatus = (): string => {
     const lines = [
       "### Connections",
       "",
-      `- Home: \`${aiCoworkerPaths.rootDir}\``,
-      `- Config: \`${aiCoworkerPaths.configDir}\``,
-      `- Sessions: \`${aiCoworkerPaths.sessionsDir}\``,
-      `- Logs: \`${aiCoworkerPaths.logsDir}\``,
-      `- Keys file: \`${aiCoworkerPaths.connectionsFile}\``,
+      "- Source: server provider status",
       "",
     ];
 
-    for (const service of CONNECT_SERVICES) {
-      const entry = store.services[service];
-      if (!entry) {
-        lines.push(`- ${service}: not connected`);
+    const services = connectServices.length > 0 ? connectServices : [...CONNECT_SERVICES];
+    for (const service of services) {
+      const status = providerStatuses.find((entry) => entry.provider === service);
+      if (!status) {
+        lines.push(`- ${service}: unknown`);
         continue;
       }
-
-      if (entry.mode === "api_key" && entry.apiKey) {
-        lines.push(`- ${service}: api key saved (${maskApiKey(entry.apiKey)})`);
-        continue;
-      }
-
-      if (entry.mode === "oauth_pending") {
-        lines.push(`- ${service}: pending`);
-        continue;
-      }
-
-      if (entry.mode === "oauth") {
-        lines.push(`- ${service}: oauth connected`);
-        continue;
-      }
-
-      lines.push(`- ${service}: configured`);
+      const auth = status.authorized ? "authorized" : "not authorized";
+      const verified = status.verified ? "verified" : "unverified";
+      const account = status.account?.email ? ` (${status.account.email})` : "";
+      lines.push(`- ${service}: ${status.mode}, ${auth}, ${verified}${account}`);
     }
 
     lines.push("");
     lines.push("Usage:");
-    lines.push(`- \`/connect <${CONNECT_SERVICES.join("|")}> <api_key>\``);
-    const oauthUiServices = CONNECT_SERVICES.filter((service) => isOauthCliProvider(service));
-    lines.push(
-      `- \`/connect <${CONNECT_SERVICES.join("|")}>\` (runs OAuth for ${oauthUiServices.join("/")}; otherwise marks pending)`
-    );
+    lines.push("- `/connect <provider> <api_key>`");
+    lines.push("- `/connect <provider>` (choose auth method)");
+    lines.push("");
+    lines.push("Auth methods:");
+    for (const service of services) {
+      const methods = providerAuthMethods[service] ?? [];
+      lines.push(`- ${service}: ${methods.length > 0 ? methods.map((m) => m.id).join(", ") : "api_key"}`);
+    }
     return lines.join("\n");
   };
 
@@ -859,27 +894,27 @@ function App(props: { serverUrl: string }) {
       const serviceToken = (tokens[0] ?? "").toLowerCase();
 
       if (!serviceToken || serviceToken === "help" || serviceToken === "list") {
-        const store = await readConnectionStore(aiCoworkerPaths);
         appendFeed({
           id: nextFeedId(),
           type: "message",
           role: "assistant",
-          text: renderConnectStatus(store),
+          text: renderConnectStatus(),
         });
         return;
       }
 
-      if (!CONNECT_SERVICES.includes(serviceToken as ConnectService)) {
+      if (!connectServices.includes(serviceToken as ConnectService)) {
         appendFeed({
           id: nextFeedId(),
           type: "system",
-          line: `unknown service "${serviceToken}". valid services: ${CONNECT_SERVICES.join(", ")}`,
+          line: `unknown service "${serviceToken}". valid services: ${connectServices.join(", ")}`,
         });
         return;
       }
 
       const service = serviceToken as ConnectService;
       const apiKey = tokens.slice(1).join(" ").trim();
+      const methods = providerAuthMethods[service] ?? [{ id: "api_key", type: "api" as const, label: "API key" }];
       const sid = sessionIdRef.current;
       if (!sid) {
         appendFeed({
@@ -890,11 +925,34 @@ function App(props: { serverUrl: string }) {
         return;
       }
 
+      if (!apiKey) {
+        openConnectWindow(service);
+        appendFeed({
+          id: nextFeedId(),
+          type: "system",
+          line: `select an auth method for ${service}`,
+        });
+        return;
+      }
+
+      const selectedMethod = methods.find((m) => m.type === "api") ?? null;
+      if (!selectedMethod) {
+        appendFeed({
+          id: nextFeedId(),
+          type: "error",
+          message: `No API key auth method available for ${service}`,
+          code: "provider_error",
+          source: "provider",
+        });
+        return;
+      }
+
       const ok = send({
-        type: "connect_provider",
+        type: "provider_auth_set_api_key",
         sessionId: sid,
         provider: service,
-        apiKey: apiKey || undefined,
+        methodId: selectedMethod.id,
+        apiKey,
       });
       if (!ok) {
         appendFeed({
@@ -910,11 +968,7 @@ function App(props: { serverUrl: string }) {
       appendFeed({
         id: nextFeedId(),
         type: "system",
-        line: apiKey
-          ? `saving key for ${service}...`
-          : isOauthCliProvider(service)
-            ? `starting OAuth sign-in for ${service}...`
-            : `marking ${service} as pending (no key supplied)...`,
+        line: `saving key for ${service}...`,
       });
     } catch (err) {
       appendFeed({
@@ -935,10 +989,11 @@ function App(props: { serverUrl: string }) {
 
   const openConnectWindow = (serviceHint?: string, apiKeyHint?: string) => {
     const hint = (serviceHint ?? "").toLowerCase();
-    const idx = CONNECT_SERVICES.findIndex((s) => s === hint);
+    const idx = connectServices.findIndex((s) => s === hint);
     setConnectSelectedIndex(idx >= 0 ? idx : 0);
+    setConnectMethodSelectedIndex(0);
     setConnectApiKeyInput(apiKeyHint ?? "");
-    setConnectFocus("select");
+    setConnectFocus("provider");
     setCommandWindow({ kind: "connect" });
   };
 
@@ -968,12 +1023,95 @@ function App(props: { serverUrl: string }) {
   };
 
   const submitConnectSelection = () => {
-    const service = CONNECT_SERVICES[connectSelectedIndex] ?? CONNECT_SERVICES[0];
-    const args = connectApiKeyInput.trim() ? `${service} ${connectApiKeyInput.trim()}` : service;
-    void handleConnectCommand(args);
+    const service = connectServices[connectSelectedIndex] ?? connectServices[0] ?? CONNECT_SERVICES[0];
+    const method = connectMethods[connectMethodSelectedIndex] ?? connectMethods[0];
+    const sid = sessionIdRef.current;
+    if (!sid) {
+      appendFeed({ id: nextFeedId(), type: "system", line: "not connected: cannot run /connect yet" });
+      return;
+    }
+    if (!method) {
+      appendFeed({ id: nextFeedId(), type: "error", message: "No auth method selected", code: "validation_failed", source: "provider" });
+      return;
+    }
+
+    let ok = false;
+    if (method.type === "api") {
+      const apiKey = connectApiKeyInput.trim();
+      if (!apiKey) {
+        appendFeed({
+          id: nextFeedId(),
+          type: "system",
+          line: "API key is required for this method. Enter a key or choose OAuth.",
+        });
+        return;
+      }
+      ok = send({
+        type: "provider_auth_set_api_key",
+        sessionId: sid,
+        provider: service,
+        methodId: method.id,
+        apiKey,
+      });
+    } else {
+      ok = send({
+        type: "provider_auth_authorize",
+        sessionId: sid,
+        provider: service,
+        methodId: method.id,
+      });
+      if (ok) {
+        if (method.oauthMode === "code") {
+          const code = connectApiKeyInput.trim();
+          if (!code) {
+            appendFeed({
+              id: nextFeedId(),
+              type: "system",
+              line: "Authorization code required for this OAuth method.",
+            });
+            return;
+          }
+          send({
+            type: "provider_auth_callback",
+            sessionId: sid,
+            provider: service,
+            methodId: method.id,
+            code,
+          });
+        } else {
+          send({
+            type: "provider_auth_callback",
+            sessionId: sid,
+            provider: service,
+            methodId: method.id,
+          });
+        }
+      }
+    }
+
+    if (!ok) {
+      appendFeed({
+        id: nextFeedId(),
+        type: "error",
+        message: "connect failed: unable to send websocket request",
+        code: "internal_error",
+        source: "session",
+      });
+      return;
+    }
+
+    appendFeed({
+      id: nextFeedId(),
+      type: "system",
+      line:
+        method.type === "api"
+          ? `saving key for ${service}...`
+          : `starting OAuth sign-in for ${service}...`,
+    });
     setCommandWindow(null);
     setConnectApiKeyInput("");
-    setConnectFocus("select");
+    setConnectMethodSelectedIndex(0);
+    setConnectFocus("provider");
   };
 
   const requestHarnessContext = () => {
@@ -1141,6 +1279,11 @@ function App(props: { serverUrl: string }) {
         return true;
       case "connect": {
         if (args) {
+          const tokens = args.split(/\s+/).filter(Boolean);
+          if (tokens.length === 1) {
+            openConnectWindow(tokens[0]);
+            return true;
+          }
           void handleConnectCommand(args);
           return true;
         }
@@ -1256,7 +1399,11 @@ function App(props: { serverUrl: string }) {
       }
 
       if (commandWindow?.kind === "connect") {
-        setConnectFocus((f) => (f === "select" ? "input" : "select"));
+        setConnectFocus((f) => {
+          if (f === "provider") return "method";
+          if (f === "method") return "input";
+          return "provider";
+        });
         return;
       }
 
@@ -1286,6 +1433,9 @@ function App(props: { serverUrl: string }) {
       setMode({ kind: "chat" });
       setToolDetailId(null);
       setCommandWindow(null);
+      setProviderCatalog([]);
+      setProviderAuthMethods({});
+      setProviderStatuses([]);
       appendSessionLog("websocket closed");
       if (closedSessionId) {
         void updateSessionStateFile({
@@ -1333,7 +1483,13 @@ function App(props: { serverUrl: string }) {
         setProvider(parsed.config.provider);
         setModel(parsed.config.model);
         setCwd(parsed.config.workingDirectory);
+        setProviderCatalog([]);
+        setProviderAuthMethods({});
+        setProviderStatuses([]);
         ws.send(JSON.stringify({ type: "harness_context_get", sessionId: parsed.sessionId } satisfies ClientMessage));
+        ws.send(JSON.stringify({ type: "provider_catalog_get", sessionId: parsed.sessionId } satisfies ClientMessage));
+        ws.send(JSON.stringify({ type: "provider_auth_methods_get", sessionId: parsed.sessionId } satisfies ClientMessage));
+        ws.send(JSON.stringify({ type: "refresh_provider_status", sessionId: parsed.sessionId } satisfies ClientMessage));
         appendSessionLog(`connected session=${parsed.sessionId} model=${parsed.config.model}`);
         void updateSessionStateFile({
           sessionId: parsed.sessionId,
@@ -1451,6 +1607,46 @@ function App(props: { serverUrl: string }) {
           });
           setModalFocus("select");
           setResponseInput("");
+          break;
+        case "provider_catalog":
+          setProviderCatalog(parsed.all);
+          break;
+        case "provider_auth_methods":
+          setProviderAuthMethods(parsed.methods);
+          break;
+        case "provider_status":
+          setProviderStatuses(parsed.providers);
+          break;
+        case "provider_auth_challenge":
+          appendFeed({
+            id: nextFeedId(),
+            type: "system",
+            line: `provider auth challenge: ${parsed.provider}/${parsed.methodId} (${parsed.challenge.method})`,
+          });
+          if (parsed.challenge.instructions) {
+            appendFeed({
+              id: nextFeedId(),
+              type: "system",
+              line: parsed.challenge.instructions,
+            });
+          }
+          break;
+        case "provider_auth_result":
+          if (parsed.ok) {
+            appendFeed({
+              id: nextFeedId(),
+              type: "system",
+              line: `provider auth: ${parsed.provider}/${parsed.methodId} (${parsed.mode ?? "ok"})`,
+            });
+          } else {
+            appendFeed({
+              id: nextFeedId(),
+              type: "error",
+              message: parsed.message,
+              code: "provider_error",
+              source: "provider",
+            });
+          }
           break;
         case "config_updated":
           setProvider(parsed.config.provider);
@@ -2095,16 +2291,19 @@ function App(props: { serverUrl: string }) {
             </text>
 
             <select
-              options={CONNECT_SERVICES.map((service) => ({
+              options={connectServices.map((service) => ({
                 name: service,
-                description: isOauthCliProvider(service) ? "save key or start OAuth login" : "save key or mark pending",
+                description: isOauthCliProvider(service) ? "OAuth or API key" : "API key",
                 value: service,
               }))}
               selectedIndex={connectSelectedIndex}
-              onChange={(i) => setConnectSelectedIndex(i)}
+              onChange={(i) => {
+                setConnectSelectedIndex(i);
+                setConnectMethodSelectedIndex(0);
+              }}
               onSelect={() => submitConnectSelection()}
               width="100%"
-              height={Math.max(4, CONNECT_SERVICES.length + 2)}
+              height={Math.max(4, connectServices.length + 2)}
               showDescription
               showScrollIndicator
               wrapSelection
@@ -2114,7 +2313,30 @@ function App(props: { serverUrl: string }) {
               focusedTextColor={theme.text}
               selectedBackgroundColor={theme.borderDim}
               selectedTextColor={theme.text}
-              focused={connectFocus === "select"}
+              focused={connectFocus === "provider"}
+            />
+
+            <select
+              options={connectMethods.map((method) => ({
+                name: method.label,
+                description: method.type === "oauth" ? `method=${method.id}` : "API key method",
+                value: method.id,
+              }))}
+              selectedIndex={connectMethodSelectedIndex}
+              onChange={(i) => setConnectMethodSelectedIndex(i)}
+              onSelect={() => submitConnectSelection()}
+              width="100%"
+              height={Math.max(4, connectMethods.length + 2)}
+              showDescription
+              showScrollIndicator
+              wrapSelection
+              backgroundColor={theme.panelBg}
+              focusedBackgroundColor={theme.inputBgFocus}
+              textColor={theme.text}
+              focusedTextColor={theme.text}
+              selectedBackgroundColor={theme.borderDim}
+              selectedTextColor={theme.text}
+              focused={connectFocus === "method"}
             />
 
             <input
@@ -2122,7 +2344,12 @@ function App(props: { serverUrl: string }) {
               onChange={(v) => setConnectApiKeyInput(normalizeInputValue(v))}
               onSubmit={() => submitConnectSelection()}
               width="100%"
-              placeholder="Optional API key (leave blank to start OAuth for CLI providers)"
+              placeholder={
+                connectMethods[connectMethodSelectedIndex]?.type === "oauth" &&
+                connectMethods[connectMethodSelectedIndex]?.oauthMode === "code"
+                  ? "Authorization code"
+                  : "API key (or leave blank for OAuth auto methods)"
+              }
               backgroundColor={theme.inputBg}
               focusedBackgroundColor={theme.inputBgFocus}
               textColor={theme.text}
@@ -2131,7 +2358,7 @@ function App(props: { serverUrl: string }) {
               focused={connectFocus === "input"}
             />
 
-            <text fg={theme.muted}>Tab switches field. Enter starts connect flow. Esc closes.</text>
+            <text fg={theme.muted}>Tab cycles provider/method/input. Enter starts connect flow. Esc closes.</text>
           </box>
         </box>
       ) : null}

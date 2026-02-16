@@ -8,12 +8,23 @@ import { googleProvider } from "./google";
 import { openaiProvider } from "./openai";
 export { DEFAULT_PROVIDER_OPTIONS } from "./providerOptions";
 export {
+  authorizeProviderAuth,
+  callbackProviderAuth,
+  listProviderAuthMethods,
+  requiresProviderAuthCode,
+  resolveProviderAuthMethod,
+  setProviderApiKey,
+  type ProviderAuthChallenge,
+  type ProviderAuthMethod,
+} from "./authRegistry";
+export {
   PROVIDER_MODEL_CATALOG,
   PROVIDER_MODEL_CHOICES,
   availableModelsForProvider,
   defaultModelForProvider,
   modelChoicesByProvider,
 } from "./catalog";
+export { getProviderCatalog, listProviderCatalogEntries, type ProviderCatalogEntry, type ProviderCatalogPayload } from "./connectionCatalog";
 
 export type ProviderRuntimeDefinition = {
   keyCandidates: readonly (ProviderName | LegacyProviderName)[];

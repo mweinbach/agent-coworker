@@ -2,7 +2,15 @@ import type { ModelMessage } from "ai";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
+import { connectProvider as connectModelProvider, getAiCoworkerPaths, type ConnectProviderResult } from "../connect";
+import {
+  authorizeProviderAuth,
+  callbackProviderAuth as callbackProviderAuthMethod,
+  listProviderAuthMethods,
+  resolveProviderAuthMethod,
+  setProviderApiKey as setProviderApiKeyMethod,
+} from "../providers/authRegistry";
+import { getProviderCatalog } from "../providers/connectionCatalog";
 import { getProviderStatuses } from "../providerStatus";
 import { discoverSkills, stripSkillFrontMatter } from "../skills";
 import { isProviderName } from "../types";
@@ -68,6 +76,7 @@ export class AgentSession {
   private readonly emit: (evt: ServerEvent) => void;
   private readonly connectProviderImpl: typeof connectModelProvider;
   private readonly getAiCoworkerPathsImpl: typeof getAiCoworkerPaths;
+  private readonly getProviderCatalogImpl: typeof getProviderCatalog;
   private readonly getProviderStatusesImpl: typeof getProviderStatuses;
   private readonly sessionBackupFactory: SessionBackupFactory;
   private readonly harnessContextStore: HarnessContextStore;
@@ -96,6 +105,7 @@ export class AgentSession {
     emit: (evt: ServerEvent) => void;
     connectProviderImpl?: typeof connectModelProvider;
     getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
+    getProviderCatalogImpl?: typeof getProviderCatalog;
     getProviderStatusesImpl?: typeof getProviderStatuses;
     sessionBackupFactory?: SessionBackupFactory;
     harnessContextStore?: HarnessContextStore;
@@ -110,6 +120,7 @@ export class AgentSession {
     this.emit = opts.emit;
     this.connectProviderImpl = opts.connectProviderImpl ?? connectModelProvider;
     this.getAiCoworkerPathsImpl = opts.getAiCoworkerPathsImpl ?? getAiCoworkerPaths;
+    this.getProviderCatalogImpl = opts.getProviderCatalogImpl ?? getProviderCatalog;
     this.getProviderStatusesImpl = opts.getProviderStatusesImpl ?? getProviderStatuses;
     this.sessionBackupFactory =
       opts.sessionBackupFactory ?? (async (factoryOpts) => await SessionBackupManager.create(factoryOpts));
@@ -148,6 +159,43 @@ export class AgentSession {
       enabled: this.config.observabilityEnabled ?? false,
       observability: this.config.observability,
     };
+  }
+
+  private getUserHomeDir(): string | undefined {
+    return this.config.userAgentDir ? path.dirname(this.config.userAgentDir) : undefined;
+  }
+
+  private getCoworkPaths() {
+    return this.getAiCoworkerPathsImpl({ homedir: this.getUserHomeDir() });
+  }
+
+  private async runProviderConnect(opts: {
+    provider: AgentConfig["provider"];
+    apiKey?: string;
+    onOauthLine?: (line: string) => void;
+  }): Promise<ConnectProviderResult> {
+    const paths = this.getCoworkPaths();
+    return await this.connectProviderImpl({
+      provider: opts.provider,
+      apiKey: opts.apiKey,
+      cwd: this.config.workingDirectory,
+      paths,
+      oauthStdioMode: "pipe",
+      allowOpenTerminal: opts.provider === "claude-code",
+      onOauthLine: opts.onOauthLine,
+    });
+  }
+
+  private emitLegacyConnectSummary(provider: AgentConfig["provider"], result: Extract<ConnectProviderResult, { ok: true }>) {
+    const lines = [`### /connect ${provider}`, "", result.message, "", `- Mode: ${result.mode}`, `- Storage: \`${result.storageFile}\``];
+    if (result.maskedApiKey) lines.splice(4, 0, `- Key: \`${result.maskedApiKey}\``);
+    if (result.oauthCommand) lines.push(`- OAuth command: \`${result.oauthCommand}\``);
+    if (result.oauthCredentialsFile) lines.push(`- OAuth credentials: \`${result.oauthCredentialsFile}\``);
+    this.emit({
+      type: "assistant_message",
+      sessionId: this.id,
+      text: lines.join("\n"),
+    });
   }
 
   private emitError(code: ServerErrorCode, source: ServerErrorSource, message: string) {
@@ -565,6 +613,180 @@ export class AgentSession {
     });
   }
 
+  async emitProviderCatalog() {
+    try {
+      const payload = await this.getProviderCatalogImpl({ paths: this.getCoworkPaths() });
+      this.emit({
+        type: "provider_catalog",
+        sessionId: this.id,
+        all: payload.all,
+        default: payload.default,
+        connected: payload.connected,
+      });
+    } catch (err) {
+      this.emitError("provider_error", "provider", `Failed to load provider catalog: ${String(err)}`);
+    }
+  }
+
+  emitProviderAuthMethods() {
+    try {
+      this.emit({
+        type: "provider_auth_methods",
+        sessionId: this.id,
+        methods: listProviderAuthMethods(),
+      });
+    } catch (err) {
+      this.emitError("provider_error", "provider", `Failed to load provider auth methods: ${String(err)}`);
+    }
+  }
+
+  async authorizeProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string) {
+    if (this.running) {
+      this.emitError("busy", "session", "Agent is busy");
+      return;
+    }
+    if (!isProviderName(providerRaw)) {
+      this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
+      return;
+    }
+    const methodId = methodIdRaw.trim();
+    if (!methodId) {
+      this.emitError("validation_failed", "provider", "Auth method id is required");
+      return;
+    }
+    if (!resolveProviderAuthMethod(providerRaw, methodId)) {
+      this.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
+      return;
+    }
+
+    const result = authorizeProviderAuth({ provider: providerRaw, methodId });
+    if (!result.ok) {
+      this.emitError("provider_error", "provider", result.message);
+      return;
+    }
+    this.emit({
+      type: "provider_auth_challenge",
+      sessionId: this.id,
+      provider: providerRaw,
+      methodId,
+      challenge: result.challenge,
+    });
+  }
+
+  async callbackProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string, codeRaw?: string) {
+    if (this.running) {
+      this.emitError("busy", "session", "Agent is busy");
+      return;
+    }
+    if (this.connecting) {
+      this.emitError("busy", "session", "Connection flow already running");
+      return;
+    }
+    if (!isProviderName(providerRaw)) {
+      this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
+      return;
+    }
+    const methodId = methodIdRaw.trim();
+    if (!methodId) {
+      this.emitError("validation_failed", "provider", "Auth method id is required");
+      return;
+    }
+    if (!resolveProviderAuthMethod(providerRaw, methodId)) {
+      this.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
+      return;
+    }
+
+    this.connecting = true;
+    try {
+      const code = codeRaw?.trim() ? codeRaw.trim() : undefined;
+      const result = await callbackProviderAuthMethod({
+        provider: providerRaw,
+        methodId,
+        code,
+        cwd: this.config.workingDirectory,
+        paths: this.getCoworkPaths(),
+        connect: async (opts) => await this.runProviderConnect(opts),
+        oauthStdioMode: "pipe",
+        allowOpenTerminal: providerRaw === "claude-code",
+        onOauthLine: (line) => this.log(`[connect ${providerRaw}] ${line}`),
+      });
+
+      this.emit({
+        type: "provider_auth_result",
+        sessionId: this.id,
+        provider: providerRaw,
+        methodId,
+        ok: result.ok,
+        mode: result.ok ? result.mode : undefined,
+        message: result.message,
+      });
+
+      if (result.ok) {
+        await this.refreshProviderStatus();
+        await this.emitProviderCatalog();
+      }
+    } catch (err) {
+      this.emitError("provider_error", "provider", `Provider auth callback failed: ${String(err)}`);
+    } finally {
+      this.connecting = false;
+    }
+  }
+
+  async setProviderApiKey(providerRaw: AgentConfig["provider"], methodIdRaw: string, apiKeyRaw: string) {
+    if (this.running) {
+      this.emitError("busy", "session", "Agent is busy");
+      return;
+    }
+    if (this.connecting) {
+      this.emitError("busy", "session", "Connection flow already running");
+      return;
+    }
+    if (!isProviderName(providerRaw)) {
+      this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
+      return;
+    }
+    const methodId = methodIdRaw.trim();
+    if (!methodId) {
+      this.emitError("validation_failed", "provider", "Auth method id is required");
+      return;
+    }
+    if (!resolveProviderAuthMethod(providerRaw, methodId)) {
+      this.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
+      return;
+    }
+
+    this.connecting = true;
+    try {
+      const result = await setProviderApiKeyMethod({
+        provider: providerRaw,
+        methodId,
+        apiKey: apiKeyRaw,
+        cwd: this.config.workingDirectory,
+        paths: this.getCoworkPaths(),
+        connect: async (opts) => await this.runProviderConnect(opts),
+      });
+
+      this.emit({
+        type: "provider_auth_result",
+        sessionId: this.id,
+        provider: providerRaw,
+        methodId,
+        ok: result.ok,
+        mode: result.ok ? result.mode : undefined,
+        message: result.message,
+      });
+
+      if (result.ok) {
+        await this.refreshProviderStatus();
+        await this.emitProviderCatalog();
+      }
+    } catch (err) {
+      this.emitError("provider_error", "provider", `Setting provider API key failed: ${String(err)}`);
+    } finally {
+      this.connecting = false;
+    }
+  }
+
   async connectProvider(providerRaw: AgentConfig["provider"], apiKeyRaw?: string) {
     if (this.running) {
       this.emitError("busy", "session", "Agent is busy");
@@ -581,32 +803,44 @@ export class AgentSession {
 
     this.connecting = true;
     try {
-      const userHome = this.config.userAgentDir ? path.dirname(this.config.userAgentDir) : undefined;
-      const paths = this.getAiCoworkerPathsImpl({ homedir: userHome });
-      const result = await this.connectProviderImpl({
-        provider: providerRaw,
-        apiKey: apiKeyRaw,
-        cwd: this.config.workingDirectory,
-        paths,
-        oauthStdioMode: "pipe",
-        allowOpenTerminal: providerRaw === "claude-code",
-        onOauthLine: (line) => this.log(`[connect ${providerRaw}] ${line}`),
-      });
+      const apiKey = apiKeyRaw?.trim();
+      const oauthMethod = resolveProviderAuthMethod(providerRaw, "oauth_cli");
+      const legacyOauthLine = (line: string) => this.log(`[connect ${providerRaw}] ${line}`);
+      const result = apiKey
+        ? await setProviderApiKeyMethod({
+            provider: providerRaw,
+            methodId: "api_key",
+            apiKey,
+            cwd: this.config.workingDirectory,
+            paths: this.getCoworkPaths(),
+            connect: async (opts) =>
+              await this.runProviderConnect({
+                ...opts,
+                onOauthLine: legacyOauthLine,
+              }),
+          })
+        : oauthMethod
+          ? await callbackProviderAuthMethod({
+              provider: providerRaw,
+              methodId: "oauth_cli",
+              cwd: this.config.workingDirectory,
+              paths: this.getCoworkPaths(),
+              connect: async (opts) => await this.runProviderConnect(opts),
+              oauthStdioMode: "pipe",
+              allowOpenTerminal: providerRaw === "claude-code",
+              onOauthLine: legacyOauthLine,
+            })
+          : await this.runProviderConnect({
+              provider: providerRaw,
+              onOauthLine: legacyOauthLine,
+            });
 
       if (!result.ok) {
         this.emitError("provider_error", "provider", result.message);
         return;
       }
 
-      const lines = [`### /connect ${providerRaw}`, "", result.message, "", `- Mode: ${result.mode}`, `- Storage: \`${result.storageFile}\``];
-      if (result.maskedApiKey) lines.splice(4, 0, `- Key: \`${result.maskedApiKey}\``);
-      if (result.oauthCommand) lines.push(`- OAuth command: \`${result.oauthCommand}\``);
-      if (result.oauthCredentialsFile) lines.push(`- OAuth credentials: \`${result.oauthCredentialsFile}\``);
-      this.emit({
-        type: "assistant_message",
-        sessionId: this.id,
-        text: lines.join("\n"),
-      });
+      this.emitLegacyConnectSummary(providerRaw, result);
     } catch (err) {
       this.emitError("provider_error", "provider", `connect failed: ${String(err)}`);
     } finally {
@@ -618,8 +852,7 @@ export class AgentSession {
     if (this.refreshingProviderStatus) return;
     this.refreshingProviderStatus = true;
     try {
-      const userHome = this.config.userAgentDir ? path.dirname(this.config.userAgentDir) : undefined;
-      const paths = this.getAiCoworkerPathsImpl({ homedir: userHome });
+      const paths = this.getCoworkPaths();
       const providers = await this.getProviderStatusesImpl({ paths });
       this.emit({ type: "provider_status", sessionId: this.id, providers });
     } catch (err) {

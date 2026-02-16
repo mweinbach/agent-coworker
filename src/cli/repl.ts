@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 
-import { getAiCoworkerPaths, isOauthCliProvider, readConnectionStore } from "../connect";
 import { defaultModelForProvider } from "../config";
 import { startAgentServer } from "../server/startServer";
 import type { ClientMessage, ServerEvent } from "../server/protocol";
@@ -18,6 +17,9 @@ type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory" 
 
 type AskPrompt = { requestId: string; question: string; options?: string[] };
 type ApprovalPrompt = { requestId: string; command: string; dangerous: boolean; reasonCode: ApprovalRiskCode };
+type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
+type ProviderStatus = Extract<ServerEvent, { type: "provider_status" }>["providers"][number];
+const DEFAULT_API_AUTH_METHOD: ProviderAuthMethod = { id: "api_key", type: "api", label: "API key" };
 
 export function renderTodosToLines(todos: TodoItem[]): string[] {
   if (todos.length === 0) return [];
@@ -99,12 +101,37 @@ export function parseReplInput(input: string): ParsedCommand {
   }
 }
 
+export function normalizeProviderAuthMethods(methods: ProviderAuthMethod[] | undefined): ProviderAuthMethod[] {
+  if (methods && methods.length > 0) return methods;
+  return [DEFAULT_API_AUTH_METHOD];
+}
+
+export function resolveProviderAuthMethodSelection(
+  methods: ProviderAuthMethod[],
+  rawSelection: string
+): ProviderAuthMethod | null {
+  if (methods.length === 0) return null;
+
+  const trimmed = rawSelection.trim();
+  if (!trimmed) return methods[0] ?? null;
+
+  const asNumber = Number(trimmed);
+  if (Number.isInteger(asNumber) && asNumber >= 1 && asNumber <= methods.length) {
+    return methods[asNumber - 1] ?? null;
+  }
+
+  const byId = methods.find((method) => method.id.toLowerCase() === trimmed.toLowerCase());
+  return byId ?? null;
+}
+
 export const __internal = {
   renderTodosToLines,
   resolveAndValidateDir,
   resolveAskAnswer,
   normalizeApprovalAnswer,
   parseReplInput,
+  normalizeProviderAuthMethods,
+  resolveProviderAuthMethodSelection,
 };
 
 export async function runCliRepl(
@@ -165,6 +192,9 @@ export async function runCliRepl(
   let activeAsk: AskPrompt | null = null;
   let activeApproval: ApprovalPrompt | null = null;
   let busy = false;
+  let providerList: string[] = [...UI_PROVIDER_NAMES];
+  let providerAuthMethods: Record<string, ProviderAuthMethod[]> = {};
+  let providerStatuses: ProviderStatus[] = [];
 
   const send = (msg: ClientMessage) => {
     if (!ws || ws.readyState !== WebSocketCtor.OPEN) return false;
@@ -184,33 +214,56 @@ export async function runCliRepl(
     console.log("  /restart              Restart server + new session");
     console.log("  /model <id>            Set model id for this session");
     console.log(`  /provider <name>       Set provider (${UI_PROVIDER_NAMES.join("|")})`);
-    console.log(`  /connect <name> [key]  Save provider key or run OAuth (${UI_PROVIDER_NAMES.join("|")})`);
+    console.log(`  /connect <name> [key]  Connect via auth methods (${UI_PROVIDER_NAMES.join("|")})`);
     console.log("  /cwd <path>            Set working directory for this session");
     console.log("  /tools                List tool names\n");
   };
 
-  const showConnectStatus = async () => {
-    const paths = getAiCoworkerPaths();
-    const store = await readConnectionStore(paths);
+  const showConnectStatus = () => {
     console.log("\nConnections:");
-    console.log(`  file=${paths.connectionsFile}`);
-    for (const service of UI_PROVIDER_NAMES) {
-      const entry = store.services[service];
-      if (!entry) {
-        console.log(`  - ${service}: not connected`);
-        continue;
+    for (const service of providerList) {
+      const status = providerStatuses.find((entry) => entry.provider === service);
+      if (!status) {
+        console.log(`  - ${service}: unknown`);
+      } else {
+        const auth = status.authorized ? "authorized" : "not authorized";
+        const verified = status.verified ? "verified" : "unverified";
+        const account = status.account?.email ? ` (${status.account.email})` : "";
+        console.log(`  - ${service}: ${status.mode}, ${auth}, ${verified}${account}`);
       }
-      if (entry.mode === "api_key") {
-        console.log(`  - ${service}: api key saved`);
-        continue;
-      }
-      if (entry.mode === "oauth") {
-        console.log(`  - ${service}: oauth connected`);
-        continue;
-      }
-      console.log(`  - ${service}: pending`);
+      const methods = normalizeProviderAuthMethods(providerAuthMethods[service]);
+      console.log(`    methods: ${methods.map((method) => method.id).join(", ")}`);
     }
     console.log("");
+  };
+
+  const askLine = async (rl: readline.Interface, prompt: string): Promise<string> => {
+    return await new Promise((resolve) => {
+      rl.question(prompt, (answer) => resolve(answer));
+    });
+  };
+
+  const promptForProviderMethod = async (
+    rl: readline.Interface,
+    provider: string,
+    methods: ProviderAuthMethod[]
+  ): Promise<ProviderAuthMethod | null> => {
+    if (methods.length <= 1) return methods[0] ?? null;
+
+    console.log(`Auth methods for ${provider}:`);
+    for (let i = 0; i < methods.length; i++) {
+      const method = methods[i]!;
+      const mode = method.type === "oauth" ? `oauth${method.oauthMode ? ` (${method.oauthMode})` : ""}` : "api key";
+      console.log(`  ${i + 1}. ${method.label} [${method.id}] - ${mode}`);
+    }
+
+    while (true) {
+      const answer = (await askLine(rl, `Select method [1-${methods.length}] (or "cancel"): `)).trim();
+      if (["cancel", "c", "q", "quit"].includes(answer.toLowerCase())) return null;
+      const selected = resolveProviderAuthMethodSelection(methods, answer);
+      if (selected) return selected;
+      console.log("Invalid selection. Enter a number or method id.");
+    }
   };
 
   const activateNextPrompt = (rl: readline.Interface) => {
@@ -259,6 +312,9 @@ export async function runCliRepl(
     sessionId = null;
     config = null;
     busy = false;
+    providerList = [...UI_PROVIDER_NAMES];
+    providerAuthMethods = {};
+    providerStatuses = [];
 
     pendingAsk = [];
     pendingApproval = [];
@@ -284,6 +340,9 @@ export async function runCliRepl(
       console.log(`connected: ${evt.sessionId}`);
       console.log(`provider=${evt.config.provider} model=${evt.config.model}`);
       console.log(`cwd=${evt.config.workingDirectory}`);
+      send({ type: "provider_catalog_get", sessionId: evt.sessionId });
+      send({ type: "provider_auth_methods_get", sessionId: evt.sessionId });
+      send({ type: "refresh_provider_status", sessionId: evt.sessionId });
       return;
     }
 
@@ -333,6 +392,26 @@ export async function runCliRepl(
       case "config_updated":
         config = evt.config;
         console.log(`config updated: ${evt.config.provider}/${evt.config.model}`);
+        break;
+      case "provider_catalog":
+        providerList = evt.all.map((entry) => entry.id);
+        break;
+      case "provider_auth_methods":
+        providerAuthMethods = evt.methods;
+        break;
+      case "provider_status":
+        providerStatuses = evt.providers;
+        break;
+      case "provider_auth_challenge":
+        console.log(`\nAuth challenge [${evt.provider}/${evt.methodId}] ${evt.challenge.instructions}`);
+        if (evt.challenge.command) console.log(`command: ${evt.challenge.command}`);
+        break;
+      case "provider_auth_result":
+        if (evt.ok) {
+          console.log(`\nProvider auth ok: ${evt.provider}/${evt.methodId} (${evt.mode ?? "ok"})`);
+        } else {
+          console.error(`\nProvider auth failed: ${evt.message}`);
+        }
         break;
       case "tools":
         console.log(`\nTools:\n${evt.tools.map((t) => `  - ${t}`).join("\n")}\n`);
@@ -581,16 +660,17 @@ export async function runCliRepl(
 
         if (cmd === "connect") {
           const serviceToken = (rest[0] ?? "").trim().toLowerCase();
-          const apiKey = rest.slice(1).join(" ").trim();
+          const apiKeyArg = rest.slice(1).join(" ").trim();
 
           if (!serviceToken || serviceToken === "help" || serviceToken === "list") {
-            await showConnectStatus();
+            showConnectStatus();
             activateNextPrompt(rl);
             return;
           }
 
-          if (!isProviderName(serviceToken)) {
-            console.log(`usage: /connect <${UI_PROVIDER_NAMES.join("|")}> [api_key]`);
+          const allowedProviders = providerList.length > 0 ? providerList : [...UI_PROVIDER_NAMES];
+          if (!isProviderName(serviceToken) || !allowedProviders.includes(serviceToken)) {
+            console.log(`usage: /connect <${allowedProviders.join("|")}> [api_key]`);
             activateNextPrompt(rl);
             return;
           }
@@ -601,24 +681,80 @@ export async function runCliRepl(
             return;
           }
 
+          const methods = normalizeProviderAuthMethods(providerAuthMethods[serviceToken]);
+          const apiMethod = methods.find((method) => method.type === "api") ?? null;
+
+          if (apiKeyArg) {
+            if (!apiMethod) {
+              console.log(`Provider ${serviceToken} does not support API key authentication.`);
+              activateNextPrompt(rl);
+              return;
+            }
+            const ok = send({
+              type: "provider_auth_set_api_key",
+              sessionId,
+              provider: serviceToken,
+              methodId: apiMethod.id,
+              apiKey: apiKeyArg,
+            });
+            if (!ok) {
+              handleDisconnect(rl, "unable to send (not connected)");
+              return;
+            }
+            console.log(`saving key for ${serviceToken}...`);
+            activateNextPrompt(rl);
+            return;
+          }
+
+          const method = await promptForProviderMethod(rl, serviceToken, methods);
+          if (!method) {
+            console.log("connect cancelled.");
+            activateNextPrompt(rl);
+            return;
+          }
+
+          if (method.type === "api") {
+            const promptedKey = (await askLine(rl, `${serviceToken} API key: `)).trim();
+            if (!promptedKey) {
+              console.log(`API key is required for ${serviceToken}.`);
+              activateNextPrompt(rl);
+              return;
+            }
+            const ok = send({
+              type: "provider_auth_set_api_key",
+              sessionId,
+              provider: serviceToken,
+              methodId: method.id,
+              apiKey: promptedKey,
+            });
+            if (!ok) {
+              handleDisconnect(rl, "unable to send (not connected)");
+              return;
+            }
+            console.log(`saving key for ${serviceToken}...`);
+            activateNextPrompt(rl);
+            return;
+          }
+
           const ok = send({
-            type: "connect_provider",
+            type: "provider_auth_authorize",
             sessionId,
             provider: serviceToken,
-            apiKey: apiKey || undefined,
+            methodId: method.id,
           });
           if (!ok) {
             handleDisconnect(rl, "unable to send (not connected)");
             return;
           }
-
-          console.log(
-            apiKey
-              ? `saving key for ${serviceToken}...`
-              : isOauthCliProvider(serviceToken)
-                ? `starting OAuth sign-in for ${serviceToken}...`
-                : `marking ${serviceToken} as pending (no key supplied)...`
-          );
+          if (method.oauthMode === "auto") {
+            send({
+              type: "provider_auth_callback",
+              sessionId,
+              provider: serviceToken,
+              methodId: method.id,
+            });
+          }
+          console.log(`starting OAuth sign-in for ${serviceToken}...`);
           activateNextPrompt(rl);
           return;
         }

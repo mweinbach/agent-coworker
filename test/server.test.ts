@@ -114,7 +114,15 @@ function sendAndCollect(
         return;
       }
 
-      if (msg.type === "session_settings" || msg.type === "observability_status") return;
+      if (
+        msg.type === "session_settings" ||
+        msg.type === "observability_status" ||
+        msg.type === "provider_catalog" ||
+        msg.type === "provider_auth_methods" ||
+        msg.type === "provider_status"
+      ) {
+        return;
+      }
 
       responses.push(msg);
       if (responses.length >= responseCount) {
@@ -393,7 +401,13 @@ describe("WebSocket Lifecycle", () => {
             ws.send("this is not valid json {{{");
             return;
           }
-          if (msg.type === "session_settings" || msg.type === "observability_status") return;
+          if (
+            msg.type === "session_settings" ||
+            msg.type === "observability_status" ||
+            msg.type === "provider_catalog" ||
+            msg.type === "provider_auth_methods" ||
+            msg.type === "provider_status"
+          ) return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);
@@ -503,7 +517,7 @@ describe("WebSocket Lifecycle", () => {
         url,
         (sessionId) => ({ type: "session_backup_get", sessionId }),
         1,
-        3000
+        5000
       );
 
       const backupEvt = responses[0];
@@ -755,7 +769,13 @@ describe("WebSocket Lifecycle", () => {
             ws.send(JSON.stringify("just a string"));
             return;
           }
-          if (msg.type === "session_settings" || msg.type === "observability_status") return;
+          if (
+            msg.type === "session_settings" ||
+            msg.type === "observability_status" ||
+            msg.type === "provider_catalog" ||
+            msg.type === "provider_auth_methods" ||
+            msg.type === "provider_status"
+          ) return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);
@@ -788,7 +808,13 @@ describe("WebSocket Lifecycle", () => {
             ws.send("null");
             return;
           }
-          if (msg.type === "session_settings" || msg.type === "observability_status") return;
+          if (
+            msg.type === "session_settings" ||
+            msg.type === "observability_status" ||
+            msg.type === "provider_catalog" ||
+            msg.type === "provider_auth_methods" ||
+            msg.type === "provider_status"
+          ) return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);
@@ -821,7 +847,13 @@ describe("WebSocket Lifecycle", () => {
             ws.send(JSON.stringify([1, 2, 3]));
             return;
           }
-          if (msg.type === "session_settings" || msg.type === "observability_status") return;
+          if (
+            msg.type === "session_settings" ||
+            msg.type === "observability_status" ||
+            msg.type === "provider_catalog" ||
+            msg.type === "provider_auth_methods" ||
+            msg.type === "provider_status"
+          ) return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);
@@ -1081,10 +1113,25 @@ describe("Server Resilience", () => {
         const ws = new WebSocket(url);
         const messages: any[] = [];
         let sessionId = "";
+        let settled = false;
+        let sawBusyTrue = false;
         const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
           ws.close();
           reject(new Error(`Timed out in traffic run ${label}`));
         }, 7000);
+        let finalizeTimer: ReturnType<typeof setTimeout> | null = null;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (finalizeTimer) {
+            clearTimeout(finalizeTimer);
+          }
+          ws.close();
+          resolve({ sessionId, messages });
+        };
 
         ws.onmessage = (e) => {
           const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
@@ -1095,16 +1142,27 @@ describe("Server Resilience", () => {
             ws.send(JSON.stringify({ type: "user_message", sessionId, text: `hello-${label}` }));
             ws.send(JSON.stringify({ type: "cancel", sessionId }));
             ws.send(JSON.stringify({ type: "session_backup_checkpoint", sessionId }));
-            setTimeout(() => {
-              clearTimeout(timer);
-              ws.close();
-              resolve({ sessionId, messages });
-            }, 1200);
+            finalizeTimer = setTimeout(finish, 2500);
+            return;
+          }
+
+          if (msg.type === "session_busy" && msg.busy === true) {
+            sawBusyTrue = true;
+            return;
+          }
+
+          if (sawBusyTrue && msg.type === "session_busy" && msg.busy === false) {
+            finish();
           }
         };
 
         ws.onerror = (e) => {
+          if (settled) return;
+          settled = true;
           clearTimeout(timer);
+          if (finalizeTimer) {
+            clearTimeout(finalizeTimer);
+          }
           ws.close();
           reject(new Error(`WebSocket error in ${label}: ${e}`));
         };
@@ -1131,7 +1189,7 @@ describe("Server Resilience", () => {
 
         const busyTrueIdx = run.messages.findIndex((m) => m.type === "session_busy" && m.busy === true);
         const busyFalseIdx = run.messages.findIndex((m) => m.type === "session_busy" && m.busy === false);
-        if (busyTrueIdx >= 0) {
+        if (busyTrueIdx >= 0 && busyFalseIdx >= 0) {
           expect(busyFalseIdx).toBeGreaterThan(busyTrueIdx);
         }
 

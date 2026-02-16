@@ -38,6 +38,12 @@ export type ApprovalRequest = {
   reasonCode: ApprovalRiskCode;
 };
 
+export type ProviderCatalogState = Extract<ServerEvent, { type: "provider_catalog" }>["all"];
+export type ProviderAuthMethodsState = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"];
+export type ProviderStatusesState = Extract<ServerEvent, { type: "provider_status" }>["providers"];
+export type ProviderAuthChallengeState = Extract<ServerEvent, { type: "provider_auth_challenge" }> | null;
+export type ProviderAuthResultState = Extract<ServerEvent, { type: "provider_auth_result" }> | null;
+
 // ── Sync store types ─────────────────────────────────────────────────────────
 
 type SyncState = {
@@ -49,6 +55,13 @@ type SyncState = {
   enableMcp: boolean;
   tools: string[];
   commands: CommandInfo[];
+  providerCatalog: ProviderCatalogState;
+  providerDefault: Record<string, string>;
+  providerConnected: string[];
+  providerAuthMethods: ProviderAuthMethodsState;
+  providerStatuses: ProviderStatusesState;
+  providerAuthChallenge: ProviderAuthChallengeState;
+  providerAuthResult: ProviderAuthResultState;
   busy: boolean;
   feed: FeedItem[];
   todos: TodoItem[];
@@ -62,6 +75,12 @@ type SyncActions = {
   respondApproval: (requestId: string, approved: boolean) => void;
   setModel: (provider: string, model: string) => void;
   connectProvider: (provider: string, apiKey?: string) => void;
+  requestProviderCatalog: () => void;
+  requestProviderAuthMethods: () => void;
+  refreshProviderStatus: () => void;
+  authorizeProviderAuth: (provider: string, methodId: string) => void;
+  callbackProviderAuth: (provider: string, methodId: string, code?: string) => void;
+  setProviderApiKey: (provider: string, methodId: string, apiKey: string) => void;
   setEnableMcp: (enabled: boolean) => void;
   refreshTools: () => void;
   refreshCommands: () => void;
@@ -118,6 +137,13 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     enableMcp: true,
     tools: [],
     commands: [],
+    providerCatalog: [],
+    providerDefault: {},
+    providerConnected: [],
+    providerAuthMethods: {},
+    providerStatuses: [],
+    providerAuthChallenge: null,
+    providerAuthResult: null,
     busy: false,
     feed: [],
     todos: [],
@@ -144,6 +170,13 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         s.enableMcp = true;
         s.tools = [];
         s.commands = [];
+        s.providerCatalog = [];
+        s.providerDefault = {};
+        s.providerConnected = [];
+        s.providerAuthMethods = {};
+        s.providerStatuses = [];
+        s.providerAuthChallenge = null;
+        s.providerAuthResult = null;
         s.busy = false;
         s.feed = [{ id: nextFeedId(), type: "system", line: `connected: ${evt.sessionId}` }];
         s.todos = [];
@@ -152,6 +185,9 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       }));
       socket?.send({ type: "list_tools", sessionId: evt.sessionId });
       socket?.send({ type: "list_commands", sessionId: evt.sessionId });
+      socket?.send({ type: "provider_catalog_get", sessionId: evt.sessionId });
+      socket?.send({ type: "provider_auth_methods_get", sessionId: evt.sessionId });
+      socket?.send({ type: "refresh_provider_status", sessionId: evt.sessionId });
       return;
     }
 
@@ -167,6 +203,49 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         setState("enableMcp", evt.enableMcp);
         break;
 
+      case "provider_catalog":
+        setState("providerCatalog", evt.all);
+        setState("providerDefault", evt.default);
+        setState("providerConnected", evt.connected);
+        break;
+
+      case "provider_auth_methods":
+        setState("providerAuthMethods", evt.methods);
+        break;
+
+      case "provider_status":
+        setState("providerStatuses", evt.providers);
+        setState("providerConnected", evt.providers.filter((p) => p.authorized).map((p) => p.provider));
+        break;
+
+      case "provider_auth_challenge":
+        setState("providerAuthChallenge", evt);
+        setState("feed", (f) => [...f, {
+          id: nextFeedId(),
+          type: "system",
+          line: `provider auth challenge: ${evt.provider}/${evt.methodId} (${evt.challenge.method})`,
+        }]);
+        break;
+
+      case "provider_auth_result":
+        setState("providerAuthResult", evt);
+        if (evt.ok) {
+          setState("feed", (f) => [...f, {
+            id: nextFeedId(),
+            type: "system",
+            line: `provider auth: ${evt.provider}/${evt.methodId} (${evt.mode ?? "ok"})`,
+          }]);
+        } else {
+          setState("feed", (f) => [...f, {
+            id: nextFeedId(),
+            type: "error",
+            message: evt.message,
+            code: "provider_error",
+            source: "provider",
+          }]);
+        }
+        break;
+
       case "reset_done":
         feedSeq = 0;
         pendingTools.clear();
@@ -175,6 +254,8 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           s.feed = [{ id: nextFeedId(), type: "system", line: "conversation reset" }];
           s.todos = [];
           s.busy = false;
+          s.providerAuthChallenge = null;
+          s.providerAuthResult = null;
           s.pendingAsk = null;
           s.pendingApproval = null;
         }));
@@ -316,6 +397,13 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           s.busy = false;
           s.tools = [];
           s.commands = [];
+          s.providerCatalog = [];
+          s.providerDefault = {};
+          s.providerConnected = [];
+          s.providerAuthMethods = {};
+          s.providerStatuses = [];
+          s.providerAuthChallenge = null;
+          s.providerAuthResult = null;
           s.pendingAsk = null;
           s.pendingApproval = null;
         }));
@@ -388,10 +476,83 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     connectProvider(provider: string, apiKey?: string) {
       const sid = state.sessionId;
       if (!sid || !socket) return;
+      const methods = state.providerAuthMethods[provider] ?? [];
+      const oauthMethod = methods.find((m) => m.type === "oauth");
+      if (apiKey?.trim()) {
+        socket.send({
+          type: "provider_auth_set_api_key",
+          sessionId: sid,
+          provider: provider as any,
+          methodId: "api_key",
+          apiKey: apiKey.trim(),
+        });
+        return;
+      }
+      if (oauthMethod) {
+        socket.send({
+          type: "provider_auth_authorize",
+          sessionId: sid,
+          provider: provider as any,
+          methodId: oauthMethod.id,
+        });
+        return;
+      }
       socket.send({
         type: "connect_provider",
         sessionId: sid,
         provider: provider as any,
+      });
+    },
+
+    requestProviderCatalog() {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({ type: "provider_catalog_get", sessionId: sid });
+    },
+
+    requestProviderAuthMethods() {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({ type: "provider_auth_methods_get", sessionId: sid });
+    },
+
+    refreshProviderStatus() {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({ type: "refresh_provider_status", sessionId: sid });
+    },
+
+    authorizeProviderAuth(provider: string, methodId: string) {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({
+        type: "provider_auth_authorize",
+        sessionId: sid,
+        provider: provider as any,
+        methodId,
+      });
+    },
+
+    callbackProviderAuth(provider: string, methodId: string, code?: string) {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({
+        type: "provider_auth_callback",
+        sessionId: sid,
+        provider: provider as any,
+        methodId,
+        code,
+      });
+    },
+
+    setProviderApiKey(provider: string, methodId: string, apiKey: string) {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({
+        type: "provider_auth_set_api_key",
+        sessionId: sid,
+        provider: provider as any,
+        methodId,
         apiKey,
       });
     },

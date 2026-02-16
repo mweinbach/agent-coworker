@@ -5,6 +5,7 @@ type LocalSlashDependencies = {
     reset: () => void;
     cancel: () => void;
     connectProvider: (provider: string, apiKey?: string) => void;
+    setProviderApiKey: (provider: string, methodId: string, apiKey: string) => void;
   };
   route: {
     navigate: (next: { route: "home" } | { route: "session"; sessionId: string }) => void;
@@ -124,7 +125,19 @@ export function createLocalSlashCommands(deps: LocalSlashDependencies): LocalSla
       icon: "c",
       execute: async (argumentsText) => {
         if (argumentsText) {
-          deps.syncActions.connectProvider(argumentsText);
+          const [provider = "", ...rest] = argumentsText.trim().split(/\s+/).filter(Boolean);
+          if (!provider) {
+            const { openProviderDialog } = await import("../dialog-provider");
+            openProviderDialog(deps.dialog as any);
+            return;
+          }
+          const apiKey = rest.join(" ").trim();
+          if (apiKey) {
+            deps.syncActions.setProviderApiKey(provider, "api_key", apiKey);
+            return;
+          }
+          const { openProviderDialogForProvider } = await import("../dialog-provider");
+          openProviderDialogForProvider(deps.dialog as any, provider);
           return;
         }
 

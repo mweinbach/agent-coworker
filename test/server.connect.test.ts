@@ -56,7 +56,15 @@ function sendConnectAndCollect(
         return;
       }
 
-      if (msg.type === "session_settings" || msg.type === "observability_status") return;
+      if (
+        msg.type === "session_settings" ||
+        msg.type === "observability_status" ||
+        msg.type === "provider_catalog" ||
+        msg.type === "provider_auth_methods" ||
+        msg.type === "provider_status"
+      ) {
+        return;
+      }
 
       responses.push(msg);
       if (responses.length >= responseCount) {

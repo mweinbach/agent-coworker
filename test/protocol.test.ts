@@ -398,6 +398,73 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("list_commands", () => {
+    test("valid list_commands message", () => {
+      const msg = expectOk(JSON.stringify({ type: "list_commands", sessionId: "s1" }));
+      expect(msg.type).toBe("list_commands");
+      if (msg.type === "list_commands") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("list_commands missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "list_commands" }));
+      expect(err).toBe("list_commands missing sessionId");
+    });
+  });
+
+  describe("execute_command", () => {
+    test("valid execute_command message", () => {
+      const msg = expectOk(JSON.stringify({
+        type: "execute_command",
+        sessionId: "s1",
+        name: "review",
+        arguments: "HEAD~3..HEAD",
+        clientMessageId: "cm-1",
+      }));
+      expect(msg.type).toBe("execute_command");
+      if (msg.type === "execute_command") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.name).toBe("review");
+        expect(msg.arguments).toBe("HEAD~3..HEAD");
+        expect(msg.clientMessageId).toBe("cm-1");
+      }
+    });
+
+    test("execute_command without optional fields", () => {
+      const msg = expectOk(JSON.stringify({
+        type: "execute_command",
+        sessionId: "s1",
+        name: "init",
+      }));
+      if (msg.type === "execute_command") {
+        expect(msg.arguments).toBeUndefined();
+        expect(msg.clientMessageId).toBeUndefined();
+      }
+    });
+
+    test("execute_command validation", () => {
+      expect(expectErr(JSON.stringify({ type: "execute_command", name: "review" }))).toBe(
+        "execute_command missing sessionId"
+      );
+      expect(expectErr(JSON.stringify({ type: "execute_command", sessionId: "s1" }))).toBe(
+        "execute_command missing/invalid name"
+      );
+      expect(expectErr(JSON.stringify({
+        type: "execute_command",
+        sessionId: "s1",
+        name: "review",
+        arguments: 12,
+      }))).toBe("execute_command invalid arguments");
+      expect(expectErr(JSON.stringify({
+        type: "execute_command",
+        sessionId: "s1",
+        name: "review",
+        clientMessageId: 12,
+      }))).toBe("execute_command invalid clientMessageId");
+    });
+  });
+
   describe("read_skill", () => {
     test("valid read_skill message", () => {
       const msg = expectOk(JSON.stringify({ type: "read_skill", sessionId: "s1", skillName: "pdf" }));
@@ -974,6 +1041,12 @@ describe("safeParseClientMessage", () => {
     test("client/server type lists are unique", () => {
       expect(new Set(CLIENT_MESSAGE_TYPES).size).toBe(CLIENT_MESSAGE_TYPES.length);
       expect(new Set(SERVER_EVENT_TYPES).size).toBe(SERVER_EVENT_TYPES.length);
+    });
+
+    test("new command message/event types are exported", () => {
+      expect(CLIENT_MESSAGE_TYPES.includes("list_commands")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("execute_command")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("commands")).toBe(true);
     });
 
     test("server_hello supports protocolVersion", () => {

@@ -26,6 +26,21 @@ export function resolveProviderName(v: unknown): ProviderName | null {
   return PROVIDER_LEGACY_ALIASES[v as LegacyProviderName] ?? null;
 }
 
+export type CommandSource = "command" | "mcp" | "skill";
+
+export interface CommandInfo {
+  name: string;
+  description?: string;
+  source: CommandSource;
+  hints: string[];
+}
+
+export interface CommandTemplateConfig {
+  description?: string;
+  template: string;
+  source?: CommandSource;
+}
+
 export interface AgentConfig {
   provider: ProviderName;
   model: string;
@@ -74,6 +89,12 @@ export interface AgentConfig {
    * Optional harness policy flags.
    */
   harness?: HarnessConfig;
+
+  /**
+   * Optional command templates exposed to slash command execution.
+   * Keys are command names and values include template and metadata.
+   */
+  command?: Record<string, CommandTemplateConfig>;
 }
 
 export interface SkillEntry {

@@ -198,6 +198,16 @@ export async function startAgentServer(
             return;
           }
 
+          if (msg.type === "list_commands") {
+            void session.listCommands();
+            return;
+          }
+
+          if (msg.type === "execute_command") {
+            void session.executeCommand(msg.name, msg.arguments ?? "", msg.clientMessageId);
+            return;
+          }
+
           if (msg.type === "list_skills") {
             void session.listSkills();
             return;

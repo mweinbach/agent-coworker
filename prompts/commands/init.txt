@@ -1,0 +1,9 @@
+Create or update the repository's AGENTS.md guidance file.
+
+Constraints:
+- Reflect the current project structure and tooling.
+- Keep guidance actionable and concise.
+- Preserve any existing important instructions unless they are clearly outdated.
+
+Additional user instructions:
+$ARGUMENTS

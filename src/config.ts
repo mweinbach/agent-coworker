@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { getAiCoworkerPaths } from "./connect";
 import { defaultModelForProvider, getModelForProvider, getProviderKeyCandidates } from "./providers";
 import { resolveProviderName } from "./types";
-import type { AgentConfig, ProviderName } from "./types";
+import type { AgentConfig, CommandTemplateConfig, ProviderName } from "./types";
 
 export { defaultModelForProvider } from "./providers";
 
@@ -73,6 +73,34 @@ function resolveDir(maybeRelative: unknown, baseDir: string): string {
   if (typeof maybeRelative !== "string" || !maybeRelative) return baseDir;
   if (path.isAbsolute(maybeRelative)) return maybeRelative;
   return path.join(baseDir, maybeRelative);
+}
+
+function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
+  if (!isPlainObject(raw)) return undefined;
+  const commands: Record<string, CommandTemplateConfig> = {};
+
+  for (const [nameRaw, value] of Object.entries(raw)) {
+    const name = nameRaw.trim();
+    if (!name || !isPlainObject(value)) continue;
+
+    const template = typeof value.template === "string" ? value.template : "";
+    if (!template.trim()) continue;
+
+    const description = typeof value.description === "string" ? value.description : undefined;
+    const source =
+      value.source === "command" || value.source === "mcp" || value.source === "skill"
+        ? value.source
+        : "command";
+
+    commands[name] = {
+      description,
+      source,
+      template,
+    };
+  }
+
+  if (Object.keys(commands).length === 0) return undefined;
+  return commands;
 }
 
 function resolveUserHomeFromConfig(config: AgentConfig): string {
@@ -249,6 +277,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
       false,
   };
 
+  const command = parseCommandConfig((merged as Record<string, unknown>).command);
+
   return {
     provider,
     model,
@@ -278,6 +308,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     observabilityEnabled,
     observability,
     harness,
+    command,
   };
 }
 

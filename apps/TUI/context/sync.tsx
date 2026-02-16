@@ -2,7 +2,7 @@ import { createContext, useContext, createEffect, onCleanup, type JSX, type Acce
 import { createStore, produce } from "solid-js/store";
 import { AgentSocket } from "../../../src/client/agentSocket";
 import type { ClientMessage, ServerEvent } from "../../../src/server/protocol";
-import type { ApprovalRiskCode, TodoItem, ServerErrorCode, ServerErrorSource } from "../../../src/types";
+import type { ApprovalRiskCode, CommandInfo, TodoItem, ServerErrorCode, ServerErrorSource } from "../../../src/types";
 
 // ── Feed item types ──────────────────────────────────────────────────────────
 
@@ -48,6 +48,7 @@ type SyncState = {
   cwd: string;
   enableMcp: boolean;
   tools: string[];
+  commands: CommandInfo[];
   busy: boolean;
   feed: FeedItem[];
   todos: TodoItem[];
@@ -63,6 +64,8 @@ type SyncActions = {
   connectProvider: (provider: string, apiKey?: string) => void;
   setEnableMcp: (enabled: boolean) => void;
   refreshTools: () => void;
+  refreshCommands: () => void;
+  executeCommand: (name: string, args?: string, displayText?: string) => boolean;
   reset: () => void;
   cancel: () => void;
 };
@@ -114,6 +117,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     cwd: "",
     enableMcp: true,
     tools: [],
+    commands: [],
     busy: false,
     feed: [],
     todos: [],
@@ -139,6 +143,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         s.cwd = evt.config.workingDirectory;
         s.enableMcp = true;
         s.tools = [];
+        s.commands = [];
         s.busy = false;
         s.feed = [{ id: nextFeedId(), type: "system", line: `connected: ${evt.sessionId}` }];
         s.todos = [];
@@ -146,6 +151,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         s.pendingApproval = null;
       }));
       socket?.send({ type: "list_tools", sessionId: evt.sessionId });
+      socket?.send({ type: "list_commands", sessionId: evt.sessionId });
       return;
     }
 
@@ -277,6 +283,10 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         setState("tools", evt.tools);
         break;
 
+      case "commands":
+        setState("commands", evt.commands);
+        break;
+
       case "error":
         setState("feed", (f) => [...f, {
           id: nextFeedId(),
@@ -305,6 +315,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           s.sessionId = null;
           s.busy = false;
           s.tools = [];
+          s.commands = [];
           s.pendingAsk = null;
           s.pendingApproval = null;
         }));
@@ -402,6 +413,37 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       socket.send({
         type: "list_tools",
         sessionId: sid,
+      });
+    },
+
+    refreshCommands() {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({
+        type: "list_commands",
+        sessionId: sid,
+      });
+    },
+
+    executeCommand(name: string, args = "", displayText?: string): boolean {
+      const sid = state.sessionId;
+      if (!sid || !socket) return false;
+
+      const trimmedName = name.trim();
+      if (!trimmedName) return false;
+
+      const trimmedArgs = args.trim();
+      const text = displayText ?? `/${trimmedName}${trimmedArgs ? ` ${trimmedArgs}` : ""}`;
+      const clientMessageId = `cm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      sentMessageIds.add(clientMessageId);
+
+      setState("feed", (f) => [...f, { id: nextFeedId(), type: "message", role: "user", text }]);
+      return socket.send({
+        type: "execute_command",
+        sessionId: sid,
+        name: trimmedName,
+        arguments: trimmedArgs || undefined,
+        clientMessageId,
       });
     },
 

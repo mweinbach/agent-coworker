@@ -439,6 +439,52 @@ describe("loadConfig", () => {
     expect(cfg.provider).toBe("google");
     expect(cfg.model).toBe("gemini-test");
   });
+
+  test("loads command template config from merged config", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      command: {
+        triage: {
+          description: "triage issues",
+          source: "command",
+          template: "Triage these issues: $ARGUMENTS",
+        },
+      },
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.command).toBeDefined();
+    expect(cfg.command?.triage?.description).toBe("triage issues");
+    expect(cfg.command?.triage?.source).toBe("command");
+    expect(cfg.command?.triage?.template).toBe("Triage these issues: $ARGUMENTS");
+  });
+
+  test("ignores invalid command template entries", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      command: {
+        bad1: { template: "" },
+        bad2: { description: "missing template" },
+      },
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.command).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

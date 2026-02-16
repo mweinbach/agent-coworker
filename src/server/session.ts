@@ -23,6 +23,7 @@ import { HarnessContextStore } from "../harness/contextStore";
 import { emitObservabilityEvent } from "../observability/otel";
 import { runObservabilityQuery } from "../observability/query";
 import { evaluateHarnessSlo } from "../observability/slo";
+import { expandCommandTemplate, listCommands as listServerCommands, resolveCommand } from "./commands";
 
 import type { ServerEvent } from "./protocol";
 import {
@@ -224,6 +225,39 @@ export class AgentSession {
     this.emit({ type: "tools", sessionId: this.id, tools });
   }
 
+  async listCommands() {
+    try {
+      const commands = await listServerCommands(this.config);
+      this.emit({ type: "commands", sessionId: this.id, commands });
+    } catch (err) {
+      this.emitError("internal_error", "session", `Failed to list commands: ${String(err)}`);
+    }
+  }
+
+  async executeCommand(nameRaw: string, argumentsText = "", clientMessageId?: string) {
+    const name = nameRaw.trim();
+    if (!name) {
+      this.emitError("validation_failed", "session", "Command name is required");
+      return;
+    }
+
+    const resolved = await resolveCommand(this.config, name);
+    if (!resolved) {
+      this.emitError("validation_failed", "session", `Unknown command: ${name}`);
+      return;
+    }
+
+    const expanded = expandCommandTemplate(resolved.template, argumentsText);
+    if (!expanded.trim()) {
+      this.emitError("validation_failed", "session", `Command "${name}" expanded to empty prompt`);
+      return;
+    }
+
+    const trimmedArgs = argumentsText.trim();
+    const slashText = `/${resolved.name}${trimmedArgs ? ` ${trimmedArgs}` : ""}`;
+    await this.sendUserMessage(expanded, clientMessageId, slashText);
+  }
+
   async listSkills() {
     try {
       const skills = await discoverSkills(this.config.skillsDirs, { includeDisabled: true });
@@ -269,6 +303,7 @@ export class AgentSession {
       .filter((s) => s.enabled)
       .map((s) => ({ name: s.name, description: s.description }));
     this.emit({ type: "skills_list", sessionId: this.id, skills });
+    await this.listCommands();
   }
 
   async disableSkill(skillNameRaw: string) {
@@ -771,7 +806,7 @@ export class AgentSession {
     }
   }
 
-  async sendUserMessage(text: string, clientMessageId?: string) {
+  async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
     if (this.running) {
       this.emitError("busy", "session", "Agent is busy");
       return;
@@ -781,7 +816,7 @@ export class AgentSession {
     this.abortController = new AbortController();
     const turnStartedAt = Date.now();
     try {
-      this.emit({ type: "user_message", sessionId: this.id, text, clientMessageId });
+      this.emit({ type: "user_message", sessionId: this.id, text: displayText ?? text, clientMessageId });
       this.emit({ type: "session_busy", sessionId: this.id, busy: true });
       // Telemetry is best-effort; don't block turn execution on network I/O.
       void emitObservabilityEvent(this.config, {

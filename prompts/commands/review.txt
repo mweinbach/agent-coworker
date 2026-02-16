@@ -1,0 +1,9 @@
+Review the requested code changes and focus on bugs, regressions, and missing tests.
+
+Target:
+$ARGUMENTS
+
+Output format:
+- Findings ordered by severity.
+- Each finding includes file path and concise rationale.
+- If no issues are found, state that explicitly and call out residual risk.

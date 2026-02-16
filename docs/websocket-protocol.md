@@ -17,7 +17,7 @@ This document is the canonical external protocol contract for all clients. Thin 
 - Conversational turn streaming: `user_message`, `assistant_message`, `reasoning`, `log`, `todos`
 - Human-in-the-loop control: `ask`/`ask_response`, `approval`/`approval_response`, `cancel`
 - Provider/model control: `connect_provider`, `set_model`, `refresh_provider_status`, `provider_status`
-- Tool and skill metadata: `list_tools`, `tools`, `list_skills`, `read_skill`, `enable_skill`, `disable_skill`, `delete_skill`
+- Tool, command, and skill metadata: `list_tools`, `tools`, `list_commands`, `commands`, `execute_command`, `list_skills`, `read_skill`, `enable_skill`, `disable_skill`, `delete_skill`
 - MCP runtime toggling: `set_enable_mcp`
 - Session backup/restore: `session_backup_get`, `session_backup_checkpoint`, `session_backup_restore`, `session_backup_delete_checkpoint`
 - Observability + harness: `observability_status`, `observability_query`, `observability_query_result`, `harness_context_get`, `harness_context_set`, `harness_slo_evaluate`, `harness_slo_result`
@@ -137,6 +137,15 @@ interface HarnessSloCheck {
   threshold: number;
   windowSec: number;
 }
+
+type CommandSource = "command" | "mcp" | "skill";
+
+interface CommandInfo {
+  name: string;
+  description?: string;
+  source: CommandSource;
+  hints: string[]; // eg: ["$1", "$ARGUMENTS"]
+}
 ```
 
 ---
@@ -249,6 +258,31 @@ Request the list of available tools.
 {
   "type": "list_tools",
   "sessionId": "..."
+}
+```
+
+### list_commands
+
+Request slash command metadata available for this session. Includes built-ins, config-defined templates, and enabled skills.
+
+```jsonc
+{
+  "type": "list_commands",
+  "sessionId": "..."
+}
+```
+
+### execute_command
+
+Execute a server-side slash command by name and optional arguments. The server resolves the command template and runs a normal agent turn with the expanded text.
+
+```jsonc
+{
+  "type": "execute_command",
+  "sessionId": "...",
+  "name": "review",
+  "arguments": "HEAD~3..HEAD",
+  "clientMessageId": "cm-123" // optional
 }
 ```
 
@@ -685,6 +719,31 @@ List of available tool names (response to `list_tools`).
 }
 ```
 
+### commands
+
+Command metadata list (response to `list_commands`).
+
+```jsonc
+{
+  "type": "commands",
+  "sessionId": "...",
+  "commands": [
+    {
+      "name": "review",
+      "description": "review changes [commit|branch|pr], defaults to uncommitted",
+      "source": "command",
+      "hints": ["$ARGUMENTS"]
+    },
+    {
+      "name": "my-mcp-prompt",
+      "description": "Prompt exposed by MCP",
+      "source": "mcp",
+      "hints": ["$1", "$2"]
+    }
+  ]
+}
+```
+
 ### skills_list
 
 List of discovered skills (response to `list_skills`).
@@ -980,6 +1039,19 @@ server  <- pong { sessionId: "..." }
 ```
 client  -> set_model { model: "gpt-5.2", provider: "openai" }
 server  <- config_updated { config: { provider: "openai", model: "gpt-5.2", ... } }
+```
+
+### Command Execution
+
+```
+client  -> list_commands { sessionId: "..." }
+server  <- commands { commands: [...] }
+
+client  -> execute_command { name: "review", arguments: "HEAD~2..HEAD" }
+server  <- user_message { text: "/review HEAD~2..HEAD" }   (echo)
+server  <- session_busy { busy: true }
+server  <- assistant_message { text: "..." }
+server  <- session_busy { busy: false }
 ```
 
 ### Backup / Checkpoint Flow

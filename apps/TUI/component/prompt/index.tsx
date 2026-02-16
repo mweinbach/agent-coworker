@@ -1,6 +1,7 @@
 import path from "node:path";
 import fg from "fast-glob";
-import { createMemo, Show, type JSX } from "solid-js";
+import { TextareaRenderable } from "@opentui/core";
+import { createEffect, createMemo, Show, type JSX } from "solid-js";
 import { useTheme } from "../../context/theme";
 import { usePrompt } from "../../context/prompt";
 import { useSyncState, useSyncActions } from "../../context/sync";
@@ -11,6 +12,13 @@ import { keyModifiersFromEvent, keyNameFromEvent } from "../../util/keyboard";
 import { createPromptHistory } from "./history";
 import { createAutocomplete, AutocompleteDropdown, type AutocompleteItem } from "./autocomplete";
 import { getTextareaAction } from "../textarea-keybindings";
+import { resolveTextareaInputValue } from "./input-value";
+import {
+  createLocalSlashCommands,
+  findLocalSlashCommand,
+  localSlashCommandsToAutocompleteItems,
+  parseSlashInput,
+} from "./slash-commands";
 
 const PLACEHOLDERS = [
   "Ask me anything...",
@@ -35,6 +43,12 @@ const FILE_AUTOCOMPLETE_IGNORE = [
   "**/.agent/**",
   "**/output/**",
   "**/uploads/**",
+];
+
+const COMPOSER_KEY_BINDINGS = [
+  { name: "enter", action: "submit" as const },
+  { name: "enter", shift: true, action: "newline" as const },
+  { name: "j", ctrl: true, action: "newline" as const },
 ];
 
 let fileCache: {
@@ -94,6 +108,55 @@ export function Prompt(props: {
   const dialog = useDialog();
   const exitCtx = useExit();
 
+  let composerRef: TextareaRenderable | undefined;
+
+  const localSlashCommands = createLocalSlashCommands({
+    syncActions,
+    route,
+    dialog,
+    exit: exitCtx,
+  });
+
+  const commandAutocompleteItems = createMemo(() => {
+    const localItems = localSlashCommandsToAutocompleteItems(localSlashCommands);
+    const serverItems = syncState.commands
+      .filter((command) => command.source !== "skill")
+      .map<AutocompleteItem>((command) => ({
+        label: `/${command.name}`,
+        value: `/${command.name}`,
+        description: command.description,
+        category: "command",
+        icon: command.source === "mcp" ? "p" : command.source === "skill" ? "*" : "/",
+      }));
+
+    const deduped: AutocompleteItem[] = [];
+    const seen = new Set<string>();
+
+    for (const item of [...localItems, ...serverItems]) {
+      const key = item.value.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(item);
+    }
+
+    return deduped;
+  });
+
+  const autocomplete = createAutocomplete({
+    getCommands: () => commandAutocompleteItems(),
+    getFiles: () => getFileAutocompleteItems(syncState.cwd || process.cwd()),
+  });
+
+  createEffect(() => {
+    const value = prompt.input();
+    if (!composerRef) return;
+    if (composerRef.plainText === value) return;
+
+    composerRef.replaceText(value);
+    composerRef.cursorOffset = value.length;
+    autocomplete.onInput(value, value.length);
+  });
+
   const placeholder = () => {
     if (prompt.shellMode()) {
       return SHELL_PLACEHOLDERS[Math.floor(Math.random() * SHELL_PLACEHOLDERS.length)]!;
@@ -101,107 +164,58 @@ export function Prompt(props: {
     return PLACEHOLDERS[Math.floor(Math.random() * PLACEHOLDERS.length)]!;
   };
 
-  const autocomplete = createAutocomplete({
-    getCommands: () => [
-      { label: "/new", value: "/new", description: "New session", category: "command", icon: "+" },
-      { label: "/clear", value: "/clear", description: "Clear session", category: "command", icon: "x" },
-      { label: "/status", value: "/status", description: "Show status", category: "command", icon: "i" },
-      { label: "/cancel", value: "/cancel", description: "Cancel current turn", category: "command", icon: "!" },
-      { label: "/exit", value: "/exit", description: "Exit", category: "command", icon: "q" },
-      { label: "/models", value: "/models", description: "Switch model", category: "command", icon: "m" },
-      { label: "/connect", value: "/connect", description: "Connect provider", category: "command", icon: "c" },
-      { label: "/themes", value: "/themes", description: "Change theme", category: "command", icon: "t" },
-      { label: "/sessions", value: "/sessions", description: "Show sessions", category: "command", icon: "s" },
-      { label: "/mcp", value: "/mcp", description: "Show MCP status", category: "command", icon: "p" },
-      { label: "/help", value: "/help", description: "Show help", category: "command", icon: "?" },
-    ],
-    getFiles: () => getFileAutocompleteItems(syncState.cwd || process.cwd()),
-  });
-
   const isDisabled = createMemo(() => {
     return props.disabled || syncState.busy || syncState.pendingAsk !== null || syncState.pendingApproval !== null;
   });
 
-  const runSlashCommand = (raw: string): boolean => {
-    const [cmd, ...rest] = raw.slice(1).trim().split(/\s+/);
-    const arg = rest.join(" ").trim();
-    const normalized = (cmd ?? "").toLowerCase();
-
-    switch (normalized) {
-      case "new":
-      case "reset":
-      case "clear":
-        syncActions.reset();
-        route.navigate({ route: "home" });
-        return true;
-
-      case "status":
-        import("../dialog-status").then(({ openStatusDialog }) => openStatusDialog(dialog));
-        return true;
-
-      case "help":
-        import("../../ui/dialog-help").then(({ openHelpDialog }) => openHelpDialog(dialog));
-        return true;
-
-      case "models":
-      case "model":
-        import("../dialog-model").then(({ openModelPicker }) => openModelPicker(dialog));
-        return true;
-
-      case "themes":
-      case "theme":
-        import("../dialog-theme-list").then(({ openThemePicker }) => openThemePicker(dialog));
-        return true;
-
-      case "connect":
-        if (arg) {
-          syncActions.connectProvider(arg);
-        } else {
-          import("../dialog-provider").then(({ openProviderDialog }) => openProviderDialog(dialog));
-        }
-        return true;
-
-      case "sessions":
-        import("../dialog-session-list").then(({ openSessionList }) => openSessionList(dialog));
-        return true;
-
-      case "mcp":
-        import("../dialog-mcp").then(({ openMcpDialog }) => openMcpDialog(dialog));
-        return true;
-
-      case "cancel":
-        syncActions.cancel();
-        return true;
-
-      case "exit":
-      case "quit":
-        exitCtx.exit();
-        return true;
-
-      default:
-        return false;
+  const setPromptInput = (value: string, cursorPos = value.length) => {
+    prompt.setInput(value);
+    if (composerRef) {
+      if (composerRef.plainText !== value) {
+        composerRef.replaceText(value);
+      }
+      composerRef.cursorOffset = Math.max(0, Math.min(cursorPos, value.length));
     }
+    autocomplete.onInput(value, cursorPos);
   };
 
-  const handleSubmit = () => {
+  const runSlashCommand = async (text: string): Promise<boolean> => {
+    const parsed = parseSlashInput(text);
+    if (!parsed) return false;
+
+    const localCommand = findLocalSlashCommand(localSlashCommands, parsed.name);
+    if (localCommand) {
+      await Promise.resolve(localCommand.execute(parsed.argumentsText));
+      return true;
+    }
+
+    const serverCommand = syncState.commands.find(
+      (command) => command.name.toLowerCase() === parsed.name.toLowerCase()
+    );
+    if (serverCommand) {
+      return syncActions.executeCommand(serverCommand.name, parsed.argumentsText, text);
+    }
+
+    return false;
+  };
+
+  const handleSubmit = async () => {
     const text = prompt.input().trim();
     if (!text) return;
 
-    // Save to persistent history
     history.append(text, prompt.shellMode() ? "shell" : "normal");
-    // Also save to context history
     prompt.pushHistory(text);
 
     if (props.onSubmit) {
       props.onSubmit(text);
-      prompt.setInput("");
+      setPromptInput("");
       return;
     }
 
     if (!prompt.shellMode() && text.startsWith("/")) {
-      const handled = runSlashCommand(text);
+      const handled = await runSlashCommand(text);
       if (handled) {
-        prompt.setInput("");
+        setPromptInput("");
         return;
       }
     }
@@ -214,47 +228,43 @@ export function Prompt(props: {
       syncActions.sendMessage(messageText);
     }
 
-    prompt.setInput("");
+    setPromptInput("");
   };
 
   const handleKeyDown = (e: any) => {
     const key = keyNameFromEvent(e);
     const { ctrl, shift, alt } = keyModifiersFromEvent(e);
 
-    // Let autocomplete handle keys first
     const acState = autocomplete.state();
     if (acState.visible) {
       if (autocomplete.onKeyDown(key, ctrl)) {
         e.preventDefault?.();
 
-        // If tab/enter, do the selection
         if (key === "tab" || key === "enter") {
-          const replacement = autocomplete.select(prompt.input());
+          const replacement = autocomplete.select(
+            prompt.input(),
+            composerRef?.cursorOffset ?? prompt.input().length
+          );
           if (replacement !== null) {
-            prompt.setInput(replacement);
+            setPromptInput(replacement);
           }
         }
         return;
       }
     }
 
-    // Use textarea keybinding mapping
     const action = getTextareaAction(key, ctrl, shift, alt);
 
     switch (action) {
       case "submit":
-        e.preventDefault?.();
-        if (!isDisabled()) handleSubmit();
-        return;
-
       case "newline":
-        // Allow newline insertion (Shift+Enter)
+      case "none":
         return;
 
       case "clear":
         if (prompt.input() !== "") {
           e.preventDefault?.();
-          prompt.setInput("");
+          setPromptInput("");
         }
         return;
 
@@ -262,7 +272,7 @@ export function Prompt(props: {
         e.preventDefault?.();
         const entry = history.navigateUp(prompt.input());
         if (entry !== null) {
-          prompt.setInput(entry.input);
+          setPromptInput(entry.input);
           if (entry.mode === "shell") prompt.setShellMode(true);
           else if (entry.mode === "normal") prompt.setShellMode(false);
         }
@@ -273,7 +283,7 @@ export function Prompt(props: {
         e.preventDefault?.();
         const entry = history.navigateDown();
         if (entry !== null) {
-          prompt.setInput(entry.input);
+          setPromptInput(entry.input);
           if (entry.mode === "shell") prompt.setShellMode(true);
           else if (entry.mode === "normal") prompt.setShellMode(false);
         }
@@ -281,22 +291,23 @@ export function Prompt(props: {
       }
 
       case "cancel":
-        e.preventDefault?.();
         if (prompt.input()) {
-          prompt.setInput("");
+          e.preventDefault?.();
+          setPromptInput("");
         }
         return;
 
       case "stash":
         e.preventDefault?.();
         prompt.doStash();
+        setPromptInput("");
         return;
 
       case "unstash": {
         e.preventDefault?.();
         const restored = prompt.doUnstash();
         if (restored !== null) {
-          prompt.setInput(restored);
+          setPromptInput(restored);
         }
         return;
       }
@@ -308,31 +319,39 @@ export function Prompt(props: {
     }
   };
 
-  const handleInput = (v: any) => {
-    const value = typeof v === "string" ? v : v?.value ?? "";
-    prompt.setInput(value);
+  const handleInput = (raw: unknown) => {
+    const value = resolveTextareaInputValue(raw, composerRef?.plainText ?? prompt.input());
+
+    if (value === prompt.input()) {
+      autocomplete.onInput(value, composerRef?.cursorOffset ?? value.length);
+      return;
+    }
+
     history.resetIndex();
 
-    // Check for ! prefix to auto-enable shell mode
     if (value.startsWith("!") && !prompt.shellMode()) {
       const stripped = value.slice(1);
       prompt.setShellMode(true);
       prompt.setInput(stripped);
-      autocomplete.onInput(stripped);
+      if (composerRef && composerRef.plainText !== stripped) {
+        composerRef.replaceText(stripped);
+        composerRef.cursorOffset = stripped.length;
+      }
+      autocomplete.onInput(stripped, composerRef?.cursorOffset ?? stripped.length);
       return;
     }
 
-    // Update autocomplete
-    autocomplete.onInput(value);
+    prompt.setInput(value);
+    autocomplete.onInput(value, composerRef?.cursorOffset ?? value.length);
   };
 
   return (
     <box flexDirection="column" width="100%">
-      {/* Autocomplete dropdown above the input */}
       <AutocompleteDropdown
         items={() => autocomplete.state().items}
         selectedIndex={() => autocomplete.state().selectedIndex}
         visible={() => autocomplete.state().visible}
+        emptyText="No matching items"
       />
 
       <box
@@ -346,24 +365,28 @@ export function Prompt(props: {
         paddingRight={1}
       >
         <box flexDirection="row">
-          {/* Mode indicator */}
           <text fg={prompt.shellMode() ? theme.warning : theme.accent} selectable={false}>
             {prompt.shellMode() ? "$ " : "❯ "}
           </text>
-          <input
-            value={prompt.input()}
-            onChange={handleInput}
+          <textarea
+            ref={(el) => {
+              composerRef = el;
+            }}
+            initialValue={prompt.input()}
+            onContentChange={handleInput}
             onKeyDown={handleKeyDown}
             onSubmit={() => {
-              if (!isDisabled()) handleSubmit();
+              if (!isDisabled()) {
+                void handleSubmit();
+              }
             }}
+            keyBindings={COMPOSER_KEY_BINDINGS}
             placeholder={isDisabled() ? "Waiting..." : placeholder()}
             placeholderColor={theme.textMuted}
             textColor={theme.text}
             focused={!isDisabled()}
             flexGrow={1}
           />
-          {/* Shell mode badge */}
           <Show when={prompt.shellMode()}>
             <text fg={theme.warning} selectable={false}>
               {" SHELL"}

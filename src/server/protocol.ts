@@ -2,6 +2,7 @@ import { isProviderName } from "../types";
 import type {
   ApprovalRiskCode,
   AgentConfig,
+  CommandInfo,
   HarnessContextPayload,
   HarnessSloCheck,
   HarnessSloOperator,
@@ -24,6 +25,14 @@ export type ClientMessage =
   | { type: "set_model"; sessionId: string; model: string; provider?: AgentConfig["provider"] }
   | { type: "refresh_provider_status"; sessionId: string }
   | { type: "list_tools"; sessionId: string }
+  | { type: "list_commands"; sessionId: string }
+  | {
+      type: "execute_command";
+      sessionId: string;
+      name: string;
+      arguments?: string;
+      clientMessageId?: string;
+    }
   | { type: "list_skills"; sessionId: string }
   | { type: "read_skill"; sessionId: string; skillName: string }
   | { type: "disable_skill"; sessionId: string; skillName: string }
@@ -73,6 +82,7 @@ export type ServerEvent =
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
     }
   | { type: "tools"; sessionId: string; tools: string[] }
+  | { type: "commands"; sessionId: string; commands: CommandInfo[] }
   | { type: "skills_list"; sessionId: string; skills: SkillEntry[] }
   | { type: "skill_content"; sessionId: string; skill: SkillEntry; content: string }
   | {
@@ -133,6 +143,8 @@ export const CLIENT_MESSAGE_TYPES = [
   "set_model",
   "refresh_provider_status",
   "list_tools",
+  "list_commands",
+  "execute_command",
   "list_skills",
   "read_skill",
   "disable_skill",
@@ -167,6 +179,7 @@ export const SERVER_EVENT_TYPES = [
   "approval",
   "config_updated",
   "tools",
+  "commands",
   "skills_list",
   "skill_content",
   "session_backup_state",
@@ -240,6 +253,21 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
     }
     case "list_tools": {
       if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "list_tools missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "list_commands": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "list_commands missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "execute_command": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "execute_command missing sessionId" };
+      if (!isNonEmptyString(obj.name)) return { ok: false, error: "execute_command missing/invalid name" };
+      if (obj.arguments !== undefined && typeof obj.arguments !== "string") {
+        return { ok: false, error: "execute_command invalid arguments" };
+      }
+      if (obj.clientMessageId !== undefined && typeof obj.clientMessageId !== "string") {
+        return { ok: false, error: "execute_command invalid clientMessageId" };
+      }
       return { ok: true, msg: obj as ClientMessage };
     }
     case "cancel": {

@@ -556,6 +556,67 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("list_commands returns commands metadata", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const { responses } = await sendAndCollect(
+        url,
+        (sessionId) => ({ type: "list_commands", sessionId }),
+        1
+      );
+
+      expect(responses[0].type).toBe("commands");
+      expect(Array.isArray(responses[0].commands)).toBe(true);
+      expect(responses[0].commands.some((cmd: any) => cmd.name === "init")).toBe(true);
+      expect(responses[0].commands.some((cmd: any) => cmd.name === "review")).toBe(true);
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("execute_command with unknown name returns validation error", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const { responses } = await sendAndCollect(
+        url,
+        (sessionId) => ({ type: "execute_command", sessionId, name: "does-not-exist" }),
+        1
+      );
+
+      expect(responses[0].type).toBe("error");
+      expect(responses[0].code).toBe("validation_failed");
+      expect(responses[0].message).toContain("Unknown command");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("execute_command known command enters normal turn flow", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const { responses } = await sendAndCollect(
+        url,
+        (sessionId) => ({
+          type: "execute_command",
+          sessionId,
+          name: "review",
+          arguments: "HEAD~1..HEAD",
+        }),
+        2
+      );
+
+      expect(responses[0].type).toBe("user_message");
+      expect(responses[0].text).toBe("/review HEAD~1..HEAD");
+      expect(responses[1].type).toBe("session_busy");
+      expect(responses[1].busy).toBe(true);
+    } finally {
+      server.stop();
+    }
+  });
+
   test("harness_context_set returns harness_context", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -1149,6 +1210,9 @@ describe("Protocol Doc Parity", () => {
 
       const tools = await sendAndCollect(url, (sessionId) => ({ type: "list_tools", sessionId }), 1);
       expect(tools.responses[0].type).toBe("tools");
+
+      const commands = await sendAndCollect(url, (sessionId) => ({ type: "list_commands", sessionId }), 1);
+      expect(commands.responses[0].type).toBe("commands");
 
       const model = await sendAndCollect(
         url,

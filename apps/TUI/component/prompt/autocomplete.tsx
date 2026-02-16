@@ -1,6 +1,7 @@
 import { createSignal, For, Show, type Accessor } from "solid-js";
 import { TextAttributes } from "@opentui/core";
 import { useTheme } from "../../context/theme";
+import { normalizeKeyName } from "../../util/keyboard";
 import { createFrecencyTracker } from "./frecency";
 
 /**
@@ -158,11 +159,12 @@ export function createAutocomplete(opts: {
 
     /** Handle keyboard events for autocomplete navigation. Returns true if handled. */
     onKeyDown(key: string, ctrl: boolean): boolean {
+      const normalized = normalizeKeyName(key);
       const s = state();
       if (!s.visible || s.items.length === 0) return false;
 
       // Arrow down or Ctrl+N
-      if (key === "down" || (key === "n" && ctrl)) {
+      if (normalized === "down" || (normalized === "n" && ctrl)) {
         setState((prev) => ({
           ...prev,
           selectedIndex: Math.min(prev.selectedIndex + 1, prev.items.length - 1),
@@ -171,7 +173,7 @@ export function createAutocomplete(opts: {
       }
 
       // Arrow up or Ctrl+P
-      if (key === "up" || (key === "p" && ctrl)) {
+      if (normalized === "up" || (normalized === "p" && ctrl)) {
         setState((prev) => ({
           ...prev,
           selectedIndex: Math.max(prev.selectedIndex - 1, 0),
@@ -180,12 +182,12 @@ export function createAutocomplete(opts: {
       }
 
       // Tab or Enter to select
-      if (key === "tab" || key === "return") {
+      if (normalized === "tab" || normalized === "enter") {
         return true; // Caller should call select()
       }
 
       // Escape to close
-      if (key === "escape") {
+      if (normalized === "escape") {
         setState((prev) => ({ ...prev, visible: false }));
         return true;
       }

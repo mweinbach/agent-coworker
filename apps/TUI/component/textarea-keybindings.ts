@@ -1,3 +1,5 @@
+import { normalizeKeyName } from "../util/keyboard";
+
 /**
  * Textarea keybinding definitions for the prompt input.
  * These map key combinations to editing actions.
@@ -21,30 +23,33 @@ export function getTextareaAction(
   shift: boolean,
   _alt: boolean
 ): TextareaAction {
+  const normalized = normalizeKeyName(key);
+  const isEnter = normalized === "enter";
+
   // Enter without shift = submit
-  if (key === "return" && !shift) return "submit";
+  if (isEnter && !shift) return "submit";
 
   // Shift+Enter or Ctrl+J = newline
-  if ((key === "return" && shift) || (key === "j" && ctrl)) return "newline";
+  if ((isEnter && shift) || (normalized === "j" && ctrl)) return "newline";
 
   // Ctrl+C = clear
-  if (key === "c" && ctrl) return "clear";
+  if (normalized === "c" && ctrl) return "clear";
 
   // Up/Down arrows = history navigation
-  if (key === "up" && !ctrl && !shift) return "history_up";
-  if (key === "down" && !ctrl && !shift) return "history_down";
+  if (normalized === "up" && !ctrl && !shift) return "history_up";
+  if (normalized === "down" && !ctrl && !shift) return "history_down";
 
   // Escape = cancel
-  if (key === "escape") return "cancel";
+  if (normalized === "escape") return "cancel";
 
   // Ctrl+Z = stash
-  if (key === "z" && ctrl && !shift) return "stash";
+  if (normalized === "z" && ctrl && !shift) return "stash";
 
   // Ctrl+Shift+Z = unstash
-  if (key === "z" && ctrl && shift) return "unstash";
+  if (normalized === "z" && ctrl && shift) return "unstash";
 
   // Ctrl+] = shell mode toggle
-  if (key === "]" && ctrl) return "shell_mode";
+  if (normalized === "]" && ctrl) return "shell_mode";
 
   return "none";
 }

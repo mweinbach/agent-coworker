@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { useTheme } from "../context/theme";
 import { Dialog } from "./dialog";
+import { keyNameFromEvent } from "../util/keyboard";
 
 type DialogPromptProps = {
   title: string;
@@ -14,8 +15,8 @@ export function DialogPrompt(props: DialogPromptProps) {
   const [value, setValue] = createSignal("");
 
   const handleKeyDown = (e: any) => {
-    const key = e.key ?? e.name ?? "";
-    if (key === "return") {
+    const key = keyNameFromEvent(e);
+    if (key === "enter") {
       const text = value().trim();
       if (text) props.onSubmit(text);
       e.preventDefault?.();

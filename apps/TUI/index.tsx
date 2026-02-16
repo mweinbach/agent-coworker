@@ -51,7 +51,9 @@ export async function runTui(
   const renderer = await createCliRenderer();
 
   await render(() => (
-    <ExitProvider>
+    <ExitProvider onExit={() => {
+      if (!renderer.isDestroyed) renderer.destroy();
+    }}>
       <KVProvider>
         <ThemeProvider>
           <DialogProvider>

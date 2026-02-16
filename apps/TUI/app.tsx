@@ -11,6 +11,9 @@ import { useSyncActions, useSyncState } from "./context/sync";
 import { useTheme } from "./context/theme";
 import { Home } from "./routes/home";
 import { Session } from "./routes/session/index";
+import { Toast, showToast } from "./ui/toast";
+import { resolveCtrlCAction } from "./util/ctrl-c";
+import { keyModifiersFromEvent, keyNameFromEvent } from "./util/keyboard";
 
 export function App() {
   const { current } = useRoute();
@@ -52,6 +55,8 @@ export function App() {
           {dialog.stack().length > 0 && dialog.stack()[dialog.stack().length - 1]!.element()}
         </box>
       </Show>
+
+      <Toast />
     </box>
   );
 }
@@ -67,6 +72,7 @@ function GlobalHotkeys() {
   const exitCtx = useExit();
 
   const [ctrlXPendingAt, setCtrlXPendingAt] = createSignal<number | null>(null);
+  const [ctrlCPendingAt, setCtrlCPendingAt] = createSignal<number | null>(null);
 
   const toggleSidebar = () => {
     kv.set("sidebar_visible", kv.get("sidebar_visible", "true") === "true" ? "false" : "true");
@@ -234,10 +240,13 @@ function GlobalHotkeys() {
     if (e.repeated) return;
     if ((e as { defaultPrevented?: boolean }).defaultPrevented) return;
 
-    const key = e.name ?? "";
-    const ctrl = e.ctrl ?? false;
-    const shift = e.shift ?? false;
-    const alt = e.meta || e.option || false;
+    const key = keyNameFromEvent(e);
+    const { ctrl, shift, alt } = keyModifiersFromEvent(e);
+    const isCtrlC = ctrl && !shift && !alt && key === "c";
+
+    if (!isCtrlC && ctrlCPendingAt() !== null) {
+      setCtrlCPendingAt(null);
+    }
 
     if (dialog.hasDialog()) {
       if (key === "escape") {
@@ -268,9 +277,14 @@ function GlobalHotkeys() {
       return;
     }
 
-    if (ctrl && !shift && !alt && key === "c") {
-      if (prompt.input()) {
+    if (isCtrlC) {
+      const resolved = resolveCtrlCAction(prompt.input(), ctrlCPendingAt(), Date.now());
+      setCtrlCPendingAt(resolved.nextPendingAt);
+
+      if (resolved.outcome === "clear_input") {
         prompt.setInput("");
+      } else if (resolved.outcome === "confirm_exit") {
+        showToast("Press Ctrl+C again to exit", "warning");
       } else {
         exitCtx.exit();
       }

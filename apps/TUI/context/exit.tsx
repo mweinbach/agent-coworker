@@ -1,4 +1,4 @@
-import { createContext, useContext, onCleanup, type JSX } from "solid-js";
+import { createContext, useContext, type JSX } from "solid-js";
 
 type CleanupFn = () => void;
 
@@ -9,7 +9,7 @@ type ExitContextValue = {
 
 const ExitContext = createContext<ExitContextValue>();
 
-export function ExitProvider(props: { children: JSX.Element }) {
+export function ExitProvider(props: { children: JSX.Element; onExit?: () => void }) {
   const cleanups: CleanupFn[] = [];
   let exited = false;
 
@@ -27,7 +27,11 @@ export function ExitProvider(props: { children: JSX.Element }) {
           // ignore cleanup errors
         }
       }
-      process.exit(0);
+      if (props.onExit) {
+        props.onExit();
+        return;
+      }
+      process.kill(process.pid, "SIGTERM");
     },
   };
 

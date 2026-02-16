@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { useTheme } from "../context/theme";
 import { Dialog } from "./dialog";
+import { keyNameFromEvent } from "../util/keyboard";
 
 type DialogConfirmProps = {
   title: string;
@@ -21,14 +22,14 @@ export function DialogConfirm(props: DialogConfirmProps) {
   ];
 
   const handleKeyDown = (e: any) => {
-    const key = e.key ?? e.name ?? "";
+    const key = keyNameFromEvent(e);
     if (key === "up" || key === "left") {
       setSelected(0);
       e.preventDefault?.();
     } else if (key === "down" || key === "right") {
       setSelected(1);
       e.preventDefault?.();
-    } else if (key === "return") {
+    } else if (key === "enter") {
       if (selected() === 0) props.onConfirm();
       else props.onCancel();
       e.preventDefault?.();

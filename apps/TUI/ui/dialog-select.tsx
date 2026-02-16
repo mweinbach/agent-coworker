@@ -1,6 +1,7 @@
 import { createSignal, createMemo, For, Show, type JSX } from "solid-js";
 import { useTheme } from "../context/theme";
 import { Dialog } from "./dialog";
+import { keyNameFromEvent } from "../util/keyboard";
 
 export type SelectItem = {
   label: string;
@@ -36,7 +37,7 @@ export function DialogSelect(props: DialogSelectProps) {
   });
 
   const handleKeyDown = (e: any) => {
-    const key = e.key ?? e.name ?? "";
+    const key = keyNameFromEvent(e);
     const items = filtered();
 
     if (key === "up") {
@@ -45,7 +46,7 @@ export function DialogSelect(props: DialogSelectProps) {
     } else if (key === "down") {
       setSelected((s) => Math.min(items.length - 1, s + 1));
       e.preventDefault?.();
-    } else if (key === "return") {
+    } else if (key === "enter") {
       const item = items[selected()];
       if (item) props.onSelect(item);
       e.preventDefault?.();

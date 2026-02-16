@@ -2,6 +2,7 @@ import { createSignal } from "solid-js";
 import { useTheme } from "../../context/theme";
 import { useSyncActions } from "../../context/sync";
 import type { ApprovalRequest } from "../../context/sync";
+import { keyNameFromEvent } from "../../util/keyboard";
 
 const OPTIONS = ["Allow once", "Allow always", "Reject"];
 
@@ -22,14 +23,14 @@ export function PermissionPrompt(props: { approval: ApprovalRequest }) {
   };
 
   const handleKeyDown = (e: any) => {
-    const key = e.key ?? e.name ?? "";
+    const key = keyNameFromEvent(e);
     if (key === "up") {
       setSelected((s) => Math.max(0, s - 1));
       e.preventDefault?.();
     } else if (key === "down") {
       setSelected((s) => Math.min(OPTIONS.length - 1, s + 1));
       e.preventDefault?.();
-    } else if (key === "return") {
+    } else if (key === "enter") {
       handleSelect();
       e.preventDefault?.();
     } else if (key === "escape") {

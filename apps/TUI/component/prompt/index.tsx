@@ -7,6 +7,7 @@ import { useSyncState, useSyncActions } from "../../context/sync";
 import { useRoute } from "../../context/route";
 import { useDialog } from "../../context/dialog";
 import { useExit } from "../../context/exit";
+import { keyModifiersFromEvent, keyNameFromEvent } from "../../util/keyboard";
 import { createPromptHistory } from "./history";
 import { createAutocomplete, AutocompleteDropdown, type AutocompleteItem } from "./autocomplete";
 import { getTextareaAction } from "../textarea-keybindings";
@@ -217,10 +218,8 @@ export function Prompt(props: {
   };
 
   const handleKeyDown = (e: any) => {
-    const key = e.key ?? e.name ?? "";
-    const ctrl = e.ctrl ?? false;
-    const shift = e.shift ?? false;
-    const alt = e.alt ?? e.option ?? e.meta ?? false;
+    const key = keyNameFromEvent(e);
+    const { ctrl, shift, alt } = keyModifiersFromEvent(e);
 
     // Let autocomplete handle keys first
     const acState = autocomplete.state();
@@ -229,7 +228,7 @@ export function Prompt(props: {
         e.preventDefault?.();
 
         // If tab/enter, do the selection
-        if (key === "tab" || key === "return") {
+        if (key === "tab" || key === "enter") {
           const replacement = autocomplete.select(prompt.input());
           if (replacement !== null) {
             prompt.setInput(replacement);
@@ -253,8 +252,10 @@ export function Prompt(props: {
         return;
 
       case "clear":
-        e.preventDefault?.();
-        prompt.setInput("");
+        if (prompt.input() !== "") {
+          e.preventDefault?.();
+          prompt.setInput("");
+        }
         return;
 
       case "history_up": {
@@ -353,6 +354,9 @@ export function Prompt(props: {
             value={prompt.input()}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
+            onSubmit={() => {
+              if (!isDisabled()) handleSubmit();
+            }}
             placeholder={isDisabled() ? "Waiting..." : placeholder()}
             placeholderColor={theme.textMuted}
             textColor={theme.text}

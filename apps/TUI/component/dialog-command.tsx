@@ -163,7 +163,6 @@ function CommandPaletteDialog(props: { onDismiss: () => void }) {
         value: "exit",
         description: "Close the TUI",
         category: "System",
-        keybind: "Ctrl+C",
       },
     ];
 

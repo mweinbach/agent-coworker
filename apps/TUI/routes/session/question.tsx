@@ -2,6 +2,7 @@ import { Show, For, createSignal } from "solid-js";
 import { useTheme } from "../../context/theme";
 import { useSyncActions } from "../../context/sync";
 import type { AskRequest } from "../../context/sync";
+import { keyNameFromEvent } from "../../util/keyboard";
 
 export function QuestionPrompt(props: { ask: AskRequest }) {
   const theme = useTheme();
@@ -25,7 +26,7 @@ export function QuestionPrompt(props: { ask: AskRequest }) {
   };
 
   const handleKeyDown = (e: any) => {
-    const key = e.key ?? e.name ?? "";
+    const key = keyNameFromEvent(e);
     if (hasOptions()) {
       if (key === "up") {
         setSelected((s) => Math.max(0, s - 1));
@@ -33,7 +34,7 @@ export function QuestionPrompt(props: { ask: AskRequest }) {
       } else if (key === "down") {
         setSelected((s) => Math.min(props.ask.options!.length - 1, s + 1));
         e.preventDefault?.();
-      } else if (key === "return") {
+      } else if (key === "enter") {
         handleSubmit();
         e.preventDefault?.();
       } else if (key === "escape") {
@@ -41,7 +42,7 @@ export function QuestionPrompt(props: { ask: AskRequest }) {
         e.preventDefault?.();
       }
     } else {
-      if (key === "return") {
+      if (key === "enter") {
         handleSubmit();
         e.preventDefault?.();
       } else if (key === "escape") {

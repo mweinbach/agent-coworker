@@ -294,6 +294,129 @@ describe("desktop protocol v2 mapping", () => {
     expect(tool.result).toEqual({ chars: 42 });
   });
 
+  test("model stream approval/source/file/raw/unknown parts render as system items", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-2",
+      index: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "tool_approval_request",
+      part: { approvalId: "ap-1", toolCall: { toolName: "bash" } },
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-2",
+      index: 1,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "source",
+      part: { source: { type: "url", url: "https://example.com" } },
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-2",
+      index: 2,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "file",
+      part: { file: { path: "/tmp/a.txt" } },
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-2",
+      index: 3,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "raw",
+      part: { raw: { type: "provider_event" } },
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-2",
+      index: 4,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "future_part",
+      part: { payload: true },
+    } as any);
+
+    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
+    const systemLines = feed
+      .filter((item) => item.kind === "system")
+      .map((item) => (item.kind === "system" ? item.line : ""));
+
+    expect(systemLines.some((line) => line.includes("Tool approval requested"))).toBe(true);
+    expect(systemLines.some((line) => line.includes("Source:"))).toBe(true);
+    expect(systemLines.some((line) => line.includes("File:"))).toBe(true);
+    expect(systemLines.some((line) => line.includes("Raw stream part"))).toBe(true);
+    expect(systemLines.some((line) => line.includes("Unhandled stream part (future_part)"))).toBe(true);
+  });
+
+  test("ignores stale session events for control and thread sockets", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+
+    const feedBefore = useAppStore.getState().threadRuntimeById[threadId]?.feed.length ?? 0;
+
+    threadSocket.emit({
+      type: "assistant_message",
+      sessionId: "stale-thread-session",
+      text: "should be ignored",
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "stale-thread-session",
+      turnId: "stale-turn",
+      index: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "text_delta",
+      part: { id: "txt_1", text: "ignored" },
+    });
+
+    const feedAfter = useAppStore.getState().threadRuntimeById[threadId]?.feed.length ?? 0;
+    expect(feedAfter).toBe(feedBefore);
+
+    controlSocket.emit({
+      type: "provider_status",
+      sessionId: "stale-control-session",
+      providers: [
+        {
+          provider: "openai",
+          connected: true,
+          authorized: true,
+          authMode: "api_key",
+          accountLabel: "user@example.com",
+          modelCount: 1,
+          source: "env",
+        },
+      ],
+    } as any);
+
+    expect(useAppStore.getState().providerConnected).toEqual([]);
+  });
+
   test("legacy log events still map to log feed items when no model stream exists", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const threadId = useAppStore.getState().selectedThreadId;

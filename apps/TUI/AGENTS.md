@@ -2,6 +2,10 @@
 
 This file applies to everything under `apps/TUI/`.
 
+## Required Reading
+
+Before writing or modifying any TUI component, read **`docs/opentui.md`** — the full OpenTUI + Solid.js API reference. It covers every JSX element, hook, event, and layout pattern available in the framework.
+
 ## Solid.js Reactivity Rules (CRITICAL)
 
 Solid.js component functions run **once**. Signal reads outside a tracking scope (JSX expressions, `createEffect`, `createMemo`) are NOT reactive. Violating this causes UI that never updates when state changes.

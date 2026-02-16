@@ -3,7 +3,7 @@ import { createStore, produce } from "solid-js/store";
 import { AgentSocket } from "../../../src/client/agentSocket";
 import type { ClientMessage, ServerEvent } from "../../../src/server/protocol";
 import type { ApprovalRiskCode, CommandInfo, TodoItem, ServerErrorCode, ServerErrorSource } from "../../../src/types";
-import { mapModelStreamChunk } from "./modelStream";
+import { mapModelStreamChunk, type ModelStreamUpdate } from "./modelStream";
 
 // ── Feed item types ──────────────────────────────────────────────────────────
 
@@ -118,6 +118,78 @@ function parseToolLogLine(line: string): ParsedToolLog | null {
     // keep as string
   }
   return { sub, dir, name, payload };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+}
+
+function previewValue(value: unknown, maxChars = 160): string {
+  if (value === undefined) return "";
+  if (typeof value === "string") {
+    return value.length > maxChars ? `${value.slice(0, maxChars - 1)}...` : value;
+  }
+  try {
+    const raw = JSON.stringify(value);
+    if (!raw) return "";
+    return raw.length > maxChars ? `${raw.slice(0, maxChars - 1)}...` : raw;
+  } catch {
+    const fallback = String(value);
+    return fallback.length > maxChars ? `${fallback.slice(0, maxChars - 1)}...` : fallback;
+  }
+}
+
+function modelStreamSystemLine(update: ModelStreamUpdate): string | null {
+  if (update.kind === "turn_abort") {
+    const reason = previewValue(update.reason);
+    return reason ? `turn aborted: ${reason}` : "turn aborted";
+  }
+
+  if (update.kind === "turn_error") {
+    const detail = previewValue(update.error);
+    return detail ? `stream error: ${detail}` : "stream error";
+  }
+
+  if (update.kind === "reasoning_start") {
+    return `reasoning started (${update.mode})`;
+  }
+
+  if (update.kind === "reasoning_end") {
+    return `reasoning ended (${update.mode})`;
+  }
+
+  if (update.kind === "tool_approval_request") {
+    const toolName = asRecord(update.toolCall)?.toolName;
+    const name = typeof toolName === "string" ? toolName : "tool";
+    return `tool approval requested: ${name}`;
+  }
+
+  if (update.kind === "source") {
+    const sourcePreview = previewValue(update.source);
+    return sourcePreview ? `source: ${sourcePreview}` : "source";
+  }
+
+  if (update.kind === "file") {
+    const filePreview = previewValue(update.file);
+    return filePreview ? `file: ${filePreview}` : "file";
+  }
+
+  if (update.kind === "raw") {
+    const rawPreview = previewValue(update.raw);
+    return rawPreview ? `raw stream part: ${rawPreview}` : "raw stream part";
+  }
+
+  if (update.kind === "unknown") {
+    const payloadPreview = previewValue(update.payload);
+    return payloadPreview
+      ? `unhandled stream part (${update.partType}): ${payloadPreview}`
+      : `unhandled stream part (${update.partType})`;
+  }
+
+  return null;
 }
 
 // ── Provider ─────────────────────────────────────────────────────────────────
@@ -330,6 +402,23 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         const mapped = mapModelStreamChunk(evt);
         if (!mapped) break;
 
+        if (mapped.kind === "turn_start") {
+          resetModelStreamState();
+          break;
+        }
+
+        if (
+          mapped.kind === "turn_finish" ||
+          mapped.kind === "step_start" ||
+          mapped.kind === "step_finish" ||
+          mapped.kind === "assistant_text_start" ||
+          mapped.kind === "assistant_text_end" ||
+          mapped.kind === "tool_input_end"
+        ) {
+          // Keep these as state-only boundaries to avoid noisy feed output.
+          break;
+        }
+
         if (mapped.kind === "assistant_delta") {
           lastStreamedAssistantTurnId = mapped.turnId;
           const existingId = streamedAssistantItemIds.get(mapped.turnId);
@@ -350,6 +439,14 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           break;
         }
 
+        if (mapped.kind === "reasoning_start" || mapped.kind === "reasoning_end") {
+          const line = modelStreamSystemLine(mapped);
+          if (line) {
+            setState("feed", (f) => [...f, { id: nextFeedId(), type: "system", line }]);
+          }
+          break;
+        }
+
         if (mapped.kind === "reasoning_delta") {
           lastStreamedReasoningTurnId = mapped.turnId;
           const key = `${mapped.turnId}:${mapped.streamId}`;
@@ -365,6 +462,14 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
             streamedReasoningItemIds.set(key, id);
             streamedReasoningText.set(key, mapped.text);
             setState("feed", (f) => [...f, { id, type: "reasoning", kind: mapped.mode, text: mapped.text }]);
+          }
+          break;
+        }
+
+        if (mapped.kind === "tool_approval_request") {
+          const line = modelStreamSystemLine(mapped);
+          if (line) {
+            setState("feed", (f) => [...f, { id: nextFeedId(), type: "system", line }]);
           }
           break;
         }
@@ -452,8 +557,9 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           break;
         }
 
-        if (mapped.kind === "finish") {
-          // no-op for now: legacy assistant/reasoning events still arrive for compatibility.
+        const line = modelStreamSystemLine(mapped);
+        if (line) {
+          setState("feed", (f) => [...f, { id: nextFeedId(), type: "system", line }]);
           break;
         }
 
@@ -562,7 +668,10 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         break;
 
       default:
-        // Handle other events as log items for visibility
+        setState("feed", (f) => [
+          ...f,
+          { id: nextFeedId(), type: "system", line: `unhandled event: ${evt.type}` },
+        ]);
         break;
     }
   }

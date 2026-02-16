@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -54,6 +54,49 @@ const Markdown = memo(function Markdown(props: { text: string }) {
   );
 });
 
+export function reasoningLabelForMode(mode: "reasoning" | "summary"): string {
+  return mode === "summary" ? "Summary" : "Reasoning";
+}
+
+export function reasoningPreviewText(text: string, maxLines = 3): string {
+  const lines = text.split("\n");
+  if (lines.length <= maxLines) return text;
+  return `${lines.slice(0, maxLines).join("\n")}...`;
+}
+
+export function shouldToggleReasoningExpanded(key: string): boolean {
+  return key === "Enter" || key === " " || key === "Spacebar";
+}
+
+const ReasoningFeedItem = memo(function ReasoningFeedItem(props: { item: Extract<FeedItem, { kind: "reasoning" }> }) {
+  const [expanded, setExpanded] = useState(false);
+  const label = reasoningLabelForMode(props.item.mode);
+  const toggle = useCallback(() => setExpanded((isExpanded) => !isExpanded), []);
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!shouldToggleReasoningExpanded(e.key)) return;
+    e.preventDefault();
+    setExpanded((isExpanded) => !isExpanded);
+  }, []);
+
+  return (
+    <div className="feedItem">
+      <div
+        className="inlineCard"
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={handleKeyDown}
+        aria-expanded={expanded}
+      >
+        <div className="metaLine">{expanded ? "▾" : "▸"} {label}</div>
+        <div style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>
+          {expanded ? props.item.text : reasoningPreviewText(props.item.text)}
+        </div>
+      </div>
+    </div>
+  );
+});
+
 const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
   const item = props.item;
 
@@ -74,14 +117,7 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
   }
 
   if (item.kind === "reasoning") {
-    return (
-      <div className="feedItem">
-        <div className="inlineCard">
-          <div className="metaLine">Reasoning</div>
-          <div style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{item.text}</div>
-        </div>
-      </div>
-    );
+    return <ReasoningFeedItem item={item} />;
   }
 
   if (item.kind === "todos") {
@@ -148,6 +184,17 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
         <div className="inlineCard inlineCardDanger">
           <div className="metaLine">Error</div>
           <div style={{ marginTop: 4 }}>{item.message}</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (item.kind === "system") {
+    return (
+      <div className="feedItem">
+        <div className="inlineCard">
+          <div className="metaLine">System</div>
+          <div style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>{item.line}</div>
         </div>
       </div>
     );

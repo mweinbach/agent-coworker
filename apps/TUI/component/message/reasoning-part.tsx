@@ -1,6 +1,17 @@
 import { Show, createSignal } from "solid-js";
 import { useTheme } from "../../context/theme";
 import { useKV } from "../../context/kv";
+import { keyNameFromEvent } from "../../util/keyboard";
+
+export function reasoningPreviewText(text: string, maxLines = 3): string {
+  const lines = text.split("\n");
+  if (lines.length <= maxLines) return text;
+  return `${lines.slice(0, maxLines).join("\n")}...`;
+}
+
+export function shouldToggleReasoningExpanded(key: string): boolean {
+  return key === "enter" || key === "space" || key === " ";
+}
 
 export function ReasoningPart(props: { kind: "reasoning" | "summary"; text: string }) {
   const theme = useTheme();
@@ -9,10 +20,13 @@ export function ReasoningPart(props: { kind: "reasoning" | "summary"; text: stri
   const [expanded, setExpanded] = createSignal(false);
 
   const label = () => (props.kind === "summary" ? "Summary" : "Thinking");
-  const preview = () => {
-    const lines = props.text.split("\n");
-    if (lines.length <= 3) return props.text;
-    return lines.slice(0, 3).join("\n") + "...";
+  const preview = () => reasoningPreviewText(props.text, 3);
+  const toggle = () => setExpanded((isExpanded) => !isExpanded);
+  const handleKeyDown = (e: any) => {
+    const key = keyNameFromEvent(e);
+    if (!shouldToggleReasoningExpanded(key)) return;
+    toggle();
+    e.preventDefault?.();
   };
 
   return (
@@ -20,7 +34,9 @@ export function ReasoningPart(props: { kind: "reasoning" | "summary"; text: stri
       <box
         flexDirection="column"
         marginBottom={1}
-        onMouseDown={() => setExpanded((e) => !e)}
+        onMouseDown={toggle}
+        onKeyDown={handleKeyDown}
+        focusable
       >
         <text fg={theme.textMuted}>
           <em>

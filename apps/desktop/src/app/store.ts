@@ -305,12 +305,95 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function previewValue(value: unknown, maxChars = 160): string {
+  if (value === undefined) return "";
+  if (typeof value === "string") {
+    return value.length > maxChars ? `${value.slice(0, maxChars - 1)}...` : value;
+  }
+  try {
+    const raw = JSON.stringify(value);
+    if (!raw) return "";
+    return raw.length > maxChars ? `${raw.slice(0, maxChars - 1)}...` : raw;
+  } catch {
+    const fallback = String(value);
+    return fallback.length > maxChars ? `${fallback.slice(0, maxChars - 1)}...` : fallback;
+  }
+}
+
+function modelStreamSystemLine(update: ModelStreamUpdate): string | null {
+  if (update.kind === "turn_abort") {
+    const reason = previewValue(update.reason);
+    return reason ? `Turn aborted: ${reason}` : "Turn aborted";
+  }
+
+  if (update.kind === "turn_error") {
+    const detail = previewValue(update.error);
+    return detail ? `Stream error: ${detail}` : "Stream error";
+  }
+
+  if (update.kind === "reasoning_start") {
+    return `Reasoning started (${update.mode})`;
+  }
+
+  if (update.kind === "reasoning_end") {
+    return `Reasoning ended (${update.mode})`;
+  }
+
+  if (update.kind === "tool_approval_request") {
+    const toolName = isRecord(update.toolCall) && typeof update.toolCall.toolName === "string"
+      ? update.toolCall.toolName
+      : "tool";
+    return `Tool approval requested: ${toolName}`;
+  }
+
+  if (update.kind === "source") {
+    const sourcePreview = previewValue(update.source);
+    return sourcePreview ? `Source: ${sourcePreview}` : "Source";
+  }
+
+  if (update.kind === "file") {
+    const filePreview = previewValue(update.file);
+    return filePreview ? `File: ${filePreview}` : "File";
+  }
+
+  if (update.kind === "raw") {
+    const rawPreview = previewValue(update.raw);
+    return rawPreview ? `Raw stream part: ${rawPreview}` : "Raw stream part";
+  }
+
+  if (update.kind === "unknown") {
+    const payloadPreview = previewValue(update.payload);
+    return payloadPreview
+      ? `Unhandled stream part (${update.partType}): ${payloadPreview}`
+      : `Unhandled stream part (${update.partType})`;
+  }
+
+  return null;
+}
+
 function appendModelStreamUpdateToFeed(
   out: FeedItem[],
   ts: string,
   stream: ThreadModelStreamRuntime,
   update: ModelStreamUpdate
 ) {
+  if (update.kind === "turn_start") {
+    clearThreadModelStreamRuntime(stream);
+    return;
+  }
+
+  if (
+    update.kind === "turn_finish" ||
+    update.kind === "step_start" ||
+    update.kind === "step_finish" ||
+    update.kind === "assistant_text_start" ||
+    update.kind === "assistant_text_end" ||
+    update.kind === "tool_input_end"
+  ) {
+    // Keep these as state-only boundaries to avoid noisy transcript reconstruction.
+    return;
+  }
+
   const replaceFeedItem = (itemId: string, updater: (item: FeedItem) => FeedItem) => {
     const idx = out.findIndex((item) => item.id === itemId);
     if (idx < 0) return;
@@ -423,6 +506,12 @@ function appendModelStreamUpdateToFeed(
     const id = makeId();
     stream.toolItemIdByKey.set(key, id);
     out.push({ id, kind: "tool", ts, name: update.name, status: "done", result });
+    return;
+  }
+
+  const systemLine = modelStreamSystemLine(update);
+  if (systemLine) {
+    out.push({ id: makeId(), kind: "system", ts, line: systemLine });
   }
 }
 
@@ -826,6 +915,11 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
         } catch {
           // ignore
         }
+        return;
+      }
+
+      const controlSessionId = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
+      if (!controlSessionId || evt.sessionId !== controlSessionId) {
         return;
       }
 
@@ -1240,6 +1334,23 @@ function applyModelStreamUpdateToThreadFeed(
   stream: ThreadModelStreamRuntime,
   update: ModelStreamUpdate
 ) {
+  if (update.kind === "turn_start") {
+    clearThreadModelStreamRuntime(stream);
+    return;
+  }
+
+  if (
+    update.kind === "turn_finish" ||
+    update.kind === "step_start" ||
+    update.kind === "step_finish" ||
+    update.kind === "assistant_text_start" ||
+    update.kind === "assistant_text_end" ||
+    update.kind === "tool_input_end"
+  ) {
+    // Keep these as state-only boundaries to avoid noisy feed output.
+    return;
+  }
+
   if (update.kind === "assistant_delta") {
     stream.lastAssistantTurnId = update.turnId;
     const itemId = stream.assistantItemIdByTurn.get(update.turnId);
@@ -1382,6 +1493,17 @@ function applyModelStreamUpdateToThreadFeed(
       status: "done",
       result,
     });
+    return;
+  }
+
+  const systemLine = modelStreamSystemLine(update);
+  if (systemLine) {
+    pushFeedItem(set, threadId, {
+      id: makeId(),
+      kind: "system",
+      ts: nowIso(),
+      line: systemLine,
+    });
   }
 }
 
@@ -1392,6 +1514,13 @@ function handleThreadEvent(
   evt: ServerEvent,
   pendingFirstMessage?: string
 ) {
+  if (evt.type !== "server_hello") {
+    const activeSessionId = get().threadRuntimeById[threadId]?.sessionId;
+    if (!activeSessionId || evt.sessionId !== activeSessionId) {
+      return;
+    }
+  }
+
   appendThreadTranscript(threadId, "server", evt);
   const stream = getModelStreamRuntime(threadId);
 
@@ -1608,6 +1737,13 @@ function handleThreadEvent(
     }));
     return;
   }
+
+  pushFeedItem(set, threadId, {
+    id: makeId(),
+    kind: "system",
+    ts: nowIso(),
+    line: `Unhandled event: ${evt.type}`,
+  });
 }
 
 export const useAppStore = create<AppStoreState>((set, get) => ({

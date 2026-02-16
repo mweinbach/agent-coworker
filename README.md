@@ -1,8 +1,8 @@
 # agent-coworker
 
-Terminal-first “coworker” agent built on Bun + the Vercel AI SDK, with:
+Terminal-first "coworker" agent built on Bun + the Vercel AI SDK, with:
 - a WebSocket agent server
-- an OpenTUI + React client (default)
+- an OpenTUI + Solid.js TUI (default) — modeled after [opencode](https://github.com/anomalyco/opencode)'s design
 - a plain CLI REPL
 - a built-in toolbelt for file/code/web tasks (with command approval for risky ops)
 
@@ -32,6 +32,16 @@ bun run start -- --dir /path/to/project
 bun run start -- --yolo
 ```
 
+Run the TUI standalone (connect to an existing server):
+```bash
+bun run tui -- --server ws://127.0.0.1:7337/ws
+```
+
+Run the legacy React-based TUI:
+```bash
+bun run start -- --legacy-tui
+```
+
 Run the CLI REPL:
 ```bash
 bun run cli
@@ -43,6 +53,87 @@ Run the server directly:
 ```bash
 bun run serve
 ```
+
+## TUI
+
+The default interface is a terminal UI built with [OpenTUI](https://github.com/anthropics/opentui) + Solid.js, inspired by [opencode](https://github.com/anomalyco/opencode)'s design. It lives in `apps/TUI/`.
+
+### Screens
+
+**Home** — A centered prompt with the cowork logo, a random tip, and a footer showing provider/model info. Type a message and press Enter to start a session.
+
+**Session** — The main workspace with:
+- A header showing the active provider, model, and working directory
+- A scrollable message feed with rendered markdown, tool calls, and reasoning
+- An optional sidebar (toggle with `Ctrl+E`) showing context usage, MCP status, and todos
+- A multi-line prompt at the bottom with autocomplete and history
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+K` | Open command palette |
+| `Ctrl+N` | New session |
+| `Ctrl+E` | Toggle sidebar |
+| `Ctrl+C` | Clear input / exit |
+| `Escape` | Cancel agent turn / dismiss dialog |
+| `Ctrl+Shift+L` | Switch model |
+| `Ctrl+X T` | Switch theme |
+| `Ctrl+X S` | List sessions |
+| `Ctrl+Z` | Stash current prompt |
+| `Ctrl+Shift+Z` | Pop stashed prompt |
+| `Ctrl+]` | Toggle shell mode |
+| `Shift+Enter` | Insert newline in prompt |
+| `Enter` | Submit prompt |
+| `Up/Down` | Navigate prompt history |
+| `PageUp/PageDown` | Scroll conversation |
+| `?` | Show help / keybinding reference |
+
+### Command Palette
+
+Press `Ctrl+K` to open the command palette with fuzzy search. Commands are grouped into categories:
+
+- **Session** — New session, reset, cancel turn, copy last response, export transcript
+- **Display** — Toggle thinking, tool details, sidebar, timestamps
+- **Prompt** — Stash/unstash prompt, view stash, toggle shell mode
+- **System** — Switch model, switch theme, connect provider, MCP servers, help, status, exit
+
+### Prompt Features
+
+- **History** — `Up`/`Down` arrows cycle through previous prompts (persisted across sessions in `~/.cowork/state/history.jsonl`)
+- **Autocomplete** — Type `@` for file completions, `/` for command completions (fuzzy matched)
+- **Shell mode** — Start a message with `!` to run shell commands directly (e.g., `!ls -la`)
+- **Stash** — `Ctrl+Z` saves the current prompt for later, `Ctrl+Shift+Z` restores it
+
+### Themes
+
+31 built-in themes. Switch with `Ctrl+X T` or the command palette. Your choice is persisted automatically. Themes include: catppuccin-mocha (default), catppuccin-latte, dracula, gruvbox-dark, gruvbox-light, nord, one-dark, one-light, solarized-dark, solarized-light, tokyo-night, github-dark, github-light, and more.
+
+### Tool Renderers
+
+The TUI renders tool calls with specialized views:
+- **bash** — Shows `$ command`, output preview, and exit code
+- **read/write/edit** — File path with colored diffs for edits
+- **glob/grep** — Pattern and match count
+- **web** — URL/query and summary
+- **todo** — Inline todo list
+
+### Architecture
+
+The TUI uses Solid.js with 9 context providers stacked in `apps/TUI/index.tsx`:
+
+```
+ExitProvider → KVProvider → ThemeProvider → DialogProvider
+→ SyncProvider → KeybindProvider → LocalProvider → RouteProvider
+→ PromptProvider → App
+```
+
+- **SyncProvider** bridges the WebSocket (`AgentSocket`) to Solid.js reactive stores
+- **DialogProvider** manages a stack of overlay dialogs
+- **ThemeProvider** provides 60+ semantic color tokens to all components
+- **KVProvider** persists UI preferences to `~/.cowork/config/tui-kv.json`
+
+The TUI connects to the agent server over WebSocket — it never touches the agent or AI SDK directly. This follows the project's WebSocket-first architecture.
 
 ## WebSocket Protocol Notes
 

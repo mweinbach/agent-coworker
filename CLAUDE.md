@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-`agent-coworker` is a terminal-first AI coworker agent built on Bun + Vercel AI SDK. It provides three interfaces: a TUI (OpenTUI + React, default), a plain CLI REPL, and a headless WebSocket server. It ships a built-in toolbelt (file ops, shell, web, code exploration) with a command approval system for risky operations.
+`agent-coworker` is a terminal-first AI coworker agent built on Bun + Vercel AI SDK. It provides three interfaces: a TUI (OpenTUI + Solid.js, default), a plain CLI REPL, and a headless WebSocket server. It ships a built-in toolbelt (file ops, shell, web, code exploration) with a command approval system for risky operations.
 
 ## Commands
 
@@ -13,6 +13,8 @@ bun install              # Install dependencies
 bun test                 # Run all tests
 bun test test/agent      # Run tests matching a pattern (e.g. agent, tools, session)
 bun run start            # Run TUI (starts server automatically)
+bun run start -- --legacy-tui  # Run legacy React TUI
+bun run tui              # Run TUI standalone (connect to existing server)
 bun run cli              # Run CLI REPL
 bun run serve            # Run WebSocket server standalone
 bun run dev              # Watch mode (rebuilds on src/ changes)
@@ -24,9 +26,10 @@ There is no linter or formatter configured. TypeScript strict mode is the primar
 
 ### Entry Points
 
-- `src/index.ts` — Main entry; routes to TUI or CLI based on `--cli` flag
+- `src/index.ts` — Main entry; routes to TUI or CLI based on `--cli` flag. Uses `--legacy-tui` to fall back to the old React TUI.
+- `apps/TUI/index.tsx` — TUI entry (OpenTUI + Solid.js). Default TUI. Can also run standalone with `bun run tui`.
+- `src/tui/index.tsx` — Legacy TUI entry (OpenTUI + React). Used when `--legacy-tui` is passed.
 - `src/server/index.ts` — Standalone WebSocket server
-- `src/tui/index.tsx` — TUI-only entry (OpenTUI + React)
 - `src/cli/repl.ts` — CLI REPL (connects to server via WebSocket)
 
 ### Core Loop
@@ -50,6 +53,23 @@ There is no linter or formatter configured. TypeScript strict mode is the primar
 Three-tier hierarchy (each overrides the previous): built-in (`config/defaults.json`) → user (`~/.agent/config.json`) → project (`.agent/config.json`). Environment variables (`AGENT_PROVIDER`, `AGENT_MODEL`, etc.) override all. Config loading and deep-merge logic is in `src/config.ts`.
 
 The same three-tier pattern applies to skills (`skills/` directories), memory (`memory/` directories), and MCP server configs (`mcp-servers.json` files).
+
+### TUI (`apps/TUI/`)
+
+The default TUI is built with OpenTUI + Solid.js (not React). It has its own `tsconfig.json` that overrides `jsxImportSource` to `@opentui/solid`. Key structure:
+
+- `apps/TUI/index.tsx` — Entry point, provider stack, `runTui()` export
+- `apps/TUI/app.tsx` — Route switch (Home vs Session) + dialog overlay
+- `apps/TUI/context/` — 9 context providers (exit, kv, theme, dialog, sync, keybind, local, route, prompt)
+- `apps/TUI/routes/home.tsx` — Home screen (logo, prompt, tips, footer)
+- `apps/TUI/routes/session/` — Session screen (header, feed, sidebar, footer, permission/question prompts)
+- `apps/TUI/component/` — Shared components (logo, tips, spinner, markdown, border, prompt input)
+- `apps/TUI/component/message/` — Message renderers (user, assistant, text-part, reasoning-part, tool-part)
+- `apps/TUI/component/tool/` — Tool-specific renderers (bash, read, write, edit, glob, grep, web, todo, generic)
+- `apps/TUI/ui/` — Reusable dialog primitives (select, confirm, prompt, alert, help)
+- `apps/TUI/util/` — Utilities (format, clipboard, terminal, signal, editor, transcript)
+
+The `SyncProvider` bridges the existing `AgentSocket` WebSocket client into Solid.js reactive stores. The TUI never touches the agent or AI SDK directly — everything goes through WebSocket.
 
 ### Key Patterns
 

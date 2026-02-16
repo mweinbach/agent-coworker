@@ -13,6 +13,7 @@ describe("providers/authRegistry", () => {
     const methods = listProviderAuthMethods();
     expect(methods.openai?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods["codex-cli"]?.some((m) => m.id === "oauth_cli")).toBe(true);
+    expect(methods["codex-cli"]?.some((m) => m.id === "oauth_device")).toBe(true);
     expect(methods["claude-code"]?.some((m) => m.id === "oauth_cli")).toBe(true);
   });
 
@@ -25,7 +26,15 @@ describe("providers/authRegistry", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.challenge.method).toBe("auto");
-    expect(result.challenge.command).toBe("codex login");
+    expect(result.challenge.url).toBe("https://auth.openai.com/oauth/authorize");
+  });
+
+  test("authorizeProviderAuth returns device-code challenge for codex oauth_device", () => {
+    const result = authorizeProviderAuth({ provider: "codex-cli", methodId: "oauth_device" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.challenge.method).toBe("auto");
+    expect(result.challenge.url).toBe("https://auth.openai.com/codex/device");
   });
 
   test("authorizeProviderAuth fails for api key method", () => {

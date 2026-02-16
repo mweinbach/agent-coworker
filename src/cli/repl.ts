@@ -555,6 +555,7 @@ export async function runCliRepl(
       case "provider_auth_challenge":
         console.log(`\nAuth challenge [${evt.provider}/${evt.methodId}] ${evt.challenge.instructions}`);
         if (evt.challenge.command) console.log(`command: ${evt.challenge.command}`);
+        if (evt.challenge.url) console.log(`url: ${evt.challenge.url}`);
         break;
       case "provider_auth_result":
         if (evt.ok) {

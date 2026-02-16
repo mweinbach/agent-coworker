@@ -147,6 +147,35 @@ describe("desktop protocol v2 mapping", () => {
     expect(sentTypes).toContain("provider_auth_callback");
   });
 
+  test("provider auth challenge keeps URL/command metadata for desktop UI", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+
+    controlSocket.emit({
+      type: "provider_auth_challenge",
+      sessionId: "control-session",
+      provider: "codex-cli",
+      methodId: "oauth_device",
+      challenge: {
+        method: "auto",
+        instructions: "Use device code flow.",
+        url: "https://auth.openai.com/codex/device",
+        command: "optional-command",
+      },
+    });
+
+    const challenge = useAppStore.getState().providerLastAuthChallenge;
+    expect(challenge).toBeDefined();
+    expect(challenge?.challenge.url).toBe("https://auth.openai.com/codex/device");
+    expect(challenge?.challenge.command).toBe("optional-command");
+
+    const notification = useAppStore.getState().notifications.at(-1);
+    expect(notification?.title).toBe("Auth challenge: codex-cli");
+    expect(notification?.detail).toContain("URL: https://auth.openai.com/codex/device");
+    expect(notification?.detail).toContain("Command: optional-command");
+  });
+
   test("approval prompt keeps required reasonCode", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const threadId = useAppStore.getState().selectedThreadId;

@@ -37,7 +37,6 @@
     "@opentui/solid": "^0.1.79",
     "ai": "^6.0.77",
     "ai-sdk-provider-claude-code": "^3.4.0",
-    "ai-sdk-provider-codex-cli": "^1.0.5",
     "exa-js": "^2.3.0",
     "fast-glob": "^3.3.3",
     "jsdom": "^28.0.0",

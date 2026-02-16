@@ -175,12 +175,14 @@ export class AgentSession {
 
   private async runProviderConnect(opts: {
     provider: AgentConfig["provider"];
+    methodId?: string;
     apiKey?: string;
     onOauthLine?: (line: string) => void;
   }): Promise<ConnectProviderResult> {
     const paths = this.getCoworkPaths();
     return await this.connectProviderImpl({
       provider: opts.provider,
+      methodId: opts.methodId,
       apiKey: opts.apiKey,
       cwd: this.config.workingDirectory,
       paths,

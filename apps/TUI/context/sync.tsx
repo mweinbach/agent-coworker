@@ -402,10 +402,12 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
 
       case "provider_auth_challenge":
         setState("providerAuthChallenge", evt);
+        const url = evt.challenge.url ? ` url=${evt.challenge.url}` : "";
+        const command = evt.challenge.command ? ` command=${evt.challenge.command}` : "";
         setState("feed", (f) => [...f, {
           id: nextFeedId(),
           type: "system",
-          line: `provider auth challenge: ${evt.provider}/${evt.methodId} (${evt.challenge.method})`,
+          line: `provider auth challenge: ${evt.provider}/${evt.methodId} (${evt.challenge.method})${url}${command}`,
         }]);
         break;
 

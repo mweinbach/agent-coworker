@@ -19,6 +19,7 @@ export type ProviderAuthChallenge = {
 
 export type ConnectProviderHandler = (opts: {
   provider: ProviderName;
+  methodId?: string;
   apiKey?: string;
   cwd?: string;
   paths?: AiCoworkerPaths;
@@ -32,7 +33,8 @@ const PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> = {
   openai: [{ id: "api_key", type: "api", label: "API key" }],
   anthropic: [{ id: "api_key", type: "api", label: "API key" }],
   "codex-cli": [
-    { id: "oauth_cli", type: "oauth", label: "Sign in with Codex CLI", oauthMode: "auto" },
+    { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
+    { id: "oauth_device", type: "oauth", label: "Sign in with ChatGPT (device code)", oauthMode: "auto" },
     { id: "api_key", type: "api", label: "API key" },
   ],
   "claude-code": [
@@ -70,12 +72,15 @@ export function authorizeProviderAuth(opts: {
   }
 
   if (opts.provider === "codex-cli") {
+    const isDeviceCode = opts.methodId === "oauth_device";
     return {
       ok: true,
       challenge: {
         method: method.oauthMode ?? "auto",
-        instructions: "Run Codex CLI sign-in, then continue.",
-        command: "codex login",
+        instructions: isDeviceCode
+          ? "Use the device-code flow. A one-time code will be generated when you continue."
+          : "Continue to open browser-based ChatGPT OAuth and finish sign-in.",
+        url: isDeviceCode ? "https://auth.openai.com/codex/device" : "https://auth.openai.com/oauth/authorize",
       },
     };
   }
@@ -146,6 +151,7 @@ export async function callbackProviderAuth(opts: {
 
   return await opts.connect({
     provider: opts.provider,
+    methodId: opts.methodId,
     cwd: opts.cwd,
     paths: opts.paths,
     oauthStdioMode: opts.oauthStdioMode,

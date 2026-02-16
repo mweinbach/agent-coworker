@@ -37,16 +37,8 @@ describe("getProviderStatuses", () => {
     await fs.mkdir(path.dirname(codexAuthPath), { recursive: true });
     await fs.writeFile(codexAuthPath, JSON.stringify(codexAuth), "utf-8");
 
-    const runnerCalls: Array<{ command: string; args: string[] }> = [];
-    const runner = async ({ command, args }: { command: string; args: string[] }) => {
-      runnerCalls.push({ command, args });
-      if (command === "codex") {
-        return { exitCode: 0, signal: null, stdout: "Logged in using ChatGPT\n", stderr: "" };
-      }
-      // Avoid real Claude calls during this test.
-      if (command === "claude") {
-        return { exitCode: 1, signal: null, stdout: "", stderr: "not logged in" };
-      }
+    const runner = async ({ command }: { command: string }) => {
+      if (command === "claude") return { exitCode: 1, signal: null, stdout: "", stderr: "not logged in" };
       return { exitCode: 1, signal: null, stdout: "", stderr: "unknown" };
     };
 
@@ -70,11 +62,9 @@ describe("getProviderStatuses", () => {
     expect(codex?.mode).toBe("oauth");
     expect(codex?.account?.email).toBe("user@example.com");
     expect(codex?.account?.name).toBe("Example User");
-
-    expect(runnerCalls).toContainEqual({ command: "codex", args: ["login", "status"] });
   });
 
-  test("codex-cli: userinfo failure but codex login status ok still verifies", async () => {
+  test("codex-cli: userinfo failure keeps credentials authorized but unverified", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
 
@@ -90,7 +80,6 @@ describe("getProviderStatuses", () => {
     );
 
     const runner = async ({ command }: { command: string }) => {
-      if (command === "codex") return { exitCode: 0, signal: null, stdout: "Logged in using ChatGPT\n", stderr: "" };
       if (command === "claude") return { exitCode: 1, signal: null, stdout: "", stderr: "not logged in" };
       return { exitCode: 1, signal: null, stdout: "", stderr: "" };
     };
@@ -101,9 +90,9 @@ describe("getProviderStatuses", () => {
     const codex = statuses.find((s) => s.provider === "codex-cli");
     expect(codex).toBeDefined();
     expect(codex?.authorized).toBe(true);
-    expect(codex?.verified).toBe(true);
+    expect(codex?.verified).toBe(false);
     expect(codex?.account?.email).toBe("jwt@example.com");
-    expect(codex?.message).toContain("Codex CLI logged in");
+    expect(codex?.message).toContain("verification failed");
   });
 
   test("claude-code: verified via claude CLI + extracts identity from credentials file when present", async () => {

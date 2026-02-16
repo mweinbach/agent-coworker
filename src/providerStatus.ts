@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { getAiCoworkerPaths, readConnectionStore, type AiCoworkerPaths, type ConnectionStore } from "./connect";
+import { isTokenExpiring, readCodexAuthMaterial, refreshCodexAuthMaterial } from "./providers/codex-auth";
 import { PROVIDER_NAMES, type ProviderName } from "./types";
 
 export type ProviderStatusMode = "missing" | "error" | "api_key" | "oauth" | "oauth_pending";
@@ -195,38 +196,23 @@ function statusFromConnectionStore(opts: {
   };
 }
 
-type CodexAuthFile = {
-  tokens?: {
-    id_token?: string;
-    access_token?: string;
-  };
-};
-
-async function loadCodexAuthFile(paths: AiCoworkerPaths): Promise<{ file: string; auth: CodexAuthFile } | null> {
-  const homeDir = path.dirname(paths.rootDir);
-  const upstream = path.join(homeDir, ".codex", "auth.json");
-  const persisted = path.join(paths.authDir, "codex-cli", "auth.json");
-
-  for (const candidate of [upstream, persisted]) {
-    if (!(await fileExists(candidate))) continue;
-    const auth = await readJsonFile<CodexAuthFile>(candidate);
-    if (!auth || !isObjectLike(auth)) continue;
-    return { file: candidate, auth };
-  }
-
-  return null;
-}
-
 async function codexOidcUserInfo(opts: {
-  idToken: string;
+  issuer?: string;
+  idToken?: string;
   accessToken: string;
   fetchImpl: typeof fetch;
 }): Promise<{ email?: string; name?: string; message: string; ok: boolean }> {
-  const payload = decodeJwtPayload(opts.idToken);
-  const email = typeof payload?.email === "string" ? payload.email : undefined;
-  const iss = typeof payload?.iss === "string" ? payload.iss : null;
+  const idPayload = opts.idToken ? decodeJwtPayload(opts.idToken) : null;
+  const accessPayload = decodeJwtPayload(opts.accessToken);
+  const email =
+    (typeof idPayload?.email === "string" ? idPayload.email : undefined) ??
+    (typeof accessPayload?.email === "string" ? accessPayload.email : undefined);
+  const iss =
+    (typeof idPayload?.iss === "string" ? idPayload.iss : undefined) ??
+    (typeof accessPayload?.iss === "string" ? accessPayload.iss : undefined) ??
+    opts.issuer;
   if (!iss) {
-    return { email, ok: false, message: "Codex id_token missing issuer; cannot resolve userinfo endpoint." };
+    return { email, ok: false, message: "Codex token missing issuer; cannot resolve userinfo endpoint." };
   }
 
   try {
@@ -262,7 +248,6 @@ async function getCodexCliStatus(opts: {
   paths: AiCoworkerPaths;
   store: ConnectionStore;
   checkedAt: string;
-  runner: CommandRunner;
   fetchImpl: typeof fetch;
 }): Promise<ProviderStatus> {
   const base = statusFromConnectionStore({ provider: "codex-cli", store: opts.store, checkedAt: opts.checkedAt });
@@ -273,11 +258,8 @@ async function getCodexCliStatus(opts: {
     return { ...base, provider: "codex-cli", authorized: true, mode: "api_key", verified: false, account: null };
   }
 
-  const authFile = await loadCodexAuthFile(opts.paths);
-  const idToken = authFile?.auth?.tokens?.id_token;
-  const accessToken = authFile?.auth?.tokens?.access_token;
-
-  if (!idToken || !accessToken) {
+  let material = await readCodexAuthMaterial(opts.paths, { migrateLegacy: true });
+  if (!material?.accessToken) {
     return {
       ...base,
       provider: "codex-cli",
@@ -285,25 +267,44 @@ async function getCodexCliStatus(opts: {
       verified: false,
       mode: base.mode === "oauth_pending" ? "oauth_pending" : "missing",
       account: null,
-      message: "Not logged in to Codex CLI. Run codex login.",
+      message: "Not logged in to Codex. Run /connect codex-cli.",
     };
   }
 
-  const jwtPayload = decodeJwtPayload(idToken);
-  const jwtEmail = typeof jwtPayload?.email === "string" ? jwtPayload.email : undefined;
-
-  let codexStatusOk = false;
-  try {
-    const res = await opts.runner({ command: "codex", args: ["login", "status"], timeoutMs: 10_000 });
-    const combined = `${res.stdout}\n${res.stderr}`.trim();
-    codexStatusOk = res.exitCode === 0 && /logged in/i.test(combined);
-  } catch {
-    codexStatusOk = false;
+  let refreshMessage = "";
+  if (isTokenExpiring(material)) {
+    try {
+      material = await refreshCodexAuthMaterial({
+        paths: opts.paths,
+        material,
+        fetchImpl: opts.fetchImpl,
+      });
+      refreshMessage = " Token refreshed.";
+    } catch (err) {
+      refreshMessage = ` Token refresh failed: ${String(err)}`;
+    }
   }
 
-  const ui = await codexOidcUserInfo({ idToken, accessToken, fetchImpl: opts.fetchImpl });
+  if (isTokenExpiring(material, 0)) {
+    return {
+      provider: "codex-cli",
+      authorized: false,
+      verified: false,
+      mode: "oauth",
+      account: material.email ? { email: material.email } : null,
+      message: `Codex token expired.${refreshMessage || " Reconnect codex-cli."}`.trim(),
+      checkedAt: opts.checkedAt,
+    };
+  }
+
+  const ui = await codexOidcUserInfo({
+    issuer: material.issuer,
+    idToken: material.idToken,
+    accessToken: material.accessToken,
+    fetchImpl: opts.fetchImpl,
+  });
   const account: ProviderAccount | null =
-    ui.email || ui.name || jwtEmail ? { email: ui.email ?? jwtEmail, name: ui.name } : null;
+    ui.email || ui.name || material.email ? { email: ui.email ?? material.email, name: ui.name } : null;
 
   if (ui.ok) {
     return {
@@ -312,19 +313,7 @@ async function getCodexCliStatus(opts: {
       verified: true,
       mode: "oauth",
       account,
-      message: ui.message,
-      checkedAt: opts.checkedAt,
-    };
-  }
-
-  if (codexStatusOk) {
-    return {
-      provider: "codex-cli",
-      authorized: true,
-      verified: true,
-      mode: "oauth",
-      account,
-      message: `Codex CLI logged in. ${ui.message}`,
+      message: `${ui.message}${refreshMessage}`.trim(),
       checkedAt: opts.checkedAt,
     };
   }
@@ -335,7 +324,7 @@ async function getCodexCliStatus(opts: {
     verified: false,
     mode: "oauth",
     account,
-    message: `Codex credentials present, but verification failed. ${ui.message}`,
+    message: `Codex credentials present, but verification failed. ${ui.message}${refreshMessage}`,
     checkedAt: opts.checkedAt,
   };
 }
@@ -705,7 +694,7 @@ export async function getProviderStatuses(opts: {
   const out: ProviderStatus[] = [];
   for (const provider of PROVIDER_NAMES) {
     if (provider === "codex-cli") {
-      out.push(await getCodexCliStatus({ paths, store, checkedAt, runner, fetchImpl }));
+      out.push(await getCodexCliStatus({ paths, store, checkedAt, fetchImpl }));
       continue;
     }
     if (provider === "claude-code") {

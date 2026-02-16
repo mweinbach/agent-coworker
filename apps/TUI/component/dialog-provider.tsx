@@ -63,7 +63,12 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     if (fromSync && fromSync.length > 0) return fromSync;
 
     const base: AuthMethod[] = [{ id: "api_key", type: "api", label: "API key" }];
-    if (selected === "codex-cli" || selected === "claude-code") {
+    if (selected === "codex-cli") {
+      base.unshift(
+        { id: "oauth_device", type: "oauth", label: "ChatGPT (device code)", oauthMode: "auto" },
+        { id: "oauth_cli", type: "oauth", label: "ChatGPT (browser)", oauthMode: "auto" }
+      );
+    } else if (selected === "claude-code") {
       base.unshift({ id: "oauth_cli", type: "oauth", label: "OAuth (CLI)", oauthMode: "auto" });
     }
     return base;
@@ -88,6 +93,24 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     if (result.provider !== provider()) return null;
     if (result.methodId !== method()?.id) return null;
     return result;
+  });
+
+  const oauthAutoTitle = createMemo(() => {
+    const challenge = matchingChallenge();
+    if (challenge?.url) return `OAuth: ${challenge.url}`;
+    if (challenge?.command) return `OAuth: ${challenge.command}`;
+    return "OAuth: Continue";
+  });
+
+  const oauthAutoPlaceholder = createMemo(() => {
+    const challenge = matchingChallenge();
+    if (!challenge) return "Start OAuth to continue.";
+
+    const extras: string[] = [];
+    if (challenge.url) extras.push(`URL: ${challenge.url}`);
+    if (challenge.command) extras.push(`Command: ${challenge.command}`);
+
+    return [challenge.instructions, extras.join(" ")].filter(Boolean).join(" ");
   });
 
   createEffect(() => {
@@ -224,7 +247,7 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
       <Match when={stage() === "oauth_auto"}>
         <DialogSelect
           items={[
-            { label: "Continue", value: "continue", description: "Run callback after completing OAuth" },
+            { label: "Continue", value: "continue", description: "Begin or continue OAuth flow" },
             { label: "Cancel", value: "cancel", description: "Back out of this flow" },
           ]}
           onSelect={(item) => {
@@ -239,8 +262,8 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
             syncActions.callbackProviderAuth(provider(), selectedMethod.id);
           }}
           onDismiss={props.onDismiss}
-          title={matchingChallenge()?.command ? `OAuth: ${matchingChallenge()!.command}` : "OAuth: Continue"}
-          placeholder={matchingChallenge()?.instructions ?? "Complete OAuth in the provider CLI, then continue."}
+          title={oauthAutoTitle()}
+          placeholder={oauthAutoPlaceholder()}
         />
       </Match>
     </Switch>

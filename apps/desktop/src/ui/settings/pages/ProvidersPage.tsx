@@ -35,7 +35,8 @@ function displayProviderName(provider: ProviderName): string {
 function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
   if (provider === "codex-cli") {
     return [
-      { id: "oauth_cli", type: "oauth", label: "Sign in with Codex CLI", oauthMode: "auto" },
+      { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
+      { id: "oauth_device", type: "oauth", label: "Sign in with ChatGPT (device code)", oauthMode: "auto" },
       { id: "api_key", type: "api", label: "API key" },
     ];
   }
@@ -262,6 +263,15 @@ export function ProvidersPage() {
                           {challengeMatch && (
                             <div className="settingsMeta" style={{ marginTop: 6 }}>
                               {challengeMatch.challenge.instructions}
+                              {challengeMatch.challenge.url ? (
+                                <>
+                                  {" "}
+                                  URL:{" "}
+                                  <a href={challengeMatch.challenge.url} target="_blank" rel="noreferrer">
+                                    {challengeMatch.challenge.url}
+                                  </a>
+                                </>
+                              ) : null}
                               {challengeMatch.challenge.command ? ` Command: ${challengeMatch.challenge.command}` : ""}
                             </div>
                           )}

@@ -14,7 +14,7 @@ describe("Cross-provider model creation", () => {
     { name: "anthropic", providerPrefix: "anthropic.messages" },
     { name: "openai", providerPrefix: "openai.responses" },
     { name: "google", providerPrefix: "google.generative-ai" },
-    { name: "codex-cli", providerPrefix: "codex-cli" },
+    { name: "codex-cli", providerPrefix: "codex-cli.responses" },
     { name: "claude-code", providerPrefix: "claude-code" },
   ];
 

@@ -755,7 +755,8 @@ function normalizeProviderChoice(provider: ProviderName): ProviderName {
 function defaultProviderAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
   if (provider === "codex-cli") {
     return [
-      { id: "oauth_cli", type: "oauth", label: "Sign in with Codex CLI", oauthMode: "auto" },
+      { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
+      { id: "oauth_device", type: "oauth", label: "Sign in with ChatGPT (device code)", oauthMode: "auto" },
       { id: "api_key", type: "api", label: "API key" },
     ];
   }
@@ -1099,6 +1100,7 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
 
       if (evt.type === "provider_auth_challenge") {
         const command = evt.challenge.command ? ` Command: ${evt.challenge.command}` : "";
+        const url = evt.challenge.url ? ` URL: ${evt.challenge.url}` : "";
         set((s) => ({
           providerLastAuthChallenge: evt,
           notifications: pushNotification(s.notifications, {
@@ -1106,7 +1108,7 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
             ts: nowIso(),
             kind: "info",
             title: `Auth challenge: ${evt.provider}`,
-            detail: `${evt.challenge.instructions}${command}`,
+            detail: `${evt.challenge.instructions}${url}${command}`,
           }),
         }));
         return;

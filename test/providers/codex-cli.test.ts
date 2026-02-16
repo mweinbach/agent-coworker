@@ -1,39 +1,42 @@
 import { describe, expect, test } from "bun:test";
 
-import { codexCli } from "ai-sdk-provider-codex-cli";
+import { createOpenAI } from "@ai-sdk/openai";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
-import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
-import { makeConfig, makeTmpDirs, repoRoot } from "./helpers";
+import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot } from "./helpers";
 
-const DEFAULT_CODEX_MODEL = PROVIDER_MODEL_CATALOG["codex-cli"].defaultModel;
+const DEFAULT_CODEX_MODEL = "gpt-5.3-codex";
 
-// ---------------------------------------------------------------------------
-// Codex CLI provider (OAuth/API key via Codex CLI)
-// ---------------------------------------------------------------------------
-describe(`Codex CLI provider (${DEFAULT_CODEX_MODEL})`, () => {
+describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
   test(`defaultModelForProvider returns ${DEFAULT_CODEX_MODEL}`, () => {
     expect(defaultModelForProvider("codex-cli")).toBe(DEFAULT_CODEX_MODEL);
   });
 
-  test(`getModel creates codex-cli model with default ${DEFAULT_CODEX_MODEL}`, () => {
+  test(`getModel creates codex model with default ${DEFAULT_CODEX_MODEL}`, () => {
     const cfg = makeConfig({ provider: "codex-cli", model: DEFAULT_CODEX_MODEL });
     const model = getModel(cfg);
 
     expect(model).toBeDefined();
     expect(model.modelId).toBe(DEFAULT_CODEX_MODEL);
-    expect(model.provider).toBe("codex-cli");
+    expect(model.provider).toBe("codex-cli.responses");
     expect(model.specificationVersion).toBe("v3");
   });
 
-  test("directly created codex-cli model matches getModel output", () => {
-    const direct = codexCli(DEFAULT_CODEX_MODEL);
+  test("directly created named OpenAI provider model matches getModel output", () => {
+    const direct = createOpenAI({ name: "codex-cli", apiKey: "test" })(DEFAULT_CODEX_MODEL);
     const cfg = makeConfig({ provider: "codex-cli", model: DEFAULT_CODEX_MODEL });
-    const viaGetModel = getModel(cfg);
+    const viaGetModel = getModel(cfg, DEFAULT_CODEX_MODEL);
 
     expect(viaGetModel.modelId).toBe(direct.modelId);
     expect(viaGetModel.provider).toBe(direct.provider);
     expect(viaGetModel.specificationVersion).toBe(direct.specificationVersion);
+  });
+
+  test("codex provider options are configured", () => {
+    const opts = DEFAULT_PROVIDER_OPTIONS["codex-cli"];
+    expect(opts).toBeDefined();
+    expect(opts.reasoningEffort).toBe("high");
+    expect(opts.reasoningSummary).toBe("detailed");
   });
 
   test(`loadConfig with codex-cli provider returns ${DEFAULT_CODEX_MODEL} model`, async () => {

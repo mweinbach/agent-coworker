@@ -125,7 +125,9 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
     });
 
     const model = getModel(cfg) as any;
-    expect(model.settings?.env?.OPENAI_API_KEY).toBe(savedKey);
+    const headers = await model.config.headers();
+    expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+    expect(model.provider).toBe("codex-cli.responses");
   });
 
   test("claude-code provider can reuse saved anthropic key", async () => {

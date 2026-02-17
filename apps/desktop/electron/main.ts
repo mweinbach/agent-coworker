@@ -5,6 +5,7 @@ import { app, BrowserWindow } from "electron";
 
 import { registerDesktopIpc } from "./ipc";
 import { PersistenceService } from "./services/persistence";
+import { resolveDesktopRendererUrl } from "./services/rendererUrl";
 import { ServerManager } from "./services/serverManager";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -36,9 +37,15 @@ async function createWindow(): Promise<void> {
     },
   });
 
-  const devUrl = process.env.ELECTRON_RENDERER_URL;
-  if (devUrl) {
-    await win.loadURL(devUrl);
+  if (!app.isPackaged) {
+    const { url, warning } = resolveDesktopRendererUrl(
+      process.env.ELECTRON_RENDERER_URL,
+      process.env.COWORK_DESKTOP_RENDERER_PORT
+    );
+    if (warning) {
+      console.warn(`[desktop] ${warning}`);
+    }
+    await win.loadURL(url);
     return;
   }
 

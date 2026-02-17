@@ -43,6 +43,9 @@ export async function getProviderCatalog(opts: {
   const all = listProviderCatalogEntries();
   const defaults: Record<string, string> = {};
   for (const entry of all) defaults[entry.id] = entry.defaultModel;
-  const connected = PROVIDER_NAMES.filter((provider) => Boolean(store.services[provider]));
+  const connected = PROVIDER_NAMES.filter((provider) => {
+    const entry = store.services[provider];
+    return entry?.mode === "api_key" || entry?.mode === "oauth";
+  });
   return { all, default: defaults, connected };
 }

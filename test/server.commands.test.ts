@@ -40,6 +40,10 @@ describe("server command helpers", () => {
     expect(expandCommandTemplate("$1 | $2", "one two three")).toBe("one | two three");
   });
 
+  test("expandCommandTemplate preserves literal numbered markers in raw arguments", () => {
+    expect(expandCommandTemplate("Review: $ARGUMENTS", "compare $2 to $3")).toBe("Review: compare $2 to $3");
+  });
+
   test("expandCommandTemplate appends args when template has no placeholders", () => {
     expect(expandCommandTemplate("Do the thing", "with extra context")).toBe(
       "Do the thing\n\nwith extra context"

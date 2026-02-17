@@ -83,4 +83,26 @@ describe("providers/authRegistry", () => {
     expect(result.ok).toBe(true);
     expect(connect).toHaveBeenCalledTimes(1);
   });
+
+  test("callbackProviderAuth forwards code to connect handler", async () => {
+    const connect = mock(async (opts: any) => ({
+      ok: true as const,
+      provider: opts.provider,
+      mode: "oauth" as const,
+      storageFile: "/tmp/connections.json",
+      message: "oauth complete",
+    }));
+
+    const result = await callbackProviderAuth({
+      provider: "codex-cli",
+      methodId: "oauth_cli",
+      code: "auth-code-123",
+      connect,
+      oauthStdioMode: "pipe",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(connect.mock.calls[0]?.[0]?.code).toBe("auth-code-123");
+  });
 });

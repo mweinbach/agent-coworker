@@ -20,6 +20,7 @@ export type ProviderAuthChallenge = {
 export type ConnectProviderHandler = (opts: {
   provider: ProviderName;
   methodId?: string;
+  code?: string;
   apiKey?: string;
   cwd?: string;
   paths?: AiCoworkerPaths;
@@ -152,6 +153,7 @@ export async function callbackProviderAuth(opts: {
   return await opts.connect({
     provider: opts.provider,
     methodId: opts.methodId,
+    code: opts.code?.trim() || undefined,
     cwd: opts.cwd,
     paths: opts.paths,
     oauthStdioMode: opts.oauthStdioMode,

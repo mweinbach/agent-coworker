@@ -8,8 +8,10 @@ import path from "node:path";
 import {
   CODEX_OAUTH_CLIENT_ID,
   CODEX_OAUTH_ISSUER,
+  isTokenExpiring,
   persistCodexAuthFromTokenResponse,
   readCodexAuthMaterial,
+  refreshCodexAuthMaterial,
 } from "./providers/codex-auth";
 import type { ProviderName } from "./types";
 
@@ -760,6 +762,7 @@ export type ConnectProviderResult =
 export async function connectProvider(opts: {
   provider: ConnectService;
   methodId?: string;
+  code?: string;
   apiKey?: string;
   cwd?: string;
   paths?: AiCoworkerPaths;
@@ -818,11 +821,28 @@ export async function connectProvider(opts: {
     const fetchImpl = opts.fetchImpl ?? fetch;
     const methodId = (opts.methodId ?? "oauth_cli").trim() || "oauth_cli";
 
-    const existing = await readCodexAuthMaterial(paths, {
+    let existing = await readCodexAuthMaterial(paths, {
       migrateLegacy: true,
       onLine: opts.onOauthLine,
     });
-    if (existing?.accessToken) {
+    if (existing?.accessToken && isTokenExpiring(existing)) {
+      if (existing.refreshToken) {
+        try {
+          existing = await refreshCodexAuthMaterial({
+            paths,
+            material: existing,
+            fetchImpl,
+          });
+          opts.onOauthLine?.("[auth] refreshed existing Codex credentials.");
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          opts.onOauthLine?.(`[auth] existing Codex credentials are stale: ${message}`);
+        }
+      } else {
+        opts.onOauthLine?.("[auth] existing Codex credentials are expired and missing refresh token.");
+      }
+    }
+    if (existing?.accessToken && !isTokenExpiring(existing, 0)) {
       store.services[provider] = {
         service: provider,
         mode: "oauth",

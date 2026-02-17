@@ -271,6 +271,78 @@ describe("connectProvider", () => {
     expect(persisted?.tokens?.access_token).toBe("codex-device-access-token");
   });
 
+  test("codex-cli stale credentials trigger new oauth flow", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const authFile = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
+    await fs.mkdir(path.dirname(authFile), { recursive: true });
+    await fs.writeFile(
+      authFile,
+      JSON.stringify(
+        {
+          issuer: "https://auth.openai.com",
+          client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+          tokens: {
+            access_token: "expired-access-token",
+            expires_at: Date.now() - 60_000,
+          },
+        },
+        null,
+        2
+      )
+    );
+
+    const openedUrls: string[] = [];
+    const result = await connectProvider({
+      provider: "codex-cli",
+      methodId: "oauth_device",
+      paths,
+      openUrl: async (url) => {
+        openedUrls.push(url);
+        return true;
+      },
+      fetchImpl: async (url) => {
+        const u = String(url);
+        if (u.endsWith("/api/accounts/deviceauth/usercode")) {
+          return new Response(JSON.stringify({ device_auth_id: "dev_stale", user_code: "WXYZ-1234", interval: 1 }), {
+            status: 200,
+          });
+        }
+        if (u.endsWith("/api/accounts/deviceauth/token")) {
+          return new Response(JSON.stringify({ authorization_code: "fresh_code_1", code_verifier: "fresh_verifier_1" }), {
+            status: 200,
+          });
+        }
+        if (u === "https://auth.openai.com/oauth/token") {
+          return new Response(
+            JSON.stringify({
+              access_token: "fresh-access-token",
+              refresh_token: "fresh-refresh-token",
+              id_token: makeJwt({
+                iss: "https://auth.openai.com",
+                email: "fresh@example.com",
+                chatgpt_account_id: "acc_789",
+              }),
+              expires_in: 3600,
+            }),
+            { status: 200 }
+          );
+        }
+        return new Response("not found", { status: 404 });
+      },
+      oauthTimeoutMs: 10_000,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.mode).toBe("oauth");
+    expect(result.message).toContain("Codex OAuth sign-in completed");
+    expect(openedUrls).toEqual(["https://auth.openai.com/codex/device"]);
+
+    const persisted = JSON.parse(await fs.readFile(authFile, "utf-8")) as any;
+    expect(persisted?.tokens?.access_token).toBe("fresh-access-token");
+  });
+
   test("oauth failure returns error and does not store connection", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });

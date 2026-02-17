@@ -807,6 +807,7 @@ export type AppStoreState = {
 
   composerText: string;
   injectContext: boolean;
+  developerMode: boolean;
 
   sidebarCollapsed: boolean;
   sidebarWidth: number;
@@ -830,6 +831,7 @@ export type AppStoreState = {
   cancelThread: (threadId: string) => void;
   setComposerText: (text: string) => void;
   setInjectContext: (v: boolean) => void;
+  setDeveloperMode: (v: boolean) => void;
 
   openSkills: () => Promise<void>;
   selectSkill: (skillName: string) => Promise<void>;
@@ -867,6 +869,7 @@ function persist(get: () => AppStoreState) {
       version: 1,
       workspaces: get().workspaces,
       threads: get().threads,
+      developerMode: get().developerMode,
     };
     void saveState(state);
   }, PERSIST_DEBOUNCE_MS);
@@ -881,6 +884,7 @@ async function persistNow(get: () => AppStoreState) {
     version: 1,
     workspaces: get().workspaces,
     threads: get().threads,
+    developerMode: get().developerMode,
   };
   await saveState(state);
 }
@@ -1925,6 +1929,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   composerText: "",
   injectContext: false,
+  developerMode: false,
 
   sidebarCollapsed: false,
   sidebarWidth: 280,
@@ -1964,6 +1969,7 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
         threads: normalizedThreads,
         selectedWorkspaceId,
         selectedThreadId,
+        developerMode: typeof state.developerMode === "boolean" ? state.developerMode : false,
         ready: true,
         startupError: null,
       });
@@ -2347,6 +2353,10 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   setComposerText: (text) => set({ composerText: text }),
   setInjectContext: (v) => set({ injectContext: v }),
+  setDeveloperMode: (v) => {
+    set({ developerMode: v });
+    void persistNow(get);
+  },
 
   openSkills: async () => {
     let workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;

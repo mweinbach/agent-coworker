@@ -16,6 +16,8 @@ export function WorkspacesPage() {
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
   const restartWorkspaceServer = useAppStore((s) => s.restartWorkspaceServer);
+  const developerMode = useAppStore((s) => s.developerMode);
+  const setDeveloperMode = useAppStore((s) => s.setDeveloperMode);
 
   const ws = useMemo(
     () => workspaces.find((w) => w.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
@@ -166,6 +168,25 @@ export function WorkspacesPage() {
           </div>
         </>
       )}
+
+      <div className="settingsCard">
+        <div className="settingsCardHeader">
+          <div className="settingsCardTitle">Interface</div>
+        </div>
+        <div className="settingsCardBody">
+          <div className="settingsRow">
+            <div>
+              <div className="settingsRowLabel">Developer mode</div>
+              <div className="settingsRowHint">Show internal system notices in the chat feed.</div>
+            </div>
+            <input
+              type="checkbox"
+              checked={developerMode}
+              onChange={(e) => setDeveloperMode(e.currentTarget.checked)}
+            />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

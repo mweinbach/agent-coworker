@@ -68,6 +68,10 @@ export function shouldToggleReasoningExpanded(key: string): boolean {
   return key === "Enter" || key === " " || key === "Spacebar";
 }
 
+export function filterFeedForDeveloperMode(feed: FeedItem[], developerMode: boolean): FeedItem[] {
+  return developerMode ? feed : feed.filter((item) => item.kind !== "system");
+}
+
 const ReasoningFeedItem = memo(function ReasoningFeedItem(props: { item: Extract<FeedItem, { kind: "reasoning" }> }) {
   const [expanded, setExpanded] = useState(false);
   const label = reasoningLabelForMode(props.item.mode);
@@ -215,6 +219,7 @@ export function ChatView() {
   });
   const composerText = useAppStore((s) => s.composerText);
   const hasPromptModal = useAppStore((s) => s.promptModal !== null);
+  const developerMode = useAppStore((s) => s.developerMode);
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
@@ -227,17 +232,18 @@ export function ChatView() {
   const lastCountRef = useRef<number>(0);
 
   const feed = rt?.feed ?? [];
+  const visibleFeed = filterFeedForDeveloperMode(feed, developerMode);
 
   useEffect(() => {
     const el = feedRef.current;
     if (!el) return;
-    if (feed.length === lastCountRef.current) return;
-    lastCountRef.current = feed.length;
+    if (visibleFeed.length === lastCountRef.current) return;
+    lastCountRef.current = visibleFeed.length;
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     if (distFromBottom < 200) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [feed.length]);
+  }, [visibleFeed.length]);
 
   useEffect(() => {
     if (selectedThreadId && textareaRef.current) {
@@ -293,14 +299,14 @@ export function ChatView() {
           </div>
         ) : null}
 
-        {feed.length === 0 ? (
+        {visibleFeed.length === 0 ? (
           <div className="hero" style={{ height: "auto", paddingTop: 60 }}>
             <div className="heroTitle" style={{ fontSize: 18 }}>New thread</div>
             <div className="heroSub" style={{ fontSize: 14 }}>Send a message to start.</div>
           </div>
         ) : null}
 
-        {feed.map((item) => (
+        {visibleFeed.map((item) => (
           <FeedRow key={item.id} item={item} />
         ))}
       </div>

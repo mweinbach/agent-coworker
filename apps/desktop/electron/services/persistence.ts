@@ -33,6 +33,7 @@ function defaultState(): PersistedState {
     version: 1,
     workspaces: [],
     threads: [],
+    developerMode: false,
   };
 }
 
@@ -72,6 +73,7 @@ export class PersistenceService {
         }
         parsed.workspaces = parsed.workspaces ?? [];
         parsed.threads = parsed.threads ?? [];
+        parsed.developerMode = typeof parsed.developerMode === "boolean" ? parsed.developerMode : false;
         return parsed;
       } catch (error) {
         if (isNotFound(error)) {

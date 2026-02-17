@@ -35,6 +35,7 @@ export type PersistedState = {
   version: number;
   workspaces: WorkspaceRecord[];
   threads: ThreadRecord[];
+  developerMode?: boolean;
 };
 
 export type TranscriptDirection = "server" | "client";

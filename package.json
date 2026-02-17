@@ -28,30 +28,30 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.38",
-    "@ai-sdk/google": "^3.0.22",
-    "@ai-sdk/mcp": "^1.0.19",
-    "@ai-sdk/openai": "^3.0.26",
+    "@ai-sdk/anthropic": "^3.0.44",
+    "@ai-sdk/google": "^3.0.29",
+    "@ai-sdk/mcp": "^1.0.21",
+    "@ai-sdk/openai": "^3.0.29",
     "@mozilla/readability": "^0.6.0",
     "@opentui/core": "^0.1.79",
     "@opentui/solid": "^0.1.79",
-    "ai": "^6.0.77",
+    "ai": "^6.0.86",
     "ai-sdk-provider-claude-code": "^3.4.0",
-    "exa-js": "^2.3.0",
+    "exa-js": "^2.4.0",
     "fast-glob": "^3.3.3",
-    "jsdom": "^28.0.0",
+    "jsdom": "^28.1.0",
     "fuzzysort": "^3.1.0",
     "react": "^19.2.4",
-    "solid-js": "^1.9.0",
+    "solid-js": "^1.9.11",
     "turndown": "^7.2.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/jsdom": "^27.0.0",
-    "@types/node": "^25.2.2",
-    "@types/react": "^19.2.13",
+    "@types/node": "^25.2.3",
+    "@types/react": "^19.2.14",
     "@types/turndown": "^5.0.6",
-    "bun-types": "^1.3.8",
+    "bun-types": "^1.3.9",
     "typescript": "^5.9.3"
   }
 }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  filterFeedForDeveloperMode,
   reasoningLabelForMode,
   reasoningPreviewText,
   shouldToggleReasoningExpanded,
@@ -22,5 +23,17 @@ describe("desktop reasoning UI helpers", () => {
     expect(shouldToggleReasoningExpanded(" ")).toBe(true);
     expect(shouldToggleReasoningExpanded("Spacebar")).toBe(true);
     expect(shouldToggleReasoningExpanded("Escape")).toBe(false);
+  });
+
+  test("hides system feed entries unless developer mode is enabled", () => {
+    const feed = [
+      { id: "a", kind: "system", ts: "2024-01-01T00:00:00.000Z", line: "[server_hello]" },
+      { id: "b", kind: "message", role: "assistant" as const, ts: "2024-01-01T00:00:01.000Z", text: "hi" },
+    ];
+
+    expect(filterFeedForDeveloperMode(feed, false)).toEqual([
+      { id: "b", kind: "message", role: "assistant", ts: "2024-01-01T00:00:01.000Z", text: "hi" },
+    ]);
+    expect(filterFeedForDeveloperMode(feed, true)).toEqual(feed);
   });
 });

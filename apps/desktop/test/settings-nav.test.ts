@@ -61,6 +61,11 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().settingsPage).toBe("workspaces");
   });
 
+  test("setDeveloperMode updates developer mode state", () => {
+    useAppStore.getState().setDeveloperMode(true);
+    expect(useAppStore.getState().developerMode).toBe(true);
+  });
+
   test("openSkills shows guidance when no workspace is available", async () => {
     await useAppStore.getState().openSkills();
     expect(useAppStore.getState().view).toBe("chat");

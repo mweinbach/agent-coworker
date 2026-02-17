@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { shouldSuppressRawDebugLogLine } from "../apps/TUI/context/sync";
+import { shouldSuppressLegacyToolLogLine, shouldSuppressRawDebugLogLine } from "../apps/TUI/context/sync";
 
 describe("TUI log suppression helpers", () => {
   test("suppresses raw provider debug stream logs", () => {
@@ -11,5 +11,19 @@ describe("TUI log suppression helpers", () => {
 
   test("keeps normal tool logs", () => {
     expect(shouldSuppressRawDebugLogLine("tool> read {\"path\":\"README.md\"}")).toBe(false);
+  });
+
+  test("suppresses legacy tool logs only when model stream is active", () => {
+    const toolStart = "tool> read {\"path\":\"README.md\"}";
+    const toolDone = "tool< read {\"chars\":42}";
+    const normalLog = "[info] finished";
+
+    expect(shouldSuppressLegacyToolLogLine(toolStart, false)).toBe(false);
+    expect(shouldSuppressLegacyToolLogLine(toolDone, false)).toBe(false);
+    expect(shouldSuppressLegacyToolLogLine(normalLog, false)).toBe(false);
+
+    expect(shouldSuppressLegacyToolLogLine(toolStart, true)).toBe(true);
+    expect(shouldSuppressLegacyToolLogLine(toolDone, true)).toBe(true);
+    expect(shouldSuppressLegacyToolLogLine(normalLog, true)).toBe(false);
   });
 });

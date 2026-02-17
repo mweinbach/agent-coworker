@@ -205,6 +205,11 @@ export function shouldSuppressRawDebugLogLine(line: string): boolean {
   return false;
 }
 
+export function shouldSuppressLegacyToolLogLine(line: string, modelStreamTurnActive: boolean): boolean {
+  if (!modelStreamTurnActive) return false;
+  return parseToolLogLine(line) !== null;
+}
+
 function normalizeQuestionPreview(question: string, maxChars = 220): string {
   let normalized = question.trim();
   normalized = normalized.replace(/\braw stream part:\s*\{[\s\S]*$/i, "").trim();
@@ -308,6 +313,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
   const streamedToolInput = new Map<string, string>();
   let lastStreamedAssistantTurnId: string | null = null;
   let lastStreamedReasoningTurnId: string | null = null;
+  let modelStreamTurnActive = false;
 
   let socket: AgentSocket | null = null;
 
@@ -320,6 +326,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     streamedToolInput.clear();
     lastStreamedAssistantTurnId = null;
     lastStreamedReasoningTurnId = null;
+    modelStreamTurnActive = false;
   }
 
   function updateFeedItem(id: string, update: (item: FeedItem) => FeedItem) {
@@ -373,7 +380,9 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     switch (evt.type) {
       case "session_busy":
         setState("busy", evt.busy);
+        pendingTools.clear();
         if (evt.busy) {
+          modelStreamTurnActive = false;
           lastStreamedAssistantTurnId = null;
           lastStreamedReasoningTurnId = null;
         } else {
@@ -480,7 +489,14 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
 
         if (mapped.kind === "turn_start") {
           resetModelStreamState();
+          pendingTools.clear();
+          modelStreamTurnActive = true;
           break;
+        }
+
+        if (!modelStreamTurnActive) {
+          pendingTools.clear();
+          modelStreamTurnActive = true;
         }
 
         if (
@@ -680,7 +696,10 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       }
 
       case "log": {
-        if (shouldSuppressRawDebugLogLine(evt.line)) {
+        if (
+          shouldSuppressRawDebugLogLine(evt.line) ||
+          shouldSuppressLegacyToolLogLine(evt.line, modelStreamTurnActive)
+        ) {
           break;
         }
 

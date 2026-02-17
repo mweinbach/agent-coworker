@@ -28,12 +28,47 @@ function normalizeCommandName(value: string): string {
   return value.trim().toLowerCase();
 }
 
-export function parseSlashInput(text: string): { name: string; argumentsText: string } | null {
+function parseWithKnownCommandNames(
+  body: string,
+  knownCommandNames: readonly string[]
+): { name: string; argumentsText: string } | null {
+  if (knownCommandNames.length === 0) return null;
+  const lowerBody = body.toLowerCase();
+
+  const normalizedCandidates = [...new Set(
+    knownCommandNames
+      .map((name) => name.trim())
+      .filter(Boolean)
+  )].sort((a, b) => b.length - a.length);
+
+  for (const candidate of normalizedCandidates) {
+    const lowerCandidate = candidate.toLowerCase();
+    if (lowerBody === lowerCandidate) {
+      return { name: candidate, argumentsText: "" };
+    }
+    if (lowerBody.startsWith(`${lowerCandidate} `)) {
+      return {
+        name: candidate,
+        argumentsText: body.slice(candidate.length).trim(),
+      };
+    }
+  }
+
+  return null;
+}
+
+export function parseSlashInput(
+  text: string,
+  knownCommandNames: readonly string[] = []
+): { name: string; argumentsText: string } | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith("/")) return null;
 
   const body = trimmed.slice(1).trim();
   if (!body) return null;
+
+  const known = parseWithKnownCommandNames(body, knownCommandNames);
+  if (known) return known;
 
   const [name = "", ...rest] = body.split(/\s+/);
   if (!name) return null;

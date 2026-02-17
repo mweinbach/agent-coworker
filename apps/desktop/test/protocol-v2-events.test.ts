@@ -176,6 +176,26 @@ describe("desktop protocol v2 mapping", () => {
     expect(notification?.detail).toContain("Command: optional-command");
   });
 
+  test("provider auth result with oauth_pending uses pending notification title", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+
+    controlSocket.emit({
+      type: "provider_auth_result",
+      sessionId: "control-session",
+      provider: "claude-code",
+      methodId: "oauth_cli",
+      ok: true,
+      mode: "oauth_pending",
+      message: "Complete sign-in in terminal.",
+    });
+
+    const notification = useAppStore.getState().notifications.at(-1);
+    expect(notification?.title).toBe("Provider auth pending: claude-code");
+    expect(notification?.detail).toBe("Complete sign-in in terminal.");
+  });
+
   test("approval prompt keeps required reasonCode", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const threadId = useAppStore.getState().selectedThreadId;

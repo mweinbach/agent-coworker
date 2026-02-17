@@ -388,7 +388,6 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       case "provider_catalog":
         setState("providerCatalog", evt.all);
         setState("providerDefault", evt.default);
-        setState("providerConnected", evt.connected);
         break;
 
       case "provider_auth_methods":

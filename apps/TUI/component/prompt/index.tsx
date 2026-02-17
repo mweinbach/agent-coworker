@@ -180,7 +180,10 @@ export function Prompt(props: {
   };
 
   const runSlashCommand = async (text: string): Promise<boolean> => {
-    const parsed = parseSlashInput(text);
+    const serverCommandNamesWithSpaces = syncState.commands
+      .map((command) => command.name)
+      .filter((name) => name.includes(" "));
+    const parsed = parseSlashInput(text, serverCommandNamesWithSpaces);
     if (!parsed) return false;
 
     const localCommand = findLocalSlashCommand(localSlashCommands, parsed.name);

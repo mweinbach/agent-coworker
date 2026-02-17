@@ -78,4 +78,16 @@ describe("local slash command registry", () => {
       argumentsText: "HEAD~2..HEAD",
     });
   });
+
+  test("parseSlashInput supports multi-word command names when provided", () => {
+    expect(parseSlashInput("/my review HEAD~2..HEAD", ["my review"])).toEqual({
+      name: "my review",
+      argumentsText: "HEAD~2..HEAD",
+    });
+
+    expect(parseSlashInput("/my review HEAD~2..HEAD")).toEqual({
+      name: "my",
+      argumentsText: "review HEAD~2..HEAD",
+    });
+  });
 });

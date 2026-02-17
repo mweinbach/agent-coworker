@@ -68,7 +68,6 @@ export function ProvidersPage() {
   const providerStatusByName = useAppStore((s) => s.providerStatusByName);
   const providerStatusRefreshing = useAppStore((s) => s.providerStatusRefreshing);
   const providerCatalog = useAppStore((s) => s.providerCatalog);
-  const providerConnected = useAppStore((s) => s.providerConnected);
   const providerAuthMethodsByProvider = useAppStore((s) => s.providerAuthMethodsByProvider);
   const providerLastAuthChallenge = useAppStore((s) => s.providerLastAuthChallenge);
   const providerLastAuthResult = useAppStore((s) => s.providerLastAuthResult);
@@ -141,7 +140,7 @@ export function ProvidersPage() {
             const label = providerStatusLabel(status);
             const isExpanded = expandedProvider === p;
             const methods = authMethodsForProvider(p);
-            const connected = providerConnected.includes(p) || Boolean(status?.authorized);
+            const connected = Boolean(status?.authorized);
             const providerDisplayName = catalogNameByProvider.get(p) ?? displayProviderName(p);
 
             return (

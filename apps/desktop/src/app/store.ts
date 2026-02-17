@@ -1115,13 +1115,18 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
       }
 
       if (evt.type === "provider_auth_result") {
+        const title = evt.ok
+          ? evt.mode === "oauth_pending"
+            ? `Provider auth pending: ${evt.provider}`
+            : `Provider connected: ${evt.provider}`
+          : `Provider auth failed: ${evt.provider}`;
         set((s) => ({
           providerLastAuthResult: evt,
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),
             kind: evt.ok ? "info" : "error",
-            title: evt.ok ? `Provider connected: ${evt.provider}` : `Provider auth failed: ${evt.provider}`,
+            title,
             detail: evt.message,
           }),
         }));

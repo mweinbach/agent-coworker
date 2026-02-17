@@ -41,6 +41,14 @@ describe("Anthropic provider (claude-opus-4-6)", () => {
     expect(model.provider).toBe("anthropic.messages");
   });
 
+  test("getModel maps claude-4-6-sonnet alias to Anthropic canonical model ID", () => {
+    const cfg = makeConfig({ provider: "anthropic", model: "claude-4-6-sonnet" });
+    const model = getModel(cfg);
+
+    expect(model.modelId).toBe("claude-sonnet-4-6");
+    expect(model.provider).toBe("anthropic.messages");
+  });
+
   test("getModel with claude-haiku-4-5 model ID", () => {
     const cfg = makeConfig({ provider: "anthropic", model: "claude-haiku-4-5-20251001" });
     const model = getModel(cfg);

@@ -213,6 +213,8 @@ type RunSpec = {
   requiredFirstNonTodoToolCall?: string;
   requiredSkillBeforeTools?: string;
   guardedToolsBeforeSkill?: string[];
+  requiredToolBeforeTools?: string;
+  guardedToolsBeforeRequiredTool?: string[];
   prompt: (ctx: PromptContext) => string;
 };
 
@@ -296,6 +298,11 @@ type SkillGuardConfig = {
   guardedToolNames?: string[];
 };
 
+type PrerequisiteToolGuardConfig = {
+  requiredToolName?: string;
+  guardedToolNames?: string[];
+};
+
 function collectToolCallsFromUnknown(value: unknown, sink: string[]) {
   if (!value) return;
   if (Array.isArray(value)) {
@@ -349,7 +356,8 @@ function createToolsWithTracing(
   steps: TracedStep[],
   limiter: RateLimiter,
   getModelImpl: typeof realGetModel,
-  skillGuard?: SkillGuardConfig
+  skillGuard?: SkillGuardConfig,
+  prerequisiteToolGuard?: PrerequisiteToolGuardConfig
 ): Record<string, any> {
   // Capture sub-agent model calls (spawnAgent uses its own generateText invocation).
   const tracedForSubAgent = makeTracedGenerateText(steps, "spawnAgent", limiter);
@@ -377,34 +385,64 @@ function createToolsWithTracing(
     memory: createMemoryTool(ctx),
   };
 
-  if (!skillGuard?.requiredSkillName || !skillGuard.guardedToolNames || skillGuard.guardedToolNames.length === 0) {
-    return baseTools;
+  const wrapped: Record<string, any> = { ...baseTools };
+
+  if (skillGuard?.requiredSkillName && skillGuard.guardedToolNames && skillGuard.guardedToolNames.length > 0) {
+    let requiredSkillLoaded = false;
+    const required = skillGuard.requiredSkillName;
+    const guarded = new Set(skillGuard.guardedToolNames);
+
+    wrapped.skill = withExecuteGuard(
+      baseTools.skill,
+      () => false,
+      "",
+      (input) => {
+        if (input && typeof input.skillName === "string" && input.skillName === required) {
+          requiredSkillLoaded = true;
+        }
+      }
+    );
+
+    for (const toolName of guarded) {
+      if (toolName === "skill") continue;
+      const original = wrapped[toolName];
+      wrapped[toolName] = withExecuteGuard(
+        original,
+        () => !requiredSkillLoaded,
+        `Required skill "${required}" must be loaded via the skill tool before calling "${toolName}".`
+      );
+    }
   }
 
-  let requiredSkillLoaded = false;
-  const required = skillGuard.requiredSkillName;
-  const guarded = new Set(skillGuard.guardedToolNames);
+  if (
+    prerequisiteToolGuard?.requiredToolName &&
+    prerequisiteToolGuard.guardedToolNames &&
+    prerequisiteToolGuard.guardedToolNames.length > 0
+  ) {
+    let requiredToolCalled = false;
+    const requiredTool = prerequisiteToolGuard.requiredToolName;
+    const guardedTools = new Set(prerequisiteToolGuard.guardedToolNames);
 
-  const wrapped: Record<string, any> = { ...baseTools };
-  wrapped.skill = withExecuteGuard(
-    baseTools.skill,
-    () => false,
-    "",
-    (input) => {
-      if (input && typeof input.skillName === "string" && input.skillName === required) {
-        requiredSkillLoaded = true;
-      }
+    if (wrapped[requiredTool]) {
+      wrapped[requiredTool] = withExecuteGuard(
+        wrapped[requiredTool],
+        () => false,
+        "",
+        () => {
+          requiredToolCalled = true;
+        }
+      );
     }
-  );
 
-  for (const toolName of guarded) {
-    if (toolName === "skill") continue;
-    const original = wrapped[toolName];
-    wrapped[toolName] = withExecuteGuard(
-      original,
-      () => !requiredSkillLoaded,
-      `Required skill "${required}" must be loaded via the skill tool before calling "${toolName}".`
-    );
+    for (const toolName of guardedTools) {
+      if (toolName === requiredTool) continue;
+      const original = wrapped[toolName];
+      wrapped[toolName] = withExecuteGuard(
+        original,
+        () => !requiredToolCalled,
+        `Tool "${requiredTool}" must be called before "${toolName}".`
+      );
+    }
   }
 
   return wrapped;
@@ -528,7 +566,22 @@ function resolveAnthropicAlias(
       const resolvedModel = candidates.slice().sort().at(-1)!;
       return { requestedModel, resolvedModel, resolvedFrom: "alias" };
     }
+    if (availableIds.includes("claude-opus-4-6")) {
+      return { requestedModel, resolvedModel: "claude-opus-4-6", resolvedFrom: "alias" };
+    }
     return { requestedModel, resolvedModel: "claude-opus-4-6", resolvedFrom: "fallback" };
+  }
+
+  if (requestedModel === "claude-4-6-sonnet") {
+    const candidates = availableIds.filter((id) => id.startsWith("claude-sonnet-4-6-"));
+    if (candidates.length > 0) {
+      const resolvedModel = candidates.slice().sort().at(-1)!;
+      return { requestedModel, resolvedModel, resolvedFrom: "alias" };
+    }
+    if (availableIds.includes("claude-sonnet-4-6")) {
+      return { requestedModel, resolvedModel: "claude-sonnet-4-6", resolvedFrom: "alias" };
+    }
+    return { requestedModel, resolvedModel: "claude-sonnet-4-6", resolvedFrom: "fallback" };
   }
 
   if (requestedModel !== "claude-4-5-haiku") {
@@ -1188,6 +1241,28 @@ Steps (must use tools):
 Final response must be a JSON object:
 { "manifest": "<absolute path>", "end": "<<END_RUN>>" }`,
     },
+    {
+      id: "run-11",
+      provider: "anthropic",
+      model: "claude-4-6-sonnet",
+      maxSteps: 40,
+      maxAttempts: 2,
+      requiredToolCalls: ["todoWrite", "webSearch", "write", "read"],
+      requiredToolBeforeTools: "webSearch",
+      guardedToolsBeforeRequiredTool: ["write", "read"],
+      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+
+Task: Demonstrate Claude 4.6 Sonnet tool use with web research.
+
+Steps (must use tools):
+1) Use todoWrite to create 3 items and mark exactly one in_progress.
+2) Use webSearch for query "HTTP 418 RFC 2324" with maxResults=4.
+3) Use write to create "sonnet_web_research.md" containing: title + 3 bullets from search results with URL citations.
+4) Use read to read "sonnet_web_research.md" (limit=200, offset=1).
+5) Use todoWrite to mark all items completed.
+
+Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
+    },
   ];
 
   const scenarioRuns =
@@ -1387,10 +1462,20 @@ Final response must be a JSON object:
         const tracedFinalizeGenerateText = makeTracedGenerateText(steps, "finalize", runLimiter);
 
         const createToolsOverride = (ctx: ToolContext) =>
-          createToolsWithTracing(ctx, steps, runLimiter, forcedGetModel, {
-            requiredSkillName: run.requiredSkillBeforeTools,
-            guardedToolNames: run.guardedToolsBeforeSkill,
-          });
+          createToolsWithTracing(
+            ctx,
+            steps,
+            runLimiter,
+            forcedGetModel,
+            {
+              requiredSkillName: run.requiredSkillBeforeTools,
+              guardedToolNames: run.guardedToolsBeforeSkill,
+            },
+            {
+              requiredToolName: run.requiredToolBeforeTools,
+              guardedToolNames: run.guardedToolsBeforeRequiredTool,
+            }
+          );
 
         try {
           const res = await runTurnWithDeps(

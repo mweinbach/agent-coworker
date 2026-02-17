@@ -503,6 +503,8 @@ async function exchangeCodexAuthorizationCode(opts: {
   return json;
 }
 
+const OAUTH_LOOPBACK_HOST = "127.0.0.1";
+
 async function listenOnLocalhost(
   preferredPort: number,
   onRequest: Parameters<typeof createServer>[0]
@@ -529,7 +531,7 @@ async function listenOnLocalhost(
       };
       server.once("error", onError);
       server.once("listening", onListening);
-      server.listen(port, "127.0.0.1");
+      server.listen(port, OAUTH_LOOPBACK_HOST);
     });
     return { port: resolvedPort, close: () => server.close() };
   };
@@ -638,7 +640,7 @@ async function runCodexBrowserOAuth(opts: {
     settle({ code });
   });
 
-  const redirectUri = `http://localhost:${listener.port}/auth/callback`;
+  const redirectUri = `http://${OAUTH_LOOPBACK_HOST}:${listener.port}/auth/callback`;
   const authUrl = buildCodexAuthorizeUrl(redirectUri, codeChallenge, state);
 
   opts.onLine?.(`[auth] opening browser for Codex login`);

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-import { DESKTOP_IPC_CHANNELS, type DesktopApi, type DeleteTranscriptInput, type ReadTranscriptInput, type ShowContextMenuInput, type StartWorkspaceServerInput, type StopWorkspaceServerInput, type TranscriptBatchInput } from "../src/lib/desktopApi";
+import { DESKTOP_IPC_CHANNELS, type DesktopApi, type DeleteTranscriptInput, type ReadTranscriptInput, type ShowContextMenuInput, type StartWorkspaceServerInput, type StopWorkspaceServerInput, type TranscriptBatchInput, type ListDirectoryInput } from "../src/lib/desktopApi";
 import type { PersistedState } from "../src/app/types";
 
 const desktopApi: DesktopApi = {
@@ -36,6 +36,8 @@ const desktopApi: DesktopApi = {
   windowClose: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.windowClose),
 
   getPlatform: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getPlatform),
+
+  listDirectory: (opts: ListDirectoryInput) => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.listDirectory, opts),
 };
 
 contextBridge.exposeInMainWorld("cowork", desktopApi);

@@ -3,6 +3,7 @@ import { useEffect, useMemo } from "react";
 import { useAppStore } from "./app/store";
 import { PromptModal } from "./ui/PromptModal";
 import { Sidebar } from "./ui/Sidebar";
+import { ContextSidebar } from "./ui/ContextSidebar";
 import { TitleBar } from "./ui/TitleBar";
 import { AppTopBar } from "./ui/layout/AppTopBar";
 import { PrimaryContent } from "./ui/layout/PrimaryContent";
@@ -73,7 +74,7 @@ export default function App() {
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
     [selectedThreadId, threads],
   );
-  const runtime = activeThread ? threadRuntimeById[activeThread.id] : null;
+  const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
   const busy = runtime?.busy === true;
 
   const title = view === "skills" ? "Skills" : activeThread?.title || "New thread";
@@ -116,6 +117,8 @@ export default function App() {
             <PrimaryContent init={init} ready={ready} startupError={startupError} view={view} />
           </div>
         </main>
+
+        <ContextSidebar />
       </div>
 
       <PromptModal />

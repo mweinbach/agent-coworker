@@ -35,6 +35,15 @@ export type ShowContextMenuInput = {
   items: ContextMenuItem[];
 };
 
+export type ListDirectoryInput = {
+  path: string;
+};
+
+export type FileEntry = {
+  name: string;
+  isDirectory: boolean;
+};
+
 export interface DesktopApi {
   startWorkspaceServer(opts: StartWorkspaceServerInput): Promise<{ url: string }>;
   stopWorkspaceServer(opts: StopWorkspaceServerInput): Promise<void>;
@@ -50,6 +59,7 @@ export interface DesktopApi {
   windowMaximize(): Promise<void>;
   windowClose(): Promise<void>;
   getPlatform(): Promise<string>;
+  listDirectory(opts: ListDirectoryInput): Promise<FileEntry[]>;
 }
 
 export const DESKTOP_IPC_CHANNELS = {
@@ -67,4 +77,5 @@ export const DESKTOP_IPC_CHANNELS = {
   windowMaximize: "desktop:windowMaximize",
   windowClose: "desktop:windowClose",
   getPlatform: "desktop:getPlatform",
+  listDirectory: "desktop:listDirectory",
 } as const;

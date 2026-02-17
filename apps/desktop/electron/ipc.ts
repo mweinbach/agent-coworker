@@ -1,6 +1,8 @@
 import { BrowserWindow, dialog, ipcMain, Menu } from "electron";
+import fs from "node:fs/promises";
+import path from "node:path";
 
-import { DESKTOP_IPC_CHANNELS, type StartWorkspaceServerInput, type StopWorkspaceServerInput, type DeleteTranscriptInput, type ReadTranscriptInput, type TranscriptBatchInput, type ShowContextMenuInput } from "../src/lib/desktopApi";
+import { DESKTOP_IPC_CHANNELS, type StartWorkspaceServerInput, type StopWorkspaceServerInput, type DeleteTranscriptInput, type ReadTranscriptInput, type TranscriptBatchInput, type ShowContextMenuInput, type ListDirectoryInput } from "../src/lib/desktopApi";
 import type { PersistedState } from "../src/app/types";
 
 import { PersistenceService } from "./services/persistence";
@@ -140,6 +142,24 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
 
   ipcMain.handle(DESKTOP_IPC_CHANNELS.getPlatform, () => {
     return process.platform;
+  });
+
+  ipcMain.handle(DESKTOP_IPC_CHANNELS.listDirectory, async (_event, args: ListDirectoryInput) => {
+    try {
+      const entries = await fs.readdir(args.path, { withFileTypes: true });
+      return entries
+        .filter((e) => !e.name.startsWith("."))
+        .map((e) => ({
+          name: e.name,
+          isDirectory: e.isDirectory(),
+        }))
+        .sort((a, b) => {
+          if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+    } catch (error) {
+      throw toIpcError(error);
+    }
   });
 
   return () => {

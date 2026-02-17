@@ -13,14 +13,16 @@ import {
   saveState,
   startWorkspaceServer,
   stopWorkspaceServer,
+  listDirectory,
 } from "../lib/desktopCommands";
-import type { ClientMessage, ProviderName, ServerEvent } from "../lib/wsProtocol";
+import type { ClientMessage, ProviderName, ServerEvent, TodoItem } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 
 import type {
   ApprovalPrompt,
   AskPrompt,
   FeedItem,
+  FileEntry,
   Notification,
   PersistedState,
   PromptModalState,
@@ -792,6 +794,9 @@ export type AppStoreState = {
   workspaceRuntimeById: Record<string, WorkspaceRuntime>;
   threadRuntimeById: Record<string, ThreadRuntime>;
 
+  latestTodosByThreadId: Record<string, TodoItem[]>;
+  workspaceFilesById: Record<string, FileEntry[]>;
+
   promptModal: PromptModalState;
   notifications: Notification[];
 
@@ -857,6 +862,8 @@ export type AppStoreState = {
 
   toggleSidebar: () => void;
   setSidebarWidth: (width: number) => void;
+
+  refreshWorkspaceFiles: (workspaceId: string) => Promise<void>;
 };
 
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1435,6 +1442,7 @@ function sendUserMessageToThread(
 }
 
 function applyModelStreamUpdateToThreadFeed(
+  get: () => AppStoreState,
   set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void,
   threadId: string,
   stream: ThreadModelStreamRuntime,
@@ -1628,19 +1636,23 @@ function applyModelStreamUpdateToThreadFeed(
           ? { ...item, name: update.name, status: "done", result }
           : item
       );
-      return;
+    } else {
+      const id = makeId();
+      stream.toolItemIdByKey.set(key, id);
+      pushFeedItem(set, threadId, {
+        id,
+        kind: "tool",
+        ts: nowIso(),
+        name: update.name,
+        status: "done",
+        result,
+      });
     }
 
-    const id = makeId();
-    stream.toolItemIdByKey.set(key, id);
-    pushFeedItem(set, threadId, {
-      id,
-      kind: "tool",
-      ts: nowIso(),
-      name: update.name,
-      status: "done",
-      result,
-    });
+    const thread = get().threads.find((t) => t.id === threadId);
+    if (thread) {
+      void get().refreshWorkspaceFiles(thread.workspaceId);
+    }
     return;
   }
 
@@ -1782,7 +1794,7 @@ function handleThreadEvent(
 
   if (evt.type === "model_stream_chunk") {
     const mapped = mapModelStreamChunk(evt);
-    if (mapped) applyModelStreamUpdateToThreadFeed(set, threadId, stream, mapped);
+    if (mapped) applyModelStreamUpdateToThreadFeed(get, set, threadId, stream, mapped);
     return;
   }
 
@@ -1856,6 +1868,9 @@ function handleThreadEvent(
   }
 
   if (evt.type === "todos") {
+    set((s) => ({
+      latestTodosByThreadId: { ...s.latestTodosByThreadId, [threadId]: evt.todos },
+    }));
     pushFeedItem(set, threadId, { id: makeId(), kind: "todos", ts: nowIso(), todos: evt.todos });
     return;
   }
@@ -1913,6 +1928,9 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
 
   workspaceRuntimeById: {},
   threadRuntimeById: {},
+
+  latestTodosByThreadId: {},
+  workspaceFilesById: {},
 
   promptModal: null,
   notifications: [],
@@ -2784,4 +2802,17 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
   setSidebarWidth: (width: number) => set({ sidebarWidth: Math.max(180, Math.min(500, width)) }),
+
+  refreshWorkspaceFiles: async (workspaceId: string) => {
+    const ws = get().workspaces.find((w) => w.id === workspaceId);
+    if (!ws) return;
+    try {
+      const files = await listDirectory(ws.path);
+      set((s) => ({
+        workspaceFilesById: { ...s.workspaceFilesById, [workspaceId]: files },
+      }));
+    } catch (err) {
+      console.error("Failed to list directory:", err);
+    }
+  },
 }));

@@ -1,4 +1,5 @@
 import type { PersistedState, TranscriptEvent } from "../app/types";
+import type { FileEntry } from "./desktopApi";
 
 function requireDesktopApi() {
   const api = window.cowork;
@@ -76,4 +77,13 @@ export async function windowClose(): Promise<void> {
 
 export async function getPlatform(): Promise<string> {
   return await requireDesktopApi().getPlatform();
+}
+
+export async function listDirectory(path: string): Promise<FileEntry[]> {
+  const api = requireDesktopApi();
+  if (typeof api.listDirectory !== "function") {
+    console.warn("listDirectory not implemented in desktop bridge");
+    return [];
+  }
+  return await api.listDirectory({ path });
 }

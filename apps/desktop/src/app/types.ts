@@ -8,6 +8,11 @@ import type {
   TodoItem,
 } from "../lib/wsProtocol";
 
+export type FileEntry = {
+  name: string;
+  isDirectory: boolean;
+};
+
 export type WorkspaceRecord = {
   id: string;
   name: string;

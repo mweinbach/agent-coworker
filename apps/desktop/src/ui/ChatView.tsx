@@ -10,40 +10,6 @@ import type { FeedItem } from "../app/types";
 const REMARK_PLUGINS = [remarkGfm];
 const REHYPE_PLUGINS = [rehypeSanitize];
 
-type ParsedToolLog = {
-  name: string;
-  preview: string;
-} | null;
-
-const TOOL_LOG_RE = /^tool>\s+(\w+)\s+(\{.*\})$/;
-
-function parseToolLogLine(line: string): ParsedToolLog | null {
-  const m = line.match(TOOL_LOG_RE);
-  if (!m) return null;
-  const name = m[1];
-  let preview = m[2];
-  if (preview.length > 60) {
-    preview = preview.slice(0, 59) + "…";
-  }
-  return { name, preview };
-}
-
-function previewValue(value: unknown, max = 120): string {
-  if (value === undefined) return "";
-  if (typeof value === "string") {
-    if (value.length <= max) return value;
-    return `${value.slice(0, max - 1)}…`;
-  }
-  try {
-    const raw = JSON.stringify(value);
-    if (!raw) return "";
-    if (raw.length <= max) return raw;
-    return `${raw.slice(0, max - 1)}…`;
-  } catch {
-    return String(value);
-  }
-}
-
 const Markdown = memo(function Markdown(props: { text: string }) {
   return (
     <div className="markdown">
@@ -69,7 +35,7 @@ export function shouldToggleReasoningExpanded(key: string): boolean {
 }
 
 export function filterFeedForDeveloperMode(feed: FeedItem[], developerMode: boolean): FeedItem[] {
-  return developerMode ? feed : feed.filter((item) => item.kind !== "system");
+  return developerMode ? feed : feed.filter((item) => item.kind !== "system" && item.kind !== "log");
 }
 
 const ReasoningFeedItem = memo(function ReasoningFeedItem(props: { item: Extract<FeedItem, { kind: "reasoning" }> }) {
@@ -101,7 +67,77 @@ const ReasoningFeedItem = memo(function ReasoningFeedItem(props: { item: Extract
   );
 });
 
-const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
+const IconTerminal = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="4 17 10 11 4 5"></polyline>
+    <line x1="12" y1="19" x2="20" y2="19"></line>
+  </svg>
+);
+
+const IconCheck = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="20 6 9 17 4 12"></polyline>
+  </svg>
+);
+
+const ToolCallRow = memo(function ToolCallRow(props: {
+  name: string;
+  args?: any;
+  result?: any;
+  status: "running" | "done" | "error";
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const argsJson = props.args ? JSON.stringify(props.args, null, 2) : "";
+  const resultJson = props.result ? JSON.stringify(props.result, null, 2) : "";
+
+  // Try to find a better name if it's just "tool"
+  let displayName = props.name;
+  if (displayName === "tool" && props.args?.name) {
+    displayName = props.args.name;
+  }
+
+  return (
+    <div className="feedItem">
+      <div
+        className="toolCallCard"
+        data-expanded={expanded}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="toolCallHeader">
+          <div className="toolCallInfo">
+            <div className={`toolStatusDot ${props.status}`} />
+            <IconTerminal />
+            <span className="toolCallName">{displayName}</span>
+          </div>
+          <div className="toolCallAction">
+            {props.status === "done" && <IconCheck />}
+            {props.status === "running" && <div className="spinner-mini" />}
+            <span className="expandIcon">{expanded ? "▾" : "▸"}</span>
+          </div>
+        </div>
+
+        {expanded && (
+          <div className="toolCallDetails">
+            {argsJson && (
+              <div className="toolCallSection">
+                <div className="toolCallSectionLabel">Arguments</div>
+                <pre className="toolCallPre">{argsJson}</pre>
+              </div>
+            )}
+            {resultJson && (
+              <div className="toolCallSection">
+                <div className="toolCallSectionLabel">Result</div>
+                <pre className="toolCallPre">{resultJson}</pre>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+const FeedRow = memo(function FeedRow(props: { item: FeedItem; developerMode: boolean }) {
   const item = props.item;
 
   if (item.kind === "message") {
@@ -125,60 +161,29 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
   }
 
   if (item.kind === "todos") {
-    return (
-      <div className="feedItem">
-        <div className="inlineCard">
-          <div className="metaLine">Progress</div>
-          <div style={{ marginTop: 8, display: "grid", gap: 4 }}>
-            {item.todos.map((t) => (
-              <div key={`${t.content}:${t.status}`} style={{ display: "flex", gap: 8 }}>
-                <span style={{ width: 12, color: "var(--muted)" }}>
-                  {t.status === "completed" ? "✓" : t.status === "in_progress" ? "►" : "○"}
-                </span>
-                <span>{t.content}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   if (item.kind === "log") {
-    const parsed = parseToolLogLine(item.line);
-    if (parsed) {
-      return (
-        <div className="feedItem">
-          <div className="toolCall">
-            <span className="toolCallName">{parsed.name}</span>
-            <span className="toolCallPreview" style={{ marginLeft: 8 }}>{parsed.preview}</span>
-          </div>
-        </div>
-      );
-    }
+    if (!props.developerMode) return null;
     return (
       <div className="feedItem">
-        <div className="toolCall">
-          <span className="toolCallPreview">{item.line}</span>
+        <div className="inlineCard">
+          <div className="metaLine">Log</div>
+          <div style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>{item.line}</div>
         </div>
       </div>
     );
   }
 
   if (item.kind === "tool") {
-    const argsPreview = previewValue(item.args);
-    const resultPreview = previewValue(item.result);
     return (
-      <div className="feedItem">
-        <div className="toolCall">
-          <span className="toolCallName">{item.name}</span>
-          <span className="toolCallPreview" style={{ marginLeft: 8 }}>
-            {item.status === "running" ? "running" : "done"}
-            {argsPreview ? ` args=${argsPreview}` : ""}
-            {resultPreview ? ` result=${resultPreview}` : ""}
-          </span>
-        </div>
-      </div>
+      <ToolCallRow
+        name={item.name}
+        args={item.args}
+        result={item.result}
+        status={item.status === "running" ? "running" : "done"}
+      />
     );
   }
 
@@ -206,6 +211,19 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
 
   return null;
 });
+
+const IconSend = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="22" y1="2" x2="11" y2="13"></line>
+    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+  </svg>
+);
+
+const IconSquare = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+    <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+  </svg>
+);
 
 export function ChatView() {
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
@@ -250,6 +268,13 @@ export function ChatView() {
       textareaRef.current.focus();
     }
   }, [selectedThreadId]);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [composerText]);
 
   const onComposerKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -307,7 +332,7 @@ export function ChatView() {
         ) : null}
 
         {visibleFeed.map((item) => (
-          <FeedRow key={item.id} item={item} />
+          <FeedRow key={item.id} item={item} developerMode={developerMode} />
         ))}
       </div>
 
@@ -328,7 +353,7 @@ export function ChatView() {
               onClick={() => cancelThread(selectedThreadId!)}
               title="Stop"
             >
-              <span className="stopIcon" />
+              <IconSquare />
             </button>
           ) : (
             <button
@@ -337,7 +362,7 @@ export function ChatView() {
               disabled={disabled || !composerText.trim()}
               onClick={() => void sendMessage(composerText)}
             >
-              <span className="sendArrow" />
+              <IconSend />
             </button>
           )}
         </div>

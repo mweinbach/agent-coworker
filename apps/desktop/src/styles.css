@@ -238,34 +238,34 @@ a { color: inherit; text-decoration: none; }
 .toolCallCard {
   margin: 2px 0;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.02);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.025);
   overflow: hidden;
   cursor: pointer;
   transition: all 120ms ease;
-  width: fit-content;
-  min-width: 180px;
-  max-width: 100%;
+  width: min(760px, 100%);
+  max-width: min(760px, 100%);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
 }
 
 .toolCallHeader {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
 }
 
-.toolCallName {
-  font-weight: 600;
-  font-size: 12px;
-  font-family: ui-monospace, Menlo, monospace;
-}
-
-.toolCallCard:hover { background: rgba(0, 0, 0, 0.05); border-color: var(--accent); }
-.toolCallHeader { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; gap: 12px; }
+.toolCallCard:hover { background: rgba(0, 0, 0, 0.04); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.toolCallCard[data-expanded="true"] { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.toolCallHeaderTop { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .toolCallInfo { display: flex; align-items: center; gap: 8px; color: var(--text); }
-.toolCallName { font-weight: 600; font-size: 13px; font-family: ui-monospace, monospace; }
+.toolCallName { font-weight: 700; font-size: 13px; font-family: ui-monospace, monospace; }
 .toolCallAction { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.toolCallMeta { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.toolCallMeta.running { color: var(--accent); }
+.toolCallMeta.done { color: #2cd08f; }
+.toolCallMeta.error { color: var(--danger); }
+.toolCallSubtitle { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 22px; }
 
 .toolStatusDot { width: 6px; height: 6px; border-radius: 50%; }
 .toolStatusDot.running { background: var(--accent); animation: pulse 1.5s infinite; }
@@ -273,7 +273,13 @@ a { color: inherit; text-decoration: none; }
 .toolStatusDot.error { background: var(--danger); }
 @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
 
-.toolCallDetails { padding: 0 12px 12px; border-top: 1px solid var(--border); padding-top: 12px; }
+.toolCallDetails { padding: 0 12px 12px; border-top: 1px solid var(--border); padding-top: 12px; display: grid; gap: 10px; }
+.toolCallKeyFacts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
+.toolCallFactRow { padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: rgba(0, 0, 0, 0.03); }
+.toolCallFactLabel { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.toolCallFactValue { margin-top: 4px; font-size: 12px; line-height: 1.4; color: var(--text); word-break: break-word; }
+.toolCallSection + .toolCallSection { margin-top: 10px; }
+.toolCallSectionLabel { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
 .toolCallPre { margin: 0; padding: 8px; background: rgba(0, 0, 0, 0.05); border-radius: 4px; font-size: 12px; overflow: auto; max-height: 300px; border: 1px solid var(--border); font-family: ui-monospace, monospace; }
 
 .inlineCard {

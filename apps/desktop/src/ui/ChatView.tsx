@@ -6,6 +6,8 @@ import rehypeSanitize from "rehype-sanitize";
 
 import { useAppStore } from "../app/store";
 import type { FeedItem } from "../app/types";
+import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
+import { ToolCard } from "./chat/toolCards/ToolCard";
 
 const REMARK_PLUGINS = [remarkGfm];
 const REHYPE_PLUGINS = [rehypeSanitize];
@@ -67,76 +69,6 @@ const ReasoningFeedItem = memo(function ReasoningFeedItem(props: { item: Extract
   );
 });
 
-const IconTerminal = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="4 17 10 11 4 5"></polyline>
-    <line x1="12" y1="19" x2="20" y2="19"></line>
-  </svg>
-);
-
-const IconCheck = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="20 6 9 17 4 12"></polyline>
-  </svg>
-);
-
-const ToolCallRow = memo(function ToolCallRow(props: {
-  name: string;
-  args?: any;
-  result?: any;
-  status: "running" | "done" | "error";
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const argsJson = props.args ? JSON.stringify(props.args, null, 2) : "";
-  const resultJson = props.result ? JSON.stringify(props.result, null, 2) : "";
-
-  // Try to find a better name if it's just "tool"
-  let displayName = props.name;
-  if (displayName === "tool" && props.args?.name) {
-    displayName = props.args.name;
-  }
-
-  return (
-    <div className="feedItem">
-      <div
-        className="toolCallCard"
-        data-expanded={expanded}
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div className="toolCallHeader">
-          <div className="toolCallInfo">
-            <div className={`toolStatusDot ${props.status}`} />
-            <IconTerminal />
-            <span className="toolCallName">{displayName}</span>
-          </div>
-          <div className="toolCallAction">
-            {props.status === "done" && <IconCheck />}
-            {props.status === "running" && <div className="spinner-mini" />}
-            <span className="expandIcon">{expanded ? "▾" : "▸"}</span>
-          </div>
-        </div>
-
-        {expanded && (
-          <div className="toolCallDetails">
-            {argsJson && (
-              <div className="toolCallSection">
-                <div className="toolCallSectionLabel">Arguments</div>
-                <pre className="toolCallPre">{argsJson}</pre>
-              </div>
-            )}
-            {resultJson && (
-              <div className="toolCallSection">
-                <div className="toolCallSectionLabel">Result</div>
-                <pre className="toolCallPre">{resultJson}</pre>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-});
-
 const FeedRow = memo(function FeedRow(props: { item: FeedItem; developerMode: boolean }) {
   const item = props.item;
 
@@ -178,11 +110,11 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem; developerMode: bo
 
   if (item.kind === "tool") {
     return (
-      <ToolCallRow
+      <ToolCard
         name={item.name}
         args={item.args}
         result={item.result}
-        status={item.status === "running" ? "running" : "done"}
+        status={item.status}
       />
     );
   }
@@ -250,7 +182,8 @@ export function ChatView() {
   const lastCountRef = useRef<number>(0);
 
   const feed = rt?.feed ?? [];
-  const visibleFeed = filterFeedForDeveloperMode(feed, developerMode);
+  const normalizedFeed = normalizeFeedForToolCards(feed, developerMode);
+  const visibleFeed = filterFeedForDeveloperMode(normalizedFeed, developerMode);
 
   useEffect(() => {
     const el = feedRef.current;

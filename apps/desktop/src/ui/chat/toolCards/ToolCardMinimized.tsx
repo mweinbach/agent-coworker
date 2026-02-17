@@ -2,7 +2,8 @@ import { memo } from "react";
 
 type ToolCardMinimizedProps = {
   expanded: boolean;
-  name: string;
+  subtitle: string;
+  title: string;
   onToggle: () => void;
   status: "running" | "done" | "error";
 };
@@ -36,19 +37,23 @@ const STATUS_LABEL: Record<"running" | "done" | "error", string> = {
 export const ToolCardMinimized = memo(function ToolCardMinimized(props: ToolCardMinimizedProps) {
   return (
     <div className="toolCallHeader" onClick={props.onToggle}>
-      <div className="toolCallInfo">
-        <div className={`toolStatusDot ${props.status}`} />
-        <IconTerminal />
-        <span className="toolCallName">{props.name}</span>
+      <div className="toolCallHeaderTop">
+        <div className="toolCallInfo">
+          <div className={`toolStatusDot ${props.status}`} />
+          <IconTerminal />
+          <span className="toolCallName">{props.title}</span>
+        </div>
+
+        <div className="toolCallAction">
+          {props.status === "done" && <IconCheck />}
+          {props.status === "running" && <div className="spinner-mini" />}
+          {props.status === "error" && <IconError />}
+          <span className={`toolCallMeta ${props.status}`}>{STATUS_LABEL[props.status]}</span>
+          <span className="expandIcon">{props.expanded ? "▾" : "▸"}</span>
+        </div>
       </div>
 
-      <div className="toolCallAction">
-        {props.status === "done" && <IconCheck />}
-        {props.status === "running" && <div className="spinner-mini" />}
-        {props.status === "error" && <IconError />}
-        <span className={`toolCallMeta ${props.status}`}>{STATUS_LABEL[props.status]}</span>
-        <span className="expandIcon">{props.expanded ? "▾" : "▸"}</span>
-      </div>
+      {props.subtitle ? <div className="toolCallSubtitle">{props.subtitle}</div> : null}
     </div>
   );
 });

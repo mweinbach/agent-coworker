@@ -187,7 +187,6 @@ export class AgentSession {
       cwd: this.config.workingDirectory,
       paths,
       oauthStdioMode: "pipe",
-      allowOpenTerminal: opts.provider === "claude-code",
       onOauthLine: opts.onOauthLine,
     });
   }
@@ -701,7 +700,6 @@ export class AgentSession {
         paths: this.getCoworkPaths(),
         connect: async (opts) => await this.runProviderConnect(opts),
         oauthStdioMode: "pipe",
-        allowOpenTerminal: providerRaw === "claude-code",
         onOauthLine: (line) => this.log(`[connect ${providerRaw}] ${line}`),
       });
 

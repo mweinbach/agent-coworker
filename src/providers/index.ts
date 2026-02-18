@@ -1,7 +1,6 @@
 import type { AgentConfig, ProviderName } from "../types";
 
 import { anthropicProvider } from "./anthropic";
-import { claudeCodeProvider } from "./claude-code";
 import { PROVIDER_MODEL_CATALOG } from "./catalog";
 import { codexCliProvider } from "./codex-cli";
 import { googleProvider } from "./google";
@@ -38,7 +37,6 @@ export type ProviderDefinition = {
 
 const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   anthropic: anthropicProvider,
-  "claude-code": claudeCodeProvider,
   "codex-cli": codexCliProvider,
   google: googleProvider,
   openai: openaiProvider,
@@ -46,7 +44,6 @@ const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
 
 export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   anthropic: { ...PROVIDER_RUNTIMES.anthropic, ...PROVIDER_MODEL_CATALOG.anthropic },
-  "claude-code": { ...PROVIDER_RUNTIMES["claude-code"], ...PROVIDER_MODEL_CATALOG["claude-code"] },
   "codex-cli": { ...PROVIDER_RUNTIMES["codex-cli"], ...PROVIDER_MODEL_CATALOG["codex-cli"] },
   google: { ...PROVIDER_RUNTIMES.google, ...PROVIDER_MODEL_CATALOG.google },
   openai: { ...PROVIDER_RUNTIMES.openai, ...PROVIDER_MODEL_CATALOG.openai },

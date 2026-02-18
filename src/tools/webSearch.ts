@@ -129,7 +129,6 @@ export function createWebSearchTool(ctx: ToolContext) {
     case "anthropic":
       return anthropic.tools.webSearch_20250305({});
     case "codex-cli":
-    case "claude-code":
       return createCustomWebSearchTool(ctx);
   }
 }

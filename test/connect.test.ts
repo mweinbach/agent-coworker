@@ -38,7 +38,6 @@ describe("connect helpers", () => {
 
   test("isOauthCliProvider returns true for oauth cli providers", () => {
     expect(isOauthCliProvider("codex-cli")).toBe(true);
-    expect(isOauthCliProvider("claude-code")).toBe(true);
   });
 
   test("isOauthCliProvider returns false for non-oauth providers", () => {
@@ -343,23 +342,4 @@ describe("connectProvider", () => {
     expect(persisted?.tokens?.access_token).toBe("fresh-access-token");
   });
 
-  test("oauth failure returns error and does not store connection", async () => {
-    const home = await makeTmpHome();
-    const paths = getAiCoworkerPaths({ homedir: home });
-
-    const result = await connectProvider({
-      provider: "claude-code",
-      paths,
-      oauthRunner: async () => ({ exitCode: 2, signal: null }),
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.mode).toBe("oauth_pending");
-    expect(result.message).toContain("requires a terminal TTY");
-
-    const store = await readConnectionStore(paths);
-    expect(store.services["claude-code"]).toBeDefined();
-    expect(store.services["claude-code"]?.mode).toBe("oauth_pending");
-  });
 });

@@ -243,7 +243,7 @@ describe("safeParseClientMessage", () => {
       }
     });
 
-    test.each(["codex-cli", "claude-code"])(
+    test.each(["codex-cli"])(
       "set_model accepts %s provider",
       (provider) => {
         const msg = expectOk(

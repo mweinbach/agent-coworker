@@ -15,7 +15,6 @@ describe("Cross-provider model creation", () => {
     { name: "openai", providerPrefix: "openai.responses" },
     { name: "google", providerPrefix: "google.generative-ai" },
     { name: "codex-cli", providerPrefix: "codex-cli.responses" },
-    { name: "claude-code", providerPrefix: "claude-code" },
   ];
 
   for (const { name, providerPrefix } of providers) {
@@ -87,7 +86,4 @@ describe("Session reasoning kind mapping", () => {
     expect(reasoningKind("codex-cli")).toBe("summary");
   });
 
-  test("claude-code provider maps to 'reasoning' kind", () => {
-    expect(reasoningKind("claude-code")).toBe("reasoning");
-  });
 });

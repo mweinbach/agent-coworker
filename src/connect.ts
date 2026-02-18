@@ -203,8 +203,8 @@ export function maskApiKey(value: string): string {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
-export function isOauthCliProvider(service: ConnectService): service is "codex-cli" | "claude-code" {
-  return service === "codex-cli" || service === "claude-code";
+export function isOauthCliProvider(service: ConnectService): service is "codex-cli" {
+  return service === "codex-cli";
 }
 
 function oauthCredentialCandidates(service: ConnectService, paths: AiCoworkerPaths): readonly string[] {
@@ -212,77 +212,12 @@ function oauthCredentialCandidates(service: ConnectService, paths: AiCoworkerPat
   switch (service) {
     case "codex-cli":
       return [path.join(paths.authDir, "codex-cli", "auth.json")];
-    case "claude-code":
-      // Claude Code stores OAuth tokens in the macOS keychain by default, with a plaintext fallback at
-      // `${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json`. Keep a few legacy file locations too.
-      const configDir = process.env.CLAUDE_CONFIG_DIR ?? path.join(homeDir, ".claude");
-      return [
-        path.join(paths.authDir, "claude-code", ".credentials.json"),
-        path.join(paths.authDir, "claude-code", "credentials.json"),
-        path.join(configDir, ".credentials.json"),
-        path.join(homeDir, ".claude", "credentials.json"),
-        path.join(homeDir, ".config", "claude", "credentials.json"),
-      ];
     default:
       return [];
   }
 }
 
-function claudeCodeKeychainAccountName(): string {
-  const envUser = (process.env.USER ?? "").trim();
-  if (envUser) return envUser;
-  try {
-    return os.userInfo().username;
-  } catch {
-    return "claude-code-user";
-  }
-}
-
-function claudeCodeKeychainServiceCandidates(configDir: string): string[] {
-  const base = "Claude Code";
-  const oauthSuffixes = ["", "-custom-oauth", "-local-oauth", "-staging-oauth"];
-
-  const hash = createHash("sha256").update(configDir).digest("hex").slice(0, 8);
-  const hashSuffixes = ["", `-${hash}`];
-
-  const out: string[] = [];
-  for (const oauthSuffix of oauthSuffixes) {
-    for (const hashSuffix of hashSuffixes) {
-      out.push(`${base}${oauthSuffix}-credentials${hashSuffix}`);
-    }
-  }
-  return out.filter((s, i) => out.indexOf(s) === i);
-}
-
-async function hasClaudeCodeKeychainCredentials(paths: AiCoworkerPaths): Promise<boolean> {
-  if (process.platform !== "darwin") return false;
-  const homeDir = path.dirname(paths.rootDir);
-  // Tests use temp home dirs; avoid reading the real user's keychain in that case.
-  if (homeDir !== os.homedir()) return false;
-  const configDir = process.env.CLAUDE_CONFIG_DIR ?? path.join(homeDir, ".claude");
-  const accountName = claudeCodeKeychainAccountName();
-  const serviceCandidates = claudeCodeKeychainServiceCandidates(configDir);
-
-  for (const serviceName of serviceCandidates) {
-    try {
-      const exitCode = await new Promise<number | null>((resolve, reject) => {
-        const child = spawn("security", ["find-generic-password", "-a", accountName, "-s", serviceName], {
-          stdio: ["ignore", "ignore", "ignore"],
-        });
-        child.once("error", reject);
-        child.once("close", (code) => resolve(code));
-      });
-      if (exitCode === 0) return true;
-    } catch {
-      // ignore and continue
-    }
-  }
-
-  return false;
-}
-
 async function hasExistingOauthCredentials(service: ConnectService, paths: AiCoworkerPaths): Promise<boolean> {
-  if (service === "claude-code" && (await hasClaudeCodeKeychainCredentials(paths))) return true;
   const files = oauthCredentialCandidates(service, paths);
   for (const file of files) {
     try {
@@ -301,13 +236,6 @@ function oauthCredentialSourceCandidates(service: ConnectService, paths: AiCowor
   switch (service) {
     case "codex-cli":
       return [];
-    case "claude-code":
-      const configDir = process.env.CLAUDE_CONFIG_DIR ?? path.join(homeDir, ".claude");
-      return [
-        path.join(configDir, ".credentials.json"),
-        path.join(homeDir, ".claude", "credentials.json"),
-        path.join(homeDir, ".config", "claude", "credentials.json"),
-      ];
     default:
       return [];
   }
@@ -369,35 +297,8 @@ function oauthCommandCandidates(
   service: ConnectService
 ): readonly { command: string; args: string[]; display: string }[] {
   switch (service) {
-    case "claude-code":
-      return [{ command: "claude", args: ["setup-token"], display: "claude setup-token" }];
     default:
       return [];
-  }
-}
-
-async function openMacOSTerminal(commandLine: string): Promise<boolean> {
-  // Avoid popping windows in CI/test environments.
-  if (process.env.CI) return false;
-  if (process.platform !== "darwin") return false;
-
-  const escaped = commandLine.replace(/\\/g, "\\\\").replace(/\"/g, '\\"');
-  const script = [
-    'tell application "Terminal" to activate',
-    `tell application "Terminal" to do script "${escaped}"`,
-  ];
-
-  try {
-    const exitCode = await new Promise<number | null>((resolve, reject) => {
-      const child = spawn("osascript", script.flatMap((line) => ["-e", line]), {
-        stdio: ["ignore", "ignore", "ignore"],
-      });
-      child.once("error", reject);
-      child.once("close", (code) => resolve(code));
-    });
-    return exitCode === 0;
-  } catch {
-    return false;
   }
 }
 
@@ -767,7 +668,6 @@ export async function connectProvider(opts: {
   cwd?: string;
   paths?: AiCoworkerPaths;
   oauthStdioMode?: OauthStdioMode;
-  allowOpenTerminal?: boolean;
   onOauthLine?: (line: string) => void;
   oauthRunner?: OauthCommandRunner;
   fetchImpl?: typeof fetch;
@@ -922,27 +822,6 @@ export async function connectProvider(opts: {
       storageFile: paths.connectionsFile,
       message: "Existing OAuth credentials detected.",
       oauthCredentialsFile: oauthCredentialsFile ?? undefined,
-    };
-  }
-
-  if (provider === "claude-code" && stdioMode !== "inherit") {
-    const opened = opts.allowOpenTerminal ? await openMacOSTerminal("claude setup-token") : false;
-    store.services[provider] = {
-      service: provider,
-      mode: "oauth_pending",
-      updatedAt: now,
-    };
-    store.updatedAt = now;
-    await writeConnectionStore(paths, store);
-    return {
-      ok: true,
-      provider,
-      mode: "oauth_pending",
-      storageFile: paths.connectionsFile,
-      message: opened
-        ? "Opened a Terminal window to run `claude setup-token`. Complete sign-in there, then click Refresh."
-        : "Claude Code OAuth requires a terminal TTY. Run `claude setup-token` in a terminal to authenticate, then retry /connect.",
-      oauthCommand: "claude setup-token",
     };
   }
 

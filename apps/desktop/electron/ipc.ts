@@ -1,10 +1,19 @@
-import { BrowserWindow, dialog, ipcMain, Menu } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, type IpcMainInvokeEvent } from "electron";
 import fs from "node:fs/promises";
-import path from "node:path";
 
-import { DESKTOP_IPC_CHANNELS, type StartWorkspaceServerInput, type StopWorkspaceServerInput, type DeleteTranscriptInput, type ReadTranscriptInput, type TranscriptBatchInput, type ShowContextMenuInput, type ListDirectoryInput } from "../src/lib/desktopApi";
+import {
+  DESKTOP_IPC_CHANNELS,
+  type DeleteTranscriptInput,
+  type ListDirectoryInput,
+  type ReadTranscriptInput,
+  type ShowContextMenuInput,
+  type StartWorkspaceServerInput,
+  type StopWorkspaceServerInput,
+  type TranscriptBatchInput,
+} from "../src/lib/desktopApi";
 import type { PersistedState } from "../src/app/types";
 
+import { isTrustedDesktopSenderUrl, resolveAllowedDirectoryPath } from "./services/ipcSecurity";
 import { PersistenceService } from "./services/persistence";
 import { ServerManager } from "./services/serverManager";
 
@@ -20,72 +29,84 @@ function toIpcError(error: unknown): Error {
   return new Error(String(error));
 }
 
+function resolveSenderUrl(event: IpcMainInvokeEvent): string {
+  const senderFrameUrl = event.senderFrame?.url?.trim();
+  if (senderFrameUrl) {
+    return senderFrameUrl;
+  }
+  return event.sender.getURL();
+}
+
+function isTrustedSender(event: IpcMainInvokeEvent): boolean {
+  const senderUrl = resolveSenderUrl(event);
+  return isTrustedDesktopSenderUrl(senderUrl, {
+    isPackaged: app.isPackaged,
+    electronRendererUrl: process.env.ELECTRON_RENDERER_URL,
+    desktopRendererPort: process.env.COWORK_DESKTOP_RENDERER_PORT,
+  });
+}
+
+function assertTrustedSender(event: IpcMainInvokeEvent): void {
+  const senderUrl = resolveSenderUrl(event);
+  if (!isTrustedSender(event)) {
+    throw new Error(`Untrusted IPC sender: ${senderUrl || "unknown"}`);
+  }
+}
+
+function assertListDirectoryPath(args: ListDirectoryInput): string {
+  if (!args || typeof args.path !== "string") {
+    throw new Error("path must be a string");
+  }
+  return args.path;
+}
+
 export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.startWorkspaceServer, async (_event, args: StartWorkspaceServerInput) => {
-    try {
-      return await deps.serverManager.startWorkspaceServer(args);
-    } catch (error) {
-      throw toIpcError(error);
-    }
+  function handleDesktopInvoke<TArgs extends unknown[], TResult>(
+    channel: string,
+    handler: (event: IpcMainInvokeEvent, ...args: TArgs) => Promise<TResult> | TResult
+  ): void {
+    ipcMain.handle(channel, async (event, ...args) => {
+      try {
+        assertTrustedSender(event);
+        return await handler(event, ...(args as TArgs));
+      } catch (error) {
+        throw toIpcError(error);
+      }
+    });
+  }
+
+  handleDesktopInvoke(
+    DESKTOP_IPC_CHANNELS.startWorkspaceServer,
+    async (_event, args: StartWorkspaceServerInput) => await deps.serverManager.startWorkspaceServer(args)
+  );
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.stopWorkspaceServer, async (_event, args: StopWorkspaceServerInput) => {
+    await deps.serverManager.stopWorkspaceServer(args.workspaceId);
   });
 
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.stopWorkspaceServer, async (_event, args: StopWorkspaceServerInput) => {
-    try {
-      await deps.serverManager.stopWorkspaceServer(args.workspaceId);
-    } catch (error) {
-      throw toIpcError(error);
-    }
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.loadState, async () => await deps.persistence.loadState());
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.saveState, async (_event, state: PersistedState) => {
+    await deps.persistence.saveState(state);
   });
 
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.loadState, async () => {
-    try {
-      return await deps.persistence.loadState();
-    } catch (error) {
-      throw toIpcError(error);
-    }
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.readTranscript, async (_event, args: ReadTranscriptInput) => {
+    return await deps.persistence.readTranscript(args.threadId);
   });
 
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.saveState, async (_event, state: PersistedState) => {
-    try {
-      await deps.persistence.saveState(state);
-    } catch (error) {
-      throw toIpcError(error);
-    }
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.appendTranscriptEvent, async (_event, args: TranscriptBatchInput) => {
+    await deps.persistence.appendTranscriptEvent(args);
   });
 
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.readTranscript, async (_event, args: ReadTranscriptInput) => {
-    try {
-      return await deps.persistence.readTranscript(args.threadId);
-    } catch (error) {
-      throw toIpcError(error);
-    }
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.appendTranscriptBatch, async (_event, args: TranscriptBatchInput[]) => {
+    await deps.persistence.appendTranscriptBatch(args);
   });
 
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.appendTranscriptEvent, async (_event, args: TranscriptBatchInput) => {
-    try {
-      await deps.persistence.appendTranscriptEvent(args);
-    } catch (error) {
-      throw toIpcError(error);
-    }
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.deleteTranscript, async (_event, args: DeleteTranscriptInput) => {
+    await deps.persistence.deleteTranscript(args.threadId);
   });
 
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.appendTranscriptBatch, async (_event, args: TranscriptBatchInput[]) => {
-    try {
-      await deps.persistence.appendTranscriptBatch(args);
-    } catch (error) {
-      throw toIpcError(error);
-    }
-  });
-
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.deleteTranscript, async (_event, args: DeleteTranscriptInput) => {
-    try {
-      await deps.persistence.deleteTranscript(args.threadId);
-    } catch (error) {
-      throw toIpcError(error);
-    }
-  });
-
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory, async (event) => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory, async (event) => {
     const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined;
     const result = await dialog.showOpenDialog(ownerWindow, {
       title: "Select a workspace directory",
@@ -98,8 +119,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
 
     return result.filePaths[0] ?? null;
   });
-
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.showContextMenu, async (event, args: ShowContextMenuInput) => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showContextMenu, async (event, args: ShowContextMenuInput) => {
     return new Promise<string | null>((resolve) => {
       const menu = Menu.buildFromTemplate(
         args.items.map((item) => ({
@@ -120,12 +140,12 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
     });
   });
 
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.windowMinimize, (event) => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.windowMinimize, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     win?.minimize();
   });
 
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.windowMaximize, (event) => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.windowMaximize, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) return;
     if (win.isMaximized()) {
@@ -135,31 +155,32 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
     }
   });
 
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.windowClose, (event) => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.windowClose, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     win?.close();
   });
 
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.getPlatform, () => {
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getPlatform, () => {
     return process.platform;
   });
 
-  ipcMain.handle(DESKTOP_IPC_CHANNELS.listDirectory, async (_event, args: ListDirectoryInput) => {
-    try {
-      const entries = await fs.readdir(args.path, { withFileTypes: true });
-      return entries
-        .filter((e) => !e.name.startsWith("."))
-        .map((e) => ({
-          name: e.name,
-          isDirectory: e.isDirectory(),
-        }))
-        .sort((a, b) => {
-          if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
-    } catch (error) {
-      throw toIpcError(error);
-    }
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.listDirectory, async (_event, args: ListDirectoryInput) => {
+    const requestedPath = assertListDirectoryPath(args);
+    const state = await deps.persistence.loadState();
+    const workspaceRoots = state.workspaces.map((workspace) => workspace.path);
+    const safePath = resolveAllowedDirectoryPath(workspaceRoots, requestedPath);
+
+    const entries = await fs.readdir(safePath, { withFileTypes: true });
+    return entries
+      .filter((e) => !e.name.startsWith("."))
+      .map((e) => ({
+        name: e.name,
+        isDirectory: e.isDirectory(),
+      }))
+      .sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
   });
 
   return () => {

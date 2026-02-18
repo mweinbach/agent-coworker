@@ -8,6 +8,9 @@ import type { TranscriptBatchInput } from "../../src/lib/desktopApi";
 
 import { assertDirection, assertSafeId, assertWithinTranscriptsDir } from "./validation";
 
+const PRIVATE_FILE_MODE = 0o600;
+const PRIVATE_DIR_MODE = 0o700;
+
 class AsyncLock {
   private pending: Promise<void> = Promise.resolve();
 
@@ -86,13 +89,14 @@ export class PersistenceService {
 
   async saveState(state: PersistedState): Promise<void> {
     await this.stateLock.run(async () => {
-      await fs.mkdir(this.appDataDir, { recursive: true });
+      await fs.mkdir(this.appDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
 
       const tempPath = `${this.stateFilePath}.tmp`;
       const payload = JSON.stringify({ ...state, version: state.version || 1 }, null, 2);
 
-      await fs.writeFile(tempPath, payload, "utf8");
+      await fs.writeFile(tempPath, payload, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
       await fs.rename(tempPath, this.stateFilePath);
+      await fs.chmod(this.stateFilePath, PRIVATE_FILE_MODE);
     });
   }
 
@@ -135,7 +139,7 @@ export class PersistenceService {
       return;
     }
 
-    await fs.mkdir(this.transcriptsDir, { recursive: true });
+    await fs.mkdir(this.transcriptsDir, { recursive: true, mode: PRIVATE_DIR_MODE });
 
     const grouped = new Map<string, TranscriptBatchInput[]>();
     for (const event of events) {
@@ -154,7 +158,8 @@ export class PersistenceService {
     for (const [threadId, chunk] of grouped) {
       const filePath = this.transcriptFilePath(threadId);
       const payload = chunk.map((event) => JSON.stringify(event)).join("\n") + "\n";
-      await fs.appendFile(filePath, payload, "utf8");
+      await fs.appendFile(filePath, payload, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
+      await fs.chmod(filePath, PRIVATE_FILE_MODE);
     }
   }
 

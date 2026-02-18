@@ -23,6 +23,7 @@
     "zustand": "^5.0.8"
   },
   "devDependencies": {
+    "@electron/notarize": "^2.5.0",
     "@react-grab/mcp": "^0.1.13",
     "@tailwindcss/vite": "^4.1.18",
     "@types/node": "^24.3.0",

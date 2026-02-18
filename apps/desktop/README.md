@@ -9,8 +9,8 @@ bun install
 bun run dev
 ```
 
-Dev mode enables Electron remote debugging on `localhost:9222` by default.
-Set `COWORK_ELECTRON_REMOTE_DEBUG_PORT` to override the port.
+Dev mode keeps Electron remote debugging disabled unless explicitly enabled.
+Set `COWORK_ELECTRON_REMOTE_DEBUG=1` to enable it, and optionally set `COWORK_ELECTRON_REMOTE_DEBUG_PORT` (default `9222`).
 
 Desktop renderer dev URL is restricted to loopback on `COWORK_DESKTOP_RENDERER_PORT` (default `1420`).
 If `ELECTRON_RENDERER_URL` points to another app (for example the harness portal), desktop falls back to its own renderer URL.
@@ -46,7 +46,7 @@ From `apps/desktop`, you can also run:
 bun run browser -- snapshot -i
 ```
 
-By default the wrapper targets CDP port `9222`, or `COWORK_ELECTRON_REMOTE_DEBUG_PORT` when set.
+When enabled, the wrapper targets CDP port `9222`, or `COWORK_ELECTRON_REMOTE_DEBUG_PORT` when set.
 The wrapper prefers a globally installed `agent-browser` binary and falls back to `bunx agent-browser` if it is not in `PATH`.
 
 ## Build
@@ -56,3 +56,6 @@ bun run build
 ```
 
 The build pipeline rebuilds bundled desktop resources (`cowork-server` sidecar + prompts/config/skills/docs) via the root `build:desktop-resources` script.
+
+For macOS notarization, set `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID`.
+Without those variables, packaging continues but notarization is skipped.

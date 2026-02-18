@@ -49,6 +49,27 @@ Run the server directly:
 bun run serve
 ```
 
+## Electron Automation (agent-browser skill)
+
+If you added the `agent-browser` skill in `./.agent/skills/agent-browser`, you can use it to drive the desktop app UI.
+
+1. Start the desktop app in dev mode (enables CDP on port `9222` by default):
+```bash
+bun run desktop:dev
+```
+
+2. In another terminal, run browser actions via the desktop wrapper:
+```bash
+bun run desktop:browser -- snapshot -i
+bun run desktop:browser -- click @e2
+bun run desktop:browser -- screenshot tmp/desktop.png
+```
+
+3. Keep the ref-based loop from the skill:
+- `snapshot -i` to get refs
+- interact with `@eN`
+- re-snapshot after page/UI changes
+
 ## TUI
 
 The default interface is a terminal UI built with [OpenTUI](https://github.com/anthropics/opentui) + Solid.js, inspired by [opencode](https://github.com/anomalyco/opencode)'s design. It lives in `apps/TUI/`.

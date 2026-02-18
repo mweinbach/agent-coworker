@@ -64,3 +64,12 @@ When adding a new WebSocket message or event:
 - Prefer environment variables (e.g. `OPENAI_API_KEY`) and local `.agent/config.json` / `.agent/mcp-servers.json` for developer setup.
 - `--yolo` bypasses command approvals; use only for local experiments.
 - Make commits liberally as you go with meaningful detailed messages.
+
+## agent-browser Skill + Electron
+
+If the project has `.agent/skills/agent-browser/SKILL.md`, use that skill for desktop UI/browser automation tasks.
+
+For the Electron desktop app (`apps/desktop`):
+- Start app in dev mode: `bun run desktop:dev`
+- Control it via CDP with: `bun run desktop:browser -- <agent-browser args>`
+- Preferred interaction loop: `snapshot -i` -> use `@eN` refs -> re-snapshot after navigation/DOM changes

@@ -15,6 +15,7 @@
     "tui": "bun --preload @opentui/solid/preload apps/TUI/index.tsx",
     "desktop:dev": "cd apps/desktop && bun run dev",
     "desktop:build": "cd apps/desktop && bun run build",
+    "desktop:browser": "bun scripts/desktop_agent_browser.ts",
     "portal:dev": "cd apps/portal && bun run dev",
     "portal:build": "cd apps/portal && bun run build",
     "portal:start": "cd apps/portal && bun run start",

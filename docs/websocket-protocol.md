@@ -67,7 +67,6 @@ type ProviderName =
   | "openai"
   | "anthropic"
   | "codex-cli"
-  | "claude-code";
 
 // Shared types
 interface ConfigSubset {

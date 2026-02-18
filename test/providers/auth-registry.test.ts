@@ -14,7 +14,6 @@ describe("providers/authRegistry", () => {
     expect(methods.openai?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods["codex-cli"]?.some((m) => m.id === "oauth_cli")).toBe(true);
     expect(methods["codex-cli"]?.some((m) => m.id === "oauth_device")).toBe(true);
-    expect(methods["claude-code"]?.some((m) => m.id === "oauth_cli")).toBe(true);
   });
 
   test("resolveProviderAuthMethod returns null for unknown method", () => {

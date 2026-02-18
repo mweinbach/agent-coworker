@@ -130,32 +130,6 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
     expect(model.provider).toBe("codex-cli.responses");
   });
 
-  test("claude-code provider can reuse saved anthropic key", async () => {
-    const { home } = await makeTmpDirs();
-    const savedKey = "saved-anthropic-key";
-
-    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      services: {
-        anthropic: {
-          service: "anthropic",
-          mode: "api_key",
-          apiKey: savedKey,
-          updatedAt: new Date().toISOString(),
-        },
-      },
-    });
-
-    const cfg = makeConfig({
-      provider: "claude-code",
-      model: "sonnet",
-      userAgentDir: path.join(home, ".agent"),
-    });
-
-    const model = getModel(cfg) as any;
-    expect(model.settings?.env?.ANTHROPIC_API_KEY).toBe(savedKey);
-  });
 
   test("falls back to env key when saved entry has no api key", async () => {
     const { home } = await makeTmpDirs();

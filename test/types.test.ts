@@ -5,8 +5,8 @@ import { isProviderName, PROVIDER_NAMES } from "../src/types";
 // PROVIDER_NAMES
 // ---------------------------------------------------------------------------
 describe("PROVIDER_NAMES", () => {
-  test("contains exactly 5 providers", () => {
-    expect(PROVIDER_NAMES).toHaveLength(5);
+  test("contains exactly 4 providers", () => {
+    expect(PROVIDER_NAMES).toHaveLength(4);
   });
 
   test("contains expected provider names", () => {
@@ -14,7 +14,6 @@ describe("PROVIDER_NAMES", () => {
     expect(PROVIDER_NAMES).toContain("openai");
     expect(PROVIDER_NAMES).toContain("anthropic");
     expect(PROVIDER_NAMES).toContain("codex-cli");
-    expect(PROVIDER_NAMES).toContain("claude-code");
   });
 });
 
@@ -40,9 +39,6 @@ describe("isProviderName", () => {
       expect(isProviderName("codex-cli")).toBe(true);
     });
 
-    test("claude-code", () => {
-      expect(isProviderName("claude-code")).toBe(true);
-    });
   });
 
   // ---- Invalid strings -----------------------------------------------------
@@ -148,7 +144,7 @@ describe("isProviderName", () => {
       expect(isProviderName("open")).toBe(false);
     });
 
-    test("claude (prefix of claude-code)", () => {
+    test("claude", () => {
       expect(isProviderName("claude")).toBe(false);
     });
   });

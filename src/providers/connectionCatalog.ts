@@ -20,7 +20,6 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   openai: "OpenAI",
   anthropic: "Anthropic",
   "codex-cli": "Codex CLI",
-  "claude-code": "Claude Code",
 };
 
 export function listProviderCatalogEntries(): ProviderCatalogEntry[] {

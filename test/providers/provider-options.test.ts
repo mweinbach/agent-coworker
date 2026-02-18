@@ -12,7 +12,6 @@ describe("Provider options structure", () => {
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("google");
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("anthropic");
     expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("codex-cli");
-    expect(DEFAULT_PROVIDER_OPTIONS).toHaveProperty("claude-code");
   });
 
   test("no extra unknown providers in options", () => {
@@ -22,7 +21,6 @@ describe("Provider options structure", () => {
       "google",
       "anthropic",
       "codex-cli",
-      "claude-code",
     ]);
   });
 

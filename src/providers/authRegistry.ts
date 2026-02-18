@@ -25,7 +25,6 @@ export type ConnectProviderHandler = (opts: {
   cwd?: string;
   paths?: AiCoworkerPaths;
   oauthStdioMode?: OauthStdioMode;
-  allowOpenTerminal?: boolean;
   onOauthLine?: (line: string) => void;
 }) => Promise<ConnectProviderResult>;
 
@@ -36,10 +35,6 @@ const PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> = {
   "codex-cli": [
     { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
     { id: "oauth_device", type: "oauth", label: "Sign in with ChatGPT (device code)", oauthMode: "auto" },
-    { id: "api_key", type: "api", label: "API key" },
-  ],
-  "claude-code": [
-    { id: "oauth_cli", type: "oauth", label: "Sign in with Claude Code", oauthMode: "auto" },
     { id: "api_key", type: "api", label: "API key" },
   ],
 };
@@ -86,16 +81,6 @@ export function authorizeProviderAuth(opts: {
     };
   }
 
-  if (opts.provider === "claude-code") {
-    return {
-      ok: true,
-      challenge: {
-        method: method.oauthMode ?? "auto",
-        instructions: "Run Claude Code sign-in in a terminal, then continue.",
-        command: "claude setup-token",
-      },
-    };
-  }
 
   return { ok: false, message: `Provider ${opts.provider} does not support OAuth authorization.` };
 }
@@ -136,7 +121,6 @@ export async function callbackProviderAuth(opts: {
   paths?: AiCoworkerPaths;
   connect: ConnectProviderHandler;
   oauthStdioMode?: OauthStdioMode;
-  allowOpenTerminal?: boolean;
   onOauthLine?: (line: string) => void;
 }): Promise<ConnectProviderResult> {
   const method = resolveProviderAuthMethod(opts.provider, opts.methodId);
@@ -157,7 +141,6 @@ export async function callbackProviderAuth(opts: {
     cwd: opts.cwd,
     paths: opts.paths,
     oauthStdioMode: opts.oauthStdioMode,
-    allowOpenTerminal: opts.allowOpenTerminal,
     onOauthLine: opts.onOauthLine,
   });
 }

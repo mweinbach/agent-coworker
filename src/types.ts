@@ -5,7 +5,6 @@ export const PROVIDER_NAMES = [
   "openai",
   "anthropic",
   "codex-cli",
-  "claude-code",
 ] as const;
 
 export type ProviderName = (typeof PROVIDER_NAMES)[number];

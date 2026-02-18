@@ -2,6 +2,14 @@ import { anthropic, createAnthropic, type AnthropicProviderOptions } from "@ai-s
 
 import type { AgentConfig } from "../types";
 
+function normalizeAnthropicModelId(modelId: string): string {
+  const normalized = modelId.trim().toLowerCase();
+  if (normalized === "claude-4-6-sonnet") {
+    return "claude-sonnet-4-6";
+  }
+  return modelId;
+}
+
 export const DEFAULT_ANTHROPIC_PROVIDER_OPTIONS = {
   thinking: {
     type: "enabled",
@@ -40,6 +48,6 @@ export const anthropicProvider = {
   keyCandidates: ["anthropic"] as const,
   createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) => {
     const provider = savedKey ? createAnthropic({ apiKey: savedKey }) : anthropic;
-    return provider(modelId);
+    return provider(normalizeAnthropicModelId(modelId));
   },
 };

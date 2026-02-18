@@ -8,7 +8,7 @@ type ProviderModelDefinition = {
 export const PROVIDER_MODEL_CATALOG = {
   anthropic: {
     defaultModel: "claude-opus-4-6",
-    availableModels: ["claude-opus-4-6", "claude-4-5-sonnet", "claude-4-5-haiku"],
+    availableModels: ["claude-opus-4-6", "claude-4-6-sonnet", "claude-4-5-sonnet", "claude-4-5-haiku"],
   },
   "claude-code": {
     defaultModel: "sonnet",

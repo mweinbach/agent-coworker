@@ -19,6 +19,13 @@ const MODEL_SYSTEM_PROMPT_TEMPLATES: readonly ModelSystemPromptTemplate[] = [
     matches: (modelId) => modelId === "claude-4-6-opus" || modelId.startsWith("claude-opus-4-6-"),
   },
   {
+    fileName: "claude-4-6-sonnet.md",
+    matches: (modelId) =>
+      modelId === "claude-4-6-sonnet" ||
+      modelId === "claude-sonnet-4-6" ||
+      modelId.startsWith("claude-sonnet-4-6-"),
+  },
+  {
     fileName: "gemini-3-flash-preview.md",
     matches: (modelId) => modelId === "gemini-3-flash-preview",
   },

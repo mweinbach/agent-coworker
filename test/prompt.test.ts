@@ -194,6 +194,26 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("DEFAULT");
   });
 
+  test("uses model-specific system template for Claude 4.6 Sonnet alias IDs", async () => {
+    const { builtIn } = await makeTmpDirs();
+
+    await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
+    await writeFile(
+      path.join(builtIn, "prompts", "system-models", "claude-4-6-sonnet.md"),
+      "SONNET TEMPLATE {{modelName}}"
+    );
+
+    const config = makeConfig({
+      builtInDir: builtIn,
+      model: "claude-sonnet-4-6-20260201",
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expect(prompt).toContain("SONNET TEMPLATE claude-sonnet-4-6-20260201");
+    expect(prompt).not.toContain("DEFAULT");
+  });
+
   test("falls back to default system template when model template is missing", async () => {
     const { builtIn } = await makeTmpDirs();
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT TEMPLATE {{modelName}}");

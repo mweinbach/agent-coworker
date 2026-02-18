@@ -28,14 +28,14 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.44",
+    "@ai-sdk/anthropic": "^3.0.45",
     "@ai-sdk/google": "^3.0.29",
     "@ai-sdk/mcp": "^1.0.21",
     "@ai-sdk/openai": "^3.0.29",
     "@mozilla/readability": "^0.6.0",
-    "@opentui/core": "^0.1.79",
-    "@opentui/solid": "^0.1.79",
-    "ai": "^6.0.86",
+    "@opentui/core": "^0.1.80",
+    "@opentui/solid": "^0.1.80",
+    "ai": "^6.0.90",
     "ai-sdk-provider-claude-code": "^3.4.0",
     "exa-js": "^2.4.0",
     "fast-glob": "^3.3.3",

@@ -1470,6 +1470,74 @@ describe("ask tool", () => {
     const res: string = await t.execute({ question: "Tell me everything" });
     expect(res).toBe(longAnswer);
   });
+
+  test("supports AskUserQuestion structured payloads", async () => {
+    const dir = await tmpDir();
+    const askFn = mock(async (_q: string, _opts?: string[]) => "Organize & tidy");
+    const ctx = makeCtx(dir);
+    ctx.askUser = askFn;
+
+    const t: any = createAskTool(ctx);
+    const res: any = await t.execute({
+      questions: [
+        {
+          question: "What kind of cleanup are you looking for?",
+          header: "Cleanup scope",
+          options: [
+            { label: "Delete everything", description: "Remove all files" },
+            { label: "Organize & tidy", description: "Keep files, improve layout" },
+          ],
+          multiSelect: false,
+        },
+      ],
+    });
+
+    expect(askFn).toHaveBeenCalledWith("What kind of cleanup are you looking for?", [
+      "Delete everything",
+      "Organize & tidy",
+    ]);
+    expect(res.answers).toEqual({
+      "What kind of cleanup are you looking for?": "Organize & tidy",
+    });
+    expect(Array.isArray(res.questions)).toBeTrue();
+  });
+
+  test("asks each structured question in sequence", async () => {
+    const dir = await tmpDir();
+    const askFn = mock(async (q: string) => (q.includes("first") ? "A" : "B"));
+    const ctx = makeCtx(dir);
+    ctx.askUser = askFn;
+
+    const t: any = createAskTool(ctx);
+    const res: any = await t.execute({
+      questions: [
+        {
+          question: "Pick first option?",
+          header: "Q1",
+          options: [
+            { label: "A", description: "A" },
+            { label: "B", description: "B" },
+          ],
+          multiSelect: false,
+        },
+        {
+          question: "Pick second option?",
+          header: "Q2",
+          options: [
+            { label: "A", description: "A" },
+            { label: "B", description: "B" },
+          ],
+          multiSelect: false,
+        },
+      ],
+    });
+
+    expect(askFn).toHaveBeenCalledTimes(2);
+    expect(res.answers).toEqual({
+      "Pick first option?": "A",
+      "Pick second option?": "B",
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2175,6 +2243,7 @@ describe("createTools", () => {
       "webSearch",
       "webFetch",
       "ask",
+      "AskUserQuestion",
       "todoWrite",
       "spawnAgent",
       "notebookEdit",
@@ -2186,10 +2255,10 @@ describe("createTools", () => {
     }
   });
 
-  test("returns exactly 14 tools", async () => {
+  test("returns exactly 15 tools", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));
-    expect(Object.keys(tools).length).toBe(14);
+    expect(Object.keys(tools).length).toBe(15);
   });
 
   test("each tool is executable or provider-native", async () => {

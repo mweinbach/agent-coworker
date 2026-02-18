@@ -16,6 +16,8 @@ import { createWebSearchTool } from "./webSearch";
 import { createWriteTool } from "./write";
 
 export function createTools(ctx: ToolContext): Record<string, any> {
+  const askTool = createAskTool(ctx);
+
   return {
     bash: createBashTool(ctx),
     read: createReadTool(ctx),
@@ -25,7 +27,8 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     grep: createGrepTool(ctx),
     webSearch: createWebSearchTool(ctx),
     webFetch: createWebFetchTool(ctx),
-    ask: createAskTool(ctx),
+    ask: askTool,
+    AskUserQuestion: askTool,
     todoWrite: createTodoWriteTool(ctx),
     spawnAgent: createSpawnAgentTool(ctx),
     notebookEdit: createNotebookEditTool(ctx),

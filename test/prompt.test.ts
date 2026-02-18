@@ -76,11 +76,11 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("{{workingDirectory}}");
   });
 
-  test("replaces {{outputDirectory}} template variable", async () => {
+  test("does not surface outputDirectory when templates don't reference it", async () => {
     const config = makeConfig({ outputDirectory: "/my/custom/output/dir" });
     const prompt = await loadSystemPrompt(config);
-    expect(prompt).toContain("/my/custom/output/dir");
     expect(prompt).not.toContain("{{outputDirectory}}");
+    expect(prompt).not.toContain("/my/custom/output/dir");
   });
 
   test("replaces {{uploadsDirectory}} template variable", async () => {

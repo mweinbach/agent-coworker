@@ -485,3 +485,848 @@ a { color: inherit; text-decoration: none; }
   .bubble { background: rgba(255, 255, 255, 0.04); }
   .inlineCard { background: rgba(255, 255, 255, 0.03); }
 }
+
+/* Shared primitives */
+.iconButton {
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.04);
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease, opacity 120ms ease;
+}
+.iconButton:hover:not(:disabled) { background: rgba(0, 0, 0, 0.08); }
+.iconButton:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.topbarRight { display: flex; align-items: center; gap: 8px; }
+
+.workspaceEmpty, .workspaceSessionsEmpty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.workspaceSessionsEmpty { padding-left: 8px; }
+
+.threadTitleMain {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.threadBusyDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: pulse 1.25s ease-in-out infinite;
+}
+
+.hero {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 10px;
+  color: var(--muted);
+  padding: 24px;
+}
+
+.heroMark {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 35%, transparent), transparent);
+}
+
+.heroTitle {
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 760;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.heroSub {
+  max-width: 560px;
+  font-size: 15px;
+  color: var(--muted);
+}
+
+.startupErrorCard {
+  margin: 16px 24px 0;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  background: var(--danger-bg);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stopButton {
+  background: color-mix(in srgb, var(--danger) 88%, white 12%);
+  border: 1px solid color-mix(in srgb, var(--danger) 46%, transparent);
+}
+.stopButton:hover:not(:disabled) { filter: brightness(1.05); }
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.modal {
+  width: min(620px, 100%);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel-bg);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.18);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modalTitle {
+  font-size: 17px;
+  line-height: 1.2;
+  font-weight: 740;
+  letter-spacing: -0.01em;
+}
+
+.modalBody {
+  color: var(--muted);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.modalActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modalButton {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--text);
+  padding: 8px 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+.modalButton:hover:not(:disabled) { background: rgba(0, 0, 0, 0.08); }
+
+.modalButtonPrimary {
+  background: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  color: #fff;
+}
+.modalButtonPrimary:hover:not(:disabled) { filter: brightness(1.08); }
+
+.modalButtonDanger {
+  background: color-mix(in srgb, var(--danger) 88%, white 12%);
+  border-color: color-mix(in srgb, var(--danger) 46%, transparent);
+  color: #fff;
+}
+
+.modalButtonOutline {
+  border-radius: 999px;
+  background: transparent;
+}
+
+.modalTextInput {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--text);
+  padding: 9px 12px;
+  min-width: 0;
+}
+.modalTextInput:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.approvalCard {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.03);
+  padding: 12px;
+}
+
+.approvalCode {
+  display: block;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 10px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Settings UI */
+.settingsRoot {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--app-bg);
+}
+
+.settingsRoot .appContent {
+  flex: 1;
+  min-height: 0;
+}
+
+.settingsApp {
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  flex: 1;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  background: var(--app-bg);
+}
+
+.settingsNav {
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  padding: 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.settingsBackButton {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--text);
+  text-align: left;
+  padding: 9px 12px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.settingsBackButton:hover { background: rgba(0, 0, 0, 0.08); }
+
+.settingsNavList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settingsNavItem {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 9px 10px;
+  color: var(--muted);
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.settingsNavItem:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text);
+}
+
+.settingsNavItem[data-active="true"] {
+  background: rgba(0, 0, 0, 0.09);
+  border-color: var(--border);
+  color: var(--text);
+  font-weight: 650;
+}
+
+.settingsPage {
+  min-height: 0;
+  overflow: auto;
+  background: linear-gradient(var(--panel-bg), color-mix(in srgb, var(--panel-bg) 70%, var(--app-bg)));
+}
+
+.settingsContent {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 34px 24px 56px;
+}
+
+.settingsStack { display: grid; gap: 20px; }
+
+.settingsPageHeader { display: grid; gap: 8px; margin-bottom: 4px; }
+
+.settingsPageTitle {
+  font-size: 28px;
+  line-height: 1.15;
+  font-weight: 760;
+  letter-spacing: -0.03em;
+  color: var(--text);
+}
+
+.settingsPageSub {
+  max-width: 720px;
+  color: var(--muted);
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+.settingsCard {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel-bg) 88%, var(--app-bg));
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+
+.settingsCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settingsCardTitle {
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: -0.015em;
+}
+.settingsCardRight { display: flex; align-items: center; gap: 8px; }
+
+.settingsCardSub {
+  padding: 0 18px 12px;
+  color: var(--muted);
+  line-height: 1.5;
+  font-size: 13px;
+  margin-top: -4px;
+}
+
+.settingsCardBody { padding: 4px 18px 16px; }
+
+.settingsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+
+.settingsRow:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.settingsRow:last-child { padding-bottom: 0; }
+
+.settingsRowLeft {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settingsRowLabel {
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: -0.008em;
+}
+
+.settingsRowHint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  max-width: 480px;
+  word-break: break-word;
+}
+
+.settingsRowRight {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settingsSelect,
+.settingsTextInput {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--text);
+  padding: 8px 10px;
+}
+
+.settingsSelect {
+  min-width: 180px;
+  max-width: min(320px, 55vw);
+}
+
+.settingsTextInput {
+  min-width: 220px;
+  width: min(360px, 100%);
+}
+
+.settingsMeta {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.settingsInlineAction {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.settingsInlineAction:hover { opacity: 0.8; }
+.settingsInlineAction:disabled { opacity: 0.5; cursor: not-allowed; text-decoration: none; }
+
+.settingsProviderGrid {
+  display: grid;
+  gap: 12px;
+}
+
+.settingsProviderCard {
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.settingsProviderCardExpanded {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.settingsProviderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  cursor: pointer;
+  border-radius: 13px;
+  transition: background 120ms ease;
+}
+
+.settingsProviderRow:hover {
+  background: rgba(0, 0, 0, 0.025);
+}
+
+.settingsProviderInfo {
+  min-width: 0;
+}
+
+.settingsProviderName {
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+
+.settingsProviderMeta {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settingsPill {
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.settingsPillVerified {
+  color: #2c8d64;
+  border-color: rgba(44, 141, 100, 0.35);
+  background: rgba(44, 141, 100, 0.12);
+}
+
+.settingsProviderBlock {
+  display: grid;
+  gap: 10px;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+}
+
+.settingsProviderBlock:first-child {
+  border-top: none;
+  padding-top: 8px;
+}
+
+.settingsProviderBlockLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.settingsKeyRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settingsKeyRow .settingsTextInput {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  max-width: none;
+}
+
+.settingsModelChips {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 8px;
+}
+
+.settingsModelChipsLabel {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.settingsModelChipsList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settingsProviderActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.settingsExpandIcon {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+  transition: transform 180ms ease;
+}
+
+.settingsProviderExpanded {
+  padding: 0 18px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.settingsOAuthRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settingsTextInput--code {
+  flex: 0 1 240px;
+  max-width: 240px;
+}
+
+.settingsChallengeInfo {
+  margin-top: 8px;
+}
+
+.settingsMetaError {
+  color: var(--danger);
+}
+
+.settingsMetaSuccess {
+  color: #2c8d64;
+}
+
+.settingsCardBody--centered {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 18px;
+}
+
+.settingsRow input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.settingsApp code {
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.06);
+  padding: 2px 5px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+/* Skills view */
+.skillsLayout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+}
+
+.skillsList {
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skillsName {
+  font-weight: 660;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skillsDesc {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.skillsList .skillsItem {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 10px;
+  cursor: pointer;
+}
+
+.skillsList .skillsItem:hover {
+  background: rgba(0, 0, 0, 0.05);
+  border-color: var(--border);
+}
+
+.skillsList .skillsItem[data-active="true"] {
+  background: rgba(0, 0, 0, 0.08);
+  border-color: var(--border);
+}
+
+.skillsContent {
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+}
+
+.skillsHeader {
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-bg) 82%, var(--app-bg));
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.skillsHeaderTitle {
+  font-size: 19px;
+  line-height: 1.2;
+  font-weight: 760;
+  letter-spacing: -0.02em;
+}
+
+.skillsHeaderSub {
+  margin-top: 4px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.skillsDoc {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 8px;
+}
+
+.markdown {
+  max-width: 920px;
+  line-height: 1.55;
+}
+
+.markdown :where(h1, h2, h3) {
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.markdown :where(code) {
+  border-radius: 7px;
+  padding: 2px 5px;
+  background: rgba(0, 0, 0, 0.06);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.markdown :where(pre) {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.markdown :where(pre code) { background: transparent; padding: 0; }
+
+.contextFileName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.expandIcon { font-size: 12px; color: var(--muted); }
+
+@media (max-width: 960px) {
+  .settingsApp {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settingsNav {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .settingsNavList { flex-direction: row; flex-wrap: wrap; }
+
+  .settingsNavItem {
+    width: auto;
+    min-width: 120px;
+  }
+
+  .settingsContent { padding: 20px 14px 32px; }
+
+  .settingsRow {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .settingsSelect,
+  .settingsTextInput { max-width: 100%; width: 100%; }
+
+  .settingsKeyRow,
+  .settingsOAuthRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settingsTextInput--code {
+    max-width: 100%;
+    flex: 1;
+  }
+
+  .skillsLayout { grid-template-columns: 1fr; }
+
+  .skillsList {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 240px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .iconButton,
+  .modalButton,
+  .settingsBackButton,
+  .settingsNavItem,
+  .settingsSelect,
+  .settingsTextInput,
+  .modalTextInput,
+  .pill {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .iconButton:hover:not(:disabled),
+  .modalButton:hover:not(:disabled),
+  .settingsBackButton:hover,
+  .settingsNavItem:hover,
+  .skillsList .skillsItem:hover {
+    background: rgba(255, 255, 255, 0.14);
+  }
+
+  .settingsNavItem[data-active="true"],
+  .skillsList .skillsItem[data-active="true"] {
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  .settingsProviderRow:hover,
+  .modalButtonOutline:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .settingsCard,
+  .skillsHeader,
+  .modal {
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+  }
+
+  .heroMark {
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.14), transparent);
+  }
+
+  .startupErrorCard,
+  .approvalCard,
+  .approvalCode,
+  .markdown :where(pre),
+  .settingsApp code,
+  .markdown :where(code) {
+    background: rgba(255, 255, 255, 0.08);
+  }
+}

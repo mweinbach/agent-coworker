@@ -111,8 +111,8 @@ describe("spawnAgent tool", () => {
     expect(toolNames).toEqual(
       ["edit", "glob", "grep", "memory", "notebookEdit", "read", "skill", "webFetch", "webSearch", "write"].sort()
     );
-    expect(lastGenerateTextArgs.tools.webSearch.type).toBe("provider");
-    expect(lastGenerateTextArgs.tools.webSearch.id).toBe("google.google_search");
+    expect(lastGenerateTextArgs.tools.webSearch.type).toBeUndefined();
+    expect(typeof lastGenerateTextArgs.tools.webSearch.execute).toBe("function");
   });
 
   test("adds google prepareStep to repair replay thought signatures in sub-agent loops", async () => {
@@ -195,8 +195,8 @@ describe("spawnAgent tool", () => {
 
     const toolNames = Object.keys(lastGenerateTextArgs.tools).sort();
     expect(toolNames).toEqual(["read", "webFetch", "webSearch"].sort());
-    expect(lastGenerateTextArgs.tools.webSearch.type).toBe("provider");
-    expect(lastGenerateTextArgs.tools.webSearch.id).toBe("google.google_search");
+    expect(lastGenerateTextArgs.tools.webSearch.type).toBeUndefined();
+    expect(typeof lastGenerateTextArgs.tools.webSearch.execute).toBe("function");
   });
 
   test("explore includes bash tool and escalates non-auto approvals to parent context", async () => {

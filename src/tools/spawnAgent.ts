@@ -37,7 +37,8 @@ export type SpawnAgentDeps = Partial<{
 function createSubAgentTools(
   parent: ToolContext,
   agentType: AgentType,
-  safeApprove: (command: string) => boolean
+  safeApprove: (command: string) => boolean,
+  turnUserPrompt?: string
 ): Record<string, any> {
   const subCtx: ToolContext = {
     config: parent.config,
@@ -52,6 +53,7 @@ function createSubAgentTools(
     spawnDepth: (parent.spawnDepth ?? 0) + 1,
     abortSignal: parent.abortSignal,
     availableSkills: parent.availableSkills,
+    turnUserPrompt: turnUserPrompt ?? parent.turnUserPrompt,
   };
 
   if (agentType === "explore") {
@@ -126,7 +128,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
       const modelId =
         agentType === "research" ? ctx.config.model : ctx.config.subAgentModel;
 
-      const tools = createSubAgentTools(ctx, agentType, safeApprove);
+      const tools = createSubAgentTools(ctx, agentType, safeApprove, normalizedTask);
       const timeoutCfg = ctx.config.modelSettings?.timeout;
       const hasExplicitTimeout =
         typeof timeoutCfg?.totalMs === "number" ||

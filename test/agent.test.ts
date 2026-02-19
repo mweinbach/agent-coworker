@@ -586,6 +586,20 @@ describe("runTurn", () => {
     expect(ctx.abortSignal).toBe(abortController.signal);
   });
 
+  test("passes best-effort latest user prompt through tool context", async () => {
+    await runTurn(
+      makeParams({
+        messages: [
+          { role: "assistant", content: "hello" },
+          { role: "user", content: "find the latest filing" },
+        ] as any,
+      })
+    );
+
+    const ctx = mockCreateTools.mock.calls[0][0] as any;
+    expect(ctx.turnUserPrompt).toBe("find the latest filing");
+  });
+
   test("builtin tools are included in tools passed to streamText", async () => {
     mockCreateTools.mockReturnValue({ myTool: { type: "custom" } });
     await runTurn(makeParams());

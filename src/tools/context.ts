@@ -22,4 +22,10 @@ export interface ToolContext {
 
   /** Lightweight skill metadata for dynamic tool descriptions. Populated from skill discovery. */
   availableSkills?: Array<{ name: string; description: string }>;
+
+  /**
+   * Best-effort plain-text user prompt for the active turn.
+   * Tools can use this as context when a provider-native-style tool call omits explicit arguments.
+   */
+  turnUserPrompt?: string;
 }

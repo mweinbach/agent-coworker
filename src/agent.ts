@@ -95,6 +95,43 @@ function cancelStreamIterator(iterator: AsyncIterator<unknown> | undefined): voi
   }
 }
 
+function extractTurnUserPrompt(messages: ModelMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const raw = messages[i] as any;
+    if (raw?.role !== "user") continue;
+
+    const content = raw.content;
+    if (typeof content === "string") {
+      const trimmed = content.trim();
+      if (trimmed) return trimmed;
+      continue;
+    }
+
+    if (!Array.isArray(content)) continue;
+    const parts: string[] = [];
+    for (const part of content) {
+      if (typeof part === "string") {
+        if (part.trim()) parts.push(part.trim());
+        continue;
+      }
+      if (!part || typeof part !== "object") continue;
+
+      const text = typeof (part as any).text === "string" ? (part as any).text.trim() : "";
+      if (text) {
+        parts.push(text);
+        continue;
+      }
+
+      const inputText = typeof (part as any).inputText === "string" ? (part as any).inputText.trim() : "";
+      if (inputText) parts.push(inputText);
+    }
+
+    if (parts.length > 0) return parts.join("\n");
+  }
+
+  return undefined;
+}
+
 type RunTurnDeps = {
   streamText: typeof streamText;
   stepCountIs: typeof stepCountIs;
@@ -131,6 +168,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
       spawnDepth: params.spawnDepth ?? 0,
       abortSignal,
       availableSkills: discoveredSkills,
+      turnUserPrompt: extractTurnUserPrompt(messages),
     };
     const builtInTools = deps.createTools(toolCtx);
 

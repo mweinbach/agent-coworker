@@ -120,7 +120,7 @@ export async function setProviderApiKey(opts: {
         provider: opts.provider,
         mode: "api_key",
         storageFile: saved.storageFile,
-        message: "Exa API key saved for Gemini webSearch.",
+        message: "Exa API key saved for Google webSearch.",
         maskedApiKey: saved.maskedApiKey,
       };
     } catch (error) {

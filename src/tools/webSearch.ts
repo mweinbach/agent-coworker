@@ -1,7 +1,6 @@
 import path from "node:path";
 
 import { anthropic } from "@ai-sdk/anthropic";
-import { google } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
 import { tool } from "ai";
 import { z } from "zod";
@@ -11,6 +10,15 @@ import type { ToolContext } from "./context";
 
 interface CustomWebSearchToolOptions {
   exaOnly?: boolean;
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
 }
 
 function formatResults(results: Array<{ title?: string; url?: string; description?: string }>): string {
@@ -32,6 +40,19 @@ function sanitizeQuery(raw: string): string {
   if (query.length > 1000) throw new Error("webSearch query is too long (max 1000 characters)");
   if (/[\u0000-\u001f]/.test(query)) throw new Error("webSearch query contains unsupported control characters");
   return query;
+}
+
+function resolveSearchQuery(
+  input: {
+    query?: string;
+    q?: string;
+    searchQuery?: string;
+    text?: string;
+    prompt?: string;
+  },
+  ctx: ToolContext
+): string | undefined {
+  return firstNonEmptyString(input.query, input.q, input.searchQuery, input.text, input.prompt, ctx.turnUserPrompt);
 }
 
 function getExaSnippet(result: unknown): string {
@@ -67,12 +88,36 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
     description: exaOnly
       ? "Search the web for current information using Exa. Requires EXA_API_KEY. Returns titles, URLs, and snippets."
       : "Search the web for current information. Requires BRAVE_API_KEY or EXA_API_KEY. Returns titles, URLs, and snippets.",
-    inputSchema: z.object({
-      query: z.string().describe("Search query"),
-      maxResults: z.number().int().min(1).max(20).optional().default(10),
-    }),
-    execute: async ({ query, maxResults }) => {
-      const safeQuery = sanitizeQuery(query);
+    inputSchema: z
+      .object({
+        query: z.string().optional().describe("Search query"),
+        q: z.string().optional().describe("Alias for query"),
+        searchQuery: z.string().optional().describe("Alias for query"),
+        text: z.string().optional().describe("Compatibility alias for query"),
+        prompt: z.string().optional().describe("Compatibility alias for query"),
+        maxResults: z.number().int().min(1).max(20).optional().default(10),
+        mode: z.string().optional().describe("Compatibility field for provider-native Google search calls"),
+        dynamicThreshold: z.number().optional().describe("Compatibility field for provider-native Google search calls"),
+      })
+      .passthrough(),
+    execute: async (input) => {
+      const query = resolveSearchQuery(input, ctx);
+      if (!query) {
+        const out = 'webSearch requires a query. Call webSearch with {"query":"..."}';
+        ctx.log(`tool< webSearch ${JSON.stringify({ ok: false, reason: "missing_query" })}`);
+        return out;
+      }
+
+      let safeQuery: string;
+      try {
+        safeQuery = sanitizeQuery(query);
+      } catch (error) {
+        const out = `webSearch invalid query: ${error instanceof Error ? error.message : String(error)}`;
+        ctx.log(`tool< webSearch ${JSON.stringify({ ok: false, reason: "invalid_query" })}`);
+        return out;
+      }
+
+      const maxResults = input.maxResults ?? 10;
       ctx.log(`tool> webSearch ${JSON.stringify({ query: safeQuery, maxResults })}`);
 
       if (!exaOnly && process.env.BRAVE_API_KEY) {
@@ -157,10 +202,7 @@ export function createWebSearchTool(ctx: ToolContext) {
     case "openai":
       return openai.tools.webSearch({});
     case "google":
-      if (ctx.config.model.toLowerCase().includes("gemini")) {
-        return createCustomWebSearchTool(ctx, { exaOnly: true });
-      }
-      return google.tools.googleSearch({});
+      return createCustomWebSearchTool(ctx, { exaOnly: true });
     case "anthropic":
       return anthropic.tools.webSearch_20250305({});
     case "codex-cli":

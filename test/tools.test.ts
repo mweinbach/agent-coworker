@@ -1003,7 +1003,7 @@ describe("webSearch tool", () => {
     expect(t.id).toBe("openai.web_search");
   });
 
-  test("uses Exa-backed web search for Gemini models on google provider", async () => {
+  test("uses Exa-backed web search for google provider (Gemini model IDs)", async () => {
     const dir = await tmpDir();
     const t: any = createWebSearchTool(
       makeCtx(dir, {
@@ -1020,7 +1020,7 @@ describe("webSearch tool", () => {
     expect(t.description).not.toContain("BRAVE_API_KEY");
   });
 
-  test("uses Google provider-native web search for non-Gemini google models", async () => {
+  test("uses Exa-backed web search for google provider (non-Gemini model IDs)", async () => {
     const dir = await tmpDir();
     const t: any = createWebSearchTool(
       makeCtx(dir, {
@@ -1031,11 +1031,13 @@ describe("webSearch tool", () => {
         }),
       })
     );
-    expect(t.type).toBe("provider");
-    expect(t.id).toBe("google.google_search");
+    expect(t.type).toBeUndefined();
+    expect(typeof t.execute).toBe("function");
+    expect(t.description).toContain("EXA_API_KEY");
+    expect(t.description).not.toContain("BRAVE_API_KEY");
   });
 
-  test("Gemini google web search requires EXA_API_KEY", async () => {
+  test("google provider web search requires EXA_API_KEY", async () => {
     const dir = await tmpDir();
     const oldBrave = process.env.BRAVE_API_KEY;
     const oldExa = process.env.EXA_API_KEY;
@@ -1061,7 +1063,7 @@ describe("webSearch tool", () => {
     }
   });
 
-  test("Gemini google web search uses saved Exa API key when env key is missing", async () => {
+  test("google provider web search uses saved Exa API key when env key is missing", async () => {
     const dir = await tmpDir();
     const paths = getAiCoworkerPaths({ homedir: dir });
     await writeConnectionStore(paths, {
@@ -1150,12 +1152,62 @@ describe("webSearch tool", () => {
     }
   });
 
-  test("rejects empty or whitespace-only query", async () => {
+  test("returns a guidance message for empty or whitespace-only query", async () => {
     const dir = await tmpDir();
     const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
-    await expect(t.execute({ query: "   ", maxResults: 1 })).rejects.toThrow(
-      /non-empty query/i
-    );
+    const out: string = await t.execute({ query: "   ", maxResults: 1 });
+    expect(out).toContain("requires a query");
+  });
+
+  test("uses turnUserPrompt as fallback query for provider-native-style google inputs", async () => {
+    const dir = await tmpDir();
+
+    const oldExa = process.env.EXA_API_KEY;
+    process.env.EXA_API_KEY = "test-exa-key";
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (_url: any, init: any) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      expect(body.query).toBe("latest Apple earnings guidance");
+      expect(body.numResults).toBe(2);
+      return new Response(
+        JSON.stringify({
+          results: [
+            {
+              title: "Exa Result",
+              url: "https://exa.com",
+              text: { text: "Exa content" },
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as any;
+
+    try {
+      const t: any = createWebSearchTool(
+        makeCtx(dir, {
+          config: makeConfig(dir, {
+            provider: "google",
+            model: "gemini-3.1-pro-preview",
+            subAgentModel: "gemini-3.1-pro-preview",
+          }),
+          turnUserPrompt: "latest Apple earnings guidance",
+        })
+      );
+
+      const out: string = await t.execute({
+        mode: "MODE_UNSPECIFIED",
+        dynamicThreshold: 1,
+        maxResults: 2,
+      });
+      expect(out).toContain("Exa Result");
+      expect(out).toContain("Exa content");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+    }
   });
 
   test("uses BRAVE_API_KEY when available", async () => {

@@ -221,6 +221,32 @@ describe("desktop protocol v2 mapping", () => {
     expect(modal.prompt.reasonCode).toBe("outside_allowed_scope");
   });
 
+  test("session_info updates canonical thread title", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "session_info",
+      sessionId: "thread-session",
+      title: "Session title from server",
+      titleSource: "model",
+      titleModel: "gpt-5-mini",
+      createdAt: "2026-02-19T00:00:00.000Z",
+      updatedAt: "2026-02-19T00:00:01.000Z",
+      provider: "openai",
+      model: "gpt-5.2",
+    });
+
+    const thread = useAppStore.getState().threads.find((item) => item.id === threadId);
+    expect(thread?.title).toBe("Session title from server");
+  });
+
   test("error feed + notification keep required source/code", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const threadId = useAppStore.getState().selectedThreadId;

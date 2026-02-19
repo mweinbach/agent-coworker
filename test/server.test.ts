@@ -116,6 +116,7 @@ function sendAndCollect(
 
       if (
         msg.type === "session_settings" ||
+        msg.type === "session_info" ||
         msg.type === "observability_status" ||
         msg.type === "provider_catalog" ||
         msg.type === "provider_auth_methods" ||
@@ -344,6 +345,93 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("connect emits initial session_info snapshot", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const messages = await collectMessages(url, 3);
+      const hello = messages.find((msg: any) => msg.type === "server_hello");
+      const info = messages.find((msg: any) => msg.type === "session_info");
+      expect(hello).toBeDefined();
+      expect(info).toBeDefined();
+      expect(info.title).toBe("New session");
+      expect(info.titleSource).toBe("default");
+      expect(info.titleModel).toBeNull();
+      expect(info.provider).toBe(hello.config.provider);
+      expect(info.model).toBe(hello.config.model);
+      expect(typeof info.createdAt).toBe("string");
+      expect(typeof info.updatedAt).toBe("string");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("first user_message triggers a session_info title update", async () => {
+    const tmpDir = await makeTmpProject();
+    const runTurnImpl = async () => ({
+      text: "",
+      reasoningText: undefined,
+      responseMessages: [],
+    });
+    const { server, url } = await startAgentServer({
+      ...serverOpts(tmpDir),
+      runTurnImpl: runTurnImpl as any,
+    });
+
+    try {
+      const infoEvents = await new Promise<any[]>((resolve, reject) => {
+        const ws = new WebSocket(url);
+        const seen: any[] = [];
+        let sessionId = "";
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          ws.close();
+          reject(new Error("Timed out waiting for session_info title update"));
+        }, 15_000);
+
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          ws.close();
+          resolve(seen.filter((evt) => evt.type === "session_info"));
+        };
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+          seen.push(msg);
+          if (!sessionId && msg.type === "server_hello") {
+            sessionId = msg.sessionId;
+            ws.send(JSON.stringify({ type: "user_message", sessionId, text: "build websocket title persistence" }));
+            return;
+          }
+          if (msg.type === "session_info" && msg.titleSource !== "default") {
+            finish();
+          }
+        };
+
+        ws.onerror = (e) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          ws.close();
+          reject(new Error(`WebSocket error: ${e}`));
+        };
+      });
+
+      expect(infoEvents.length).toBeGreaterThanOrEqual(2);
+      expect(infoEvents[0]?.titleSource).toBe("default");
+      const updated = infoEvents.find((evt) => evt.titleSource !== "default");
+      expect(updated).toBeDefined();
+      expect(typeof updated.title).toBe("string");
+      expect(updated.title.trim().length).toBeGreaterThan(0);
+    } finally {
+      server.stop();
+    }
+  });
+
   test("server_hello config.workingDirectory matches the cwd", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -359,7 +447,7 @@ describe("WebSocket Lifecycle", () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
     try {
-      const messages = await collectMessages(url, 3);
+      const messages = await collectMessages(url, 4);
       const status = messages.find((msg: any) => msg.type === "observability_status");
       expect(status).toBeDefined();
       expect(typeof status.enabled).toBe("boolean");
@@ -444,6 +532,7 @@ describe("WebSocket Lifecycle", () => {
           }
           if (
             msg.type === "session_settings" ||
+            msg.type === "session_info" ||
             msg.type === "observability_status" ||
             msg.type === "provider_catalog" ||
             msg.type === "provider_auth_methods" ||
@@ -770,6 +859,7 @@ describe("WebSocket Lifecycle", () => {
           }
           if (
             msg.type === "session_settings" ||
+            msg.type === "session_info" ||
             msg.type === "observability_status" ||
             msg.type === "provider_catalog" ||
             msg.type === "provider_auth_methods" ||
@@ -809,6 +899,7 @@ describe("WebSocket Lifecycle", () => {
           }
           if (
             msg.type === "session_settings" ||
+            msg.type === "session_info" ||
             msg.type === "observability_status" ||
             msg.type === "provider_catalog" ||
             msg.type === "provider_auth_methods" ||
@@ -848,6 +939,7 @@ describe("WebSocket Lifecycle", () => {
           }
           if (
             msg.type === "session_settings" ||
+            msg.type === "session_info" ||
             msg.type === "observability_status" ||
             msg.type === "provider_catalog" ||
             msg.type === "provider_auth_methods" ||

@@ -87,6 +87,7 @@ export type ContextUsageSnapshot = {
 type SyncState = {
   status: "connecting" | "connected" | "disconnected";
   sessionId: string | null;
+  sessionTitle: string | null;
   provider: string;
   model: string;
   cwd: string;
@@ -377,6 +378,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
   const [state, setState] = createStore<SyncState>({
     status: "connecting",
     sessionId: null,
+    sessionTitle: null,
     provider: "",
     model: "",
     cwd: "",
@@ -448,6 +450,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       setState(produce((s) => {
         s.status = "connected";
         s.sessionId = evt.sessionId;
+        s.sessionTitle = null;
         s.provider = evt.config.provider;
         s.model = evt.config.model;
         s.cwd = evt.config.workingDirectory;
@@ -503,6 +506,12 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
 
       case "session_settings":
         setState("enableMcp", evt.enableMcp);
+        break;
+
+      case "session_info":
+        setState("sessionTitle", evt.title);
+        setState("provider", evt.provider);
+        setState("model", evt.model);
         break;
 
       case "observability_status":
@@ -1003,6 +1012,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         setState(produce((s) => {
           s.status = "disconnected";
           s.sessionId = null;
+          s.sessionTitle = null;
           s.busy = false;
           s.tools = [];
           s.commands = [];

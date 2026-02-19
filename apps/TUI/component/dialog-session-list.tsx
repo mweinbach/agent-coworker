@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { For, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { useTheme } from "../context/theme";
 import { useSyncState } from "../context/sync";
 import { Dialog } from "../ui/dialog";
@@ -9,6 +9,7 @@ import { useDialog } from "../context/dialog";
 
 type SessionEntry = {
   id: string;
+  title: string | null;
   updatedAtMs: number;
 };
 
@@ -24,9 +25,26 @@ function loadSessionEntries(): SessionEntry[] {
         try {
           const fullPath = path.join(SESSION_DIR, entry.name);
           const stat = fs.statSync(fullPath);
+          let title: string | null = null;
+          let updatedAtMs = stat.mtimeMs;
+          try {
+            const raw = fs.readFileSync(fullPath, "utf-8");
+            const parsed = JSON.parse(raw) as Record<string, unknown>;
+            const session = parsed?.session as Record<string, unknown> | undefined;
+            if (session && typeof session.title === "string" && session.title.trim()) {
+              title = session.title.trim();
+            }
+            if (typeof parsed?.updatedAt === "string") {
+              const parsedMs = Date.parse(parsed.updatedAt);
+              if (Number.isFinite(parsedMs)) updatedAtMs = parsedMs;
+            }
+          } catch {
+            // fall back to filesystem metadata
+          }
           return [{
             id: entry.name.replace(/\.json$/, ""),
-            updatedAtMs: stat.mtimeMs,
+            title,
+            updatedAtMs,
           }];
         } catch {
           return [];
@@ -74,12 +92,17 @@ function SessionListDialog(props: { onDismiss: () => void }) {
             <box flexDirection="column">
               <For each={sessions()}>
                 {(session) => (
-                  <box flexDirection="row" gap={1}>
-                    <text fg={session.id === syncState.sessionId ? theme.accent : theme.textMuted}>
-                      {session.id === syncState.sessionId ? "▸" : " "}
-                    </text>
-                    <text fg={theme.text}>{session.id}</text>
-                    <text fg={theme.textMuted}>{formatAge(session.updatedAtMs)}</text>
+                  <box flexDirection="column" marginBottom={1}>
+                    <box flexDirection="row" gap={1}>
+                      <text fg={session.id === syncState.sessionId ? theme.accent : theme.textMuted}>
+                        {session.id === syncState.sessionId ? "▸" : " "}
+                      </text>
+                      <text fg={theme.text}>{session.title ?? session.id}</text>
+                      <text fg={theme.textMuted}>{formatAge(session.updatedAtMs)}</text>
+                    </box>
+                    <Show when={session.title !== null}>
+                      <text fg={theme.textMuted}>{session.id}</text>
+                    </Show>
                   </box>
                 )}
               </For>

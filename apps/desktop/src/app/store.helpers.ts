@@ -757,7 +757,7 @@ function defaultProviderAuthMethods(provider: ProviderName): ProviderAuthMethod[
       { id: "api_key", type: "api", label: "API key" },
     ];
   }
-  if (provider === "claude-code") {
+  if (provider === "codex-cli") {
     return [
       { id: "oauth_cli", type: "oauth", label: "Sign in with Claude Code", oauthMode: "auto" },
       { id: "api_key", type: "api", label: "API key" },
@@ -811,6 +811,7 @@ export type AppStoreState = {
 
   sidebarCollapsed: boolean;
   sidebarWidth: number;
+  contextSidebarCollapsed: boolean;
 
   init: () => Promise<void>;
 
@@ -857,6 +858,7 @@ export type AppStoreState = {
   dismissPrompt: () => void;
 
   toggleSidebar: () => void;
+  toggleContextSidebar: () => void;
   setSidebarWidth: (width: number) => void;
 
   refreshWorkspaceFiles: (workspaceId: string) => Promise<void>;
@@ -1103,16 +1105,16 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
 
       if (evt.type === "provider_catalog") {
         const connected = evt.connected.filter((provider): provider is ProviderName => isProviderName(provider));
-        set({
+        set((s) => ({
           providerCatalog: evt.all,
           providerDefaultModelByProvider: evt.default,
           providerConnected: connected,
-        });
+        }));
         return;
       }
 
       if (evt.type === "provider_auth_methods") {
-        set({ providerAuthMethodsByProvider: evt.methods });
+        set((s) => ({ providerAuthMethodsByProvider: evt.methods }));
         return;
       }
 
@@ -1154,14 +1156,14 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
         const sid = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
         if (!sid) return;
 
-        set({ providerStatusRefreshing: true });
+        set((s) => ({ providerStatusRefreshing: true }));
         startProviderRefreshTimeout(get, set, workspaceId);
         try {
           socket.send({ type: "refresh_provider_status", sessionId: sid });
           socket.send({ type: "provider_catalog_get", sessionId: sid });
         } catch {
           clearProviderRefreshTimer(workspaceId);
-          set({ providerStatusRefreshing: false });
+          set((s) => ({ providerStatusRefreshing: false }));
         }
         return;
       }
@@ -1440,7 +1442,7 @@ function sendUserMessageToThread(
       id: makeId(),
       kind: "error",
       ts: nowIso(),
-      message: "Not connected. Reconnect to continue.",
+      message: "Not connected. Reconnect to continue.", code: "internal_error", source: "protocol",
     });
     return false;
   }

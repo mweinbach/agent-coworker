@@ -113,6 +113,25 @@ Initial handshake event with `sessionId`, config, capabilities, and `protocolVer
 ### session_settings
 Current runtime session settings (for example `enableMcp`).
 
+### session_info
+Canonical session metadata snapshot including title state.
+
+Payload shape:
+
+```json
+{
+  "type": "session_info",
+  "sessionId": "...",
+  "title": "Summarize websocket title service",
+  "titleSource": "model",
+  "titleModel": "gpt-5-mini",
+  "createdAt": "2026-02-19T18:10:00.000Z",
+  "updatedAt": "2026-02-19T18:10:03.000Z",
+  "provider": "openai",
+  "model": "gpt-5.2"
+}
+```
+
 ### provider_catalog
 Provider catalog metadata.
 

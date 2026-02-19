@@ -41,6 +41,7 @@ const initialState: AppStoreDataState = {
   developerMode: false,
 
   sidebarCollapsed: false,
+  contextSidebarCollapsed: false,
   sidebarWidth: 280,
 };
 

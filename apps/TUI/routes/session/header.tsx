@@ -7,6 +7,7 @@ export function SessionHeader() {
   const syncState = useSyncState();
 
   const title = createMemo(() => {
+    if (syncState.sessionTitle?.trim()) return `# ${syncState.sessionTitle}`;
     return `# ${syncState.provider}/${syncState.model}`;
   });
 

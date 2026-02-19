@@ -56,7 +56,13 @@ async function persistProjectModelDefaults(
     subAgentModel: defaults.subAgentModel,
   };
   await fs.mkdir(projectAgentDir, { recursive: true });
-  await fs.writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
+  const payload = `${JSON.stringify(next, null, 2)}\n`;
+  const tempPath = path.join(
+    projectAgentDir,
+    `.config.json.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
+  );
+  await fs.writeFile(tempPath, payload, "utf-8");
+  await fs.rename(tempPath, configPath);
 }
 
 export interface StartAgentServerOptions {
@@ -213,6 +219,7 @@ export async function startAgentServer(
             enableMcp: session.getEnableMcp(),
           };
           ws.send(JSON.stringify(settings));
+          ws.send(JSON.stringify(session.getSessionInfoEvent()));
 
           ws.send(JSON.stringify(session.getObservabilityStatusEvent()));
           void session.emitProviderCatalog();

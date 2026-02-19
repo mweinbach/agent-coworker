@@ -175,12 +175,13 @@ export default function App() {
             view={view}
           />
 
-          <div className="min-h-0 flex-1 overflow-hidden">
-            <PrimaryContent init={init} ready={ready} startupError={startupError} view={view} />
+          <div className="flex min-h-0 flex-1 overflow-hidden">
+            <div className="min-w-0 flex-1 overflow-hidden">
+              <PrimaryContent init={init} ready={ready} startupError={startupError} view={view} />
+            </div>
+            {showContextSidebar ? <ContextSidebar /> : null}
           </div>
         </main>
-
-        {showContextSidebar ? <ContextSidebar /> : null}
       </div>
 
       <PromptModal />

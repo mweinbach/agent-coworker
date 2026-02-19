@@ -29,6 +29,8 @@ import { emitObservabilityEvent } from "../observability/otel";
 import { getObservabilityHealth } from "../observability/runtime";
 import { expandCommandTemplate, listCommands as listServerCommands, resolveCommand } from "./commands";
 import { normalizeModelStreamPart, reasoningModeForProvider } from "./modelStream";
+import { generateSessionTitle, type SessionTitleSource, DEFAULT_SESSION_TITLE } from "./sessionTitleService";
+import { type PersistedSessionSnapshot, writePersistedSessionSnapshot } from "./sessionStore";
 
 import type { ServerEvent } from "./protocol";
 import {
@@ -55,6 +57,8 @@ type PersistedModelSelection = {
   model: string;
   subAgentModel: string;
 };
+
+type SessionInfoState = Omit<Extract<ServerEvent, { type: "session_info" }>, "type" | "sessionId">;
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (v: T) => void;
@@ -119,6 +123,8 @@ export class AgentSession {
   private readonly harnessContextStore: HarnessContextStore;
   private readonly runTurnImpl: typeof runTurn;
   private readonly persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
+  private readonly generateSessionTitleImpl: typeof generateSessionTitle;
+  private readonly writePersistedSessionSnapshotImpl: typeof writePersistedSessionSnapshot;
 
   private messages: ModelMessage[] = [];
   private running = false;
@@ -130,6 +136,9 @@ export class AgentSession {
   private readonly pendingApproval = new Map<string, Deferred<boolean>>();
 
   private todos: TodoItem[] = [];
+  private sessionInfo: SessionInfoState;
+  private hasGeneratedTitle = false;
+  private sessionSnapshotQueue: Promise<void> = Promise.resolve();
   private sessionBackup: SessionBackupHandle | null = null;
   private sessionBackupState: SessionBackupPublicState;
   private sessionBackupInit: Promise<void> | null = null;
@@ -150,6 +159,8 @@ export class AgentSession {
     harnessContextStore?: HarnessContextStore;
     runTurnImpl?: typeof runTurn;
     persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
+    generateSessionTitleImpl?: typeof generateSessionTitle;
+    writePersistedSessionSnapshotImpl?: typeof writePersistedSessionSnapshot;
   }) {
     this.id = makeId();
     this.config = opts.config;
@@ -166,15 +177,28 @@ export class AgentSession {
     this.harnessContextStore = opts.harnessContextStore ?? new HarnessContextStore();
     this.runTurnImpl = opts.runTurnImpl ?? runTurn;
     this.persistModelSelectionImpl = opts.persistModelSelectionImpl;
+    this.generateSessionTitleImpl = opts.generateSessionTitleImpl ?? generateSessionTitle;
+    this.writePersistedSessionSnapshotImpl = opts.writePersistedSessionSnapshotImpl ?? writePersistedSessionSnapshot;
+    const now = new Date().toISOString();
+    this.sessionInfo = {
+      title: DEFAULT_SESSION_TITLE,
+      titleSource: "default",
+      titleModel: null,
+      createdAt: now,
+      updatedAt: now,
+      provider: this.config.provider,
+      model: this.config.model,
+    };
     this.sessionBackupState = {
       status: "initializing",
       sessionId: this.id,
       workingDirectory: this.config.workingDirectory,
       backupDirectory: null,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
       originalSnapshot: { kind: "pending" },
       checkpoints: [],
     };
+    this.queuePersistSessionSnapshot("session.created");
   }
 
   getPublicConfig() {
@@ -188,6 +212,14 @@ export class AgentSession {
 
   getEnableMcp() {
     return this.config.enableMcp ?? false;
+  }
+
+  getSessionInfoEvent(): Extract<ServerEvent, { type: "session_info" }> {
+    return {
+      type: "session_info",
+      sessionId: this.id,
+      ...this.sessionInfo,
+    };
   }
 
   getObservabilityStatusEvent(): Extract<ServerEvent, { type: "observability_status" }> {
@@ -212,6 +244,112 @@ export class AgentSession {
       health: getObservabilityHealth(this.config),
       config,
     };
+  }
+
+  private updateSessionInfo(
+    patch: Partial<{
+      title: string;
+      titleSource: SessionTitleSource;
+      titleModel: string | null;
+      provider: AgentConfig["provider"];
+      model: string;
+    }>
+  ) {
+    const next: SessionInfoState = {
+      ...this.sessionInfo,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    const changed =
+      next.title !== this.sessionInfo.title ||
+      next.titleSource !== this.sessionInfo.titleSource ||
+      next.titleModel !== this.sessionInfo.titleModel ||
+      next.provider !== this.sessionInfo.provider ||
+      next.model !== this.sessionInfo.model;
+    if (!changed) return;
+    this.sessionInfo = next;
+    this.emit(this.getSessionInfoEvent());
+    this.queuePersistSessionSnapshot("session_info.updated");
+  }
+
+  private buildPersistedSnapshot(): PersistedSessionSnapshot {
+    return {
+      version: 1,
+      sessionId: this.id,
+      createdAt: this.sessionInfo.createdAt,
+      updatedAt: new Date().toISOString(),
+      session: {
+        title: this.sessionInfo.title,
+        titleSource: this.sessionInfo.titleSource,
+        titleModel: this.sessionInfo.titleModel,
+        provider: this.sessionInfo.provider,
+        model: this.sessionInfo.model,
+      },
+      config: {
+        provider: this.config.provider,
+        model: this.config.model,
+        enableMcp: this.getEnableMcp(),
+        workingDirectory: this.config.workingDirectory,
+        outputDirectory: this.config.outputDirectory,
+        uploadsDirectory: this.config.uploadsDirectory,
+      },
+      context: {
+        system: this.system,
+        messages: this.messages,
+        todos: this.todos,
+        harnessContext: this.harnessContextStore.get(this.id),
+      },
+    };
+  }
+
+  private queuePersistSessionSnapshot(reason: string) {
+    const run = async () => {
+      const startedAt = Date.now();
+      const snapshot = this.buildPersistedSnapshot();
+      await this.writePersistedSessionSnapshotImpl({
+        paths: this.getCoworkPaths(),
+        snapshot,
+      });
+      this.emitTelemetry("session.snapshot.persist", "ok", { sessionId: this.id, reason }, Date.now() - startedAt);
+    };
+
+    this.sessionSnapshotQueue = this.sessionSnapshotQueue
+      .catch(() => {
+        // keep queue alive after prior failures
+      })
+      .then(run)
+      .catch((err) => {
+        this.emitTelemetry(
+          "session.snapshot.persist",
+          "error",
+          { sessionId: this.id, reason, error: this.formatErrorMessage(err) }
+        );
+      });
+  }
+
+  private maybeGenerateTitleFromQuery(query: string) {
+    if (this.hasGeneratedTitle) return;
+    this.hasGeneratedTitle = true;
+    const titleConfig: AgentConfig = { ...this.config };
+    const prompt = query.trim();
+    if (!prompt) return;
+
+    void (async () => {
+      const generated = await this.generateSessionTitleImpl({
+        config: titleConfig,
+        query: prompt,
+      });
+      this.updateSessionInfo({
+        title: generated.title,
+        titleSource: generated.source,
+        titleModel: generated.model,
+      });
+    })().catch((err) => {
+      this.emitTelemetry("session.title.generate", "error", {
+        sessionId: this.id,
+        error: this.formatErrorMessage(err),
+      });
+    });
   }
 
   private getUserHomeDir(): string | undefined {
@@ -331,6 +469,7 @@ export class AgentSession {
     this.todos = [];
     this.emit({ type: "todos", sessionId: this.id, todos: [] });
     this.emit({ type: "reset_done", sessionId: this.id });
+    this.queuePersistSessionSnapshot("session.reset");
   }
 
   listTools() {
@@ -552,6 +691,7 @@ export class AgentSession {
 
     this.config = { ...this.config, enableMcp };
     this.emit({ type: "session_settings", sessionId: this.id, enableMcp });
+    this.queuePersistSessionSnapshot("session.enable_mcp");
   }
 
   getHarnessContext() {
@@ -570,6 +710,7 @@ export class AgentSession {
       runId: context.runId,
       objectiveLength: context.objective.length,
     });
+    this.queuePersistSessionSnapshot("session.harness_context");
   }
 
   private formatErrorMessage(err: unknown): string {
@@ -604,12 +745,7 @@ export class AgentSession {
       model: modelId,
       subAgentModel: nextSubAgentModel,
     };
-    this.emit({
-      type: "config_updated",
-      sessionId: this.id,
-      config: this.getPublicConfig(),
-    });
-
+    let persistDefaultsError: string | null = null;
     if (this.persistModelSelectionImpl) {
       try {
         await this.persistModelSelectionImpl({
@@ -618,14 +754,28 @@ export class AgentSession {
           subAgentModel: nextSubAgentModel,
         });
       } catch (err) {
-        this.emitError(
-          "internal_error",
-          "session",
-          `Model updated for this session, but persisting defaults failed: ${String(err)}`
-        );
+        persistDefaultsError = String(err);
       }
     }
 
+    this.emit({
+      type: "config_updated",
+      sessionId: this.id,
+      config: this.getPublicConfig(),
+    });
+    this.updateSessionInfo({
+      provider: nextProvider,
+      model: modelId,
+    });
+    if (persistDefaultsError) {
+      this.emitError(
+        "internal_error",
+        "session",
+        `Model updated for this session, but persisting defaults failed: ${persistDefaultsError}`
+      );
+    }
+
+    this.queuePersistSessionSnapshot("session.model_updated");
     await this.emitProviderCatalog();
   }
 
@@ -1051,6 +1201,7 @@ export class AgentSession {
   private updateTodos = (todos: TodoItem[]) => {
     this.todos = todos;
     this.emit({ type: "todos", sessionId: this.id, todos });
+    this.queuePersistSessionSnapshot("session.todos_updated");
   };
 
   async getSessionBackupState() {
@@ -1168,6 +1319,8 @@ export class AgentSession {
         model: this.config.model,
       });
       this.messages.push({ role: "user", content: text });
+      this.maybeGenerateTitleFromQuery(text);
+      this.queuePersistSessionSnapshot("session.user_message");
 
       // Trim message history to prevent unbounded memory growth.
       // Keep the first message (initial context) plus the most recent entries.
@@ -1234,6 +1387,7 @@ export class AgentSession {
       });
 
       this.messages.push(...res.responseMessages);
+      this.queuePersistSessionSnapshot("session.turn_response");
 
       const reasoning = (res.reasoningText || "").trim();
       if (reasoning) {

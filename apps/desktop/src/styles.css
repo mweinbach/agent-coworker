@@ -127,20 +127,6 @@ body {
   -webkit-app-region: drag;
 }
 
-:root[data-platform="darwin"] .app-context-sidebar {
-  position: relative;
-}
-
-:root[data-platform="darwin"] .app-context-sidebar__drag-zone {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 0.625rem;
-  z-index: 70;
-  -webkit-app-region: drag;
-}
-
 :root[data-platform="darwin"] .settings-shell__nav {
   padding-top: 2.75rem;
 }

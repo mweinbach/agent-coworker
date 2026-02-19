@@ -76,6 +76,17 @@ export type ServerEvent =
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
     }
   | { type: "session_settings"; sessionId: string; enableMcp: boolean }
+  | {
+      type: "session_info";
+      sessionId: string;
+      title: string;
+      titleSource: "default" | "model" | "heuristic";
+      titleModel: string | null;
+      createdAt: string;
+      updatedAt: string;
+      provider: AgentConfig["provider"];
+      model: string;
+    }
   | { type: "provider_catalog"; sessionId: string; all: ProviderCatalogEntry[]; default: Record<string, string>; connected: string[] }
   | { type: "provider_auth_methods"; sessionId: string; methods: Record<string, ProviderAuthMethod[]> }
   | {
@@ -196,6 +207,7 @@ export const CLIENT_MESSAGE_TYPES = [
 export const SERVER_EVENT_TYPES = [
   "server_hello",
   "session_settings",
+  "session_info",
   "provider_catalog",
   "provider_auth_methods",
   "provider_auth_challenge",

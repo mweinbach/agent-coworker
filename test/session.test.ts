@@ -51,6 +51,14 @@ const mockGetAiCoworkerPaths = mock((opts?: { homedir?: string }) => {
   };
 });
 
+const mockGenerateSessionTitle = mock(async () => ({
+  title: "Mock title",
+  source: "heuristic" as const,
+  model: null as string | null,
+}));
+
+const mockWritePersistedSessionSnapshot = mock(async () => "/tmp/mock-home/.cowork/sessions/mock.json");
+
 // Import AgentSession AFTER the runTurn mock is registered so it picks up the mock.
 const { AgentSession } = await import("../src/server/session");
 
@@ -159,6 +167,12 @@ function makeSession(
       model: string;
       subAgentModel: string;
     }) => Promise<void> | void;
+    generateSessionTitleImpl: (opts: { config: AgentConfig; query: string }) => Promise<{
+      title: string;
+      source: "default" | "model" | "heuristic";
+      model: string | null;
+    }>;
+    writePersistedSessionSnapshotImpl: (opts: any) => Promise<string>;
   }>
 ) {
   const dir = "/tmp/test-session";
@@ -176,8 +190,15 @@ function makeSession(
     getProviderStatusesImpl,
     sessionBackupFactory,
     persistModelSelectionImpl: overrides?.persistModelSelectionImpl,
+    generateSessionTitleImpl: overrides?.generateSessionTitleImpl ?? mockGenerateSessionTitle,
+    writePersistedSessionSnapshotImpl:
+      overrides?.writePersistedSessionSnapshotImpl ?? mockWritePersistedSessionSnapshot,
   });
   return { session, emit, events, sessionBackupFactory };
+}
+
+async function flushAsyncWork(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +240,16 @@ describe("AgentSession", () => {
         connectionsFile: path.join(authDir, "connections.json"),
       };
     });
+
+    mockGenerateSessionTitle.mockReset();
+    mockGenerateSessionTitle.mockImplementation(async () => ({
+      title: "Mock title",
+      source: "heuristic",
+      model: null,
+    }));
+
+    mockWritePersistedSessionSnapshot.mockReset();
+    mockWritePersistedSessionSnapshot.mockImplementation(async () => "/tmp/mock-home/.cowork/sessions/mock.json");
   });
 
   afterAll(() => {
@@ -259,6 +290,17 @@ describe("AgentSession", () => {
       expect(ids.size).toBe(10);
     });
 
+    test("exposes initial session_info payload", () => {
+      const { session } = makeSession();
+      const info = session.getSessionInfoEvent();
+      expect(info.type).toBe("session_info");
+      expect(info.title).toBe("New session");
+      expect(info.titleSource).toBe("default");
+      expect(info.titleModel).toBeNull();
+      expect(info.provider).toBe("google");
+      expect(info.model).toBe("gemini-2.0-flash");
+    });
+
     test("initializes with empty messages (sendUserMessage produces no history artifacts)", async () => {
       const { session } = makeSession();
       await session.sendUserMessage("hello");
@@ -273,6 +315,15 @@ describe("AgentSession", () => {
       const todosEvt = events.find((e) => e.type === "todos") as any;
       expect(todosEvt).toBeDefined();
       expect(todosEvt.todos).toEqual([]);
+    });
+
+    test("writes an initial persisted session snapshot", async () => {
+      makeSession();
+      await flushAsyncWork();
+      expect(mockWritePersistedSessionSnapshot).toHaveBeenCalledTimes(1);
+      const first = mockWritePersistedSessionSnapshot.mock.calls[0]?.[0] as any;
+      expect(first?.snapshot?.version).toBe(1);
+      expect(first?.snapshot?.session?.title).toBe("New session");
     });
   });
 
@@ -601,6 +652,17 @@ describe("AgentSession", () => {
         expect(updated.config.model).toBe("claude-4-5-sonnet");
       }
       expect(events.some((e) => e.type === "error")).toBe(false);
+    });
+
+    test("emits session_info when provider/model changes", async () => {
+      const { session, events } = makeSession();
+      await session.setModel("gpt-5.2", "openai");
+      const info = events.find((e): e is Extract<ServerEvent, { type: "session_info" }> => e.type === "session_info");
+      expect(info).toBeDefined();
+      if (info) {
+        expect(info.provider).toBe("openai");
+        expect(info.model).toBe("gpt-5.2");
+      }
     });
 
     test("invokes model-selection persistence hook with updated defaults", async () => {
@@ -1409,6 +1471,26 @@ describe("AgentSession", () => {
       expect(userEvt.clientMessageId).toBeUndefined();
     });
 
+    test("generates title once from the first accepted user prompt", async () => {
+      mockGenerateSessionTitle.mockResolvedValueOnce({
+        title: "First prompt title",
+        source: "model",
+        model: "gpt-5-mini",
+      });
+      const { session, events } = makeSession();
+
+      await session.sendUserMessage("first question");
+      await session.sendUserMessage("second question");
+      await flushAsyncWork();
+
+      expect(mockGenerateSessionTitle).toHaveBeenCalledTimes(1);
+      expect(mockGenerateSessionTitle.mock.calls[0]?.[0]).toMatchObject({
+        query: "first question",
+      });
+      const infoEvents = events.filter((evt): evt is Extract<ServerEvent, { type: "session_info" }> => evt.type === "session_info");
+      expect(infoEvents.some((evt) => evt.title === "First prompt title")).toBe(true);
+    });
+
     test("adds user message to messages array", async () => {
       const { session } = makeSession();
       await session.sendUserMessage("test message");
@@ -1479,6 +1561,26 @@ describe("AgentSession", () => {
       expect(secondCall.messages[0]).toEqual({ role: "user", content: "first" });
       expect(secondCall.messages[1]).toEqual(responseMsg);
       expect(secondCall.messages[2]).toEqual({ role: "user", content: "second" });
+    });
+
+    test("persists full session context including response history", async () => {
+      mockRunTurn.mockResolvedValueOnce({
+        text: "assistant reply",
+        reasoningText: undefined,
+        responseMessages: [{ role: "assistant", content: "assistant reply" }],
+      });
+      const { session } = makeSession();
+
+      await session.sendUserMessage("persist me");
+      await flushAsyncWork();
+
+      const last = mockWritePersistedSessionSnapshot.mock.calls.at(-1)?.[0] as any;
+      const snapshot = last?.snapshot;
+      expect(snapshot).toBeDefined();
+      expect(snapshot.context.system).toBe("You are a test assistant.");
+      expect(Array.isArray(snapshot.context.messages)).toBe(true);
+      expect(snapshot.context.messages.some((msg: any) => msg.role === "user")).toBe(true);
+      expect(snapshot.context.messages.some((msg: any) => msg.role === "assistant")).toBe(true);
     });
 
     test("emits assistant_message when response has text", async () => {

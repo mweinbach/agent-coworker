@@ -21,7 +21,6 @@ export function ContextSidebar() {
 
   return (
     <aside className="app-context-sidebar flex h-full w-[300px] shrink-0 flex-col gap-3 border-l border-border/80 bg-background p-3">
-      <div className="app-context-sidebar__drag-zone" aria-hidden="true" />
       <Card className="border-border/80 bg-card/80">
         <CardHeader className="pb-2">
           <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">Tasks</CardTitle>

@@ -993,6 +993,7 @@ describe("safeParseClientMessage", () => {
       expect(SERVER_EVENT_TYPES.includes("provider_auth_methods")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_auth_challenge")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_auth_result")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("session_info")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("model_stream_chunk")).toBe(true);
     });
 

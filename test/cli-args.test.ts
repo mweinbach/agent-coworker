@@ -37,6 +37,24 @@ describe("parseCliArgs", () => {
     expect(args.yolo).toBe(true);
   });
 
+  test("parses --mouse", () => {
+    const { args, errors } = parseCliArgs(["--mouse"]);
+    expect(errors).toEqual([]);
+    expect(args.mouse).toBe(true);
+  });
+
+  test("parses -m", () => {
+    const { args, errors } = parseCliArgs(["-m"]);
+    expect(errors).toEqual([]);
+    expect(args.mouse).toBe(true);
+  });
+
+  test("parses --no-mouse", () => {
+    const { args, errors } = parseCliArgs(["--no-mouse"]);
+    expect(errors).toEqual([]);
+    expect(args.mouse).toBe(false);
+  });
+
   test("parses -y", () => {
     const { args, errors } = parseCliArgs(["-y"]);
     expect(errors).toEqual([]);
@@ -106,6 +124,7 @@ describe("parseCliArgs", () => {
     expect(args.help).toBe(false);
     expect(args.cli).toBe(false);
     expect(args.yolo).toBe(false);
+    expect(args.mouse).toBe(true);
     expect(args.dir).toBeUndefined();
   });
 

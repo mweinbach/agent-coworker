@@ -4,8 +4,25 @@ type LocalSlashDependencies = {
   syncActions: {
     reset: () => void;
     cancel: () => void;
-    connectProvider: (provider: string, apiKey?: string) => void;
     setProviderApiKey: (provider: string, methodId: string, apiKey: string) => void;
+    requestHarnessContext: () => void;
+    setHarnessContext: (context: {
+      runId: string;
+      taskId?: string;
+      objective: string;
+      acceptanceCriteria: string[];
+      constraints: string[];
+      metadata?: Record<string, string>;
+    }) => void;
+    evaluateHarnessSlo: (checks: Array<{
+      id: string;
+      type: "latency" | "error_rate" | "custom";
+      queryType: "logql" | "promql" | "traceql";
+      query: string;
+      op: "<" | "<=" | ">" | ">=" | "==" | "!=";
+      threshold: number;
+      windowSec: number;
+    }>) => void;
   };
   route: {
     navigate: (next: { route: "home" } | { route: "session"; sessionId: string }) => void;
@@ -26,6 +43,53 @@ export type LocalSlashCommand = {
 
 function normalizeCommandName(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function buildDefaultHarnessContext(objectiveOverride: string) {
+  const now = new Date();
+  const isoNow = now.toISOString();
+  const runId = `tui-${isoNow.replace(/[:.]/g, "-")}`;
+  const objective = objectiveOverride.trim() || "Validate the current workspace behavior with harness visibility.";
+
+  return {
+    runId,
+    objective,
+    acceptanceCriteria: [
+      "Requested behavior is implemented and demonstrated in this workspace.",
+      "No regressions are introduced while making the change.",
+    ],
+    constraints: [
+      "Keep scope focused on the requested behavior.",
+      "Use reproducible checks where possible.",
+    ],
+    metadata: {
+      source: "tui",
+      createdAt: isoNow,
+    },
+  };
+}
+
+function defaultHarnessSloChecks() {
+  return [
+    {
+      id: "run_error_logs",
+      type: "error_rate" as const,
+      queryType: "logql" as const,
+      query: "_time:[now-5m, now] level:error",
+      op: "==" as const,
+      threshold: 0,
+      windowSec: 300,
+    },
+    {
+      id: "vector_errors",
+      type: "custom" as const,
+      queryType: "promql" as const,
+      query: "sum(rate(vector_component_errors_total[5m]))",
+      op: "<=" as const,
+      threshold: 0,
+      windowSec: 300,
+    },
+  ];
 }
 
 function parseWithKnownCommandNames(
@@ -121,6 +185,36 @@ export function createLocalSlashCommands(deps: LocalSlashDependencies): LocalSla
       execute: async () => {
         const { openStatusDialog } = await import("../dialog-status");
         openStatusDialog(deps.dialog as any);
+      },
+    },
+    {
+      name: "hctx",
+      aliases: ["harness-context"],
+      description: "Get harness context or set defaults (/hctx set)",
+      icon: "h",
+      execute: (argumentsText) => {
+        const trimmed = argumentsText.trim();
+        if (!trimmed) {
+          deps.syncActions.requestHarnessContext();
+          return;
+        }
+
+        if (trimmed === "set" || trimmed.startsWith("set ")) {
+          const objective = trimmed.slice(3).trim();
+          deps.syncActions.setHarnessContext(buildDefaultHarnessContext(objective));
+          return;
+        }
+
+        deps.syncActions.requestHarnessContext();
+      },
+    },
+    {
+      name: "slo",
+      aliases: [],
+      description: "Run default harness SLO checks",
+      icon: "%",
+      execute: () => {
+        deps.syncActions.evaluateHarnessSlo(defaultHarnessSloChecks());
       },
     },
     {

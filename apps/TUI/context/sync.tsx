@@ -1,9 +1,20 @@
 import { createContext, useContext, createEffect, onCleanup, type JSX, type Accessor } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { AgentSocket } from "../../../src/client/agentSocket";
-import type { ClientMessage, ServerEvent } from "../../../src/server/protocol";
-import type { ApprovalRiskCode, CommandInfo, TodoItem, ServerErrorCode, ServerErrorSource } from "../../../src/types";
+import { WEBSOCKET_PROTOCOL_VERSION, type ClientMessage, type ServerEvent } from "../../../src/server/protocol";
+import type {
+  ApprovalRiskCode,
+  CommandInfo,
+  HarnessContextPayload,
+  HarnessSloCheck,
+  ObservabilityQueryRequest,
+  ServerErrorCode,
+  ServerErrorSource,
+  SkillEntry,
+  TodoItem,
+} from "../../../src/types";
 import { mapModelStreamChunk, type ModelStreamUpdate } from "./modelStream";
+import { showToast } from "../ui/toast";
 
 // ── Feed item types ──────────────────────────────────────────────────────────
 
@@ -22,7 +33,33 @@ export type FeedItem =
   | { id: string; type: "todos"; todos: TodoItem[] }
   | { id: string; type: "system"; line: string }
   | { id: string; type: "log"; line: string }
-  | { id: string; type: "error"; message: string; code: ServerErrorCode; source: ServerErrorSource };
+  | { id: string; type: "error"; message: string; code: ServerErrorCode; source: ServerErrorSource }
+  | {
+      id: string;
+      type: "observability_status";
+      enabled: boolean;
+      observability?: Extract<ServerEvent, { type: "observability_status" }>["observability"];
+    }
+  | { id: string; type: "harness_context"; context: Extract<ServerEvent, { type: "harness_context" }>["context"] }
+  | {
+      id: string;
+      type: "observability_query_result";
+      result: Extract<ServerEvent, { type: "observability_query_result" }>["result"];
+    }
+  | { id: string; type: "harness_slo_result"; result: Extract<ServerEvent, { type: "harness_slo_result" }>["result"] }
+  | { id: string; type: "skills_list"; skills: SkillEntry[] }
+  | {
+      id: string;
+      type: "skill_content";
+      skill: Extract<ServerEvent, { type: "skill_content" }>["skill"];
+      content: string;
+    }
+  | {
+      id: string;
+      type: "session_backup_state";
+      reason: Extract<ServerEvent, { type: "session_backup_state" }>["reason"];
+      backup: Extract<ServerEvent, { type: "session_backup_state" }>["backup"];
+    };
 
 // ── Ask/Approval types ───────────────────────────────────────────────────────
 
@@ -44,6 +81,14 @@ export type ProviderAuthMethodsState = Extract<ServerEvent, { type: "provider_au
 export type ProviderStatusesState = Extract<ServerEvent, { type: "provider_status" }>["providers"];
 export type ProviderAuthChallengeState = Extract<ServerEvent, { type: "provider_auth_challenge" }> | null;
 export type ProviderAuthResultState = Extract<ServerEvent, { type: "provider_auth_result" }> | null;
+export type HarnessContextState = Extract<ServerEvent, { type: "harness_context" }>["context"];
+export type SkillsState = Extract<ServerEvent, { type: "skills_list" }>["skills"];
+export type SessionBackupState = Extract<ServerEvent, { type: "session_backup_state" }>["backup"] | null;
+export type ContextUsageSnapshot = {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+};
 
 // ── Sync store types ─────────────────────────────────────────────────────────
 
@@ -63,6 +108,12 @@ type SyncState = {
   providerStatuses: ProviderStatusesState;
   providerAuthChallenge: ProviderAuthChallengeState;
   providerAuthResult: ProviderAuthResultState;
+  observabilityEnabled: boolean;
+  observability?: Extract<ServerEvent, { type: "observability_status" }>["observability"];
+  harnessContext: HarnessContextState;
+  skills: SkillsState;
+  backup: SessionBackupState;
+  contextUsage: ContextUsageSnapshot | null;
   busy: boolean;
   feed: FeedItem[];
   todos: TodoItem[];
@@ -84,6 +135,10 @@ type SyncActions = {
   setEnableMcp: (enabled: boolean) => void;
   refreshTools: () => void;
   refreshCommands: () => void;
+  requestHarnessContext: () => void;
+  setHarnessContext: (context: HarnessContextPayload) => void;
+  queryObservability: (query: ObservabilityQueryRequest) => void;
+  evaluateHarnessSlo: (checks: HarnessSloCheck[]) => void;
   executeCommand: (name: string, args?: string, displayText?: string) => boolean;
   reset: () => void;
   cancel: () => void;
@@ -140,6 +195,54 @@ function previewValue(value: unknown, maxChars = 160): string {
     const fallback = String(value);
     return fallback.length > maxChars ? `${fallback.slice(0, maxChars - 1)}...` : fallback;
   }
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return value;
+}
+
+function pickUsageNumber(record: Record<string, unknown>, keys: readonly string[]): number | null {
+  for (const key of keys) {
+    const parsed = toFiniteNumber(record[key]);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
+function extractUsageSnapshot(value: unknown): ContextUsageSnapshot | null {
+  const usage = asRecord(value);
+  if (!usage) return null;
+
+  const inputTokens = pickUsageNumber(usage, [
+    "inputTokens",
+    "promptTokens",
+    "requestTokens",
+    "input",
+    "prompt",
+  ]);
+  const outputTokens = pickUsageNumber(usage, [
+    "outputTokens",
+    "completionTokens",
+    "responseTokens",
+    "output",
+    "completion",
+  ]);
+  let totalTokens = pickUsageNumber(usage, [
+    "totalTokens",
+    "tokenCount",
+    "total",
+  ]);
+
+  if (totalTokens === null && inputTokens !== null && outputTokens !== null) {
+    totalTokens = inputTokens + outputTokens;
+  }
+
+  if (inputTokens === null && outputTokens === null && totalTokens === null) {
+    return null;
+  }
+
+  return { inputTokens, outputTokens, totalTokens };
 }
 
 function parseJsonCandidate(value: string): unknown {
@@ -296,6 +399,12 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     providerStatuses: [],
     providerAuthChallenge: null,
     providerAuthResult: null,
+    observabilityEnabled: false,
+    observability: undefined,
+    harnessContext: null,
+    skills: [],
+    backup: null,
+    contextUsage: null,
     busy: false,
     feed: [],
     todos: [],
@@ -360,6 +469,12 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         s.providerStatuses = [];
         s.providerAuthChallenge = null;
         s.providerAuthResult = null;
+        s.observabilityEnabled = false;
+        s.observability = undefined;
+        s.harnessContext = null;
+        s.skills = [];
+        s.backup = null;
+        s.contextUsage = null;
         s.busy = false;
         s.feed = [{ id: nextFeedId(), type: "system", line: `connected: ${evt.sessionId}` }];
         s.todos = [];
@@ -371,6 +486,9 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       socket?.send({ type: "provider_catalog_get", sessionId: evt.sessionId });
       socket?.send({ type: "provider_auth_methods_get", sessionId: evt.sessionId });
       socket?.send({ type: "refresh_provider_status", sessionId: evt.sessionId });
+      socket?.send({ type: "list_skills", sessionId: evt.sessionId });
+      socket?.send({ type: "session_backup_get", sessionId: evt.sessionId });
+      socket?.send({ type: "harness_context_get", sessionId: evt.sessionId });
       return;
     }
 
@@ -392,6 +510,74 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
 
       case "session_settings":
         setState("enableMcp", evt.enableMcp);
+        break;
+
+      case "observability_status":
+        setState("observabilityEnabled", evt.enabled);
+        setState("observability", evt.observability);
+        setState("feed", (f) => [...f, {
+          id: nextFeedId(),
+          type: "observability_status",
+          enabled: evt.enabled,
+          observability: evt.observability,
+        }]);
+        break;
+
+      case "harness_context":
+        setState("harnessContext", evt.context);
+        setState("feed", (f) => [...f, {
+          id: nextFeedId(),
+          type: "harness_context",
+          context: evt.context,
+        }]);
+        break;
+
+      case "observability_query_result":
+        setState("feed", (f) => [...f, {
+          id: nextFeedId(),
+          type: "observability_query_result",
+          result: evt.result,
+        }]);
+        break;
+
+      case "harness_slo_result":
+        setState("feed", (f) => [...f, {
+          id: nextFeedId(),
+          type: "harness_slo_result",
+          result: evt.result,
+        }]);
+        showToast(
+          evt.result.passed ? "SLO checks passed" : "SLO checks failed",
+          evt.result.passed ? "success" : "warning"
+        );
+        break;
+
+      case "skills_list":
+        setState("skills", evt.skills);
+        setState("feed", (f) => [...f, {
+          id: nextFeedId(),
+          type: "skills_list",
+          skills: evt.skills,
+        }]);
+        break;
+
+      case "skill_content":
+        setState("feed", (f) => [...f, {
+          id: nextFeedId(),
+          type: "skill_content",
+          skill: evt.skill,
+          content: evt.content,
+        }]);
+        break;
+
+      case "session_backup_state":
+        setState("backup", evt.backup);
+        setState("feed", (f) => [...f, {
+          id: nextFeedId(),
+          type: "session_backup_state",
+          reason: evt.reason,
+          backup: evt.backup,
+        }]);
         break;
 
       case "provider_catalog":
@@ -446,6 +632,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         setState(produce((s) => {
           s.feed = [{ id: nextFeedId(), type: "system", line: "conversation reset" }];
           s.todos = [];
+          s.contextUsage = null;
           s.busy = false;
           s.providerAuthChallenge = null;
           s.providerAuthResult = null;
@@ -499,10 +686,25 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           modelStreamTurnActive = true;
         }
 
+        if (mapped.kind === "turn_finish") {
+          const usage = extractUsageSnapshot(mapped.totalUsage);
+          if (usage) {
+            setState("contextUsage", usage);
+          }
+          // Keep as a state-only boundary to avoid noisy feed output.
+          break;
+        }
+
+        if (mapped.kind === "step_finish") {
+          const usage = extractUsageSnapshot(mapped.usage);
+          if (usage) {
+            setState("contextUsage", usage);
+          }
+          break;
+        }
+
         if (
-          mapped.kind === "turn_finish" ||
           mapped.kind === "step_start" ||
-          mapped.kind === "step_finish" ||
           mapped.kind === "assistant_text_start" ||
           mapped.kind === "assistant_text_end"
         ) {
@@ -819,7 +1021,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     const sock = new AgentSocket({
       url: props.serverUrl,
       client: "tui",
-      version: "2.0",
+      version: WEBSOCKET_PROTOCOL_VERSION,
       onEvent: handleEvent,
       onClose: () => {
         resetModelStreamState();
@@ -836,6 +1038,12 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           s.providerStatuses = [];
           s.providerAuthChallenge = null;
           s.providerAuthResult = null;
+          s.observabilityEnabled = false;
+          s.observability = undefined;
+          s.harnessContext = null;
+          s.skills = [];
+          s.backup = null;
+          s.contextUsage = null;
           s.pendingAsk = null;
           s.pendingApproval = null;
         }));
@@ -984,6 +1192,45 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       socket.send({
         type: "list_commands",
         sessionId: sid,
+      });
+    },
+
+    requestHarnessContext() {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({
+        type: "harness_context_get",
+        sessionId: sid,
+      });
+    },
+
+    setHarnessContext(context: HarnessContextPayload) {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({
+        type: "harness_context_set",
+        sessionId: sid,
+        context,
+      });
+    },
+
+    queryObservability(query: ObservabilityQueryRequest) {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({
+        type: "observability_query",
+        sessionId: sid,
+        query,
+      });
+    },
+
+    evaluateHarnessSlo(checks: HarnessSloCheck[]) {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({
+        type: "harness_slo_evaluate",
+        sessionId: sid,
+        checks,
       });
     },
 

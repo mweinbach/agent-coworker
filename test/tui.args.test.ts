@@ -8,7 +8,7 @@ describe("parseArgs", () => {
     expect(parsed).toEqual({
       serverUrl: "ws://127.0.0.1:7337/ws",
       help: false,
-      useMouse: false,
+      useMouse: true,
     });
   });
 
@@ -27,6 +27,15 @@ describe("parseArgs", () => {
       serverUrl: "ws://127.0.0.1:7337/ws",
       help: true,
       useMouse: true,
+    });
+  });
+
+  test("accepts --no-mouse override", () => {
+    const parsed = parseArgs(["--no-mouse"]);
+    expect(parsed).toEqual({
+      serverUrl: "ws://127.0.0.1:7337/ws",
+      help: false,
+      useMouse: false,
     });
   });
 });

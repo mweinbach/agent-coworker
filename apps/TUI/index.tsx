@@ -17,11 +17,12 @@ import { App } from "./app";
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
 
 function printUsage() {
-  console.log("Usage: bun apps/TUI/index.tsx [--server <ws_url>] [--mouse]");
+  console.log("Usage: bun apps/TUI/index.tsx [--server <ws_url>] [--no-mouse]");
   console.log("");
   console.log("Options:");
   console.log("  --server, -s  WebSocket server URL (default: ws://127.0.0.1:7337/ws)");
-  console.log("  --mouse, -m   Enable OpenTUI mouse capture (disabled by default for native terminal copy/select)");
+  console.log("  --mouse, -m   Enable OpenTUI mouse capture (enabled by default)");
+  console.log("  --no-mouse    Disable OpenTUI mouse capture");
   console.log("  --help, -h    Show help");
   console.log("");
 }
@@ -32,7 +33,7 @@ export function parseArgs(argv: string[]): {
   useMouse: boolean;
 } {
   let serverUrl = "ws://127.0.0.1:7337/ws";
-  let useMouse = false;
+  let useMouse = true;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -47,6 +48,10 @@ export function parseArgs(argv: string[]): {
       useMouse = true;
       continue;
     }
+    if (arg === "--no-mouse") {
+      useMouse = false;
+      continue;
+    }
     if (arg === "--help" || arg === "-h") return { serverUrl, help: true, useMouse };
     throw new Error(`Unknown argument: ${arg}`);
   }
@@ -59,8 +64,8 @@ export async function runTui(
   opts?: { onDestroy?: () => void; useMouse?: boolean }
 ): Promise<void> {
   const renderer = await createCliRenderer({
-    // Keep native terminal text selection/copy available by default.
-    useMouse: opts?.useMouse ?? false,
+    // Mouse capture is enabled by default for scrollbar click/drag support.
+    useMouse: opts?.useMouse ?? true,
     // Ctrl+C is handled by app-level keybindings and exit flow.
     exitOnCtrlC: false,
   });
@@ -121,7 +126,7 @@ export async function runTui(
 if (import.meta.main) {
   let serverUrl = "ws://127.0.0.1:7337/ws";
   let help = false;
-  let useMouse = false;
+  let useMouse = true;
 
   try {
     const parsed = parseArgs(process.argv.slice(2));

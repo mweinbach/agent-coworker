@@ -1,16 +1,36 @@
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeSanitize from "rehype-sanitize";
+import { AlertTriangleIcon, RotateCcwIcon } from "lucide-react";
 
 import { useAppStore } from "../app/store";
 import type { FeedItem } from "../app/types";
+import {
+  Conversation,
+  ConversationContent,
+  ConversationEmptyState,
+} from "../components/ai-elements/conversation";
+import {
+  Message,
+  MessageContent,
+  MessageResponse,
+} from "../components/ai-elements/message";
+import {
+  PromptInputForm,
+  PromptInputRoot,
+  PromptInputSubmit,
+  PromptInputTextarea,
+} from "../components/ai-elements/prompt-input";
+import {
+  Reasoning,
+  ReasoningContent,
+  ReasoningTrigger,
+} from "../components/ai-elements/reasoning";
+import { Button } from "../components/ui/button";
+import { Card, CardContent } from "../components/ui/card";
+import { cn } from "../lib/utils";
 import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
 import { ToolCard } from "./chat/toolCards/ToolCard";
-
-const REMARK_PLUGINS = [remarkGfm];
-const REHYPE_PLUGINS = [rehypeSanitize];
 
 type ChatViewContextValue = {
   developerMode: boolean;
@@ -25,16 +45,6 @@ function useChatViewContext(): ChatViewContextValue {
   }
   return context;
 }
-
-const Markdown = memo(function Markdown(props: { text: string }) {
-  return (
-    <div className="markdown">
-      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>
-        {props.text}
-      </ReactMarkdown>
-    </div>
-  );
-});
 
 export function reasoningLabelForMode(mode: "reasoning" | "summary"): string {
   return mode === "summary" ? "Summary" : "Reasoning";
@@ -57,29 +67,12 @@ export function filterFeedForDeveloperMode(feed: FeedItem[], developerMode: bool
 const ReasoningFeedItem = memo(function ReasoningFeedItem(props: { item: Extract<FeedItem, { kind: "reasoning" }> }) {
   const [expanded, setExpanded] = useState(false);
   const label = reasoningLabelForMode(props.item.mode);
-  const toggle = useCallback(() => setExpanded((isExpanded) => !isExpanded), []);
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!shouldToggleReasoningExpanded(e.key)) return;
-    e.preventDefault();
-    setExpanded((isExpanded) => !isExpanded);
-  }, []);
 
   return (
-    <div className="feedItem">
-      <div
-        className="inlineCard"
-        role="button"
-        tabIndex={0}
-        onClick={toggle}
-        onKeyDown={handleKeyDown}
-        aria-expanded={expanded}
-      >
-        <div className="metaLine">{expanded ? "▾" : "▸"} {label}</div>
-        <div style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>
-          {expanded ? props.item.text : reasoningPreviewText(props.item.text)}
-        </div>
-      </div>
-    </div>
+    <Reasoning open={expanded} onOpenChange={setExpanded}>
+      <ReasoningTrigger label={label} />
+      <ReasoningContent>{props.item.text}</ReasoningContent>
+    </Reasoning>
   );
 });
 
@@ -89,17 +82,15 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
 
   if (item.kind === "message") {
     return (
-      <div className="feedItem">
-        <div className={"bubbleRow"} data-user={item.role === "user"}>
-          <div className={"bubble"} data-user={item.role === "user"}>
-            {item.role === "assistant" ? (
-              <Markdown text={item.text} />
-            ) : (
-              <div style={{ whiteSpace: "pre-wrap" }}>{item.text}</div>
-            )}
-          </div>
-        </div>
-      </div>
+      <Message from={item.role}>
+        <MessageContent>
+          {item.role === "assistant" ? (
+            <MessageResponse>{item.text}</MessageResponse>
+          ) : (
+            <div className="whitespace-pre-wrap">{item.text}</div>
+          )}
+        </MessageContent>
+      </Message>
     );
   }
 
@@ -109,18 +100,6 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
 
   if (item.kind === "todos") {
     return null;
-  }
-
-  if (item.kind === "log") {
-    if (!developerMode) return null;
-    return (
-      <div className="feedItem">
-        <div className="inlineCard">
-          <div className="metaLine">Log</div>
-          <div style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>{item.line}</div>
-        </div>
-      </div>
-    );
   }
 
   if (item.kind === "tool") {
@@ -134,43 +113,42 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
     );
   }
 
+  if (item.kind === "log") {
+    if (!developerMode) return null;
+    return (
+      <Card className="max-w-3xl border-border/70 bg-muted/30">
+        <CardContent className="p-3 text-xs text-muted-foreground">
+          <div className="mb-1 font-semibold uppercase tracking-wide text-primary">Log</div>
+          <div className="whitespace-pre-wrap">{item.line}</div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   if (item.kind === "error") {
     return (
-      <div className="feedItem">
-        <div className="inlineCard inlineCardDanger">
-          <div className="metaLine">Error</div>
-          <div style={{ marginTop: 4 }}>{item.message}</div>
-        </div>
-      </div>
+      <Card className="max-w-3xl border-destructive/40 bg-destructive/10">
+        <CardContent className="p-3 text-sm">
+          <div className="mb-1 font-semibold uppercase tracking-wide text-destructive">Error</div>
+          <div>{item.message}</div>
+        </CardContent>
+      </Card>
     );
   }
 
   if (item.kind === "system") {
     return (
-      <div className="feedItem">
-        <div className="inlineCard">
-          <div className="metaLine">System</div>
-          <div style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>{item.line}</div>
-        </div>
-      </div>
+      <Card className="max-w-3xl border-border/70 bg-muted/30">
+        <CardContent className="p-3 text-xs text-muted-foreground">
+          <div className="mb-1 font-semibold uppercase tracking-wide text-primary">System</div>
+          <div className="whitespace-pre-wrap">{item.line}</div>
+        </CardContent>
+      </Card>
     );
   }
 
   return null;
 });
-
-const IconSend = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="22" y1="2" x2="11" y2="13"></line>
-    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-  </svg>
-);
-
-const IconSquare = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-    <rect x="4" y="4" width="16" height="16" rx="2"></rect>
-  </svg>
-);
 
 export function ChatView() {
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
@@ -203,7 +181,7 @@ export function ChatView() {
     () => ({
       developerMode,
     }),
-    [developerMode]
+    [developerMode],
   );
 
   useEffect(() => {
@@ -212,7 +190,7 @@ export function ChatView() {
     if (visibleFeed.length === lastCountRef.current) return;
     lastCountRef.current = visibleFeed.length;
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distFromBottom < 200) {
+    if (distFromBottom < 220) {
       el.scrollTop = el.scrollHeight;
     }
   }, [visibleFeed.length]);
@@ -231,24 +209,22 @@ export function ChatView() {
   }, [composerText]);
 
   const onComposerKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
+    (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
         void sendMessage(composerText);
       }
     },
-    [sendMessage, composerText]
+    [composerText, sendMessage],
   );
 
   if (!selectedThreadId || !thread) {
     return (
-      <div className="hero">
-        <div className="heroMark" />
-        <div className="heroTitle">Let's build</div>
-        <div className="heroSub">Pick a workspace and start a new thread.</div>
-        <button className="modalButton modalButtonPrimary" type="button" onClick={() => void newThread()}>
-          New thread
-        </button>
+      <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+        <div className="h-14 w-14 rounded-2xl border border-border/80 bg-gradient-to-br from-primary/35 to-transparent" />
+        <h2 className="text-3xl font-semibold tracking-tight">Let&apos;s build</h2>
+        <p className="max-w-xl text-muted-foreground">Pick a workspace and start a new thread.</p>
+        <Button type="button" onClick={() => void newThread()}>New thread</Button>
       </div>
     );
   }
@@ -258,72 +234,83 @@ export function ChatView() {
   const transcriptOnly = rt?.transcriptOnly === true;
   const disconnected = !transcriptOnly && thread.status !== "active";
 
+  const placeholder = transcriptOnly
+    ? "Continue in a new thread..."
+    : disconnected
+      ? "Reconnect to continue..."
+      : busy
+        ? "Working..."
+        : "Message...";
+
   return (
     <ChatViewContext.Provider value={contextValue}>
-      <div className="chatLayout">
-        <div className="feed" ref={feedRef}>
-          {transcriptOnly ? (
-            <div style={{ marginBottom: 12, padding: 8, background: "rgba(255,255,255,0.1)", borderRadius: 6 }}>
-              <div style={{ fontWeight: 600 }}>Transcript view</div>
-              <div style={{ fontSize: 13, color: "var(--muted)" }}>Sending a message will continue in a new thread.</div>
-            </div>
-          ) : disconnected ? (
-            <div style={{ marginBottom: 12, padding: 8, background: "rgba(255,255,255,0.1)", borderRadius: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-              <div>
-                <div style={{ fontWeight: 600 }}>Disconnected</div>
-                <div style={{ fontSize: 13, color: "var(--muted)" }}>Reconnect to continue this thread.</div>
-              </div>
-              <button className="iconButton" type="button" onClick={() => void reconnectThread(selectedThreadId!)}>
-                Reconnect
-              </button>
-            </div>
-          ) : null}
+      <div className="flex h-full min-h-0 flex-col bg-panel">
+        <Conversation className="min-h-0" ref={feedRef}>
+          <ConversationContent>
+            {transcriptOnly ? (
+              <Card className="max-w-3xl border-border/70 bg-muted/30">
+                <CardContent className="flex items-start gap-3 p-3">
+                  <AlertTriangleIcon className="mt-0.5 h-4 w-4 text-primary" />
+                  <div>
+                    <div className="font-semibold">Transcript view</div>
+                    <div className="text-sm text-muted-foreground">Sending a message will continue in a new thread.</div>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
 
-          {visibleFeed.length === 0 ? (
-            <div className="hero" style={{ height: "auto", paddingTop: 60 }}>
-              <div className="heroTitle" style={{ fontSize: 18 }}>New thread</div>
-              <div className="heroSub" style={{ fontSize: 14 }}>Send a message to start.</div>
-            </div>
-          ) : null}
+            {disconnected ? (
+              <Card className="max-w-3xl border-border/70 bg-muted/30">
+                <CardContent className="flex items-center justify-between gap-3 p-3">
+                  <div>
+                    <div className="font-semibold">Disconnected</div>
+                    <div className="text-sm text-muted-foreground">Reconnect to continue this thread.</div>
+                  </div>
+                  <Button type="button" variant="outline" size="sm" onClick={() => void reconnectThread(selectedThreadId)}>
+                    <RotateCcwIcon className="h-3.5 w-3.5" />
+                    Reconnect
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : null}
 
-          {visibleFeed.map((item) => (
-            <FeedRow key={item.id} item={item} />
-          ))}
-        </div>
-
-        <div className="composerWrap">
-          <div className="composer">
-            <textarea
-              ref={textareaRef}
-              value={composerText}
-              onChange={(e) => setComposerText(e.currentTarget.value)}
-              placeholder={transcriptOnly ? "Continue in a new thread…" : disconnected ? "Reconnect to continue…" : busy ? "Working…" : "Message…"}
-              aria-label="Message input"
-              disabled={disabled}
-              onKeyDown={onComposerKeyDown}
-            />
-            {busy ? (
-              <button
-                className="sendButton stopButton"
-                type="button"
-                onClick={() => cancelThread(selectedThreadId!)}
-                title="Stop"
-                aria-label="Stop generating response"
-              >
-                <IconSquare />
-              </button>
+            {visibleFeed.length === 0 ? (
+              <ConversationEmptyState
+                title="New thread"
+                description="Send a message to start."
+              />
             ) : (
-              <button
-                className="sendButton"
-                type="button"
-                disabled={disabled || !composerText.trim()}
-                onClick={() => void sendMessage(composerText)}
-                title="Send message"
-                aria-label="Send message"
-              >
-                <IconSend />
-              </button>
+              visibleFeed.map((item) => <FeedRow key={item.id} item={item} />)
             )}
+          </ConversationContent>
+        </Conversation>
+
+        <div className="border-t border-border/60 px-5 py-4">
+          <PromptInputRoot>
+            <PromptInputForm
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!composerText.trim()) return;
+                void sendMessage(composerText);
+              }}
+            >
+              <PromptInputTextarea
+                value={composerText}
+                disabled={disabled}
+                placeholder={placeholder}
+                onChange={setComposerText}
+                onKeyDown={onComposerKeyDown}
+                textareaRef={textareaRef}
+              />
+              <PromptInputSubmit
+                busy={busy}
+                disabled={disabled || !composerText.trim()}
+                onStop={() => cancelThread(selectedThreadId)}
+              />
+            </PromptInputForm>
+          </PromptInputRoot>
+          <div className={cn("mx-auto mt-2 max-w-3xl text-center text-xs text-muted-foreground", busy ? "opacity-100" : "opacity-70")}>
+            {busy ? "Agent is working..." : "Press Enter to send, Shift+Enter for newline."}
           </div>
         </div>
       </div>

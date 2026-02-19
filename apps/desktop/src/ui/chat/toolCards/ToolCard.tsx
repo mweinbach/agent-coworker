@@ -1,8 +1,14 @@
-import { memo, useCallback, useMemo, useState, type KeyboardEvent } from "react";
+import { memo, useMemo, useState } from "react";
+
+import {
+  Tool,
+  ToolCodeBlock,
+  ToolContent,
+  ToolHeader,
+  ToolKeyValue,
+} from "../../../components/ai-elements/tool";
 
 import { formatToolCard } from "./toolCardFormatting";
-import { ToolCardMaximized } from "./ToolCardMaximized";
-import { ToolCardMinimized } from "./ToolCardMinimized";
 
 type ToolCardProps = {
   args?: unknown;
@@ -38,38 +44,24 @@ export const ToolCard = memo(function ToolCard(props: ToolCardProps) {
   const resultJson = useMemo(() => toJson(props.result), [props.result]);
   const formatting = useMemo(
     () => formatToolCard(displayName, props.args, props.result, props.status),
-    [displayName, props.args, props.result, props.status]
+    [displayName, props.args, props.result, props.status],
   );
 
-  const toggle = useCallback(() => {
-    setExpanded((isExpanded) => !isExpanded);
-  }, []);
-
-  const onKeyDown = useCallback((e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
-    e.preventDefault();
-    toggle();
-  }, [toggle]);
-
   return (
-    <div className="feedItem">
-      <div
-        className="toolCallCard"
-        data-expanded={expanded}
-        role="button"
-        tabIndex={0}
-        aria-expanded={expanded}
-        onKeyDown={onKeyDown}
-      >
-        <ToolCardMinimized
-          expanded={expanded}
-          subtitle={formatting.subtitle}
-          title={formatting.title}
-          onToggle={toggle}
-          status={props.status}
-        />
-        {expanded ? <ToolCardMaximized argsJson={argsJson} details={formatting.details} resultJson={resultJson} /> : null}
-      </div>
-    </div>
+    <Tool open={expanded} onOpenChange={setExpanded}>
+      <ToolHeader title={formatting.title} subtitle={formatting.subtitle} status={props.status} />
+      <ToolContent>
+        {formatting.details.length > 0 ? (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {formatting.details.map((detail) => (
+              <ToolKeyValue key={`${detail.label}:${detail.value}`} label={detail.label} value={detail.value} />
+            ))}
+          </div>
+        ) : null}
+
+        {argsJson ? <ToolCodeBlock label="Arguments" value={argsJson} /> : null}
+        {resultJson ? <ToolCodeBlock label="Result" value={resultJson} tone={props.status === "error" ? "error" : "default"} /> : null}
+      </ToolContent>
+    </Tool>
   );
 });

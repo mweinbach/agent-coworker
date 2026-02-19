@@ -17,16 +17,22 @@ import { App } from "./app";
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
 
 function printUsage() {
-  console.log("Usage: bun apps/TUI/index.tsx [--server <ws_url>]");
+  console.log("Usage: bun apps/TUI/index.tsx [--server <ws_url>] [--mouse]");
   console.log("");
   console.log("Options:");
   console.log("  --server, -s  WebSocket server URL (default: ws://127.0.0.1:7337/ws)");
+  console.log("  --mouse, -m   Enable OpenTUI mouse capture (disabled by default for native terminal copy/select)");
   console.log("  --help, -h    Show help");
   console.log("");
 }
 
-function parseArgs(argv: string[]): { serverUrl: string; help: boolean } {
+export function parseArgs(argv: string[]): {
+  serverUrl: string;
+  help: boolean;
+  useMouse: boolean;
+} {
   let serverUrl = "ws://127.0.0.1:7337/ws";
+  let useMouse = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -37,18 +43,27 @@ function parseArgs(argv: string[]): { serverUrl: string; help: boolean } {
       i++;
       continue;
     }
-    if (arg === "--help" || arg === "-h") return { serverUrl, help: true };
+    if (arg === "--mouse" || arg === "-m") {
+      useMouse = true;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") return { serverUrl, help: true, useMouse };
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { serverUrl, help: false };
+  return { serverUrl, help: false, useMouse };
 }
 
 export async function runTui(
   serverUrl: string,
-  opts?: { onDestroy?: () => void }
+  opts?: { onDestroy?: () => void; useMouse?: boolean }
 ): Promise<void> {
-  const renderer = await createCliRenderer();
+  const renderer = await createCliRenderer({
+    // Keep native terminal text selection/copy available by default.
+    useMouse: opts?.useMouse ?? false,
+    // Ctrl+C is handled by app-level keybindings and exit flow.
+    exitOnCtrlC: false,
+  });
 
   await render(() => (
     <ExitProvider onExit={() => {
@@ -106,11 +121,13 @@ export async function runTui(
 if (import.meta.main) {
   let serverUrl = "ws://127.0.0.1:7337/ws";
   let help = false;
+  let useMouse = false;
 
   try {
     const parsed = parseArgs(process.argv.slice(2));
     serverUrl = parsed.serverUrl;
     help = parsed.help;
+    useMouse = parsed.useMouse;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     console.error("");
@@ -119,7 +136,7 @@ if (import.meta.main) {
   }
 
   if (!help && process.exitCode !== 1) {
-    runTui(serverUrl).catch((err) => {
+    runTui(serverUrl, { useMouse }).catch((err) => {
       console.error(err);
       process.exitCode = 1;
     });

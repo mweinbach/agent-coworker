@@ -1,3 +1,4 @@
+import { Button } from "../../components/ui/button";
 import { ChatView } from "../ChatView";
 import { SkillsView } from "../SkillsView";
 
@@ -22,20 +23,20 @@ function resolveVariant({ ready, startupError, view }: Omit<PrimaryContentProps,
 
 function StartingContent() {
   return (
-    <div className="hero">
-      <div className="heroTitle">Starting…</div>
+    <div className="flex h-full items-center justify-center">
+      <div className="text-lg font-semibold text-foreground">Starting...</div>
     </div>
   );
 }
 
 function ErrorContent({ startupError, init }: { startupError: string; init: () => Promise<void> }) {
   return (
-    <div className="hero">
-      <div className="heroTitle">Recovered</div>
-      <div className="heroSub">{startupError}</div>
-      <button className="iconButton" type="button" onClick={() => void init()}>
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+      <div className="text-xl font-semibold text-foreground">Recovered</div>
+      <div className="max-w-xl text-sm text-muted-foreground">{startupError}</div>
+      <Button variant="outline" type="button" onClick={() => void init()}>
         Retry
-      </button>
+      </Button>
     </div>
   );
 }

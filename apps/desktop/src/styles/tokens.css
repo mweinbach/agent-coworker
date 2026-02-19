@@ -1,0 +1,55 @@
+:root {
+  --app-bg: #e7dfd4;
+  --sidebar-bg: #eee3d4;
+  --panel-bg: #f6eee4;
+  --border: rgba(94, 67, 41, 0.14);
+  --text: #2f2318;
+  --muted: #5a4736;
+  --accent: #9a6640;
+  --danger: #bb3e3e;
+  --danger-bg: rgba(187, 62, 62, 0.12);
+  --radius: 0.625rem;
+
+  color-scheme: light;
+}
+
+:root[data-system-theme="dark"] {
+  --app-bg: #1f1913;
+  --sidebar-bg: #29221b;
+  --panel-bg: #332a22;
+  --border: rgba(255, 233, 212, 0.16);
+  --text: #f6ece0;
+  --muted: #d8c7b6;
+  --accent: #e29a62;
+  --danger: #e86060;
+  --danger-bg: rgba(232, 96, 96, 0.14);
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-system-theme]) {
+    --app-bg: #1f1913;
+    --sidebar-bg: #29221b;
+    --panel-bg: #332a22;
+    --border: rgba(255, 233, 212, 0.16);
+    --text: #f6ece0;
+    --muted: #d8c7b6;
+    --accent: #e29a62;
+    --danger: #e86060;
+    --danger-bg: rgba(232, 96, 96, 0.14);
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-platform="win32"][data-reduced-transparency="false"] {
+  --app-bg: color-mix(in srgb, var(--app-bg) 88%, transparent);
+  --sidebar-bg: color-mix(in srgb, var(--sidebar-bg) 82%, transparent);
+  --panel-bg: color-mix(in srgb, var(--panel-bg) 90%, transparent);
+}
+
+:root[data-high-contrast="true"] {
+  --border: currentColor;
+  --accent: #1769e0;
+}

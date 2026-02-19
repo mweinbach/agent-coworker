@@ -1,10 +1,13 @@
 import type { ReactNode } from "react";
 
-import { ProvidersPage } from "./pages/ProvidersPage";
-import { WorkspacesPage } from "./pages/WorkspacesPage";
+import { ArrowLeftIcon } from "lucide-react";
 
 import { useAppStore } from "../../app/store";
+import { Button } from "../../components/ui/button";
+import { cn } from "../../lib/utils";
 import type { SettingsPageId } from "../../app/types";
+import { ProvidersPage } from "./pages/ProvidersPage";
+import { WorkspacesPage } from "./pages/WorkspacesPage";
 
 type SettingsPageDefinition = {
   id: SettingsPageId;
@@ -27,22 +30,23 @@ function SettingsNavigation({
   onBack: () => void;
 }) {
   return (
-    <aside className="settingsNav">
-      <button className="settingsBackButton" type="button" onClick={onBack}>
+    <aside className="flex min-h-0 flex-col gap-3 border-r border-border/80 bg-sidebar p-4 max-[960px]:border-r-0 max-[960px]:border-b">
+      <Button className="justify-start" variant="outline" type="button" onClick={onBack}>
+        <ArrowLeftIcon className="h-4 w-4" />
         Back to app
-      </button>
+      </Button>
 
-      <div className="settingsNavList">
+      <div className="flex flex-col gap-1 max-[960px]:flex-row max-[960px]:flex-wrap">
         {SETTINGS_PAGES.map((page) => (
-          <button
+          <Button
             key={page.id}
-            className="settingsNavItem"
-            data-active={activePage === page.id}
+            variant={activePage === page.id ? "secondary" : "ghost"}
+            className={cn("justify-start", activePage === page.id ? "border border-border/70" : "")}
             type="button"
             onClick={() => onSelectPage(page.id)}
           >
             {page.label}
-          </button>
+          </Button>
         ))}
       </div>
     </aside>
@@ -56,11 +60,11 @@ export function SettingsShell() {
   const activePage = SETTINGS_PAGES.find((page) => page.id === settingsPage) ?? SETTINGS_PAGES[0];
 
   return (
-    <div className="settingsApp">
+    <div className="grid h-full min-h-0 grid-cols-[260px_minmax(0,1fr)] bg-background max-[960px]:grid-cols-1">
       <SettingsNavigation activePage={settingsPage} onSelectPage={setSettingsPage} onBack={closeSettings} />
 
-      <main className="settingsPage">
-        <div className="settingsContent">{activePage.render()}</div>
+      <main className="min-h-0 overflow-auto bg-gradient-to-b from-panel to-background">
+        <div className="mx-auto w-full max-w-5xl p-6 max-[960px]:p-4">{activePage.render()}</div>
       </main>
     </div>
   );

@@ -1,45 +1,19 @@
+import type { MouseEvent } from "react";
+
+import {
+  CirclePlusIcon,
+  FolderIcon,
+  MessageSquareIcon,
+  PlusIcon,
+  Settings2Icon,
+  SparklesIcon,
+} from "lucide-react";
+
 import { useAppStore } from "../app/store";
 import { confirmAction, showContextMenu } from "../lib/desktopCommands";
-
-const IconPlus = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="12" y1="5" x2="12" y2="19"></line>
-    <line x1="5" y1="12" x2="19" y2="12"></line>
-  </svg>
-);
-
-const IconMessage = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-  </svg>
-);
-
-const IconPlusCircle = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10"></circle>
-    <line x1="12" y1="8" x2="12" y2="16"></line>
-    <line x1="8" y1="12" x2="16" y2="12"></line>
-  </svg>
-);
-
-const IconZap = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-  </svg>
-);
-
-const IconFolder = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-  </svg>
-);
-
-const IconSettings = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="3"></circle>
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-  </svg>
-);
+import { designTokens } from "../lib/designTokens";
+import { Button } from "../components/ui/button";
+import { cn } from "../lib/utils";
 
 export function Sidebar() {
   const view = useAppStore((s) => s.view);
@@ -63,7 +37,7 @@ export function Sidebar() {
     : []
   ).sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt));
 
-  const handleWorkspaceContextMenu = async (e: React.MouseEvent, wsId: string, wsName: string) => {
+  const handleWorkspaceContextMenu = async (e: MouseEvent, wsId: string, wsName: string) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -90,7 +64,7 @@ export function Sidebar() {
     }
   };
 
-  const handleThreadContextMenu = async (e: React.MouseEvent, tId: string, tTitle: string) => {
+  const handleThreadContextMenu = async (e: MouseEvent, tId: string, tTitle: string) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -118,53 +92,47 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="sidebar">
-      <div className="brand">
-        <div className="brandMark" />
-        <div className="brandName">Cowork</div>
+    <aside className={cn("flex h-full w-full flex-col gap-3 border-r border-border/80 bg-sidebar px-3 py-3", designTokens.classes.subtleSurface)}>
+      <div className="mb-2 flex items-center gap-3 px-2">
+        <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-primary to-primary/70" />
+        <div className="text-base font-bold tracking-tight text-foreground">Cowork</div>
       </div>
 
-      <nav className="sidebarNav">
-        <button
-          className="navItem"
-          data-active={view === "chat"}
+      <nav className="grid gap-1">
+        <Button
+          variant={view === "chat" ? "secondary" : "ghost"}
+          className="justify-start"
           onClick={() => void newThread()}
         >
-          <IconPlusCircle />
-          <span>New thread</span>
-        </button>
+          <CirclePlusIcon className="h-4 w-4" />
+          New thread
+        </Button>
 
-        <button
-          className="navItem"
-          data-active={view === "skills"}
+        <Button
+          variant={view === "skills" ? "secondary" : "ghost"}
+          className="justify-start"
           onClick={() => void openSkills()}
         >
-          <IconZap />
-          <span>Skills</span>
-        </button>
+          <SparklesIcon className="h-4 w-4" />
+          Skills
+        </Button>
       </nav>
 
-      <div className="sidebarSection">
-        <div className="sectionTitleRow">
-          <div className="sectionTitle">Workspaces</div>
-          <button
-            className="sidebarToggle"
-            type="button"
-            onClick={() => void addWorkspace()}
-            title="Add workspace"
-            aria-label="Add workspace"
-          >
-            <IconPlus />
-          </button>
+      <section className="flex min-h-0 flex-1 flex-col gap-2">
+        <div className="flex items-center justify-between px-2">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Workspaces</div>
+          <Button size="icon-sm" variant="ghost" onClick={() => void addWorkspace()} aria-label="Add workspace">
+            <PlusIcon className="h-4 w-4" />
+          </Button>
         </div>
 
-        <div className="workspaceList">
+        <div className="min-h-0 flex-1 space-y-1 overflow-auto pr-1">
           {workspaces.length === 0 ? (
-            <div className="workspaceEmpty">
+            <div className="rounded-lg border border-dashed border-border/80 bg-muted/25 p-3 text-center text-xs text-muted-foreground">
               <div>No workspaces yet</div>
-              <button className="iconButton" type="button" onClick={() => void addWorkspace()} style={{ marginTop: 10 }}>
+              <Button className="mt-2" size="sm" variant="outline" type="button" onClick={() => void addWorkspace()}>
                 Add workspace
-              </button>
+              </Button>
             </div>
           ) : (
             workspaces.map((ws) => {
@@ -172,85 +140,77 @@ export function Sidebar() {
               const workspaceThreads = active ? activeWorkspaceThreads : [];
 
               return (
-                <div key={ws.id}>
-                  <div
-                    className="workspaceRow"
-                    data-active={active}
-                    role="button"
-                    tabIndex={0}
+                <div key={ws.id} className="space-y-1.5">
+                  <button
+                    className={cn(
+                      "w-full rounded-lg border px-2.5 py-2 text-left transition-colors",
+                      active
+                        ? "border-border bg-muted/55"
+                        : "border-transparent bg-transparent hover:border-border/50 hover:bg-muted/30",
+                    )}
                     aria-expanded={active}
                     onClick={() => void selectWorkspace(ws.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        void selectWorkspace(ws.id);
-                      }
-                    }}
                     onContextMenu={(e) => handleWorkspaceContextMenu(e, ws.id, ws.name)}
                     title={ws.path}
+                    type="button"
                   >
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <IconFolder />
-                      <div className="workspaceName">{ws.name}</div>
+                    <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                      <FolderIcon className="h-4 w-4 text-muted-foreground" />
+                      <span className="truncate">{ws.name}</span>
                     </div>
-                    <div className="workspacePath">{ws.path}</div>
-                  </div>
+                    <div className="truncate text-[11px] text-muted-foreground">{ws.path}</div>
+                  </button>
 
-                  {active && (
-                    <div className="workspaceSessions">
+                  {active ? (
+                    <div className="ml-4 space-y-1 border-l border-border/70 pl-3">
                       {workspaceThreads.length === 0 ? (
-                        <div className="workspaceSessionsEmpty">No sessions yet</div>
+                        <div className="py-1 text-xs text-muted-foreground">No sessions yet</div>
                       ) : (
-                        workspaceThreads.map((t) => {
-                          const tr = threadRuntimeById[t.id];
-                          const busy = tr?.busy === true;
-                          const isActive = t.id === selectedThreadId;
+                        workspaceThreads.map((thread) => {
+                          const runtime = threadRuntimeById[thread.id];
+                          const busy = runtime?.busy === true;
+                          const isActive = thread.id === selectedThreadId;
 
                           return (
-                            <div
-                              key={t.id}
-                              className="threadRow"
-                              data-active={isActive}
-                              role="button"
-                              tabIndex={0}
-                              onClick={() => void selectThread(t.id)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === " ") {
-                                  e.preventDefault();
-                                  void selectThread(t.id);
-                                }
-                              }}
-                              onContextMenu={(e) => handleThreadContextMenu(e, t.id, t.title || "New thread")}
+                            <button
+                              key={thread.id}
+                              className={cn(
+                                "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+                                isActive
+                                  ? "bg-muted/60 text-foreground"
+                                  : "text-muted-foreground hover:bg-muted/35 hover:text-foreground",
+                              )}
+                              onClick={() => void selectThread(thread.id)}
+                              onContextMenu={(e) => handleThreadContextMenu(e, thread.id, thread.title || "New thread")}
+                              type="button"
                             >
-                              <div style={{ display: "flex", alignItems: "center", gap: 8, overflow: "hidden" }}>
-                                <IconMessage />
-                                <div className="threadTitleMain">{t.title || "New thread"}</div>
-                              </div>
-                              {busy && <span className="threadBusyDot" />}
-                            </div>
+                              <span className="flex min-w-0 items-center gap-2">
+                                <MessageSquareIcon className="h-3.5 w-3.5 shrink-0" />
+                                <span className="truncate">{thread.title || "New thread"}</span>
+                              </span>
+                              {busy ? <span className="h-2 w-2 shrink-0 rounded-full bg-primary" aria-hidden="true" /> : null}
+                            </button>
                           );
                         })
                       )}
                     </div>
-                  )}
+                  ) : null}
                 </div>
               );
             })
           )}
         </div>
-      </div>
+      </section>
 
-      <div style={{ marginTop: "auto" }}>
-        <button
-          className="navItem"
-          data-active={view === "settings"}
-          type="button"
-          onClick={() => openSettings()}
-        >
-          <IconSettings />
-          <span>Settings</span>
-        </button>
-      </div>
+      <Button
+        variant={view === "settings" ? "secondary" : "ghost"}
+        className="justify-start"
+        type="button"
+        onClick={() => openSettings()}
+      >
+        <Settings2Icon className="h-4 w-4" />
+        Settings
+      </Button>
     </aside>
   );
 }

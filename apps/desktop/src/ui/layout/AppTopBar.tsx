@@ -1,3 +1,10 @@
+import { LayoutPanelLeftIcon, LoaderCircleIcon, PlusIcon } from "lucide-react";
+
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { designTokens } from "../../lib/designTokens";
+import { cn } from "../../lib/utils";
+
 interface AppTopBarProps {
   busy: boolean;
   onCreateThread: () => void;
@@ -6,20 +13,6 @@ interface AppTopBarProps {
   title: string;
   view: "chat" | "skills";
 }
-
-const IconSidebar = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-    <line x1="9" y1="3" x2="9" y2="21"></line>
-  </svg>
-);
-
-const IconPlus = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="12" y1="5" x2="12" y2="19"></line>
-    <line x1="5" y1="12" x2="19" y2="12"></line>
-  </svg>
-);
 
 export function AppTopBar({
   busy,
@@ -32,32 +25,32 @@ export function AppTopBar({
   const sidebarLabel = sidebarCollapsed ? "Show sidebar (Cmd/Ctrl+B)" : "Hide sidebar (Cmd/Ctrl+B)";
 
   return (
-    <div className="topbar">
-      <div className="topbarLeft">
-        <button
-          className="sidebarToggle"
-          type="button"
+    <div className={cn("flex h-12 shrink-0 items-center justify-between border-b border-border/70 bg-sidebar px-4", designTokens.classes.subtleSurface)}>
+      <div className="flex min-w-0 items-center gap-2">
+        <Button
+          size="icon-sm"
+          variant="ghost"
           onClick={onToggleSidebar}
           title={sidebarLabel}
           aria-label={sidebarLabel}
         >
-          <IconSidebar />
-        </button>
-        <div className="topbarTitle">{title}</div>
+          <LayoutPanelLeftIcon className="h-4 w-4" />
+        </Button>
+        <div className="truncate font-semibold text-sm text-foreground">{title}</div>
       </div>
-      <div className="topbarRight">
-        {busy && (
-          <div className="statusPill busy">
-            <div className="spinner-mini" />
-            <span>Busy</span>
-          </div>
-        )}
-        {view === "chat" && (
-          <button className="primaryButton" type="button" onClick={onCreateThread}>
-            <IconPlus />
-            <span>New</span>
-          </button>
-        )}
+      <div className="flex items-center gap-2">
+        {busy ? (
+          <Badge variant="secondary" className="gap-1.5">
+            <LoaderCircleIcon className="h-3.5 w-3.5 animate-spin" />
+            Busy
+          </Badge>
+        ) : null}
+        {view === "chat" ? (
+          <Button size="sm" onClick={onCreateThread}>
+            <PlusIcon className="h-3.5 w-3.5" />
+            New
+          </Button>
+        ) : null}
       </div>
     </div>
   );

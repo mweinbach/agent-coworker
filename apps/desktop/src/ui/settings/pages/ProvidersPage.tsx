@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
+import { Badge } from "../../../components/ui/badge";
+import { Button } from "../../../components/ui/button";
+import { Card, CardContent } from "../../../components/ui/card";
+import { Input } from "../../../components/ui/input";
 import type { ProviderName, ServerEvent } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { MODEL_CHOICES, UI_DISABLED_PROVIDERS } from "../../../lib/modelChoices";
+import { cn } from "../../../lib/utils";
 
 type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
 
@@ -32,7 +37,6 @@ function displayProviderName(provider: ProviderName): string {
     openai: "OpenAI",
     anthropic: "Anthropic",
     "codex-cli": "Codex CLI",
-    "claude-code": "Claude Code",
   };
   return names[provider] ?? provider;
 }
@@ -42,12 +46,6 @@ function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
     return [
       { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
       { id: "oauth_device", type: "oauth", label: "Sign in with ChatGPT (device code)", oauthMode: "auto" },
-      { id: "api_key", type: "api", label: "API key" },
-    ];
-  }
-  if (provider === "claude-code") {
-    return [
-      { id: "oauth_cli", type: "oauth", label: "Sign in with Claude Code", oauthMode: "auto" },
       { id: "api_key", type: "api", label: "API key" },
     ];
   }
@@ -111,13 +109,14 @@ export function ProvidersPage() {
   }, [canConnectProvider, requestProviderAuthMethods, requestProviderCatalog]);
 
   return (
-    <div className="settingsStack">
-      <div className="settingsPageHeader">
-        <div className="settingsPageTitle">Providers</div>
-        <div className="settingsPageSub">
+    <div className="space-y-5">
+      <div className="space-y-2">
+        <h1 className="text-3xl font-semibold tracking-tight text-foreground">Providers</h1>
+        <p className="text-sm text-muted-foreground">
           Connect your AI providers to start chatting.{" "}
-          <button
-            className="settingsInlineAction"
+          <Button
+            variant="link"
+            className="h-auto px-0"
             type="button"
             onClick={() => {
               void requestProviderCatalog();
@@ -126,82 +125,77 @@ export function ProvidersPage() {
             }}
             disabled={providerStatusRefreshing}
           >
-            {providerStatusRefreshing ? "Refreshing…" : "Refresh status"}
-          </button>
-        </div>
+            {providerStatusRefreshing ? "Refreshing..." : "Refresh status"}
+          </Button>
+        </p>
       </div>
 
-      {!canConnectProvider && (
-        <div className="settingsCard">
-          <div className="settingsCardBody settingsCardBody--centered">
-            <span className="settingsMeta">Add a workspace first to connect providers.</span>
-          </div>
-        </div>
-      )}
+      {!canConnectProvider ? (
+        <Card className="border-border/80 bg-card/85">
+          <CardContent className="p-6 text-center text-sm text-muted-foreground">
+            Add a workspace first to connect providers.
+          </CardContent>
+        </Card>
+      ) : null}
 
-      <div className="settingsProviderGrid">
-        {providerRows.map((p) => {
-          const status = providerStatusByName[p];
+      <div className="space-y-3">
+        {providerRows.map((provider) => {
+          const status = providerStatusByName[provider];
           const label = providerStatusLabel(status);
-          const isExpanded = expandedProvider === p;
-          const methods = authMethodsForProvider(p);
+          const isExpanded = expandedProvider === provider;
+          const methods = authMethodsForProvider(provider);
           const connected = Boolean(status?.authorized || status?.verified);
-          const providerDisplayName = catalogNameByProvider.get(p) ?? displayProviderName(p);
-          const models = (MODEL_CHOICES[p] ?? []).slice(0, 8);
+          const providerDisplayName = catalogNameByProvider.get(provider) ?? displayProviderName(provider);
+          const models = (MODEL_CHOICES[provider] ?? []).slice(0, 8);
 
           return (
-            <div key={p} className={"settingsCard settingsProviderCard" + (isExpanded ? " settingsProviderCardExpanded" : "")}>
+            <Card key={provider} className={cn("border-border/80 bg-card/85", isExpanded && "border-primary/35")}> 
               <button
-                className="settingsProviderRow"
+                className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
                 type="button"
                 aria-expanded={isExpanded}
-                aria-controls={`provider-panel-${p}`}
-                onClick={() => setExpandedProvider(isExpanded ? null : p)}
+                aria-controls={`provider-panel-${provider}`}
+                onClick={() => setExpandedProvider(isExpanded ? null : provider)}
               >
-                <div className="settingsProviderInfo">
-                  <div className="settingsProviderName">{providerDisplayName}</div>
-                  <div className="settingsProviderMeta">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-foreground">{providerDisplayName}</div>
+                  <div className="mt-0.5 truncate text-xs text-muted-foreground">
                     {connected
-                      ? (status?.account ? formatAccount(status.account) : `${models.length} model${models.length !== 1 ? "s" : ""} available`)
+                      ? (status?.account
+                          ? formatAccount(status.account)
+                          : `${models.length} model${models.length !== 1 ? "s" : ""} available`)
                       : "Click to set up"}
                   </div>
                 </div>
-                <div className="settingsProviderActions">
-                  <span
-                    className={
-                      "settingsPill" +
-                      (connected ? " settingsPillVerified" : "")
-                    }
-                  >
-                    {label}
-                  </span>
-                  <span className="settingsExpandIcon">{isExpanded ? "▾" : "▸"}</span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge variant={connected ? "default" : "secondary"}>{label}</Badge>
+                  <span className="text-xs text-muted-foreground">{isExpanded ? "▾" : "▸"}</span>
                 </div>
               </button>
 
-              {isExpanded && (
-                <div className="settingsProviderExpanded" id={`provider-panel-${p}`}>
+              {isExpanded ? (
+                <CardContent id={`provider-panel-${provider}`} className="space-y-4 border-t border-border/70 px-5 py-4">
                   {methods.map((method) => {
-                    const stateKey = methodStateKey(p, method.id);
+                    const stateKey = methodStateKey(provider, method.id);
                     const apiKeyValue = apiKeysByMethod[stateKey] ?? "";
                     const codeValue = oauthCodesByMethod[stateKey] ?? "";
                     const challengeMatch =
-                      providerLastAuthChallenge?.provider === p && providerLastAuthChallenge?.methodId === method.id
+                      providerLastAuthChallenge?.provider === provider && providerLastAuthChallenge?.methodId === method.id
                         ? providerLastAuthChallenge
                         : null;
                     const resultMatch =
-                      providerLastAuthResult?.provider === p && providerLastAuthResult?.methodId === method.id
+                      providerLastAuthResult?.provider === provider && providerLastAuthResult?.methodId === method.id
                         ? providerLastAuthResult
                         : null;
 
                     return (
-                      <div className="settingsProviderBlock" key={stateKey}>
-                        <div className="settingsProviderBlockLabel">{method.label}</div>
+                      <div key={stateKey} className="space-y-2 border-t border-border/70 pt-4 first:border-t-0 first:pt-0">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{method.label}</div>
 
                         {method.type === "api" ? (
-                          <div className="settingsKeyRow">
-                            <input
-                              className="settingsTextInput"
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Input
+                              className="max-w-md"
                               value={apiKeyValue}
                               onChange={(e) =>
                                 setApiKeysByMethod((s) => ({ ...s, [stateKey]: e.currentTarget.value }))
@@ -210,35 +204,33 @@ export function ProvidersPage() {
                               type="password"
                               aria-label={`${providerDisplayName} ${method.label} API key`}
                             />
-                            <button
-                              className="modalButton modalButtonPrimary"
+                            <Button
                               type="button"
                               disabled={!canConnectProvider}
                               title={!canConnectProvider ? "Add a workspace first." : undefined}
                               onClick={() => {
-                                void setProviderApiKey(p, method.id, apiKeyValue);
+                                void setProviderApiKey(provider, method.id, apiKeyValue);
                               }}
                             >
                               Save
-                            </button>
+                            </Button>
                           </div>
                         ) : (
-                          <div className="settingsOAuthRow">
-                            <button
-                              className="modalButton modalButtonPrimary"
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
                               type="button"
                               disabled={!canConnectProvider}
                               title={!canConnectProvider ? "Add a workspace first." : undefined}
                               onClick={() => {
-                                void authorizeProviderAuth(p, method.id);
+                                void authorizeProviderAuth(provider, method.id);
                               }}
                             >
                               Sign in
-                            </button>
+                            </Button>
                             {method.oauthMode === "code" ? (
                               <>
-                                <input
-                                  className="settingsTextInput settingsTextInput--code"
+                                <Input
+                                  className="max-w-xs"
                                   value={codeValue}
                                   onChange={(e) =>
                                     setOauthCodesByMethod((s) => ({ ...s, [stateKey]: e.currentTarget.value }))
@@ -247,73 +239,74 @@ export function ProvidersPage() {
                                   type="text"
                                   aria-label={`${providerDisplayName} ${method.label} authorization code`}
                                 />
-                                <button
-                                  className="modalButton"
+                                <Button
+                                  variant="outline"
                                   type="button"
                                   disabled={!canConnectProvider}
                                   onClick={() => {
-                                    void callbackProviderAuth(p, method.id, codeValue);
+                                    void callbackProviderAuth(provider, method.id, codeValue);
                                   }}
                                 >
                                   Submit
-                                </button>
+                                </Button>
                               </>
                             ) : (
-                              <button
-                                className="modalButton"
+                              <Button
+                                variant="outline"
                                 type="button"
                                 disabled={!canConnectProvider}
                                 onClick={() => {
-                                  void callbackProviderAuth(p, method.id);
+                                  void callbackProviderAuth(provider, method.id);
                                 }}
                               >
                                 Continue
-                              </button>
+                              </Button>
                             )}
                           </div>
                         )}
 
-                        {challengeMatch && (
-                          <div className="settingsMeta settingsChallengeInfo">
+                        {challengeMatch ? (
+                          <div className="text-xs text-muted-foreground">
                             {challengeMatch.challenge.instructions}
                             {challengeMatch.challenge.url ? (
                               <>
                                 {" "}
-                                <a href={challengeMatch.challenge.url} target="_blank" rel="noreferrer">
+                                <a href={challengeMatch.challenge.url} target="_blank" rel="noreferrer" className="underline">
                                   Open link
                                 </a>
                               </>
                             ) : null}
                             {challengeMatch.challenge.command ? (
-                              <> Run: <code>{challengeMatch.challenge.command}</code></>
-                            ) : ""}
+                              <>
+                                {" "}
+                                Run: <code className="rounded bg-muted/45 px-1.5 py-0.5">{challengeMatch.challenge.command}</code>
+                              </>
+                            ) : null}
                           </div>
-                        )}
+                        ) : null}
 
-                        {resultMatch && (
-                          <div
-                            className={"settingsMeta" + (resultMatch.ok ? " settingsMetaSuccess" : " settingsMetaError")}
-                          >
+                        {resultMatch ? (
+                          <div className={cn("text-xs", resultMatch.ok ? "text-emerald-600" : "text-destructive")}>
                             {resultMatch.message}
                           </div>
-                        )}
+                        ) : null}
                       </div>
                     );
                   })}
 
-                  {models.length > 0 && (
-                    <div className="settingsModelChips">
-                      <div className="settingsModelChipsLabel">Available models</div>
-                      <div className="settingsModelChipsList">
-                        {models.map((m) => (
-                          <span key={m} className="pill">{m}</span>
+                  {models.length > 0 ? (
+                    <div className="space-y-2 border-t border-border/70 pt-4">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Available models</div>
+                      <div className="flex flex-wrap gap-2">
+                        {models.map((model) => (
+                          <Badge key={model} variant="secondary">{model}</Badge>
                         ))}
                       </div>
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
+                  ) : null}
+                </CardContent>
+              ) : null}
+            </Card>
           );
         })}
       </div>

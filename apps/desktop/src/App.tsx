@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 
 import { useAppStore } from "./app/store";
+import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
   getSystemAppearance,
   onMenuCommand,
@@ -8,14 +9,13 @@ import {
   setWindowAppearance,
   showNotification,
 } from "./lib/desktopCommands";
+import { ContextSidebar } from "./ui/ContextSidebar";
 import { PromptModal } from "./ui/PromptModal";
 import { Sidebar } from "./ui/Sidebar";
-import { ContextSidebar } from "./ui/ContextSidebar";
 import { AppTopBar } from "./ui/layout/AppTopBar";
 import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
-import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 
 export default function App() {
   const ready = useAppStore((s) => s.ready);
@@ -137,13 +137,14 @@ export default function App() {
   );
   const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
   const busy = runtime?.busy === true;
+  const showContextSidebar = view === "chat" && activeThread !== null;
 
   const title = view === "skills" ? "Skills" : activeThread?.title || "New thread";
 
   if (view === "settings") {
     return (
-      <div className="settingsRoot">
-        <div className="appContent">
+      <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
+        <div className="min-h-0 flex-1">
           <SettingsContent init={init} ready={ready} startupError={startupError} />
         </div>
         <PromptModal />
@@ -152,17 +153,17 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <div className="appContent">
+    <div className="h-full bg-background text-foreground">
+      <div className="flex h-full min-h-0">
         <div
-          className={"sidebarContainer" + (sidebarCollapsed ? " sidebarCollapsed" : "")}
+          className="relative shrink-0 overflow-hidden"
           style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
         >
-          {!sidebarCollapsed && <Sidebar />}
-          {!sidebarCollapsed && <SidebarResizer />}
+          {!sidebarCollapsed ? <Sidebar /> : null}
+          {!sidebarCollapsed ? <SidebarResizer /> : null}
         </div>
 
-        <main className="main">
+        <main className="flex min-w-0 flex-1 flex-col bg-panel">
           <AppTopBar
             busy={busy}
             onCreateThread={() => void newThread()}
@@ -172,12 +173,12 @@ export default function App() {
             view={view}
           />
 
-          <div className="content">
+          <div className="min-h-0 flex-1 overflow-hidden">
             <PrimaryContent init={init} ready={ready} startupError={startupError} view={view} />
           </div>
         </main>
 
-        <ContextSidebar />
+        {showContextSidebar ? <ContextSidebar /> : null}
       </div>
 
       <PromptModal />

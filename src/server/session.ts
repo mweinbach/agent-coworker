@@ -1324,10 +1324,13 @@ export class AgentSession {
         );
       }
     } finally {
-      await this.takeAutomaticSessionCheckpoint();
       this.emit({ type: "session_busy", sessionId: this.id, busy: false });
       this.running = false;
       this.abortController = null;
+      // Auto-checkpointing is best-effort and must never block follow-up prompts.
+      void this.takeAutomaticSessionCheckpoint().catch(() => {
+        // takeAutomaticSessionCheckpoint already emits backup errors/telemetry.
+      });
     }
   }
 

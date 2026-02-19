@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 
 import { useAppStore } from "../../app/store";
+import { cn } from "../../lib/utils";
 
 export function SidebarResizer() {
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
@@ -22,7 +23,7 @@ export function SidebarResizer() {
   );
 
   const handleKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLDivElement>) => {
+    (event: KeyboardEvent<HTMLDivElement>) => {
       const step = event.shiftKey ? 32 : 16;
       if (event.key === "ArrowLeft") {
         event.preventDefault();
@@ -64,7 +65,7 @@ export function SidebarResizer() {
 
   return (
     <div
-      className={"sidebarResizer" + (dragging ? " sidebarResizerActive" : "")}
+      className={cn("absolute right-0 top-0 z-20 h-full w-2 cursor-col-resize", dragging && "bg-primary/20")}
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize sidebar"

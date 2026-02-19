@@ -22,4 +22,13 @@ describe("getTextareaAction", () => {
   test("keeps existing Ctrl+J newline behavior", () => {
     expect(getTextareaAction("j", true, false, false)).toBe("newline");
   });
+
+  test("maps plain Ctrl+C to clear", () => {
+    expect(getTextareaAction("c", true, false, false)).toBe("clear");
+    expect(getTextareaAction("C", true, false, false)).toBe("clear");
+  });
+
+  test("does not swallow Ctrl+Shift+C copy chord", () => {
+    expect(getTextareaAction("c", true, true, false)).toBe("none");
+  });
 });

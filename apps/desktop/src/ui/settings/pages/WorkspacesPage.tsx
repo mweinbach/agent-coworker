@@ -3,20 +3,33 @@ import { useMemo } from "react";
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 
 import { useAppStore } from "../../../app/store";
+import { Badge } from "../../../components/ui/badge";
+import { Button } from "../../../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
+import { Checkbox } from "../../../components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../../components/ui/select";
 import { confirmAction } from "../../../lib/desktopCommands";
+import { MODEL_CHOICES, modelOptionsForProvider, UI_DISABLED_PROVIDERS } from "../../../lib/modelChoices";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
-import { MODEL_CHOICES, modelOptionsForProvider, UI_DISABLED_PROVIDERS } from "../../../lib/modelChoices";
 
 function displayProviderName(provider: ProviderName): string {
   const names: Partial<Record<ProviderName, string>> = {
     google: "Google",
     openai: "OpenAI",
     anthropic: "Anthropic",
-    "codex-cli": "Codex CLI",
-    "claude-code": "Claude Code",
-  };
+    "codex-cli": "Codex CLI",  };
   return names[provider] ?? provider;
+}
+
+function toBoolean(checked: boolean | "indeterminate"): boolean {
+  return checked === true;
 }
 
 export function WorkspacesPage() {
@@ -33,7 +46,7 @@ export function WorkspacesPage() {
 
   const ws = useMemo(
     () => workspaces.find((w) => w.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
-    [selectedWorkspaceId, workspaces]
+    [selectedWorkspaceId, workspaces],
   );
 
   const provider = (ws?.defaultProvider ?? "google") as ProviderName;
@@ -46,125 +59,143 @@ export function WorkspacesPage() {
   const hasCustomModel = Boolean(model && !curatedModels.includes(model));
 
   return (
-    <div className="settingsStack">
-      <div className="settingsPageHeader">
-        <div className="settingsPageTitle">Workspaces</div>
-        <div className="settingsPageSub">Choose a project folder and configure how the agent behaves in it.</div>
+    <div className="space-y-5">
+      <div className="space-y-2">
+        <h1 className="text-3xl font-semibold tracking-tight text-foreground">Workspaces</h1>
+        <p className="text-sm text-muted-foreground">Choose a project folder and configure how the agent behaves in it.</p>
       </div>
 
       {workspaces.length === 0 || !ws ? (
-        <div className="settingsCard">
-          <div className="settingsCardBody settingsCardBody--centered">
-            <button className="modalButton modalButtonPrimary" type="button" onClick={() => void addWorkspace()}>
+        <Card className="border-border/80 bg-card/85">
+          <CardContent className="p-8 text-center">
+            <Button type="button" onClick={() => void addWorkspace()}>
               Add workspace
-            </button>
-          </div>
-        </div>
+            </Button>
+          </CardContent>
+        </Card>
       ) : (
         <>
-          {/* ── Workspace selector ── */}
-          <div className="settingsCard">
-            <div className="settingsCardHeader">
-              <div className="settingsCardTitle">Active workspace</div>
-              <button className="iconButton" type="button" onClick={() => void addWorkspace()}>
-                Add
-              </button>
-            </div>
-            <div className="settingsCardBody">
-              <div className="settingsRow">
-                <div className="settingsRowLeft">
-                  <div className="settingsRowLabel">{ws.name}</div>
-                  <div className="settingsRowHint">{ws.path}</div>
-                </div>
-                {workspaces.length > 1 && (
-                  <select
-                    className="settingsSelect"
-                    value={ws.id}
-                    aria-label="Active workspace"
-                    onChange={(e) => void selectWorkspace(e.currentTarget.value)}
-                  >
-                    {workspaces.map((w) => (
-                      <option key={w.id} value={w.id}>{w.name}</option>
-                    ))}
-                  </select>
-                )}
+          <Card className="border-border/80 bg-card/85">
+            <CardHeader className="flex-row items-center justify-between space-y-0">
+              <div>
+                <CardTitle>Active workspace</CardTitle>
+                <CardDescription>Selected project for this desktop session.</CardDescription>
               </div>
-            </div>
-          </div>
+              <Button variant="outline" type="button" onClick={() => void addWorkspace()}>
+                Add
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div>
+                <div className="text-sm font-medium text-foreground">{ws.name}</div>
+                <div className="text-xs text-muted-foreground">{ws.path}</div>
+              </div>
+              {workspaces.length > 1 ? (
+                <Select value={ws.id} onValueChange={(value) => void selectWorkspace(value)}>
+                  <SelectTrigger aria-label="Active workspace">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {workspaces.map((workspace) => (
+                      <SelectItem key={workspace.id} value={workspace.id}>
+                        {workspace.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
+            </CardContent>
+          </Card>
 
-          {/* ── Model selection ── */}
-          <div className="settingsCard">
-            <div className="settingsCardHeader">
-              <div className="settingsCardTitle">Model</div>
-            </div>
-            <div className="settingsCardSub">The default provider and model for new sessions in this workspace.</div>
-            <div className="settingsCardBody">
-              <div className="settingsRow">
-                <div className="settingsRowLabel">Provider</div>
-                <select
-                  className="settingsSelect"
+          <Card className="border-border/80 bg-card/85">
+            <CardHeader>
+              <CardTitle>Model</CardTitle>
+              <CardDescription>The default provider and model for new sessions in this workspace.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <div className="text-sm font-medium text-foreground">Provider</div>
+                <Select
                   value={provider}
-                  aria-label="Default provider"
-                  onChange={(e) => {
+                  onValueChange={(value) => {
                     if (!ws) return;
-                    const v = e.currentTarget.value as ProviderName;
-                    if (UI_DISABLED_PROVIDERS.has(v)) return;
-                    void updateWorkspaceDefaults(ws.id, { defaultProvider: v, defaultModel: defaultModelForProvider(v) });
+                    const nextProvider = value as ProviderName;
+                    if (UI_DISABLED_PROVIDERS.has(nextProvider)) return;
+                    void updateWorkspaceDefaults(ws.id, {
+                      defaultProvider: nextProvider,
+                      defaultModel: defaultModelForProvider(nextProvider),
+                    });
                   }}
                 >
-                  {PROVIDER_NAMES.filter((p) => !UI_DISABLED_PROVIDERS.has(p)).map((p) => (
-                    <option key={p} value={p}>{displayProviderName(p)}</option>
-                  ))}
-                </select>
+                  <SelectTrigger aria-label="Default provider">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PROVIDER_NAMES.filter((entry) => !UI_DISABLED_PROVIDERS.has(entry)).map((entry) => (
+                      <SelectItem key={entry} value={entry}>
+                        {displayProviderName(entry)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
-              <div className="settingsRow">
-                <div className="settingsRowLabel">Model</div>
-                <select
-                  className="settingsSelect"
+              <div className="space-y-2">
+                <div className="text-sm font-medium text-foreground">Model</div>
+                <Select
                   value={model}
-                  aria-label="Default model"
-                  onChange={(e) => ws && void updateWorkspaceDefaults(ws.id, { defaultModel: e.currentTarget.value })}
+                  onValueChange={(value) => {
+                    if (!ws) return;
+                    void updateWorkspaceDefaults(ws.id, { defaultModel: value });
+                  }}
                 >
-                  {modelOptions.map((m) => (
-                    <option key={m} value={m}>{hasCustomModel && m === model ? `${m} (custom)` : m}</option>
-                  ))}
-                </select>
+                  <SelectTrigger aria-label="Default model">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {modelOptions.map((entry) => (
+                      <SelectItem key={entry} value={entry}>
+                        {hasCustomModel && entry === model ? `${entry} (custom)` : entry}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
 
-          {/* ── Behavior ── */}
-          <div className="settingsCard">
-            <div className="settingsCardHeader">
-              <div className="settingsCardTitle">Behavior</div>
-            </div>
-            <div className="settingsCardBody">
-              <div className="settingsRow">
-                <div className="settingsRowLeft">
-                  <div className="settingsRowLabel">MCP tools</div>
-                  <div className="settingsRowHint">Allow the agent to use Model Context Protocol servers configured for this workspace.</div>
+          <Card className="border-border/80 bg-card/85">
+            <CardHeader>
+              <CardTitle>Behavior</CardTitle>
+              <CardDescription>Execution and visibility options for this workspace.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+                <div>
+                  <div className="text-sm font-medium">MCP tools</div>
+                  <div className="text-xs text-muted-foreground">Allow the agent to use MCP servers configured for this workspace.</div>
                 </div>
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={enableMcp}
                   aria-label="Enable MCP tools"
-                  onChange={(e) => ws && void updateWorkspaceDefaults(ws.id, { defaultEnableMcp: e.currentTarget.checked })}
+                  onCheckedChange={(checked) => {
+                    if (!ws) return;
+                    void updateWorkspaceDefaults(ws.id, { defaultEnableMcp: toBoolean(checked) });
+                  }}
                 />
               </div>
 
-              <div className="settingsRow">
-                <div className="settingsRowLeft">
-                  <div className="settingsRowLabel">Auto-approve commands</div>
-                  <div className="settingsRowHint">Skip confirmation prompts for shell commands. The agent will run tools without asking first.</div>
+              <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+                <div>
+                  <div className="text-sm font-medium">Auto-approve commands</div>
+                  <div className="text-xs text-muted-foreground">Skip confirmation prompts for shell commands.</div>
                 </div>
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={yolo}
                   aria-label="Enable auto-approve commands"
-                  onChange={async (e) => {
+                  onCheckedChange={async (checked) => {
                     if (!ws) return;
-                    const next = e.currentTarget.checked;
+                    const next = toBoolean(checked);
                     const confirmed = await confirmAction({
                       title: next ? "Enable auto-approve commands" : "Disable auto-approve commands",
                       message: next
@@ -182,44 +213,43 @@ export function WorkspacesPage() {
                 />
               </div>
 
-              <div className="settingsRow">
-                <div className="settingsRowLeft">
-                  <div className="settingsRowLabel">Developer mode</div>
-                  <div className="settingsRowHint">Show internal system notices in the chat feed.</div>
+              <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+                <div>
+                  <div className="text-sm font-medium">Developer mode</div>
+                  <div className="text-xs text-muted-foreground">Show internal system notices in the chat feed.</div>
                 </div>
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={developerMode}
                   aria-label="Enable developer mode"
-                  onChange={(e) => setDeveloperMode(e.currentTarget.checked)}
+                  onCheckedChange={(checked) => setDeveloperMode(toBoolean(checked))}
                 />
               </div>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
 
-          {/* ── Advanced ── */}
-          <div className="settingsCard">
-            <div className="settingsCardHeader">
-              <div className="settingsCardTitle">Advanced</div>
-            </div>
-            <div className="settingsCardBody">
-              <div className="settingsRow">
-                <div className="settingsRowLeft">
-                  <div className="settingsRowLabel">Restart server</div>
-                  <div className="settingsRowHint">Restart the workspace agent server. Use this if the agent is unresponsive.</div>
+          <Card className="border-border/80 bg-card/85">
+            <CardHeader>
+              <CardTitle>Advanced</CardTitle>
+              <CardDescription>Maintenance and destructive actions.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
+                <div>
+                  <div className="text-sm font-medium">Restart server</div>
+                  <div className="text-xs text-muted-foreground">Restart the workspace agent server if unresponsive.</div>
                 </div>
-                <button className="iconButton" type="button" onClick={() => void restartWorkspaceServer(ws.id)}>
+                <Button variant="outline" type="button" onClick={() => void restartWorkspaceServer(ws.id)}>
                   Restart
-                </button>
+                </Button>
               </div>
 
-              <div className="settingsRow">
-                <div className="settingsRowLeft">
-                  <div className="settingsRowLabel">Remove workspace</div>
-                  <div className="settingsRowHint">Remove this workspace from the app. Your files on disk are not affected.</div>
+              <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
+                <div>
+                  <div className="text-sm font-medium">Remove workspace</div>
+                  <div className="text-xs text-muted-foreground">Remove this workspace from the app. Your files on disk are not affected.</div>
                 </div>
-                <button
-                  className="modalButton modalButtonDanger"
+                <Button
+                  variant="destructive"
                   type="button"
                   onClick={async () => {
                     const confirmed = await confirmAction({
@@ -237,9 +267,16 @@ export function WorkspacesPage() {
                   }}
                 >
                   Remove
-                </button>
+                </Button>
               </div>
-            </div>
+            </CardContent>
+          </Card>
+
+          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+            <span>Current provider:</span>
+            <Badge variant="secondary">{displayProviderName(provider)}</Badge>
+            <span>Model:</span>
+            <Badge variant="secondary">{model}</Badge>
           </div>
         </>
       )}

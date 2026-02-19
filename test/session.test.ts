@@ -1354,6 +1354,65 @@ describe("AgentSession", () => {
       expect(busyFalseIdxAfter).toBeGreaterThan(busyTrueIdx);
     });
 
+    test("clears busy and allows follow-up even when auto-checkpoint never resolves", async () => {
+      const sessionBackupFactory = mock(async (opts: SessionBackupInitOptions): Promise<SessionBackupHandle> => {
+        const checkpoints: SessionBackupPublicCheckpoint[] = [];
+        const createdAt = new Date().toISOString();
+        const state = (): SessionBackupPublicState => ({
+          status: "ready",
+          sessionId: opts.sessionId,
+          workingDirectory: opts.workingDirectory,
+          backupDirectory: `/tmp/mock-backups/${opts.sessionId}`,
+          createdAt,
+          originalSnapshot: { kind: "directory" },
+          checkpoints: [...checkpoints],
+        });
+
+        return {
+          getPublicState: () => state(),
+          createCheckpoint: async (trigger) => {
+            if (trigger === "auto") {
+              await new Promise<never>(() => {});
+            }
+            const checkpoint: SessionBackupPublicCheckpoint = {
+              id: `cp-${String(checkpoints.length + 1).padStart(4, "0")}`,
+              index: checkpoints.length + 1,
+              createdAt: new Date().toISOString(),
+              trigger,
+              changed: true,
+              patchBytes: 42,
+            };
+            checkpoints.push(checkpoint);
+            return checkpoint;
+          },
+          restoreOriginal: async () => {},
+          restoreCheckpoint: async (_checkpointId: string) => {},
+          deleteCheckpoint: async (_checkpointId: string) => false,
+          close: async () => {},
+        };
+      });
+
+      const { session, events } = makeSession({ sessionBackupFactory });
+
+      const firstTurnResult = await Promise.race([
+        session.sendUserMessage("first").then(() => "resolved" as const),
+        new Promise<"timeout">((resolve) => {
+          setTimeout(() => resolve("timeout"), 50);
+        }),
+      ]);
+      expect(firstTurnResult).toBe("resolved");
+
+      const busyTrueIdx = events.findIndex((e) => e.type === "session_busy" && (e as any).busy === true);
+      const busyFalseIdx = events.findIndex((e) => e.type === "session_busy" && (e as any).busy === false);
+      expect(busyTrueIdx).toBeGreaterThanOrEqual(0);
+      expect(busyFalseIdx).toBeGreaterThan(busyTrueIdx);
+
+      events.length = 0;
+      await session.sendUserMessage("follow-up");
+      const busyError = events.find((e) => e.type === "error" && (e as any).message === "Agent is busy");
+      expect(busyError).toBeUndefined();
+    });
+
     test("emits user_message event", async () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("hello world");

@@ -21,7 +21,7 @@ export function getTextareaAction(
   key: string,
   ctrl: boolean,
   shift: boolean,
-  _alt: boolean
+  alt: boolean
 ): TextareaAction {
   const normalized = normalizeKeyName(key);
   const isEnter = normalized === "enter";
@@ -32,8 +32,8 @@ export function getTextareaAction(
   // Shift+Enter or Ctrl+J = newline
   if ((isEnter && shift) || (normalized === "j" && ctrl)) return "newline";
 
-  // Ctrl+C = clear
-  if (normalized === "c" && ctrl) return "clear";
+  // Ctrl+C = clear (do not swallow terminal copy bindings like Ctrl+Shift+C).
+  if (normalized === "c" && ctrl && !shift && !alt) return "clear";
 
   // Up/Down arrows = history navigation
   if (normalized === "up" && !ctrl && !shift) return "history_up";

@@ -1,7 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import { useAppStore } from "../app/store";
 import type { PromptModalState } from "../app/types";
+import { Button } from "../components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
+import { Input } from "../components/ui/input";
 
 function decodeJsonStringLiteral(value: string): string | null {
   try {
@@ -84,26 +94,14 @@ export function shouldRenderAskOptions(options: string[]): boolean {
   return options.length >= 2;
 }
 
-const MODAL_FOCUSABLE_SELECTOR = [
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "textarea:not([disabled])",
-  "select:not([disabled])",
-  "[href]",
-  "[tabindex]:not([tabindex='-1'])",
-].join(", ");
-
 type AskModalState = Extract<NonNullable<PromptModalState>, { kind: "ask" }>;
 
-function AskPromptDialog(props: {
+function AskPromptContent(props: {
   modal: AskModalState;
-  dialogRef: { current: HTMLDivElement | null };
   answerAsk: (threadId: string, requestId: string, answer: string) => void;
   dismiss: () => void;
 }) {
   const [freeText, setFreeText] = useState("");
-  const titleId = "prompt-modal-title-ask";
-  const descriptionId = "prompt-modal-description-ask";
   const opts = normalizeAskOptions(props.modal.prompt.options);
   const hasOptions = shouldRenderAskOptions(opts);
   const questionText = normalizeAskQuestion(props.modal.prompt.question);
@@ -114,35 +112,30 @@ function AskPromptDialog(props: {
   };
 
   return (
-    <div
-      className="modal"
-      ref={props.dialogRef}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      aria-describedby={descriptionId}
-      tabIndex={-1}
-    >
-      <div className="modalTitle" id={titleId}>Question</div>
-      <div className="modalBody" id={descriptionId}>{questionText}</div>
+    <>
+      <DialogHeader>
+        <DialogTitle>Question</DialogTitle>
+        <DialogDescription className="whitespace-pre-wrap text-sm leading-6">{questionText}</DialogDescription>
+      </DialogHeader>
 
-      {hasOptions && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+      {hasOptions ? (
+        <div className="flex flex-wrap justify-center gap-2">
           {opts.map((option) => (
-            <button
+            <Button
               key={option}
-              className="modalButton modalButtonOutline"
+              variant="outline"
+              className="rounded-full"
               type="button"
               onClick={() => props.answerAsk(props.modal.threadId, props.modal.prompt.requestId, option)}
             >
               {option}
-            </button>
+            </Button>
           ))}
         </div>
-      )}
+      ) : null}
 
-      <div style={{ display: "flex", gap: 8 }}>
-        <input
+      <div className="flex gap-2 max-[600px]:flex-col">
+        <Input
           value={freeText}
           onChange={(e) => setFreeText(e.currentTarget.value)}
           onKeyDown={(e) => {
@@ -151,29 +144,23 @@ function AskPromptDialog(props: {
               submitFreeText();
             }
           }}
-          placeholder={hasOptions ? "Or type a custom answer…" : "Type your answer…"}
-          className="modalTextInput"
+          placeholder={hasOptions ? "Or type a custom answer..." : "Type your answer..."}
           aria-label="Custom answer"
-          data-modal-autofocus={!hasOptions ? "true" : undefined}
+          autoFocus={!hasOptions}
         />
-        <button
-          className="modalButton modalButtonPrimary"
-          type="button"
-          disabled={!freeText.trim()}
-          onClick={submitFreeText}
-        >
+        <Button type="button" disabled={!freeText.trim()} onClick={submitFreeText}>
           Send
-        </button>
+        </Button>
       </div>
 
-      {!hasOptions && (
-        <div className="modalActions">
-          <button className="modalButton" type="button" onClick={props.dismiss}>
+      {!hasOptions ? (
+        <DialogFooter>
+          <Button variant="outline" type="button" onClick={props.dismiss}>
             Cancel
-          </button>
-        </div>
-      )}
-    </div>
+          </Button>
+        </DialogFooter>
+      ) : null}
+    </>
   );
 }
 
@@ -183,129 +170,58 @@ export function PromptModal() {
   const answerApproval = useAppStore((s) => s.answerApproval);
   const dismiss = useAppStore((s) => s.dismissPrompt);
 
-  const dialogRef = useRef<HTMLDivElement | null>(null);
-  const restoreFocusRef = useRef<HTMLElement | null>(null);
-
-  const requestId = modal?.kind === "ask" ? modal.prompt.requestId : null;
-
-  useEffect(() => {
-    if (!modal) return;
-    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-
-    const rafId = window.requestAnimationFrame(() => {
-      const dialog = dialogRef.current;
-      if (!dialog) return;
-      const preferred = dialog.querySelector<HTMLElement>("[data-modal-autofocus='true']");
-      const firstFocusable = preferred ?? dialog.querySelector<HTMLElement>(MODAL_FOCUSABLE_SELECTOR);
-      firstFocusable?.focus();
-    });
-
-    return () => {
-      window.cancelAnimationFrame(rafId);
-      restoreFocusRef.current?.focus();
-    };
-  }, [modal, requestId]);
-
-  useEffect(() => {
-    if (!modal) return;
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        dismiss();
-        return;
-      }
-
-      if (event.key !== "Tab") return;
-      const dialog = dialogRef.current;
-      if (!dialog) return;
-
-      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(MODAL_FOCUSABLE_SELECTOR)).filter(
-        (el) => !el.hasAttribute("disabled") && el.getAttribute("aria-hidden") !== "true",
-      );
-
-      if (focusable.length === 0) {
-        event.preventDefault();
-        dialog.focus();
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-
-      if (event.shiftKey && active === first) {
-        event.preventDefault();
-        last.focus();
-        return;
-      }
-
-      if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [dismiss, modal]);
-
-  if (!modal) return null;
-
-  const titleId = `prompt-modal-title-${modal.kind}`;
-  const descriptionId = `prompt-modal-description-${modal.kind}`;
-
   return (
-    <div className="modalOverlay" role="presentation" onMouseDown={dismiss}>
-      <div role="presentation" onMouseDown={(e) => e.stopPropagation()}>
-        {modal.kind === "ask" ? (
-          <AskPromptDialog
-            key={modal.prompt.requestId}
-            modal={modal}
-            dialogRef={dialogRef}
-            answerAsk={answerAsk}
-            dismiss={dismiss}
-          />
-        ) : (
-          <div
-            className="modal"
-            ref={dialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={titleId}
-            aria-describedby={descriptionId}
-            tabIndex={-1}
-          >
-            <div className="modalTitle" id={titleId}>Command approval</div>
-            <div className={"approvalCard" + (modal.prompt.dangerous ? "" : "")} id={descriptionId}>
-              <div style={{ fontSize: 11, textTransform: "uppercase", marginBottom: 6 }}>
-                {modal.prompt.dangerous ? "Dangerous" : "Command"}
+    <Dialog open={Boolean(modal)} onOpenChange={(open) => {
+      if (!open) dismiss();
+    }}>
+      {modal ? (
+        <DialogContent>
+          {modal.kind === "ask" ? (
+            <AskPromptContent
+              key={modal.prompt.requestId}
+              modal={modal}
+              answerAsk={answerAsk}
+              dismiss={dismiss}
+            />
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>Command approval</DialogTitle>
+                <DialogDescription>
+                  Review this command before allowing the agent to execute it.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-2 rounded-lg border border-border/70 bg-muted/35 p-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {modal.prompt.dangerous ? "Dangerous" : "Command"}
+                </div>
+                <code className="block whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted/45 px-2.5 py-2 text-xs">
+                  {modal.prompt.command}
+                </code>
+                <div className="text-xs text-muted-foreground">Risk: {modal.prompt.reasonCode}</div>
               </div>
-              <code className="approvalCode">{modal.prompt.command}</code>
-              <div className="metaLine" style={{ marginTop: 8 }}>
-                Risk: {modal.prompt.reasonCode}
-              </div>
-            </div>
-            <div className="modalActions">
-              <button
-                className="modalButton"
-                type="button"
-                data-modal-autofocus="true"
-                onClick={() => answerApproval(modal.threadId, modal.prompt.requestId, false)}
-              >
-                Deny
-              </button>
-              <button
-                className={"modalButton " + (modal.prompt.dangerous ? "modalButtonDanger" : "modalButtonPrimary")}
-                type="button"
-                onClick={() => answerApproval(modal.threadId, modal.prompt.requestId, true)}
-              >
-                Approve
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={() => answerApproval(modal.threadId, modal.prompt.requestId, false)}
+                >
+                  Deny
+                </Button>
+                <Button
+                  variant={modal.prompt.dangerous ? "destructive" : "default"}
+                  type="button"
+                  onClick={() => answerApproval(modal.threadId, modal.prompt.requestId, true)}
+                >
+                  Approve
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      ) : null}
+    </Dialog>
   );
 }

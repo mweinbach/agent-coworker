@@ -6,7 +6,7 @@
       "name": "agent-coworker",
       "dependencies": {
         "@ai-sdk/anthropic": "^3.0.45",
-        "@ai-sdk/google": "^3.0.29",
+        "@ai-sdk/google": "^3.0.30",
         "@ai-sdk/mcp": "^1.0.21",
         "@ai-sdk/openai": "^3.0.30",
         "@langfuse/otel": "^4.6.1",
@@ -15,7 +15,7 @@
         "@opentelemetry/sdk-node": "^0.212.0",
         "@opentui/core": "^0.1.80",
         "@opentui/solid": "^0.1.80",
-        "ai": "^6.0.91",
+        "ai": "^6.0.92",
         "exa-js": "^2.4.0",
         "fast-glob": "^3.3.3",
         "fuzzysort": "^3.1.0",
@@ -27,7 +27,7 @@
       },
       "devDependencies": {
         "@types/jsdom": "^27.0.0",
-        "@types/node": "^25.2.3",
+        "@types/node": "^25.3.0",
         "@types/react": "^19.2.14",
         "@types/turndown": "^5.0.6",
         "bun-types": "^1.3.9",
@@ -338,7 +338,7 @@
 
     "agent-base": ["agent-base@7.1.4", "", {}, "sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ=="],
 
-    "ai": ["ai@6.0.92", "", { "dependencies": { "@ai-sdk/gateway": "3.0.51", "@ai-sdk/provider": "3.0.8", "@ai-sdk/provider-utils": "4.0.15", "@opentelemetry/api": "1.9.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-TeXJX2PBv2djoqZN5J5+pL5etJFwxEiv55i6iZF4/qthLx1SjWDk6i3SETd7r9XZfvOlDaOJBQZ6MIHkAaOnhw=="],
+    "ai": ["ai@6.0.93", "", { "dependencies": { "@ai-sdk/gateway": "3.0.51", "@ai-sdk/provider": "3.0.8", "@ai-sdk/provider-utils": "4.0.15", "@opentelemetry/api": "1.9.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-txpGaxP2Ty6vzpysy+9l42VkGOokMNb6msLSbeLiyCcstuSWQoeMO7khxY48BAPEfwYsvzxdJ/qX52Q6auH6KA=="],
 
     "ansi-regex": ["ansi-regex@5.0.1", "", {}, "sha512-quJQXlTSUGL2LH9SUXo8VwsY4soanhgo6LNSm84E1LBcE8s3O0wpdiRzyR9z/ZZJMlMWv37qOOb9pdJlMUEKFQ=="],
 

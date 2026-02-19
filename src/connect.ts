@@ -16,6 +16,8 @@ import {
 import type { ProviderName } from "./types";
 
 export type ConnectService = ProviderName;
+export const TOOL_API_KEY_NAMES = ["exa"] as const;
+export type ToolApiKeyName = (typeof TOOL_API_KEY_NAMES)[number];
 
 export type ConnectionMode = "api_key" | "oauth" | "oauth_pending";
 
@@ -30,6 +32,7 @@ export type ConnectionStore = {
   version: 1;
   updatedAt: string;
   services: Partial<Record<ConnectService, StoredConnection>>;
+  toolApiKeys?: Partial<Record<ToolApiKeyName, string>>;
 };
 
 export type AiCoworkerPaths = {
@@ -114,6 +117,23 @@ function isObjectLike(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+function isToolApiKeyName(value: string): value is ToolApiKeyName {
+  return (TOOL_API_KEY_NAMES as readonly string[]).includes(value);
+}
+
+function normalizeToolApiKeys(value: unknown): Partial<Record<ToolApiKeyName, string>> | undefined {
+  if (!isObjectLike(value)) return undefined;
+  const out: Partial<Record<ToolApiKeyName, string>> = {};
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    if (!isToolApiKeyName(rawKey)) continue;
+    if (typeof rawValue !== "string") continue;
+    const trimmed = rawValue.trim();
+    if (!trimmed) continue;
+    out[rawKey] = trimmed;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export function getAiCoworkerPaths(opts: { homedir?: string } = {}): AiCoworkerPaths {
   const home = opts.homedir ?? os.homedir();
   const rootDir = path.join(home, ".cowork");
@@ -155,10 +175,12 @@ export async function readConnectionStore(paths: AiCoworkerPaths): Promise<Conne
         isObjectLike(parsed.services) &&
         (typeof parsed.updatedAt === "string" || parsed.updatedAt === undefined)
       ) {
+        const toolApiKeys = normalizeToolApiKeys(parsed.toolApiKeys);
         return {
           version: 1,
           updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
           services: parsed.services as ConnectionStore["services"],
+          ...(toolApiKeys ? { toolApiKeys } : {}),
         };
       }
     } catch {
@@ -196,6 +218,48 @@ export async function writeConnectionStore(paths: AiCoworkerPaths, store: Connec
   } catch {
     // best effort only
   }
+}
+
+export async function readToolApiKey(opts: {
+  name: ToolApiKeyName;
+  paths?: AiCoworkerPaths;
+  homedir?: string;
+  readStore?: typeof readConnectionStore;
+}): Promise<string | undefined> {
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir });
+  const readStore = opts.readStore ?? readConnectionStore;
+  const store = await readStore(paths);
+  const value = store.toolApiKeys?.[opts.name];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export async function writeToolApiKey(opts: {
+  name: ToolApiKeyName;
+  apiKey: string;
+  paths?: AiCoworkerPaths;
+  homedir?: string;
+  readStore?: typeof readConnectionStore;
+  writeStore?: typeof writeConnectionStore;
+}): Promise<{ storageFile: string; maskedApiKey: string; message: string }> {
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir });
+  const readStore = opts.readStore ?? readConnectionStore;
+  const writeStore = opts.writeStore ?? writeConnectionStore;
+  const apiKey = opts.apiKey.trim();
+  if (!apiKey) throw new Error("API key is required.");
+
+  const store = await readStore(paths);
+  store.toolApiKeys = {
+    ...(store.toolApiKeys ?? {}),
+    [opts.name]: apiKey,
+  };
+  store.updatedAt = new Date().toISOString();
+  await writeStore(paths, store);
+
+  return {
+    storageFile: paths.connectionsFile,
+    maskedApiKey: maskApiKey(apiKey),
+    message: `${opts.name.toUpperCase()} API key saved.`,
+  };
 }
 
 export function maskApiKey(value: string): string {

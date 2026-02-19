@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { getAiCoworkerPaths, readConnectionStore, type AiCoworkerPaths, type ConnectionStore } from "./connect";
+import { getAiCoworkerPaths, maskApiKey, readConnectionStore, type AiCoworkerPaths, type ConnectionStore } from "./connect";
 import { isTokenExpiring, readCodexAuthMaterial, refreshCodexAuthMaterial } from "./providers/codex-auth";
 import { PROVIDER_NAMES, type ProviderName } from "./types";
 
@@ -23,6 +23,7 @@ export type ProviderStatus = {
   account: ProviderAccount | null;
   message: string;
   checkedAt: string;
+  savedApiKeyMasks?: Partial<Record<string, string>>;
 };
 
 export type CommandRunner = (opts: {
@@ -131,12 +132,33 @@ function normalizeProviderStatusMode(mode: unknown): ProviderStatusMode {
   return mode === "api_key" || mode === "oauth" || mode === "oauth_pending" ? mode : "missing";
 }
 
+function buildSavedApiKeyMasks(opts: {
+  provider: ProviderName;
+  store: ConnectionStore;
+}): Partial<Record<string, string>> | undefined {
+  const out: Partial<Record<string, string>> = {};
+
+  const providerEntry = opts.store.services[opts.provider];
+  const providerApiKey = providerEntry?.mode === "api_key" ? providerEntry.apiKey?.trim() : "";
+  if (providerApiKey) {
+    out.api_key = maskApiKey(providerApiKey);
+  }
+
+  if (opts.provider === "google") {
+    const exa = opts.store.toolApiKeys?.exa?.trim();
+    if (exa) out.exa_api_key = maskApiKey(exa);
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function statusFromConnectionStore(opts: {
   provider: ProviderName;
   store: ConnectionStore;
   checkedAt: string;
 }): ProviderStatus {
   const entry = opts.store.services[opts.provider];
+  const savedApiKeyMasks = buildSavedApiKeyMasks({ provider: opts.provider, store: opts.store });
   if (!entry) {
     return {
       provider: opts.provider,
@@ -146,6 +168,7 @@ function statusFromConnectionStore(opts: {
       account: null,
       message: "Not connected.",
       checkedAt: opts.checkedAt,
+      ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
     };
   }
 
@@ -158,6 +181,7 @@ function statusFromConnectionStore(opts: {
       account: null,
       message: entry.apiKey ? "API key saved." : "API key missing.",
       checkedAt: opts.checkedAt,
+      ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
     };
   }
 
@@ -170,6 +194,7 @@ function statusFromConnectionStore(opts: {
       account: null,
       message: "Pending connection (no credentials).",
       checkedAt: opts.checkedAt,
+      ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
     };
   }
 
@@ -182,6 +207,7 @@ function statusFromConnectionStore(opts: {
       account: null,
       message: "OAuth connected.",
       checkedAt: opts.checkedAt,
+      ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
     };
   }
 
@@ -193,6 +219,7 @@ function statusFromConnectionStore(opts: {
     account: null,
     message: "Configured.",
     checkedAt: opts.checkedAt,
+    ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
   };
 }
 

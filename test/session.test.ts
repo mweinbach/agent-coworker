@@ -702,6 +702,7 @@ describe("AgentSession", () => {
       expect(evt).toBeDefined();
       if (evt && evt.type === "provider_auth_methods") {
         expect(evt.methods.openai?.some((m) => m.id === "api_key")).toBe(true);
+        expect(evt.methods.google?.some((m) => m.id === "exa_api_key")).toBe(true);
       }
     });
 

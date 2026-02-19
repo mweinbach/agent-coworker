@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { getAiCoworkerPaths } from "../src/connect";
+import { getAiCoworkerPaths, writeConnectionStore } from "../src/connect";
 import { getProviderStatuses } from "../src/providerStatus";
 
 function b64url(input: string): string {
@@ -21,6 +21,53 @@ async function makeTmpHome(): Promise<string> {
 }
 
 describe("getProviderStatuses", () => {
+  test("includes masked provider/tool API keys in google status", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeConnectionStore(paths, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        google: {
+          service: "google",
+          mode: "api_key",
+          apiKey: "goog-secret-1234",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+      toolApiKeys: {
+        exa: "exa-secret-5678",
+      },
+    });
+
+    const statuses = await getProviderStatuses({ paths });
+    const google = statuses.find((s) => s.provider === "google");
+    expect(google).toBeDefined();
+    expect(google?.savedApiKeyMasks?.api_key).toBe("goog...1234");
+    expect(google?.savedApiKeyMasks?.exa_api_key).toBe("exa-...5678");
+  });
+
+  test("includes masked Exa key even when google provider key is not connected", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeConnectionStore(paths, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {},
+      toolApiKeys: {
+        exa: "exa-secret-5678",
+      },
+    });
+
+    const statuses = await getProviderStatuses({ paths });
+    const google = statuses.find((s) => s.provider === "google");
+    expect(google).toBeDefined();
+    expect(google?.authorized).toBe(false);
+    expect(google?.mode).toBe("missing");
+    expect(google?.savedApiKeyMasks?.api_key).toBeUndefined();
+    expect(google?.savedApiKeyMasks?.exa_api_key).toBe("exa-...5678");
+  });
+
   test("codex-cli: verified via OIDC userinfo + shows name/email", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });

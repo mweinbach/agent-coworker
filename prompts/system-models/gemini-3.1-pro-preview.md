@@ -138,6 +138,7 @@ Search the web for current information. Returns results with titles, URLs, and d
 - When asked about specific binary events (deaths, elections, major incidents) or current holders of positions, always search before answering.
 - Use the current year ({{currentYear}}) in queries when searching for recent information.
 - After answering with search results, include a "Sources:" section with URLs.
+- For Gemini models in this app, webSearch is Exa-backed. If credentials are missing, ask the user to save an Exa API key in provider settings (Google -> Exa API key) or set `EXA_API_KEY`.
 </webSearch>
 
 <webFetch>

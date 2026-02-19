@@ -462,6 +462,19 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       queueBusyRecoveryAfterCancel(get, set, threadId, "manual");
     },
   
+    setThreadModel: (threadId, provider, model) => {
+      const rt = get().threadRuntimeById[threadId];
+      if (!rt?.sessionId) return;
+      const ok = sendThread(get, threadId, (sessionId) => ({
+        type: "set_model",
+        sessionId,
+        provider,
+        model,
+      }));
+      if (ok) {
+        appendThreadTranscript(threadId, "client", { type: "set_model", sessionId: rt.sessionId, provider, model });
+      }
+    },
     setComposerText: (text) => set({ composerText: text }),
     setInjectContext: (v) => set({ injectContext: v }),
     setDeveloperMode: (v) => {

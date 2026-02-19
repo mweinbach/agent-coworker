@@ -21,6 +21,7 @@ import { createNotebookEditTool } from "../src/tools/notebookEdit";
 import { createSkillTool } from "../src/tools/skill";
 import { createMemoryTool } from "../src/tools/memory";
 import { createTools } from "../src/tools/index";
+import { getAiCoworkerPaths, writeConnectionStore } from "../src/connect";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1002,7 +1003,7 @@ describe("webSearch tool", () => {
     expect(t.id).toBe("openai.web_search");
   });
 
-  test("uses Google provider-native web search for google provider", async () => {
+  test("uses Exa-backed web search for Gemini models on google provider", async () => {
     const dir = await tmpDir();
     const t: any = createWebSearchTool(
       makeCtx(dir, {
@@ -1013,8 +1014,107 @@ describe("webSearch tool", () => {
         }),
       })
     );
+    expect(t.type).toBeUndefined();
+    expect(typeof t.execute).toBe("function");
+    expect(t.description).toContain("EXA_API_KEY");
+    expect(t.description).not.toContain("BRAVE_API_KEY");
+  });
+
+  test("uses Google provider-native web search for non-Gemini google models", async () => {
+    const dir = await tmpDir();
+    const t: any = createWebSearchTool(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "google",
+          model: "text-bison",
+          subAgentModel: "text-bison",
+        }),
+      })
+    );
     expect(t.type).toBe("provider");
     expect(t.id).toBe("google.google_search");
+  });
+
+  test("Gemini google web search requires EXA_API_KEY", async () => {
+    const dir = await tmpDir();
+    const oldBrave = process.env.BRAVE_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
+    process.env.BRAVE_API_KEY = "test-brave-key";
+    delete process.env.EXA_API_KEY;
+
+    try {
+      const t: any = createWebSearchTool(
+        makeCtx(dir, {
+          config: makeConfig(dir, {
+            provider: "google",
+            model: "gemini-3.1-pro-preview",
+            subAgentModel: "gemini-3.1-pro-preview",
+          }),
+        })
+      );
+      const out: string = await t.execute({ query: "test", maxResults: 1 });
+      expect(out).toContain("set EXA_API_KEY");
+    } finally {
+      if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
+      else delete process.env.BRAVE_API_KEY;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+    }
+  });
+
+  test("Gemini google web search uses saved Exa API key when env key is missing", async () => {
+    const dir = await tmpDir();
+    const paths = getAiCoworkerPaths({ homedir: dir });
+    await writeConnectionStore(paths, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {},
+      toolApiKeys: {
+        exa: "saved-exa-key",
+      },
+    });
+
+    const oldBrave = process.env.BRAVE_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
+    delete process.env.BRAVE_API_KEY;
+    delete process.env.EXA_API_KEY;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (_url: any, init: any) => {
+      expect(init?.headers?.["x-api-key"]).toBe("saved-exa-key");
+      return new Response(
+        JSON.stringify({
+          results: [
+            {
+              title: "Stored Exa Result",
+              url: "https://exa.example",
+              text: { text: "Stored key content" },
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as any;
+
+    try {
+      const t: any = createWebSearchTool(
+        makeCtx(dir, {
+          config: makeConfig(dir, {
+            provider: "google",
+            model: "gemini-3.1-pro-preview",
+            subAgentModel: "gemini-3.1-pro-preview",
+          }),
+        })
+      );
+      const out: string = await t.execute({ query: "test query", maxResults: 3 });
+      expect(out).toContain("Stored Exa Result");
+      expect(out).toContain("Stored key content");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
+      else delete process.env.BRAVE_API_KEY;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+    }
   });
 
   test("uses Anthropic provider-native web search for anthropic provider", async () => {

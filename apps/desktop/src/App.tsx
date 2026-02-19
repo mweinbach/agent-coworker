@@ -158,7 +158,7 @@ export default function App() {
       <div className="app-window-drag-strip" aria-hidden="true" />
       <div className="flex h-full min-h-0">
         <div
-          className="relative shrink-0 overflow-hidden"
+          className="relative shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)]"
           style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
         >
           {!sidebarCollapsed ? <Sidebar /> : null}

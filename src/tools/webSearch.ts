@@ -1,10 +1,17 @@
+import path from "node:path";
+
 import { anthropic } from "@ai-sdk/anthropic";
 import { google } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
 import { tool } from "ai";
 import { z } from "zod";
 
+import { getAiCoworkerPaths, readToolApiKey } from "../connect";
 import type { ToolContext } from "./context";
+
+interface CustomWebSearchToolOptions {
+  exaOnly?: boolean;
+}
 
 function formatResults(results: Array<{ title?: string; url?: string; description?: string }>): string {
   return (
@@ -34,10 +41,32 @@ function getExaSnippet(result: unknown): string {
   return "";
 }
 
-function createCustomWebSearchTool(ctx: ToolContext) {
+function resolveHomeDirFromToolContext(ctx: ToolContext): string | undefined {
+  const userAgentDir = ctx.config.userAgentDir;
+  if (typeof userAgentDir !== "string" || !userAgentDir) return undefined;
+  return path.dirname(userAgentDir);
+}
+
+async function resolveExaApiKey(ctx: ToolContext): Promise<string | undefined> {
+  const fromEnv = process.env.EXA_API_KEY?.trim();
+  if (fromEnv) return fromEnv;
+
+  try {
+    const homedir = resolveHomeDirFromToolContext(ctx);
+    const paths = getAiCoworkerPaths(homedir ? { homedir } : {});
+    return await readToolApiKey({ name: "exa", paths });
+  } catch {
+    return undefined;
+  }
+}
+
+function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToolOptions = {}) {
+  const exaOnly = options.exaOnly ?? false;
+
   return tool({
-    description:
-      "Search the web for current information. Requires BRAVE_API_KEY or EXA_API_KEY. Returns titles, URLs, and snippets.",
+    description: exaOnly
+      ? "Search the web for current information using Exa. Requires EXA_API_KEY. Returns titles, URLs, and snippets."
+      : "Search the web for current information. Requires BRAVE_API_KEY or EXA_API_KEY. Returns titles, URLs, and snippets.",
     inputSchema: z.object({
       query: z.string().describe("Search query"),
       maxResults: z.number().int().min(1).max(20).optional().default(10),
@@ -46,7 +75,7 @@ function createCustomWebSearchTool(ctx: ToolContext) {
       const safeQuery = sanitizeQuery(query);
       ctx.log(`tool> webSearch ${JSON.stringify({ query: safeQuery, maxResults })}`);
 
-      if (process.env.BRAVE_API_KEY) {
+      if (!exaOnly && process.env.BRAVE_API_KEY) {
         const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(
           safeQuery
         )}&count=${maxResults}`;
@@ -76,12 +105,13 @@ function createCustomWebSearchTool(ctx: ToolContext) {
         return out;
       }
 
-      if (process.env.EXA_API_KEY) {
+      const exaApiKey = await resolveExaApiKey(ctx);
+      if (exaApiKey) {
         try {
           const res = await fetch("https://api.exa.ai/search", {
             method: "POST",
             headers: {
-              "x-api-key": process.env.EXA_API_KEY,
+              "x-api-key": exaApiKey,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
@@ -113,7 +143,9 @@ function createCustomWebSearchTool(ctx: ToolContext) {
         }
       }
 
-      const out = "webSearch disabled: set BRAVE_API_KEY or EXA_API_KEY";
+      const out = exaOnly
+        ? "webSearch disabled: set EXA_API_KEY or save Exa API key in provider settings"
+        : "webSearch disabled: set BRAVE_API_KEY or EXA_API_KEY";
       ctx.log(`tool< webSearch ${JSON.stringify({ disabled: true })}`);
       return out;
     },
@@ -125,6 +157,9 @@ export function createWebSearchTool(ctx: ToolContext) {
     case "openai":
       return openai.tools.webSearch({});
     case "google":
+      if (ctx.config.model.toLowerCase().includes("gemini")) {
+        return createCustomWebSearchTool(ctx, { exaOnly: true });
+      }
       return google.tools.googleSearch({});
     case "anthropic":
       return anthropic.tools.webSearch_20250305({});

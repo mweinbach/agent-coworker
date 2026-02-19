@@ -42,6 +42,12 @@ function displayProviderName(provider: ProviderName): string {
 }
 
 function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
+  if (provider === "google") {
+    return [
+      { id: "api_key", type: "api", label: "API key" },
+      { id: "exa_api_key", type: "api", label: "Exa API key (web search)" },
+    ];
+  }
   if (provider === "codex-cli") {
     return [
       { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
@@ -76,6 +82,9 @@ export function ProvidersPage() {
   const providerLastAuthResult = useAppStore((s) => s.providerLastAuthResult);
 
   const [apiKeysByMethod, setApiKeysByMethod] = useState<Record<string, string>>({});
+  const [apiKeyEditingByMethod, setApiKeyEditingByMethod] = useState<Record<string, boolean>>({});
+  const [revealApiKeyByMethod, setRevealApiKeyByMethod] = useState<Record<string, boolean>>({});
+  const [optimisticApiKeyMaskByMethod, setOptimisticApiKeyMaskByMethod] = useState<Record<string, string>>({});
   const [oauthCodesByMethod, setOauthCodesByMethod] = useState<Record<string, string>>({});
   const [expandedProvider, setExpandedProvider] = useState<ProviderName | null>(null);
 
@@ -107,6 +116,17 @@ export function ProvidersPage() {
     void requestProviderCatalog();
     void requestProviderAuthMethods();
   }, [canConnectProvider, requestProviderAuthMethods, requestProviderCatalog]);
+
+  useEffect(() => {
+    if (!providerLastAuthResult?.ok) return;
+    const stateKey = methodStateKey(providerLastAuthResult.provider, providerLastAuthResult.methodId);
+    const refreshedMask = providerStatusByName[providerLastAuthResult.provider]?.savedApiKeyMasks?.[providerLastAuthResult.methodId];
+    const nextMask = typeof refreshedMask === "string" && refreshedMask.trim().length > 0 ? refreshedMask : "••••••••";
+    setApiKeysByMethod((s) => ({ ...s, [stateKey]: "" }));
+    setApiKeyEditingByMethod((s) => ({ ...s, [stateKey]: false }));
+    setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: false }));
+    setOptimisticApiKeyMaskByMethod((s) => ({ ...s, [stateKey]: nextMask }));
+  }, [providerLastAuthResult, providerStatusByName]);
 
   return (
     <div className="space-y-5">
@@ -179,6 +199,10 @@ export function ProvidersPage() {
                     const stateKey = methodStateKey(provider, method.id);
                     const apiKeyValue = apiKeysByMethod[stateKey] ?? "";
                     const codeValue = oauthCodesByMethod[stateKey] ?? "";
+                    const savedApiKeyMask = status?.savedApiKeyMasks?.[method.id] ?? optimisticApiKeyMaskByMethod[stateKey];
+                    const hasSavedApiKey = typeof savedApiKeyMask === "string" && savedApiKeyMask.trim().length > 0;
+                    const isEditingApiKey = apiKeyEditingByMethod[stateKey] ?? !hasSavedApiKey;
+                    const revealApiKey = Boolean(revealApiKeyByMethod[stateKey]);
                     const challengeMatch =
                       providerLastAuthChallenge?.provider === provider && providerLastAuthChallenge?.methodId === method.id
                         ? providerLastAuthChallenge
@@ -196,24 +220,72 @@ export function ProvidersPage() {
                           <div className="flex flex-wrap items-center gap-2">
                             <Input
                               className="max-w-md"
-                              value={apiKeyValue}
-                              onChange={(e) =>
-                                setApiKeysByMethod((s) => ({ ...s, [stateKey]: e.currentTarget.value }))
+                              value={isEditingApiKey ? apiKeyValue : savedApiKeyMask ?? "••••••••"}
+                              onChange={(e) => {
+                                if (!isEditingApiKey) return;
+                                const nextValue = e.currentTarget.value;
+                                setApiKeysByMethod((s) => ({ ...s, [stateKey]: nextValue }));
+                              }}
+                              placeholder={
+                                isEditingApiKey
+                                  ? method.id === "exa_api_key"
+                                    ? "Paste your Exa API key"
+                                    : "Paste your API key"
+                                  : "Saved key (hidden)"
                               }
-                              placeholder="Paste your API key"
-                              type="password"
+                              type={revealApiKey ? "text" : "password"}
+                              readOnly={!isEditingApiKey}
                               aria-label={`${providerDisplayName} ${method.label} API key`}
                             />
                             <Button
+                              variant="outline"
                               type="button"
-                              disabled={!canConnectProvider}
-                              title={!canConnectProvider ? "Add a workspace first." : undefined}
-                              onClick={() => {
-                                void setProviderApiKey(provider, method.id, apiKeyValue);
-                              }}
+                              disabled={!hasSavedApiKey}
+                              onClick={() =>
+                                setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: !revealApiKey }))
+                              }
                             >
-                              Save
+                              {revealApiKey ? "Hide" : "View"}
                             </Button>
+                            {!isEditingApiKey ? (
+                              <Button
+                                type="button"
+                                disabled={!canConnectProvider}
+                                title={!canConnectProvider ? "Add a workspace first." : undefined}
+                                onClick={() => {
+                                  setApiKeyEditingByMethod((s) => ({ ...s, [stateKey]: true }));
+                                  setApiKeysByMethod((s) => ({ ...s, [stateKey]: "" }));
+                                  setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: false }));
+                                }}
+                              >
+                                Edit
+                              </Button>
+                            ) : null}
+                            {isEditingApiKey && hasSavedApiKey ? (
+                              <Button
+                                variant="outline"
+                                type="button"
+                                onClick={() => {
+                                  setApiKeyEditingByMethod((s) => ({ ...s, [stateKey]: false }));
+                                  setApiKeysByMethod((s) => ({ ...s, [stateKey]: "" }));
+                                  setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: false }));
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                            ) : null}
+                            {isEditingApiKey ? (
+                              <Button
+                                type="button"
+                                disabled={!canConnectProvider || !apiKeyValue.trim()}
+                                title={!canConnectProvider ? "Add a workspace first." : undefined}
+                                onClick={() => {
+                                  void setProviderApiKey(provider, method.id, apiKeyValue.trim());
+                                }}
+                              >
+                                Save
+                              </Button>
+                            ) : null}
                           </div>
                         ) : (
                           <div className="flex flex-wrap items-center gap-2">
@@ -232,9 +304,10 @@ export function ProvidersPage() {
                                 <Input
                                   className="max-w-xs"
                                   value={codeValue}
-                                  onChange={(e) =>
-                                    setOauthCodesByMethod((s) => ({ ...s, [stateKey]: e.currentTarget.value }))
-                                  }
+                                  onChange={(e) => {
+                                    const nextValue = e.currentTarget.value;
+                                    setOauthCodesByMethod((s) => ({ ...s, [stateKey]: nextValue }));
+                                  }}
                                   placeholder="Paste authorization code"
                                   type="text"
                                   aria-label={`${providerDisplayName} ${method.label} authorization code`}

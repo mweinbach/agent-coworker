@@ -128,6 +128,11 @@ Auth completion result.
 ### provider_status
 Current provider connection/auth status list.
 
+Notes:
+
+- Provider entries may include optional `savedApiKeyMasks` keyed by auth method id (for example `api_key`, `exa_api_key`).
+- `savedApiKeyMasks` values are always masked and never include raw secret values.
+
 ### session_busy
 Busy/idle state transitions for an agent turn.
 

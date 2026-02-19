@@ -125,6 +125,7 @@ Search file contents with regex. Uses ripgrep syntax — literal braces need esc
 ### webSearch
 
 Search the web for current information. Use for anything beyond your knowledge cutoff. Use {{currentYear}} in queries for recent information. Include a "Sources:" section with URLs after answering.
+For Gemini models in this app, webSearch uses Exa. If webSearch is disabled due missing credentials, ask the user to save an Exa API key in provider settings (Google -> Exa API key) or set `EXA_API_KEY`.
 
 ### webFetch
 

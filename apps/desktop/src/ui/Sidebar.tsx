@@ -3,6 +3,7 @@ import type { MouseEvent } from "react";
 import {
   CirclePlusIcon,
   FolderIcon,
+  FolderPlusIcon,
   MessageSquareIcon,
   PlusIcon,
   Settings2Icon,
@@ -94,12 +95,12 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        "app-sidebar flex h-full w-full flex-col gap-3 border-r border-border/80 bg-sidebar px-3 py-3",
+        "app-sidebar flex h-full w-full flex-col gap-3 border-r border-border/80 bg-sidebar/85 px-3 py-3 backdrop-blur-xl",
         designTokens.classes.subtleSurface,
       )}
     >
       <div className="app-sidebar__drag-zone" aria-hidden="true" />
-      <div className="app-sidebar__brand mb-2 flex items-center gap-3 px-2">
+      <div className="app-sidebar__brand mb-4 mt-1 flex items-center gap-3 px-2">
         <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-primary to-primary/70" />
         <div className="text-base font-bold tracking-tight text-foreground">Cowork</div>
       </div>
@@ -126,7 +127,7 @@ export function Sidebar() {
 
       <section className="flex min-h-0 flex-1 flex-col gap-2">
         <div className="flex items-center justify-between px-2">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Workspaces</div>
+          <div className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/70">Workspaces</div>
           <Button size="icon-sm" variant="ghost" onClick={() => void addWorkspace()} aria-label="Add workspace">
             <PlusIcon className="h-4 w-4" />
           </Button>
@@ -134,7 +135,8 @@ export function Sidebar() {
 
         <div className="min-h-0 flex-1 space-y-1 overflow-auto pr-1">
           {workspaces.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border/80 bg-muted/25 p-3 text-center text-xs text-muted-foreground">
+            <div className="rounded-lg border border-transparent bg-muted/10 p-3 text-center text-xs text-muted-foreground">
+              <FolderPlusIcon strokeWidth={1} className="mx-auto mb-2 h-6 w-6 text-muted-foreground/50" />
               <div>No workspaces yet</div>
               <Button className="mt-2" size="sm" variant="outline" type="button" onClick={() => void addWorkspace()}>
                 Add workspace
@@ -149,10 +151,10 @@ export function Sidebar() {
                 <div key={ws.id} className="space-y-1.5">
                   <button
                     className={cn(
-                      "w-full rounded-lg border px-2.5 py-2 text-left transition-colors",
+                      "w-full rounded-lg border px-2.5 py-2 text-left transition-all duration-200 ease-out",
                       active
-                        ? "border-border bg-muted/55"
-                        : "border-transparent bg-transparent hover:border-border/50 hover:bg-muted/30",
+                        ? "border-border/40 bg-muted/20 shadow-sm"
+                        : "border-transparent bg-transparent hover:border-border/20 hover:bg-muted/10",
                     )}
                     aria-expanded={active}
                     onClick={() => void selectWorkspace(ws.id)}
@@ -161,10 +163,10 @@ export function Sidebar() {
                     type="button"
                   >
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                      <FolderIcon className="h-4 w-4 text-muted-foreground" />
+                      <FolderIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <span className="truncate">{ws.name}</span>
                     </div>
-                    <div className="truncate text-[11px] text-muted-foreground">{ws.path}</div>
+                    <div className="truncate pl-6 text-[10px] text-muted-foreground/70">{ws.path}</div>
                   </button>
 
                   {active ? (
@@ -178,14 +180,14 @@ export function Sidebar() {
                           const isActive = thread.id === selectedThreadId;
 
                           return (
-                            <button
-                              key={thread.id}
-                              className={cn(
-                                "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
-                                isActive
-                                  ? "bg-muted/60 text-foreground"
-                                  : "text-muted-foreground hover:bg-muted/35 hover:text-foreground",
-                              )}
+                              <button
+                                key={thread.id}
+                                className={cn(
+                                  "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors duration-200 ease-out",
+                                  isActive
+                                    ? "bg-muted/60 text-foreground"
+                                    : "text-muted-foreground hover:bg-muted/35 hover:text-foreground",
+                                )}
                               onClick={() => void selectThread(thread.id)}
                               onContextMenu={(e) => handleThreadContextMenu(e, thread.id, thread.title || "New thread")}
                               type="button"
@@ -194,7 +196,7 @@ export function Sidebar() {
                                 <MessageSquareIcon className="h-3.5 w-3.5 shrink-0" />
                                 <span className="truncate">{thread.title || "New thread"}</span>
                               </span>
-                              {busy ? <span className="h-2 w-2 shrink-0 rounded-full bg-primary" aria-hidden="true" /> : null}
+                              {busy ? <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden="true" /> : null}
                             </button>
                           );
                         })

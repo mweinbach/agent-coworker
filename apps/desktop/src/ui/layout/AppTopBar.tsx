@@ -27,7 +27,7 @@ export function AppTopBar({
   return (
     <div
       className={cn(
-        "app-topbar flex h-12 shrink-0 items-center justify-between border-b border-border/70 bg-sidebar px-4",
+        "app-topbar flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-sidebar/85 px-4 backdrop-blur-xl",
         sidebarCollapsed && "app-topbar--macos-inset",
         designTokens.classes.subtleSurface,
       )}

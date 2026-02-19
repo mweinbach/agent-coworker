@@ -63,6 +63,9 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     if (fromSync && fromSync.length > 0) return fromSync;
 
     const base: AuthMethod[] = [{ id: "api_key", type: "api", label: "API key" }];
+    if (selected === "google") {
+      base.push({ id: "exa_api_key", type: "api", label: "Exa API key (web search)" });
+    }
     if (selected === "codex-cli") {
       base.unshift(
         { id: "oauth_device", type: "oauth", label: "ChatGPT (device code)", oauthMode: "auto" },
@@ -95,6 +98,14 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     return result;
   });
 
+  const getSavedApiKeyMask = (selectedProvider: string, methodId: string): string | null => {
+    const status = syncState.providerStatuses.find((entry) => entry.provider === selectedProvider);
+    const mask = status?.savedApiKeyMasks?.[methodId];
+    if (typeof mask !== "string") return null;
+    const trimmed = mask.trim();
+    return trimmed ? trimmed : null;
+  };
+
   const oauthAutoTitle = createMemo(() => {
     const challenge = matchingChallenge();
     if (challenge?.url) return `OAuth: ${challenge.url}`;
@@ -113,6 +124,18 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     return [challenge.instructions, extras.join(" ")].filter(Boolean).join(" ");
   });
 
+  const apiKeyPlaceholder = createMemo(() => {
+    const selectedMethod = method();
+    const mask = selectedMethod ? getSavedApiKeyMask(provider(), selectedMethod.id) : null;
+    const isExa = selectedMethod?.id === "exa_api_key";
+    if (!mask) {
+      return isExa ? "Paste Exa API key and press Enter" : "Paste API key and press Enter";
+    }
+    return isExa
+      ? `Saved (${mask}). Paste new Exa API key and press Enter`
+      : `Saved (${mask}). Paste new API key and press Enter`;
+  });
+
   createEffect(() => {
     const result = matchingResult();
     if (!result || !awaitingResult()) return;
@@ -128,7 +151,13 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     return methodsForProvider().map((item) => ({
       label: item.label,
       value: item.id,
-      description: item.type === "oauth" ? "OAuth sign-in" : "Store API key",
+      description:
+        item.type === "oauth"
+          ? "OAuth sign-in"
+          : (() => {
+              const mask = getSavedApiKeyMask(provider(), item.id);
+              return mask ? `Saved (${mask})` : "Store API key";
+            })(),
     }));
   });
 
@@ -216,8 +245,8 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
 
       <Match when={stage() === "api_key"}>
         <DialogPrompt
-          title={`API Key: ${provider()}`}
-          placeholder="Paste API key and press Enter"
+          title={`API Key: ${method()?.label ?? provider()}`}
+          placeholder={apiKeyPlaceholder()}
           onDismiss={props.onDismiss}
           onSubmit={(value) => {
             const selectedMethod = method();

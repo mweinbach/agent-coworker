@@ -744,6 +744,12 @@ function normalizeProviderChoice(provider: ProviderName): ProviderName {
 }
 
 function defaultProviderAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
+  if (provider === "google") {
+    return [
+      { id: "api_key", type: "api", label: "API key" },
+      { id: "exa_api_key", type: "api", label: "Exa API key (web search)" },
+    ];
+  }
   if (provider === "codex-cli") {
     return [
       { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
@@ -823,6 +829,7 @@ export type AppStoreState = {
 
   sendMessage: (text: string) => Promise<void>;
   cancelThread: (threadId: string) => void;
+  setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;
   setComposerText: (text: string) => void;
   setInjectContext: (v: boolean) => void;
   setDeveloperMode: (v: boolean) => void;

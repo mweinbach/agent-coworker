@@ -1,4 +1,4 @@
-import type { AiCoworkerPaths, ConnectProviderResult, OauthStdioMode } from "../connect";
+import { writeToolApiKey, type AiCoworkerPaths, type ConnectProviderResult, type OauthStdioMode } from "../connect";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 
 export type ProviderAuthMethodType = "api" | "oauth";
@@ -29,7 +29,10 @@ export type ConnectProviderHandler = (opts: {
 }) => Promise<ConnectProviderResult>;
 
 const PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> = {
-  google: [{ id: "api_key", type: "api", label: "API key" }],
+  google: [
+    { id: "api_key", type: "api", label: "API key" },
+    { id: "exa_api_key", type: "api", label: "Exa API key (web search)" },
+  ],
   openai: [{ id: "api_key", type: "api", label: "API key" }],
   anthropic: [{ id: "api_key", type: "api", label: "API key" }],
   "codex-cli": [
@@ -103,6 +106,30 @@ export async function setProviderApiKey(opts: {
   const apiKey = opts.apiKey.trim();
   if (!apiKey) {
     return { ok: false, provider: opts.provider, message: "API key is required." };
+  }
+
+  if (opts.provider === "google" && method.id === "exa_api_key") {
+    try {
+      const saved = await writeToolApiKey({
+        name: "exa",
+        apiKey,
+        paths: opts.paths,
+      });
+      return {
+        ok: true,
+        provider: opts.provider,
+        mode: "api_key",
+        storageFile: saved.storageFile,
+        message: "Exa API key saved for Gemini webSearch.",
+        maskedApiKey: saved.maskedApiKey,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        provider: opts.provider,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   return await opts.connect({

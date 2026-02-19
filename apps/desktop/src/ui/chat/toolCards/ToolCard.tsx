@@ -5,7 +5,6 @@ import {
   ToolCodeBlock,
   ToolContent,
   ToolHeader,
-  ToolKeyValue,
 } from "../../../components/ai-elements/tool";
 
 import { formatToolCard } from "./toolCardFormatting";
@@ -51,16 +50,8 @@ export const ToolCard = memo(function ToolCard(props: ToolCardProps) {
     <Tool open={expanded} onOpenChange={setExpanded}>
       <ToolHeader title={formatting.title} subtitle={formatting.subtitle} status={props.status} />
       <ToolContent>
-        {formatting.details.length > 0 ? (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {formatting.details.map((detail) => (
-              <ToolKeyValue key={`${detail.label}:${detail.value}`} label={detail.label} value={detail.value} />
-            ))}
-          </div>
-        ) : null}
-
-        {argsJson ? <ToolCodeBlock label="Arguments" value={argsJson} /> : null}
-        {resultJson ? <ToolCodeBlock label="Result" value={resultJson} tone={props.status === "error" ? "error" : "default"} /> : null}
+        {argsJson ? <ToolCodeBlock label="Input" value={argsJson} /> : null}
+        {resultJson ? <ToolCodeBlock label="Output" value={resultJson} tone={props.status === "error" ? "error" : "default"} /> : null}
       </ToolContent>
     </Tool>
   );

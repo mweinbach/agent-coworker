@@ -64,8 +64,8 @@ body {
 }
 
 :where(button, [role="button"], a, input, textarea, select, [role="separator"]):focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--app-bg), 0 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 ::-webkit-scrollbar {

@@ -160,7 +160,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
     const list = skills
       .map(
         (s) =>
-          `- **${s.name}**: ${s.description} (source: ${s.source}; triggers: ${s.triggers.join(", ")})`
+          `- **${s.name}**: ${s.description} (location: ${s.path}; source: ${s.source}; triggers: ${s.triggers.join(", ")})`
       )
       .join("\n");
     prompt +=

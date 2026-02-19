@@ -3,7 +3,24 @@ import path from "node:path";
 
 import type { SkillEntry } from "../types";
 
-type ParsedFrontMatter = { frontMatter: Record<string, string>; body: string };
+type SkillFrontMatter = {
+  name: string;
+  description: string;
+  license?: string;
+  compatibility?: string;
+  metadata?: Record<string, string>;
+  allowedTools?: string;
+};
+
+type ParsedSkillDocument = {
+  frontMatter: SkillFrontMatter;
+  rawFrontMatter: Record<string, unknown>;
+  body: string;
+};
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function stripQuotes(v: string): string {
   const trimmed = v.trim();
@@ -16,29 +33,118 @@ function stripQuotes(v: string): string {
   return trimmed;
 }
 
-function parseFrontMatter(raw: string): ParsedFrontMatter {
+function splitFrontMatter(raw: string): { frontMatterRaw: string | null; body: string } {
   // Tolerate an optional UTF-8 BOM at the start of the file.
   const re = /^\ufeff?---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/;
   const m = raw.match(re);
-  if (!m) return { frontMatter: {}, body: raw };
+  if (!m) return { frontMatterRaw: null, body: raw };
+  return { frontMatterRaw: m[1] ?? "", body: raw.slice(m[0].length) };
+}
 
-  const frontMatterRaw = m[1] ?? "";
-  const frontMatter: Record<string, string> = {};
+function parseYamlFrontMatter(frontMatterRaw: string): Record<string, unknown> | null {
+  try {
+    const parsed = Bun.YAML.parse(frontMatterRaw);
+    if (!isPlainRecord(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
-  for (const line of frontMatterRaw.split(/\r?\n/)) {
-    const l = line.trimEnd();
-    if (!l || l.trimStart().startsWith("#")) continue;
-    if (/^\s/.test(l)) continue; // ignore nested blocks
-    const kv = l.match(/^([A-Za-z0-9_]+)\s*:\s*(.+)\s*$/);
-    if (!kv) continue;
-    const key = kv[1] ?? "";
-    const value = kv[2] ?? "";
-    if (!key) continue;
-    frontMatter[key] = stripQuotes(value);
+function parseMetadataMap(value: unknown): Record<string, string> | null {
+  if (!isPlainRecord(value)) return null;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v !== "string") return null;
+    out[k] = v;
+  }
+  return out;
+}
+
+function parseSkillFrontMatter(raw: string, skillDirName: string): ParsedSkillDocument | null {
+  const { frontMatterRaw, body } = splitFrontMatter(raw);
+  if (!frontMatterRaw) return null;
+
+  const parsed = parseYamlFrontMatter(frontMatterRaw);
+  if (!parsed) return null;
+
+  const nameRaw = parsed.name;
+  const descriptionRaw = parsed.description;
+
+  if (typeof nameRaw !== "string" || typeof descriptionRaw !== "string") {
+    return null;
   }
 
-  const body = raw.slice(m[0].length);
-  return { frontMatter, body };
+  const name = nameRaw.trim();
+  const description = descriptionRaw.trim();
+
+  // Agent Skills spec constraints.
+  if (!name || name.length > 64) return null;
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) return null;
+  if (name !== skillDirName) return null;
+
+  if (!description || description.length > 1024) return null;
+
+  let license: string | undefined;
+  if (parsed.license !== undefined) {
+    if (typeof parsed.license !== "string") return null;
+    const value = parsed.license.trim();
+    if (!value) return null;
+    license = value;
+  }
+
+  let compatibility: string | undefined;
+  if (parsed.compatibility !== undefined) {
+    if (typeof parsed.compatibility !== "string") return null;
+    const value = parsed.compatibility.trim();
+    if (!value || value.length > 500) return null;
+    compatibility = value;
+  }
+
+  let metadata: Record<string, string> | undefined;
+  if (parsed.metadata !== undefined) {
+    const m = parseMetadataMap(parsed.metadata);
+    if (!m) return null;
+    metadata = m;
+  }
+
+  let allowedTools: string | undefined;
+  const allowedToolsRaw = parsed["allowed-tools"];
+  if (allowedToolsRaw !== undefined) {
+    if (typeof allowedToolsRaw !== "string") return null;
+    const value = allowedToolsRaw.trim();
+    if (!value) return null;
+    allowedTools = value;
+  }
+
+  return {
+    frontMatter: {
+      name,
+      description,
+      ...(license ? { license } : {}),
+      ...(compatibility ? { compatibility } : {}),
+      ...(metadata ? { metadata } : {}),
+      ...(allowedTools ? { allowedTools } : {}),
+    },
+    rawFrontMatter: parsed,
+    body,
+  };
+}
+
+function parseTriggerValue(value: unknown): string[] {
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .filter((v): v is string => typeof v === "string")
+      .map((v) => v.trim())
+      .filter(Boolean);
+  }
+  return [];
 }
 
 function mimeTypeForPath(p: string): string {
@@ -165,13 +271,15 @@ async function readAgentInterface(skillRoot: string): Promise<SkillEntry["interf
   return out;
 }
 
-export function extractTriggers(name: string, content: string): string[] {
-  const triggerMatch = content.match(/^\s*TRIGGERS?\s*:\s*(.+)$/im);
-  if (triggerMatch) {
-    return triggerMatch[1]
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean);
+export function extractTriggers(name: string, frontMatter?: Record<string, unknown>): string[] {
+  if (frontMatter) {
+    const direct = parseTriggerValue(frontMatter.triggers);
+    if (direct.length > 0) return direct;
+
+    if (isPlainRecord(frontMatter.metadata)) {
+      const metadataTriggers = parseTriggerValue(frontMatter.metadata.triggers);
+      if (metadataTriggers.length > 0) return metadataTriggers;
+    }
   }
 
   const defaults: Record<string, string[]> = {
@@ -214,37 +322,31 @@ export async function discoverSkills(
         const items = await fs.readdir(scanDir, { withFileTypes: true });
         for (const item of items) {
           if (!item.isDirectory()) continue;
-          if (seen.has(item.name)) continue;
 
           const skillPath = path.join(scanDir, item.name, "SKILL.md");
           try {
             const content = await fs.readFile(skillPath, "utf-8");
-            const { frontMatter, body } = parseFrontMatter(content);
+            const parsed = parseSkillFrontMatter(content, item.name);
+            if (!parsed) continue;
 
-            const firstNonEmptyLine =
-              body
-                .split(/\r?\n/)
-                .map((l) => l.trim())
-                .find((l) => l.length > 0) || item.name;
-
-            const fallbackDesc = firstNonEmptyLine.replace(/^#+\s*/, "") || item.name;
-            const description = frontMatter.description || fallbackDesc;
+            const name = parsed.frontMatter.name;
+            if (seen.has(name)) continue;
 
             const interfaceMeta = await readAgentInterface(path.dirname(skillPath));
-            const triggers = extractTriggers(item.name, body);
+            const triggers = extractTriggers(name, parsed.rawFrontMatter);
 
-            seen.add(item.name);
+            seen.add(name);
             entries.push({
-              name: item.name,
+              name,
               path: skillPath,
               source,
               enabled,
               triggers,
-              description,
+              description: parsed.frontMatter.description,
               interface: interfaceMeta,
             });
           } catch {
-            // No SKILL.md in this folder.
+            // No readable SKILL.md in this folder.
           }
         }
       } catch {
@@ -257,6 +359,6 @@ export async function discoverSkills(
 }
 
 export function stripSkillFrontMatter(raw: string): string {
-  const { body } = parseFrontMatter(raw);
+  const { body } = splitFrontMatter(raw);
   return body.trimStart();
 }

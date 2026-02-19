@@ -1923,13 +1923,17 @@ describe("notebookEdit tool", () => {
 // ---------------------------------------------------------------------------
 
 describe("skill tool", () => {
+  function skillDoc(name: string, description: string, body: string): string {
+    return ["---", `name: \"${name}\"`, `description: \"${description}\"`, "---", "", body].join("\n");
+  }
+
   test("loads skill from SKILL.md in directory", async () => {
     const dir = await tmpDir();
     const skillDir = path.join(dir, "skills", "xlsx");
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(
       path.join(skillDir, "SKILL.md"),
-      "# XLSX Skill\nInstructions here.",
+      skillDoc("xlsx", "Spreadsheet helper skill.", "# XLSX Skill\nInstructions here."),
       "utf-8"
     );
 
@@ -1944,7 +1948,7 @@ describe("skill tool", () => {
     expect(res).toContain("Instructions here.");
   });
 
-  test("loads skill from flat file layout", async () => {
+  test("does not load non-spec flat file layout", async () => {
     const dir = await tmpDir();
     const skillsDir = path.join(dir, "skills");
     await fs.mkdir(skillsDir, { recursive: true });
@@ -1957,7 +1961,7 @@ describe("skill tool", () => {
 
     const t: any = createSkillTool(ctx);
     const res: string = await t.execute({ skillName: "pdf" });
-    expect(res).toContain("PDF Skill Content");
+    expect(res).toContain("not found");
   });
 
   test("returns 'not found' for missing skill", async () => {
@@ -1974,36 +1978,52 @@ describe("skill tool", () => {
 
   test("reloads modified skill content when file changes", async () => {
     const dir = await tmpDir();
-    const skillDir = path.join(dir, "skills_cache_test", "cached_skill_unique");
+    const skillDir = path.join(dir, "skills-cache-test", "cached-skill-unique");
     await fs.mkdir(skillDir, { recursive: true });
-    await fs.writeFile(path.join(skillDir, "SKILL.md"), "Cached content", "utf-8");
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      skillDoc("cached-skill-unique", "Cached skill.", "Cached content"),
+      "utf-8"
+    );
 
     const config = makeConfig(dir);
-    config.skillsDirs = [path.join(dir, "skills_cache_test")];
+    config.skillsDirs = [path.join(dir, "skills-cache-test")];
     const ctx = makeCtx(dir);
     ctx.config = config;
 
     const t: any = createSkillTool(ctx);
     // First call reads from disk
-    const res1: string = await t.execute({ skillName: "cached_skill_unique" });
+    const res1: string = await t.execute({ skillName: "cached-skill-unique" });
     expect(res1).toBe("Cached content");
 
     // Modify the file on disk
-    await fs.writeFile(path.join(skillDir, "SKILL.md"), "Modified content", "utf-8");
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      skillDoc("cached-skill-unique", "Cached skill.", "Modified content"),
+      "utf-8"
+    );
 
     // Second call should reflect updated on-disk content.
-    const res2: string = await t.execute({ skillName: "cached_skill_unique" });
+    const res2: string = await t.execute({ skillName: "cached-skill-unique" });
     expect(res2).toBe("Modified content");
   });
 
   test("searches multiple skillsDirs in order", async () => {
     const dir = await tmpDir();
-    const dir1 = path.join(dir, "s1_order_test");
-    const dir2 = path.join(dir, "s2_order_test");
-    await fs.mkdir(path.join(dir1, "myskill_order"), { recursive: true });
-    await fs.mkdir(path.join(dir2, "myskill_order"), { recursive: true });
-    await fs.writeFile(path.join(dir1, "myskill_order", "SKILL.md"), "First dir", "utf-8");
-    await fs.writeFile(path.join(dir2, "myskill_order", "SKILL.md"), "Second dir", "utf-8");
+    const dir1 = path.join(dir, "s1-order-test");
+    const dir2 = path.join(dir, "s2-order-test");
+    await fs.mkdir(path.join(dir1, "myskill-order"), { recursive: true });
+    await fs.mkdir(path.join(dir2, "myskill-order"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir1, "myskill-order", "SKILL.md"),
+      skillDoc("myskill-order", "First version.", "First dir"),
+      "utf-8"
+    );
+    await fs.writeFile(
+      path.join(dir2, "myskill-order", "SKILL.md"),
+      skillDoc("myskill-order", "Second version.", "Second dir"),
+      "utf-8"
+    );
 
     const config = makeConfig(dir);
     config.skillsDirs = [dir1, dir2];
@@ -2011,7 +2031,7 @@ describe("skill tool", () => {
     ctx.config = config;
 
     const t: any = createSkillTool(ctx);
-    const res: string = await t.execute({ skillName: "myskill_order" });
+    const res: string = await t.execute({ skillName: "myskill-order" });
     expect(res).toBe("First dir");
   });
 

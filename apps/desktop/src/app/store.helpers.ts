@@ -1771,7 +1771,7 @@ function handleThreadEvent(
     return;
   }
 
-  if (evt.type === "session_backup_state" || evt.type === "harness_context" || evt.type === "observability_query_result" || evt.type === "harness_slo_result") {
+  if (evt.type === "session_backup_state" || evt.type === "harness_context") {
     return;
   }
 

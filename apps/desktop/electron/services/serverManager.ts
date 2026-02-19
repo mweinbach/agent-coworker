@@ -22,17 +22,6 @@ type ServerListening = {
   cwd: string;
 };
 
-type SavedObservabilityState = {
-  stack?: {
-    endpoints?: {
-      otlpHttpEndpoint?: string;
-      logsBaseUrl?: string;
-      metricsBaseUrl?: string;
-      tracesBaseUrl?: string;
-    };
-  };
-};
-
 function resolveRepoRoot(): string {
   const fromEnv = process.env.COWORK_REPO_ROOT;
   if (fromEnv && fs.existsSync(path.join(fromEnv, "src", "server", "index.ts"))) {
@@ -200,40 +189,8 @@ function buildSpawnArgs(workspacePath: string, yolo: boolean): string[] {
   return args;
 }
 
-function buildServerEnv(repoRoot: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-
-  // Desktop sessions should report observability status by default.
-  if (!env.AGENT_OBSERVABILITY_ENABLED) {
-    env.AGENT_OBSERVABILITY_ENABLED = "1";
-  }
-
-  // Allow portal-style overrides to flow through when AGENT_* variables are not set.
-  if (!env.AGENT_OBS_OTLP_HTTP && env.HARNESS_OBS_OTLP_HTTP) env.AGENT_OBS_OTLP_HTTP = env.HARNESS_OBS_OTLP_HTTP;
-  if (!env.AGENT_OBS_LOGS_URL && env.HARNESS_OBS_LOGS_URL) env.AGENT_OBS_LOGS_URL = env.HARNESS_OBS_LOGS_URL;
-  if (!env.AGENT_OBS_METRICS_URL && env.HARNESS_OBS_METRICS_URL) env.AGENT_OBS_METRICS_URL = env.HARNESS_OBS_METRICS_URL;
-  if (!env.AGENT_OBS_TRACES_URL && env.HARNESS_OBS_TRACES_URL) env.AGENT_OBS_TRACES_URL = env.HARNESS_OBS_TRACES_URL;
-
-  // If a local observability stack state exists, use those endpoints automatically.
-  const statePath = path.join(repoRoot, ".agent", "observability-stack", "default.json");
-  if (!fs.existsSync(statePath)) {
-    return env;
-  }
-
-  try {
-    const parsed = JSON.parse(fs.readFileSync(statePath, "utf-8")) as SavedObservabilityState;
-    const endpoints = parsed.stack?.endpoints;
-    if (!endpoints) return env;
-
-    if (!env.AGENT_OBS_OTLP_HTTP && endpoints.otlpHttpEndpoint) env.AGENT_OBS_OTLP_HTTP = endpoints.otlpHttpEndpoint;
-    if (!env.AGENT_OBS_LOGS_URL && endpoints.logsBaseUrl) env.AGENT_OBS_LOGS_URL = endpoints.logsBaseUrl;
-    if (!env.AGENT_OBS_METRICS_URL && endpoints.metricsBaseUrl) env.AGENT_OBS_METRICS_URL = endpoints.metricsBaseUrl;
-    if (!env.AGENT_OBS_TRACES_URL && endpoints.tracesBaseUrl) env.AGENT_OBS_TRACES_URL = endpoints.tracesBaseUrl;
-  } catch {
-    // Ignore malformed state and keep defaults.
-  }
-
-  return env;
+function buildServerEnv(): NodeJS.ProcessEnv {
+  return { ...process.env };
 }
 
 export class ServerManager {
@@ -256,7 +213,7 @@ export class ServerManager {
     const useSource = !app.isPackaged || process.env.COWORK_DESKTOP_USE_SOURCE === "1";
     const spawnArgs = buildSpawnArgs(workspacePath, yolo);
     const repoRoot = resolveRepoRoot();
-    const serverEnv = buildServerEnv(repoRoot);
+    const serverEnv = buildServerEnv();
 
     let child: ChildProcessWithoutNullStreams;
     if (useSource) {

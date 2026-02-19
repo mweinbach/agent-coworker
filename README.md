@@ -153,7 +153,7 @@ The TUI connects to the agent server over WebSocket — it never touches the age
 
 ## WebSocket Protocol Notes
 
-- Current protocol version is `2.0` (sent in `server_hello.protocolVersion`).
+- Current protocol version is `4.0` (sent in `server_hello.protocolVersion`).
 - `ping` now requires `sessionId`, and `pong.sessionId` echoes it.
 - `error` events always include required `code` and `source`.
 - `approval` events always include required `reasonCode`.
@@ -171,8 +171,11 @@ Environment variables:
 - `AGENT_USER_NAME`
 - `AGENT_ENABLE_MCP` (`true|false`, defaults to `true`)
 - `AGENT_OBSERVABILITY_ENABLED` (`true|false`, defaults to `false`)
-- `AGENT_OBS_OTLP_HTTP` (OTLP HTTP endpoint)
-- `AGENT_OBS_LOGS_URL`, `AGENT_OBS_METRICS_URL`, `AGENT_OBS_TRACES_URL` (query API base URLs)
+- `LANGFUSE_PUBLIC_KEY`
+- `LANGFUSE_SECRET_KEY`
+- `LANGFUSE_BASE_URL` (defaults to `https://cloud.langfuse.com`)
+- `LANGFUSE_TRACING_ENVIRONMENT`
+- `LANGFUSE_RELEASE`
 - `AGENT_HARNESS_REPORT_ONLY` (`true|false`, defaults to `true`)
 - `AGENT_HARNESS_STRICT_MODE` (`true|false`, defaults to `false`)
 
@@ -225,13 +228,9 @@ Watch mode:
 bun run dev
 ```
 
-Harness + observability helpers:
+Harness helper:
 ```bash
-bun run obs:up
-bun run obs:status
-bun run harness:smoke
 bun run harness:run
-bun run obs:down
 ```
 
 Harness web portal (Next.js realtime dashboard):
@@ -244,6 +243,4 @@ bun run portal:start
 
 Full operational runbook:
 - `docs/harness/runbook.md`
-- `docs/harness/runbook.md` section `9.4 End-to-end: run in a target directory + watch live traces`
-- `docs/harness/runbook.md` section `17. Next.js Web Portal (Realtime)`
-- `docs/harness/runbook.md` section `18. GitHub CI In Testing Environment`
+- `docs/harness/observability.md`

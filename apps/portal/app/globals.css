@@ -262,9 +262,7 @@ button {
   letter-spacing: 0.04em;
 }
 
-.detail-card pre,
-.query-result pre,
-.obs-endpoints pre {
+.detail-card pre {
   margin: 0;
   border: 1px solid #2b3a62;
   border-radius: 8px;
@@ -304,105 +302,6 @@ button {
   background: #10162b;
   position: sticky;
   top: 0;
-}
-
-.observability-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.obs-health-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.obs-metrics-grid {
-  display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.mini-card {
-  border: 1px solid #2a3555;
-  border-radius: 10px;
-  padding: 10px;
-  background: linear-gradient(180deg, rgba(22, 29, 49, 0.9), rgba(15, 21, 35, 0.94));
-}
-
-.mini-card h3 {
-  margin: 0;
-  font-size: 0.76rem;
-  color: var(--ink-soft);
-  text-transform: uppercase;
-}
-
-.mini-card strong {
-  display: block;
-  margin-top: 8px;
-  font-size: 1.35rem;
-}
-
-.query-form {
-  display: grid;
-  gap: 10px;
-  border: 1px solid #2a3555;
-  border-radius: 10px;
-  padding: 10px;
-  background: linear-gradient(180deg, rgba(23, 30, 49, 0.9), rgba(14, 20, 34, 0.94));
-}
-
-.query-form h3 {
-  margin: 0;
-  font-size: 0.86rem;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-}
-
-.query-form label {
-  display: grid;
-  gap: 6px;
-  font-size: 0.76rem;
-  color: var(--ink-soft);
-}
-
-.query-form select,
-.query-form textarea,
-.query-form input {
-  border: 1px solid #2f4069;
-  border-radius: 7px;
-  background: #0a1020;
-  color: var(--ink);
-  padding: 8px;
-  font-size: 0.76rem;
-}
-
-.query-form textarea {
-  resize: vertical;
-}
-
-.query-form button {
-  justify-self: start;
-  border: 1px solid #59bce8;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #13334d, #0d273b);
-  color: #cbeeff;
-  padding: 8px 11px;
-  font-size: 0.76rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.query-form button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.query-result h3 {
-  margin: 0 0 8px 0;
-  font-size: 0.86rem;
-  color: var(--ink-soft);
 }
 
 .empty {
@@ -467,10 +366,6 @@ button {
 @media (max-width: 1520px) {
   .layout-grid {
     grid-template-columns: 300px 1fr;
-  }
-
-  .observability-panel {
-    grid-column: 1 / -1;
   }
 }
 

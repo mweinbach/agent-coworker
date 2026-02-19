@@ -19,7 +19,6 @@ export interface HarnessRunSummary {
   lastError: string | null;
   finalPreview: string;
   observabilityEnabled: boolean;
-  sloPassed: boolean | null;
   updatedAtMs: number;
 }
 
@@ -27,10 +26,8 @@ export interface HarnessRunRootSummary {
   runRootName: string;
   createdAt: string | null;
   harness: {
-    observability: boolean;
     reportOnly: boolean;
     strictMode: boolean;
-    keepStack: boolean;
   } | null;
   runs: HarnessRunSummary[];
   updatedAtMs: number;
@@ -68,9 +65,6 @@ export interface HarnessRunDetail {
     first: Array<Record<string, unknown>>;
     last: Array<Record<string, unknown>>;
   };
-  sloChecks: Array<Record<string, unknown>>;
-  sloReport: Record<string, unknown> | null;
-  observabilityQueries: Array<Record<string, unknown>>;
   artifactsIndex: Array<Record<string, unknown>>;
   toolLogTail: string[];
   files: string[];
@@ -201,7 +195,6 @@ async function readRunSummary(runRootPath: string, runDirName: string): Promise<
   const runMeta = await readJsonFile<Record<string, unknown>>(path.join(runDir, "run_meta.json"));
   const attempts = (await readJsonFile<Array<Record<string, unknown>>>(path.join(runDir, "attempts.json"))) ?? [];
   const trace = await readJsonFile<Record<string, unknown>>(path.join(runDir, "trace.json"));
-  const sloReport = await readJsonFile<Record<string, unknown>>(path.join(runDir, "slo_report.json"));
   const finalText = await readTextFile(path.join(runDir, "final.txt"));
 
   const runId = asString(runMeta?.runId) ?? runDirName;
@@ -230,7 +223,6 @@ async function readRunSummary(runRootPath: string, runDirName: string): Promise<
     path.join(runDir, "attempts.json"),
     path.join(runDir, "trace.json"),
     path.join(runDir, "final.txt"),
-    path.join(runDir, "slo_report.json"),
   ]);
 
   return {
@@ -247,7 +239,6 @@ async function readRunSummary(runRootPath: string, runDirName: string): Promise<
     lastError,
     finalPreview: getPreview(finalText),
     observabilityEnabled,
-    sloPassed: typeof sloReport?.passed === "boolean" ? (sloReport.passed as boolean) : null,
     updatedAtMs,
   };
 }
@@ -288,10 +279,8 @@ async function readRunRootSummary(repoRoot: string, runRootName: string): Promis
     createdAt: asString(manifest?.createdAt),
     harness: harness
       ? {
-          observability: asBoolean(harness.observability, false),
           reportOnly: asBoolean(harness.reportOnly, true),
           strictMode: asBoolean(harness.strictMode, false),
-          keepStack: asBoolean(harness.keepStack, false),
         }
       : null,
     runs,
@@ -355,10 +344,6 @@ export async function getHarnessRunDetail(runRootName: string, runDirName: strin
 
   const attempts = (await readJsonFile<Array<Record<string, unknown>>>(path.join(runDir, "attempts.json"))) ?? [];
   const trace = await readJsonFile<Record<string, unknown>>(path.join(runDir, "trace.json"));
-  const sloChecks = (await readJsonFile<Array<Record<string, unknown>>>(path.join(runDir, "slo_checks.json"))) ?? [];
-  const sloReport = await readJsonFile<Record<string, unknown>>(path.join(runDir, "slo_report.json"));
-  const observabilityQueries =
-    (await readJsonFile<Array<Record<string, unknown>>>(path.join(runDir, "observability_queries.json"))) ?? [];
   const artifactsIndex =
     (await readJsonFile<Array<Record<string, unknown>>>(path.join(runDir, "artifacts_index.json"))) ?? [];
 
@@ -382,8 +367,6 @@ export async function getHarnessRunDetail(runRootName: string, runDirName: strin
     path.join(runDir, "run_meta.json"),
     path.join(runDir, "trace.json"),
     path.join(runDir, "attempts.json"),
-    path.join(runDir, "slo_report.json"),
-    path.join(runDir, "observability_queries.json"),
     path.join(runDir, "artifacts_index.json"),
     path.join(runDir, "tool-log.txt"),
   ]);
@@ -410,9 +393,6 @@ export async function getHarnessRunDetail(runRootName: string, runDirName: strin
       responseMessages: traceResponseMessages.length,
     },
     traceStepPreview: normalizeTracePreview(traceSteps),
-    sloChecks,
-    sloReport,
-    observabilityQueries,
     artifactsIndex,
     toolLogTail: tailLines(toolLogText, 220),
     files: files.sort((a, b) => a.localeCompare(b)),

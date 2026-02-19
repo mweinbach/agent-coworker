@@ -10,8 +10,56 @@ export interface ObservabilityEvent {
   attributes?: Record<string, string | number | boolean>;
 }
 
-const OTLP_HTTP_TRACES_PATH = "/v1/traces";
-const LEGACY_VICTORIA_TRACES_PATH = "/insert/opentelemetry/v1/traces";
+const LANGFUSE_OTEL_TRACES_PATH = "/api/public/otel/v1/traces";
+
+const WARN_ONCE_KEYS = new Set<string>();
+
+const BLOCKED_ATTRIBUTE_SUBSTRINGS = [
+  "prompt",
+  "content",
+  "body",
+  "input",
+  "output",
+  "response",
+  "message",
+  "error",
+  "query",
+  "argument",
+  "payload",
+  "raw",
+];
+
+const ALLOWED_ATTRIBUTE_KEYS = new Set([
+  "sessionId",
+  "turnId",
+  "runId",
+  "taskId",
+  "provider",
+  "model",
+  "tool",
+  "toolName",
+  "command",
+  "commandName",
+  "skillName",
+  "methodId",
+  "mode",
+  "reasonCode",
+  "scenario",
+  "status",
+  "objectiveLength",
+  "providers",
+  "checks",
+  "passed",
+  "limit",
+  "attempt",
+  "maxAttempts",
+]);
+
+function warnOnce(key: string, message: string): void {
+  if (WARN_ONCE_KEYS.has(key)) return;
+  WARN_ONCE_KEYS.add(key);
+  console.warn(message);
+}
 
 function toAnyValue(v: string | number | boolean): Record<string, unknown> {
   if (typeof v === "number") return { doubleValue: v };
@@ -38,35 +86,71 @@ function normalizeUrl(input: string): string {
   return input.replace(/\/+$/, "");
 }
 
-function resolveTraceIngestUrl(config: AgentConfig): string | null {
-  if (!config.observability) return null;
-  const otlpEndpoint = config.observability.otlpHttpEndpoint?.trim();
-  if (!otlpEndpoint) {
-    return `${normalizeUrl(config.observability.queryApi.tracesBaseUrl)}${LEGACY_VICTORIA_TRACES_PATH}`;
+function resolveLangfuseTraceIngestUrl(baseUrl: string): string {
+  return `${normalizeUrl(baseUrl)}${LANGFUSE_OTEL_TRACES_PATH}`;
+}
+
+function shouldIncludeAttribute(key: string, value: string | number | boolean): boolean {
+  if (typeof value === "string" && value.length > 512) return false;
+
+  if (ALLOWED_ATTRIBUTE_KEYS.has(key)) return true;
+  if (key.endsWith("Id")) return true;
+
+  const lowered = key.toLowerCase();
+  return !BLOCKED_ATTRIBUTE_SUBSTRINGS.some((token) => lowered.includes(token));
+}
+
+function sanitizeAttributes(attributes: Record<string, string | number | boolean> | undefined): Array<{ key: string; value: Record<string, unknown> }> {
+  if (!attributes) return [];
+  const out: Array<{ key: string; value: Record<string, unknown> }> = [];
+  for (const [key, value] of Object.entries(attributes)) {
+    if (!shouldIncludeAttribute(key, value)) continue;
+    out.push({ key, value: toAnyValue(value) });
+  }
+  return out;
+}
+
+function resolveLangfuseConfig(
+  config: AgentConfig
+):
+  | {
+      baseUrl: string;
+      publicKey: string;
+      secretKey: string;
+      tracingEnvironment?: string;
+      release?: string;
+    }
+  | null {
+  if (!config.observabilityEnabled) return null;
+
+  const obs = config.observability;
+  if (!obs) {
+    warnOnce(
+      "langfuse-missing-config",
+      "[observability] Langfuse telemetry is enabled but no observability config is present. Continuing without telemetry export."
+    );
+    return null;
   }
 
-  try {
-    const parsed = new URL(otlpEndpoint);
-    const normalizedPath = normalizeUrl(parsed.pathname);
-    if (
-      normalizedPath.endsWith(OTLP_HTTP_TRACES_PATH) ||
-      normalizedPath.endsWith(LEGACY_VICTORIA_TRACES_PATH)
-    ) {
-      return normalizeUrl(parsed.toString());
-    }
+  const baseUrl = obs.baseUrl.trim();
+  const publicKey = obs.publicKey?.trim() ?? "";
+  const secretKey = obs.secretKey?.trim() ?? "";
 
-    parsed.pathname = `${normalizedPath}${OTLP_HTTP_TRACES_PATH}`;
-    return parsed.toString();
-  } catch {
-    const normalizedEndpoint = normalizeUrl(otlpEndpoint);
-    if (
-      normalizedEndpoint.endsWith(OTLP_HTTP_TRACES_PATH) ||
-      normalizedEndpoint.endsWith(LEGACY_VICTORIA_TRACES_PATH)
-    ) {
-      return normalizedEndpoint;
-    }
-    return `${normalizedEndpoint}${OTLP_HTTP_TRACES_PATH}`;
+  if (!baseUrl || !publicKey || !secretKey) {
+    warnOnce(
+      "langfuse-missing-credentials",
+      "[observability] Langfuse telemetry is enabled but LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY (and base URL) are not fully configured. Continuing without telemetry export."
+    );
+    return null;
   }
+
+  return {
+    baseUrl,
+    publicKey,
+    secretKey,
+    tracingEnvironment: obs.tracingEnvironment,
+    release: obs.release,
+  };
 }
 
 export async function emitObservabilityEvent(
@@ -74,13 +158,11 @@ export async function emitObservabilityEvent(
   event: ObservabilityEvent,
   deps?: { fetchImpl?: typeof fetch }
 ): Promise<void> {
-  if (!config.observabilityEnabled || !config.observability) return;
+  const langfuse = resolveLangfuseConfig(config);
+  if (!langfuse) return;
 
   const fetchImpl = deps?.fetchImpl ?? fetch;
-  const attributes = Object.entries(event.attributes ?? {}).map(([key, value]) => ({
-    key,
-    value: toAnyValue(value),
-  }));
+  const attributes = sanitizeAttributes(event.attributes);
   const { startNs, endNs } = computeSpanWindow(event.at, event.durationMs);
   const traceId = randomHex(16);
   const spanId = randomHex(8);
@@ -91,7 +173,10 @@ export async function emitObservabilityEvent(
         resource: {
           attributes: [
             { key: "service.name", value: { stringValue: "agent-coworker" } },
-            { key: "service.version", value: { stringValue: "0.1.0" } },
+            { key: "service.version", value: { stringValue: langfuse.release ?? "0.1.0" } },
+            ...(langfuse.tracingEnvironment
+              ? [{ key: "deployment.environment", value: { stringValue: langfuse.tracingEnvironment } }]
+              : []),
           ],
         },
         scopeSpans: [
@@ -122,16 +207,21 @@ export async function emitObservabilityEvent(
       },
     ],
   };
-  const tracesInsertUrl = resolveTraceIngestUrl(config);
-  if (!tracesInsertUrl) return;
+
+  const ingestUrl = resolveLangfuseTraceIngestUrl(langfuse.baseUrl);
+  const auth = Buffer.from(`${langfuse.publicKey}:${langfuse.secretKey}`).toString("base64");
 
   try {
-    const res = await fetchImpl(tracesInsertUrl, {
+    const res = await fetchImpl(ingestUrl, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Basic ${auth}`,
+      },
       body: JSON.stringify(body),
     });
-    // Drain the response body to allow socket reuse and prevent connection pool exhaustion.
+
+    // Drain body to avoid leaked sockets and keep exports best-effort.
     await res.arrayBuffer().catch(() => {});
   } catch {
     // best-effort export; failures should not affect core runtime

@@ -591,6 +591,70 @@ describe("loadConfig", () => {
     expect(cfg.modelSettings?.timeout?.stepMs).toBe(15000);
     expect(cfg.modelSettings?.timeout?.chunkMs).toBe(2000);
   });
+
+  test("loads Langfuse observability config from env vars", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {
+        AGENT_OBSERVABILITY_ENABLED: "true",
+        LANGFUSE_PUBLIC_KEY: "pk-lf-test",
+        LANGFUSE_SECRET_KEY: "sk-lf-test",
+        LANGFUSE_BASE_URL: "https://self-hosted.langfuse.example/",
+        LANGFUSE_TRACING_ENVIRONMENT: "staging",
+        LANGFUSE_RELEASE: "release-123",
+      },
+    });
+
+    expect(cfg.observabilityEnabled).toBe(true);
+    expect(cfg.observability?.provider).toBe("langfuse");
+    expect(cfg.observability?.baseUrl).toBe("https://self-hosted.langfuse.example");
+    expect(cfg.observability?.otelEndpoint).toBe("https://self-hosted.langfuse.example/api/public/otel/v1/traces");
+    expect(cfg.observability?.publicKey).toBe("pk-lf-test");
+    expect(cfg.observability?.secretKey).toBe("sk-lf-test");
+    expect(cfg.observability?.tracingEnvironment).toBe("staging");
+    expect(cfg.observability?.release).toBe("release-123");
+  });
+
+  test("enabled observability remains non-fatal when Langfuse keys are missing", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {
+        AGENT_OBSERVABILITY_ENABLED: "true",
+      },
+    });
+
+    expect(cfg.observabilityEnabled).toBe(true);
+    expect(cfg.observability?.provider).toBe("langfuse");
+    expect(cfg.observability?.publicKey).toBeUndefined();
+    expect(cfg.observability?.secretKey).toBeUndefined();
+  });
+
+  test("explicit disable overrides Langfuse key presence", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {
+        AGENT_OBSERVABILITY_ENABLED: "false",
+        LANGFUSE_PUBLIC_KEY: "pk-lf-test",
+        LANGFUSE_SECRET_KEY: "sk-lf-test",
+      },
+    });
+
+    expect(cfg.observabilityEnabled).toBe(false);
+    expect(cfg.observability?.publicKey).toBe("pk-lf-test");
+    expect(cfg.observability?.secretKey).toBe("sk-lf-test");
+  });
 });
 
 // ---------------------------------------------------------------------------

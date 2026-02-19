@@ -83,13 +83,13 @@ export interface AgentConfig {
   enableMcp?: boolean;
 
   /**
-   * Whether local observability integration is enabled for this session/run.
+   * Whether Langfuse observability integration is enabled for this session/run.
    * Defaults to false when not specified.
    */
   observabilityEnabled?: boolean;
 
   /**
-   * Optional observability endpoint and runtime settings.
+   * Optional Langfuse observability endpoint and runtime settings.
    */
   observability?: ObservabilityConfig;
 
@@ -168,19 +168,14 @@ export const SERVER_ERROR_CODES = [
 
 export type ServerErrorCode = (typeof SERVER_ERROR_CODES)[number];
 
-export type ObservabilityQueryType = "logql" | "promql" | "traceql";
-
-export interface ObservabilityQueryApi {
-  logsBaseUrl: string;
-  metricsBaseUrl: string;
-  tracesBaseUrl: string;
-}
-
 export interface ObservabilityConfig {
-  mode: "local_docker";
-  otlpHttpEndpoint: string;
-  queryApi: ObservabilityQueryApi;
-  defaultWindowSec: number;
+  provider: "langfuse";
+  baseUrl: string;
+  otelEndpoint: string;
+  publicKey?: string;
+  secretKey?: string;
+  tracingEnvironment?: string;
+  release?: string;
 }
 
 export interface HarnessConfig {
@@ -203,58 +198,6 @@ export interface HarnessContextPayload {
 
 export interface HarnessContextState extends HarnessContextPayload {
   updatedAt: string;
-}
-
-export type HarnessSloOperator = "<" | "<=" | ">" | ">=" | "==" | "!=";
-
-export interface HarnessSloCheck {
-  id: string;
-  type: "latency" | "error_rate" | "custom";
-  queryType: ObservabilityQueryType;
-  query: string;
-  op: HarnessSloOperator;
-  threshold: number;
-  windowSec: number;
-}
-
-export interface ObservabilityQueryRequest {
-  queryType: ObservabilityQueryType;
-  query: string;
-  fromMs?: number;
-  toMs?: number;
-  limit?: number;
-}
-
-export interface ObservabilityQueryResult {
-  queryType: ObservabilityQueryType;
-  query: string;
-  fromMs: number;
-  toMs: number;
-  status: "ok" | "error";
-  data: unknown;
-  error?: string;
-}
-
-export interface HarnessSloCheckResult {
-  id: string;
-  type: HarnessSloCheck["type"];
-  queryType: ObservabilityQueryType;
-  query: string;
-  op: HarnessSloOperator;
-  threshold: number;
-  windowSec: number;
-  actual: number | null;
-  pass: boolean;
-  reason?: string;
-}
-
-export interface HarnessSloResult {
-  reportOnly: boolean;
-  strictMode: boolean;
-  passed: boolean;
-  fromMs: number;
-  toMs: number;
-  checks: HarnessSloCheckResult[];
 }
 
 export type AgentMessages = ModelMessage[];

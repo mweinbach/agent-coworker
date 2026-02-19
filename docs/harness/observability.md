@@ -1,36 +1,29 @@
-# Harness Observability
+# Harness Observability (Langfuse-Only)
 
-The harness uses a local Docker Compose stack per run/worktree:
+Harness observability exports OTLP traces directly to Langfuse.
 
-- OpenTelemetry OTLP/HTTP ingest (Vector source)
-- Vector fan-out pipeline
-- VictoriaLogs query API (`logql`)
-- VictoriaMetrics query API (`promql`)
-- VictoriaTraces query API (`traceql`)
+## Runtime Behavior
 
-Notes on trace querying:
+- Telemetry is controlled by `AGENT_OBSERVABILITY_ENABLED`.
+- When enabled with valid Langfuse credentials, span events are exported to:
+  - `{LANGFUSE_BASE_URL}/api/public/otel/v1/traces`
+- When telemetry is enabled but credentials are missing/misconfigured, the runtime emits a one-time warning and continues without failing turns/runs.
 
-- `queryType: "traceql"` first tries `/select/traceql/query`.
-- For VictoriaTraces builds that expose trace search via LogsQL (`/select/logsql/query`), harness query code automatically falls back to that endpoint.
-- In practice, this means `observability_query` with `queryType: "traceql"` still works across endpoint variants.
+## Environment Variables
 
-## Lifecycle
+- `AGENT_OBSERVABILITY_ENABLED` (`true|false`)
+- `LANGFUSE_PUBLIC_KEY`
+- `LANGFUSE_SECRET_KEY`
+- `LANGFUSE_BASE_URL` (defaults to `https://cloud.langfuse.com`)
+- `LANGFUSE_TRACING_ENVIRONMENT`
+- `LANGFUSE_RELEASE`
 
-- Stack config: `config/observability/docker-compose.yml`
-- Vector routing: `config/observability/vector/vector.toml`
-- Runtime control: `src/observability/runtime.ts`
-- CLI helper: `scripts/observability_stack.ts`
+## Harness Runner Emissions
 
-The primary harness runner (`scripts/run_raw_agent_loops.ts`) boots and tears down the stack per run when `--observability` is enabled.
+`scripts/run_raw_agent_loops.ts` emits lightweight lifecycle events:
 
-## Endpoint Injection
+- `harness.run.started`
+- `harness.run.completed`
+- `harness.run.failed`
 
-When observability is enabled, the harness injects:
-
-- `AGENT_OBSERVABILITY_ENABLED=true`
-- `AGENT_OBS_OTLP_HTTP=<vector otlp endpoint>`
-- `AGENT_OBS_LOGS_URL=<victoria logs base url>`
-- `AGENT_OBS_METRICS_URL=<victoria metrics base url>`
-- `AGENT_OBS_TRACES_URL=<victoria traces base url>`
-
-Run-level endpoint details are written to `observability_endpoints.json` inside each run directory.
+Emitted metadata is intentionally limited to balanced identifiers (for example run/session/provider/model/tool identifiers) and avoids raw prompt/tool payload bodies.

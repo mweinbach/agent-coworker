@@ -2,13 +2,12 @@
 
 This directory is the system-of-record for harness engineering in `agent-coworker`.
 
-- `observability.md`: local observability stack (OTel + Vector + Victoria) and query APIs.
+- `observability.md`: Langfuse-only telemetry wiring and runtime behavior.
 - `context.md`: harness context schema and WebSocket interaction flow.
-- `slo.md`: SLO check schema, report-only semantics, and strict mode behavior.
-- `runbook.md`: exhaustive operator guide for running, using, viewing, and troubleshooting the full harness stack.
-  - Includes the Next.js realtime portal workflow (`apps/portal`).
+- `slo.md`: historical SLO doc status (query/SLO protocol paths are removed).
+- `runbook.md`: operator guide for running harness scenarios and viewing artifacts.
 
 See also:
-- `docs/websocket-protocol.md` for wire-level message/event definitions.
-- `test/server.test.ts` (`Protocol Doc Parity`) for the automated check that protocol docs stay in sync with `src/server/protocol.ts`.
-- `scripts/run_raw_agent_loops.ts` for the current harness runner implementation.
+
+- `docs/websocket-protocol.md` for the wire-level protocol contract.
+- `scripts/run_raw_agent_loops.ts` for the harness runner implementation.

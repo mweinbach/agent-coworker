@@ -622,116 +622,27 @@ describe("safeParseClientMessage", () => {
     });
   });
 
-  describe("observability_query", () => {
-    test("observability_query parses", () => {
-      const msg = expectOk(
-        JSON.stringify({
-          type: "observability_query",
-          sessionId: "s1",
-          query: {
-            queryType: "promql",
-            query: "sum(rate(vector_component_errors_total[5m]))",
-            fromMs: 1000,
-            toMs: 2000,
-            limit: 10,
-          },
-        })
-      );
-      expect(msg.type).toBe("observability_query");
-      if (msg.type === "observability_query") {
-        expect(msg.query.queryType).toBe("promql");
-      }
-    });
-
-    test("observability_query rejects invalid queryType", () => {
+  describe("removed observability query/slo messages", () => {
+    test("observability_query is rejected as unknown", () => {
       const err = expectErr(
         JSON.stringify({
           type: "observability_query",
           sessionId: "s1",
-          query: { queryType: "sql", query: "select *" },
+          query: { queryType: "promql", query: "up" },
         })
       );
-      expect(err).toContain("observability_query invalid query.queryType");
+      expect(err).toBe("Unknown type: observability_query");
     });
 
-    test("observability_query rejects invalid limit", () => {
-      const err = expectErr(
-        JSON.stringify({
-          type: "observability_query",
-          sessionId: "s1",
-          query: { queryType: "promql", query: "up", limit: 0 },
-        }),
-      );
-      expect(err).toContain("observability_query invalid query.limit");
-    });
-
-    test("observability_query rejects too-large limit", () => {
-      const err = expectErr(
-        JSON.stringify({
-          type: "observability_query",
-          sessionId: "s1",
-          query: { queryType: "promql", query: "up", limit: 10001 },
-        }),
-      );
-      expect(err).toContain("observability_query invalid query.limit");
-    });
-  });
-
-  describe("harness_slo_evaluate", () => {
-    test("harness_slo_evaluate parses", () => {
-      const msg = expectOk(
-        JSON.stringify({
-          type: "harness_slo_evaluate",
-          sessionId: "s1",
-          checks: [
-            {
-              id: "vector_errors",
-              type: "custom",
-              queryType: "promql",
-              query: "sum(rate(vector_component_errors_total[5m]))",
-              op: "<=",
-              threshold: 0,
-              windowSec: 300,
-            },
-          ],
-        })
-      );
-      expect(msg.type).toBe("harness_slo_evaluate");
-      if (msg.type === "harness_slo_evaluate") {
-        expect(msg.checks).toHaveLength(1);
-      }
-    });
-
-    test("harness_slo_evaluate rejects invalid check operator", () => {
-      const err = expectErr(
-        JSON.stringify({
-          type: "harness_slo_evaluate",
-          sessionId: "s1",
-          checks: [
-            {
-              id: "c1",
-              type: "custom",
-              queryType: "promql",
-              query: "x",
-              op: "lte",
-              threshold: 1,
-              windowSec: 10,
-            },
-          ],
-        })
-      );
-      expect(err).toContain("harness_slo_evaluate invalid check.op");
-    });
-
-    test("harness_slo_evaluate rejects empty checks", () => {
+    test("harness_slo_evaluate is rejected as unknown", () => {
       const err = expectErr(
         JSON.stringify({
           type: "harness_slo_evaluate",
           sessionId: "s1",
           checks: [],
-        }),
+        })
       );
-      expect(err).toContain("harness_slo_evaluate missing/invalid checks");
+      expect(err).toBe("Unknown type: harness_slo_evaluate");
     });
   });
 
@@ -1089,7 +1000,7 @@ describe("safeParseClientMessage", () => {
       const evt: ServerEvent = {
         type: "server_hello",
         sessionId: "s1",
-        protocolVersion: "3.0",
+        protocolVersion: "4.0",
         capabilities: {
           modelStreamChunk: "v1",
         },
@@ -1102,7 +1013,7 @@ describe("safeParseClientMessage", () => {
       };
       expect(evt.type).toBe("server_hello");
       if (evt.type === "server_hello") {
-        expect(evt.protocolVersion).toBe("3.0");
+        expect(evt.protocolVersion).toBe("4.0");
         expect(evt.capabilities?.modelStreamChunk).toBe("v1");
       }
     });

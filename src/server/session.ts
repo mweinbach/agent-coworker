@@ -17,8 +17,6 @@ import { isProviderName } from "../types";
 import type {
   AgentConfig,
   HarnessContextPayload,
-  HarnessSloCheck,
-  ObservabilityQueryRequest,
   ServerErrorCode,
   ServerErrorSource,
   TodoItem,
@@ -29,8 +27,6 @@ import { createTools } from "../tools";
 import { classifyCommandDetailed } from "../utils/approval";
 import { HarnessContextStore } from "../harness/contextStore";
 import { emitObservabilityEvent } from "../observability/otel";
-import { runObservabilityQuery } from "../observability/query";
-import { evaluateHarnessSlo } from "../observability/slo";
 import { expandCommandTemplate, listCommands as listServerCommands, resolveCommand } from "./commands";
 import { normalizeModelStreamPart, reasoningModeForProvider } from "./modelStream";
 
@@ -84,8 +80,6 @@ export class AgentSession {
   private readonly getProviderStatusesImpl: typeof getProviderStatuses;
   private readonly sessionBackupFactory: SessionBackupFactory;
   private readonly harnessContextStore: HarnessContextStore;
-  private readonly runObservabilityQueryImpl: typeof runObservabilityQuery;
-  private readonly evaluateHarnessSloImpl: typeof evaluateHarnessSlo;
   private readonly runTurnImpl: typeof runTurn;
 
   private messages: ModelMessage[] = [];
@@ -116,8 +110,6 @@ export class AgentSession {
     getProviderStatusesImpl?: typeof getProviderStatuses;
     sessionBackupFactory?: SessionBackupFactory;
     harnessContextStore?: HarnessContextStore;
-    runObservabilityQueryImpl?: typeof runObservabilityQuery;
-    evaluateHarnessSloImpl?: typeof evaluateHarnessSlo;
     runTurnImpl?: typeof runTurn;
   }) {
     this.id = makeId();
@@ -133,8 +125,6 @@ export class AgentSession {
     this.sessionBackupFactory =
       opts.sessionBackupFactory ?? (async (factoryOpts) => await SessionBackupManager.create(factoryOpts));
     this.harnessContextStore = opts.harnessContextStore ?? new HarnessContextStore();
-    this.runObservabilityQueryImpl = opts.runObservabilityQueryImpl ?? runObservabilityQuery;
-    this.evaluateHarnessSloImpl = opts.evaluateHarnessSloImpl ?? evaluateHarnessSlo;
     this.runTurnImpl = opts.runTurnImpl ?? runTurn;
     this.sessionBackupState = {
       status: "initializing",
@@ -161,11 +151,25 @@ export class AgentSession {
   }
 
   getObservabilityStatusEvent(): Extract<ServerEvent, { type: "observability_status" }> {
+    const observability = this.config.observability;
+    const config = observability
+      ? {
+          provider: observability.provider,
+          baseUrl: observability.baseUrl,
+          otelEndpoint: observability.otelEndpoint,
+          ...(observability.tracingEnvironment ? { tracingEnvironment: observability.tracingEnvironment } : {}),
+          ...(observability.release ? { release: observability.release } : {}),
+          hasPublicKey: !!observability.publicKey,
+          hasSecretKey: !!observability.secretKey,
+          configured: !!observability.publicKey && !!observability.secretKey,
+        }
+      : null;
+
     return {
       type: "observability_status",
       sessionId: this.id,
       enabled: this.config.observabilityEnabled ?? false,
-      observability: this.config.observability,
+      config,
     };
   }
 
@@ -522,116 +526,6 @@ export class AgentSession {
   private formatErrorMessage(err: unknown): string {
     if (err instanceof Error && err.message) return err.message;
     return String(err);
-  }
-
-  private buildObservabilityQueryErrorResult(
-    query: ObservabilityQueryRequest,
-    err: unknown
-  ): Extract<ServerEvent, { type: "observability_query_result" }>["result"] {
-    const toMs = typeof query.toMs === "number" && Number.isFinite(query.toMs) ? Math.floor(query.toMs) : Date.now();
-    const defaultWindowMs = Math.max(1, this.config.observability?.defaultWindowSec ?? 300) * 1000;
-    const fromMs =
-      typeof query.fromMs === "number" && Number.isFinite(query.fromMs) ? Math.floor(query.fromMs) : toMs - defaultWindowMs;
-
-    return {
-      queryType: query.queryType,
-      query: query.query.trim(),
-      fromMs,
-      toMs,
-      status: "error",
-      data: null,
-      error: `Failed to run observability query: ${this.formatErrorMessage(err)}`,
-    };
-  }
-
-  private buildHarnessSloErrorResult(
-    checks: HarnessSloCheck[],
-    err: unknown
-  ): Extract<ServerEvent, { type: "harness_slo_result" }>["result"] {
-    const toMs = Date.now();
-    const maxWindowSec = checks.reduce((max, check) => {
-      const windowSec =
-        typeof check.windowSec === "number" && Number.isFinite(check.windowSec) && check.windowSec > 0 ? check.windowSec : 0;
-      return Math.max(max, windowSec);
-    }, 0);
-    const fromMs = toMs - maxWindowSec * 1000;
-    const reason = `Failed to evaluate SLO checks: ${this.formatErrorMessage(err)}`;
-
-    return {
-      reportOnly: this.config.harness?.reportOnly ?? true,
-      strictMode: this.config.harness?.strictMode ?? false,
-      passed: false,
-      fromMs,
-      toMs,
-      checks: checks.map((check) => ({
-        ...check,
-        actual: null,
-        pass: false,
-        reason,
-      })),
-    };
-  }
-
-  async queryObservability(query: ObservabilityQueryRequest) {
-    const startedAt = Date.now();
-    let result: Extract<ServerEvent, { type: "observability_query_result" }>["result"];
-    try {
-      result = await this.runObservabilityQueryImpl(this.config, query);
-      this.emitTelemetry(
-        "observability.query",
-        result.status === "ok" ? "ok" : "error",
-        {
-          sessionId: this.id,
-          queryType: query.queryType,
-          limit: typeof query.limit === "number" ? query.limit : 0,
-        },
-        Date.now() - startedAt
-      );
-    } catch (err) {
-      result = this.buildObservabilityQueryErrorResult(query, err);
-      this.emitTelemetry(
-        "observability.query",
-        "error",
-        {
-          sessionId: this.id,
-          queryType: query.queryType,
-          error: this.formatErrorMessage(err),
-        },
-        Date.now() - startedAt
-      );
-    }
-    this.emit({ type: "observability_query_result", sessionId: this.id, result });
-  }
-
-  async evaluateHarnessSloChecks(checks: HarnessSloCheck[]) {
-    const startedAt = Date.now();
-    let result: Extract<ServerEvent, { type: "harness_slo_result" }>["result"];
-    try {
-      result = await this.evaluateHarnessSloImpl(this.config, checks);
-      this.emitTelemetry(
-        "harness.slo.evaluate",
-        result.passed ? "ok" : "error",
-        {
-          sessionId: this.id,
-          checks: checks.length,
-          passed: result.passed,
-        },
-        Date.now() - startedAt
-      );
-    } catch (err) {
-      result = this.buildHarnessSloErrorResult(checks, err);
-      this.emitTelemetry(
-        "harness.slo.evaluate",
-        "error",
-        {
-          sessionId: this.id,
-          checks: checks.length,
-          error: this.formatErrorMessage(err),
-        },
-        Date.now() - startedAt
-      );
-    }
-    this.emit({ type: "harness_slo_result", sessionId: this.id, result });
   }
 
   async setModel(modelIdRaw: string, providerRaw?: AgentConfig["provider"]) {

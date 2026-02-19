@@ -69,6 +69,10 @@ function asNumber(v: unknown): number | null {
   return parsed;
 }
 
+function asNonEmptyString(v: unknown): string | undefined {
+  return typeof v === "string" && v.trim() ? v.trim() : undefined;
+}
+
 function resolveDir(maybeRelative: unknown, baseDir: string): string {
   if (typeof maybeRelative !== "string" || !maybeRelative) return baseDir;
   if (path.isAbsolute(maybeRelative)) return maybeRelative;
@@ -239,46 +243,31 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     true;
 
   const mergedObservability = isPlainObject(merged.observability) ? merged.observability : {};
-  const mergedQueryApi = isPlainObject(mergedObservability["queryApi"])
-    ? (mergedObservability["queryApi"] as Record<string, unknown>)
-    : {};
   const observabilityEnabled =
     asBoolean(env.AGENT_OBSERVABILITY_ENABLED) ??
     asBoolean(projectConfig.observabilityEnabled) ??
     asBoolean(userConfig.observabilityEnabled) ??
     asBoolean(builtInDefaults.observabilityEnabled) ??
     false;
+  const langfuseBaseUrl = (
+    env.LANGFUSE_BASE_URL ||
+    asNonEmptyString(mergedObservability["baseUrl"]) ||
+    "https://cloud.langfuse.com"
+  ).replace(/\/+$/, "");
+  const langfusePublicKey = env.LANGFUSE_PUBLIC_KEY || asNonEmptyString(mergedObservability["publicKey"]);
+  const langfuseSecretKey = env.LANGFUSE_SECRET_KEY || asNonEmptyString(mergedObservability["secretKey"]);
+  const langfuseTracingEnvironment =
+    env.LANGFUSE_TRACING_ENVIRONMENT || asNonEmptyString(mergedObservability["tracingEnvironment"]);
+  const langfuseRelease = env.LANGFUSE_RELEASE || asNonEmptyString(mergedObservability["release"]);
 
-  const observability = {
-    // Only "local_docker" is supported for now.
-    mode: "local_docker" as const,
-    otlpHttpEndpoint:
-      env.AGENT_OBS_OTLP_HTTP ||
-      (typeof mergedObservability["otlpHttpEndpoint"] === "string" &&
-      mergedObservability["otlpHttpEndpoint"]
-        ? (mergedObservability["otlpHttpEndpoint"] as string)
-        : "http://127.0.0.1:4318"),
-    queryApi: {
-      logsBaseUrl:
-        env.AGENT_OBS_LOGS_URL ||
-        (typeof mergedQueryApi.logsBaseUrl === "string" && mergedQueryApi.logsBaseUrl
-          ? mergedQueryApi.logsBaseUrl
-          : "http://127.0.0.1:9428"),
-      metricsBaseUrl:
-        env.AGENT_OBS_METRICS_URL ||
-        (typeof mergedQueryApi.metricsBaseUrl === "string" && mergedQueryApi.metricsBaseUrl
-          ? mergedQueryApi.metricsBaseUrl
-          : "http://127.0.0.1:8428"),
-      tracesBaseUrl:
-        env.AGENT_OBS_TRACES_URL ||
-        (typeof mergedQueryApi.tracesBaseUrl === "string" && mergedQueryApi.tracesBaseUrl
-          ? mergedQueryApi.tracesBaseUrl
-          : "http://127.0.0.1:10428"),
-    },
-    defaultWindowSec: Math.max(
-      1,
-      Math.floor(asNumber(env.AGENT_OBS_DEFAULT_WINDOW_SEC) ?? asNumber(mergedObservability["defaultWindowSec"]) ?? 300)
-    ),
+  const observability: AgentConfig["observability"] = {
+    provider: "langfuse",
+    baseUrl: langfuseBaseUrl,
+    otelEndpoint: `${langfuseBaseUrl}/api/public/otel/v1/traces`,
+    ...(langfusePublicKey ? { publicKey: langfusePublicKey } : {}),
+    ...(langfuseSecretKey ? { secretKey: langfuseSecretKey } : {}),
+    ...(langfuseTracingEnvironment ? { tracingEnvironment: langfuseTracingEnvironment } : {}),
+    ...(langfuseRelease ? { release: langfuseRelease } : {}),
   };
 
   const mergedHarness = isPlainObject(merged.harness) ? merged.harness : {};

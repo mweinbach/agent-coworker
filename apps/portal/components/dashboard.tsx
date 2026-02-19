@@ -1,6 +1,6 @@
 "use client";
 
-import React, { FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type RunStatus = "pending" | "running" | "completed" | "failed";
 
@@ -18,7 +18,6 @@ type HarnessRunSummary = {
   lastError: string | null;
   finalPreview: string;
   observabilityEnabled: boolean;
-  sloPassed: boolean | null;
   updatedAtMs: number;
 };
 
@@ -26,10 +25,8 @@ type HarnessRunRootSummary = {
   runRootName: string;
   createdAt: string | null;
   harness: {
-    observability: boolean;
     reportOnly: boolean;
     strictMode: boolean;
-    keepStack: boolean;
   } | null;
   runs: HarnessRunSummary[];
   updatedAtMs: number;
@@ -67,44 +64,10 @@ type HarnessRunDetail = {
     first: Array<Record<string, unknown>>;
     last: Array<Record<string, unknown>>;
   };
-  sloChecks: Array<Record<string, unknown>>;
-  sloReport: Record<string, unknown> | null;
-  observabilityQueries: Array<Record<string, unknown>>;
   artifactsIndex: Array<Record<string, unknown>>;
   toolLogTail: string[];
   files: string[];
   updatedAtMs: number;
-};
-
-type ObservabilitySnapshot = {
-  generatedAt: string;
-  endpoints: {
-    otlpHttpEndpoint: string;
-    logsBaseUrl: string;
-    metricsBaseUrl: string;
-    tracesBaseUrl: string;
-  };
-  health: {
-    logs: boolean;
-    metrics: boolean;
-    traces: boolean;
-  };
-  metrics: {
-    vectorErrorRate: number | null;
-    recentAgentTurnSpans: number | null;
-  };
-};
-
-type QueryType = "logql" | "promql" | "traceql";
-
-type ObservabilityQueryResult = {
-  queryType: QueryType;
-  query: string;
-  fromMs: number;
-  toMs: number;
-  status: "ok" | "error";
-  data: unknown;
-  error?: string;
 };
 
 type ConnectionState = "connecting" | "connected" | "disconnected" | "error";
@@ -121,18 +84,6 @@ function statusClass(status: RunStatus): string {
   if (status === "running") return "pill pill-running";
   if (status === "failed") return "pill pill-failed";
   return "pill pill-pending";
-}
-
-function healthClass(ok: boolean): string {
-  return ok ? "pill pill-complete" : "pill pill-failed";
-}
-
-function safeJson(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
 }
 
 function findFirstRun(snapshot: HarnessRunsSnapshot | null): { runRoot: string; runDir: string } | null {
@@ -153,17 +104,6 @@ export function Dashboard() {
   const [runDetail, setRunDetail] = useState<HarnessRunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState<boolean>(false);
   const [detailError, setDetailError] = useState<string>("");
-
-  const [obsSnapshot, setObsSnapshot] = useState<ObservabilitySnapshot | null>(null);
-  const [obsLoading, setObsLoading] = useState<boolean>(false);
-  const [obsError, setObsError] = useState<string>("");
-
-  const [queryType, setQueryType] = useState<QueryType>("traceql");
-  const [queryText, setQueryText] = useState<string>("_time:[now-5m, now] name:agent.turn.*");
-  const [queryLimit, setQueryLimit] = useState<number>(200);
-  const [queryResult, setQueryResult] = useState<ObservabilityQueryResult | null>(null);
-  const [queryLoading, setQueryLoading] = useState<boolean>(false);
-  const [queryError, setQueryError] = useState<string>("");
 
   useEffect(() => {
     let source: EventSource | null = null;
@@ -295,36 +235,6 @@ export function Dashboard() {
     };
   }, [selectedRunRoot, selectedRunDir]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadObs = async () => {
-      setObsLoading(true);
-      try {
-        const response = await fetch("/api/observability/snapshot", { cache: "no-store" });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const payload = (await response.json()) as ObservabilitySnapshot;
-        if (cancelled) return;
-        setObsSnapshot(payload);
-        setObsError("");
-      } catch (err) {
-        if (!cancelled) setObsError(String(err));
-      } finally {
-        if (!cancelled) setObsLoading(false);
-      }
-    };
-
-    void loadObs();
-    const timer = setInterval(() => {
-      void loadObs();
-    }, 3_000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
-
   const selectedRunSummary = useMemo(() => {
     if (!runsSnapshot) return null;
     const root = runsSnapshot.roots.find((entry) => entry.runRootName === selectedRunRoot);
@@ -361,47 +271,14 @@ export function Dashboard() {
     );
   }, [runsSnapshot]);
 
-  const queryAbortRef = React.useRef<AbortController | null>(null);
-
-  const submitQuery = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    // Cancel any in-flight query to prevent race conditions.
-    queryAbortRef.current?.abort();
-    const controller = new AbortController();
-    queryAbortRef.current = controller;
-    setQueryLoading(true);
-    setQueryError("");
-    try {
-      const response = await fetch("/api/observability/query", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          queryType,
-          query: queryText,
-          limit: queryLimit,
-        }),
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = (await response.json()) as ObservabilityQueryResult;
-      if (controller.signal.aborted) return;
-      setQueryResult(payload);
-    } catch (err) {
-      if (controller.signal.aborted) return;
-      setQueryError(String(err));
-    } finally {
-      if (!controller.signal.aborted) setQueryLoading(false);
-    }
-  };
-
   return (
     <main className="portal-shell">
       <header className="portal-header">
         <div>
           <p className="eyebrow">Harness Portal</p>
-          <h1>Realtime Runs + Observability</h1>
+          <h1>Realtime Harness Runs</h1>
           <p className="subtle">
-            A live Next.js view over run artifacts, attempts, traces, SLO checks, and local observability endpoints.
+            A live Next.js view over run artifacts, attempts, and traces.
           </p>
         </div>
         <div className="status-stack">
@@ -453,7 +330,7 @@ export function Dashboard() {
                     <p className="subtle">created {formatDate(root.createdAt)}</p>
                     {root.harness ? (
                       <p className="micro">
-                        obs={String(root.harness.observability)} | reportOnly={String(root.harness.reportOnly)} | strict={String(root.harness.strictMode)}
+                        reportOnly={String(root.harness.reportOnly)} | strict={String(root.harness.strictMode)}
                       </p>
                     ) : null}
                   </header>
@@ -517,7 +394,6 @@ export function Dashboard() {
                 <p className="micro">finished: {formatDate(selectedRunSummary.finishedAt)}</p>
                 <p className="micro">attempts: {selectedRunSummary.attemptsSucceeded}/{selectedRunSummary.attemptsTotal}</p>
                 <p className="micro">observability: {String(selectedRunSummary.observabilityEnabled)}</p>
-                <p className="micro">SLO passed: {selectedRunSummary.sloPassed === null ? "n/a" : String(selectedRunSummary.sloPassed)}</p>
               </article>
 
               <article className="detail-card">
@@ -533,15 +409,6 @@ export function Dashboard() {
                   </>
                 ) : (
                   <p className="empty">No trace loaded.</p>
-                )}
-              </article>
-
-              <article className="detail-card">
-                <h3>SLO Result</h3>
-                {runDetail?.sloReport ? (
-                  <pre>{safeJson(runDetail.sloReport)}</pre>
-                ) : (
-                  <p className="empty">No `slo_report.json` in this run.</p>
                 )}
               </article>
 
@@ -588,15 +455,6 @@ export function Dashboard() {
               </article>
 
               <article className="detail-card wide">
-                <h3>Observability Queries</h3>
-                {runDetail?.observabilityQueries.length ? (
-                  <pre>{safeJson(runDetail.observabilityQueries)}</pre>
-                ) : (
-                  <p className="empty">No `observability_queries.json` file.</p>
-                )}
-              </article>
-
-              <article className="detail-card wide">
                 <h3>Tool Log Tail (last 220 lines)</h3>
                 <pre>{runDetail?.toolLogTail.join("\n") || "(empty)"}</pre>
               </article>
@@ -604,82 +462,6 @@ export function Dashboard() {
           ) : (
             <p className="empty">No run selected.</p>
           )}
-        </section>
-
-        <section className="panel observability-panel">
-          <div className="panel-header">
-            <h2>Live Observability</h2>
-            <p className="subtle">Snapshot refreshes every 3s</p>
-          </div>
-
-          {obsError ? <p className="error-text">{obsError}</p> : null}
-
-          <div className="obs-health-row">
-            <span className={obsSnapshot ? healthClass(obsSnapshot.health.logs) : "pill pill-muted"}>logs {obsSnapshot ? String(obsSnapshot.health.logs) : "…"}</span>
-            <span className={obsSnapshot ? healthClass(obsSnapshot.health.metrics) : "pill pill-muted"}>metrics {obsSnapshot ? String(obsSnapshot.health.metrics) : "…"}</span>
-            <span className={obsSnapshot ? healthClass(obsSnapshot.health.traces) : "pill pill-muted"}>traces {obsSnapshot ? String(obsSnapshot.health.traces) : "…"}</span>
-            {obsLoading ? <span className="pill pill-running">refreshing</span> : null}
-          </div>
-
-          {obsSnapshot ? (
-            <div className="obs-metrics-grid">
-              <article className="mini-card">
-                <h3>Vector Error Rate</h3>
-                <strong>{obsSnapshot.metrics.vectorErrorRate ?? "n/a"}</strong>
-              </article>
-              <article className="mini-card">
-                <h3>Recent Turn Spans (2m)</h3>
-                <strong>{obsSnapshot.metrics.recentAgentTurnSpans ?? "n/a"}</strong>
-              </article>
-            </div>
-          ) : (
-            <p className="empty">No snapshot yet.</p>
-          )}
-
-          <details className="obs-endpoints" open>
-            <summary>Endpoints</summary>
-            <pre>{safeJson(obsSnapshot?.endpoints ?? {})}</pre>
-          </details>
-
-          <form className="query-form" onSubmit={submitQuery}>
-            <h3>Run Custom Query</h3>
-            <label>
-              Query Type
-              <select value={queryType} onChange={(event) => setQueryType(event.target.value as QueryType)}>
-                <option value="traceql">traceql</option>
-                <option value="promql">promql</option>
-                <option value="logql">logql</option>
-              </select>
-            </label>
-            <label>
-              Query
-              <textarea value={queryText} onChange={(event) => setQueryText(event.target.value)} rows={4} />
-            </label>
-            <label>
-              Limit
-              <input
-                type="number"
-                min={1}
-                max={10000}
-                value={queryLimit}
-                onChange={(event) => setQueryLimit(Number(event.target.value) || 200)}
-              />
-            </label>
-            <button type="submit" disabled={queryLoading}>
-              {queryLoading ? "Running…" : "Run Query"}
-            </button>
-          </form>
-
-          {queryError ? <p className="error-text">{queryError}</p> : null}
-          {queryResult ? (
-            <article className="query-result">
-              <h3>
-                Query Result: <span className={queryResult.status === "ok" ? "ok-text" : "error-text"}>{queryResult.status}</span>
-              </h3>
-              {queryResult.error ? <p className="error-text">{queryResult.error}</p> : null}
-              <pre>{safeJson(queryResult.data)}</pre>
-            </article>
-          ) : null}
         </section>
       </section>
     </main>

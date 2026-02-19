@@ -4,10 +4,6 @@ import type {
   AgentConfig,
   CommandInfo,
   HarnessContextPayload,
-  HarnessSloCheck,
-  HarnessSloOperator,
-  ObservabilityQueryRequest,
-  ObservabilityQueryType,
   ServerErrorCode,
   ServerErrorSource,
   SkillEntry,
@@ -66,8 +62,6 @@ export type ClientMessage =
   | { type: "session_backup_delete_checkpoint"; sessionId: string; checkpointId: string }
   | { type: "harness_context_get"; sessionId: string }
   | { type: "harness_context_set"; sessionId: string; context: HarnessContextPayload }
-  | { type: "observability_query"; sessionId: string; query: ObservabilityQueryRequest }
-  | { type: "harness_slo_evaluate"; sessionId: string; checks: HarnessSloCheck[] }
   | { type: "reset"; sessionId: string };
 
 export type ServerEvent =
@@ -142,48 +136,28 @@ export type ServerEvent =
       reason: "requested" | "auto_checkpoint" | "manual_checkpoint" | "restore" | "delete";
       backup: SessionBackupPublicState;
     }
-  | { type: "observability_status"; sessionId: string; enabled: boolean; observability?: AgentConfig["observability"] }
+  | {
+      type: "observability_status";
+      sessionId: string;
+      enabled: boolean;
+      config:
+        | {
+            provider: "langfuse";
+            baseUrl: string;
+            otelEndpoint: string;
+            tracingEnvironment?: string;
+            release?: string;
+            hasPublicKey: boolean;
+            hasSecretKey: boolean;
+            configured: boolean;
+          }
+        | null;
+    }
   | { type: "harness_context"; sessionId: string; context: (HarnessContextPayload & { updatedAt: string }) | null }
-  | {
-      type: "observability_query_result";
-      sessionId: string;
-      result: {
-        queryType: ObservabilityQueryType;
-        query: string;
-        fromMs: number;
-        toMs: number;
-        status: "ok" | "error";
-        data: unknown;
-        error?: string;
-      };
-    }
-  | {
-      type: "harness_slo_result";
-      sessionId: string;
-      result: {
-        reportOnly: boolean;
-        strictMode: boolean;
-        passed: boolean;
-        fromMs: number;
-        toMs: number;
-        checks: Array<{
-          id: string;
-          type: "latency" | "error_rate" | "custom";
-          queryType: ObservabilityQueryType;
-          query: string;
-          op: HarnessSloOperator;
-          threshold: number;
-          windowSec: number;
-          actual: number | null;
-          pass: boolean;
-          reason?: string;
-        }>;
-      };
-    }
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "3.0";
+export const WEBSOCKET_PROTOCOL_VERSION = "4.0";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -214,8 +188,6 @@ export const CLIENT_MESSAGE_TYPES = [
   "session_backup_delete_checkpoint",
   "harness_context_get",
   "harness_context_set",
-  "observability_query",
-  "harness_slo_evaluate",
   "reset",
 ] as const;
 
@@ -245,8 +217,6 @@ export const SERVER_EVENT_TYPES = [
   "session_backup_state",
   "observability_status",
   "harness_context",
-  "observability_query_result",
-  "harness_slo_result",
   "error",
   "pong",
 ] as const;
@@ -257,14 +227,6 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.trim().length > 0;
-}
-
-function isQueryType(v: unknown): v is ObservabilityQueryType {
-  return v === "logql" || v === "promql" || v === "traceql";
-}
-
-function isSloOperator(v: unknown): v is HarnessSloOperator {
-  return v === "<" || v === "<=" || v === ">" || v === ">=" || v === "==" || v === "!=";
 }
 
 export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMessage } | { ok: false; error: string } {
@@ -458,51 +420,6 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
           if (typeof v !== "string") {
             return { ok: false, error: "harness_context_set invalid context.metadata values" };
           }
-        }
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "observability_query": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "observability_query missing sessionId" };
-      if (!isPlainObject(obj.query)) return { ok: false, error: "observability_query missing/invalid query" };
-      if (!isQueryType(obj.query.queryType)) return { ok: false, error: "observability_query invalid query.queryType" };
-      if (!isNonEmptyString(obj.query.query)) return { ok: false, error: "observability_query invalid query.query" };
-      if (obj.query.fromMs !== undefined && (typeof obj.query.fromMs !== "number" || !Number.isFinite(obj.query.fromMs))) {
-        return { ok: false, error: "observability_query invalid query.fromMs" };
-      }
-      if (obj.query.toMs !== undefined && (typeof obj.query.toMs !== "number" || !Number.isFinite(obj.query.toMs))) {
-        return { ok: false, error: "observability_query invalid query.toMs" };
-      }
-      if (
-        obj.query.limit !== undefined &&
-        (typeof obj.query.limit !== "number" ||
-          !Number.isInteger(obj.query.limit) ||
-          obj.query.limit <= 0 ||
-          obj.query.limit > 10_000)
-      ) {
-        return { ok: false, error: "observability_query invalid query.limit" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "harness_slo_evaluate": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "harness_slo_evaluate missing sessionId" };
-      if (!Array.isArray(obj.checks) || obj.checks.length === 0) {
-        return { ok: false, error: "harness_slo_evaluate missing/invalid checks" };
-      }
-      for (const check of obj.checks) {
-        if (!isPlainObject(check)) return { ok: false, error: "harness_slo_evaluate invalid check object" };
-        if (!isNonEmptyString(check.id)) return { ok: false, error: "harness_slo_evaluate invalid check.id" };
-        if (check.type !== "latency" && check.type !== "error_rate" && check.type !== "custom") {
-          return { ok: false, error: "harness_slo_evaluate invalid check.type" };
-        }
-        if (!isQueryType(check.queryType)) return { ok: false, error: "harness_slo_evaluate invalid check.queryType" };
-        if (!isNonEmptyString(check.query)) return { ok: false, error: "harness_slo_evaluate invalid check.query" };
-        if (!isSloOperator(check.op)) return { ok: false, error: "harness_slo_evaluate invalid check.op" };
-        if (typeof check.threshold !== "number" || !Number.isFinite(check.threshold)) {
-          return { ok: false, error: "harness_slo_evaluate invalid check.threshold" };
-        }
-        if (typeof check.windowSec !== "number" || !Number.isFinite(check.windowSec) || check.windowSec <= 0) {
-          return { ok: false, error: "harness_slo_evaluate invalid check.windowSec" };
         }
       }
       return { ok: true, msg: obj as ClientMessage };

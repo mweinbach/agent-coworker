@@ -52,8 +52,8 @@ async function main() {
     assertContains(harnessIndex, "context.md", "docs/harness/index.md"),
     assertContains(harnessIndex, "slo.md", "docs/harness/index.md"),
     assertContains(wsProtocol, "harness_context_get", "docs/websocket-protocol.md"),
-    assertContains(wsProtocol, "observability_query", "docs/websocket-protocol.md"),
-    assertContains(wsProtocol, "harness_slo_evaluate", "docs/websocket-protocol.md"),
+    assertContains(wsProtocol, "observability_status", "docs/websocket-protocol.md"),
+    assertContains(wsProtocol, "protocol version: `4.0`", "docs/websocket-protocol.md"),
   ];
 
   const failures = checks.filter((check): check is { ok: false; message: string } => !check.ok);
@@ -74,4 +74,3 @@ if (import.meta.main) {
     process.exitCode = 1;
   });
 }
-

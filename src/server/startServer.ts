@@ -344,16 +344,6 @@ export async function startAgentServer(
             return;
           }
 
-          if (msg.type === "observability_query") {
-            void session.queryObservability(msg.query);
-            return;
-          }
-
-          if (msg.type === "harness_slo_evaluate") {
-            void session.evaluateHarnessSloChecks(msg.checks);
-            return;
-          }
-
           if (msg.type === "session_backup_get") {
             void session.getSessionBackupState();
             return;

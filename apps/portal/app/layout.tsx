@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Agent Coworker Harness Portal",
-  description: "Live portal for harness runs, traces, artifacts, and observability.",
+  description: "Live portal for harness runs, traces, and artifacts.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

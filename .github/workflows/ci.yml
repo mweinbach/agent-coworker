@@ -39,34 +39,12 @@ jobs:
       - name: Portal build
         run: bun run portal:build
 
-  harness_smoke:
-    name: Harness Smoke
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    needs:
-      - checks
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Docker info
-        run: docker version
-
-      - name: Harness smoke
-        run: bun run harness:smoke -- --run-id ci-${{ github.run_id }}-${{ github.run_attempt }}
-
   harness_full_testing:
     name: Harness Full (Testing Env)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     needs:
-      - harness_smoke
+      - checks
     if: ${{ github.event_name != 'pull_request' }}
     environment:
       name: Testing
@@ -79,9 +57,6 @@ jobs:
 
       - name: Install dependencies
         run: bun install
-
-      - name: Docker info
-        run: docker version
 
       - name: Validate required provider secrets
         env:
@@ -101,7 +76,7 @@ jobs:
             exit 1
           fi
 
-      - name: Full harness run (observability/report-only)
+      - name: Full harness run
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}

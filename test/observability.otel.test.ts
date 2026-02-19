@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { SpanStatusCode } from "@opentelemetry/api";
 
-import type { AgentConfig } from "../src/types";
+import type { AgentConfig, ObservabilityHealth } from "../src/types";
 import { emitObservabilityEvent } from "../src/observability/otel";
 
 function makeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
@@ -20,7 +21,6 @@ function makeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
     skillsDirs: [],
     memoryDirs: [],
     configDirs: [],
-    enableMcp: false,
     observabilityEnabled: true,
     observability: {
       provider: "langfuse",
@@ -29,164 +29,173 @@ function makeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
       publicKey: "pk-lf-test",
       secretKey: "sk-lf-test",
       tracingEnvironment: "test",
-      release: "test-sha",
+      release: "test-release",
     },
-    harness: {
-      reportOnly: true,
-      strictMode: false,
-    },
+    harness: { reportOnly: true, strictMode: false },
     ...overrides,
   };
 }
 
-describe("emitObservabilityEvent (Langfuse)", () => {
-  test("does nothing when observability is disabled", async () => {
-    const cfg = makeConfig({ observabilityEnabled: false });
-    const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
-    const fetchImpl: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      calls.push({ url: String(input), init });
-      return new Response("", { status: 200 });
-    }) as any;
+function makeHealth(status: ObservabilityHealth["status"], reason: string, message?: string): ObservabilityHealth {
+  return {
+    status,
+    reason,
+    ...(message ? { message } : {}),
+    updatedAt: "2026-02-19T08:00:00.000Z",
+  };
+}
 
-    await emitObservabilityEvent(
+function makeTracer() {
+  const captured = {
+    name: "",
+    startTime: null as Date | null,
+    attributes: {} as Record<string, unknown>,
+    statusCode: null as number | null,
+    endTime: null as Date | null,
+    calls: 0,
+  };
+
+  const tracer = {
+    startSpan(name: string, options?: { startTime?: Date; attributes?: Record<string, unknown> }) {
+      captured.calls += 1;
+      captured.name = name;
+      captured.startTime = options?.startTime ?? null;
+      captured.attributes = options?.attributes ?? {};
+
+      return {
+        setStatus(status: { code: number }) {
+          captured.statusCode = status.code;
+        },
+        end(time?: Date) {
+          captured.endTime = time ?? null;
+        },
+      };
+    },
+  };
+
+  return { tracer, captured };
+}
+
+describe("emitObservabilityEvent (Langfuse runtime tracer)", () => {
+  test("does not emit when runtime is not ready", async () => {
+    const cfg = makeConfig();
+    const { tracer, captured } = makeTracer();
+    const degraded = makeHealth("degraded", "missing_credentials");
+
+    const res = await emitObservabilityEvent(
       cfg,
+      { name: "agent.turn.started", at: "2026-02-19T08:00:00.000Z", status: "ok" },
       {
-        name: "agent.turn.started",
-        at: "2026-02-11T18:00:00.000Z",
-        status: "ok",
-      },
-      { fetchImpl }
+        tracer: tracer as any,
+        runtime: {
+          ensure: async () => ({ ready: false, health: degraded, healthChanged: false }),
+          getHealth: () => degraded,
+          noteFailure: () => ({ changed: false, health: degraded }),
+          noteSuccess: () => ({ changed: false, health: degraded }),
+          forceFlush: async () => {},
+        },
+      }
     );
 
-    expect(calls).toHaveLength(0);
+    expect(res.emitted).toBe(false);
+    expect(res.health.status).toBe("degraded");
+    expect(captured.calls).toBe(0);
   });
 
-  test("warns and no-ops when enabled but Langfuse credentials are missing", async () => {
-    const cfg = makeConfig({
-      observabilityEnabled: true,
-      observability: {
-        provider: "langfuse",
-        baseUrl: "https://cloud.langfuse.com",
-        otelEndpoint: "https://cloud.langfuse.com/api/public/otel/v1/traces",
-      },
-    });
-
-    const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
-    const fetchImpl: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      calls.push({ url: String(input), init });
-      return new Response("", { status: 200 });
-    }) as any;
-
-    const warnings: string[] = [];
-    const originalWarn = console.warn;
-    console.warn = (...args: unknown[]) => {
-      warnings.push(args.map((value) => String(value)).join(" "));
-    };
-    try {
-      await emitObservabilityEvent(
-        cfg,
-        {
-          name: "agent.turn.started",
-          at: "2026-02-11T18:00:00.000Z",
-          status: "ok",
-        },
-        { fetchImpl }
-      );
-    } finally {
-      console.warn = originalWarn;
-    }
-
-    expect(calls).toHaveLength(0);
-    expect(warnings.some((line) => line.includes("Langfuse telemetry is enabled"))).toBe(true);
-  });
-
-  test("emits an OTLP span to Langfuse ingest with Basic auth", async () => {
+  test("emits span and keeps diagnostic attributes while redacting secrets", async () => {
     const cfg = makeConfig();
-    const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
-    const fetchImpl: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      calls.push({ url: String(input), init });
-      return new Response("", { status: 200 });
-    }) as any;
+    const { tracer, captured } = makeTracer();
+    const ready = makeHealth("ready", "runtime_ready");
 
-    await emitObservabilityEvent(
-      cfg,
-      {
-        name: "agent.turn.completed",
-        at: "2026-02-11T18:00:00.000Z",
-        status: "ok",
-        durationMs: 250,
-        attributes: {
-          sessionId: "session-123",
-          provider: "openai",
-          model: "gpt-5.2",
-          promptBody: "this must be filtered",
-          error: "this must be filtered",
-        },
-      },
-      { fetchImpl }
-    );
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe("https://cloud.langfuse.com/api/public/otel/v1/traces");
-
-    const headers = (calls[0]?.init?.headers ?? {}) as Record<string, string>;
-    expect(headers.authorization).toBe("Basic " + Buffer.from("pk-lf-test:sk-lf-test").toString("base64"));
-
-    const body = JSON.parse(String(calls[0]?.init?.body));
-    const resourceAttrs = body.resourceSpans?.[0]?.resource?.attributes ?? [];
-    expect(resourceAttrs.some((attr: any) => attr.key === "deployment.environment")).toBe(true);
-
-    const span = body.resourceSpans?.[0]?.scopeSpans?.[0]?.spans?.[0];
-    expect(span?.name).toBe("agent.turn.completed");
-    expect(span?.traceId).toMatch(/^[0-9a-f]{32}$/);
-    expect(span?.spanId).toMatch(/^[0-9a-f]{16}$/);
-    expect(span?.status?.code).toBe(1);
-
-    const attrs = span?.attributes ?? [];
-    expect(attrs.some((attr: any) => attr.key === "sessionId")).toBe(true);
-    expect(attrs.some((attr: any) => attr.key === "provider")).toBe(true);
-    expect(attrs.some((attr: any) => attr.key === "model")).toBe(true);
-    expect(attrs.some((attr: any) => attr.key === "duration.ms")).toBe(true);
-    expect(attrs.some((attr: any) => attr.key === "promptBody")).toBe(false);
-    expect(attrs.some((attr: any) => attr.key === "error")).toBe(false);
-  });
-
-  test("marks error spans with OTLP error status code", async () => {
-    const cfg = makeConfig();
-    let payload: any = null;
-    const fetchImpl: typeof fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      payload = JSON.parse(String(init?.body ?? "{}"));
-      return new Response("", { status: 200 });
-    }) as any;
-
-    await emitObservabilityEvent(
+    const res = await emitObservabilityEvent(
       cfg,
       {
         name: "agent.turn.failed",
-        at: "2026-02-11T18:00:00.000Z",
+        at: "2026-02-19T08:00:00.000Z",
         status: "error",
+        durationMs: 250,
+        attributes: {
+          sessionId: "session-123",
+          error: "request failed",
+          message: "upstream timeout",
+          apiKey: "sk-test-secret",
+        },
       },
-      { fetchImpl }
+      {
+        tracer: tracer as any,
+        runtime: {
+          ensure: async () => ({ ready: true, health: ready, healthChanged: false }),
+          getHealth: () => ready,
+          noteFailure: () => ({ changed: false, health: ready }),
+          noteSuccess: () => ({ changed: false, health: ready }),
+          forceFlush: async () => {},
+        },
+      }
     );
 
-    const span = payload.resourceSpans?.[0]?.scopeSpans?.[0]?.spans?.[0];
-    expect(span?.status?.code).toBe(2);
+    expect(res.emitted).toBe(true);
+    expect(captured.name).toBe("agent.turn.failed");
+    expect(captured.attributes["sessionId"]).toBe("session-123");
+    expect(captured.attributes["error"]).toBe("request failed");
+    expect(captured.attributes["message"]).toBe("upstream timeout");
+    expect(captured.attributes["apiKey"]).toBe("[REDACTED]");
+    expect(captured.attributes["duration.ms"]).toBe(250);
+    expect(captured.statusCode).toBe(SpanStatusCode.ERROR);
   });
 
-  test("fetch failures are swallowed (best-effort export)", async () => {
+  test("sets OK span status for successful events", async () => {
     const cfg = makeConfig();
-    const fetchImpl: typeof fetch = (async () => {
-      throw new Error("ECONNREFUSED");
-    }) as any;
+    const { tracer, captured } = makeTracer();
+    const ready = makeHealth("ready", "runtime_ready");
 
     await emitObservabilityEvent(
       cfg,
+      { name: "agent.turn.completed", at: "2026-02-19T08:00:00.000Z", status: "ok" },
       {
-        name: "agent.turn.started",
-        at: "2026-02-11T18:00:00.000Z",
-        status: "ok",
-      },
-      { fetchImpl }
+        tracer: tracer as any,
+        runtime: {
+          ensure: async () => ({ ready: true, health: ready, healthChanged: false }),
+          getHealth: () => ready,
+          noteFailure: () => ({ changed: false, health: ready }),
+          noteSuccess: () => ({ changed: false, health: ready }),
+          forceFlush: async () => {},
+        },
+      }
     );
+
+    expect(captured.statusCode).toBe(SpanStatusCode.OK);
+  });
+
+  test("flush failures mark health as degraded and report transition", async () => {
+    const cfg = makeConfig();
+    const { tracer } = makeTracer();
+
+    let health = makeHealth("ready", "runtime_ready");
+    const getHealth = () => health;
+
+    const res = await emitObservabilityEvent(
+      cfg,
+      { name: "agent.turn.completed", at: "2026-02-19T08:00:00.000Z", status: "ok" },
+      {
+        tracer: tracer as any,
+        runtime: {
+          ensure: async () => ({ ready: true, health, healthChanged: false }),
+          getHealth,
+          noteFailure: (reason, message) => {
+            health = makeHealth("degraded", reason, message);
+            return { changed: true, health };
+          },
+          noteSuccess: () => ({ changed: false, health }),
+          forceFlush: async () => {
+            throw new Error("ECONNRESET");
+          },
+        },
+      }
+    );
+
+    expect(res.emitted).toBe(true);
+    expect(res.health.status).toBe("degraded");
+    expect(res.health.reason).toBe("runtime_flush_failed");
+    expect(res.healthChanged).toBe(true);
   });
 });

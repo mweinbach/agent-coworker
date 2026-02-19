@@ -1,17 +1,19 @@
 # Harness Observability (Langfuse-Only)
 
-Harness observability exports OTLP traces directly to Langfuse.
+Harness observability uses Langfuse's OpenTelemetry processor/runtime and exports traces to Langfuse.
 
 ## Runtime Behavior
 
 - Telemetry is controlled by `AGENT_OBSERVABILITY_ENABLED`.
-- When enabled with valid Langfuse credentials, span events are exported to:
+- When enabled with valid Langfuse credentials, the runtime initializes `LangfuseSpanProcessor` and exports spans to:
   - `{LANGFUSE_BASE_URL}/api/public/otel/v1/traces`
-- When telemetry is enabled but credentials are missing/misconfigured, the runtime emits a one-time warning and continues without failing turns/runs.
+- AI SDK model calls are traced with `recordInputs=true` and `recordOutputs=true` (full LLM I/O) whenever observability is enabled and healthy.
+- When telemetry is enabled but credentials are missing/misconfigured, the runtime degrades observability health, emits warnings, and continues without failing turns/runs.
+- Runtime/export failures are non-fatal and surfaced via observability health status.
 
 ## Environment Variables
 
-- `AGENT_OBSERVABILITY_ENABLED` (`true|false`)
+- `AGENT_OBSERVABILITY_ENABLED` (`true|false`, defaults to `true`)
 - `LANGFUSE_PUBLIC_KEY`
 - `LANGFUSE_SECRET_KEY`
 - `LANGFUSE_BASE_URL` (defaults to `https://cloud.langfuse.com`)
@@ -20,10 +22,10 @@ Harness observability exports OTLP traces directly to Langfuse.
 
 ## Harness Runner Emissions
 
-`scripts/run_raw_agent_loops.ts` emits lightweight lifecycle events:
+`scripts/run_raw_agent_loops.ts` emits lifecycle events:
 
 - `harness.run.started`
 - `harness.run.completed`
 - `harness.run.failed`
 
-Emitted metadata is intentionally limited to balanced identifiers (for example run/session/provider/model/tool identifiers) and avoids raw prompt/tool payload bodies.
+Run metadata (`run_meta.json`) includes `observabilityEnabled` plus an `observability` summary with `startHealth` and `endHealth` snapshots.

@@ -170,7 +170,7 @@ Environment variables:
 - `AGENT_OUTPUT_DIR`, `AGENT_UPLOADS_DIR`
 - `AGENT_USER_NAME`
 - `AGENT_ENABLE_MCP` (`true|false`, defaults to `true`)
-- `AGENT_OBSERVABILITY_ENABLED` (`true|false`, defaults to `false`)
+- `AGENT_OBSERVABILITY_ENABLED` (`true|false`, defaults to `true`)
 - `LANGFUSE_PUBLIC_KEY`
 - `LANGFUSE_SECRET_KEY`
 - `LANGFUSE_BASE_URL` (defaults to `https://cloud.langfuse.com`)
@@ -178,6 +178,11 @@ Environment variables:
 - `LANGFUSE_RELEASE`
 - `AGENT_HARNESS_REPORT_ONLY` (`true|false`, defaults to `true`)
 - `AGENT_HARNESS_STRICT_MODE` (`true|false`, defaults to `false`)
+
+Langfuse behavior:
+- When enabled and configured, lifecycle telemetry plus AI SDK model-call traces are exported through the Langfuse OpenTelemetry processor.
+- AI SDK telemetry records inputs/outputs (`recordInputs=true`, `recordOutputs=true`) for full LLM I/O trace visibility.
+- Export/runtime failures are non-fatal; health is surfaced via `observability_status.health` (`disabled | ready | degraded`).
 
 Config files (optional):
 - `./.agent/config.json` (project)

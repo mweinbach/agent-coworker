@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import type { AgentConfig } from "../src/types";
+import type { AgentConfig, ObservabilityHealth } from "../src/types";
 import { emitObservabilityEvent } from "../src/observability/otel";
 
-function makeConfig(baseUrl: string): AgentConfig {
+function makeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
   return {
     provider: "openai",
     model: "gpt-5.2",
@@ -20,91 +20,56 @@ function makeConfig(baseUrl: string): AgentConfig {
     skillsDirs: [],
     memoryDirs: [],
     configDirs: [],
-    enableMcp: false,
     observabilityEnabled: true,
     observability: {
       provider: "langfuse",
-      baseUrl,
-      otelEndpoint: `${baseUrl.replace(/\/+$/, "")}/api/public/otel/v1/traces`,
+      baseUrl: "https://cloud.langfuse.com",
+      otelEndpoint: "https://cloud.langfuse.com/api/public/otel/v1/traces",
       publicKey: "pk-lf-test",
       secretKey: "sk-lf-test",
     },
-    harness: {
-      reportOnly: true,
-      strictMode: false,
-    },
+    harness: { reportOnly: true, strictMode: false },
+    ...overrides,
   };
 }
 
-describe("emitObservabilityEvent URL and payload details", () => {
-  test("normalizes trailing slash on LANGFUSE_BASE_URL", async () => {
-    const cfg = makeConfig("https://cloud.langfuse.com/");
-    const calls: string[] = [];
+function makeHealth(status: ObservabilityHealth["status"], reason: string): ObservabilityHealth {
+  return {
+    status,
+    reason,
+    updatedAt: "2026-02-19T08:00:00.000Z",
+  };
+}
 
-    const fetchImpl: typeof fetch = (async (input: RequestInfo | URL) => {
-      calls.push(String(input));
-      return new Response("", { status: 200 });
-    }) as any;
+function makeTracer() {
+  const capture = {
+    startTime: null as Date | null,
+    endTime: null as Date | null,
+    attributes: {} as Record<string, unknown>,
+  };
 
-    await emitObservabilityEvent(
-      cfg,
-      {
-        name: "harness.run.started",
-        at: "2026-02-11T18:00:00.000Z",
-        status: "ok",
-      },
-      { fetchImpl }
-    );
-
-    expect(calls).toEqual(["https://cloud.langfuse.com/api/public/otel/v1/traces"]);
-  });
-
-  test("preserves finite numeric and boolean attributes", async () => {
-    const cfg = makeConfig("https://self-hosted.langfuse.internal");
-    let body: any = null;
-
-    const fetchImpl: typeof fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body ?? "{}"));
-      return new Response("", { status: 200 });
-    }) as any;
-
-    await emitObservabilityEvent(
-      cfg,
-      {
-        name: "harness.run.completed",
-        at: "2026-02-11T18:00:01.000Z",
-        status: "ok",
-        durationMs: 123,
-        attributes: {
-          attempts: 3,
-          passed: true,
-          runId: "run-42",
+  const tracer = {
+    startSpan(_name: string, options?: { startTime?: Date; attributes?: Record<string, unknown> }) {
+      capture.startTime = options?.startTime ?? null;
+      capture.attributes = options?.attributes ?? {};
+      return {
+        setStatus() {},
+        end(time?: Date) {
+          capture.endTime = time ?? null;
         },
-      },
-      { fetchImpl }
-    );
+      };
+    },
+  };
 
-    const attrs = body.resourceSpans?.[0]?.scopeSpans?.[0]?.spans?.[0]?.attributes ?? [];
+  return { tracer, capture };
+}
 
-    const attemptsAttr = attrs.find((attr: any) => attr.key === "attempts");
-    const passedAttr = attrs.find((attr: any) => attr.key === "passed");
-    const runIdAttr = attrs.find((attr: any) => attr.key === "runId");
-
-    expect(attemptsAttr?.value?.doubleValue).toBe(3);
-    expect(passedAttr?.value?.boolValue).toBe(true);
-    expect(runIdAttr?.value?.stringValue).toBe("run-42");
-  });
-
+describe("emitObservabilityEvent payload details", () => {
   test("invalid event timestamp falls back to current time window", async () => {
-    const cfg = makeConfig("https://cloud.langfuse.com");
-    let span: any = null;
-
+    const cfg = makeConfig();
+    const { tracer, capture } = makeTracer();
+    const ready = makeHealth("ready", "runtime_ready");
     const before = Date.now();
-    const fetchImpl: typeof fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}"));
-      span = body.resourceSpans?.[0]?.scopeSpans?.[0]?.spans?.[0];
-      return new Response("", { status: 200 });
-    }) as any;
 
     await emitObservabilityEvent(
       cfg,
@@ -114,12 +79,87 @@ describe("emitObservabilityEvent URL and payload details", () => {
         status: "ok",
         durationMs: 100,
       },
-      { fetchImpl }
+      {
+        tracer: tracer as any,
+        runtime: {
+          ensure: async () => ({ ready: true, health: ready, healthChanged: false }),
+          getHealth: () => ready,
+          noteFailure: () => ({ changed: false, health: ready }),
+          noteSuccess: () => ({ changed: false, health: ready }),
+          forceFlush: async () => {},
+        },
+      }
     );
-    const after = Date.now();
 
-    const endMs = Number(BigInt(span.endTimeUnixNano) / 1_000_000n);
+    const after = Date.now();
+    const endMs = capture.endTime?.getTime() ?? 0;
     expect(endMs).toBeGreaterThanOrEqual(before);
     expect(endMs).toBeLessThanOrEqual(after);
+  });
+
+  test("preserves finite numeric/boolean attributes", async () => {
+    const cfg = makeConfig();
+    const { tracer, capture } = makeTracer();
+    const ready = makeHealth("ready", "runtime_ready");
+
+    await emitObservabilityEvent(
+      cfg,
+      {
+        name: "harness.run.completed",
+        at: "2026-02-19T08:00:00.000Z",
+        status: "ok",
+        attributes: {
+          attempts: 3,
+          passed: true,
+          runId: "run-42",
+        },
+      },
+      {
+        tracer: tracer as any,
+        runtime: {
+          ensure: async () => ({ ready: true, health: ready, healthChanged: false }),
+          getHealth: () => ready,
+          noteFailure: () => ({ changed: false, health: ready }),
+          noteSuccess: () => ({ changed: false, health: ready }),
+          forceFlush: async () => {},
+        },
+      }
+    );
+
+    expect(capture.attributes["attempts"]).toBe(3);
+    expect(capture.attributes["passed"]).toBe(true);
+    expect(capture.attributes["runId"]).toBe("run-42");
+  });
+
+  test("truncates long string attributes", async () => {
+    const cfg = makeConfig();
+    const { tracer, capture } = makeTracer();
+    const ready = makeHealth("ready", "runtime_ready");
+    const veryLong = "x".repeat(4000);
+
+    await emitObservabilityEvent(
+      cfg,
+      {
+        name: "agent.turn.completed",
+        at: "2026-02-19T08:00:00.000Z",
+        status: "ok",
+        attributes: {
+          message: veryLong,
+        },
+      },
+      {
+        tracer: tracer as any,
+        runtime: {
+          ensure: async () => ({ ready: true, health: ready, healthChanged: false }),
+          getHealth: () => ready,
+          noteFailure: () => ({ changed: false, health: ready }),
+          noteSuccess: () => ({ changed: false, health: ready }),
+          forceFlush: async () => {},
+        },
+      }
+    );
+
+    const message = String(capture.attributes["message"] ?? "");
+    expect(message.length).toBeLessThanOrEqual(2048);
   });
 });

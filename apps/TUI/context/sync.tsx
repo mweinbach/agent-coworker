@@ -36,6 +36,7 @@ export type FeedItem =
       type: "observability_status";
       enabled: boolean;
       config: Extract<ServerEvent, { type: "observability_status" }>["config"];
+      health: Extract<ServerEvent, { type: "observability_status" }>["health"];
     }
   | { id: string; type: "harness_context"; context: Extract<ServerEvent, { type: "harness_context" }>["context"] }
   | { id: string; type: "skills_list"; skills: SkillEntry[] }
@@ -101,6 +102,7 @@ type SyncState = {
   providerAuthResult: ProviderAuthResultState;
   observabilityEnabled: boolean;
   observabilityConfig: Extract<ServerEvent, { type: "observability_status" }>["config"];
+  observabilityHealth: Extract<ServerEvent, { type: "observability_status" }>["health"] | null;
   harnessContext: HarnessContextState;
   skills: SkillsState;
   backup: SessionBackupState;
@@ -390,6 +392,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     providerAuthResult: null,
     observabilityEnabled: false,
     observabilityConfig: null,
+    observabilityHealth: null,
     harnessContext: null,
     skills: [],
     backup: null,
@@ -460,6 +463,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         s.providerAuthResult = null;
         s.observabilityEnabled = false;
         s.observabilityConfig = null;
+        s.observabilityHealth = null;
         s.harnessContext = null;
         s.skills = [];
         s.backup = null;
@@ -504,11 +508,13 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       case "observability_status":
         setState("observabilityEnabled", evt.enabled);
         setState("observabilityConfig", evt.config);
+        setState("observabilityHealth", evt.health);
         setState("feed", (f) => [...f, {
           id: nextFeedId(),
           type: "observability_status",
           enabled: evt.enabled,
           config: evt.config,
+          health: evt.health,
         }]);
         break;
 

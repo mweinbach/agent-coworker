@@ -1,6 +1,15 @@
-import { randomBytes } from "node:crypto";
+import type { AttributeValue, Tracer } from "@opentelemetry/api";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 
-import type { AgentConfig } from "../types";
+import type { AgentConfig, ObservabilityHealth } from "../types";
+
+import {
+  ensureObservabilityRuntime,
+  forceFlushObservabilityRuntime,
+  getObservabilityHealth,
+  noteObservabilityFailure,
+  noteObservabilitySuccess,
+} from "./runtime";
 
 export interface ObservabilityEvent {
   name: string;
@@ -10,220 +19,168 @@ export interface ObservabilityEvent {
   attributes?: Record<string, string | number | boolean>;
 }
 
-const LANGFUSE_OTEL_TRACES_PATH = "/api/public/otel/v1/traces";
+export interface EmitObservabilityResult {
+  emitted: boolean;
+  healthChanged: boolean;
+  health: ObservabilityHealth;
+}
 
-const WARN_ONCE_KEYS = new Set<string>();
+type RuntimeDeps = {
+  ensure: typeof ensureObservabilityRuntime;
+  getHealth: typeof getObservabilityHealth;
+  noteFailure: typeof noteObservabilityFailure;
+  noteSuccess: typeof noteObservabilitySuccess;
+  forceFlush: typeof forceFlushObservabilityRuntime;
+};
 
-const BLOCKED_ATTRIBUTE_SUBSTRINGS = [
-  "prompt",
-  "content",
-  "body",
-  "input",
-  "output",
-  "response",
-  "message",
-  "error",
-  "query",
-  "argument",
-  "payload",
-  "raw",
+export interface EmitObservabilityDeps {
+  tracer?: Tracer;
+  runtime?: Partial<RuntimeDeps>;
+}
+
+const MAX_ATTRIBUTE_STRING_LENGTH = 2048;
+const SECRET_ATTRIBUTE_TOKENS = [
+  "api_key",
+  "apikey",
+  "secret",
+  "token",
+  "authorization",
+  "cookie",
+  "password",
+  "privatekey",
+  "secretkey",
 ];
 
-const ALLOWED_ATTRIBUTE_KEYS = new Set([
-  "sessionId",
-  "turnId",
-  "runId",
-  "taskId",
-  "provider",
-  "model",
-  "tool",
-  "toolName",
-  "command",
-  "commandName",
-  "skillName",
-  "methodId",
-  "mode",
-  "reasonCode",
-  "scenario",
-  "status",
-  "objectiveLength",
-  "providers",
-  "checks",
-  "passed",
-  "limit",
-  "attempt",
-  "maxAttempts",
-]);
-
-function warnOnce(key: string, message: string): void {
-  if (WARN_ONCE_KEYS.has(key)) return;
-  WARN_ONCE_KEYS.add(key);
-  console.warn(message);
+function formatErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  return String(err);
 }
 
-function toAnyValue(v: string | number | boolean): Record<string, unknown> {
-  if (typeof v === "number") return { doubleValue: v };
-  if (typeof v === "boolean") return { boolValue: v };
-  return { stringValue: v };
-}
-
-function randomHex(bytes: number): string {
-  return randomBytes(bytes).toString("hex");
-}
-
-function computeSpanWindow(atIso: string, durationMs: number | undefined): { startNs: string; endNs: string } {
-  const parsedMs = Date.parse(atIso);
-  const endMs = Number.isFinite(parsedMs) ? parsedMs : Date.now();
-  const spanDurationMs = typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 1;
-  const startMs = Math.max(0, endMs - spanDurationMs);
-  return {
-    startNs: String(BigInt(Math.floor(startMs)) * 1_000_000n),
-    endNs: String(BigInt(Math.floor(endMs)) * 1_000_000n),
-  };
-}
-
-function normalizeUrl(input: string): string {
-  return input.replace(/\/+$/, "");
-}
-
-function resolveLangfuseTraceIngestUrl(baseUrl: string): string {
-  return `${normalizeUrl(baseUrl)}${LANGFUSE_OTEL_TRACES_PATH}`;
-}
-
-function shouldIncludeAttribute(key: string, value: string | number | boolean): boolean {
-  if (typeof value === "string" && value.length > 512) return false;
-
-  if (ALLOWED_ATTRIBUTE_KEYS.has(key)) return true;
-  if (key.endsWith("Id")) return true;
-
+function isSecretLikeKey(key: string): boolean {
   const lowered = key.toLowerCase();
-  return !BLOCKED_ATTRIBUTE_SUBSTRINGS.some((token) => lowered.includes(token));
+  return SECRET_ATTRIBUTE_TOKENS.some((token) => lowered.includes(token));
 }
 
-function sanitizeAttributes(attributes: Record<string, string | number | boolean> | undefined): Array<{ key: string; value: Record<string, unknown> }> {
-  if (!attributes) return [];
-  const out: Array<{ key: string; value: Record<string, unknown> }> = [];
+function truncateString(value: string): string {
+  if (value.length <= MAX_ATTRIBUTE_STRING_LENGTH) return value;
+  return `${value.slice(0, MAX_ATTRIBUTE_STRING_LENGTH - 1)}…`;
+}
+
+function sanitizeAttributeValue(
+  key: string,
+  value: string | number | boolean
+): AttributeValue | undefined {
+  if (isSecretLikeKey(key)) return "[REDACTED]";
+
+  if (typeof value === "string") {
+    return truncateString(value);
+  }
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return undefined;
+    return value;
+  }
+
+  return value;
+}
+
+function sanitizeAttributes(
+  attributes: Record<string, string | number | boolean> | undefined
+): Record<string, AttributeValue> {
+  if (!attributes) return {};
+
+  const out: Record<string, AttributeValue> = {};
   for (const [key, value] of Object.entries(attributes)) {
-    if (!shouldIncludeAttribute(key, value)) continue;
-    out.push({ key, value: toAnyValue(value) });
+    const sanitized = sanitizeAttributeValue(key, value);
+    if (sanitized === undefined) continue;
+    out[key] = sanitized;
   }
   return out;
 }
 
-function resolveLangfuseConfig(
-  config: AgentConfig
-):
-  | {
-      baseUrl: string;
-      publicKey: string;
-      secretKey: string;
-      tracingEnvironment?: string;
-      release?: string;
-    }
-  | null {
-  if (!config.observabilityEnabled) return null;
-
-  const obs = config.observability;
-  if (!obs) {
-    warnOnce(
-      "langfuse-missing-config",
-      "[observability] Langfuse telemetry is enabled but no observability config is present. Continuing without telemetry export."
-    );
-    return null;
-  }
-
-  const baseUrl = obs.baseUrl.trim();
-  const publicKey = obs.publicKey?.trim() ?? "";
-  const secretKey = obs.secretKey?.trim() ?? "";
-
-  if (!baseUrl || !publicKey || !secretKey) {
-    warnOnce(
-      "langfuse-missing-credentials",
-      "[observability] Langfuse telemetry is enabled but LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY (and base URL) are not fully configured. Continuing without telemetry export."
-    );
-    return null;
-  }
-
+function computeSpanWindow(atIso: string, durationMs: number | undefined): { startTime: Date; endTime: Date } {
+  const parsedMs = Date.parse(atIso);
+  const endMs = Number.isFinite(parsedMs) ? parsedMs : Date.now();
+  const spanDurationMs =
+    typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 1;
+  const startMs = Math.max(0, endMs - spanDurationMs);
   return {
-    baseUrl,
-    publicKey,
-    secretKey,
-    tracingEnvironment: obs.tracingEnvironment,
-    release: obs.release,
+    startTime: new Date(startMs),
+    endTime: new Date(endMs),
   };
+}
+
+function sameHealth(a: ObservabilityHealth, b: ObservabilityHealth): boolean {
+  return (
+    a.status === b.status &&
+    a.reason === b.reason &&
+    (a.message ?? "") === (b.message ?? "")
+  );
 }
 
 export async function emitObservabilityEvent(
   config: AgentConfig,
   event: ObservabilityEvent,
-  deps?: { fetchImpl?: typeof fetch }
-): Promise<void> {
-  const langfuse = resolveLangfuseConfig(config);
-  if (!langfuse) return;
-
-  const fetchImpl = deps?.fetchImpl ?? fetch;
-  const attributes = sanitizeAttributes(event.attributes);
-  const { startNs, endNs } = computeSpanWindow(event.at, event.durationMs);
-  const traceId = randomHex(16);
-  const spanId = randomHex(8);
-
-  const body = {
-    resourceSpans: [
-      {
-        resource: {
-          attributes: [
-            { key: "service.name", value: { stringValue: "agent-coworker" } },
-            { key: "service.version", value: { stringValue: langfuse.release ?? "0.1.0" } },
-            ...(langfuse.tracingEnvironment
-              ? [{ key: "deployment.environment", value: { stringValue: langfuse.tracingEnvironment } }]
-              : []),
-          ],
-        },
-        scopeSpans: [
-          {
-            scope: { name: "agent-coworker" },
-            spans: [
-              {
-                traceId,
-                spanId,
-                name: event.name,
-                kind: 1,
-                startTimeUnixNano: startNs,
-                endTimeUnixNano: endNs,
-                attributes: [
-                  ...attributes,
-                  { key: "event.at", value: { stringValue: event.at } },
-                  ...(event.durationMs !== undefined
-                    ? [{ key: "duration.ms", value: { doubleValue: event.durationMs } }]
-                    : []),
-                ],
-                status: {
-                  code: event.status === "error" ? 2 : 1,
-                },
-              },
-            ],
-          },
-        ],
-      },
-    ],
+  deps?: EmitObservabilityDeps
+): Promise<EmitObservabilityResult> {
+  const runtime: RuntimeDeps = {
+    ensure: deps?.runtime?.ensure ?? ensureObservabilityRuntime,
+    getHealth: deps?.runtime?.getHealth ?? getObservabilityHealth,
+    noteFailure: deps?.runtime?.noteFailure ?? noteObservabilityFailure,
+    noteSuccess: deps?.runtime?.noteSuccess ?? noteObservabilitySuccess,
+    forceFlush: deps?.runtime?.forceFlush ?? forceFlushObservabilityRuntime,
   };
 
-  const ingestUrl = resolveLangfuseTraceIngestUrl(langfuse.baseUrl);
-  const auth = Buffer.from(`${langfuse.publicKey}:${langfuse.secretKey}`).toString("base64");
+  const tracer = deps?.tracer ?? trace.getTracer("agent-coworker.observability");
+  const before = runtime.getHealth(config);
 
+  const runtimeState = await runtime.ensure(config);
+  if (!runtimeState.ready) {
+    const after = runtime.getHealth(config);
+    return {
+      emitted: false,
+      healthChanged: runtimeState.healthChanged || !sameHealth(before, after),
+      health: after,
+    };
+  }
+
+  const { startTime, endTime } = computeSpanWindow(event.at, event.durationMs);
+  const attributes = sanitizeAttributes(event.attributes);
+
+  let emitted = false;
   try {
-    const res = await fetchImpl(ingestUrl, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Basic ${auth}`,
+    const span = tracer.startSpan(event.name, {
+      startTime,
+      attributes: {
+        ...attributes,
+        "event.at": truncateString(event.at),
+        ...(event.durationMs !== undefined ? { "duration.ms": event.durationMs } : {}),
       },
-      body: JSON.stringify(body),
     });
 
-    // Drain body to avoid leaked sockets and keep exports best-effort.
-    await res.arrayBuffer().catch(() => {});
-  } catch {
-    // best-effort export; failures should not affect core runtime
+    if (event.status === "error") {
+      span.setStatus({ code: SpanStatusCode.ERROR });
+    } else {
+      span.setStatus({ code: SpanStatusCode.OK });
+    }
+
+    span.end(endTime);
+    emitted = true;
+
+    try {
+      await runtime.forceFlush();
+      runtime.noteSuccess(config, "runtime_flush_ok");
+    } catch (flushErr) {
+      runtime.noteFailure("runtime_flush_failed", formatErrorMessage(flushErr));
+    }
+  } catch (err) {
+    runtime.noteFailure("span_emit_failed", formatErrorMessage(err));
   }
+
+  const after = runtime.getHealth(config);
+  return {
+    emitted,
+    healthChanged: runtimeState.healthChanged || !sameHealth(before, after),
+    health: after,
+  };
 }

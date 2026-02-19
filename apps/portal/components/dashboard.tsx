@@ -394,6 +394,13 @@ export function Dashboard() {
                 <p className="micro">finished: {formatDate(selectedRunSummary.finishedAt)}</p>
                 <p className="micro">attempts: {selectedRunSummary.attemptsSucceeded}/{selectedRunSummary.attemptsTotal}</p>
                 <p className="micro">observability: {String(selectedRunSummary.observabilityEnabled)}</p>
+                <p className="micro">observability health: {selectedRunSummary.observabilityHealthStatus ?? "unknown"}</p>
+                {selectedRunSummary.observabilityHealthReason ? (
+                  <p className="micro">health reason: {selectedRunSummary.observabilityHealthReason}</p>
+                ) : null}
+                {selectedRunSummary.observabilityHealthMessage ? (
+                  <p className="micro">health message: {selectedRunSummary.observabilityHealthMessage}</p>
+                ) : null}
               </article>
 
               <article className="detail-card">

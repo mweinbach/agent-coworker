@@ -552,6 +552,16 @@ export async function runCliRepl(
       case "provider_status":
         providerStatuses = evt.providers;
         break;
+      case "observability_status": {
+        const configured = evt.config?.configured ? "yes" : "no";
+        const healthReason = evt.health.message
+          ? `${evt.health.reason}: ${evt.health.message}`
+          : evt.health.reason;
+        console.log(
+          `\n[observability] enabled=${evt.enabled} configured=${configured} health=${evt.health.status} (${healthReason})`
+        );
+        break;
+      }
       case "provider_auth_challenge":
         console.log(`\nAuth challenge [${evt.provider}/${evt.methodId}] ${evt.challenge.instructions}`);
         if (evt.challenge.command) console.log(`command: ${evt.challenge.command}`);

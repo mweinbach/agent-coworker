@@ -2,6 +2,7 @@ import { stepCountIs, streamText } from "ai";
 import type { ModelMessage } from "ai";
 
 import { getModel } from "./config";
+import { buildAiSdkTelemetrySettings } from "./observability/runtime";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import type { AgentConfig, TodoItem } from "./types";
 import { loadMCPServers, loadMCPTools } from "./mcp";
@@ -33,6 +34,10 @@ export interface RunTurnParams {
   onModelError?: (error: unknown) => void | Promise<void>;
   onModelAbort?: () => void | Promise<void>;
   includeRawChunks?: boolean;
+  telemetryContext?: {
+    functionId?: string;
+    metadata?: Record<string, string | number | boolean | null | undefined>;
+  };
 }
 
 function stripStaticMcpNamespacingGuidance(system: string): string {
@@ -154,12 +159,20 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
               ...(typeof timeoutCfg?.chunkMs === "number" ? { chunkMs: timeoutCfg.chunkMs } : {}),
             }
           : { chunkMs: DEFAULT_MODEL_STALL_TIMEOUT_MS };
+        const telemetry = await buildAiSdkTelemetrySettings(config, {
+          functionId: params.telemetryContext?.functionId ?? "agent.runTurn",
+          metadata: {
+            ...(params.telemetryContext?.metadata ?? {}),
+          },
+        });
+
         const streamResult = await deps.streamText({
           model: deps.getModel(config),
           system: turnSystem,
           messages,
           tools,
           providerOptions: turnProviderOptions,
+          ...(telemetry ? { experimental_telemetry: telemetry } : {}),
           stopWhen: deps.stepCountIs(params.maxSteps ?? 100),
           ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
           abortSignal,

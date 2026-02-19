@@ -8,6 +8,7 @@ import type { AgentConfig } from "../src/types";
 import type { ToolContext } from "../src/tools/context";
 
 import { createSpawnAgentTool } from "../src/tools/spawnAgent";
+import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -68,7 +69,9 @@ describe("spawnAgent tool", () => {
     };
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await observabilityRuntimeInternal.resetForTests();
+
     lastGenerateTextArgs = null;
     mockStreamText.mockClear();
     mockStepCountIs.mockClear();
@@ -269,6 +272,38 @@ describe("spawnAgent tool", () => {
       stepMs: 12000,
       chunkMs: 5000,
     });
+  });
+
+  test("enables AI SDK telemetry with full I/O when observability is configured", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-telemetry-"));
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        observabilityEnabled: true,
+        observability: {
+          provider: "langfuse",
+          baseUrl: "https://cloud.langfuse.com",
+          otelEndpoint: "https://cloud.langfuse.com/api/public/otel/v1/traces",
+          publicKey: "pk-lf-test",
+          secretKey: "sk-lf-test",
+        },
+      }),
+    });
+
+    const t: any = createSpawnAgentTool(ctx, {
+      streamText: mockStreamText as any,
+      stepCountIs: mockStepCountIs as any,
+      getModel: mockGetModel as any,
+      loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
+      classifyCommandDetailed: mockClassifyCommandDetailed as any,
+    });
+
+    await t.execute({ task: "telemetry check", agentType: "general" });
+
+    expect(lastGenerateTextArgs.experimental_telemetry).toBeDefined();
+    expect(lastGenerateTextArgs.experimental_telemetry.isEnabled).toBe(true);
+    expect(lastGenerateTextArgs.experimental_telemetry.recordInputs).toBe(true);
+    expect(lastGenerateTextArgs.experimental_telemetry.recordOutputs).toBe(true);
+    expect(lastGenerateTextArgs.experimental_telemetry.functionId).toBe("tool.spawnAgent");
   });
 
   test("rejects sub-agent recursion beyond configured depth", async () => {

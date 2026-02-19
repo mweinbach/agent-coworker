@@ -4,7 +4,7 @@
   "uploadsDirectory": "uploads",
   "userName": "",
   "knowledgeCutoff": "End of May 2025",
-  "observabilityEnabled": false,
+  "observabilityEnabled": true,
   "observability": {
     "provider": "langfuse",
     "baseUrl": "https://cloud.langfuse.com",

@@ -178,6 +178,15 @@ export interface ObservabilityConfig {
   release?: string;
 }
 
+export type ObservabilityHealthStatus = "disabled" | "ready" | "degraded";
+
+export interface ObservabilityHealth {
+  status: ObservabilityHealthStatus;
+  reason: string;
+  message?: string;
+  updatedAt: string;
+}
+
 export interface HarnessConfig {
   reportOnly: boolean;
   strictMode: boolean;

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AgentConfig } from "../src/types";
 import type { RunTurnParams } from "../src/agent";
 import { createRunTurn } from "../src/agent";
+import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -80,7 +81,9 @@ function makeParams(overrides: Partial<RunTurnParams> = {}): RunTurnParams {
 describe("runTurn", () => {
   let runTurn: typeof import("../src/agent").runTurn;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await observabilityRuntimeInternal.resetForTests();
+
     mockStreamText.mockClear();
     mockStepCountIs.mockClear();
     mockGetModel.mockClear();
@@ -444,6 +447,35 @@ describe("runTurn", () => {
 
     const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.providerOptions).toBeUndefined();
+  });
+
+  test("enables AI SDK telemetry with full I/O when observability is configured", async () => {
+    const config = makeConfig({
+      observabilityEnabled: true,
+      observability: {
+        provider: "langfuse",
+        baseUrl: "https://cloud.langfuse.com",
+        otelEndpoint: "https://cloud.langfuse.com/api/public/otel/v1/traces",
+        publicKey: "pk-lf-test",
+        secretKey: "sk-lf-test",
+      },
+    });
+
+    await runTurn(makeParams({
+      config,
+      telemetryContext: {
+        functionId: "session.turn",
+        metadata: { sessionId: "session-123" },
+      },
+    }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.experimental_telemetry).toBeDefined();
+    expect(callArg.experimental_telemetry.isEnabled).toBe(true);
+    expect(callArg.experimental_telemetry.recordInputs).toBe(true);
+    expect(callArg.experimental_telemetry.recordOutputs).toBe(true);
+    expect(callArg.experimental_telemetry.functionId).toBe("session.turn");
+    expect(callArg.experimental_telemetry.metadata.sessionId).toBe("session-123");
   });
 
   // -------------------------------------------------------------------------

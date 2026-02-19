@@ -32,6 +32,7 @@ import { createWebSearchTool } from "../src/tools/webSearch";
 import { createWriteTool } from "../src/tools/write";
 import { classifyCommand } from "../src/utils/approval";
 import { emitObservabilityEvent } from "../src/observability/otel";
+import { buildAiSdkTelemetrySettings, getObservabilityHealth } from "../src/observability/runtime";
 
 type AskEvent = {
   at: string;
@@ -223,17 +224,38 @@ function safeJsonStringify(v: unknown): string {
 function makeTracedGenerateText(
   steps: TracedStep[],
   scope: string,
-  limiter: RateLimiter
+  limiter: RateLimiter,
+  config: AgentConfig,
+  metadata?: Record<string, string | number | boolean | null | undefined>
 ): typeof realGenerateText {
   const traced = (async (opts: any) => {
     const callerOnStepFinish = opts?.onStepFinish;
     const callerOnFinish = opts?.onFinish;
     const callerPrepareStep = opts?.prepareStep;
+    const callerTelemetry = opts?.experimental_telemetry;
+    const telemetry = await buildAiSdkTelemetrySettings(config, {
+      functionId: `harness.generateText.${scope}`,
+      metadata: {
+        scope,
+        ...(metadata ?? {}),
+      },
+    });
+    const mergedTelemetry = telemetry
+      ? {
+          ...telemetry,
+          ...(callerTelemetry ?? {}),
+          metadata: {
+            ...(telemetry.metadata ?? {}),
+            ...(callerTelemetry?.metadata ?? {}),
+          },
+        }
+      : callerTelemetry;
 
     return await realGenerateText({
       ...opts,
       // Avoid internal retries that can blow past free-tier request quotas.
       maxRetries: typeof opts?.maxRetries === "number" ? opts.maxRetries : 0,
+      ...(mergedTelemetry ? { experimental_telemetry: mergedTelemetry } : {}),
       experimental_include: {
         requestBody: true,
         responseBody: true,
@@ -334,7 +356,9 @@ function createToolsWithTracing(
   prerequisiteToolGuard?: PrerequisiteToolGuardConfig
 ): Record<string, any> {
   // Capture sub-agent model calls (spawnAgent uses its own generateText invocation).
-  const tracedForSubAgent = makeTracedGenerateText(steps, "spawnAgent", limiter);
+  const tracedForSubAgent = makeTracedGenerateText(steps, "spawnAgent", limiter, ctx.config, {
+    toolName: "spawnAgent",
+  });
 
   const baseTools = {
     bash: createBashTool(ctx),
@@ -1334,6 +1358,7 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
     config.configDirs = [localProjectAgentDir, localUserAgentDir, config.builtInConfigDir];
 
     await ensureDir(config.projectAgentDir);
+    const observabilityStartHealthBefore = getObservabilityHealth(config);
     await emitHarnessRunEvent(
       config,
       "harness.run.started",
@@ -1349,6 +1374,7 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
       },
       0
     );
+    const observabilityStartHealth = getObservabilityHealth(config);
 
     const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
 
@@ -1406,8 +1432,14 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
         todoEvents.push({ at: isoSafeNow(), todos });
       };
 
-      const tracedMainGenerateText = makeTracedGenerateText(steps, "main", runLimiter);
-      const tracedFinalizeGenerateText = makeTracedGenerateText(steps, "finalize", runLimiter);
+      const tracedMainGenerateText = makeTracedGenerateText(steps, "main", runLimiter, config, {
+        runId: run.id,
+        scenario: cliArgs.scenario,
+      });
+      const tracedFinalizeGenerateText = makeTracedGenerateText(steps, "finalize", runLimiter, config, {
+        runId: run.id,
+        scenario: cliArgs.scenario,
+      });
 
       const createToolsOverride = (ctx: ToolContext) =>
         createToolsWithTracing(
@@ -1438,6 +1470,14 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
             discoveredSkills,
             maxSteps: run.maxSteps ?? 100,
             enableMcp: false,
+            telemetryContext: {
+              functionId: "harness.runTurn",
+              metadata: {
+                runId: run.id,
+                scenario: cliArgs.scenario,
+                attempt,
+              },
+            },
           },
           {
             generateText: tracedMainGenerateText as any,
@@ -1620,22 +1660,6 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
     const runFailureError =
       !finalRes && finalError ? new Error(`Run ${run.id} failed after ${maxAttempts} attempts: ${String(finalError)}`) : undefined;
 
-    const runMeta = {
-      runId: run.id,
-      provider: run.provider,
-      requestedModel: resolved.requestedModel,
-      resolvedModel: resolved.resolvedModel,
-      resolvedFrom: resolved.resolvedFrom,
-      maxSteps: run.maxSteps ?? 100,
-      maxAttempts,
-      runDir,
-      startedAt,
-      finishedAt,
-      observabilityEnabled: config.observabilityEnabled ?? false,
-      ...(runFailureError ? { error: runFailureError.message } : {}),
-    };
-    await fs.writeFile(path.join(runDir, "run_meta.json"), safeJsonStringify(runMeta), "utf-8");
-
     if (runFailureError) {
       await emitHarnessRunEvent(
         config,
@@ -1651,24 +1675,50 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
         },
         Date.now() - startedAtMs
       );
-      throw runFailureError;
+    } else {
+      await emitHarnessRunEvent(
+        config,
+        "harness.run.completed",
+        "ok",
+        finishedAt,
+        {
+          runId: run.id,
+          provider: run.provider,
+          model: resolved.resolvedModel,
+          scenario: cliArgs.scenario,
+          attempts: attempts.length,
+          successfulAttempts: attempts.filter((attempt) => attempt.ok).length,
+        },
+        Date.now() - startedAtMs
+      );
     }
 
-    await emitHarnessRunEvent(
-      config,
-      "harness.run.completed",
-      "ok",
+    const observabilityEndHealth = getObservabilityHealth(config);
+    const runMeta = {
+      runId: run.id,
+      provider: run.provider,
+      requestedModel: resolved.requestedModel,
+      resolvedModel: resolved.resolvedModel,
+      resolvedFrom: resolved.resolvedFrom,
+      maxSteps: run.maxSteps ?? 100,
+      maxAttempts,
+      runDir,
+      startedAt,
       finishedAt,
-      {
-        runId: run.id,
-        provider: run.provider,
-        model: resolved.resolvedModel,
-        scenario: cliArgs.scenario,
-        attempts: attempts.length,
-        successfulAttempts: attempts.filter((attempt) => attempt.ok).length,
+      observabilityEnabled: config.observabilityEnabled ?? false,
+      observability: {
+        provider: "langfuse",
+        startHealth: observabilityStartHealth,
+        endHealth: observabilityEndHealth,
+        startHealthBeforeStartEvent: observabilityStartHealthBefore,
       },
-      Date.now() - startedAtMs
-    );
+      ...(runFailureError ? { error: runFailureError.message } : {}),
+    };
+    await fs.writeFile(path.join(runDir, "run_meta.json"), safeJsonStringify(runMeta), "utf-8");
+
+    if (runFailureError) {
+      throw runFailureError;
+    }
   }
 
   const manifest = {

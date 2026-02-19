@@ -19,6 +19,9 @@ export interface HarnessRunSummary {
   lastError: string | null;
   finalPreview: string;
   observabilityEnabled: boolean;
+  observabilityHealthStatus: string | null;
+  observabilityHealthReason: string | null;
+  observabilityHealthMessage: string | null;
   updatedAtMs: number;
 }
 
@@ -207,6 +210,11 @@ async function readRunSummary(runRootPath: string, runDirName: string): Promise<
   const startedAt = asString(runMeta?.startedAt) ?? asString(trace?.startedAt);
   const finishedAt = asString(runMeta?.finishedAt) ?? asString(trace?.finishedAt);
   const observabilityEnabled = asBoolean(runMeta?.observabilityEnabled, false);
+  const observability = toRecord(runMeta?.observability);
+  const observabilityEndHealth = toRecord(observability?.endHealth);
+  const observabilityHealthStatus = asString(observabilityEndHealth?.status);
+  const observabilityHealthReason = asString(observabilityEndHealth?.reason);
+  const observabilityHealthMessage = asString(observabilityEndHealth?.message);
 
   const attemptSucceeded = attempts.filter((attempt) => asBoolean(attempt.ok, false)).length;
   const lastAttempt = attempts.length > 0 ? attempts[attempts.length - 1] : null;
@@ -239,6 +247,9 @@ async function readRunSummary(runRootPath: string, runDirName: string): Promise<
     lastError,
     finalPreview: getPreview(finalText),
     observabilityEnabled,
+    observabilityHealthStatus,
+    observabilityHealthReason,
+    observabilityHealthMessage,
     updatedAtMs,
   };
 }

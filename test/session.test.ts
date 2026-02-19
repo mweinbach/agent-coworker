@@ -5,6 +5,7 @@ import path from "node:path";
 
 import type { AgentConfig, TodoItem } from "../src/types";
 import type { ServerEvent } from "../src/server/protocol";
+import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import type {
   SessionBackupHandle,
   SessionBackupInitOptions,
@@ -178,7 +179,9 @@ function makeSession(
 // ---------------------------------------------------------------------------
 
 describe("AgentSession", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await observabilityRuntimeInternal.resetForTests();
+
     mockRunTurn.mockReset();
     mockRunTurn.mockImplementation(async () => ({
       text: "",
@@ -398,6 +401,8 @@ describe("AgentSession", () => {
       const evt = session.getObservabilityStatusEvent();
       expect(evt.type).toBe("observability_status");
       expect(evt.enabled).toBe(true);
+      expect(evt.health).toBeDefined();
+      expect(["disabled", "ready", "degraded"]).toContain(evt.health.status);
       expect(evt.config?.provider).toBe("langfuse");
       expect(evt.config?.baseUrl).toBe("https://cloud.langfuse.com");
       expect(evt.config?.otelEndpoint).toBe("https://cloud.langfuse.com/api/public/otel/v1/traces");

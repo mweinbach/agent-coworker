@@ -4,6 +4,7 @@ import type {
   AgentConfig,
   CommandInfo,
   HarnessContextPayload,
+  ObservabilityHealth,
   ServerErrorCode,
   ServerErrorSource,
   SkillEntry,
@@ -140,6 +141,7 @@ export type ServerEvent =
       type: "observability_status";
       sessionId: string;
       enabled: boolean;
+      health: ObservabilityHealth;
       config:
         | {
             provider: "langfuse";

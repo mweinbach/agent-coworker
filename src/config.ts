@@ -248,7 +248,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(projectConfig.observabilityEnabled) ??
     asBoolean(userConfig.observabilityEnabled) ??
     asBoolean(builtInDefaults.observabilityEnabled) ??
-    false;
+    true;
   const langfuseBaseUrl = (
     env.LANGFUSE_BASE_URL ||
     asNonEmptyString(mergedObservability["baseUrl"]) ||

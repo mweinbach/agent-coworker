@@ -186,6 +186,11 @@ Payload shape:
   "type": "observability_status",
   "sessionId": "...",
   "enabled": true,
+  "health": {
+    "status": "ready",
+    "reason": "runtime_ready",
+    "updatedAt": "2026-02-19T08:45:00.000Z"
+  },
   "config": {
     "provider": "langfuse",
     "baseUrl": "https://cloud.langfuse.com",
@@ -202,6 +207,9 @@ Payload shape:
 Notes:
 
 - `config` can be `null` if no observability config is available.
+- `health.status` is one of `disabled | ready | degraded`.
+- `health.reason` is a stable machine-readable reason code.
+- `health.message` is optional and present for degraded states with details.
 - Secret values are never sent over this event.
 
 ### harness_context

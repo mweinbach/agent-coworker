@@ -26,6 +26,7 @@ import { createTools } from "../tools";
 import { classifyCommandDetailed } from "../utils/approval";
 import { HarnessContextStore } from "../harness/contextStore";
 import { emitObservabilityEvent } from "../observability/otel";
+import { getObservabilityHealth } from "../observability/runtime";
 import { expandCommandTemplate, listCommands as listServerCommands, resolveCommand } from "./commands";
 import { normalizeModelStreamPart, reasoningModeForProvider } from "./modelStream";
 
@@ -168,6 +169,7 @@ export class AgentSession {
       type: "observability_status",
       sessionId: this.id,
       enabled: this.config.observabilityEnabled ?? false,
+      health: getObservabilityHealth(this.config),
       config,
     };
   }
@@ -263,12 +265,20 @@ export class AgentSession {
   }
 
   private emitTelemetry(name: string, status: "ok" | "error", attributes?: Record<string, string | number | boolean>, durationMs?: number) {
-    void emitObservabilityEvent(this.config, {
-      name,
-      at: new Date().toISOString(),
-      status,
-      ...(durationMs !== undefined ? { durationMs } : {}),
-      attributes,
+    void (async () => {
+      const result = await emitObservabilityEvent(this.config, {
+        name,
+        at: new Date().toISOString(),
+        status,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        attributes,
+      });
+
+      if (result.healthChanged) {
+        this.emit(this.getObservabilityStatusEvent());
+      }
+    })().catch(() => {
+      // observability is best-effort; never fail core session flow
     });
   }
 
@@ -1110,6 +1120,13 @@ export class AgentSession {
         maxSteps: 100,
         enableMcp: this.config.enableMcp,
         spawnDepth: 0,
+        telemetryContext: {
+          functionId: "session.turn",
+          metadata: {
+            sessionId: this.id,
+            turnId,
+          },
+        },
         abortSignal: this.abortController.signal,
         includeRawChunks: true,
         onModelError: async (error) => {

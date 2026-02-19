@@ -110,6 +110,7 @@ describe("loadConfig", () => {
     expect(cfg.subAgentModel).toBe("gemini-3-flash-preview");
     expect(cfg.knowledgeCutoff).toBe("End of May 2025");
     expect(cfg.userName).toBe("");
+    expect(cfg.observabilityEnabled).toBe(true);
   });
 
   test("user config from homedir/.agent/config.json overrides defaults", async () => {

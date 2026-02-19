@@ -187,6 +187,23 @@ function FeedItemRenderer(props: { item: FeedItem }) {
           <text fg={(props.item as any).enabled ? theme.success : theme.warning}>
             {(props.item as any).enabled ? "enabled" : "disabled"}
           </text>
+          <text
+            fg={
+              (props.item as any).health?.status === "ready"
+                ? theme.success
+                : (props.item as any).health?.status === "disabled"
+                  ? theme.warning
+                  : theme.error
+            }
+          >
+            health: {(props.item as any).health?.status ?? "unknown"}
+          </text>
+          <text fg={theme.textMuted}>
+            reason: {(props.item as any).health?.reason ?? "unknown"}
+          </text>
+          <Show when={(props.item as any).health?.message}>
+            <text fg={theme.textMuted}>message: {(props.item as any).health?.message}</text>
+          </Show>
           <Show
             when={(props.item as any).config}
             fallback={<text fg={theme.textMuted}>config: unavailable</text>}

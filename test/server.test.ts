@@ -363,6 +363,9 @@ describe("WebSocket Lifecycle", () => {
       const status = messages.find((msg: any) => msg.type === "observability_status");
       expect(status).toBeDefined();
       expect(typeof status.enabled).toBe("boolean");
+      expect(status.health).toBeDefined();
+      expect(typeof status.health.status).toBe("string");
+      expect(typeof status.health.reason).toBe("string");
       expect(status.config === null || status.config.provider === "langfuse").toBe(true);
       if (status.config) {
         expect(typeof status.config.hasPublicKey).toBe("boolean");

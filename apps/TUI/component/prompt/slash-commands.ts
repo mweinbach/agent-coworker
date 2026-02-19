@@ -14,15 +14,6 @@ type LocalSlashDependencies = {
       constraints: string[];
       metadata?: Record<string, string>;
     }) => void;
-    evaluateHarnessSlo: (checks: Array<{
-      id: string;
-      type: "latency" | "error_rate" | "custom";
-      queryType: "logql" | "promql" | "traceql";
-      query: string;
-      op: "<" | "<=" | ">" | ">=" | "==" | "!=";
-      threshold: number;
-      windowSec: number;
-    }>) => void;
   };
   route: {
     navigate: (next: { route: "home" } | { route: "session"; sessionId: string }) => void;
@@ -67,29 +58,6 @@ function buildDefaultHarnessContext(objectiveOverride: string) {
       createdAt: isoNow,
     },
   };
-}
-
-function defaultHarnessSloChecks() {
-  return [
-    {
-      id: "run_error_logs",
-      type: "error_rate" as const,
-      queryType: "logql" as const,
-      query: "_time:[now-5m, now] level:error",
-      op: "==" as const,
-      threshold: 0,
-      windowSec: 300,
-    },
-    {
-      id: "vector_errors",
-      type: "custom" as const,
-      queryType: "promql" as const,
-      query: "sum(rate(vector_component_errors_total[5m]))",
-      op: "<=" as const,
-      threshold: 0,
-      windowSec: 300,
-    },
-  ];
 }
 
 function parseWithKnownCommandNames(
@@ -206,15 +174,6 @@ export function createLocalSlashCommands(deps: LocalSlashDependencies): LocalSla
         }
 
         deps.syncActions.requestHarnessContext();
-      },
-    },
-    {
-      name: "slo",
-      aliases: [],
-      description: "Run default harness SLO checks",
-      icon: "%",
-      execute: () => {
-        deps.syncActions.evaluateHarnessSlo(defaultHarnessSloChecks());
       },
     },
     {

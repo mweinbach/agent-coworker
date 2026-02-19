@@ -187,14 +187,20 @@ function FeedItemRenderer(props: { item: FeedItem }) {
           <text fg={(props.item as any).enabled ? theme.success : theme.warning}>
             {(props.item as any).enabled ? "enabled" : "disabled"}
           </text>
-          <Show when={(props.item as any).observability?.queryApi?.logsBaseUrl}>
-            <text fg={theme.textMuted}>logs: {(props.item as any).observability.queryApi.logsBaseUrl}</text>
-          </Show>
-          <Show when={(props.item as any).observability?.queryApi?.metricsBaseUrl}>
-            <text fg={theme.textMuted}>metrics: {(props.item as any).observability.queryApi.metricsBaseUrl}</text>
-          </Show>
-          <Show when={(props.item as any).observability?.queryApi?.tracesBaseUrl}>
-            <text fg={theme.textMuted}>traces: {(props.item as any).observability.queryApi.tracesBaseUrl}</text>
+          <Show
+            when={(props.item as any).config}
+            fallback={<text fg={theme.textMuted}>config: unavailable</text>}
+          >
+            {(config) => (
+              <box flexDirection="column">
+                <text fg={theme.textMuted}>provider: {config().provider}</text>
+                <text fg={theme.textMuted}>base: {config().baseUrl}</text>
+                <text fg={theme.textMuted}>otlp: {config().otelEndpoint}</text>
+                <text fg={config().configured ? theme.success : theme.warning}>
+                  configured: {config().configured ? "yes" : "no"}
+                </text>
+              </box>
+            )}
           </Show>
         </box>
       </Match>
@@ -236,60 +242,6 @@ function FeedItemRenderer(props: { item: FeedItem }) {
               </box>
             )}
           </Show>
-        </box>
-      </Match>
-
-      <Match when={props.item.type === "observability_query_result"}>
-        <box
-          border
-          borderStyle="rounded"
-          borderColor={theme.borderSubtle}
-          paddingLeft={1}
-          paddingRight={1}
-          marginBottom={1}
-          flexDirection="column"
-        >
-          <text fg={theme.text}>
-            <strong>Observability Query</strong>
-          </text>
-          <text fg={(props.item as any).result.status === "ok" ? theme.success : theme.error}>
-            {(props.item as any).result.queryType} · {(props.item as any).result.status}
-          </text>
-          <text fg={theme.textMuted}>query: {(props.item as any).result.query}</text>
-          <Show when={(props.item as any).result.error}>
-            <text fg={theme.error}>error: {(props.item as any).result.error}</text>
-          </Show>
-          <Show when={(props.item as any).result.status === "ok"}>
-            <text fg={theme.textMuted}>
-              data: {summarizeData((props.item as any).result.data)}
-            </text>
-          </Show>
-        </box>
-      </Match>
-
-      <Match when={props.item.type === "harness_slo_result"}>
-        <box
-          border
-          borderStyle="rounded"
-          borderColor={theme.borderSubtle}
-          paddingLeft={1}
-          paddingRight={1}
-          marginBottom={1}
-          flexDirection="column"
-        >
-          <text fg={theme.text}>
-            <strong>Harness SLO</strong>
-          </text>
-          <text fg={(props.item as any).result.passed ? theme.success : theme.error}>
-            {(props.item as any).result.passed ? "passed" : "failed"} · reportOnly={(props.item as any).result.reportOnly ? "true" : "false"} · strict={(props.item as any).result.strictMode ? "true" : "false"}
-          </text>
-          <For each={(props.item as any).result.checks}>
-            {(check: any) => (
-              <text fg={check.pass ? theme.success : theme.error}>
-                {check.pass ? "✓" : "✗"} {check.id}: {formatSloValue(check.actual)} {check.op} {formatSloValue(check.threshold)}
-              </text>
-            )}
-          </For>
         </box>
       </Match>
 
@@ -377,17 +329,6 @@ function FeedItemRenderer(props: { item: FeedItem }) {
   );
 }
 
-function summarizeData(data: unknown): string {
-  try {
-    const raw = JSON.stringify(data);
-    if (!raw) return "null";
-    if (raw.length <= 220) return raw;
-    return `${raw.slice(0, 219)}...`;
-  } catch {
-    return String(data);
-  }
-}
-
 function summarizePlainText(value: string, maxChars: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
   if (compact.length <= maxChars) return compact;
@@ -401,12 +342,4 @@ function formatBytes(value: number): string {
   if (kb < 1024) return `${kb.toFixed(1)} KB`;
   const mb = kb / 1024;
   return `${mb.toFixed(1)} MB`;
-}
-
-function formatSloValue(value: unknown): string {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value.toString();
-  }
-  if (value === null || value === undefined) return "n/a";
-  return String(value);
 }

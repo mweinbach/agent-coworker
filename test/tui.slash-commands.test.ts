@@ -16,7 +16,6 @@ describe("local slash command registry", () => {
         setProviderApiKey: () => {},
         requestHarnessContext: () => {},
         setHarnessContext: () => {},
-        evaluateHarnessSlo: () => {},
       },
       route: {
         navigate: () => {},
@@ -52,7 +51,6 @@ describe("local slash command registry", () => {
         setProviderApiKey: () => {},
         requestHarnessContext: () => {},
         setHarnessContext: () => {},
-        evaluateHarnessSlo: () => {},
       },
       route: {
         navigate: () => {
@@ -107,7 +105,6 @@ describe("local slash command registry", () => {
         setHarnessContext: (context) => {
           setPayload = context;
         },
-        evaluateHarnessSlo: () => {},
       },
       route: {
         navigate: () => {},
@@ -131,9 +128,7 @@ describe("local slash command registry", () => {
     expect(setPayload.metadata?.source).toBe("tui");
   });
 
-  test("slo command triggers default harness SLO checks", async () => {
-    let checks: any[] | null = null;
-
+  test("slo command is not registered", () => {
     const commands = createLocalSlashCommands({
       syncActions: {
         reset: () => {},
@@ -141,9 +136,6 @@ describe("local slash command registry", () => {
         setProviderApiKey: () => {},
         requestHarnessContext: () => {},
         setHarnessContext: () => {},
-        evaluateHarnessSlo: (nextChecks) => {
-          checks = nextChecks;
-        },
       },
       route: {
         navigate: () => {},
@@ -155,12 +147,6 @@ describe("local slash command registry", () => {
     });
 
     const resolved = findLocalSlashCommand(commands, "slo");
-    expect(resolved).not.toBeNull();
-    await Promise.resolve(resolved?.execute(""));
-
-    expect(checks).not.toBeNull();
-    expect(checks?.length).toBe(2);
-    expect(checks?.[0]?.id).toBe("run_error_logs");
-    expect(checks?.[1]?.id).toBe("vector_errors");
+    expect(resolved).toBeNull();
   });
 });

@@ -1,20 +1,17 @@
 import { createContext, useContext, createEffect, onCleanup, type JSX, type Accessor } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { AgentSocket } from "../../../src/client/agentSocket";
-import { WEBSOCKET_PROTOCOL_VERSION, type ClientMessage, type ServerEvent } from "../../../src/server/protocol";
+import { WEBSOCKET_PROTOCOL_VERSION, type ServerEvent } from "../../../src/server/protocol";
 import type {
   ApprovalRiskCode,
   CommandInfo,
   HarnessContextPayload,
-  HarnessSloCheck,
-  ObservabilityQueryRequest,
   ServerErrorCode,
   ServerErrorSource,
   SkillEntry,
   TodoItem,
 } from "../../../src/types";
 import { mapModelStreamChunk, type ModelStreamUpdate } from "./modelStream";
-import { showToast } from "../ui/toast";
 
 // ── Feed item types ──────────────────────────────────────────────────────────
 
@@ -38,15 +35,9 @@ export type FeedItem =
       id: string;
       type: "observability_status";
       enabled: boolean;
-      observability?: Extract<ServerEvent, { type: "observability_status" }>["observability"];
+      config: Extract<ServerEvent, { type: "observability_status" }>["config"];
     }
   | { id: string; type: "harness_context"; context: Extract<ServerEvent, { type: "harness_context" }>["context"] }
-  | {
-      id: string;
-      type: "observability_query_result";
-      result: Extract<ServerEvent, { type: "observability_query_result" }>["result"];
-    }
-  | { id: string; type: "harness_slo_result"; result: Extract<ServerEvent, { type: "harness_slo_result" }>["result"] }
   | { id: string; type: "skills_list"; skills: SkillEntry[] }
   | {
       id: string;
@@ -109,7 +100,7 @@ type SyncState = {
   providerAuthChallenge: ProviderAuthChallengeState;
   providerAuthResult: ProviderAuthResultState;
   observabilityEnabled: boolean;
-  observability?: Extract<ServerEvent, { type: "observability_status" }>["observability"];
+  observabilityConfig: Extract<ServerEvent, { type: "observability_status" }>["config"];
   harnessContext: HarnessContextState;
   skills: SkillsState;
   backup: SessionBackupState;
@@ -137,8 +128,6 @@ type SyncActions = {
   refreshCommands: () => void;
   requestHarnessContext: () => void;
   setHarnessContext: (context: HarnessContextPayload) => void;
-  queryObservability: (query: ObservabilityQueryRequest) => void;
-  evaluateHarnessSlo: (checks: HarnessSloCheck[]) => void;
   executeCommand: (name: string, args?: string, displayText?: string) => boolean;
   reset: () => void;
   cancel: () => void;
@@ -400,7 +389,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     providerAuthChallenge: null,
     providerAuthResult: null,
     observabilityEnabled: false,
-    observability: undefined,
+    observabilityConfig: null,
     harnessContext: null,
     skills: [],
     backup: null,
@@ -470,7 +459,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         s.providerAuthChallenge = null;
         s.providerAuthResult = null;
         s.observabilityEnabled = false;
-        s.observability = undefined;
+        s.observabilityConfig = null;
         s.harnessContext = null;
         s.skills = [];
         s.backup = null;
@@ -514,12 +503,12 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
 
       case "observability_status":
         setState("observabilityEnabled", evt.enabled);
-        setState("observability", evt.observability);
+        setState("observabilityConfig", evt.config);
         setState("feed", (f) => [...f, {
           id: nextFeedId(),
           type: "observability_status",
           enabled: evt.enabled,
-          observability: evt.observability,
+          config: evt.config,
         }]);
         break;
 
@@ -530,26 +519,6 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           type: "harness_context",
           context: evt.context,
         }]);
-        break;
-
-      case "observability_query_result":
-        setState("feed", (f) => [...f, {
-          id: nextFeedId(),
-          type: "observability_query_result",
-          result: evt.result,
-        }]);
-        break;
-
-      case "harness_slo_result":
-        setState("feed", (f) => [...f, {
-          id: nextFeedId(),
-          type: "harness_slo_result",
-          result: evt.result,
-        }]);
-        showToast(
-          evt.result.passed ? "SLO checks passed" : "SLO checks failed",
-          evt.result.passed ? "success" : "warning"
-        );
         break;
 
       case "skills_list":
@@ -1039,7 +1008,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           s.providerAuthChallenge = null;
           s.providerAuthResult = null;
           s.observabilityEnabled = false;
-          s.observability = undefined;
+          s.observabilityConfig = null;
           s.harnessContext = null;
           s.skills = [];
           s.backup = null;
@@ -1211,26 +1180,6 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         type: "harness_context_set",
         sessionId: sid,
         context,
-      });
-    },
-
-    queryObservability(query: ObservabilityQueryRequest) {
-      const sid = state.sessionId;
-      if (!sid || !socket) return;
-      socket.send({
-        type: "observability_query",
-        sessionId: sid,
-        query,
-      });
-    },
-
-    evaluateHarnessSlo(checks: HarnessSloCheck[]) {
-      const sid = state.sessionId;
-      if (!sid || !socket) return;
-      socket.send({
-        type: "harness_slo_evaluate",
-        sessionId: sid,
-        checks,
       });
     },
 

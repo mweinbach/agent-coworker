@@ -74,7 +74,6 @@ type AttemptMeta = {
 
 type RawLoopArgs = {
   reportOnly: boolean;
-  strictMode: boolean;
   scenario: "mixed" | "dcf-model-matrix" | "gpt-skill-reliability";
   onlyRunIds: string[];
   onlyModels: string[];
@@ -83,7 +82,6 @@ type RawLoopArgs = {
 function parseArgs(argv: string[]): RawLoopArgs {
   const args: RawLoopArgs = {
     reportOnly: true,
-    strictMode: false,
     scenario: "mixed",
     onlyRunIds: [],
     onlyModels: [],
@@ -91,11 +89,6 @@ function parseArgs(argv: string[]): RawLoopArgs {
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--strict") {
-      args.strictMode = true;
-      args.reportOnly = false;
-      continue;
-    }
     if (a === "--report-only") {
       args.reportOnly = true;
       continue;
@@ -126,7 +119,7 @@ function parseArgs(argv: string[]): RawLoopArgs {
     }
     if (a === "--help" || a === "-h") {
       console.log(
-        "Usage: bun scripts/run_raw_agent_loops.ts [--strict] [--report-only] [--scenario mixed|dcf-model-matrix|gpt-skill-reliability] [--only-run <run-id>] [--only-model <model>]"
+        "Usage: bun scripts/run_raw_agent_loops.ts [--report-only] [--scenario mixed|dcf-model-matrix|gpt-skill-reliability] [--only-run <run-id>] [--only-model <model>]"
       );
       process.exit(0);
     }
@@ -1314,7 +1307,6 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
       AGENT_PROVIDER: run.provider,
       AGENT_MODEL: resolved.resolvedModel,
       AGENT_HARNESS_REPORT_ONLY: cliArgs.reportOnly ? "true" : "false",
-      AGENT_HARNESS_STRICT_MODE: cliArgs.strictMode ? "true" : "false",
     };
 
     const config = await loadConfig({ cwd: repoDir, env });
@@ -1323,7 +1315,7 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
     config.provider = run.provider;
     config.model = resolved.resolvedModel;
     config.subAgentModel = resolved.resolvedModel;
-    config.harness = { reportOnly: cliArgs.reportOnly, strictMode: cliArgs.strictMode };
+    config.harness = { reportOnly: cliArgs.reportOnly, strictMode: false };
 
     // Keep memory local to the run folder so artifacts can be captured per-run.
     const localProjectAgentDir = path.join(runDir, ".agent");
@@ -1686,7 +1678,6 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
     harness: {
       scenario: cliArgs.scenario,
       reportOnly: cliArgs.reportOnly,
-      strictMode: cliArgs.strictMode,
       onlyRunIds: cliArgs.onlyRunIds,
       onlyModels: cliArgs.onlyModels,
     },

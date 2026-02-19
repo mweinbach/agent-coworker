@@ -2,6 +2,7 @@ import { describe, expect, test, mock, beforeEach } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { asSchema } from "@ai-sdk/provider-utils";
 
 import type { AgentConfig } from "../src/types";
 import type { ToolContext } from "../src/tools/context";
@@ -1436,6 +1437,14 @@ describe("webFetch tool", () => {
 // ---------------------------------------------------------------------------
 
 describe("ask tool", () => {
+  test("exports a provider-compatible top-level object input schema", async () => {
+    const dir = await tmpDir();
+    const t: any = createAskTool(makeCtx(dir));
+    const schema = asSchema(t.inputSchema).jsonSchema as Record<string, unknown>;
+
+    expect(schema.type).toBe("object");
+  });
+
   test("calls askUser with question", async () => {
     const dir = await tmpDir();
     const askFn = mock(async (q: string) => "user answer");

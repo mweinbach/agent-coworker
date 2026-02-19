@@ -133,6 +133,33 @@ describe("runTurn", () => {
     expect(callArg.system).toBe("Custom system prompt");
   });
 
+  test("removes MCP namespacing guidance when MCP tools are not active", async () => {
+    const system =
+      "Header\nMCP tool names are namespaced as `mcp__{serverName}__{toolName}` to prevent collisions.\nFooter";
+
+    await runTurn(makeParams({ system, enableMcp: false }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.system).not.toContain("`mcp__{serverName}__{toolName}`");
+    expect(callArg.system).toContain("Header");
+    expect(callArg.system).toContain("Footer");
+    expect(callArg.system).not.toContain("## Active MCP Tools");
+  });
+
+  test("adds MCP namespacing guidance only when MCP tools are active", async () => {
+    mockLoadMCPServers.mockResolvedValue([{ name: "srv", transport: { type: "stdio", command: "x", args: [] } }]);
+    mockLoadMCPTools.mockResolvedValue({
+      tools: { "mcp__srv__doThing": { type: "mcp-tool" } },
+      errors: [],
+    });
+
+    await runTurn(makeParams({ enableMcp: true, system: "Base system prompt" }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.system).toContain("## Active MCP Tools");
+    expect(callArg.system).toContain("`mcp__{serverName}__{toolName}`");
+  });
+
   // -------------------------------------------------------------------------
   // Messages
   // -------------------------------------------------------------------------
@@ -147,6 +174,70 @@ describe("runTurn", () => {
 
     const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.messages).toBe(msgs);
+  });
+
+  test("drops prior google tool-call parts that are missing thought signatures", async () => {
+    const log = mock(() => {});
+    const msgs = [
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } }],
+      },
+      {
+        role: "tool",
+        content: [{ type: "tool-result", toolCallId: "call-1", toolName: "bash", output: { type: "json", value: {} } }],
+      },
+    ] as any[];
+
+    await runTurn(makeParams({ messages: msgs, log }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const serialized = JSON.stringify(callArg.messages);
+    expect(serialized).not.toContain("\"type\":\"tool-call\"");
+    expect(serialized).not.toContain("\"type\":\"tool-result\"");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("without thought signatures"));
+  });
+
+  test("keeps google tool-call parts when thought signatures are present", async () => {
+    const msgs = [
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "call-1",
+            toolName: "bash",
+            input: { command: "ls" },
+            providerOptions: { google: { thoughtSignature: "sig-1" } },
+          },
+        ],
+      },
+    ] as any[];
+
+    await runTurn(makeParams({ messages: msgs }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const serialized = JSON.stringify(callArg.messages);
+    expect(serialized).toContain("\"type\":\"tool-call\"");
+    expect(serialized).toContain("sig-1");
+  });
+
+  test("does not sanitize missing thought signatures for non-google providers", async () => {
+    const msgs = [
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } }],
+      },
+    ] as any[];
+
+    await runTurn(makeParams({ config: makeConfig({ provider: "openai" }), messages: msgs }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const serialized = JSON.stringify(callArg.messages);
+    expect(serialized).toContain("\"type\":\"tool-call\"");
   });
 
   // -------------------------------------------------------------------------

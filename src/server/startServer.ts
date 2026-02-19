@@ -155,6 +155,7 @@ export async function startAgentServer(
 
           let session: AgentSession;
           let binding: SessionBinding;
+          let isResume = false;
 
           if (resumable && resumable.socket === null) {
             binding = resumable;
@@ -164,6 +165,7 @@ export async function startAgentServer(
               binding.disposeTimer = null;
             }
             session = binding.session;
+            isResume = true;
           } else {
             binding = {
               session: undefined as unknown as AgentSession,
@@ -209,6 +211,15 @@ export async function startAgentServer(
               modelStreamChunk: "v1",
             },
             config: session.getPublicConfig(),
+            ...(isResume
+              ? {
+                  isResume: true,
+                  busy: session.isBusy,
+                  messageCount: session.messageCount,
+                  hasPendingAsk: session.hasPendingAsk,
+                  hasPendingApproval: session.hasPendingApproval,
+                }
+              : {}),
           };
 
           ws.send(JSON.stringify(hello));
@@ -225,6 +236,12 @@ export async function startAgentServer(
           void session.emitProviderCatalog();
           session.emitProviderAuthMethods();
           void session.refreshProviderStatus();
+          // Feature 7: push backup state on connect
+          void session.getSessionBackupState();
+          // Feature 1: replay pending prompts on reconnect
+          if (isResume) {
+            session.replayPendingPrompts();
+          }
         },
         message(ws, raw) {
           const session = ws.data.session;
@@ -402,6 +419,36 @@ export async function startAgentServer(
 
           if (msg.type === "session_backup_delete_checkpoint") {
             void session.deleteSessionCheckpoint(msg.checkpointId);
+            return;
+          }
+
+          if (msg.type === "get_messages") {
+            session.getMessages(msg.offset, msg.limit);
+            return;
+          }
+
+          if (msg.type === "set_session_title") {
+            session.setSessionTitle(msg.title);
+            return;
+          }
+
+          if (msg.type === "list_sessions") {
+            void session.listSessions();
+            return;
+          }
+
+          if (msg.type === "delete_session") {
+            void session.deleteSession(msg.targetSessionId);
+            return;
+          }
+
+          if (msg.type === "set_config") {
+            session.setConfig(msg.config);
+            return;
+          }
+
+          if (msg.type === "upload_file") {
+            void session.uploadFile(msg.filename, msg.contentBase64);
             return;
           }
         },

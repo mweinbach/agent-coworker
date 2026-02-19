@@ -15,6 +15,7 @@ import { resolveProviderAuthMethod, type ProviderAuthMethod, type ProviderAuthCh
 import type { ProviderCatalogEntry } from "../providers/connectionCatalog";
 import type { ModelStreamPartType } from "./modelStream";
 import type { SessionBackupPublicState } from "./sessionBackup";
+import type { PersistedSessionSummary } from "./sessionStore";
 
 export type ClientMessage =
   | { type: "client_hello"; client: "tui" | "cli" | string; version?: string }
@@ -63,7 +64,22 @@ export type ClientMessage =
   | { type: "session_backup_delete_checkpoint"; sessionId: string; checkpointId: string }
   | { type: "harness_context_get"; sessionId: string }
   | { type: "harness_context_set"; sessionId: string; context: HarnessContextPayload }
-  | { type: "reset"; sessionId: string };
+  | { type: "reset"; sessionId: string }
+  | { type: "get_messages"; sessionId: string; offset?: number; limit?: number }
+  | { type: "set_session_title"; sessionId: string; title: string }
+  | { type: "list_sessions"; sessionId: string }
+  | { type: "delete_session"; sessionId: string; targetSessionId: string }
+  | {
+      type: "set_config";
+      sessionId: string;
+      config: {
+        yolo?: boolean;
+        observabilityEnabled?: boolean;
+        subAgentModel?: string;
+        maxSteps?: number;
+      };
+    }
+  | { type: "upload_file"; sessionId: string; filename: string; contentBase64: string };
 
 export type ServerEvent =
   | {
@@ -74,13 +90,18 @@ export type ServerEvent =
         modelStreamChunk: "v1";
       };
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
+      isResume?: boolean;
+      busy?: boolean;
+      messageCount?: number;
+      hasPendingAsk?: boolean;
+      hasPendingApproval?: boolean;
     }
   | { type: "session_settings"; sessionId: string; enableMcp: boolean }
   | {
       type: "session_info";
       sessionId: string;
       title: string;
-      titleSource: "default" | "model" | "heuristic";
+      titleSource: "default" | "model" | "heuristic" | "manual";
       titleModel: string | null;
       createdAt: string;
       updatedAt: string;
@@ -106,7 +127,14 @@ export type ServerEvent =
       message: string;
     }
   | { type: "provider_status"; sessionId: string; providers: ProviderStatus[] }
-  | { type: "session_busy"; sessionId: string; busy: boolean }
+  | {
+      type: "session_busy";
+      sessionId: string;
+      busy: boolean;
+      turnId?: string;
+      cause?: "user_message" | "command";
+      outcome?: "completed" | "cancelled" | "error";
+    }
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
   | {
       type: "model_stream_chunk";
@@ -138,7 +166,7 @@ export type ServerEvent =
       sessionId: string;
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
     }
-  | { type: "tools"; sessionId: string; tools: string[] }
+  | { type: "tools"; sessionId: string; tools: Array<{ name: string; description: string }> }
   | { type: "commands"; sessionId: string; commands: CommandInfo[] }
   | { type: "skills_list"; sessionId: string; skills: SkillEntry[] }
   | { type: "skill_content"; sessionId: string; skill: SkillEntry; content: string }
@@ -167,10 +195,37 @@ export type ServerEvent =
         | null;
     }
   | { type: "harness_context"; sessionId: string; context: (HarnessContextPayload & { updatedAt: string }) | null }
+  | {
+      type: "turn_usage";
+      sessionId: string;
+      turnId: string;
+      usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+    }
+  | {
+      type: "messages";
+      sessionId: string;
+      messages: unknown[];
+      total: number;
+      offset: number;
+      limit: number;
+    }
+  | { type: "sessions"; sessionId: string; sessions: PersistedSessionSummary[] }
+  | { type: "session_deleted"; sessionId: string; targetSessionId: string }
+  | {
+      type: "session_config";
+      sessionId: string;
+      config: {
+        yolo: boolean;
+        observabilityEnabled: boolean;
+        subAgentModel: string;
+        maxSteps: number;
+      };
+    }
+  | { type: "file_uploaded"; sessionId: string; filename: string; path: string }
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "4.0";
+export const WEBSOCKET_PROTOCOL_VERSION = "5.0";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -202,6 +257,12 @@ export const CLIENT_MESSAGE_TYPES = [
   "harness_context_get",
   "harness_context_set",
   "reset",
+  "get_messages",
+  "set_session_title",
+  "list_sessions",
+  "delete_session",
+  "set_config",
+  "upload_file",
 ] as const;
 
 export const SERVER_EVENT_TYPES = [
@@ -231,6 +292,12 @@ export const SERVER_EVENT_TYPES = [
   "session_backup_state",
   "observability_status",
   "harness_context",
+  "turn_usage",
+  "messages",
+  "sessions",
+  "session_deleted",
+  "session_config",
+  "file_uploaded",
   "error",
   "pong",
 ] as const;
@@ -469,6 +536,60 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
       if (!isNonEmptyString(obj.model)) return { ok: false, error: "set_model missing/invalid model" };
       if (obj.provider !== undefined && !isProviderName(obj.provider)) {
         return { ok: false, error: `set_model invalid provider: ${String(obj.provider)}` };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "get_messages": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "get_messages missing sessionId" };
+      if (obj.offset !== undefined && (typeof obj.offset !== "number" || obj.offset < 0)) {
+        return { ok: false, error: "get_messages invalid offset" };
+      }
+      if (obj.limit !== undefined && (typeof obj.limit !== "number" || obj.limit < 1)) {
+        return { ok: false, error: "get_messages invalid limit" };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "set_session_title": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "set_session_title missing sessionId" };
+      if (!isNonEmptyString(obj.title)) return { ok: false, error: "set_session_title missing/invalid title" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "list_sessions": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "list_sessions missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "delete_session": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "delete_session missing sessionId" };
+      if (!isNonEmptyString(obj.targetSessionId)) {
+        return { ok: false, error: "delete_session missing/invalid targetSessionId" };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "set_config": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "set_config missing sessionId" };
+      if (!isPlainObject(obj.config)) return { ok: false, error: "set_config missing/invalid config" };
+      const cfg = obj.config as Record<string, unknown>;
+      if (cfg.yolo !== undefined && typeof cfg.yolo !== "boolean") {
+        return { ok: false, error: "set_config config.yolo must be boolean" };
+      }
+      if (cfg.observabilityEnabled !== undefined && typeof cfg.observabilityEnabled !== "boolean") {
+        return { ok: false, error: "set_config config.observabilityEnabled must be boolean" };
+      }
+      if (cfg.subAgentModel !== undefined && !isNonEmptyString(cfg.subAgentModel)) {
+        return { ok: false, error: "set_config config.subAgentModel must be non-empty string" };
+      }
+      if (cfg.maxSteps !== undefined) {
+        if (typeof cfg.maxSteps !== "number" || cfg.maxSteps < 1 || cfg.maxSteps > 1000) {
+          return { ok: false, error: "set_config config.maxSteps must be number 1-1000" };
+        }
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "upload_file": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "upload_file missing sessionId" };
+      if (!isNonEmptyString(obj.filename)) return { ok: false, error: "upload_file missing/invalid filename" };
+      if (typeof obj.contentBase64 !== "string") {
+        return { ok: false, error: "upload_file missing/invalid contentBase64" };
       }
       return { ok: true, msg: obj as ClientMessage };
     }

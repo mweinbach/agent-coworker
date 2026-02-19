@@ -19,7 +19,7 @@ const TITLE_MAX_TOKENS = 15;
 
 export const DEFAULT_SESSION_TITLE = "New session";
 
-export type SessionTitleSource = "default" | "model" | "heuristic";
+export type SessionTitleSource = "default" | "model" | "heuristic" | "manual";
 
 export type SessionTitleResult = {
   title: string;

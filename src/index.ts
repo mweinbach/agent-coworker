@@ -10,14 +10,14 @@ import { startAgentServer } from "./server/startServer";
 
 async function loadModernRunTui() {
   await import("@opentui/solid/preload");
-  return (await import("../apps/TUI/index")).runTui;
+  return (await import("./tui/index")).runTui;
 }
 
 // Keep output clean by default.
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
 
 function printUsage() {
-  console.log("Usage: cowork [--dir <directory_path>] [--cli] [--yolo]");
+  console.log("Usage: cowork [--dir <directory_path>] [--cli] [--yolo] [--no-mouse]");
   console.log("");
   console.log("By default, cowork launches the TUI (and starts the agent server in the background).");
   console.log("");
@@ -25,6 +25,8 @@ function printUsage() {
   console.log("  --dir, -d   Run the agent in the specified directory");
   console.log("  --cli, -c   Run the plain CLI instead of the TUI");
   console.log("  --yolo, -y  Skip command approvals (dangerous; use with care)");
+  console.log("  --mouse, -m Enable OpenTUI mouse capture (enabled by default)");
+  console.log("  --no-mouse  Disable OpenTUI mouse capture");
   console.log("  --help, -h  Show help");
   console.log("");
 }
@@ -84,7 +86,7 @@ async function main() {
 
   const tuiRunner = await loadModernRunTui();
   try {
-    await tuiRunner(url, { onDestroy: stop });
+    await tuiRunner(url, { onDestroy: stop, useMouse: args.mouse });
   } finally {
     stop();
   }

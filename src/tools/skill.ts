@@ -4,6 +4,7 @@ import path from "node:path";
 import { tool } from "ai";
 import { z } from "zod";
 
+import { discoverSkills, stripSkillFrontMatter } from "../skills";
 import type { ToolContext } from "./context";
 
 type SkillCacheEntry = {
@@ -58,20 +59,13 @@ export function createSkillTool(ctx: ToolContext) {
       skillName: z.string().describe(paramDesc),
     }),
     execute: async ({ skillName }) => {
-      for (const dir of ctx.config.skillsDirs) {
-        const p = path.join(dir, skillName, "SKILL.md");
-        const content = await readIfExists(p);
-        if (content) return content;
-      }
+      const discovered = await discoverSkills(ctx.config.skillsDirs);
+      const selected = discovered.find((s) => s.enabled && s.name === skillName);
+      if (!selected) return `Skill "${skillName}" not found.`;
 
-      // Fallback: flat file layout skills/<skillName>.md
-      for (const dir of ctx.config.skillsDirs) {
-        const p = path.join(dir, `${skillName}.md`);
-        const content = await readIfExists(p);
-        if (content) return content;
-      }
-
-      return `Skill "${skillName}" not found.`;
+      const content = await readIfExists(path.resolve(selected.path));
+      if (!content) return `Skill "${skillName}" not found.`;
+      return stripSkillFrontMatter(content);
     },
   });
 }

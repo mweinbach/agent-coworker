@@ -16,6 +16,8 @@ function normalizeControlSequence(raw: string): string | null {
   if (raw === "\t") return "tab";
   if (raw === "\b" || raw === "\u007f") return "backspace";
   if (raw === "\u0003") return "c";
+  if (/^\u001b\[5(?:;\d+)?~$/.test(raw)) return "pageup";
+  if (/^\u001b\[6(?:;\d+)?~$/.test(raw)) return "pagedown";
   return null;
 }
 
@@ -30,9 +32,13 @@ export function normalizeKeyName(raw: string): string {
   const bySequence = normalizeControlSequence(raw);
   if (bySequence) return bySequence;
 
-  const key = raw.toLowerCase();
+  const key = raw.toLowerCase().trim();
   if (key === "return" || key === "linefeed" || key === "carriagereturn" || key === "kpenter") return "enter";
   if (key === "esc") return "escape";
+
+  const compact = key.replace(/[\s_-]+/g, "");
+  if (compact === "pageup" || compact === "pgup" || compact === "prior") return "pageup";
+  if (compact === "pagedown" || compact === "pgdown" || compact === "pgdn" || compact === "next") return "pagedown";
 
   const byCode = normalizeKeyCodeName(key);
   if (byCode) return byCode;

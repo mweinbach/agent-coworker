@@ -3,10 +3,11 @@ export interface CliArgs {
   help: boolean;
   cli: boolean;
   yolo: boolean;
+  mouse: boolean;
 }
 
 export function parseCliArgs(argv: string[]): { args: CliArgs; errors: string[] } {
-  const args: CliArgs = { help: false, cli: false, yolo: false };
+  const args: CliArgs = { help: false, cli: false, yolo: false, mouse: true };
   const errors: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
@@ -24,6 +25,16 @@ export function parseCliArgs(argv: string[]): { args: CliArgs; errors: string[] 
 
     if (a === "--yolo" || a === "-y") {
       args.yolo = true;
+      continue;
+    }
+
+    if (a === "--mouse" || a === "-m") {
+      args.mouse = true;
+      continue;
+    }
+
+    if (a === "--no-mouse") {
+      args.mouse = false;
       continue;
     }
 

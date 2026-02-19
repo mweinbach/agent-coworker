@@ -57,6 +57,10 @@ async function writeFile(p: string, content: string) {
   await fs.writeFile(p, content, "utf-8");
 }
 
+function skillDoc(name: string, description: string, body = "# Skill Body\n"): string {
+  return ["---", `name: \"${name}\"`, `description: \"${description}\"`, "---", "", body].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // loadSystemPrompt
 // ---------------------------------------------------------------------------
@@ -243,7 +247,7 @@ describe("loadSystemPrompt", () => {
 
     // Create a skill directory with SKILL.md
     const skillMdPath = path.join(skillsDir, "test-skill", "SKILL.md");
-    await writeFile(skillMdPath, "# Test Skill Description\n\nSome content.\nTRIGGERS: trigger1, trigger2");
+    await writeFile(skillMdPath, skillDoc("test-skill", "Test Skill Description", "# Test Skill\n"));
 
     const config = makeConfig({
       skillsDirs: [skillsDir],
@@ -253,8 +257,8 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("## Available Skills");
     expect(prompt).toContain("test-skill");
     expect(prompt).toContain("Test Skill Description");
-    expect(prompt).toContain("trigger1");
-    expect(prompt).toContain("trigger2");
+    expect(prompt).toContain("triggers: test-skill");
+    expect(prompt).toContain(path.join("test-skill", "SKILL.md"));
   });
 
   test("appends multiple skills when multiple skill dirs exist", async () => {
@@ -263,12 +267,12 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(
       path.join(skillsDir, "skill-a", "SKILL.md"),
-      "# Skill A Description\n\nContent A.\nTRIGGERS: alpha, bravo"
+      skillDoc("skill-a", "Skill A Description", "# Skill A\n")
     );
 
     await writeFile(
       path.join(skillsDir, "skill-b", "SKILL.md"),
-      "# Skill B Description\n\nContent B.\nTRIGGERS: charlie, delta"
+      skillDoc("skill-b", "Skill B Description", "# Skill B\n")
     );
 
     const config = makeConfig({
@@ -425,7 +429,7 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(
       path.join(skillsDir, "annotated-skill", "SKILL.md"),
-      "# Annotated Skill\n\nContent.\nTRIGGERS: foo"
+      skillDoc("annotated-skill", "Annotated Skill", "# Annotated Skill\n")
     );
 
     const config = makeConfig({
@@ -442,7 +446,7 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(
       path.join(skillsDir, "xlsx", "SKILL.md"),
-      "# Excel Spreadsheet Skill\n\nContent."
+      skillDoc("xlsx", "Excel Spreadsheet Skill", "# Excel Spreadsheet Skill\n")
     );
 
     const config = makeConfig({
@@ -609,7 +613,7 @@ describe("loadHotCache (tested indirectly)", () => {
 
     await writeFile(
       path.join(skillsDir, "combo-skill", "SKILL.md"),
-      "# Combo Skill\n\nContent.\nTRIGGERS: combo"
+      skillDoc("combo-skill", "Combo Skill", "# Combo Skill\n")
     );
 
     const config = makeConfig({

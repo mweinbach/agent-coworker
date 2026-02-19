@@ -432,7 +432,11 @@ describe("AgentSession", () => {
     async function createSkill(parentDir: string, name: string, content: string): Promise<string> {
       const skillDir = path.join(parentDir, name);
       await fs.mkdir(skillDir, { recursive: true });
-      await fs.writeFile(path.join(skillDir, "SKILL.md"), content, "utf-8");
+      const normalizedContent =
+        content.trimStart().startsWith("---")
+          ? content
+          : ["---", `name: \"${name}\"`, `description: \"${name} skill\"`, "---", "", content].join("\n");
+      await fs.writeFile(path.join(skillDir, "SKILL.md"), normalizedContent, "utf-8");
       return skillDir;
     }
 

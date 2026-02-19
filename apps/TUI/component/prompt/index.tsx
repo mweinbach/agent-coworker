@@ -238,6 +238,12 @@ export function Prompt(props: {
     const key = keyNameFromEvent(e);
     const { ctrl, shift, alt } = keyModifiersFromEvent(e);
 
+    // Page navigation belongs to the chat feed, not the prompt textarea.
+    if (key === "pageup" || key === "pagedown") {
+      e.preventDefault?.();
+      return;
+    }
+
     const acState = autocomplete.state();
     if (acState.visible) {
       if (autocomplete.onKeyDown(key, ctrl)) {

@@ -1,44 +1,34 @@
+import { describe, expect, test } from "bun:test";
+
 import { extractTriggers } from "../src/skills/index";
-import { describe, test, expect } from "bun:test";
 
 describe("extractTriggers", () => {
-  test("extracts triggers with standard formatting", () => {
-    const content = "TRIGGERS: a, b";
-    expect(extractTriggers("test", content)).toEqual(["a", "b"]);
+  test("extracts triggers from frontmatter triggers string", () => {
+    expect(extractTriggers("test", { triggers: "a, b" })).toEqual(["a", "b"]);
   });
 
-  test("extracts triggers with leading whitespace", () => {
-    const content = "  TRIGGERS: a, b";
-    expect(extractTriggers("test", content)).toEqual(["a", "b"]);
+  test("extracts triggers from frontmatter triggers array", () => {
+    expect(extractTriggers("test", { triggers: ["a", "b"] })).toEqual(["a", "b"]);
   });
 
-  test("extracts triggers with spaces around colon", () => {
-    const content = "TRIGGERS : a, b";
-    expect(extractTriggers("test", content)).toEqual(["a", "b"]);
+  test("extracts triggers from metadata.triggers", () => {
+    expect(extractTriggers("test", { metadata: { triggers: "@home, #work, c++, node.js" } })).toEqual([
+      "@home",
+      "#work",
+      "c++",
+      "node.js",
+    ]);
   });
 
-  test("extracts triggers with case insensitivity", () => {
-    const content = "triggers: a, b";
-    expect(extractTriggers("test", content)).toEqual(["a", "b"]);
+  test("filters empty values in trigger strings", () => {
+    expect(extractTriggers("test", { triggers: "a,, b," })).toEqual(["a", "b"]);
   });
 
-  test("extracts triggers with special characters", () => {
-    const content = "TRIGGERS: @home, #work, c++, node.js";
-    expect(extractTriggers("test", content)).toEqual(["@home", "#work", "c++", "node.js"]);
+  test("returns defaults if no trigger metadata is provided (known skill)", () => {
+    expect(extractTriggers("pdf", { name: "pdf" })).toEqual(["pdf", ".pdf", "form", "merge", "split"]);
   });
 
-  test("handles empty values and trailing commas", () => {
-    const content = "TRIGGERS: a,, b,";
-    expect(extractTriggers("test", content)).toEqual(["a", "b"]);
-  });
-
-  test("returns defaults if no match found (known skill)", () => {
-    const content = "No triggers here";
-    expect(extractTriggers("pdf", content)).toEqual(["pdf", ".pdf", "form", "merge", "split"]);
-  });
-
-  test("returns name as default if no match found (unknown skill)", () => {
-    const content = "No triggers here";
-    expect(extractTriggers("unknown-skill", content)).toEqual(["unknown-skill"]);
+  test("returns name as default if no trigger metadata is provided (unknown skill)", () => {
+    expect(extractTriggers("unknown-skill", { name: "unknown-skill" })).toEqual(["unknown-skill"]);
   });
 });

@@ -1,7 +1,10 @@
+import { ScrollBoxRenderable } from "@opentui/core";
+import { useKeyboard } from "@opentui/solid";
 import { For, Show, Switch, Match, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { useTheme } from "../../context/theme";
 import { useSyncState } from "../../context/sync";
 import { useKV } from "../../context/kv";
+import { useDialog } from "../../context/dialog";
 import { SessionHeader } from "./header";
 import { SessionFooter } from "./footer";
 import { SessionSidebar } from "./sidebar";
@@ -14,13 +17,15 @@ import { ReasoningPart } from "../../component/message/reasoning-part";
 import { ToolPart } from "../../component/message/tool-part";
 import { TodoItem } from "../../component/todo-item";
 import type { FeedItem } from "../../context/sync";
+import { keyNameFromEvent } from "../../util/keyboard";
 
 export function Session(props: { sessionId: string }) {
-  const theme = useTheme();
   const syncState = useSyncState();
   const kv = useKV();
+  const dialog = useDialog();
+  let feedScrollRef: ScrollBoxRenderable | undefined;
 
-  const [sidebarOpen, setSidebarOpen] = kv.signal("sidebar_visible", true);
+  const [sidebarOpen] = kv.signal("sidebar_visible", true);
 
   const [terminalWidth, setTerminalWidth] = createSignal(process.stdout.columns ?? 120);
 
@@ -36,6 +41,27 @@ export function Session(props: { sessionId: string }) {
     return syncState.pendingAsk !== null || syncState.pendingApproval !== null;
   });
 
+  useKeyboard((e) => {
+    if ((e as { defaultPrevented?: boolean }).defaultPrevented) return;
+    if (dialog.hasDialog()) return;
+
+    const key = keyNameFromEvent(e);
+    if (key !== "pageup" && key !== "pagedown" && e.repeated) return;
+
+    if (key === "pageup") {
+      feedScrollRef?.scrollBy(-0.5, "viewport");
+      e.preventDefault?.();
+      e.stopPropagation?.();
+      return;
+    }
+
+    if (key === "pagedown") {
+      feedScrollRef?.scrollBy(0.5, "viewport");
+      e.preventDefault?.();
+      e.stopPropagation?.();
+    }
+  });
+
   return (
     <box flexDirection="row" width="100%" height="100%">
       {/* Main content area */}
@@ -45,6 +71,9 @@ export function Session(props: { sessionId: string }) {
 
         {/* Message feed */}
         <scrollbox
+          ref={(el) => {
+            feedScrollRef = el;
+          }}
           flexGrow={1}
           stickyScroll={true}
           paddingLeft={1}
@@ -141,6 +170,243 @@ function FeedItemRenderer(props: { item: FeedItem }) {
           <text fg={theme.textMuted}>{(props.item as any).line}</text>
         </box>
       </Match>
+
+      <Match when={props.item.type === "observability_status"}>
+        <box
+          border
+          borderStyle="rounded"
+          borderColor={theme.borderSubtle}
+          paddingLeft={1}
+          paddingRight={1}
+          marginBottom={1}
+          flexDirection="column"
+        >
+          <text fg={theme.text}>
+            <strong>Observability</strong>
+          </text>
+          <text fg={(props.item as any).enabled ? theme.success : theme.warning}>
+            {(props.item as any).enabled ? "enabled" : "disabled"}
+          </text>
+          <Show when={(props.item as any).observability?.queryApi?.logsBaseUrl}>
+            <text fg={theme.textMuted}>logs: {(props.item as any).observability.queryApi.logsBaseUrl}</text>
+          </Show>
+          <Show when={(props.item as any).observability?.queryApi?.metricsBaseUrl}>
+            <text fg={theme.textMuted}>metrics: {(props.item as any).observability.queryApi.metricsBaseUrl}</text>
+          </Show>
+          <Show when={(props.item as any).observability?.queryApi?.tracesBaseUrl}>
+            <text fg={theme.textMuted}>traces: {(props.item as any).observability.queryApi.tracesBaseUrl}</text>
+          </Show>
+        </box>
+      </Match>
+
+      <Match when={props.item.type === "harness_context"}>
+        <box
+          border
+          borderStyle="rounded"
+          borderColor={theme.borderSubtle}
+          paddingLeft={1}
+          paddingRight={1}
+          marginBottom={1}
+          flexDirection="column"
+        >
+          <text fg={theme.text}>
+            <strong>Harness Context</strong>
+          </text>
+          <Show
+            when={(props.item as any).context}
+            fallback={<text fg={theme.textMuted}>none</text>}
+          >
+            {(context) => (
+              <box flexDirection="column">
+                <text fg={theme.textMuted}>runId: {context().runId}</text>
+                <Show when={context().taskId}>
+                  <text fg={theme.textMuted}>taskId: {context().taskId}</text>
+                </Show>
+                <text fg={theme.text}>objective: {context().objective}</text>
+                <Show when={context().acceptanceCriteria.length > 0}>
+                  <text fg={theme.textMuted}>
+                    acceptance: {context().acceptanceCriteria.join(" | ")}
+                  </text>
+                </Show>
+                <Show when={context().constraints.length > 0}>
+                  <text fg={theme.textMuted}>
+                    constraints: {context().constraints.join(" | ")}
+                  </text>
+                </Show>
+              </box>
+            )}
+          </Show>
+        </box>
+      </Match>
+
+      <Match when={props.item.type === "observability_query_result"}>
+        <box
+          border
+          borderStyle="rounded"
+          borderColor={theme.borderSubtle}
+          paddingLeft={1}
+          paddingRight={1}
+          marginBottom={1}
+          flexDirection="column"
+        >
+          <text fg={theme.text}>
+            <strong>Observability Query</strong>
+          </text>
+          <text fg={(props.item as any).result.status === "ok" ? theme.success : theme.error}>
+            {(props.item as any).result.queryType} · {(props.item as any).result.status}
+          </text>
+          <text fg={theme.textMuted}>query: {(props.item as any).result.query}</text>
+          <Show when={(props.item as any).result.error}>
+            <text fg={theme.error}>error: {(props.item as any).result.error}</text>
+          </Show>
+          <Show when={(props.item as any).result.status === "ok"}>
+            <text fg={theme.textMuted}>
+              data: {summarizeData((props.item as any).result.data)}
+            </text>
+          </Show>
+        </box>
+      </Match>
+
+      <Match when={props.item.type === "harness_slo_result"}>
+        <box
+          border
+          borderStyle="rounded"
+          borderColor={theme.borderSubtle}
+          paddingLeft={1}
+          paddingRight={1}
+          marginBottom={1}
+          flexDirection="column"
+        >
+          <text fg={theme.text}>
+            <strong>Harness SLO</strong>
+          </text>
+          <text fg={(props.item as any).result.passed ? theme.success : theme.error}>
+            {(props.item as any).result.passed ? "passed" : "failed"} · reportOnly={(props.item as any).result.reportOnly ? "true" : "false"} · strict={(props.item as any).result.strictMode ? "true" : "false"}
+          </text>
+          <For each={(props.item as any).result.checks}>
+            {(check: any) => (
+              <text fg={check.pass ? theme.success : theme.error}>
+                {check.pass ? "✓" : "✗"} {check.id}: {formatSloValue(check.actual)} {check.op} {formatSloValue(check.threshold)}
+              </text>
+            )}
+          </For>
+        </box>
+      </Match>
+
+      <Match when={props.item.type === "skills_list"}>
+        <box
+          border
+          borderStyle="rounded"
+          borderColor={theme.borderSubtle}
+          paddingLeft={1}
+          paddingRight={1}
+          marginBottom={1}
+          flexDirection="column"
+        >
+          <text fg={theme.text}>
+            <strong>Skills</strong>
+          </text>
+          <text fg={theme.textMuted}>
+            {(props.item as any).skills.length} discovered
+          </text>
+          <Show when={(props.item as any).skills.length > 0}>
+            <text fg={theme.textMuted}>
+              {(props.item as any).skills.slice(0, 4).map((skill: any) => skill.name).join(", ")}
+              {(props.item as any).skills.length > 4 ? "..." : ""}
+            </text>
+          </Show>
+        </box>
+      </Match>
+
+      <Match when={props.item.type === "skill_content"}>
+        <box
+          border
+          borderStyle="rounded"
+          borderColor={theme.borderSubtle}
+          paddingLeft={1}
+          paddingRight={1}
+          marginBottom={1}
+          flexDirection="column"
+        >
+          <text fg={theme.text}>
+            <strong>Skill Content</strong>
+          </text>
+          <text fg={theme.textMuted}>
+            {(props.item as any).skill.name} ({(props.item as any).skill.source})
+          </text>
+          <text fg={theme.textMuted}>
+            {summarizePlainText((props.item as any).content, 320)}
+          </text>
+        </box>
+      </Match>
+
+      <Match when={props.item.type === "session_backup_state"}>
+        <box
+          border
+          borderStyle="rounded"
+          borderColor={theme.borderSubtle}
+          paddingLeft={1}
+          paddingRight={1}
+          marginBottom={1}
+          flexDirection="column"
+        >
+          <text fg={theme.text}>
+            <strong>Session Backup</strong>
+          </text>
+          <text fg={theme.textMuted}>
+            reason: {(props.item as any).reason} · status: {(props.item as any).backup.status}
+          </text>
+          <text fg={theme.textMuted}>
+            checkpoints: {(props.item as any).backup.checkpoints.length}
+          </text>
+          <Show when={(props.item as any).backup.checkpoints.length > 0}>
+            {() => {
+              const latest = (props.item as any).backup.checkpoints[
+                (props.item as any).backup.checkpoints.length - 1
+              ];
+              return (
+                <text fg={theme.textMuted}>
+                  latest: {latest.id} ({latest.trigger}, {latest.changed ? "changed" : "unchanged"}, {formatBytes(latest.patchBytes)})
+                </text>
+              );
+            }}
+          </Show>
+        </box>
+      </Match>
     </Switch>
   );
+}
+
+function summarizeData(data: unknown): string {
+  try {
+    const raw = JSON.stringify(data);
+    if (!raw) return "null";
+    if (raw.length <= 220) return raw;
+    return `${raw.slice(0, 219)}...`;
+  } catch {
+    return String(data);
+  }
+}
+
+function summarizePlainText(value: string, maxChars: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxChars) return compact;
+  return `${compact.slice(0, maxChars - 1)}...`;
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return "n/a";
+  if (value < 1024) return `${value} B`;
+  const kb = value / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(1)} MB`;
+}
+
+function formatSloValue(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value.toString();
+  }
+  if (value === null || value === undefined) return "n/a";
+  return String(value);
 }

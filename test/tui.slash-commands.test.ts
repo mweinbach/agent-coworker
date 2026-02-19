@@ -13,8 +13,10 @@ describe("local slash command registry", () => {
       syncActions: {
         reset: () => {},
         cancel: () => {},
-        connectProvider: () => {},
         setProviderApiKey: () => {},
+        requestHarnessContext: () => {},
+        setHarnessContext: () => {},
+        evaluateHarnessSlo: () => {},
       },
       route: {
         navigate: () => {},
@@ -47,8 +49,10 @@ describe("local slash command registry", () => {
           resetCalls += 1;
         },
         cancel: () => {},
-        connectProvider: () => {},
         setProviderApiKey: () => {},
+        requestHarnessContext: () => {},
+        setHarnessContext: () => {},
+        evaluateHarnessSlo: () => {},
       },
       route: {
         navigate: () => {
@@ -89,5 +93,74 @@ describe("local slash command registry", () => {
       name: "my",
       argumentsText: "review HEAD~2..HEAD",
     });
+  });
+
+  test("hctx set generates a default harness context payload", async () => {
+    let setPayload: any = null;
+
+    const commands = createLocalSlashCommands({
+      syncActions: {
+        reset: () => {},
+        cancel: () => {},
+        setProviderApiKey: () => {},
+        requestHarnessContext: () => {},
+        setHarnessContext: (context) => {
+          setPayload = context;
+        },
+        evaluateHarnessSlo: () => {},
+      },
+      route: {
+        navigate: () => {},
+      },
+      dialog: {},
+      exit: {
+        exit: () => {},
+      },
+    });
+
+    const resolved = findLocalSlashCommand(commands, "hctx");
+    expect(resolved).not.toBeNull();
+    await Promise.resolve(resolved?.execute("set verify harness wiring"));
+
+    expect(setPayload).not.toBeNull();
+    expect(typeof setPayload.runId).toBe("string");
+    expect(setPayload.runId.startsWith("tui-")).toBe(true);
+    expect(setPayload.objective).toBe("verify harness wiring");
+    expect(Array.isArray(setPayload.acceptanceCriteria)).toBe(true);
+    expect(Array.isArray(setPayload.constraints)).toBe(true);
+    expect(setPayload.metadata?.source).toBe("tui");
+  });
+
+  test("slo command triggers default harness SLO checks", async () => {
+    let checks: any[] | null = null;
+
+    const commands = createLocalSlashCommands({
+      syncActions: {
+        reset: () => {},
+        cancel: () => {},
+        setProviderApiKey: () => {},
+        requestHarnessContext: () => {},
+        setHarnessContext: () => {},
+        evaluateHarnessSlo: (nextChecks) => {
+          checks = nextChecks;
+        },
+      },
+      route: {
+        navigate: () => {},
+      },
+      dialog: {},
+      exit: {
+        exit: () => {},
+      },
+    });
+
+    const resolved = findLocalSlashCommand(commands, "slo");
+    expect(resolved).not.toBeNull();
+    await Promise.resolve(resolved?.execute(""));
+
+    expect(checks).not.toBeNull();
+    expect(checks?.length).toBe(2);
+    expect(checks?.[0]?.id).toBe("run_error_logs");
+    expect(checks?.[1]?.id).toBe("vector_errors");
   });
 });

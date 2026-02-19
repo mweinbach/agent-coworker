@@ -60,6 +60,37 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractAssistantTextFromMessageContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+
+  const chunks: string[] = [];
+  for (const part of content) {
+    if (!isRecord(part)) continue;
+    const partType = typeof part.type === "string" ? part.type : "";
+    if (partType !== "text" && partType !== "output_text") continue;
+    if (typeof part.text === "string" && part.text.length > 0) {
+      chunks.push(part.text);
+    }
+  }
+  return chunks.join("");
+}
+
+function extractAssistantTextFromResponseMessages(messages: ModelMessage[]): string {
+  const chunks: string[] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    const text = extractAssistantTextFromMessageContent(message.content).trim();
+    if (!text) continue;
+    chunks.push(text);
+  }
+  return chunks.join("\n\n");
+}
+
 /** Maximum number of message history entries before older entries are pruned. */
 const MAX_MESSAGE_HISTORY = 200;
 const ASK_RESPONSE_TIMEOUT_MS = 5 * 60_000;
@@ -1171,7 +1202,9 @@ export class AgentSession {
         this.emit({ type: "reasoning", sessionId: this.id, kind, text: reasoning });
       }
 
-      const out = (res.text || "").trim();
+      const out =
+        (res.text || "").trim() ||
+        extractAssistantTextFromResponseMessages(res.responseMessages);
       if (out) this.emit({ type: "assistant_message", sessionId: this.id, text: out });
       this.emitTelemetry(
         "agent.turn.completed",

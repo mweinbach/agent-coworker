@@ -1506,6 +1506,28 @@ describe("AgentSession", () => {
       expect(assistantEvt).toBeUndefined();
     });
 
+    test("falls back to assistant responseMessages text when stream text is empty", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Here is what I found in this folder." }],
+          },
+        ],
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("whats in this folder");
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message");
+      expect(assistantEvt).toBeDefined();
+      if (assistantEvt && assistantEvt.type === "assistant_message") {
+        expect(assistantEvt.text).toBe("Here is what I found in this folder.");
+      }
+    });
+
     test("does not emit assistant_message when response text is only whitespace", async () => {
       mockRunTurn.mockImplementation(async () => ({
         text: "   \n\t  ",

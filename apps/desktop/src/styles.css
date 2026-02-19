@@ -85,3 +85,76 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--text) 24%, transparent);
 }
+
+.app-topbar {
+  -webkit-app-region: drag;
+}
+
+.app-topbar__controls {
+  -webkit-app-region: no-drag;
+}
+
+:root[data-platform="darwin"] .app-topbar.app-topbar--macos-inset {
+  padding-left: 5.75rem;
+}
+
+:root[data-platform="darwin"] .app-sidebar {
+  position: relative;
+  padding-top: 2.75rem;
+}
+
+:root[data-platform="darwin"] .app-sidebar__drag-zone {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2.75rem;
+  z-index: 70;
+  -webkit-app-region: drag;
+}
+
+.app-shell {
+  position: relative;
+}
+
+:root[data-platform="darwin"] .app-window-drag-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 0.625rem;
+  z-index: 60;
+  -webkit-app-region: drag;
+}
+
+:root[data-platform="darwin"] .app-context-sidebar {
+  position: relative;
+}
+
+:root[data-platform="darwin"] .app-context-sidebar__drag-zone {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 0.625rem;
+  z-index: 70;
+  -webkit-app-region: drag;
+}
+
+:root[data-platform="darwin"] .settings-shell__nav {
+  padding-top: 2.75rem;
+}
+
+:root[data-platform="darwin"] .settings-shell__back-button {
+  margin-top: 0;
+}
+
+:root[data-platform="darwin"] .settings-shell__drag-zone {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2.75rem;
+  z-index: 80;
+  -webkit-app-region: drag;
+}

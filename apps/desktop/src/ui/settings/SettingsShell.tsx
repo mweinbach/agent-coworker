@@ -30,8 +30,8 @@ function SettingsNavigation({
   onBack: () => void;
 }) {
   return (
-    <aside className="flex min-h-0 flex-col gap-3 border-r border-border/80 bg-sidebar p-4 max-[960px]:border-r-0 max-[960px]:border-b">
-      <Button className="justify-start" variant="outline" type="button" onClick={onBack}>
+    <aside className="settings-shell__nav flex min-h-0 flex-col gap-3 border-r border-border/80 bg-sidebar p-4 max-[960px]:border-r-0 max-[960px]:border-b">
+      <Button className="settings-shell__back-button justify-start" variant="outline" type="button" onClick={onBack}>
         <ArrowLeftIcon className="h-4 w-4" />
         Back to app
       </Button>
@@ -60,11 +60,12 @@ export function SettingsShell() {
   const activePage = SETTINGS_PAGES.find((page) => page.id === settingsPage) ?? SETTINGS_PAGES[0];
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[260px_minmax(0,1fr)] bg-background max-[960px]:grid-cols-1">
+    <div className="settings-shell relative grid h-full min-h-0 grid-cols-[260px_minmax(0,1fr)] bg-background max-[960px]:grid-cols-1">
+      <div className="settings-shell__drag-zone" aria-hidden="true" />
       <SettingsNavigation activePage={settingsPage} onSelectPage={setSettingsPage} onBack={closeSettings} />
 
-      <main className="min-h-0 overflow-auto bg-gradient-to-b from-panel to-background">
-        <div className="mx-auto w-full max-w-5xl p-6 max-[960px]:p-4">{activePage.render()}</div>
+      <main className="settings-shell__main min-h-0 overflow-auto bg-gradient-to-b from-panel to-background">
+        <div className="settings-shell__content mx-auto w-full max-w-5xl p-6 max-[960px]:p-4">{activePage.render()}</div>
       </main>
     </div>
   );

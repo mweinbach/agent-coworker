@@ -2100,6 +2100,12 @@ describe("AgentSession", () => {
     test("sendUserMessage emits auto checkpoint state after completion", async () => {
       const { session, events } = makeSession();
       await session.sendUserMessage("checkpoint me");
+      for (let i = 0; i < 40; i += 1) {
+        if (events.some((e) => e.type === "session_backup_state" && e.reason === "auto_checkpoint")) break;
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5);
+        });
+      }
 
       const backupEvents = events.filter((e) => e.type === "session_backup_state") as Array<
         Extract<ServerEvent, { type: "session_backup_state" }>

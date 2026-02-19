@@ -16,6 +16,7 @@ import { PersistenceService } from "./services/persistence";
 import { resolveDesktopRendererUrl } from "./services/rendererUrl";
 import { ServerManager } from "./services/serverManager";
 import { createBeforeQuitHandler } from "./services/shutdown";
+import { applyMacosPremiumEnhancements, macosBrowserWindowOptions } from "./services/windowEnhancements";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -136,6 +137,7 @@ async function createWindow(): Promise<void> {
     width: 1240,
     height: 820,
     ...(backgroundMaterial ? { backgroundMaterial } : {}),
+    ...macosBrowserWindowOptions(),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
@@ -149,6 +151,9 @@ async function createWindow(): Promise<void> {
     },
   });
   mainWindow = win;
+  if (process.platform === "darwin") {
+    win.setWindowButtonVisibility(true);
+  }
   applyInitialWindowAppearance(win);
   applyWindowSecurity(win);
 
@@ -158,8 +163,11 @@ async function createWindow(): Promise<void> {
     }
   });
 
-  win.webContents.on("did-finish-load", () => {
+  win.webContents.once("did-finish-load", () => {
     emitSystemAppearance();
+    void applyMacosPremiumEnhancements(win).catch((error) => {
+      console.warn(`[desktop] Failed to apply macOS premium window enhancements: ${String(error)}`);
+    });
   });
 
   if (!app.isPackaged) {

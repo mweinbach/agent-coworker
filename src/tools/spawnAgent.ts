@@ -22,6 +22,7 @@ import { createNotebookEditTool } from "./notebookEdit";
 type AgentType = "explore" | "research" | "general";
 const MAX_SUB_AGENT_DEPTH = 2;
 const MAX_SUB_AGENT_TASK_CHARS = 20_000;
+const DEFAULT_MODEL_STALL_TIMEOUT_MS = 90_000;
 
 export type SpawnAgentDeps = Partial<{
   streamText: typeof realStreamText;
@@ -124,6 +125,18 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
         agentType === "research" ? ctx.config.model : ctx.config.subAgentModel;
 
       const tools = createSubAgentTools(ctx, agentType, safeApprove);
+      const timeoutCfg = ctx.config.modelSettings?.timeout;
+      const hasExplicitTimeout =
+        typeof timeoutCfg?.totalMs === "number" ||
+        typeof timeoutCfg?.stepMs === "number" ||
+        typeof timeoutCfg?.chunkMs === "number";
+      const timeout = hasExplicitTimeout
+        ? {
+            ...(typeof timeoutCfg?.totalMs === "number" ? { totalMs: timeoutCfg.totalMs } : {}),
+            ...(typeof timeoutCfg?.stepMs === "number" ? { stepMs: timeoutCfg.stepMs } : {}),
+            ...(typeof timeoutCfg?.chunkMs === "number" ? { chunkMs: timeoutCfg.chunkMs } : {}),
+          }
+        : { chunkMs: DEFAULT_MODEL_STALL_TIMEOUT_MS };
 
       const streamResult = await streamText({
         model: getModel(ctx.config, modelId),
@@ -131,26 +144,9 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
         tools,
         stopWhen: stepCountIs(50),
         providerOptions: ctx.config.providerOptions,
+        timeout,
         ...(typeof ctx.config.modelSettings?.maxRetries === "number"
           ? { maxRetries: ctx.config.modelSettings.maxRetries }
-          : {}),
-        ...(ctx.config.modelSettings?.timeout &&
-        (typeof ctx.config.modelSettings.timeout.totalMs === "number" ||
-          typeof ctx.config.modelSettings.timeout.stepMs === "number" ||
-          typeof ctx.config.modelSettings.timeout.chunkMs === "number")
-          ? {
-              timeout: {
-                ...(typeof ctx.config.modelSettings.timeout.totalMs === "number"
-                  ? { totalMs: ctx.config.modelSettings.timeout.totalMs }
-                  : {}),
-                ...(typeof ctx.config.modelSettings.timeout.stepMs === "number"
-                  ? { stepMs: ctx.config.modelSettings.timeout.stepMs }
-                  : {}),
-                ...(typeof ctx.config.modelSettings.timeout.chunkMs === "number"
-                  ? { chunkMs: ctx.config.modelSettings.timeout.chunkMs }
-                  : {}),
-              },
-            }
           : {}),
         abortSignal: ctx.abortSignal,
         prompt: normalizedTask,

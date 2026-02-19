@@ -143,7 +143,8 @@ export default function App() {
 
   if (view === "settings") {
     return (
-      <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
+      <div className="app-shell flex h-full min-h-0 flex-col bg-background text-foreground">
+        <div className="app-window-drag-strip" aria-hidden="true" />
         <div className="min-h-0 flex-1">
           <SettingsContent init={init} ready={ready} startupError={startupError} />
         </div>
@@ -153,7 +154,8 @@ export default function App() {
   }
 
   return (
-    <div className="h-full bg-background text-foreground">
+    <div className="app-shell h-full bg-background text-foreground">
+      <div className="app-window-drag-strip" aria-hidden="true" />
       <div className="flex h-full min-h-0">
         <div
           className="relative shrink-0 overflow-hidden"

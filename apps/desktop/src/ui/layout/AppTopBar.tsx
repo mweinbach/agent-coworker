@@ -25,8 +25,14 @@ export function AppTopBar({
   const sidebarLabel = sidebarCollapsed ? "Show sidebar (Cmd/Ctrl+B)" : "Hide sidebar (Cmd/Ctrl+B)";
 
   return (
-    <div className={cn("flex h-12 shrink-0 items-center justify-between border-b border-border/70 bg-sidebar px-4", designTokens.classes.subtleSurface)}>
-      <div className="flex min-w-0 items-center gap-2">
+    <div
+      className={cn(
+        "app-topbar flex h-12 shrink-0 items-center justify-between border-b border-border/70 bg-sidebar px-4",
+        sidebarCollapsed && "app-topbar--macos-inset",
+        designTokens.classes.subtleSurface,
+      )}
+    >
+      <div className="app-topbar__controls flex min-w-0 items-center gap-2">
         <Button
           size="icon-sm"
           variant="ghost"
@@ -38,7 +44,7 @@ export function AppTopBar({
         </Button>
         <div className="truncate font-semibold text-sm text-foreground">{title}</div>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="app-topbar__controls flex items-center gap-2">
         {busy ? (
           <Badge variant="secondary" className="gap-1.5">
             <LoaderCircleIcon className="h-3.5 w-3.5 animate-spin" />

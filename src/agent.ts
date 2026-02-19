@@ -6,6 +6,8 @@ import type { AgentConfig, TodoItem } from "./types";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
 
+const DEFAULT_MODEL_STALL_TIMEOUT_MS = 90_000;
+
 export interface RunTurnParams {
   config: AgentConfig;
   system: string;
@@ -112,6 +114,17 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
     const result = await (async () => {
       try {
         const timeoutCfg = config.modelSettings?.timeout;
+        const hasExplicitTimeout =
+          typeof timeoutCfg?.totalMs === "number" ||
+          typeof timeoutCfg?.stepMs === "number" ||
+          typeof timeoutCfg?.chunkMs === "number";
+        const timeout = hasExplicitTimeout
+          ? {
+              ...(typeof timeoutCfg?.totalMs === "number" ? { totalMs: timeoutCfg.totalMs } : {}),
+              ...(typeof timeoutCfg?.stepMs === "number" ? { stepMs: timeoutCfg.stepMs } : {}),
+              ...(typeof timeoutCfg?.chunkMs === "number" ? { chunkMs: timeoutCfg.chunkMs } : {}),
+            }
+          : { chunkMs: DEFAULT_MODEL_STALL_TIMEOUT_MS };
         const streamResult = await deps.streamText({
           model: deps.getModel(config),
           system,
@@ -120,20 +133,9 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           providerOptions: config.providerOptions,
           stopWhen: deps.stepCountIs(params.maxSteps ?? 100),
           abortSignal,
+          timeout,
           ...(typeof config.modelSettings?.maxRetries === "number"
             ? { maxRetries: config.modelSettings.maxRetries }
-            : {}),
-          ...(timeoutCfg &&
-          (typeof timeoutCfg.totalMs === "number" ||
-            typeof timeoutCfg.stepMs === "number" ||
-            typeof timeoutCfg.chunkMs === "number")
-            ? {
-                timeout: {
-                  ...(typeof timeoutCfg.totalMs === "number" ? { totalMs: timeoutCfg.totalMs } : {}),
-                  ...(typeof timeoutCfg.stepMs === "number" ? { stepMs: timeoutCfg.stepMs } : {}),
-                  ...(typeof timeoutCfg.chunkMs === "number" ? { chunkMs: timeoutCfg.chunkMs } : {}),
-                },
-              }
             : {}),
           onError: async ({ error }: { error: unknown }) => {
             log(`[model:error] ${String(error)}`);

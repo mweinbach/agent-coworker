@@ -92,8 +92,14 @@ export function Sidebar() {
   };
 
   return (
-    <aside className={cn("flex h-full w-full flex-col gap-3 border-r border-border/80 bg-sidebar px-3 py-3", designTokens.classes.subtleSurface)}>
-      <div className="mb-2 flex items-center gap-3 px-2">
+    <aside
+      className={cn(
+        "app-sidebar flex h-full w-full flex-col gap-3 border-r border-border/80 bg-sidebar px-3 py-3",
+        designTokens.classes.subtleSurface,
+      )}
+    >
+      <div className="app-sidebar__drag-zone" aria-hidden="true" />
+      <div className="app-sidebar__brand mb-2 flex items-center gap-3 px-2">
         <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-primary to-primary/70" />
         <div className="text-base font-bold tracking-tight text-foreground">Cowork</div>
       </div>

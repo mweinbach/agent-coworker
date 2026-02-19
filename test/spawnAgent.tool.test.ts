@@ -102,6 +102,7 @@ describe("spawnAgent tool", () => {
     expect(lastGenerateTextArgs.prompt).toBe("do the thing");
     expect(lastGenerateTextArgs.stopWhen).toBe("stepCountIs:50");
     expect(lastGenerateTextArgs.providerOptions).toEqual(ctx.config.providerOptions);
+    expect(lastGenerateTextArgs.timeout).toEqual({ chunkMs: 90000 });
 
     const toolNames = Object.keys(lastGenerateTextArgs.tools).sort();
     expect(toolNames).toEqual(
@@ -176,6 +177,37 @@ describe("spawnAgent tool", () => {
 
     await t.execute({ task: "check signal", agentType: "general" });
     expect(lastGenerateTextArgs.abortSignal).toBe(controller.signal);
+  });
+
+  test("forwards explicit timeout settings to sub-agent streamText call", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-timeout-"));
+    const ctx = makeCtx(dir, {
+      config: makeConfig(dir, {
+        modelSettings: {
+          timeout: {
+            totalMs: 45000,
+            stepMs: 12000,
+            chunkMs: 5000,
+          },
+        },
+      }),
+    });
+
+    const t: any = createSpawnAgentTool(ctx, {
+      streamText: mockStreamText as any,
+      stepCountIs: mockStepCountIs as any,
+      getModel: mockGetModel as any,
+      loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
+      classifyCommandDetailed: mockClassifyCommandDetailed as any,
+    });
+
+    await t.execute({ task: "respect timeout", agentType: "general" });
+
+    expect(lastGenerateTextArgs.timeout).toEqual({
+      totalMs: 45000,
+      stepMs: 12000,
+      chunkMs: 5000,
+    });
   });
 
   test("rejects sub-agent recursion beyond configured depth", async () => {

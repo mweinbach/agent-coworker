@@ -61,6 +61,13 @@ export function App() {
   );
 }
 
+export function shouldSuspendGlobalHotkeys(state: {
+  pendingAsk: boolean;
+  pendingApproval: boolean;
+}): boolean {
+  return state.pendingAsk || state.pendingApproval;
+}
+
 function GlobalHotkeys() {
   const keybind = useKeybind();
   const dialog = useDialog();
@@ -242,6 +249,18 @@ function GlobalHotkeys() {
 
     const key = keyNameFromEvent(e);
     const { ctrl, shift, alt } = keyModifiersFromEvent(e);
+
+    // OpenTUI global listeners run before focused elements. While a human-loop
+    // prompt is active, avoid consuming keys here so the prompt can handle them.
+    if (
+      shouldSuspendGlobalHotkeys({
+        pendingAsk: syncState.pendingAsk !== null,
+        pendingApproval: syncState.pendingApproval !== null,
+      })
+    ) {
+      return;
+    }
+
     const isCtrlC = ctrl && !shift && !alt && key === "c";
 
     if (!isCtrlC && ctrlCPendingAt() !== null) {

@@ -24,15 +24,17 @@ describe("desktop model stream mapper", () => {
       rawFinishReason: undefined,
       totalUsage: undefined,
     });
-    expect(mapModelStreamChunk(chunk("start_step", { request: { id: "rq1" } }, 2))).toEqual({
+    expect(mapModelStreamChunk(chunk("start_step", { stepNumber: 2, request: { id: "rq1" } }, 2))).toEqual({
       kind: "step_start",
       turnId: "t1",
+      stepNumber: 2,
       request: { id: "rq1" },
       warnings: undefined,
     });
-    expect(mapModelStreamChunk(chunk("finish_step", { response: { id: "rs1" } }, 3))).toEqual({
+    expect(mapModelStreamChunk(chunk("finish_step", { stepNumber: 2, response: { id: "rs1" } }, 3))).toEqual({
       kind: "step_finish",
       turnId: "t1",
+      stepNumber: 2,
       response: { id: "rs1" },
       usage: undefined,
       finishReason: undefined,

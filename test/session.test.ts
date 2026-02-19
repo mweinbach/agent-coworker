@@ -558,31 +558,39 @@ describe("AgentSession", () => {
   });
 
   describe("setModel", () => {
-    test("updates public model and emits config_updated", async () => {
+    test("rejects model change because model/provider are locked per session", async () => {
       const { session, events } = makeSession();
+      const before = session.getPublicConfig();
       await session.setModel("gpt-5.2");
 
-      expect(session.getPublicConfig().model).toBe("gpt-5.2");
+      expect(session.getPublicConfig()).toEqual(before);
 
-      const evt = events.find((e) => e.type === "config_updated");
-      expect(evt).toBeDefined();
-      if (evt && evt.type === "config_updated") {
-        expect(evt.config.model).toBe("gpt-5.2");
+      const updated = events.find((e) => e.type === "config_updated");
+      expect(updated).toBeUndefined();
+      const err = events.find((e) => e.type === "error");
+      expect(err).toBeDefined();
+      if (err && err.type === "error") {
+        expect(err.code).toBe("validation_failed");
+        expect(err.source).toBe("session");
+        expect(err.message).toContain("locked for this session");
       }
     });
 
-    test("updates provider when provider is supplied", async () => {
+    test("rejects provider+model change because model/provider are locked per session", async () => {
       const { session, events } = makeSession();
+      const before = session.getPublicConfig();
       await session.setModel("claude-4-5-sonnet", "anthropic");
 
-      expect(session.getPublicConfig().provider).toBe("anthropic");
-      expect(session.getPublicConfig().model).toBe("claude-4-5-sonnet");
+      expect(session.getPublicConfig()).toEqual(before);
 
-      const evt = events.find((e) => e.type === "config_updated");
-      expect(evt).toBeDefined();
-      if (evt && evt.type === "config_updated") {
-        expect(evt.config.provider).toBe("anthropic");
-        expect(evt.config.model).toBe("claude-4-5-sonnet");
+      const updated = events.find((e) => e.type === "config_updated");
+      expect(updated).toBeUndefined();
+      const err = events.find((e) => e.type === "error");
+      expect(err).toBeDefined();
+      if (err && err.type === "error") {
+        expect(err.code).toBe("validation_failed");
+        expect(err.source).toBe("session");
+        expect(err.message).toContain("locked for this session");
       }
     });
 

@@ -112,6 +112,67 @@ describe("spawnAgent tool", () => {
     expect(lastGenerateTextArgs.tools.webSearch.id).toBe("google.google_search");
   });
 
+  test("adds google prepareStep to repair replay thought signatures in sub-agent loops", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-prepare-step-"));
+    const log = mock(() => {});
+    const ctx = makeCtx(dir, {
+      log,
+      config: makeConfig(dir, {
+        providerOptions: {
+          google: {
+            thinkingConfig: {
+              includeThoughts: true,
+              thinkingLevel: "high",
+            },
+          },
+        },
+      }),
+    });
+
+    const t: any = createSpawnAgentTool(ctx, {
+      streamText: mockStreamText as any,
+      stepCountIs: mockStepCountIs as any,
+      getModel: mockGetModel as any,
+      loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
+      classifyCommandDetailed: mockClassifyCommandDetailed as any,
+    });
+
+    await t.execute({ task: "loop-safe sub-agent", agentType: "general" });
+
+    expect(typeof lastGenerateTextArgs.prepareStep).toBe("function");
+    const replayMessages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "reasoning",
+            text: "thinking",
+            providerOptions: { google: { thoughtSignature: "sig-sub" } },
+          },
+          { type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } },
+        ],
+      },
+    ] as any[];
+
+    const repaired = await lastGenerateTextArgs.prepareStep({ stepNumber: 1, messages: replayMessages });
+    expect(repaired).toBeDefined();
+    expect(repaired.providerOptions).toBeUndefined();
+    expect(JSON.stringify(repaired.messages)).toContain("\"thoughtSignature\":\"sig-sub\"");
+
+    const unresolved = await lastGenerateTextArgs.prepareStep({
+      stepNumber: 1,
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "tool-call", toolCallId: "call-2", toolName: "bash", input: { command: "pwd" } }],
+        },
+      ],
+    });
+    expect(unresolved).toBeDefined();
+    expect(unresolved.providerOptions.google.thinkingConfig.includeThoughts).toBe(false);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("disabling thoughts for this step"));
+  });
+
   test("research uses main model and web-only tool set", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-research-"));
     const ctx = makeCtx(dir);

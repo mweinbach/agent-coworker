@@ -1365,7 +1365,12 @@ describe("Protocol Doc Parity", () => {
         (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.2" }),
         1,
       );
-      expect(model.responses[0].type).toBe("config_updated");
+      expect(model.responses[0].type).toBe("error");
+      if (model.responses[0].type === "error") {
+        expect(model.responses[0].code).toBe("validation_failed");
+        expect(model.responses[0].source).toBe("session");
+        expect(model.responses[0].message).toContain("locked for this session");
+      }
     } finally {
       server.stop();
     }

@@ -176,7 +176,7 @@ describe("runTurn", () => {
     expect(callArg.messages).toBe(msgs);
   });
 
-  test("drops prior google tool-call parts that are missing thought signatures", async () => {
+  test("preserves google tool-call history without dropping parts", async () => {
     const log = mock(() => {});
     const msgs = [
       { role: "user", content: [{ type: "text", text: "hello" }] },
@@ -193,38 +193,76 @@ describe("runTurn", () => {
     await runTurn(makeParams({ messages: msgs, log }));
 
     const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.messages).toBe(msgs);
     const serialized = JSON.stringify(callArg.messages);
-    expect(serialized).not.toContain("\"type\":\"tool-call\"");
-    expect(serialized).not.toContain("\"type\":\"tool-result\"");
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("without thought signatures"));
+    expect(serialized).toContain("\"type\":\"tool-call\"");
+    expect(serialized).toContain("\"type\":\"tool-result\"");
   });
 
-  test("keeps google tool-call parts when thought signatures are present", async () => {
-    const msgs = [
-      { role: "user", content: [{ type: "text", text: "hello" }] },
+  test("keeps google includeThoughts enabled and repairs replay signatures in prepareStep", async () => {
+    const log = mock(() => {});
+    const providerOptions = {
+      google: {
+        thinkingConfig: {
+          includeThoughts: true,
+          thinkingLevel: "high",
+        },
+      },
+    };
+    await runTurn(makeParams({ config: makeConfig({ providerOptions }), log }));
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.providerOptions.google.thinkingConfig.includeThoughts).toBe(true);
+    expect(callArg.providerOptions.google.thinkingConfig.thinkingLevel).toBe("high");
+    expect(typeof callArg.prepareStep).toBe("function");
+
+    const replayMessages = [
       {
         role: "assistant",
         content: [
           {
-            type: "tool-call",
-            toolCallId: "call-1",
-            toolName: "bash",
-            input: { command: "ls" },
+            type: "reasoning",
+            text: "thinking",
             providerOptions: { google: { thoughtSignature: "sig-1" } },
           },
+          { type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } },
         ],
       },
     ] as any[];
 
-    await runTurn(makeParams({ messages: msgs }));
-
-    const callArg = mockStreamText.mock.calls[0][0] as any;
-    const serialized = JSON.stringify(callArg.messages);
-    expect(serialized).toContain("\"type\":\"tool-call\"");
-    expect(serialized).toContain("sig-1");
+    const prepareResult = await callArg.prepareStep({ stepNumber: 1, messages: replayMessages });
+    expect(prepareResult).toBeDefined();
+    expect(prepareResult.providerOptions).toBeUndefined();
+    const serialized = JSON.stringify(prepareResult.messages);
+    expect(serialized).toContain("\"thoughtSignature\":\"sig-1\"");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Repaired 1 Gemini tool call"));
   });
 
-  test("does not sanitize missing thought signatures for non-google providers", async () => {
+  test("prepareStep falls back by disabling thoughts when signatures are unresolved", async () => {
+    const log = mock(() => {});
+    const providerOptions = {
+      google: {
+        thinkingConfig: {
+          includeThoughts: true,
+          thinkingLevel: "high",
+        },
+      },
+    };
+    await runTurn(makeParams({ config: makeConfig({ providerOptions }), log }));
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const replayMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } }],
+      },
+    ] as any[];
+    const prepareResult = await callArg.prepareStep({ stepNumber: 1, messages: replayMessages });
+    expect(prepareResult).toBeDefined();
+    expect(prepareResult.providerOptions.google.thinkingConfig.includeThoughts).toBe(false);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("disabling thoughts for this step"));
+  });
+
+  test("keeps provider options unchanged for non-google providers", async () => {
+    const providerOptions = { openai: { reasoningEffort: "high" } };
     const msgs = [
       { role: "user", content: [{ type: "text", text: "hello" }] },
       {
@@ -233,11 +271,10 @@ describe("runTurn", () => {
       },
     ] as any[];
 
-    await runTurn(makeParams({ config: makeConfig({ provider: "openai" }), messages: msgs }));
+    await runTurn(makeParams({ config: makeConfig({ provider: "openai", providerOptions }), messages: msgs }));
 
     const callArg = mockStreamText.mock.calls[0][0] as any;
-    const serialized = JSON.stringify(callArg.messages);
-    expect(serialized).toContain("\"type\":\"tool-call\"");
+    expect(callArg.providerOptions).toBe(providerOptions);
   });
 
   // -------------------------------------------------------------------------

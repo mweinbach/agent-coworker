@@ -13,10 +13,11 @@ export type ModelStreamUpdate =
     }
   | { kind: "turn_abort"; turnId: string; reason?: unknown }
   | { kind: "turn_error"; turnId: string; error: unknown }
-  | { kind: "step_start"; turnId: string; request?: unknown; warnings?: unknown }
+  | { kind: "step_start"; turnId: string; stepNumber?: number; request?: unknown; warnings?: unknown }
   | {
       kind: "step_finish";
       turnId: string;
+      stepNumber?: number;
       response?: unknown;
       usage?: unknown;
       finishReason?: unknown;
@@ -44,6 +45,10 @@ export type ModelStreamUpdate =
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function asPartRecord(value: unknown): Record<string, unknown> {
@@ -233,23 +238,29 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         turnId: evt.turnId,
         error: part.error ?? "unknown_error",
       };
-    case "start_step":
+    case "start_step": {
+      const startStepNumber = asFiniteNumber(part.stepNumber);
       return {
         kind: "step_start",
         turnId: evt.turnId,
+        ...(startStepNumber !== undefined ? { stepNumber: startStepNumber } : {}),
         request: part.request,
         warnings: part.warnings,
       };
-    case "finish_step":
+    }
+    case "finish_step": {
+      const finishStepNumber = asFiniteNumber(part.stepNumber);
       return {
         kind: "step_finish",
         turnId: evt.turnId,
+        ...(finishStepNumber !== undefined ? { stepNumber: finishStepNumber } : {}),
         response: part.response,
         usage: part.usage,
         finishReason: part.finishReason,
         rawFinishReason: part.rawFinishReason,
         providerMetadata: part.providerMetadata,
       };
+    }
     case "text_start":
       return {
         kind: "assistant_text_start",

@@ -41,16 +41,18 @@ describe("TUI model stream mapper", () => {
       error: { code: "bad" },
     });
 
-    expect(mapModelStreamChunk(chunk("start_step", { request: { id: "rq" }, warnings: ["slow"] }, 4))).toEqual({
+    expect(mapModelStreamChunk(chunk("start_step", { stepNumber: 1, request: { id: "rq" }, warnings: ["slow"] }, 4))).toEqual({
       kind: "step_start",
       turnId: "t1",
+      stepNumber: 1,
       request: { id: "rq" },
       warnings: ["slow"],
     });
 
-    expect(mapModelStreamChunk(chunk("finish_step", { response: { id: "rs" }, usage: { in: 1 } }, 5))).toEqual({
+    expect(mapModelStreamChunk(chunk("finish_step", { stepNumber: 1, response: { id: "rs" }, usage: { in: 1 } }, 5))).toEqual({
       kind: "step_finish",
       turnId: "t1",
+      stepNumber: 1,
       response: { id: "rs" },
       usage: { in: 1 },
       finishReason: undefined,

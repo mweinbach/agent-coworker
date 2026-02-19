@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import { getModel as realGetModel } from "../config";
+import { buildGooglePrepareStep } from "../providers/googleReplay";
 import { loadSubAgentPrompt as realLoadSubAgentPrompt } from "../prompt";
 import { classifyCommandDetailed as realClassifyCommandDetailed } from "../utils/approval";
 
@@ -137,6 +138,10 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
             ...(typeof timeoutCfg?.chunkMs === "number" ? { chunkMs: timeoutCfg.chunkMs } : {}),
           }
         : { chunkMs: DEFAULT_MODEL_STALL_TIMEOUT_MS };
+      const googlePrepareStep =
+        ctx.config.provider === "google" && Object.keys(tools).length > 0
+          ? buildGooglePrepareStep(ctx.config.providerOptions, ctx.log)
+          : undefined;
 
       const streamResult = await streamText({
         model: getModel(ctx.config, modelId),
@@ -144,6 +149,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
         tools,
         stopWhen: stepCountIs(50),
         providerOptions: ctx.config.providerOptions,
+        ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
         timeout,
         ...(typeof ctx.config.modelSettings?.maxRetries === "number"
           ? { maxRetries: ctx.config.modelSettings.maxRetries }

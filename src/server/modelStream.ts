@@ -56,6 +56,10 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function asSafeString(value: unknown): string {
   if (typeof value === "string") return value;
   const sanitized = sanitizeUnknown(value);
@@ -231,6 +235,7 @@ export function normalizeModelStreamPart(
         {
           partType: "start_step",
           part: compactRecord({
+            stepNumber: asFiniteNumber(raw.stepNumber) ?? asFiniteNumber(raw.step),
             request: sanitizeUnknown(raw.request),
             warnings: sanitizeUnknown(raw.warnings),
           }),
@@ -244,6 +249,7 @@ export function normalizeModelStreamPart(
         {
           partType: "finish_step",
           part: compactRecord({
+            stepNumber: asFiniteNumber(raw.stepNumber) ?? asFiniteNumber(raw.step),
             response: sanitizeUnknown(raw.response),
             usage: sanitizeUnknown(raw.usage),
             finishReason: stepFinishReason,

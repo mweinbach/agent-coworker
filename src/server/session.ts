@@ -22,7 +22,6 @@ import type {
   TodoItem,
 } from "../types";
 import { runTurn } from "../agent";
-import { loadSystemPromptWithSkills } from "../prompt";
 import { createTools } from "../tools";
 import { classifyCommandDetailed } from "../utils/approval";
 import { HarnessContextStore } from "../harness/contextStore";
@@ -539,38 +538,16 @@ export class AgentSession {
       return;
     }
 
-    const nextProvider =
-      providerRaw === undefined
-        ? this.config.provider
-        : isProviderName(providerRaw)
-          ? providerRaw
-          : null;
-    if (!nextProvider) {
+    if (providerRaw !== undefined && !isProviderName(providerRaw)) {
       this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
       return;
     }
 
-    this.config = {
-      ...this.config,
-      provider: nextProvider,
-      model: modelId,
-      // Keep sub-agent model aligned for now until we expose a dedicated toggle.
-      subAgentModel: modelId,
-    };
-
-    try {
-      const result = await loadSystemPromptWithSkills(this.config);
-      this.system = result.prompt;
-      this.discoveredSkills = result.discoveredSkills;
-    } catch (err) {
-      this.emitError("internal_error", "session", `Model updated but failed to refresh prompt: ${String(err)}`);
-    }
-
-    this.emit({
-      type: "config_updated",
-      sessionId: this.id,
-      config: this.getPublicConfig(),
-    });
+    this.emitError(
+      "validation_failed",
+      "session",
+      "Model/provider are locked for this session. Start a new session to change them."
+    );
   }
 
   async emitProviderCatalog() {

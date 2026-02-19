@@ -2,6 +2,7 @@ import { stepCountIs, streamText } from "ai";
 import type { ModelMessage } from "ai";
 
 import { getModel } from "./config";
+import { buildGooglePrepareStep } from "./providers/googleReplay";
 import type { AgentConfig, TodoItem } from "./types";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
@@ -34,10 +35,6 @@ export interface RunTurnParams {
   includeRawChunks?: boolean;
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
-
 function stripStaticMcpNamespacingGuidance(system: string): string {
   return system
     .split("\n")
@@ -56,93 +53,6 @@ function buildTurnSystemPrompt(system: string, mcpToolNames: string[]): string {
     "MCP tools are active in this turn. Their names follow `mcp__{serverName}__{toolName}`.",
     "Only call MCP tools that are present in the current tool list.",
   ].join("\n");
-}
-
-function getGoogleThoughtSignature(part: Record<string, unknown>): unknown {
-  const providerOptions = part.providerOptions;
-  if (!isRecord(providerOptions)) return undefined;
-  const googleOptions = isRecord(providerOptions.google)
-    ? providerOptions.google
-    : isRecord(providerOptions.vertex)
-      ? providerOptions.vertex
-      : undefined;
-  if (!googleOptions) return undefined;
-  return (googleOptions as Record<string, unknown>).thoughtSignature ?? googleOptions.thought_signature;
-}
-
-function collectInvalidGoogleToolCallIds(messages: ModelMessage[]): Set<string> {
-  const invalidToolCallIds = new Set<string>();
-  for (const message of messages) {
-    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-    for (const part of message.content) {
-      if (!isRecord(part) || part.type !== "tool-call") continue;
-      const signature = getGoogleThoughtSignature(part);
-      if (signature !== undefined && signature !== null && String(signature).length > 0) continue;
-      if (typeof part.toolCallId === "string" && part.toolCallId.length > 0) {
-        invalidToolCallIds.add(part.toolCallId);
-      }
-    }
-  }
-  return invalidToolCallIds;
-}
-
-function sanitizeGoogleReplayMessages(messages: ModelMessage[], log: (line: string) => void): ModelMessage[] {
-  const invalidToolCallIds = collectInvalidGoogleToolCallIds(messages);
-  let removedToolCalls = 0;
-  let removedToolResults = 0;
-  let changed = false;
-  const sanitized: ModelMessage[] = [];
-
-  for (const message of messages) {
-    if (message.role === "assistant" && Array.isArray(message.content)) {
-      const filtered = message.content.filter((part) => {
-        if (!isRecord(part) || part.type !== "tool-call") return true;
-
-        const signature = getGoogleThoughtSignature(part);
-        if (signature !== undefined && signature !== null && String(signature).length > 0) return true;
-
-        removedToolCalls += 1;
-        changed = true;
-        return false;
-      });
-      if (filtered.length === 0) continue;
-      if (filtered.length !== message.content.length) {
-        sanitized.push({ ...message, content: filtered } as ModelMessage);
-      } else {
-        sanitized.push(message);
-      }
-      continue;
-    }
-
-    if (message.role === "tool" && Array.isArray(message.content) && invalidToolCallIds.size > 0) {
-      const filtered = message.content.filter((part) => {
-        if (!isRecord(part) || part.type !== "tool-result" || typeof part.toolCallId !== "string") return true;
-        if (!invalidToolCallIds.has(part.toolCallId)) return true;
-        removedToolResults += 1;
-        changed = true;
-        return false;
-      });
-      if (filtered.length === 0) continue;
-      if (filtered.length !== message.content.length) {
-        sanitized.push({ ...message, content: filtered } as ModelMessage);
-      } else {
-        sanitized.push(message);
-      }
-      continue;
-    }
-
-    sanitized.push(message);
-  }
-
-  if (removedToolCalls > 0) {
-    log(
-      `[warn] Dropped ${removedToolCalls} prior Gemini tool call(s) without thought signatures` +
-        (removedToolResults > 0 ? ` and ${removedToolResults} orphaned tool result(s)` : "") +
-        "."
-    );
-  }
-
-  return changed ? sanitized : messages;
 }
 
 function mergeToolSets(
@@ -224,8 +134,11 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
     const tools = mergeToolSets(builtInTools, mcpTools, log);
     const mcpToolNames = Object.keys(mcpTools).sort();
     const turnSystem = buildTurnSystemPrompt(system, mcpToolNames);
-    const turnMessages =
-      config.provider === "google" ? sanitizeGoogleReplayMessages(messages, log) : messages;
+    const turnProviderOptions = config.providerOptions;
+    const googlePrepareStep =
+      config.provider === "google" && Object.keys(tools).length > 0
+        ? buildGooglePrepareStep(turnProviderOptions, log)
+        : undefined;
 
     const result = await (async () => {
       try {
@@ -244,10 +157,11 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
         const streamResult = await deps.streamText({
           model: deps.getModel(config),
           system: turnSystem,
-          messages: turnMessages,
+          messages,
           tools,
-          providerOptions: config.providerOptions,
+          providerOptions: turnProviderOptions,
           stopWhen: deps.stepCountIs(params.maxSteps ?? 100),
+          ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
           abortSignal,
           timeout,
           ...(typeof config.modelSettings?.maxRetries === "number"

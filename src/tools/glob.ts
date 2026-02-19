@@ -27,9 +27,11 @@ export function createGlobTool(ctx: ToolContext) {
     inputSchema: z.object({
       pattern: z.string().describe("Glob pattern to match (e.g. **/*.ts)"),
       cwd: z.string().optional().describe("Directory to search from (defaults to working directory)"),
+      maxResults: z.number().int().min(1).max(10000).optional().default(2000).describe("Maximum files to return"),
     }),
-    execute: async ({ pattern, cwd }) => {
-      ctx.log(`tool> glob ${JSON.stringify({ pattern, cwd })}`);
+    execute: async ({ pattern, cwd, maxResults }) => {
+      ctx.log(`tool> glob ${JSON.stringify({ pattern, cwd, maxResults })}`);
+      const effectiveMaxResults = Number.isInteger(maxResults) && (maxResults as number) > 0 ? (maxResults as number) : 2000;
 
       assertSafeGlobPattern(pattern);
 
@@ -38,14 +40,34 @@ export function createGlobTool(ctx: ToolContext) {
         ctx.config,
         "glob"
       );
-      const files = await fg(pattern, {
+      const files: Array<{ path: string; mtimeMs: number }> = [];
+      const stream = fg.stream(pattern, {
         cwd: searchCwd,
         dot: false,
+        objectMode: true,
         stats: true,
         braceExpansion: false,
         followSymbolicLinks: false,
       });
-      files.sort((a, b) => (b.stats?.mtimeMs || 0) - (a.stats?.mtimeMs || 0));
+      let truncated = false;
+      for await (const entry of stream as AsyncIterable<unknown>) {
+        if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
+        if (typeof entry === "string") {
+          files.push({ path: entry, mtimeMs: 0 });
+        } else if (entry && typeof entry === "object") {
+          const maybePath = (entry as any).path;
+          if (typeof maybePath !== "string") continue;
+          const mtimeMs = typeof (entry as any).stats?.mtimeMs === "number" ? (entry as any).stats.mtimeMs : 0;
+          files.push({ path: maybePath, mtimeMs });
+        }
+
+        if (files.length >= effectiveMaxResults) {
+          truncated = true;
+          (stream as any).destroy?.();
+          break;
+        }
+      }
+      files.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
       await Promise.all(
         files.map(async (f) => {
@@ -54,8 +76,13 @@ export function createGlobTool(ctx: ToolContext) {
         })
       );
 
-      const res = files.map((f) => f.path).join("\n") || "No files found.";
-      ctx.log(`tool< glob ${JSON.stringify({ count: files.length })}`);
+      const listed = files.map((f) => f.path).join("\n");
+      const res = listed
+        ? truncated
+          ? `${listed}\n... truncated to ${effectiveMaxResults} matches`
+          : listed
+        : "No files found.";
+      ctx.log(`tool< glob ${JSON.stringify({ count: files.length, truncated })}`);
       return res;
     },
   });

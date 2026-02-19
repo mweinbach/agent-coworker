@@ -2089,6 +2089,18 @@ describe("AgentSession", () => {
         expect(err.message).toContain("Unknown checkpoint id");
       }
     });
+
+    test("manual checkpoint requests are serialized", async () => {
+      const { session, events } = makeSession();
+
+      await Promise.all([session.createManualSessionCheckpoint(), session.createManualSessionCheckpoint()]);
+
+      const manualEvents = events.filter(
+        (e) => e.type === "session_backup_state" && e.reason === "manual_checkpoint"
+      ) as Array<Extract<ServerEvent, { type: "session_backup_state" }>>;
+      expect(manualEvents.length).toBe(2);
+      expect(manualEvents[1]?.backup.checkpoints.length).toBe(2);
+    });
   });
 
   // =========================================================================

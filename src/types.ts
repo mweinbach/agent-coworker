@@ -32,6 +32,17 @@ export interface CommandTemplateConfig {
   source?: CommandSource;
 }
 
+export interface ModelTimeoutSettings {
+  totalMs?: number;
+  stepMs?: number;
+  chunkMs?: number;
+}
+
+export interface ModelRuntimeSettings {
+  maxRetries?: number;
+  timeout?: ModelTimeoutSettings;
+}
+
 export interface AgentConfig {
   provider: ProviderName;
   model: string;
@@ -58,6 +69,12 @@ export interface AgentConfig {
    * This lets us tune reasoning/thinking behavior per provider without hardcoding it in every call site.
    */
   providerOptions?: Record<string, any>;
+
+  /**
+   * Optional runtime controls for model calls.
+   * These map to AI SDK call settings such as maxRetries and timeout.
+   */
+  modelSettings?: ModelRuntimeSettings;
 
   /**
    * Whether to enable MCP (Model Context Protocol) tool discovery/execution.

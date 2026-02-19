@@ -95,14 +95,16 @@ export async function createLocalObservabilityStack(opts: {
   repoDir: string;
   runId: string;
   composeFile?: string;
+  findAvailablePortImpl?: (start: number) => Promise<number>;
 }): Promise<LocalObservabilityStack> {
   const composeFile = opts.composeFile ?? path.join(opts.repoDir, "config/observability/docker-compose.yml");
   const projectName = sanitizeName(`cowork-obs-${opts.runId.toLowerCase()}`);
+  const findPort = opts.findAvailablePortImpl ?? findAvailablePort;
   const ports: LocalObservabilityStackPorts = {
-    vectorOtlpHttp: await findAvailablePort(14318),
-    victoriaLogs: await findAvailablePort(19428),
-    victoriaMetrics: await findAvailablePort(18428),
-    victoriaTraces: await findAvailablePort(10428),
+    vectorOtlpHttp: await findPort(14318),
+    victoriaLogs: await findPort(19428),
+    victoriaMetrics: await findPort(18428),
+    victoriaTraces: await findPort(10428),
   };
 
   const env = {
@@ -138,4 +140,3 @@ export async function getLocalObservabilityStackStatus(stack: LocalObservability
   const { stdout } = await runCommand("docker", composeArgs(stack, ["ps"]), stack.env);
   return stdout;
 }
-

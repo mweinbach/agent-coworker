@@ -551,6 +551,16 @@ describe("bash tool", () => {
     const res = await t.execute({ command: "echo should not see", timeout: 5000 });
     expect(res.stdout).toBe("");
   });
+
+  test("returns aborted exit code when turn signal is aborted", async () => {
+    const dir = await tmpDir();
+    const controller = new AbortController();
+    controller.abort();
+    const t: any = createBashTool(makeCtx(dir, { abortSignal: controller.signal }));
+    const res = await t.execute({ command: "echo hello", timeout: 5000 });
+    expect(res.exitCode).toBe(130);
+    expect(res.stderr.toLowerCase()).toContain("aborted");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -672,6 +682,19 @@ describe("glob tool", () => {
 
     const t: any = createGlobTool(makeCtx(dir));
     await expect(t.execute({ pattern: absolutePattern })).rejects.toThrow(/blocked/i);
+  });
+
+  test("limits results when maxResults is provided", async () => {
+    const dir = await tmpDir();
+    for (let i = 0; i < 5; i++) {
+      await fs.writeFile(path.join(dir, `f${i}.txt`), "", "utf-8");
+    }
+
+    const t: any = createGlobTool(makeCtx(dir));
+    const res: string = await t.execute({ pattern: "*.txt", maxResults: 2 });
+    const lines = res.split("\n");
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+    expect(res).toContain("truncated to 2 matches");
   });
 });
 
@@ -1949,7 +1972,7 @@ describe("skill tool", () => {
     expect(res).toContain("not found");
   });
 
-  test("caches loaded skills", async () => {
+  test("reloads modified skill content when file changes", async () => {
     const dir = await tmpDir();
     const skillDir = path.join(dir, "skills_cache_test", "cached_skill_unique");
     await fs.mkdir(skillDir, { recursive: true });
@@ -1968,9 +1991,9 @@ describe("skill tool", () => {
     // Modify the file on disk
     await fs.writeFile(path.join(skillDir, "SKILL.md"), "Modified content", "utf-8");
 
-    // Second call should return cached version
+    // Second call should reflect updated on-disk content.
     const res2: string = await t.execute({ skillName: "cached_skill_unique" });
-    expect(res2).toBe("Cached content");
+    expect(res2).toBe("Modified content");
   });
 
   test("searches multiple skillsDirs in order", async () => {

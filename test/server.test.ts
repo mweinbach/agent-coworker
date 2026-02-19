@@ -379,6 +379,23 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("resumeSessionId query param reattaches a recently disconnected session", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const first = await collectMessages(url, 1);
+      const originalSessionId = first[0]?.sessionId;
+      expect(typeof originalSessionId).toBe("string");
+      expect(originalSessionId.length).toBeGreaterThan(0);
+
+      const resumed = await collectMessages(`${url}?resumeSessionId=${originalSessionId}`, 1);
+      expect(resumed[0]?.type).toBe("server_hello");
+      expect(resumed[0]?.sessionId).toBe(originalSessionId);
+    } finally {
+      server.stop();
+    }
+  });
+
   test("sending client_hello is handled gracefully (no error returned)", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

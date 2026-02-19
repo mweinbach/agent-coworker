@@ -386,6 +386,14 @@ describe("runTurn", () => {
     expect(ctx.updateTodos).toBe(updateTodos);
   });
 
+  test("passes abortSignal through tool context", async () => {
+    const abortController = new AbortController();
+    await runTurn(makeParams({ abortSignal: abortController.signal }));
+
+    const ctx = mockCreateTools.mock.calls[0][0] as any;
+    expect(ctx.abortSignal).toBe(abortController.signal);
+  });
+
   test("builtin tools are included in tools passed to streamText", async () => {
     mockCreateTools.mockReturnValue({ myTool: { type: "custom" } });
     await runTurn(makeParams());
@@ -441,6 +449,67 @@ describe("runTurn", () => {
     const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.tools).toHaveProperty("bash");
     expect(callArg.tools).toHaveProperty("mcp__s__doThing");
+  });
+
+  test("MCP tool name collisions are remapped to a safe alias", async () => {
+    const log = mock(() => {});
+    mockCreateTools.mockReturnValue({ bash: { type: "builtin-bash" } });
+    mockLoadMCPServers.mockResolvedValue([{ name: "s", transport: { type: "stdio", command: "x", args: [] } }]);
+    mockLoadMCPTools.mockResolvedValue({
+      tools: { bash: { type: "mcp-bash" } },
+      errors: [],
+    });
+
+    await runTurn(makeParams({ enableMcp: true, log }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.tools.bash.type).toBe("builtin-bash");
+    expect(callArg.tools).toHaveProperty("mcp__bash");
+    expect(callArg.tools["mcp__bash"].type).toBe("mcp-bash");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("MCP tool name collision"));
+  });
+
+  test("forwards modelSettings maxRetries and timeout to streamText", async () => {
+    const config = makeConfig({
+      modelSettings: {
+        maxRetries: 1,
+        timeout: {
+          totalMs: 60000,
+          stepMs: 10000,
+          chunkMs: 3000,
+        },
+      },
+    });
+
+    await runTurn(makeParams({ config }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.maxRetries).toBe(1);
+    expect(callArg.timeout).toEqual({
+      totalMs: 60000,
+      stepMs: 10000,
+      chunkMs: 3000,
+    });
+  });
+
+  test("stream onError callback forwards to onModelError", async () => {
+    const onModelError = mock(async () => {});
+    await runTurn(makeParams({ onModelError }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(typeof callArg.onError).toBe("function");
+    await callArg.onError({ error: new Error("stream failed") });
+    expect(onModelError).toHaveBeenCalledTimes(1);
+  });
+
+  test("stream onAbort callback forwards to onModelAbort", async () => {
+    const onModelAbort = mock(async () => {});
+    await runTurn(makeParams({ onModelAbort }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(typeof callArg.onAbort).toBe("function");
+    await callArg.onAbort({ steps: [] });
+    expect(onModelAbort).toHaveBeenCalledTimes(1);
   });
 
   test("does not call loadMCPTools when no servers are configured", async () => {

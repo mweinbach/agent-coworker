@@ -103,6 +103,22 @@ function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
   return commands;
 }
 
+function normalizePositiveInt(v: unknown): number | undefined {
+  const n = asNumber(v);
+  if (n === null) return undefined;
+  const i = Math.floor(n);
+  if (!Number.isFinite(i) || i <= 0) return undefined;
+  return i;
+}
+
+function normalizeNonNegativeInt(v: unknown): number | undefined {
+  const n = asNumber(v);
+  if (n === null) return undefined;
+  const i = Math.floor(n);
+  if (!Number.isFinite(i) || i < 0) return undefined;
+  return i;
+}
+
 function resolveUserHomeFromConfig(config: AgentConfig): string {
   if (typeof config.userAgentDir === "string" && config.userAgentDir) {
     return path.dirname(config.userAgentDir);
@@ -278,6 +294,52 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   };
 
   const command = parseCommandConfig((merged as Record<string, unknown>).command);
+  const providerOptions = isPlainObject((merged as Record<string, unknown>).providerOptions)
+    ? (deepMerge({}, (merged as Record<string, unknown>).providerOptions as Record<string, unknown>) as Record<string, any>)
+    : undefined;
+
+  const mergedModelSettings = isPlainObject((merged as Record<string, unknown>).modelSettings)
+    ? ((merged as Record<string, unknown>).modelSettings as Record<string, unknown>)
+    : {};
+  const mergedModelTimeout = isPlainObject(mergedModelSettings.timeout)
+    ? (mergedModelSettings.timeout as Record<string, unknown>)
+    : {};
+
+  const modelSettings: AgentConfig["modelSettings"] = {
+    ...(normalizeNonNegativeInt(env.AGENT_MODEL_MAX_RETRIES) !== undefined
+      ? { maxRetries: normalizeNonNegativeInt(env.AGENT_MODEL_MAX_RETRIES) }
+      : normalizeNonNegativeInt(mergedModelSettings.maxRetries) !== undefined
+        ? { maxRetries: normalizeNonNegativeInt(mergedModelSettings.maxRetries) }
+        : {}),
+    timeout: {
+      ...(normalizePositiveInt(env.AGENT_MODEL_TIMEOUT_TOTAL_MS ?? env.AGENT_MODEL_TIMEOUT_MS) !== undefined
+        ? { totalMs: normalizePositiveInt(env.AGENT_MODEL_TIMEOUT_TOTAL_MS ?? env.AGENT_MODEL_TIMEOUT_MS) }
+        : normalizePositiveInt(mergedModelTimeout.totalMs) !== undefined
+          ? { totalMs: normalizePositiveInt(mergedModelTimeout.totalMs) }
+          : {}),
+      ...(normalizePositiveInt(env.AGENT_MODEL_TIMEOUT_STEP_MS) !== undefined
+        ? { stepMs: normalizePositiveInt(env.AGENT_MODEL_TIMEOUT_STEP_MS) }
+        : normalizePositiveInt(mergedModelTimeout.stepMs) !== undefined
+          ? { stepMs: normalizePositiveInt(mergedModelTimeout.stepMs) }
+          : {}),
+      ...(normalizePositiveInt(env.AGENT_MODEL_TIMEOUT_CHUNK_MS) !== undefined
+        ? { chunkMs: normalizePositiveInt(env.AGENT_MODEL_TIMEOUT_CHUNK_MS) }
+        : normalizePositiveInt(mergedModelTimeout.chunkMs) !== undefined
+          ? { chunkMs: normalizePositiveInt(mergedModelTimeout.chunkMs) }
+          : {}),
+    },
+  };
+  const hasModelTimeout =
+    typeof modelSettings.timeout?.totalMs === "number" ||
+    typeof modelSettings.timeout?.stepMs === "number" ||
+    typeof modelSettings.timeout?.chunkMs === "number";
+  const normalizedModelSettings: AgentConfig["modelSettings"] =
+    typeof modelSettings.maxRetries === "number" || hasModelTimeout
+      ? {
+          ...(typeof modelSettings.maxRetries === "number" ? { maxRetries: modelSettings.maxRetries } : {}),
+          ...(hasModelTimeout ? { timeout: modelSettings.timeout } : {}),
+        }
+      : undefined;
 
   return {
     provider,
@@ -309,6 +371,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     observability,
     harness,
     command,
+    ...(providerOptions ? { providerOptions } : {}),
+    ...(normalizedModelSettings ? { modelSettings: normalizedModelSettings } : {}),
   };
 }
 

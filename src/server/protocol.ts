@@ -477,7 +477,8 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
         obj.query.limit !== undefined &&
         (typeof obj.query.limit !== "number" ||
           !Number.isInteger(obj.query.limit) ||
-          obj.query.limit <= 0)
+          obj.query.limit <= 0 ||
+          obj.query.limit > 10_000)
       ) {
         return { ok: false, error: "observability_query invalid query.limit" };
       }

@@ -1,4 +1,5 @@
-import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import readline from "node:readline";
 
 import { tool } from "ai";
 import { z } from "zod";
@@ -24,11 +25,31 @@ export function createReadTool(ctx: ToolContext) {
         ctx.config,
         "read"
       );
-      const raw = await fs.readFile(abs, "utf-8");
-      const lines = raw.split("\n");
       const start = (offset || 1) - 1;
-      const sliced = lines.slice(start, start + limit);
-      const numbered = sliced.map((line, i) => `${start + i + 1}\t${truncateLine(line, 2000)}`);
+      const end = start + limit;
+      const numbered: string[] = [];
+
+      let lineNo = 0;
+      const stream = createReadStream(abs, { encoding: "utf-8" });
+      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+      try {
+        for await (const line of rl) {
+          lineNo += 1;
+          if (lineNo <= start) continue;
+          if (lineNo > end) break;
+          if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
+          numbered.push(`${lineNo}\t${truncateLine(line, 2000)}`);
+        }
+      } finally {
+        rl.close();
+        stream.destroy();
+      }
+
+      if (lineNo === 0 && start === 0) {
+        // Preserve existing behavior for empty files.
+        numbered.push("1\t");
+      }
+
       const res = numbered.join("\n");
 
       ctx.log(`tool< read ${JSON.stringify({ chars: res.length })}`);

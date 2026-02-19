@@ -10,4 +10,5 @@ This directory is the system-of-record for harness engineering in `agent-coworke
 
 See also:
 - `docs/websocket-protocol.md` for wire-level message/event definitions.
+- `test/server.test.ts` (`Protocol Doc Parity`) for the automated check that protocol docs stay in sync with `src/server/protocol.ts`.
 - `scripts/run_raw_agent_loops.ts` for the current harness runner implementation.

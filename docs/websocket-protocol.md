@@ -9,7 +9,7 @@ This document is the canonical external protocol contract for all clients. Thin 
 - **URL**: `ws://127.0.0.1:{port}/ws` (default port `7337`)
 - **No authentication** — server binds to localhost only
 - **Ping/pong keepalive** — clients may send `ping` with `sessionId`; the server responds with `pong`
-- **One session per connection** — disconnecting destroys the session; there is no resumption
+- **Session resume window** — reconnect with `?resumeSessionId=<sessionId>` within 60s to reattach to an existing session
 
 ## Public Capabilities
 
@@ -37,7 +37,7 @@ Client                          Server
   |---- user_message / others --->|  (must include sessionId)
 ```
 
-1. Client opens a WebSocket to `ws://127.0.0.1:{port}/ws`
+1. Client opens a WebSocket to `ws://127.0.0.1:{port}/ws` (or `.../ws?resumeSessionId=<previousSessionId>` to resume)
 2. Server creates an `AgentSession` and immediately sends `server_hello` with a UUID `sessionId`
 3. Client optionally sends `client_hello` to identify itself
 4. Client includes `sessionId` in **every** subsequent message

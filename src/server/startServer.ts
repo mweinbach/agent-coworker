@@ -15,6 +15,22 @@ import {
   type ServerEvent,
 } from "./protocol";
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(override)) {
+    if (isPlainObject(out[k]) && isPlainObject(v)) {
+      out[k] = deepMerge(out[k] as Record<string, unknown>, v as Record<string, unknown>);
+      continue;
+    }
+    out[k] = v;
+  }
+  return out as T;
+}
+
 export interface StartAgentServerOptions {
   cwd: string;
   hostname?: string;
@@ -27,6 +43,14 @@ export interface StartAgentServerOptions {
   getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
   runTurnImpl?: typeof runTurnFn;
 }
+
+type SessionBinding = {
+  session: AgentSession;
+  socket: Bun.ServerWebSocket<{ session?: AgentSession; resumeSessionId?: string }> | null;
+  disposeTimer: ReturnType<typeof setTimeout> | null;
+};
+
+const RESUME_SESSION_TTL_MS = 60_000;
 
 export async function startAgentServer(
   opts: StartAgentServerOptions
@@ -52,22 +76,36 @@ export async function startAgentServer(
       ? env.COWORK_BUILTIN_DIR
       : undefined;
   const config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
-  if (opts.providerOptions) config.providerOptions = opts.providerOptions;
+  const mergedProviderOptions =
+    isPlainObject(opts.providerOptions) && isPlainObject(config.providerOptions)
+      ? deepMerge(
+          opts.providerOptions as Record<string, unknown>,
+          config.providerOptions as Record<string, unknown>
+        )
+      : isPlainObject(config.providerOptions)
+        ? config.providerOptions
+        : isPlainObject(opts.providerOptions)
+          ? opts.providerOptions
+          : undefined;
+  if (mergedProviderOptions) config.providerOptions = mergedProviderOptions;
 
   await fs.mkdir(config.projectAgentDir, { recursive: true });
   await fs.mkdir(config.outputDirectory, { recursive: true });
   await fs.mkdir(config.uploadsDirectory, { recursive: true });
 
   const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
+  const sessionBindings = new Map<string, SessionBinding>();
 
   function createServer(port: number): ReturnType<typeof Bun.serve> {
-    return Bun.serve<{ session?: AgentSession }>({
+    return Bun.serve<{ session?: AgentSession; resumeSessionId?: string }>({
       hostname,
       port,
       fetch(req, srv) {
         const url = new URL(req.url);
         if (url.pathname === "/ws") {
-          const upgraded = srv.upgrade(req, { data: {} });
+          const resumeSessionIdRaw = url.searchParams.get("resumeSessionId");
+          const resumeSessionId = resumeSessionIdRaw && resumeSessionIdRaw.trim() ? resumeSessionIdRaw.trim() : undefined;
+          const upgraded = srv.upgrade(req, { data: { resumeSessionId } });
           if (upgraded) return;
           return new Response("WebSocket upgrade failed", { status: 400 });
         }
@@ -75,24 +113,53 @@ export async function startAgentServer(
       },
       websocket: {
         open(ws) {
-          const session = new AgentSession({
-            config,
-            system,
-            discoveredSkills,
-            yolo: opts.yolo,
-            connectProviderImpl: opts.connectProviderImpl,
-            getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl,
-            runTurnImpl: opts.runTurnImpl,
-            emit: (evt: ServerEvent) => {
-              try {
-                ws.send(JSON.stringify(evt));
-              } catch {
-                // ignore
-              }
-            },
-          });
+          const resumeSessionId = ws.data.resumeSessionId;
+          const resumable =
+            resumeSessionId && sessionBindings.has(resumeSessionId)
+              ? sessionBindings.get(resumeSessionId)
+              : undefined;
+
+          let session: AgentSession;
+          let binding: SessionBinding;
+
+          if (resumable && resumable.socket === null) {
+            binding = resumable;
+            binding.socket = ws;
+            if (binding.disposeTimer) {
+              clearTimeout(binding.disposeTimer);
+              binding.disposeTimer = null;
+            }
+            session = binding.session;
+          } else {
+            binding = {
+              session: undefined as unknown as AgentSession,
+              socket: ws,
+              disposeTimer: null,
+            };
+            session = new AgentSession({
+              config,
+              system,
+              discoveredSkills,
+              yolo: opts.yolo,
+              connectProviderImpl: opts.connectProviderImpl,
+              getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl,
+              runTurnImpl: opts.runTurnImpl,
+              emit: (evt: ServerEvent) => {
+                const socket = binding.socket;
+                if (!socket) return;
+                try {
+                  socket.send(JSON.stringify(evt));
+                } catch {
+                  // ignore
+                }
+              },
+            });
+            binding.session = session;
+            sessionBindings.set(session.id, binding);
+          }
 
           ws.data.session = session;
+          ws.data.resumeSessionId = session.id;
 
           const hello: ServerEvent = {
             type: "server_hello",
@@ -308,7 +375,24 @@ export async function startAgentServer(
           }
         },
         close(ws) {
-          ws.data.session?.dispose("websocket closed");
+          const session = ws.data.session;
+          if (!session) return;
+          const binding = sessionBindings.get(session.id);
+          if (!binding) {
+            session.dispose("websocket closed");
+            return;
+          }
+
+          if (binding.socket === ws) {
+            binding.socket = null;
+          }
+
+          if (binding.disposeTimer) clearTimeout(binding.disposeTimer);
+          binding.disposeTimer = setTimeout(() => {
+            if (binding.socket) return;
+            binding.session.dispose("websocket closed");
+            sessionBindings.delete(binding.session.id);
+          }, RESUME_SESSION_TTL_MS);
         },
       },
     });

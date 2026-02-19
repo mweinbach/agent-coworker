@@ -8,6 +8,8 @@ import { z } from "zod";
 import type { ToolContext } from "./context";
 import { truncateText } from "../utils/paths";
 
+const MEMORY_SEARCH_TIMEOUT_MS = 30_000;
+
 async function readIfExists(p: string): Promise<string | null> {
   try {
     return await fs.readFile(p, "utf-8");
@@ -98,6 +100,7 @@ Use action=read to retrieve memory, action=write to store new information, and a
 
       if (action === "search") {
         if (!query) throw new Error("query is required for search action");
+        if (ctx.abortSignal?.aborted) throw new Error("Cancelled by user");
 
         const parts: string[] = [];
 
@@ -115,17 +118,27 @@ Use action=read to retrieve memory, action=write to store new information, and a
           execFile(
             "rg",
             ["-n", "--no-heading", query, projectMemoryDir, userMemoryDir],
-            { maxBuffer: 1024 * 1024 * 5 },
-            (err, stdout) => {
+            {
+              maxBuffer: 1024 * 1024 * 5,
+              timeout: MEMORY_SEARCH_TIMEOUT_MS,
+              ...(ctx.abortSignal ? { signal: ctx.abortSignal } : {}),
+            },
+            (err, stdout, stderr) => {
+              if ((err as any)?.name === "AbortError" || (err as any)?.code === "ABORT_ERR") {
+                return resolve(`Memory search aborted.`);
+              }
               const code = (err as any)?.code;
               if (code === 1) return resolve(null);
               if ((err as any)?.code === "ENOENT") return resolve(null);
-              if (err) return resolve(String(err));
+              if (err) return resolve(String(stderr || err));
               return resolve(stdout.toString());
             }
           );
         });
 
+        if (rgOut === "Memory search aborted.") {
+          throw new Error("Cancelled by user");
+        }
         if (rgOut) parts.push(rgOut);
 
         const out = parts.length ? truncateText(parts.join("\n\n"), 30000) : `No memory found for "${query}".`;

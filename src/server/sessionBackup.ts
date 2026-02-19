@@ -67,6 +67,8 @@ const METADATA_FILE = "metadata.json";
 const ORIGINAL_DIR = "original";
 const ORIGINAL_ARCHIVE = "original.tar.gz";
 const CHECKPOINTS_DIR = "checkpoints";
+const DEFAULT_MAX_CLOSED_SESSIONS = 20;
+const DEFAULT_MAX_CLOSED_AGE_DAYS = 7;
 
 function makeCheckpointId(index: number): string {
   return `cp-${String(index).padStart(4, "0")}`;
@@ -486,6 +488,44 @@ export class SessionBackupManager implements SessionBackupHandle {
     }
   }
 
+  static async pruneClosedSessions(
+    backupsRootDir: string,
+    opts?: { maxClosedSessions?: number; maxClosedAgeDays?: number; skipSessionId?: string }
+  ): Promise<void> {
+    await ensureSecureDirectory(backupsRootDir);
+    const maxClosedSessions = Math.max(1, Math.floor(opts?.maxClosedSessions ?? DEFAULT_MAX_CLOSED_SESSIONS));
+    const maxClosedAgeDays = Math.max(1, Math.floor(opts?.maxClosedAgeDays ?? DEFAULT_MAX_CLOSED_AGE_DAYS));
+    const maxClosedAgeMs = maxClosedAgeDays * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    const entries = await fs.readdir(backupsRootDir, { withFileTypes: true });
+    const closedSessions: Array<{ sessionId: string; sessionDir: string; closedAtMs: number }> = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (opts?.skipSessionId && entry.name === opts.skipSessionId) continue;
+      const sessionDir = path.join(backupsRootDir, entry.name);
+      const metadata = await readMetadata(path.join(sessionDir, METADATA_FILE));
+      if (!metadata || metadata.state !== "closed") continue;
+      const closedAtMs = Date.parse(metadata.closedAt ?? metadata.createdAt);
+      closedSessions.push({
+        sessionId: metadata.sessionId,
+        sessionDir,
+        closedAtMs: Number.isFinite(closedAtMs) ? closedAtMs : 0,
+      });
+    }
+
+    closedSessions.sort((a, b) => b.closedAtMs - a.closedAtMs);
+    const keep = new Set(closedSessions.slice(0, maxClosedSessions).map((x) => x.sessionId));
+
+    for (const session of closedSessions) {
+      const tooOld = session.closedAtMs > 0 && now - session.closedAtMs > maxClosedAgeMs;
+      const overLimit = !keep.has(session.sessionId);
+      if (!tooOld && !overLimit) continue;
+      await fs.rm(session.sessionDir, { recursive: true, force: true });
+    }
+  }
+
   static async create(opts: SessionBackupInitOptions): Promise<SessionBackupManager> {
     const workingDirectory = path.resolve(opts.workingDirectory);
     const paths = getAiCoworkerPaths({ homedir: opts.homedir });
@@ -723,6 +763,15 @@ export class SessionBackupManager implements SessionBackupHandle {
     this.metadata.state = "closed";
     this.metadata.closedAt = new Date().toISOString();
     await this.persistMetadata();
+    try {
+      const backupsRootDir = path.dirname(this.sessionDir);
+      await SessionBackupManager.compactClosedSessions(backupsRootDir);
+      await SessionBackupManager.pruneClosedSessions(backupsRootDir, {
+        skipSessionId: this.metadata.sessionId,
+      });
+    } catch {
+      // best-effort cleanup
+    }
   }
 
   private async ensureOriginalDirectory(): Promise<string> {

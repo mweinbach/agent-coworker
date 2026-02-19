@@ -465,6 +465,21 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("cancel", () => {
+    test("valid cancel message", () => {
+      const msg = expectOk(JSON.stringify({ type: "cancel", sessionId: "s1" }));
+      expect(msg.type).toBe("cancel");
+      if (msg.type === "cancel") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("cancel missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "cancel" }));
+      expect(err).toBe("cancel missing sessionId");
+    });
+  });
+
   describe("read_skill", () => {
     test("valid read_skill message", () => {
       const msg = expectOk(JSON.stringify({ type: "read_skill", sessionId: "s1", skillName: "pdf" }));
@@ -645,6 +660,17 @@ describe("safeParseClientMessage", () => {
           type: "observability_query",
           sessionId: "s1",
           query: { queryType: "promql", query: "up", limit: 0 },
+        }),
+      );
+      expect(err).toContain("observability_query invalid query.limit");
+    });
+
+    test("observability_query rejects too-large limit", () => {
+      const err = expectErr(
+        JSON.stringify({
+          type: "observability_query",
+          sessionId: "s1",
+          query: { queryType: "promql", query: "up", limit: 10001 },
         }),
       );
       expect(err).toContain("observability_query invalid query.limit");

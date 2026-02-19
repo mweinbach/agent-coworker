@@ -26,7 +26,34 @@ export interface RunTurnParams {
   enableMcp?: boolean;
   abortSignal?: AbortSignal;
   onModelStreamPart?: (part: unknown) => void | Promise<void>;
+  onModelError?: (error: unknown) => void | Promise<void>;
+  onModelAbort?: () => void | Promise<void>;
   includeRawChunks?: boolean;
+}
+
+function mergeToolSets(
+  builtInTools: Record<string, any>,
+  mcpTools: Record<string, any>,
+  log: (line: string) => void
+): Record<string, any> {
+  const merged: Record<string, any> = { ...builtInTools };
+  for (const [name, toolDef] of Object.entries(mcpTools)) {
+    if (!(name in merged)) {
+      merged[name] = toolDef;
+      continue;
+    }
+
+    const baseAlias = `mcp__${name}`;
+    let alias = baseAlias;
+    let i = 2;
+    while (alias in merged) {
+      alias = `${baseAlias}_${i}`;
+      i += 1;
+    }
+    log(`[warn] MCP tool name collision: "${name}" remapped to "${alias}"`);
+    merged[alias] = toolDef;
+  }
+  return merged;
 }
 
 type RunTurnDeps = {
@@ -63,6 +90,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
       approveCommand,
       updateTodos,
       spawnDepth: params.spawnDepth ?? 0,
+      abortSignal,
       availableSkills: discoveredSkills,
     };
     const builtInTools = deps.createTools(toolCtx);
@@ -79,10 +107,11 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
       }
     }
 
-    const tools = { ...builtInTools, ...mcpTools };
+    const tools = mergeToolSets(builtInTools, mcpTools, log);
 
     const result = await (async () => {
       try {
+        const timeoutCfg = config.modelSettings?.timeout;
         const streamResult = await deps.streamText({
           model: deps.getModel(config),
           system,
@@ -91,6 +120,29 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           providerOptions: config.providerOptions,
           stopWhen: deps.stepCountIs(params.maxSteps ?? 100),
           abortSignal,
+          ...(typeof config.modelSettings?.maxRetries === "number"
+            ? { maxRetries: config.modelSettings.maxRetries }
+            : {}),
+          ...(timeoutCfg &&
+          (typeof timeoutCfg.totalMs === "number" ||
+            typeof timeoutCfg.stepMs === "number" ||
+            typeof timeoutCfg.chunkMs === "number")
+            ? {
+                timeout: {
+                  ...(typeof timeoutCfg.totalMs === "number" ? { totalMs: timeoutCfg.totalMs } : {}),
+                  ...(typeof timeoutCfg.stepMs === "number" ? { stepMs: timeoutCfg.stepMs } : {}),
+                  ...(typeof timeoutCfg.chunkMs === "number" ? { chunkMs: timeoutCfg.chunkMs } : {}),
+                },
+              }
+            : {}),
+          onError: async ({ error }: { error: unknown }) => {
+            log(`[model:error] ${String(error)}`);
+            await params.onModelError?.(error);
+          },
+          onAbort: async () => {
+            log("[model:abort]");
+            await params.onModelAbort?.();
+          },
           includeRawChunks: params.includeRawChunks ?? true,
         } as any);
 

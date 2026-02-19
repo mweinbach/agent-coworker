@@ -14,6 +14,12 @@ export interface ToolContext {
   /** Current sub-agent nesting depth (0 = root session). */
   spawnDepth?: number;
 
+  /**
+   * Abort signal for the active turn.
+   * Tools should honor this signal for long-running operations.
+   */
+  abortSignal?: AbortSignal;
+
   /** Lightweight skill metadata for dynamic tool descriptions. Populated from skill discovery. */
   availableSkills?: Array<{ name: string; description: string }>;
 }

@@ -513,6 +513,84 @@ describe("loadConfig", () => {
 
     expect(cfg.command).toBeUndefined();
   });
+
+  test("merges providerOptions from built-in, user, and project config", async () => {
+    const { cwd, home } = await makeTmpDirs();
+    const customBuiltIn = path.join(os.tmpdir(), `builtin-provider-options-${Date.now()}`);
+
+    await writeJson(path.join(customBuiltIn, "config", "defaults.json"), {
+      provider: "openai",
+      model: "gpt-5.2",
+      providerOptions: {
+        openai: {
+          reasoningEffort: "low",
+          reasoningSummary: "auto",
+        },
+        google: {
+          thinkingConfig: { includeThoughts: true, thinkingLevel: "low" },
+        },
+      },
+    });
+
+    await writeJson(path.join(home, ".agent", "config.json"), {
+      providerOptions: {
+        openai: {
+          reasoningSummary: "detailed",
+        },
+      },
+    });
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      providerOptions: {
+        openai: {
+          reasoningEffort: "high",
+        },
+      },
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: customBuiltIn,
+      env: {},
+    });
+
+    expect(cfg.providerOptions).toBeDefined();
+    expect(cfg.providerOptions?.openai.reasoningEffort).toBe("high");
+    expect(cfg.providerOptions?.openai.reasoningSummary).toBe("detailed");
+    expect(cfg.providerOptions?.google.thinkingConfig.thinkingLevel).toBe("low");
+  });
+
+  test("loads modelSettings from config and allows env overrides", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      modelSettings: {
+        maxRetries: 4,
+        timeout: {
+          totalMs: 120000,
+          stepMs: 15000,
+          chunkMs: 5000,
+        },
+      },
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {
+        AGENT_MODEL_MAX_RETRIES: "1",
+        AGENT_MODEL_TIMEOUT_MS: "60000",
+        AGENT_MODEL_TIMEOUT_CHUNK_MS: "2000",
+      },
+    });
+
+    expect(cfg.modelSettings?.maxRetries).toBe(1);
+    expect(cfg.modelSettings?.timeout?.totalMs).toBe(60000);
+    expect(cfg.modelSettings?.timeout?.stepMs).toBe(15000);
+    expect(cfg.modelSettings?.timeout?.chunkMs).toBe(2000);
+  });
 });
 
 // ---------------------------------------------------------------------------

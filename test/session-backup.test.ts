@@ -112,9 +112,33 @@ describe("SessionBackupManager", () => {
     const originalDir = path.join(sessionDir, "original");
     const originalArchive = path.join(sessionDir, "original.tar.gz");
 
-    expect(await fileExists(originalDir)).toBe(true);
+    // Close now triggers best-effort compaction, so either form can exist here.
+    const hadOriginalDir = await fileExists(originalDir);
+    const hadArchive = await fileExists(originalArchive);
+    expect(hadOriginalDir || hadArchive).toBe(true);
     await SessionBackupManager.compactClosedSessions(backupsRoot);
     expect(await fileExists(originalArchive)).toBe(true);
     expect(await fileExists(originalDir)).toBe(false);
+  });
+
+  test("pruneClosedSessions removes old closed sessions beyond retention", async () => {
+    const { home, workspace } = await makeTmpWorkspace();
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const sessionId = crypto.randomUUID();
+      ids.push(sessionId);
+      const manager = await SessionBackupManager.create({
+        sessionId,
+        workingDirectory: workspace,
+        homedir: home,
+      });
+      await manager.close();
+    }
+
+    const backupsRoot = path.join(home, ".cowork", "session-backups");
+    await SessionBackupManager.pruneClosedSessions(backupsRoot, { maxClosedSessions: 1, maxClosedAgeDays: 365 });
+
+    const existing = await Promise.all(ids.map(async (id) => ({ id, exists: await fileExists(path.join(backupsRoot, id)) })));
+    expect(existing.filter((x) => x.exists).length).toBe(1);
   });
 });

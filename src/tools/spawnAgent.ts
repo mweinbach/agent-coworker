@@ -42,8 +42,13 @@ function createSubAgentTools(
     askUser: async () => {
       throw new Error("Sub-agent cannot ask the user directly.");
     },
-    approveCommand: async (command) => safeApprove(command),
+    approveCommand: async (command) => {
+      if (safeApprove(command)) return true;
+      return await parent.approveCommand(command);
+    },
     spawnDepth: (parent.spawnDepth ?? 0) + 1,
+    abortSignal: parent.abortSignal,
+    availableSkills: parent.availableSkills,
   };
 
   if (agentType === "explore") {
@@ -126,6 +131,28 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
         tools,
         stopWhen: stepCountIs(50),
         providerOptions: ctx.config.providerOptions,
+        ...(typeof ctx.config.modelSettings?.maxRetries === "number"
+          ? { maxRetries: ctx.config.modelSettings.maxRetries }
+          : {}),
+        ...(ctx.config.modelSettings?.timeout &&
+        (typeof ctx.config.modelSettings.timeout.totalMs === "number" ||
+          typeof ctx.config.modelSettings.timeout.stepMs === "number" ||
+          typeof ctx.config.modelSettings.timeout.chunkMs === "number")
+          ? {
+              timeout: {
+                ...(typeof ctx.config.modelSettings.timeout.totalMs === "number"
+                  ? { totalMs: ctx.config.modelSettings.timeout.totalMs }
+                  : {}),
+                ...(typeof ctx.config.modelSettings.timeout.stepMs === "number"
+                  ? { stepMs: ctx.config.modelSettings.timeout.stepMs }
+                  : {}),
+                ...(typeof ctx.config.modelSettings.timeout.chunkMs === "number"
+                  ? { chunkMs: ctx.config.modelSettings.timeout.chunkMs }
+                  : {}),
+              },
+            }
+          : {}),
+        abortSignal: ctx.abortSignal,
         prompt: normalizedTask,
       } as any);
       const text = await streamResult.text;

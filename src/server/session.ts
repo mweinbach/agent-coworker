@@ -66,6 +66,9 @@ function deferred<T>(): Deferred<T> {
 
 /** Maximum number of message history entries before older entries are pruned. */
 const MAX_MESSAGE_HISTORY = 200;
+const ASK_RESPONSE_TIMEOUT_MS = 5 * 60_000;
+const APPROVAL_RESPONSE_TIMEOUT_MS = 5 * 60_000;
+const AUTO_CHECKPOINT_MIN_INTERVAL_MS = 30_000;
 
 export class AgentSession {
   readonly id: string;
@@ -97,7 +100,9 @@ export class AgentSession {
   private todos: TodoItem[] = [];
   private sessionBackup: SessionBackupHandle | null = null;
   private sessionBackupState: SessionBackupPublicState;
-  private readonly sessionBackupInit: Promise<void>;
+  private sessionBackupInit: Promise<void> | null = null;
+  private backupOperationQueue: Promise<void> = Promise.resolve();
+  private lastAutoCheckpointAt = 0;
 
   constructor(opts: {
     config: AgentConfig;
@@ -140,7 +145,6 @@ export class AgentSession {
       originalSnapshot: { kind: "pending" },
       checkpoints: [],
     };
-    this.sessionBackupInit = this.initializeSessionBackup();
   }
 
   getPublicConfig() {
@@ -201,7 +205,8 @@ export class AgentSession {
     });
   }
 
-  private classifyTurnError(message: string): { code: ServerErrorCode; source: ServerErrorSource } {
+  private classifyTurnError(err: unknown): { code: ServerErrorCode; source: ServerErrorSource } {
+    const message = this.formatErrorMessage(err);
     const m = message.toLowerCase();
     const includesAny = (...needles: string[]) => needles.some((needle) => m.includes(needle));
 
@@ -241,6 +246,27 @@ export class AgentSession {
     }
 
     return { code: "internal_error", source: "session" };
+  }
+
+  private isAbortLikeError(err: unknown): boolean {
+    if (this.abortController?.signal.aborted) return true;
+    if (err instanceof DOMException && err.name === "AbortError") return true;
+
+    const code = typeof err === "object" && err ? (err as { code?: unknown }).code : undefined;
+    if (code === "ABORT_ERR") return true;
+
+    const msg = this.formatErrorMessage(err).toLowerCase();
+    return msg.includes("abort") || msg.includes("cancel");
+  }
+
+  private emitTelemetry(name: string, status: "ok" | "error", attributes?: Record<string, string | number | boolean>, durationMs?: number) {
+    void emitObservabilityEvent(this.config, {
+      name,
+      at: new Date().toISOString(),
+      status,
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      attributes,
+    });
   }
 
   reset() {
@@ -486,6 +512,11 @@ export class AgentSession {
   setHarnessContext(context: HarnessContextPayload) {
     const next = this.harnessContextStore.set(this.id, context);
     this.emit({ type: "harness_context", sessionId: this.id, context: next });
+    this.emitTelemetry("harness.context.set", "ok", {
+      sessionId: this.id,
+      runId: context.runId,
+      objectiveLength: context.objective.length,
+    });
   }
 
   private formatErrorMessage(err: unknown): string {
@@ -542,21 +573,63 @@ export class AgentSession {
   }
 
   async queryObservability(query: ObservabilityQueryRequest) {
+    const startedAt = Date.now();
     let result: Extract<ServerEvent, { type: "observability_query_result" }>["result"];
     try {
       result = await this.runObservabilityQueryImpl(this.config, query);
+      this.emitTelemetry(
+        "observability.query",
+        result.status === "ok" ? "ok" : "error",
+        {
+          sessionId: this.id,
+          queryType: query.queryType,
+          limit: typeof query.limit === "number" ? query.limit : 0,
+        },
+        Date.now() - startedAt
+      );
     } catch (err) {
       result = this.buildObservabilityQueryErrorResult(query, err);
+      this.emitTelemetry(
+        "observability.query",
+        "error",
+        {
+          sessionId: this.id,
+          queryType: query.queryType,
+          error: this.formatErrorMessage(err),
+        },
+        Date.now() - startedAt
+      );
     }
     this.emit({ type: "observability_query_result", sessionId: this.id, result });
   }
 
   async evaluateHarnessSloChecks(checks: HarnessSloCheck[]) {
+    const startedAt = Date.now();
     let result: Extract<ServerEvent, { type: "harness_slo_result" }>["result"];
     try {
       result = await this.evaluateHarnessSloImpl(this.config, checks);
+      this.emitTelemetry(
+        "harness.slo.evaluate",
+        result.passed ? "ok" : "error",
+        {
+          sessionId: this.id,
+          checks: checks.length,
+          passed: result.passed,
+        },
+        Date.now() - startedAt
+      );
     } catch (err) {
       result = this.buildHarnessSloErrorResult(checks, err);
+      this.emitTelemetry(
+        "harness.slo.evaluate",
+        "error",
+        {
+          sessionId: this.id,
+          checks: checks.length,
+          error: this.formatErrorMessage(err),
+        },
+        Date.now() - startedAt
+      );
     }
     this.emit({ type: "harness_slo_result", sessionId: this.id, result });
   }
@@ -655,6 +728,12 @@ export class AgentSession {
     const result = authorizeProviderAuth({ provider: providerRaw, methodId });
     if (!result.ok) {
       this.emitError("provider_error", "provider", result.message);
+      this.emitTelemetry("provider.auth.authorize", "error", {
+        sessionId: this.id,
+        provider: providerRaw,
+        methodId,
+        error: result.message,
+      });
       return;
     }
     this.emit({
@@ -663,6 +742,11 @@ export class AgentSession {
       provider: providerRaw,
       methodId,
       challenge: result.challenge,
+    });
+    this.emitTelemetry("provider.auth.authorize", "ok", {
+      sessionId: this.id,
+      provider: providerRaw,
+      methodId,
     });
   }
 
@@ -690,6 +774,7 @@ export class AgentSession {
     }
 
     this.connecting = true;
+    const startedAt = Date.now();
     try {
       const code = codeRaw?.trim() ? codeRaw.trim() : undefined;
       const result = await callbackProviderAuthMethod({
@@ -717,8 +802,30 @@ export class AgentSession {
         await this.refreshProviderStatus();
         await this.emitProviderCatalog();
       }
+      this.emitTelemetry(
+        "provider.auth.callback",
+        result.ok ? "ok" : "error",
+        {
+          sessionId: this.id,
+          provider: providerRaw,
+          methodId,
+          mode: result.mode ?? "unknown",
+        },
+        Date.now() - startedAt
+      );
     } catch (err) {
       this.emitError("provider_error", "provider", `Provider auth callback failed: ${String(err)}`);
+      this.emitTelemetry(
+        "provider.auth.callback",
+        "error",
+        {
+          sessionId: this.id,
+          provider: providerRaw,
+          methodId,
+          error: this.formatErrorMessage(err),
+        },
+        Date.now() - startedAt
+      );
     } finally {
       this.connecting = false;
     }
@@ -748,6 +855,7 @@ export class AgentSession {
     }
 
     this.connecting = true;
+    const startedAt = Date.now();
     try {
       const result = await setProviderApiKeyMethod({
         provider: providerRaw,
@@ -772,8 +880,30 @@ export class AgentSession {
         await this.refreshProviderStatus();
         await this.emitProviderCatalog();
       }
+      this.emitTelemetry(
+        "provider.auth.api_key",
+        result.ok ? "ok" : "error",
+        {
+          sessionId: this.id,
+          provider: providerRaw,
+          methodId,
+          mode: result.mode ?? "unknown",
+        },
+        Date.now() - startedAt
+      );
     } catch (err) {
       this.emitError("provider_error", "provider", `Setting provider API key failed: ${String(err)}`);
+      this.emitTelemetry(
+        "provider.auth.api_key",
+        "error",
+        {
+          sessionId: this.id,
+          provider: providerRaw,
+          methodId,
+          error: this.formatErrorMessage(err),
+        },
+        Date.now() - startedAt
+      );
     } finally {
       this.connecting = false;
     }
@@ -782,12 +912,25 @@ export class AgentSession {
   async refreshProviderStatus() {
     if (this.refreshingProviderStatus) return;
     this.refreshingProviderStatus = true;
+    const startedAt = Date.now();
     try {
       const paths = this.getCoworkPaths();
       const providers = await this.getProviderStatusesImpl({ paths });
       this.emit({ type: "provider_status", sessionId: this.id, providers });
+      this.emitTelemetry(
+        "provider.status.refresh",
+        "ok",
+        { sessionId: this.id, providers: providers.length },
+        Date.now() - startedAt
+      );
     } catch (err) {
       this.emitError("provider_error", "provider", `Failed to refresh provider status: ${String(err)}`);
+      this.emitTelemetry(
+        "provider.status.refresh",
+        "error",
+        { sessionId: this.id, error: this.formatErrorMessage(err) },
+        Date.now() - startedAt
+      );
     } finally {
       this.refreshingProviderStatus = false;
     }
@@ -849,13 +992,76 @@ export class AgentSession {
     this.emit({ type: "log", sessionId: this.id, line });
   }
 
+  private waitForPromptResponse<T>(
+    requestId: string,
+    bucket: Map<string, Deferred<T>>,
+    timeoutMs: number,
+    timeoutMessage: string
+  ): Promise<T> {
+    const deferredValue = bucket.get(requestId);
+    if (!deferredValue) return Promise.reject(new Error(`Unknown prompt request: ${requestId}`));
+
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        bucket.delete(requestId);
+        deferredValue.reject(new Error(timeoutMessage));
+        reject(new Error(timeoutMessage));
+      }, timeoutMs);
+
+      deferredValue.promise.then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (err) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(err);
+        }
+      );
+    });
+  }
+
+  private async runInBackupQueue<T>(op: () => Promise<T>): Promise<T> {
+    const prior = this.backupOperationQueue;
+    let release!: () => void;
+    this.backupOperationQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await prior.catch(() => {});
+    try {
+      return await op();
+    } finally {
+      release();
+    }
+  }
+
+  private async ensureSessionBackupInitialized() {
+    if (!this.sessionBackupInit) {
+      this.sessionBackupInit = this.initializeSessionBackup();
+    }
+    await this.sessionBackupInit;
+  }
+
   private async askUser(question: string, options?: string[]) {
     const requestId = makeId();
     const d = deferred<string>();
     this.pendingAsk.set(requestId, d);
 
     this.emit({ type: "ask", sessionId: this.id, requestId, question, options });
-    return await d.promise;
+    return await this.waitForPromptResponse(
+      requestId,
+      this.pendingAsk,
+      ASK_RESPONSE_TIMEOUT_MS,
+      "Ask prompt timed out waiting for user response."
+    );
   }
 
   private async approveCommand(command: string) {
@@ -883,7 +1089,12 @@ export class AgentSession {
       reasonCode: classification.riskCode,
     });
 
-    return await d.promise;
+    return await this.waitForPromptResponse(
+      requestId,
+      this.pendingApproval,
+      APPROVAL_RESPONSE_TIMEOUT_MS,
+      "Command approval timed out waiting for user response."
+    );
   }
 
   private updateTodos = (todos: TodoItem[]) => {
@@ -892,8 +1103,9 @@ export class AgentSession {
   };
 
   async getSessionBackupState() {
-    await this.sessionBackupInit;
+    await this.ensureSessionBackupInitialized();
     this.emitSessionBackupState("requested");
+    this.emitTelemetry("session.backup.state_requested", "ok", { sessionId: this.id });
   }
 
   async createManualSessionCheckpoint() {
@@ -901,20 +1113,25 @@ export class AgentSession {
       this.emitError("busy", "session", "Agent is busy");
       return;
     }
-
-    await this.sessionBackupInit;
-    if (!this.sessionBackup) {
-      const reason = this.sessionBackupState.failureReason ?? "Session backup is unavailable";
-      this.emitError("backup_error", "backup", reason);
-      return;
-    }
-
+    const startedAt = Date.now();
     try {
-      await this.sessionBackup.createCheckpoint("manual");
-      this.sessionBackupState = this.sessionBackup.getPublicState();
-      this.emitSessionBackupState("manual_checkpoint");
+      const didCheckpoint = await this.runInBackupQueue(async () => {
+        await this.ensureSessionBackupInitialized();
+        if (!this.sessionBackup) {
+          const reason = this.sessionBackupState.failureReason ?? "Session backup is unavailable";
+          this.emitError("backup_error", "backup", reason);
+          return false;
+        }
+        await this.sessionBackup.createCheckpoint("manual");
+        this.sessionBackupState = this.sessionBackup.getPublicState();
+        this.emitSessionBackupState("manual_checkpoint");
+        return true;
+      });
+      if (!didCheckpoint) return;
+      this.emitTelemetry("session.backup.checkpoint.manual", "ok", { sessionId: this.id }, Date.now() - startedAt);
     } catch (err) {
       this.emitError("backup_error", "backup", `manual checkpoint failed: ${String(err)}`);
+      this.emitTelemetry("session.backup.checkpoint.manual", "error", { sessionId: this.id }, Date.now() - startedAt);
     }
   }
 
@@ -924,23 +1141,29 @@ export class AgentSession {
       return;
     }
 
-    await this.sessionBackupInit;
-    if (!this.sessionBackup) {
-      const reason = this.sessionBackupState.failureReason ?? "Session backup is unavailable";
-      this.emitError("backup_error", "backup", reason);
-      return;
-    }
-
+    const startedAt = Date.now();
     try {
-      if (checkpointId) {
-        await this.sessionBackup.restoreCheckpoint(checkpointId);
-      } else {
-        await this.sessionBackup.restoreOriginal();
-      }
-      this.sessionBackupState = this.sessionBackup.getPublicState();
-      this.emitSessionBackupState("restore");
+      const didRestore = await this.runInBackupQueue(async () => {
+        await this.ensureSessionBackupInitialized();
+        if (!this.sessionBackup) {
+          const reason = this.sessionBackupState.failureReason ?? "Session backup is unavailable";
+          this.emitError("backup_error", "backup", reason);
+          return false;
+        }
+        if (checkpointId) {
+          await this.sessionBackup.restoreCheckpoint(checkpointId);
+        } else {
+          await this.sessionBackup.restoreOriginal();
+        }
+        this.sessionBackupState = this.sessionBackup.getPublicState();
+        this.emitSessionBackupState("restore");
+        return true;
+      });
+      if (!didRestore) return;
+      this.emitTelemetry("session.backup.restore", "ok", { sessionId: this.id }, Date.now() - startedAt);
     } catch (err) {
       this.emitError("backup_error", "backup", `restore failed: ${String(err)}`);
+      this.emitTelemetry("session.backup.restore", "error", { sessionId: this.id }, Date.now() - startedAt);
     }
   }
 
@@ -950,23 +1173,29 @@ export class AgentSession {
       return;
     }
 
-    await this.sessionBackupInit;
-    if (!this.sessionBackup) {
-      const reason = this.sessionBackupState.failureReason ?? "Session backup is unavailable";
-      this.emitError("backup_error", "backup", reason);
-      return;
-    }
-
+    const startedAt = Date.now();
     try {
-      const removed = await this.sessionBackup.deleteCheckpoint(checkpointId);
-      if (!removed) {
-        this.emitError("validation_failed", "backup", `Unknown checkpoint id: ${checkpointId}`);
-        return;
-      }
-      this.sessionBackupState = this.sessionBackup.getPublicState();
-      this.emitSessionBackupState("delete");
+      const didDelete = await this.runInBackupQueue(async () => {
+        await this.ensureSessionBackupInitialized();
+        if (!this.sessionBackup) {
+          const reason = this.sessionBackupState.failureReason ?? "Session backup is unavailable";
+          this.emitError("backup_error", "backup", reason);
+          return false;
+        }
+        const removed = await this.sessionBackup.deleteCheckpoint(checkpointId);
+        if (!removed) {
+          this.emitError("validation_failed", "backup", `Unknown checkpoint id: ${checkpointId}`);
+          return false;
+        }
+        this.sessionBackupState = this.sessionBackup.getPublicState();
+        this.emitSessionBackupState("delete");
+        return true;
+      });
+      if (!didDelete) return;
+      this.emitTelemetry("session.backup.checkpoint.delete", "ok", { sessionId: this.id }, Date.now() - startedAt);
     } catch (err) {
       this.emitError("backup_error", "backup", `delete checkpoint failed: ${String(err)}`);
+      this.emitTelemetry("session.backup.checkpoint.delete", "error", { sessionId: this.id }, Date.now() - startedAt);
     }
   }
 
@@ -982,18 +1211,11 @@ export class AgentSession {
     try {
       this.emit({ type: "user_message", sessionId: this.id, text: displayText ?? text, clientMessageId });
       this.emit({ type: "session_busy", sessionId: this.id, busy: true });
-      // Telemetry is best-effort; don't block turn execution on network I/O.
-      void emitObservabilityEvent(this.config, {
-        name: "agent.turn.started",
-        at: new Date().toISOString(),
-        status: "ok",
-        attributes: {
-          sessionId: this.id,
-          provider: this.config.provider,
-          model: this.config.model,
-        },
+      this.emitTelemetry("agent.turn.started", "ok", {
+        sessionId: this.id,
+        provider: this.config.provider,
+        model: this.config.model,
       });
-      await this.sessionBackupInit;
       this.messages.push({ role: "user", content: text });
 
       // Trim message history to prevent unbounded memory growth.
@@ -1019,6 +1241,21 @@ export class AgentSession {
         spawnDepth: 0,
         abortSignal: this.abortController.signal,
         includeRawChunks: true,
+        onModelError: async (error) => {
+          this.emitTelemetry("agent.stream.error", "error", {
+            sessionId: this.id,
+            provider: this.config.provider,
+            model: this.config.model,
+            error: this.formatErrorMessage(error),
+          });
+        },
+        onModelAbort: async () => {
+          this.emitTelemetry("agent.stream.aborted", "ok", {
+            sessionId: this.id,
+            provider: this.config.provider,
+            model: this.config.model,
+          });
+        },
         onModelStreamPart: async (rawPart) => {
           const normalized = normalizeModelStreamPart(rawPart, {
             provider: this.config.provider,
@@ -1048,38 +1285,44 @@ export class AgentSession {
 
       const out = (res.text || "").trim();
       if (out) this.emit({ type: "assistant_message", sessionId: this.id, text: out });
-      // Telemetry is best-effort; don't block turn execution on network I/O.
-      void emitObservabilityEvent(this.config, {
-        name: "agent.turn.completed",
-        at: new Date().toISOString(),
-        status: "ok",
-        durationMs: Date.now() - turnStartedAt,
-        attributes: {
+      this.emitTelemetry(
+        "agent.turn.completed",
+        "ok",
+        {
           sessionId: this.id,
           provider: this.config.provider,
           model: this.config.model,
         },
-      });
+        Date.now() - turnStartedAt
+      );
     } catch (err) {
-      const msg = String(err);
-      // Don't emit error for user-initiated cancellation.
-      if (!msg.includes("abort") && !msg.includes("cancel")) {
-        const classified = this.classifyTurnError(msg);
+      const msg = this.formatErrorMessage(err);
+      if (!this.isAbortLikeError(err)) {
+        const classified = this.classifyTurnError(err);
         this.emitError(classified.code, classified.source, msg);
+        this.emitTelemetry(
+          "agent.turn.failed",
+          "error",
+          {
+            sessionId: this.id,
+            provider: this.config.provider,
+            model: this.config.model,
+            error: msg,
+          },
+          Date.now() - turnStartedAt
+        );
+      } else {
+        this.emitTelemetry(
+          "agent.turn.aborted",
+          "ok",
+          {
+            sessionId: this.id,
+            provider: this.config.provider,
+            model: this.config.model,
+          },
+          Date.now() - turnStartedAt
+        );
       }
-      // Telemetry is best-effort; don't block turn execution on network I/O.
-      void emitObservabilityEvent(this.config, {
-        name: "agent.turn.failed",
-        at: new Date().toISOString(),
-        status: "error",
-        durationMs: Date.now() - turnStartedAt,
-        attributes: {
-          sessionId: this.id,
-          provider: this.config.provider,
-          model: this.config.model,
-          error: msg,
-        },
-      });
     } finally {
       await this.takeAutomaticSessionCheckpoint();
       this.emit({ type: "session_busy", sessionId: this.id, busy: false });
@@ -1101,6 +1344,7 @@ export class AgentSession {
 
   private async initializeSessionBackup() {
     const userHome = this.config.userAgentDir ? path.dirname(this.config.userAgentDir) : undefined;
+    const startedAt = Date.now();
 
     try {
       this.sessionBackup = await this.sessionBackupFactory({
@@ -1109,6 +1353,7 @@ export class AgentSession {
         homedir: userHome,
       });
       this.sessionBackupState = this.sessionBackup.getPublicState();
+      this.emitTelemetry("session.backup.initialize", "ok", { sessionId: this.id }, Date.now() - startedAt);
     } catch (err) {
       const reason = `session backup initialization failed: ${String(err)}`;
       this.sessionBackup = null;
@@ -1118,28 +1363,55 @@ export class AgentSession {
         failureReason: reason,
         originalSnapshot: { kind: "pending" },
       };
+      this.emitTelemetry(
+        "session.backup.initialize",
+        "error",
+        { sessionId: this.id, error: reason },
+        Date.now() - startedAt
+      );
     }
   }
 
   private async takeAutomaticSessionCheckpoint() {
-    if (!this.sessionBackup) return;
+    if (Date.now() - this.lastAutoCheckpointAt < AUTO_CHECKPOINT_MIN_INTERVAL_MS) return;
+
     try {
-      await this.sessionBackup.createCheckpoint("auto");
-      this.sessionBackupState = this.sessionBackup.getPublicState();
-      this.emitSessionBackupState("auto_checkpoint");
+      const didCheckpoint = await this.runInBackupQueue(async () => {
+        if (Date.now() - this.lastAutoCheckpointAt < AUTO_CHECKPOINT_MIN_INTERVAL_MS) return;
+        await this.ensureSessionBackupInitialized();
+        if (!this.sessionBackup) return false;
+        await this.sessionBackup.createCheckpoint("auto");
+        this.sessionBackupState = this.sessionBackup.getPublicState();
+        this.emitSessionBackupState("auto_checkpoint");
+        this.lastAutoCheckpointAt = Date.now();
+        return true;
+      });
+      if (!didCheckpoint) return;
     } catch (err) {
       this.emitError("backup_error", "backup", `automatic checkpoint failed: ${String(err)}`);
+      this.emitTelemetry("session.backup.checkpoint.auto", "error", {
+        sessionId: this.id,
+        error: this.formatErrorMessage(err),
+      });
+      return;
     }
+
+    this.emitTelemetry("session.backup.checkpoint.auto", "ok", { sessionId: this.id });
   }
 
   private async closeSessionBackup() {
-    await this.sessionBackupInit;
-    if (!this.sessionBackup) return;
+    if (!this.sessionBackupInit) return;
     try {
-      await this.sessionBackup.close();
-      this.sessionBackupState = this.sessionBackup.getPublicState();
+      await this.runInBackupQueue(async () => {
+        await this.ensureSessionBackupInitialized();
+        if (!this.sessionBackup) return;
+        await this.sessionBackup.close();
+        this.sessionBackupState = this.sessionBackup.getPublicState();
+      });
+      this.emitTelemetry("session.backup.close", "ok", { sessionId: this.id });
     } catch {
       // best-effort close
+      this.emitTelemetry("session.backup.close", "error", { sessionId: this.id });
     }
   }
 }

@@ -134,9 +134,10 @@ describe("spawnAgent tool", () => {
     expect(lastGenerateTextArgs.tools.webSearch.id).toBe("google.google_search");
   });
 
-  test("explore includes bash tool and uses safe auto-approval only", async () => {
+  test("explore includes bash tool and escalates non-auto approvals to parent context", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-explore-"));
-    const ctx = makeCtx(dir);
+    const parentApprove = mock(async (command: string) => !command.includes("touch"));
+    const ctx = makeCtx(dir, { approveCommand: parentApprove });
 
     const t: any = createSpawnAgentTool(ctx, {
       streamText: mockStreamText as any,
@@ -157,6 +158,24 @@ describe("spawnAgent tool", () => {
     const rejected = await tools.bash.execute({ command: "touch /tmp/should-not-run", timeout: 5000 });
     expect(rejected.exitCode).toBe(1);
     expect(rejected.stderr).toContain("rejected");
+    expect(parentApprove).toHaveBeenCalledWith("touch /tmp/should-not-run");
+  });
+
+  test("forwards abortSignal to sub-agent streamText call", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-abort-"));
+    const controller = new AbortController();
+    const ctx = makeCtx(dir, { abortSignal: controller.signal });
+
+    const t: any = createSpawnAgentTool(ctx, {
+      streamText: mockStreamText as any,
+      stepCountIs: mockStepCountIs as any,
+      getModel: mockGetModel as any,
+      loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
+      classifyCommandDetailed: mockClassifyCommandDetailed as any,
+    });
+
+    await t.execute({ task: "check signal", agentType: "general" });
+    expect(lastGenerateTextArgs.abortSignal).toBe(controller.signal);
   });
 
   test("rejects sub-agent recursion beyond configured depth", async () => {

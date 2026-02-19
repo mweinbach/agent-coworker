@@ -6,11 +6,28 @@ import { z } from "zod";
 
 import type { ToolContext } from "./context";
 
-const loadedSkills = new Map<string, string>();
+type SkillCacheEntry = {
+  content: string;
+  mtimeMs: number;
+  size: number;
+};
+
+const loadedSkills = new Map<string, SkillCacheEntry>();
 
 async function readIfExists(p: string): Promise<string | null> {
   try {
-    return await fs.readFile(p, "utf-8");
+    const stat = await fs.stat(p);
+    if (!stat.isFile()) return null;
+
+    const cacheKey = path.resolve(p);
+    const cached = loadedSkills.get(cacheKey);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return cached.content;
+    }
+
+    const content = await fs.readFile(p, "utf-8");
+    loadedSkills.set(cacheKey, { content, mtimeMs: stat.mtimeMs, size: stat.size });
+    return content;
   } catch {
     return null;
   }
@@ -41,25 +58,17 @@ export function createSkillTool(ctx: ToolContext) {
       skillName: z.string().describe(paramDesc),
     }),
     execute: async ({ skillName }) => {
-      if (loadedSkills.has(skillName)) return loadedSkills.get(skillName)!;
-
       for (const dir of ctx.config.skillsDirs) {
         const p = path.join(dir, skillName, "SKILL.md");
         const content = await readIfExists(p);
-        if (content) {
-          loadedSkills.set(skillName, content);
-          return content;
-        }
+        if (content) return content;
       }
 
       // Fallback: flat file layout skills/<skillName>.md
       for (const dir of ctx.config.skillsDirs) {
         const p = path.join(dir, `${skillName}.md`);
         const content = await readIfExists(p);
-        if (content) {
-          loadedSkills.set(skillName, content);
-          return content;
-        }
+        if (content) return content;
       }
 
       return `Skill "${skillName}" not found.`;

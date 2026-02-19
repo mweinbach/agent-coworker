@@ -7,7 +7,7 @@
   --panel-bg: #f6eee4;
   --border: rgba(94, 67, 41, 0.14);
   --text: #2f2318;
-  --muted: rgba(47, 35, 24, 0.55);
+  --muted: #5a4736;
   --accent: #9a6640;
   --danger: #bb3e3e;
   --danger-bg: rgba(187, 62, 62, 0.12);
@@ -28,7 +28,7 @@
     --panel-bg: #332a22;
     --border: rgba(255, 233, 212, 0.12);
     --text: #f6ece0;
-    --muted: rgba(246, 236, 224, 0.55);
+    --muted: #d8c7b6;
     --accent: #e29a62;
     --danger: #e86060;
     --danger-bg: rgba(232, 96, 96, 0.14);
@@ -50,13 +50,25 @@ button {
 }
 a { color: inherit; text-decoration: none; }
 
-.navItem, .workspaceRow, .threadRow, .sidebarToggle, .iconButton {
+.navItem, .workspaceRow, .threadRow, .sidebarToggle, .iconButton, .titleBarButton, .settingsProviderRow, .skillsList .skillsItem {
   border: none;
   background: transparent;
   outline: none;
 }
 
-.navItem:focus-visible, .workspaceRow:focus-visible, .threadRow:focus-visible, .sidebarToggle:focus-visible {
+:where(button, [role="button"], a, input, textarea, select, .sidebarResizer):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.navItem:focus-visible,
+.workspaceRow:focus-visible,
+.threadRow:focus-visible,
+.sidebarToggle:focus-visible,
+.iconButton:focus-visible,
+.settingsProviderRow:focus-visible,
+.skillsList .skillsItem:focus-visible,
+.titleBarButton:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
@@ -89,9 +101,46 @@ a { color: inherit; text-decoration: none; }
 .titleBarLeft { display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag; }
 .titleBarTitle { font-size: 12px; font-weight: 600; opacity: 0.6; }
 .titleBarCenter { position: absolute; left: 50%; transform: translateX(-50%); }
+.titleBarControls { display: flex; height: 100%; -webkit-app-region: no-drag; }
+.titleBarButton {
+  min-width: 44px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  transition: background 160ms ease, color 160ms ease;
+}
+.titleBarButton:hover { background: rgba(0, 0, 0, 0.08); color: var(--text); }
+.titleBarButtonClose:hover { background: #c85a5a; color: #fff; }
 
 .sidebarContainer { position: relative; flex-shrink: 0; min-width: 0; overflow: hidden; }
 .sidebarContainer.sidebarCollapsed { width: 0 !important; }
+.sidebarResizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 20;
+  touch-action: none;
+}
+.sidebarResizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 4px;
+  width: 2px;
+  height: 100%;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.sidebarResizer:hover::after,
+.sidebarResizer:focus-visible::after,
+.sidebarResizerActive::after {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
 
 .sidebar {
   height: 100%;
@@ -200,8 +249,8 @@ a { color: inherit; text-decoration: none; }
 .topbarTitle { font-weight: 700; font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .sidebarToggle {
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -364,8 +413,8 @@ a { color: inherit; text-decoration: none; }
 }
 
 .sendButton {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   flex-shrink: 0;
   border-radius: 50%; /* Circle send button */
   background: var(--accent);
@@ -388,7 +437,6 @@ a { color: inherit; text-decoration: none; }
 .sendButton:active:not(:disabled) {
   transform: scale(0.95);
 }
-.sendButton:hover { filter: brightness(1.1); transform: translateY(-1px); }
 .sendButton:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
 .contextSidebar {
@@ -484,6 +532,8 @@ a { color: inherit; text-decoration: none; }
   .toolCallCard { background: rgba(255, 255, 255, 0.03); }
   .bubble { background: rgba(255, 255, 255, 0.04); }
   .inlineCard { background: rgba(255, 255, 255, 0.03); }
+  .titleBarButton:hover { background: rgba(255, 255, 255, 0.12); }
+  .titleBarButtonClose:hover { background: #d46b6b; color: #fff; }
 }
 
 /* Shared primitives */
@@ -537,6 +587,32 @@ a { color: inherit; text-decoration: none; }
   background: var(--accent);
   flex-shrink: 0;
   animation: pulse 1.25s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .feedItem,
+  .toolStatusDot.running,
+  .spinner-mini,
+  .threadBusyDot {
+    animation: none !important;
+  }
+
+  .sendButton,
+  .primaryButton,
+  .iconButton,
+  .modalButton,
+  .settingsProviderRow,
+  .navItem,
+  .sidebarToggle {
+    transition: none !important;
+  }
+
+  .sendButton:hover:not(:disabled),
+  .sendButton:active:not(:disabled),
+  .primaryButton:hover,
+  .iconButton:hover:not(:disabled) {
+    transform: none !important;
+  }
 }
 
 .hero {
@@ -679,6 +755,14 @@ a { color: inherit; text-decoration: none; }
 .modalTextInput:focus {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.composer textarea:focus-visible,
+.settingsSelect:focus-visible,
+.settingsTextInput:focus-visible,
+.modalTextInput:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .approvalCard {
@@ -936,12 +1020,14 @@ a { color: inherit; text-decoration: none; }
 }
 
 .settingsProviderRow {
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   padding: 14px 18px;
   cursor: pointer;
+  text-align: left;
   border-radius: 13px;
   transition: background 120ms ease;
 }
@@ -1144,10 +1230,12 @@ a { color: inherit; text-decoration: none; }
 }
 
 .skillsList .skillsItem {
+  width: 100%;
   border: 1px solid transparent;
   border-radius: 10px;
   padding: 10px;
   cursor: pointer;
+  text-align: left;
 }
 
 .skillsList .skillsItem:hover {

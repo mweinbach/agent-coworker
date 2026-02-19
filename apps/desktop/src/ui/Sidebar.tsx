@@ -134,6 +134,7 @@ export function Sidebar() {
             type="button"
             onClick={() => void addWorkspace()}
             title="Add workspace"
+            aria-label="Add workspace"
           >
             <IconPlus />
           </button>
@@ -157,7 +158,16 @@ export function Sidebar() {
                   <div
                     className="workspaceRow"
                     data-active={active}
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={active}
                     onClick={() => void selectWorkspace(ws.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        void selectWorkspace(ws.id);
+                      }
+                    }}
                     onContextMenu={(e) => handleWorkspaceContextMenu(e, ws.id, ws.name)}
                     title={ws.path}
                   >

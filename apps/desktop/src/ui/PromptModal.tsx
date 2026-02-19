@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../app/store";
 
@@ -83,6 +83,15 @@ export function shouldRenderAskOptions(options: string[]): boolean {
   return options.length >= 2;
 }
 
+const MODAL_FOCUSABLE_SELECTOR = [
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "textarea:not([disabled])",
+  "select:not([disabled])",
+  "[href]",
+  "[tabindex]:not([tabindex='-1'])",
+].join(", ");
+
 export function PromptModal() {
   const modal = useAppStore((s) => s.promptModal);
   const answerAsk = useAppStore((s) => s.answerAsk);
@@ -90,14 +99,80 @@ export function PromptModal() {
   const dismiss = useAppStore((s) => s.dismissPrompt);
 
   const [freeText, setFreeText] = useState("");
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
 
   const requestId = modal?.kind === "ask" ? modal.prompt.requestId : null;
   useEffect(() => {
     setFreeText("");
   }, [requestId]);
 
+  useEffect(() => {
+    if (!modal) return;
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const rafId = window.requestAnimationFrame(() => {
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const preferred = dialog.querySelector<HTMLElement>("[data-modal-autofocus='true']");
+      const firstFocusable = preferred ?? dialog.querySelector<HTMLElement>(MODAL_FOCUSABLE_SELECTOR);
+      firstFocusable?.focus();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      restoreFocusRef.current?.focus();
+    };
+  }, [modal, requestId]);
+
+  useEffect(() => {
+    if (!modal) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        dismiss();
+        return;
+      }
+
+      if (event.key !== "Tab") return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(MODAL_FOCUSABLE_SELECTOR)).filter(
+        (el) => !el.hasAttribute("disabled") && el.getAttribute("aria-hidden") !== "true",
+      );
+
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+        return;
+      }
+
+      if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [dismiss, modal]);
+
   const content = useMemo(() => {
     if (!modal) return null;
+    const titleId = `prompt-modal-title-${modal.kind}`;
+    const descriptionId = `prompt-modal-description-${modal.kind}`;
 
     if (modal.kind === "ask") {
       const opts = normalizeAskOptions(modal.prompt.options);
@@ -105,9 +180,17 @@ export function PromptModal() {
       const questionText = normalizeAskQuestion(modal.prompt.question);
 
       return (
-        <div className="modal">
-          <div className="modalTitle">Question</div>
-          <div className="modalBody">{questionText}</div>
+        <div
+          className="modal"
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          aria-describedby={descriptionId}
+          tabIndex={-1}
+        >
+          <div className="modalTitle" id={titleId}>Question</div>
+          <div className="modalBody" id={descriptionId}>{questionText}</div>
 
           {hasOptions && (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
@@ -136,7 +219,9 @@ export function PromptModal() {
               }}
               placeholder={hasOptions ? "Or type a custom answer…" : "Type your answer…"}
               className="modalTextInput"
+              aria-label="Custom answer"
               autoFocus={!hasOptions}
+              data-modal-autofocus={!hasOptions ? "true" : undefined}
             />
             <button
               className="modalButton modalButtonPrimary"
@@ -161,9 +246,17 @@ export function PromptModal() {
 
     if (modal.kind === "approval") {
       return (
-        <div className="modal">
-          <div className="modalTitle">Command approval</div>
-          <div className={"approvalCard" + (modal.prompt.dangerous ? "" : "")}>
+        <div
+          className="modal"
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          aria-describedby={descriptionId}
+          tabIndex={-1}
+        >
+          <div className="modalTitle" id={titleId}>Command approval</div>
+          <div className={"approvalCard" + (modal.prompt.dangerous ? "" : "")} id={descriptionId}>
             <div style={{ fontSize: 11, textTransform: "uppercase", marginBottom: 6 }}>
               {modal.prompt.dangerous ? "Dangerous" : "Command"}
             </div>
@@ -173,7 +266,12 @@ export function PromptModal() {
             </div>
           </div>
           <div className="modalActions">
-            <button className="modalButton" type="button" onClick={() => answerApproval(modal.threadId, modal.prompt.requestId, false)}>
+            <button
+              className="modalButton"
+              type="button"
+              data-modal-autofocus="true"
+              onClick={() => answerApproval(modal.threadId, modal.prompt.requestId, false)}
+            >
               Deny
             </button>
             <button

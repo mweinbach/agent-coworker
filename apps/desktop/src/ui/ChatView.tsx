@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -11,6 +11,20 @@ import { ToolCard } from "./chat/toolCards/ToolCard";
 
 const REMARK_PLUGINS = [remarkGfm];
 const REHYPE_PLUGINS = [rehypeSanitize];
+
+type ChatViewContextValue = {
+  developerMode: boolean;
+};
+
+const ChatViewContext = createContext<ChatViewContextValue | null>(null);
+
+function useChatViewContext(): ChatViewContextValue {
+  const context = useContext(ChatViewContext);
+  if (!context) {
+    throw new Error("ChatViewContext is not available");
+  }
+  return context;
+}
 
 const Markdown = memo(function Markdown(props: { text: string }) {
   return (
@@ -69,7 +83,8 @@ const ReasoningFeedItem = memo(function ReasoningFeedItem(props: { item: Extract
   );
 });
 
-const FeedRow = memo(function FeedRow(props: { item: FeedItem; developerMode: boolean }) {
+const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
+  const { developerMode } = useChatViewContext();
   const item = props.item;
 
   if (item.kind === "message") {
@@ -97,7 +112,7 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem; developerMode: bo
   }
 
   if (item.kind === "log") {
-    if (!props.developerMode) return null;
+    if (!developerMode) return null;
     return (
       <div className="feedItem">
         <div className="inlineCard">
@@ -184,6 +199,12 @@ export function ChatView() {
   const feed = rt?.feed ?? [];
   const normalizedFeed = normalizeFeedForToolCards(feed, developerMode);
   const visibleFeed = filterFeedForDeveloperMode(normalizedFeed, developerMode);
+  const contextValue = useMemo<ChatViewContextValue>(
+    () => ({
+      developerMode,
+    }),
+    [developerMode]
+  );
 
   useEffect(() => {
     const el = feedRef.current;
@@ -238,68 +259,74 @@ export function ChatView() {
   const disconnected = !transcriptOnly && thread.status !== "active";
 
   return (
-    <div className="chatLayout">
-      <div className="feed" ref={feedRef}>
-        {transcriptOnly ? (
-          <div style={{ marginBottom: 12, padding: 8, background: "rgba(255,255,255,0.1)", borderRadius: 6 }}>
-            <div style={{ fontWeight: 600 }}>Transcript view</div>
-            <div style={{ fontSize: 13, color: "var(--muted)" }}>Sending a message will continue in a new thread.</div>
-          </div>
-        ) : disconnected ? (
-          <div style={{ marginBottom: 12, padding: 8, background: "rgba(255,255,255,0.1)", borderRadius: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-            <div>
-              <div style={{ fontWeight: 600 }}>Disconnected</div>
-              <div style={{ fontSize: 13, color: "var(--muted)" }}>Reconnect to continue this thread.</div>
+    <ChatViewContext.Provider value={contextValue}>
+      <div className="chatLayout">
+        <div className="feed" ref={feedRef}>
+          {transcriptOnly ? (
+            <div style={{ marginBottom: 12, padding: 8, background: "rgba(255,255,255,0.1)", borderRadius: 6 }}>
+              <div style={{ fontWeight: 600 }}>Transcript view</div>
+              <div style={{ fontSize: 13, color: "var(--muted)" }}>Sending a message will continue in a new thread.</div>
             </div>
-            <button className="iconButton" type="button" onClick={() => void reconnectThread(selectedThreadId!)}>
-              Reconnect
-            </button>
+          ) : disconnected ? (
+            <div style={{ marginBottom: 12, padding: 8, background: "rgba(255,255,255,0.1)", borderRadius: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div>
+                <div style={{ fontWeight: 600 }}>Disconnected</div>
+                <div style={{ fontSize: 13, color: "var(--muted)" }}>Reconnect to continue this thread.</div>
+              </div>
+              <button className="iconButton" type="button" onClick={() => void reconnectThread(selectedThreadId!)}>
+                Reconnect
+              </button>
+            </div>
+          ) : null}
+
+          {visibleFeed.length === 0 ? (
+            <div className="hero" style={{ height: "auto", paddingTop: 60 }}>
+              <div className="heroTitle" style={{ fontSize: 18 }}>New thread</div>
+              <div className="heroSub" style={{ fontSize: 14 }}>Send a message to start.</div>
+            </div>
+          ) : null}
+
+          {visibleFeed.map((item) => (
+            <FeedRow key={item.id} item={item} />
+          ))}
+        </div>
+
+        <div className="composerWrap">
+          <div className="composer">
+            <textarea
+              ref={textareaRef}
+              value={composerText}
+              onChange={(e) => setComposerText(e.currentTarget.value)}
+              placeholder={transcriptOnly ? "Continue in a new thread…" : disconnected ? "Reconnect to continue…" : busy ? "Working…" : "Message…"}
+              aria-label="Message input"
+              disabled={disabled}
+              onKeyDown={onComposerKeyDown}
+            />
+            {busy ? (
+              <button
+                className="sendButton stopButton"
+                type="button"
+                onClick={() => cancelThread(selectedThreadId!)}
+                title="Stop"
+                aria-label="Stop generating response"
+              >
+                <IconSquare />
+              </button>
+            ) : (
+              <button
+                className="sendButton"
+                type="button"
+                disabled={disabled || !composerText.trim()}
+                onClick={() => void sendMessage(composerText)}
+                title="Send message"
+                aria-label="Send message"
+              >
+                <IconSend />
+              </button>
+            )}
           </div>
-        ) : null}
-
-        {visibleFeed.length === 0 ? (
-          <div className="hero" style={{ height: "auto", paddingTop: 60 }}>
-            <div className="heroTitle" style={{ fontSize: 18 }}>New thread</div>
-            <div className="heroSub" style={{ fontSize: 14 }}>Send a message to start.</div>
-          </div>
-        ) : null}
-
-        {visibleFeed.map((item) => (
-          <FeedRow key={item.id} item={item} developerMode={developerMode} />
-        ))}
-      </div>
-
-      <div className="composerWrap">
-        <div className="composer">
-          <textarea
-            ref={textareaRef}
-            value={composerText}
-            onChange={(e) => setComposerText(e.currentTarget.value)}
-            placeholder={transcriptOnly ? "Continue in a new thread…" : disconnected ? "Reconnect to continue…" : busy ? "Working…" : "Message…"}
-            disabled={disabled}
-            onKeyDown={onComposerKeyDown}
-          />
-          {busy ? (
-            <button
-              className="sendButton stopButton"
-              type="button"
-              onClick={() => cancelThread(selectedThreadId!)}
-              title="Stop"
-            >
-              <IconSquare />
-            </button>
-          ) : (
-            <button
-              className="sendButton"
-              type="button"
-              disabled={disabled || !composerText.trim()}
-              onClick={() => void sendMessage(composerText)}
-            >
-              <IconSend />
-            </button>
-          )}
         </div>
       </div>
-    </div>
+    </ChatViewContext.Provider>
   );
 }

@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { app } from "electron";
 
-import type { PersistedState, TranscriptEvent } from "../../src/app/types";
+import type { PersistedState, ThreadRecord, ThreadStatus, TranscriptEvent, WorkspaceRecord } from "../../src/app/types";
 import type { TranscriptBatchInput } from "../../src/lib/desktopApi";
 
 import { assertDirection, assertSafeId, assertWithinTranscriptsDir } from "./validation";
@@ -40,6 +40,158 @@ function defaultState(): PersistedState {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function asSafeId(value: unknown): string | null {
+  const candidate = asNonEmptyString(value);
+  if (!candidate) {
+    return null;
+  }
+  try {
+    assertSafeId(candidate, "id");
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
+function asTimestamp(value: unknown): string | null {
+  const candidate = asNonEmptyString(value);
+  if (!candidate) {
+    return null;
+  }
+  return Number.isNaN(Date.parse(candidate)) ? null : candidate;
+}
+
+function asOptionalString(value: unknown): string | undefined {
+  const candidate = asNonEmptyString(value);
+  return candidate ?? undefined;
+}
+
+function asThreadStatus(value: unknown): ThreadStatus {
+  return value === "active" || value === "disconnected" ? value : "disconnected";
+}
+
+async function resolveWorkspacePath(value: unknown): Promise<string | null> {
+  const candidate = asNonEmptyString(value);
+  if (!candidate) {
+    return null;
+  }
+
+  const resolved = path.resolve(candidate);
+  try {
+    const stat = await fs.stat(resolved);
+    if (!stat.isDirectory()) {
+      return null;
+    }
+    return await fs.realpath(resolved);
+  } catch {
+    return null;
+  }
+}
+
+async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const workspaces: WorkspaceRecord[] = [];
+  const seenWorkspaceIds = new Set<string>();
+  for (const item of value) {
+    if (!isRecord(item)) {
+      continue;
+    }
+
+    const id = asSafeId(item.id);
+    const name = asNonEmptyString(item.name);
+    const createdAt = asTimestamp(item.createdAt);
+    const lastOpenedAt = asTimestamp(item.lastOpenedAt);
+    const workspacePath = await resolveWorkspacePath(item.path);
+    if (!id || !name || !createdAt || !lastOpenedAt || !workspacePath || seenWorkspaceIds.has(id)) {
+      continue;
+    }
+
+    workspaces.push({
+      id,
+      name,
+      path: workspacePath,
+      createdAt,
+      lastOpenedAt,
+      defaultProvider: asOptionalString(item.defaultProvider) as WorkspaceRecord["defaultProvider"],
+      defaultModel: asOptionalString(item.defaultModel),
+      defaultEnableMcp: typeof item.defaultEnableMcp === "boolean" ? item.defaultEnableMcp : true,
+      yolo: typeof item.yolo === "boolean" ? item.yolo : false,
+    });
+    seenWorkspaceIds.add(id);
+  }
+
+  return workspaces;
+}
+
+function sanitizeThreads(value: unknown, workspaceIds: Set<string>): ThreadRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const threads: ThreadRecord[] = [];
+  const seenThreadIds = new Set<string>();
+  for (const item of value) {
+    if (!isRecord(item)) {
+      continue;
+    }
+
+    const id = asSafeId(item.id);
+    const workspaceId = asSafeId(item.workspaceId);
+    const title = asNonEmptyString(item.title);
+    const createdAt = asTimestamp(item.createdAt);
+    const lastMessageAt = asTimestamp(item.lastMessageAt);
+    if (!id || !workspaceId || !title || !createdAt || !lastMessageAt || seenThreadIds.has(id)) {
+      continue;
+    }
+    if (!workspaceIds.has(workspaceId)) {
+      continue;
+    }
+
+    threads.push({
+      id,
+      workspaceId,
+      title,
+      createdAt,
+      lastMessageAt,
+      status: asThreadStatus(item.status),
+    });
+    seenThreadIds.add(id);
+  }
+
+  return threads;
+}
+
+async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
+  if (!isRecord(value)) {
+    return defaultState();
+  }
+
+  const workspaces = await sanitizeWorkspaces(value.workspaces);
+  const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
+  const threads = sanitizeThreads(value.threads, workspaceIds);
+  return {
+    version: typeof value.version === "number" && Number.isFinite(value.version) ? value.version : 1,
+    workspaces,
+    threads,
+    developerMode: typeof value.developerMode === "boolean" ? value.developerMode : false,
+  };
+}
+
 function isNotFound(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }
@@ -70,14 +222,7 @@ export class PersistenceService {
     return await this.stateLock.run(async () => {
       try {
         const raw = await fs.readFile(this.stateFilePath, "utf8");
-        const parsed = JSON.parse(raw) as PersistedState;
-        if (!parsed.version) {
-          parsed.version = 1;
-        }
-        parsed.workspaces = parsed.workspaces ?? [];
-        parsed.threads = parsed.threads ?? [];
-        parsed.developerMode = typeof parsed.developerMode === "boolean" ? parsed.developerMode : false;
-        return parsed;
+        return await sanitizePersistedState(JSON.parse(raw));
       } catch (error) {
         if (isNotFound(error)) {
           return defaultState();
@@ -91,8 +236,9 @@ export class PersistenceService {
     await this.stateLock.run(async () => {
       await fs.mkdir(this.appDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
 
+      const sanitizedState = await sanitizePersistedState(state);
       const tempPath = `${this.stateFilePath}.tmp`;
-      const payload = JSON.stringify({ ...state, version: state.version || 1 }, null, 2);
+      const payload = JSON.stringify({ ...sanitizedState, version: sanitizedState.version || 1 }, null, 2);
 
       await fs.writeFile(tempPath, payload, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
       await fs.rename(tempPath, this.stateFilePath);

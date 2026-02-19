@@ -29,6 +29,8 @@ export function AppTopBar({
   title,
   view,
 }: AppTopBarProps) {
+  const sidebarLabel = sidebarCollapsed ? "Show sidebar (⌘B)" : "Hide sidebar (⌘B)";
+
   return (
     <div className="topbar">
       <div className="topbarLeft">
@@ -36,7 +38,8 @@ export function AppTopBar({
           className="sidebarToggle"
           type="button"
           onClick={onToggleSidebar}
-          title={sidebarCollapsed ? "Show sidebar (⌘B)" : "Hide sidebar (⌘B)"}
+          title={sidebarLabel}
+          aria-label={sidebarLabel}
         >
           <IconSidebar />
         </button>

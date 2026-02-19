@@ -108,6 +108,11 @@ async function createWindow(): Promise<void> {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      safeDialogs: true,
+      devTools: !app.isPackaged,
     },
   });
   mainWindow = win;

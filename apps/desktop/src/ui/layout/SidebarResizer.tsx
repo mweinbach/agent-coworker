@@ -21,6 +21,26 @@ export function SidebarResizer() {
     [sidebarWidth],
   );
 
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const step = event.shiftKey ? 32 : 16;
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        setSidebarWidth(sidebarWidth - step);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        setSidebarWidth(sidebarWidth + step);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        setSidebarWidth(180);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        setSidebarWidth(500);
+      }
+    },
+    [setSidebarWidth, sidebarWidth],
+  );
+
   useEffect(() => {
     if (!dragging) return;
 
@@ -45,7 +65,15 @@ export function SidebarResizer() {
   return (
     <div
       className={"sidebarResizer" + (dragging ? " sidebarResizerActive" : "")}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      aria-valuemin={180}
+      aria-valuemax={500}
+      aria-valuenow={sidebarWidth}
+      tabIndex={0}
       onMouseDown={handleMouseDown}
+      onKeyDown={handleKeyDown}
     />
   );
 }

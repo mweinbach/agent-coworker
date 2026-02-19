@@ -151,8 +151,11 @@ export function ProvidersPage() {
 
           return (
             <div key={p} className={"settingsCard settingsProviderCard" + (isExpanded ? " settingsProviderCardExpanded" : "")}>
-              <div
+              <button
                 className="settingsProviderRow"
+                type="button"
+                aria-expanded={isExpanded}
+                aria-controls={`provider-panel-${p}`}
                 onClick={() => setExpandedProvider(isExpanded ? null : p)}
               >
                 <div className="settingsProviderInfo">
@@ -174,10 +177,10 @@ export function ProvidersPage() {
                   </span>
                   <span className="settingsExpandIcon">{isExpanded ? "▾" : "▸"}</span>
                 </div>
-              </div>
+              </button>
 
               {isExpanded && (
-                <div className="settingsProviderExpanded">
+                <div className="settingsProviderExpanded" id={`provider-panel-${p}`}>
                   {methods.map((method) => {
                     const stateKey = methodStateKey(p, method.id);
                     const apiKeyValue = apiKeysByMethod[stateKey] ?? "";
@@ -205,6 +208,7 @@ export function ProvidersPage() {
                               }
                               placeholder="Paste your API key"
                               type="password"
+                              aria-label={`${providerDisplayName} ${method.label} API key`}
                             />
                             <button
                               className="modalButton modalButtonPrimary"
@@ -241,6 +245,7 @@ export function ProvidersPage() {
                                   }
                                   placeholder="Paste authorization code"
                                   type="text"
+                                  aria-label={`${providerDisplayName} ${method.label} authorization code`}
                                 />
                                 <button
                                   className="modalButton"

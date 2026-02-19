@@ -64,15 +64,17 @@ export function SkillsView() {
             const desc = s.interface?.shortDescription || s.description;
 
             return (
-              <div
+              <button
                 key={s.name}
                 className={"skillsItem" + (active ? "" : "")}
                 data-active={active}
+                type="button"
+                aria-pressed={active}
                 onClick={() => void selectSkill(s.name)}
               >
                 <div className="skillsName">{displayName}</div>
                 <div className="skillsDesc">{desc}</div>
-              </div>
+              </button>
             );
           })
         )}
@@ -106,7 +108,7 @@ export function SkillsView() {
         ) : (
           <div className="hero" style={{ height: "auto", paddingTop: 40 }}>
             <div className="heroTitle" style={{ fontSize: 18 }}>Select a skill</div>
-            <div className="heroSub" style={{ fontSize: 14 }}>Click a skill to view its documentation.</div>
+            <div className="heroSub" style={{ fontSize: 14 }}>Select a skill to view its documentation.</div>
           </div>
         )}
       </div>

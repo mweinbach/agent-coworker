@@ -26,17 +26,35 @@ export function TitleBar() {
         <span className="titleBarTitle">Cowork</span>
       </div>
       <div className="titleBarControls">
-        <button className="titleBarButton" type="button" onClick={() => void windowMinimize()} title="Minimize">
+        <button
+          className="titleBarButton"
+          type="button"
+          onClick={() => void windowMinimize()}
+          title="Minimize"
+          aria-label="Minimize window"
+        >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <rect x="1" y="5" width="10" height="1" fill="currentColor" />
           </svg>
         </button>
-        <button className="titleBarButton" type="button" onClick={() => void windowMaximize()} title="Maximize">
+        <button
+          className="titleBarButton"
+          type="button"
+          onClick={() => void windowMaximize()}
+          title="Maximize"
+          aria-label="Maximize window"
+        >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <rect x="1.5" y="1.5" width="9" height="9" stroke="currentColor" strokeWidth="1" fill="none" />
           </svg>
         </button>
-        <button className="titleBarButton titleBarButtonClose" type="button" onClick={() => void windowClose()} title="Close">
+        <button
+          className="titleBarButton titleBarButtonClose"
+          type="button"
+          onClick={() => void windowClose()}
+          title="Close"
+          aria-label="Close window"
+        >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.2" />
           </svg>

@@ -79,6 +79,7 @@ export function WorkspacesPage() {
                   <select
                     className="settingsSelect"
                     value={ws.id}
+                    aria-label="Active workspace"
                     onChange={(e) => void selectWorkspace(e.currentTarget.value)}
                   >
                     {workspaces.map((w) => (
@@ -102,6 +103,7 @@ export function WorkspacesPage() {
                 <select
                   className="settingsSelect"
                   value={provider}
+                  aria-label="Default provider"
                   onChange={(e) => {
                     if (!ws) return;
                     const v = e.currentTarget.value as ProviderName;
@@ -120,6 +122,7 @@ export function WorkspacesPage() {
                 <select
                   className="settingsSelect"
                   value={model}
+                  aria-label="Default model"
                   onChange={(e) => ws && void updateWorkspaceDefaults(ws.id, { defaultModel: e.currentTarget.value })}
                 >
                   {modelOptions.map((m) => (
@@ -144,6 +147,7 @@ export function WorkspacesPage() {
                 <input
                   type="checkbox"
                   checked={enableMcp}
+                  aria-label="Enable MCP tools"
                   onChange={(e) => ws && void updateWorkspaceDefaults(ws.id, { defaultEnableMcp: e.currentTarget.checked })}
                 />
               </div>
@@ -156,6 +160,7 @@ export function WorkspacesPage() {
                 <input
                   type="checkbox"
                   checked={yolo}
+                  aria-label="Enable auto-approve commands"
                   onChange={(e) => {
                     if (!ws) return;
                     const next = e.currentTarget.checked;
@@ -174,6 +179,7 @@ export function WorkspacesPage() {
                 <input
                   type="checkbox"
                   checked={developerMode}
+                  aria-label="Enable developer mode"
                   onChange={(e) => setDeveloperMode(e.currentTarget.checked)}
                 />
               </div>

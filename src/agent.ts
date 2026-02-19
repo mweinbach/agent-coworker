@@ -9,6 +9,7 @@ import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
 
 const DEFAULT_MODEL_STALL_TIMEOUT_MS = 90_000;
+const MODEL_STREAM_DRAIN_GRACE_MS = 750;
 const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
 
 export interface RunTurnParams {
@@ -83,6 +84,15 @@ function mergeToolSets(
     merged[alias] = toolDef;
   }
   return merged;
+}
+
+function cancelStreamIterator(iterator: AsyncIterator<unknown> | undefined): void {
+  if (!iterator || typeof iterator.return !== "function") return;
+  try {
+    void iterator.return(undefined);
+  } catch {
+    // ignore iterator cancellation errors
+  }
 }
 
 type RunTurnDeps = {
@@ -191,21 +201,44 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           includeRawChunks: params.includeRawChunks ?? true,
         } as any);
 
+        let streamIterator: AsyncIterator<unknown> | undefined;
         const streamConsumption = (async () => {
           if (!params.onModelStreamPart) return;
           const fullStream = (streamResult as any).fullStream;
           if (!fullStream || typeof fullStream[Symbol.asyncIterator] !== "function") return;
-          for await (const part of fullStream as AsyncIterable<unknown>) {
-            await params.onModelStreamPart(part);
+
+          streamIterator = (fullStream as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+          while (true) {
+            const next = await streamIterator.next();
+            if (next.done) break;
+            await params.onModelStreamPart(next.value);
           }
         })();
 
-        const [, text, reasoningText, response] = await Promise.all([
-          streamConsumption,
+        const [text, reasoningText, response] = await Promise.all([
           streamResult.text,
           streamResult.reasoningText,
           streamResult.response,
         ]);
+
+        if (params.onModelStreamPart) {
+          const streamDrained = await Promise.race([
+            streamConsumption.then(() => true),
+            new Promise<false>((resolve) => {
+              setTimeout(() => resolve(false), MODEL_STREAM_DRAIN_GRACE_MS);
+            }),
+          ]);
+
+          if (!streamDrained) {
+            log(
+              `[warn] Model stream did not drain within ${MODEL_STREAM_DRAIN_GRACE_MS}ms after response completion; continuing turn.`
+            );
+            cancelStreamIterator(streamIterator);
+            void streamConsumption.catch((error) => {
+              log(`[warn] Model stream ended with error after timeout: ${String(error)}`);
+            });
+          }
+        }
 
         return { text, reasoningText, response } as any;
       } finally {

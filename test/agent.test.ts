@@ -524,6 +524,38 @@ describe("runTurn", () => {
     expect(seen).toEqual(parts);
   });
 
+  test("does not hang when fullStream never closes after provider-native tool usage", async () => {
+    mockStreamText.mockImplementation(async () => ({
+      text: "completed response",
+      reasoningText: undefined,
+      response: { messages: [{ role: "assistant", content: "done" }] },
+      fullStream: (async function* () {
+        yield { type: "start" };
+        await new Promise(() => {});
+      })(),
+    }));
+
+    const log = mock(() => {});
+    const seen: unknown[] = [];
+    const result = await Promise.race([
+      runTurn(
+        makeParams({
+          log,
+          onModelStreamPart: async (part) => {
+            seen.push(part);
+          },
+        })
+      ),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 2000)),
+    ]);
+
+    expect(result).not.toBe("timeout");
+    if (result === "timeout") return;
+    expect(result.text).toBe("completed response");
+    expect(seen).toEqual([{ type: "start" }]);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Model stream did not drain"));
+  });
+
   // -------------------------------------------------------------------------
   // createTools
   // -------------------------------------------------------------------------

@@ -1368,12 +1368,21 @@ describe("Protocol Doc Parity", () => {
         (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.2" }),
         1,
       );
-      expect(model.responses[0].type).toBe("error");
-      if (model.responses[0].type === "error") {
-        expect(model.responses[0].code).toBe("validation_failed");
-        expect(model.responses[0].source).toBe("session");
-        expect(model.responses[0].message).toContain("locked for this session");
+      expect(model.responses[0].type).toBe("config_updated");
+      if (model.responses[0].type === "config_updated") {
+        expect(model.responses[0].config.provider).toBe("openai");
+        expect(model.responses[0].config.model).toBe("gpt-5.2");
       }
+
+      const nextSessionHello = (await collectMessages(url, 1))[0];
+      expect(nextSessionHello.type).toBe("server_hello");
+      expect(nextSessionHello.config.provider).toBe("openai");
+      expect(nextSessionHello.config.model).toBe("gpt-5.2");
+
+      const persistedConfigPath = path.join(tmpDir, ".agent", "config.json");
+      const persistedConfig = JSON.parse(await fs.readFile(persistedConfigPath, "utf-8")) as Record<string, unknown>;
+      expect(persistedConfig.provider).toBe("openai");
+      expect(persistedConfig.model).toBe("gpt-5.2");
     } finally {
       server.stop();
     }

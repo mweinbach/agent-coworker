@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { google } from "@ai-sdk/google";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
+import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot } from "./helpers";
 
 // ---------------------------------------------------------------------------
@@ -11,6 +12,10 @@ import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot } from "./h
 describe("Google provider (gemini-3-flash-preview)", () => {
   test("defaultModelForProvider returns gemini-3-flash-preview", () => {
     expect(defaultModelForProvider("google")).toBe("gemini-3-flash-preview");
+  });
+
+  test("catalog includes gemini-3.1-pro-preview", () => {
+    expect(PROVIDER_MODEL_CATALOG.google.availableModels).toContain("gemini-3.1-pro-preview");
   });
 
   test("getModel creates google model with default gemini-3-flash-preview", () => {

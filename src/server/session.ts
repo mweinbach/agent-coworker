@@ -50,6 +50,12 @@ type Deferred<T> = {
   reject: (err: unknown) => void;
 };
 
+type PersistedModelSelection = {
+  provider: AgentConfig["provider"];
+  model: string;
+  subAgentModel: string;
+};
+
 function deferred<T>(): Deferred<T> {
   let resolve!: (v: T) => void;
   let reject!: (err: unknown) => void;
@@ -112,6 +118,7 @@ export class AgentSession {
   private readonly sessionBackupFactory: SessionBackupFactory;
   private readonly harnessContextStore: HarnessContextStore;
   private readonly runTurnImpl: typeof runTurn;
+  private readonly persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
 
   private messages: ModelMessage[] = [];
   private running = false;
@@ -142,6 +149,7 @@ export class AgentSession {
     sessionBackupFactory?: SessionBackupFactory;
     harnessContextStore?: HarnessContextStore;
     runTurnImpl?: typeof runTurn;
+    persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
   }) {
     this.id = makeId();
     this.config = opts.config;
@@ -157,6 +165,7 @@ export class AgentSession {
       opts.sessionBackupFactory ?? (async (factoryOpts) => await SessionBackupManager.create(factoryOpts));
     this.harnessContextStore = opts.harnessContextStore ?? new HarnessContextStore();
     this.runTurnImpl = opts.runTurnImpl ?? runTurn;
+    this.persistModelSelectionImpl = opts.persistModelSelectionImpl;
     this.sessionBackupState = {
       status: "initializing",
       sessionId: this.id,
@@ -584,21 +593,51 @@ export class AgentSession {
       return;
     }
 
-    this.emitError(
-      "validation_failed",
-      "session",
-      "Model/provider are locked for this session. Start a new session to change them."
-    );
+    const nextProvider = providerRaw ?? this.config.provider;
+    const nextSubAgentModel = this.config.subAgentModel === this.config.model
+      ? modelId
+      : this.config.subAgentModel;
+
+    this.config = {
+      ...this.config,
+      provider: nextProvider,
+      model: modelId,
+      subAgentModel: nextSubAgentModel,
+    };
+    this.emit({
+      type: "config_updated",
+      sessionId: this.id,
+      config: this.getPublicConfig(),
+    });
+
+    if (this.persistModelSelectionImpl) {
+      try {
+        await this.persistModelSelectionImpl({
+          provider: nextProvider,
+          model: modelId,
+          subAgentModel: nextSubAgentModel,
+        });
+      } catch (err) {
+        this.emitError(
+          "internal_error",
+          "session",
+          `Model updated for this session, but persisting defaults failed: ${String(err)}`
+        );
+      }
+    }
+
+    await this.emitProviderCatalog();
   }
 
   async emitProviderCatalog() {
     try {
       const payload = await this.getProviderCatalogImpl({ paths: this.getCoworkPaths() });
+      const defaults = { ...payload.default, [this.config.provider]: this.config.model };
       this.emit({
         type: "provider_catalog",
         sessionId: this.id,
         all: payload.all,
-        default: payload.default,
+        default: defaults,
         connected: payload.connected,
       });
     } catch (err) {

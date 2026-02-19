@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
 import type { runTurn as runTurnFn } from "../agent";
@@ -29,6 +30,33 @@ function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
     out[k] = v;
   }
   return out as T;
+}
+
+async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unknown>> {
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (isPlainObject(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    // Ignore read/parse failures and fall back to an empty object.
+  }
+  return {};
+}
+
+async function persistProjectModelDefaults(
+  projectAgentDir: string,
+  defaults: Pick<AgentConfig, "provider" | "model" | "subAgentModel">
+): Promise<void> {
+  const configPath = path.join(projectAgentDir, "config.json");
+  const current = await loadJsonObjectSafe(configPath);
+  const next: Record<string, unknown> = {
+    ...current,
+    provider: defaults.provider,
+    model: defaults.model,
+    subAgentModel: defaults.subAgentModel,
+  };
+  await fs.mkdir(projectAgentDir, { recursive: true });
+  await fs.writeFile(configPath, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
 }
 
 export interface StartAgentServerOptions {
@@ -137,13 +165,19 @@ export async function startAgentServer(
               disposeTimer: null,
             };
             session = new AgentSession({
-              config,
+              config: { ...config },
               system,
               discoveredSkills,
               yolo: opts.yolo,
               connectProviderImpl: opts.connectProviderImpl,
               getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl,
               runTurnImpl: opts.runTurnImpl,
+              persistModelSelectionImpl: async (selection) => {
+                config.provider = selection.provider;
+                config.model = selection.model;
+                config.subAgentModel = selection.subAgentModel;
+                await persistProjectModelDefaults(config.projectAgentDir, selection);
+              },
               emit: (evt: ServerEvent) => {
                 const socket = binding.socket;
                 if (!socket) return;

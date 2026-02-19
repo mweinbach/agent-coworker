@@ -178,6 +178,26 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
   });
 
+  test("uses model-specific system template for gemini-3.1-pro-preview when present", async () => {
+    const { builtIn } = await makeTmpDirs();
+
+    await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
+    await writeFile(
+      path.join(builtIn, "prompts", "system-models", "gemini-3.1-pro-preview.md"),
+      "GEMINI 3.1 PRO TEMPLATE {{modelName}}"
+    );
+
+    const config = makeConfig({
+      builtInDir: builtIn,
+      model: "gemini-3.1-pro-preview",
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expect(prompt).toContain("GEMINI 3.1 PRO TEMPLATE gemini-3.1-pro-preview");
+    expect(prompt).not.toContain("DEFAULT");
+  });
+
   test("uses model-specific system template for Anthropic alias IDs", async () => {
     const { builtIn } = await makeTmpDirs();
 

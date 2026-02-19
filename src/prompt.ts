@@ -34,6 +34,10 @@ const MODEL_SYSTEM_PROMPT_TEMPLATES: readonly ModelSystemPromptTemplate[] = [
     matches: (modelId) => modelId === "gemini-3-pro-preview",
   },
   {
+    fileName: "gemini-3.1-pro-preview.md",
+    matches: (modelId) => modelId === "gemini-3.1-pro-preview",
+  },
+  {
     fileName: "claude-4-5-haiku.md",
     matches: (modelId) => modelId === "claude-4-5-haiku" || modelId.startsWith("claude-haiku-4-5-"),
   },

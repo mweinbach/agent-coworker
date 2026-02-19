@@ -154,6 +154,11 @@ function makeSession(
     getProviderCatalogImpl: (opts: any) => Promise<any>;
     getProviderStatusesImpl: (opts: any) => Promise<any>;
     sessionBackupFactory: (opts: SessionBackupInitOptions) => Promise<SessionBackupHandle>;
+    persistModelSelectionImpl: (selection: {
+      provider: AgentConfig["provider"];
+      model: string;
+      subAgentModel: string;
+    }) => Promise<void> | void;
   }>
 ) {
   const dir = "/tmp/test-session";
@@ -170,6 +175,7 @@ function makeSession(
     getProviderCatalogImpl: overrides?.getProviderCatalogImpl as any,
     getProviderStatusesImpl,
     sessionBackupFactory,
+    persistModelSelectionImpl: overrides?.persistModelSelectionImpl,
   });
   return { session, emit, events, sessionBackupFactory };
 }
@@ -563,39 +569,71 @@ describe("AgentSession", () => {
   });
 
   describe("setModel", () => {
-    test("rejects model change because model/provider are locked per session", async () => {
+    test("updates model in-session and emits config_updated", async () => {
       const { session, events } = makeSession();
-      const before = session.getPublicConfig();
       await session.setModel("gpt-5.2");
 
-      expect(session.getPublicConfig()).toEqual(before);
-
-      const updated = events.find((e) => e.type === "config_updated");
-      expect(updated).toBeUndefined();
-      const err = events.find((e) => e.type === "error");
-      expect(err).toBeDefined();
-      if (err && err.type === "error") {
-        expect(err.code).toBe("validation_failed");
-        expect(err.source).toBe("session");
-        expect(err.message).toContain("locked for this session");
+      expect(session.getPublicConfig().provider).toBe("google");
+      expect(session.getPublicConfig().model).toBe("gpt-5.2");
+      const updated = events.find(
+        (e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated"
+      );
+      expect(updated).toBeDefined();
+      if (updated) {
+        expect(updated.config.provider).toBe("google");
+        expect(updated.config.model).toBe("gpt-5.2");
       }
+      expect(events.some((e) => e.type === "error")).toBe(false);
     });
 
-    test("rejects provider+model change because model/provider are locked per session", async () => {
+    test("updates provider+model in-session and emits config_updated", async () => {
       const { session, events } = makeSession();
-      const before = session.getPublicConfig();
       await session.setModel("claude-4-5-sonnet", "anthropic");
 
-      expect(session.getPublicConfig()).toEqual(before);
+      expect(session.getPublicConfig().provider).toBe("anthropic");
+      expect(session.getPublicConfig().model).toBe("claude-4-5-sonnet");
+      const updated = events.find(
+        (e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated"
+      );
+      expect(updated).toBeDefined();
+      if (updated) {
+        expect(updated.config.provider).toBe("anthropic");
+        expect(updated.config.model).toBe("claude-4-5-sonnet");
+      }
+      expect(events.some((e) => e.type === "error")).toBe(false);
+    });
+
+    test("invokes model-selection persistence hook with updated defaults", async () => {
+      const persistModelSelectionImpl = mock(async () => {});
+      const { session } = makeSession({ persistModelSelectionImpl });
+
+      await session.setModel("gpt-5.2", "openai");
+
+      expect(persistModelSelectionImpl).toHaveBeenCalledTimes(1);
+      expect(persistModelSelectionImpl).toHaveBeenCalledWith({
+        provider: "openai",
+        model: "gpt-5.2",
+        subAgentModel: "gpt-5.2",
+      });
+    });
+
+    test("persistence-hook failures do not roll back config_updated", async () => {
+      const persistModelSelectionImpl = mock(async () => {
+        throw new Error("disk write failed");
+      });
+      const { session, events } = makeSession({ persistModelSelectionImpl });
+
+      await session.setModel("gpt-5.2");
 
       const updated = events.find((e) => e.type === "config_updated");
-      expect(updated).toBeUndefined();
-      const err = events.find((e) => e.type === "error");
+      expect(updated).toBeDefined();
+      const err = events.find(
+        (e): e is Extract<ServerEvent, { type: "error" }> =>
+          e.type === "error" && e.message.includes("persisting defaults failed")
+      );
       expect(err).toBeDefined();
-      if (err && err.type === "error") {
-        expect(err.code).toBe("validation_failed");
-        expect(err.source).toBe("session");
-        expect(err.message).toContain("locked for this session");
+      if (err) {
+        expect(err.code).toBe("internal_error");
       }
     });
 
@@ -649,7 +687,10 @@ describe("AgentSession", () => {
       expect(evt).toBeDefined();
       if (evt && evt.type === "provider_catalog") {
         expect(evt.all).toEqual(catalog.all);
-        expect(evt.default).toEqual(catalog.default);
+        expect(evt.default).toEqual({
+          ...catalog.default,
+          google: "gemini-2.0-flash",
+        });
         expect(evt.connected).toEqual(catalog.connected);
       }
     });

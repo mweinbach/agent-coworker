@@ -31,7 +31,7 @@ Respond to an `ask` event.
 Respond to an `approval` event.
 
 ### set_model
-Attempt to update session model/provider. Sessions are model/provider-locked, so this returns an `error` event in v4.
+Update session model/provider. On success, server emits `config_updated` and persists this selection as the default for new sessions in the current project.
 
 ### refresh_provider_status
 Request provider status refresh.

@@ -64,7 +64,9 @@ function McpDialog(props: { onDismiss: () => void }) {
             <box flexDirection="column">
               <For each={syncState.tools}>
                 {(tool) => (
-                  <text fg={theme.textMuted}>{tool}</text>
+                  <text fg={theme.textMuted}>
+                    {tool.description && tool.description !== tool.name ? `${tool.name}: ${tool.description}` : tool.name}
+                  </text>
                 )}
               </For>
             </box>

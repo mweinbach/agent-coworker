@@ -366,6 +366,10 @@ export class AgentSession {
 
   private maybeGenerateTitleFromQuery(query: string) {
     if (this.hasGeneratedTitle) return;
+    if (this.sessionInfo.titleSource === "manual") {
+      this.hasGeneratedTitle = true;
+      return;
+    }
     this.hasGeneratedTitle = true;
     const titleConfig: AgentConfig = { ...this.config };
     const prompt = query.trim();
@@ -376,6 +380,7 @@ export class AgentSession {
         config: titleConfig,
         query: prompt,
       });
+      if (this.sessionInfo.titleSource === "manual") return;
       this.updateSessionInfo({
         title: generated.title,
         titleSource: generated.source,
@@ -1213,7 +1218,9 @@ export class AgentSession {
       this.pendingAsk,
       ASK_RESPONSE_TIMEOUT_MS,
       "Ask prompt timed out waiting for user response."
-    );
+    ).finally(() => {
+      this.pendingAskEvents.delete(requestId);
+    });
   }
 
   private async approveCommand(command: string) {
@@ -1248,7 +1255,9 @@ export class AgentSession {
       this.pendingApproval,
       APPROVAL_RESPONSE_TIMEOUT_MS,
       "Command approval timed out waiting for user response."
-    );
+    ).finally(() => {
+      this.pendingApprovalEvents.delete(requestId);
+    });
   }
 
   private updateTodos = (todos: TodoItem[]) => {
@@ -1276,6 +1285,7 @@ export class AgentSession {
       this.emitError("validation_failed", "session", "Title must be non-empty");
       return;
     }
+    this.hasGeneratedTitle = true;
     this.updateSessionInfo({
       title: trimmed,
       titleSource: "manual",

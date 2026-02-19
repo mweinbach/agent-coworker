@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { memo, useEffect } from "react";
 
 import { CheckCircle2Icon, CircleDashedIcon, CircleIcon, FileIcon, FolderIcon } from "lucide-react";
 
@@ -6,7 +6,7 @@ import { useAppStore } from "../app/store";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { cn } from "../lib/utils";
 
-export function ContextSidebar() {
+export const ContextSidebar = memo(function ContextSidebar() {
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const todos = useAppStore((s) => selectedThreadId ? s.latestTodosByThreadId[selectedThreadId] : null);
@@ -20,7 +20,7 @@ export function ContextSidebar() {
   }, [refresh, selectedWorkspaceId]);
 
   return (
-    <aside className="app-context-sidebar flex h-full w-[300px] shrink-0 flex-col gap-3 border-l border-border/80 bg-background p-3">
+    <aside className="app-context-sidebar flex h-full w-full flex-col gap-3 p-3 overflow-hidden">
       <Card className="border-border/80 bg-card/80">
         <CardHeader className="pb-2">
           <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">Tasks</CardTitle>
@@ -66,4 +66,4 @@ export function ContextSidebar() {
       </Card>
     </aside>
   );
-}
+});

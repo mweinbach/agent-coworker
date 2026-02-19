@@ -812,6 +812,8 @@ export type AppStoreState = {
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   contextSidebarCollapsed: boolean;
+  contextSidebarWidth: number;
+  messageBarHeight: number;
 
   init: () => Promise<void>;
 
@@ -860,6 +862,8 @@ export type AppStoreState = {
   toggleSidebar: () => void;
   toggleContextSidebar: () => void;
   setSidebarWidth: (width: number) => void;
+  setContextSidebarWidth: (width: number) => void;
+  setMessageBarHeight: (height: number) => void;
 
   refreshWorkspaceFiles: (workspaceId: string) => Promise<void>;
 };
@@ -1780,6 +1784,32 @@ function handleThreadEvent(
     return;
   }
 
+  if (evt.type === "session_info") {
+    set((s) => {
+      const rt = s.threadRuntimeById[threadId];
+      const nextConfig = rt?.config
+        ? {
+            ...rt.config,
+            provider: evt.provider,
+            model: evt.model,
+          }
+        : rt?.config ?? null;
+      return {
+        threads: s.threads.map((t) => (t.id === threadId ? { ...t, title: evt.title || t.title } : t)),
+        ...(rt
+          ? {
+              threadRuntimeById: {
+                ...s.threadRuntimeById,
+                [threadId]: { ...rt, config: nextConfig },
+              },
+            }
+          : {}),
+      };
+    });
+    void persist(get);
+    return;
+  }
+
   if (evt.type === "session_backup_state" || evt.type === "harness_context") {
     return;
   }
@@ -1829,7 +1859,6 @@ function handleThreadEvent(
           ? {
               ...t,
               lastMessageAt: nowIso(),
-              title: !t.title || t.title === "New thread" ? truncateTitle(evt.text) : t.title,
             }
           : t
       ),

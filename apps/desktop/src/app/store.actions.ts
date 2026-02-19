@@ -906,8 +906,11 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     dismissPrompt: () => set({ promptModal: null }),
   
     toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+    toggleContextSidebar: () => set((s) => ({ contextSidebarCollapsed: !s.contextSidebarCollapsed })),
   
-    setSidebarWidth: (width: number) => set({ sidebarWidth: Math.max(180, Math.min(500, width)) }),
+    setSidebarWidth: (width: number) => set({ sidebarWidth: Math.max(180, Math.min(600, width)) }),
+    setContextSidebarWidth: (width: number) => set({ contextSidebarWidth: Math.max(200, Math.min(600, width)) }),
+    setMessageBarHeight: (height: number) => set({ messageBarHeight: Math.max(80, Math.min(500, height)) }),
   
     refreshWorkspaceFiles: async (workspaceId: string) => {
       const ws = get().workspaces.find((w) => w.id === workspaceId);

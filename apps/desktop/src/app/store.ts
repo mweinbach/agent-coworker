@@ -42,6 +42,8 @@ const initialState: AppStoreDataState = {
 
   sidebarCollapsed: false,
   contextSidebarCollapsed: false,
+  contextSidebarWidth: 300,
+  messageBarHeight: 120,
   sidebarWidth: 280,
 };
 

@@ -98,21 +98,6 @@ body {
   padding-left: 5.75rem;
 }
 
-:root[data-platform="darwin"] .app-sidebar {
-  position: relative;
-  padding-top: 2.75rem;
-}
-
-:root[data-platform="darwin"] .app-sidebar__drag-zone {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2.75rem;
-  z-index: 70;
-  -webkit-app-region: drag;
-}
-
 .app-shell {
   position: relative;
 }
@@ -143,4 +128,23 @@ body {
   height: 2.75rem;
   z-index: 80;
   -webkit-app-region: drag;
+}
+
+.app-left-sidebar-pane,
+.app-right-sidebar-pane {
+  will-change: width;
+}
+
+body.app-resizing-sidebars {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.app-resizing-sidebars .app-left-sidebar-pane,
+body.app-resizing-sidebars .app-right-sidebar-pane {
+  transition: none;
+}
+
+body.app-resizing-sidebars .app-left-sidebar-pane {
+  backdrop-filter: none;
 }

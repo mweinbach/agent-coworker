@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 
 import { useAppStore } from "./app/store";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
@@ -16,6 +16,39 @@ import { AppTopBar } from "./ui/layout/AppTopBar";
 import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
+import { ContextSidebarResizer } from "./ui/layout/ContextSidebarResizer";
+
+const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed: boolean }) {
+  const sidebarWidth = useAppStore((s) => s.sidebarWidth);
+
+  return (
+    <div
+      className="app-left-sidebar-pane relative shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] bg-sidebar/85 backdrop-blur-xl border-r border-border/80"
+      style={{ width: collapsed ? 0 : sidebarWidth, borderRightWidth: collapsed ? 0 : 1 }}
+    >
+      <div className="absolute top-0 bottom-0 right-0 flex" style={{ width: sidebarWidth }}>
+        <Sidebar />
+      </div>
+      {!collapsed ? <SidebarResizer /> : null}
+    </div>
+  );
+});
+
+const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collapsed: boolean }) {
+  const contextSidebarWidth = useAppStore((s) => s.contextSidebarWidth);
+
+  return (
+    <div
+      className="app-right-sidebar-pane relative shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] bg-panel border-l border-border/80"
+      style={{ width: collapsed ? 0 : contextSidebarWidth, borderLeftWidth: collapsed ? 0 : 1 }}
+    >
+      {!collapsed ? <ContextSidebarResizer /> : null}
+      <div className="absolute top-0 bottom-0 left-0 flex" style={{ width: contextSidebarWidth }}>
+        <ContextSidebar />
+      </div>
+    </div>
+  );
+});
 
 export default function App() {
   const ready = useAppStore((s) => s.ready);
@@ -27,8 +60,9 @@ export default function App() {
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
-  const sidebarWidth = useAppStore((s) => s.sidebarWidth);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
+  const toggleContextSidebar = useAppStore((s) => s.toggleContextSidebar);
   const openSkills = useAppStore((s) => s.openSkills);
   const openSettings = useAppStore((s) => s.openSettings);
   const notifications = useAppStore((s) => s.notifications);
@@ -139,7 +173,6 @@ export default function App() {
   const busy = runtime?.busy === true;
   const showContextSidebar = view === "chat" && activeThread !== null;
 
-  const title = view === "skills" ? "Skills" : activeThread?.title || "New thread";
 
   if (view === "settings") {
     return (
@@ -154,32 +187,26 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell h-full bg-background text-foreground">
+    <div className="app-shell h-full flex flex-col bg-background text-foreground">
       <div className="app-window-drag-strip" aria-hidden="true" />
-      <div className="flex h-full min-h-0">
-        <div
-          className="relative shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)]"
-          style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
-        >
-          {!sidebarCollapsed ? <Sidebar /> : null}
-          {!sidebarCollapsed ? <SidebarResizer /> : null}
-        </div>
+      <AppTopBar
+        busy={busy}
+        onToggleSidebar={toggleSidebar}
+        sidebarCollapsed={sidebarCollapsed}
+        contextSidebarCollapsed={contextSidebarCollapsed}
+        onToggleContextSidebar={toggleContextSidebar}
+      />
+      <div className="flex min-h-0 flex-1">
+        <LeftSidebarPane collapsed={sidebarCollapsed} />
 
         <main className="flex min-w-0 flex-1 flex-col bg-panel">
-          <AppTopBar
-            busy={busy}
-            onCreateThread={() => void newThread()}
-            onToggleSidebar={toggleSidebar}
-            sidebarCollapsed={sidebarCollapsed}
-            title={title}
-            view={view}
-          />
-
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <div className="min-w-0 flex-1 overflow-hidden">
+            <div className="min-w-0 flex-1 overflow-hidden relative">
               <PrimaryContent init={init} ready={ready} startupError={startupError} view={view} />
             </div>
-            {showContextSidebar ? <ContextSidebar /> : null}
+            {showContextSidebar ? (
+              <RightSidebarPane collapsed={contextSidebarCollapsed} />
+            ) : null}
           </div>
         </main>
       </div>

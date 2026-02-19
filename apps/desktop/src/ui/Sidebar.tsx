@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import { memo, type MouseEvent } from "react";
 
 import {
   CirclePlusIcon,
@@ -16,7 +16,7 @@ import { designTokens } from "../lib/designTokens";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
 
-export function Sidebar() {
+export const Sidebar = memo(function Sidebar() {
   const view = useAppStore((s) => s.view);
   const workspaces = useAppStore((s) => s.workspaces);
   const threads = useAppStore((s) => s.threads);
@@ -95,15 +95,11 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        "app-sidebar flex h-full w-full flex-col gap-3 border-r border-border/80 bg-sidebar/85 px-3 py-3 backdrop-blur-xl",
+        "app-sidebar flex h-full w-full flex-col gap-3 px-3 py-3",
         designTokens.classes.subtleSurface,
       )}
     >
-      <div className="app-sidebar__drag-zone" aria-hidden="true" />
-      <div className="app-sidebar__brand mb-4 mt-1 flex items-center gap-3 px-2">
-        <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-primary to-primary/70" />
-        <div className="text-base font-bold tracking-tight text-foreground">Cowork</div>
-      </div>
+
 
       <nav className="grid gap-1">
         <Button
@@ -221,4 +217,4 @@ export function Sidebar() {
       </Button>
     </aside>
   );
-}
+});

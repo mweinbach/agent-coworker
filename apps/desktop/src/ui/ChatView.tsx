@@ -26,6 +26,7 @@ import {
   ReasoningContent,
   ReasoningTrigger,
 } from "../components/ai-elements/reasoning";
+import { MessageBarResizer } from "./layout/MessageBarResizer";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { cn } from "../lib/utils";
@@ -163,6 +164,7 @@ export function ChatView() {
   const composerText = useAppStore((s) => s.composerText);
   const hasPromptModal = useAppStore((s) => s.promptModal !== null);
   const developerMode = useAppStore((s) => s.developerMode);
+  const messageBarHeight = useAppStore((s) => s.messageBarHeight);
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
@@ -173,6 +175,7 @@ export function ChatView() {
   const feedRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const lastCountRef = useRef<number>(0);
+  const autoScrolledThreadIdRef = useRef<string | null>(null);
 
   const feed = rt?.feed ?? [];
   const normalizedFeed = normalizeFeedForToolCards(feed, developerMode);
@@ -187,13 +190,40 @@ export function ChatView() {
   useEffect(() => {
     const el = feedRef.current;
     if (!el) return;
+
+    const isThreadChange = autoScrolledThreadIdRef.current !== selectedThreadId;
+    if (isThreadChange) {
+      autoScrolledThreadIdRef.current = selectedThreadId;
+      lastCountRef.current = visibleFeed.length;
+      window.requestAnimationFrame(() => {
+        const nextEl = feedRef.current;
+        if (nextEl) {
+          nextEl.scrollTop = nextEl.scrollHeight;
+        }
+      });
+      return;
+    }
+
     if (visibleFeed.length === lastCountRef.current) return;
+
+    const previousCount = lastCountRef.current;
     lastCountRef.current = visibleFeed.length;
+
+    if (previousCount === 0 && visibleFeed.length > 0) {
+      window.requestAnimationFrame(() => {
+        const nextEl = feedRef.current;
+        if (nextEl) {
+          nextEl.scrollTop = nextEl.scrollHeight;
+        }
+      });
+      return;
+    }
+
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     if (distFromBottom < 220) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [visibleFeed.length]);
+  }, [selectedThreadId, visibleFeed.length]);
 
   useEffect(() => {
     if (selectedThreadId && textareaRef.current) {
@@ -201,12 +231,6 @@ export function ChatView() {
     }
   }, [selectedThreadId]);
 
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }, [composerText]);
 
   const onComposerKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -244,9 +268,14 @@ export function ChatView() {
 
   return (
     <ChatViewContext.Provider value={contextValue}>
-      <div className="flex h-full min-h-0 flex-col bg-panel">
+      <div className="flex h-full min-h-0 flex-col bg-panel relative">
+        <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-center pointer-events-none p-3 pb-8 bg-gradient-to-b from-panel via-panel/80 to-transparent">
+          <div className="bg-background/80 backdrop-blur-md px-4 py-1.5 rounded-full border border-border/50 shadow-sm text-sm font-medium text-foreground max-w-lg truncate pointer-events-auto">
+            {thread.title || "New thread"}
+          </div>
+        </div>
         <Conversation className="min-h-0" ref={feedRef}>
-          <ConversationContent>
+          <ConversationContent className="pt-24">
             {transcriptOnly ? (
               <Card className="max-w-3xl border-border/70 bg-muted/30">
                 <CardContent className="flex items-start gap-3 p-3">
@@ -285,7 +314,8 @@ export function ChatView() {
           </ConversationContent>
         </Conversation>
 
-        <div className="border-t border-border/60 px-5 py-4">
+        <div className="relative border-t border-border/60 px-4 py-3 flex flex-col shrink-0" style={{ height: messageBarHeight }}>
+          <MessageBarResizer />
           <PromptInputRoot>
             <PromptInputForm
               onSubmit={(event) => {
@@ -309,7 +339,7 @@ export function ChatView() {
               />
             </PromptInputForm>
           </PromptInputRoot>
-          <div className={cn("mx-auto mt-2 max-w-3xl text-center text-xs text-muted-foreground", busy ? "opacity-100" : "opacity-70")}>
+          <div className={cn("mx-auto mt-2 max-w-3xl shrink-0 text-center text-xs text-muted-foreground", busy ? "opacity-100" : "opacity-70")}>
             {busy ? "Agent is working..." : "Press Enter to send, Shift+Enter for newline."}
           </div>
         </div>

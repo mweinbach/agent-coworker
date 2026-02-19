@@ -13,7 +13,7 @@ export function PromptInputRoot({ className, ...props }: PromptInputRootProps) {
   return (
     <div
       className={cn(
-        "mx-auto w-full max-w-3xl rounded-2xl p-3 shadow-[0_10px_25px_rgba(0,0,0,0.06)]",
+        "mx-auto w-full max-w-3xl rounded-2xl p-3 shadow-[0_10px_25px_rgba(0,0,0,0.06)] flex flex-col min-h-0 flex-1",
         designTokens.classes.panelSurface,
         className,
       )}
@@ -30,7 +30,7 @@ type PromptInputFormProps = {
 
 export function PromptInputForm({ className, onSubmit, children }: PromptInputFormProps) {
   return (
-    <form className={cn("flex items-end gap-3", className)} onSubmit={onSubmit}>
+    <form className={cn("flex flex-1 items-end gap-3 min-h-0", className)} onSubmit={onSubmit}>
       {children}
     </form>
   );
@@ -56,7 +56,7 @@ export function PromptInputTextarea({
   return (
     <Textarea
       ref={textareaRef}
-      className="max-h-60 min-h-10 flex-1 resize-none border-none bg-transparent p-2 shadow-none focus-visible:ring-0"
+      className="h-full w-full min-h-0 flex-1 resize-none border-none bg-transparent p-2 shadow-none focus-visible:ring-0"
       value={value}
       placeholder={placeholder}
       disabled={disabled}

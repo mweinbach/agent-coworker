@@ -1,3 +1,4 @@
+import { For } from "solid-js";
 import { useTheme } from "../context/theme";
 import { useSyncActions, useSyncState } from "../context/sync";
 import { Dialog } from "../ui/dialog";
@@ -61,9 +62,11 @@ function McpDialog(props: { onDismiss: () => void }) {
         <scrollbox maxHeight={12} marginBottom={1}>
           {syncState.tools.length > 0 ? (
             <box flexDirection="column">
-              {syncState.tools.map((tool) => (
-                <text fg={theme.textMuted}>{tool}</text>
-              ))}
+              <For each={syncState.tools}>
+                {(tool) => (
+                  <text fg={theme.textMuted}>{tool}</text>
+                )}
+              </For>
             </box>
           ) : (
             <text fg={theme.textMuted}>No tools discovered yet. Try Refresh tools.</text>

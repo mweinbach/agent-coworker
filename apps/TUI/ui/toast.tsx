@@ -1,4 +1,4 @@
-import { createSignal, Show, onCleanup } from "solid-js";
+import { For, Show, createSignal } from "solid-js";
 import { useTheme } from "../context/theme";
 
 type ToastMessage = {
@@ -40,18 +40,20 @@ export function Toast() {
         gap={1}
         zIndex={200}
       >
-        {toasts().map((toast) => (
-          <box
-            border
-            borderStyle="rounded"
-            borderColor={colorForType(toast.type)}
-            backgroundColor={theme.backgroundPanel}
-            paddingLeft={1}
-            paddingRight={1}
-          >
-            <text fg={colorForType(toast.type)}>{toast.text}</text>
-          </box>
-        ))}
+        <For each={toasts()}>
+          {(toast) => (
+            <box
+              border
+              borderStyle="rounded"
+              borderColor={colorForType(toast.type)}
+              backgroundColor={theme.backgroundPanel}
+              paddingLeft={1}
+              paddingRight={1}
+            >
+              <text fg={colorForType(toast.type)}>{toast.text}</text>
+            </box>
+          )}
+        </For>
       </box>
     </Show>
   );

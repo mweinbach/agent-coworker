@@ -1,12 +1,15 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeTheme, type IpcMainInvokeEvent } from "electron";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import {
   DESKTOP_IPC_CHANNELS,
+  type ConfirmActionInput,
+  type DesktopNotificationInput,
   type DeleteTranscriptInput,
   type ListDirectoryInput,
   type ReadTranscriptInput,
+  type SetWindowAppearanceInput,
   type ShowContextMenuInput,
   type StartWorkspaceServerInput,
   type StopWorkspaceServerInput,
@@ -15,6 +18,8 @@ import {
 import type { PersistedState } from "../src/app/types";
 
 import { isTrustedDesktopSenderUrl, resolveAllowedDirectoryPath } from "./services/ipcSecurity";
+import { applyWindowAppearance, getSystemAppearanceSnapshot } from "./services/appearance";
+import { buildConfirmDialog } from "./services/dialogs";
 import { PersistenceService } from "./services/persistence";
 import { ServerManager } from "./services/serverManager";
 
@@ -59,6 +64,66 @@ function assertListDirectoryPath(args: ListDirectoryInput): string {
     throw new Error("path must be a string");
   }
   return args.path;
+}
+
+function assertConfirmActionInput(args: ConfirmActionInput): ConfirmActionInput {
+  if (!args || typeof args !== "object") {
+    throw new Error("confirmAction options must be an object");
+  }
+  if (typeof args.title !== "string" || !args.title.trim()) {
+    throw new Error("confirmAction title must be a non-empty string");
+  }
+  if (typeof args.message !== "string" || !args.message.trim()) {
+    throw new Error("confirmAction message must be a non-empty string");
+  }
+  if (args.kind !== undefined && !["none", "info", "warning", "error"].includes(args.kind)) {
+    throw new Error("confirmAction kind is invalid");
+  }
+  if (args.defaultAction !== undefined && !["confirm", "cancel"].includes(args.defaultAction)) {
+    throw new Error("confirmAction defaultAction is invalid");
+  }
+  if (args.confirmLabel !== undefined && (typeof args.confirmLabel !== "string" || !args.confirmLabel.trim())) {
+    throw new Error("confirmAction confirmLabel must be a non-empty string when provided");
+  }
+  if (args.cancelLabel !== undefined && (typeof args.cancelLabel !== "string" || !args.cancelLabel.trim())) {
+    throw new Error("confirmAction cancelLabel must be a non-empty string when provided");
+  }
+  if (args.detail !== undefined && typeof args.detail !== "string") {
+    throw new Error("confirmAction detail must be a string when provided");
+  }
+  return args;
+}
+
+function assertDesktopNotificationInput(args: DesktopNotificationInput): DesktopNotificationInput {
+  if (!args || typeof args !== "object") {
+    throw new Error("showNotification options must be an object");
+  }
+  if (typeof args.title !== "string" || !args.title.trim()) {
+    throw new Error("showNotification title must be a non-empty string");
+  }
+  if (args.body !== undefined && typeof args.body !== "string") {
+    throw new Error("showNotification body must be a string when provided");
+  }
+  if (args.silent !== undefined && typeof args.silent !== "boolean") {
+    throw new Error("showNotification silent must be a boolean when provided");
+  }
+  return args;
+}
+
+function assertSetWindowAppearanceInput(args: SetWindowAppearanceInput): SetWindowAppearanceInput {
+  if (!args || typeof args !== "object") {
+    throw new Error("setWindowAppearance options must be an object");
+  }
+  if (args.themeSource !== undefined && !["system", "light", "dark"].includes(args.themeSource)) {
+    throw new Error("setWindowAppearance themeSource is invalid");
+  }
+  if (
+    args.backgroundMaterial !== undefined &&
+    !["auto", "none", "mica", "acrylic", "tabbed"].includes(args.backgroundMaterial)
+  ) {
+    throw new Error("setWindowAppearance backgroundMaterial is invalid");
+  }
+  return args;
 }
 
 async function normalizeWorkspacePath(workspacePath: string): Promise<string> {
@@ -272,6 +337,47 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
         if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.confirmAction, async (event, args: ConfirmActionInput) => {
+    const input = assertConfirmActionInput(args);
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined;
+    const built = buildConfirmDialog(input);
+
+    const response = ownerWindow
+      ? await dialog.showMessageBox(ownerWindow, built.options)
+      : await dialog.showMessageBox(built.options);
+    return response.response === built.confirmButtonIndex;
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showNotification, async (_event, args: DesktopNotificationInput) => {
+    const input = assertDesktopNotificationInput(args);
+    if (!Notification.isSupported()) {
+      return false;
+    }
+    const notification = new Notification({
+      title: input.title.trim(),
+      body: input.body?.trim(),
+      silent: input.silent,
+    });
+    notification.show();
+    return true;
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.getSystemAppearance, async () => {
+    return getSystemAppearanceSnapshot();
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.setWindowAppearance, async (event, args: SetWindowAppearanceInput) => {
+    const input = assertSetWindowAppearanceInput(args);
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
+    if (!ownerWindow) {
+      if (input.themeSource) {
+        nativeTheme.themeSource = input.themeSource;
+      }
+      return getSystemAppearanceSnapshot();
+    }
+    return applyWindowAppearance(ownerWindow, input);
   });
 
   return () => {

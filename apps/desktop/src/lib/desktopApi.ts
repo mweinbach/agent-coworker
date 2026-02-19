@@ -44,6 +44,48 @@ export type FileEntry = {
   isDirectory: boolean;
 };
 
+export type DesktopMenuCommand =
+  | "newThread"
+  | "toggleSidebar"
+  | "openSettings"
+  | "openWorkspacesSettings"
+  | "openSkills";
+
+export type ThemeSource = "system" | "light" | "dark";
+
+export type WindowsBackgroundMaterial = "auto" | "none" | "mica" | "acrylic" | "tabbed";
+
+export type SystemAppearance = {
+  platform: string;
+  themeSource: ThemeSource;
+  shouldUseDarkColors: boolean;
+  shouldUseHighContrastColors: boolean;
+  shouldUseInvertedColorScheme: boolean;
+  prefersReducedTransparency: boolean;
+  inForcedColorsMode: boolean;
+};
+
+export type ConfirmActionInput = {
+  title: string;
+  message: string;
+  detail?: string;
+  kind?: "none" | "info" | "warning" | "error";
+  confirmLabel?: string;
+  cancelLabel?: string;
+  defaultAction?: "confirm" | "cancel";
+};
+
+export type DesktopNotificationInput = {
+  title: string;
+  body?: string;
+  silent?: boolean;
+};
+
+export type SetWindowAppearanceInput = {
+  themeSource?: ThemeSource;
+  backgroundMaterial?: WindowsBackgroundMaterial;
+};
+
 export interface DesktopApi {
   startWorkspaceServer(opts: StartWorkspaceServerInput): Promise<{ url: string }>;
   stopWorkspaceServer(opts: StopWorkspaceServerInput): Promise<void>;
@@ -60,6 +102,12 @@ export interface DesktopApi {
   windowClose(): Promise<void>;
   getPlatform(): Promise<string>;
   listDirectory(opts: ListDirectoryInput): Promise<FileEntry[]>;
+  confirmAction(opts: ConfirmActionInput): Promise<boolean>;
+  showNotification(opts: DesktopNotificationInput): Promise<boolean>;
+  getSystemAppearance(): Promise<SystemAppearance>;
+  setWindowAppearance(opts: SetWindowAppearanceInput): Promise<SystemAppearance>;
+  onSystemAppearanceChanged(listener: (appearance: SystemAppearance) => void): () => void;
+  onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void;
 }
 
 export const DESKTOP_IPC_CHANNELS = {
@@ -78,4 +126,13 @@ export const DESKTOP_IPC_CHANNELS = {
   windowClose: "desktop:windowClose",
   getPlatform: "desktop:getPlatform",
   listDirectory: "desktop:listDirectory",
+  confirmAction: "desktop:confirmAction",
+  showNotification: "desktop:showNotification",
+  getSystemAppearance: "desktop:getSystemAppearance",
+  setWindowAppearance: "desktop:setWindowAppearance",
+} as const;
+
+export const DESKTOP_EVENT_CHANNELS = {
+  menuCommand: "desktop:event:menuCommand",
+  systemAppearanceChanged: "desktop:event:systemAppearanceChanged",
 } as const;

@@ -1,5 +1,5 @@
 import { useAppStore } from "../app/store";
-import { showContextMenu } from "../lib/desktopCommands";
+import { confirmAction, showContextMenu } from "../lib/desktopCommands";
 
 const IconPlus = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -75,7 +75,16 @@ export function Sidebar() {
     if (result === "select") {
       void selectWorkspace(wsId);
     } else if (result === "remove") {
-      if (window.confirm(`Remove workspace "${wsName}"?`)) {
+      const confirmed = await confirmAction({
+        title: "Remove workspace",
+        message: `Remove workspace \"${wsName}\"?`,
+        detail: "This only removes it from Cowork. Files on disk are unchanged.",
+        confirmLabel: "Remove",
+        cancelLabel: "Cancel",
+        kind: "warning",
+        defaultAction: "cancel",
+      });
+      if (confirmed) {
         void removeWorkspace(wsId);
       }
     }
@@ -93,7 +102,16 @@ export function Sidebar() {
     if (result === "select") {
       void selectThread(tId);
     } else if (result === "remove") {
-      if (window.confirm(`Remove session "${tTitle}"?`)) {
+      const confirmed = await confirmAction({
+        title: "Remove session",
+        message: `Remove session \"${tTitle}\"?`,
+        detail: "The chat transcript will be removed from this desktop app.",
+        confirmLabel: "Remove",
+        cancelLabel: "Cancel",
+        kind: "warning",
+        defaultAction: "cancel",
+      });
+      if (confirmed) {
         void removeThread(tId);
       }
     }

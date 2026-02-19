@@ -1,14 +1,20 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 import {
+  DESKTOP_EVENT_CHANNELS,
   DESKTOP_IPC_CHANNELS,
+  type ConfirmActionInput,
   type DeleteTranscriptInput,
+  type DesktopMenuCommand,
+  type DesktopNotificationInput,
   type DesktopApi,
   type ListDirectoryInput,
   type ReadTranscriptInput,
+  type SetWindowAppearanceInput,
   type ShowContextMenuInput,
   type StartWorkspaceServerInput,
   type StopWorkspaceServerInput,
+  type SystemAppearance,
   type TranscriptBatchInput,
 } from "../src/lib/desktopApi";
 import type { PersistedState } from "../src/app/types";
@@ -25,6 +31,13 @@ function assertString(value: unknown, label: string): asserts value is string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`${label} must be a non-empty string`);
   }
+}
+
+function assertOptionalString(value: unknown, label: string): asserts value is string | undefined {
+  if (value === undefined) {
+    return;
+  }
+  assertString(value, label);
 }
 
 function assertSafeId(value: unknown, label: string): asserts value is string {
@@ -105,6 +118,71 @@ function assertPersistedState(state: PersistedState): void {
   }
 }
 
+function assertConfirmActionInput(opts: ConfirmActionInput): void {
+  assertObject(opts, "confirmAction options");
+  assertString(opts.title, "title");
+  assertString(opts.message, "message");
+  assertOptionalString(opts.detail, "detail");
+  assertOptionalString(opts.confirmLabel, "confirmLabel");
+  assertOptionalString(opts.cancelLabel, "cancelLabel");
+  if (opts.kind && !["none", "info", "warning", "error"].includes(opts.kind)) {
+    throw new Error("kind must be one of: none, info, warning, error");
+  }
+  if (opts.defaultAction && !["confirm", "cancel"].includes(opts.defaultAction)) {
+    throw new Error("defaultAction must be one of: confirm, cancel");
+  }
+}
+
+function assertDesktopNotificationInput(opts: DesktopNotificationInput): void {
+  assertObject(opts, "showNotification options");
+  assertString(opts.title, "title");
+  assertOptionalString(opts.body, "body");
+  if (opts.silent !== undefined && typeof opts.silent !== "boolean") {
+    throw new Error("silent must be a boolean when provided");
+  }
+}
+
+function assertSetWindowAppearanceInput(opts: SetWindowAppearanceInput): void {
+  assertObject(opts, "setWindowAppearance options");
+  if (opts.themeSource && !["system", "light", "dark"].includes(opts.themeSource)) {
+    throw new Error("themeSource must be one of: system, light, dark");
+  }
+  if (opts.backgroundMaterial && !["auto", "none", "mica", "acrylic", "tabbed"].includes(opts.backgroundMaterial)) {
+    throw new Error("backgroundMaterial must be one of: auto, none, mica, acrylic, tabbed");
+  }
+}
+
+function assertDesktopMenuCommand(value: unknown): asserts value is DesktopMenuCommand {
+  if (!["newThread", "toggleSidebar", "openSettings", "openWorkspacesSettings", "openSkills"].includes(String(value))) {
+    throw new Error("Invalid menu command");
+  }
+}
+
+function assertSystemAppearance(value: unknown): asserts value is SystemAppearance {
+  assertObject(value, "system appearance");
+  if (!["darwin", "linux", "win32", "aix", "freebsd", "openbsd", "sunos", "android"].includes(String(value.platform))) {
+    throw new Error("system appearance platform is invalid");
+  }
+  if (!["system", "light", "dark"].includes(String(value.themeSource))) {
+    throw new Error("system appearance themeSource is invalid");
+  }
+  if (typeof value.shouldUseDarkColors !== "boolean") {
+    throw new Error("system appearance shouldUseDarkColors must be a boolean");
+  }
+  if (typeof value.shouldUseHighContrastColors !== "boolean") {
+    throw new Error("system appearance shouldUseHighContrastColors must be a boolean");
+  }
+  if (typeof value.shouldUseInvertedColorScheme !== "boolean") {
+    throw new Error("system appearance shouldUseInvertedColorScheme must be a boolean");
+  }
+  if (typeof value.prefersReducedTransparency !== "boolean") {
+    throw new Error("system appearance prefersReducedTransparency must be a boolean");
+  }
+  if (typeof value.inForcedColorsMode !== "boolean") {
+    throw new Error("system appearance inForcedColorsMode must be a boolean");
+  }
+}
+
 const desktopApi = Object.freeze<DesktopApi>({
   startWorkspaceServer: (opts: StartWorkspaceServerInput) => {
     assertStartWorkspaceServerInput(opts);
@@ -161,6 +239,57 @@ const desktopApi = Object.freeze<DesktopApi>({
   listDirectory: (opts: ListDirectoryInput) => {
     assertListDirectoryInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.listDirectory, opts);
+  },
+
+  confirmAction: (opts: ConfirmActionInput) => {
+    assertConfirmActionInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.confirmAction, opts);
+  },
+
+  showNotification: (opts: DesktopNotificationInput) => {
+    assertDesktopNotificationInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.showNotification, opts);
+  },
+
+  getSystemAppearance: async () => {
+    const appearance = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getSystemAppearance);
+    assertSystemAppearance(appearance);
+    return appearance;
+  },
+
+  setWindowAppearance: async (opts: SetWindowAppearanceInput) => {
+    assertSetWindowAppearanceInput(opts);
+    const appearance = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.setWindowAppearance, opts);
+    assertSystemAppearance(appearance);
+    return appearance;
+  },
+
+  onSystemAppearanceChanged: (listener: (appearance: SystemAppearance) => void) => {
+    if (typeof listener !== "function") {
+      throw new Error("onSystemAppearanceChanged listener must be a function");
+    }
+    const wrapped = (_event: unknown, payload: unknown) => {
+      assertSystemAppearance(payload);
+      listener(payload);
+    };
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.systemAppearanceChanged, wrapped);
+    return () => {
+      ipcRenderer.off(DESKTOP_EVENT_CHANNELS.systemAppearanceChanged, wrapped);
+    };
+  },
+
+  onMenuCommand: (listener: (command: DesktopMenuCommand) => void) => {
+    if (typeof listener !== "function") {
+      throw new Error("onMenuCommand listener must be a function");
+    }
+    const wrapped = (_event: unknown, payload: unknown) => {
+      assertDesktopMenuCommand(payload);
+      listener(payload);
+    };
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
+    return () => {
+      ipcRenderer.off(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
+    };
   },
 });
 

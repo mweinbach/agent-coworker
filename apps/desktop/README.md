@@ -15,6 +15,16 @@ Set `COWORK_ELECTRON_REMOTE_DEBUG=1` to enable it, and optionally set `COWORK_EL
 Desktop renderer dev URL is restricted to loopback on `COWORK_DESKTOP_RENDERER_PORT` (default `1420`).
 If `ELECTRON_RENDERER_URL` points to another app (for example the harness portal), desktop falls back to its own renderer URL.
 
+## Native Integration
+
+- Desktop now uses an application menu with platform-native roles and accelerators.
+- Menu actions dispatch to renderer commands for `New Thread`, `Toggle Sidebar`, `Skills`, and settings views.
+- Destructive confirmations use native `dialog.showMessageBox` (instead of browser `window.confirm`).
+- System appearance comes from Electron `nativeTheme` and is pushed to the renderer (`dark`, high-contrast, reduced transparency).
+- Desktop notifications are routed through Electron `Notification`.
+
+On Windows, the app sets `AppUserModelId` (`com.cowork.desktop`) for better notification/taskbar integration.
+
 ## Control With agent-browser
 
 Use [agent-browser](https://github.com/vercel-labs/agent-browser) to drive the Electron app over CDP.

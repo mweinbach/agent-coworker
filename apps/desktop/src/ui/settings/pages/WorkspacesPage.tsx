@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 
 import { useAppStore } from "../../../app/store";
+import { confirmAction } from "../../../lib/desktopCommands";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { MODEL_CHOICES, modelOptionsForProvider, UI_DISABLED_PROVIDERS } from "../../../lib/modelChoices";
@@ -161,10 +162,20 @@ export function WorkspacesPage() {
                   type="checkbox"
                   checked={yolo}
                   aria-label="Enable auto-approve commands"
-                  onChange={(e) => {
+                  onChange={async (e) => {
                     if (!ws) return;
                     const next = e.currentTarget.checked;
-                    if (window.confirm(next ? "Enable auto-approve? The agent will run commands without asking." : "Disable auto-approve?")) {
+                    const confirmed = await confirmAction({
+                      title: next ? "Enable auto-approve commands" : "Disable auto-approve commands",
+                      message: next
+                        ? "Enable auto-approve? The agent will run commands without asking."
+                        : "Disable auto-approve?",
+                      confirmLabel: next ? "Enable" : "Disable",
+                      cancelLabel: "Cancel",
+                      kind: "warning",
+                      defaultAction: "cancel",
+                    });
+                    if (confirmed) {
                       void updateWorkspaceDefaults(ws.id, { yolo: next }).then(() => restartWorkspaceServer(ws.id));
                     }
                   }}
@@ -210,8 +221,17 @@ export function WorkspacesPage() {
                 <button
                   className="modalButton modalButtonDanger"
                   type="button"
-                  onClick={() => {
-                    if (window.confirm(`Remove workspace "${ws.name}"? Your files on disk won't be affected.`)) {
+                  onClick={async () => {
+                    const confirmed = await confirmAction({
+                      title: "Remove workspace",
+                      message: `Remove workspace \"${ws.name}\"?`,
+                      detail: "Your files on disk will not be affected.",
+                      confirmLabel: "Remove",
+                      cancelLabel: "Cancel",
+                      kind: "warning",
+                      defaultAction: "cancel",
+                    });
+                    if (confirmed) {
                       void removeWorkspace(ws.id);
                     }
                   }}

@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { For, createSignal } from "solid-js";
 import { useTheme } from "../../context/theme";
 import { useSyncActions } from "../../context/sync";
 import type { ApprovalRequest } from "../../context/sync";
@@ -71,21 +71,23 @@ export function PermissionPrompt(props: { approval: ApprovalRequest }) {
         <text fg={theme.text}>{props.approval.command}</text>
       </box>
 
-      {OPTIONS.map((opt, i) => (
-        <box
-          flexDirection="row"
-          gap={1}
-          onMouseDown={() => {
-            setSelected(i);
-            handleSelect();
-          }}
-        >
-          <text fg={selected() === i ? theme.accent : theme.textMuted}>
-            {selected() === i ? "▸" : " "}
-          </text>
-          <text fg={selected() === i ? theme.text : theme.textMuted}>{opt}</text>
-        </box>
-      ))}
+      <For each={OPTIONS}>
+        {(opt, i) => (
+          <box
+            flexDirection="row"
+            gap={1}
+            onMouseDown={() => {
+              setSelected(i());
+              handleSelect();
+            }}
+          >
+            <text fg={selected() === i() ? theme.accent : theme.textMuted}>
+              {selected() === i() ? "▸" : " "}
+            </text>
+            <text fg={selected() === i() ? theme.text : theme.textMuted}>{opt}</text>
+          </box>
+        )}
+      </For>
     </box>
   );
 }

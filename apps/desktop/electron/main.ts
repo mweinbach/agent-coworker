@@ -3,7 +3,15 @@ import { fileURLToPath } from "node:url";
 
 import { app, BrowserWindow, shell } from "electron";
 
+import { DESKTOP_EVENT_CHANNELS, type DesktopMenuCommand } from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
+import {
+  applyInitialWindowAppearance,
+  defaultWindowsBackgroundMaterial,
+  getSystemAppearanceSnapshot,
+  registerSystemAppearanceListener,
+} from "./services/appearance";
+import { installDesktopApplicationMenu } from "./services/menu";
 import { PersistenceService } from "./services/persistence";
 import { resolveDesktopRendererUrl } from "./services/rendererUrl";
 import { ServerManager } from "./services/serverManager";
@@ -16,12 +24,38 @@ const PACKAGED_RENDERER_DIR = path.resolve(path.join(__dirname, "../renderer"));
 const serverManager = new ServerManager();
 const persistence = new PersistenceService();
 let unregisterIpc = () => {};
+let unregisterAppearanceListener = () => {};
 let mainWindow: BrowserWindow | null = null;
 
 if (!app.isPackaged && process.env.COWORK_ELECTRON_REMOTE_DEBUG === "1") {
   const port = process.env.COWORK_ELECTRON_REMOTE_DEBUG_PORT?.trim() || "9222";
   app.commandLine.appendSwitch("remote-debugging-port", port);
   app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
+}
+
+if (process.platform === "win32") {
+  app.setAppUserModelId("com.cowork.desktop");
+}
+
+function emitDesktopEvent(channel: string, payload: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) {
+      continue;
+    }
+    win.webContents.send(channel, payload);
+  }
+}
+
+function emitSystemAppearance(): void {
+  emitDesktopEvent(DESKTOP_EVENT_CHANNELS.systemAppearanceChanged, getSystemAppearanceSnapshot());
+}
+
+function sendMenuCommand(command: DesktopMenuCommand): void {
+  const target = BrowserWindow.getFocusedWindow() ?? mainWindow;
+  if (!target || target.isDestroyed()) {
+    return;
+  }
+  target.webContents.send(DESKTOP_EVENT_CHANNELS.menuCommand, command);
 }
 
 function isExternalUrl(rawUrl: string): boolean {
@@ -95,14 +129,13 @@ function applyWindowSecurity(win: BrowserWindow): void {
 }
 
 async function createWindow(): Promise<void> {
-  const isMac = process.platform === "darwin";
+  const backgroundMaterial = defaultWindowsBackgroundMaterial();
 
   const win = new BrowserWindow({
     title: "Cowork",
     width: 1240,
     height: 820,
-    titleBarStyle: isMac ? "hidden" : "default",
-    trafficLightPosition: isMac ? { x: 16, y: 16 } : undefined,
+    ...(backgroundMaterial ? { backgroundMaterial } : {}),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
@@ -116,12 +149,17 @@ async function createWindow(): Promise<void> {
     },
   });
   mainWindow = win;
+  applyInitialWindowAppearance(win);
   applyWindowSecurity(win);
 
   win.on("closed", () => {
     if (mainWindow === win) {
       mainWindow = null;
     }
+  });
+
+  win.webContents.on("did-finish-load", () => {
+    emitSystemAppearance();
   });
 
   if (!app.isPackaged) {
@@ -159,6 +197,17 @@ if (!gotSingleInstanceLock) {
       persistence,
       serverManager,
     });
+    unregisterAppearanceListener = registerSystemAppearanceListener((appearance) => {
+      emitDesktopEvent(DESKTOP_EVENT_CHANNELS.systemAppearanceChanged, appearance);
+    });
+
+    installDesktopApplicationMenu({
+      includeDevTools: !app.isPackaged,
+      openExternal: (url) => {
+        void shell.openExternal(url);
+      },
+      sendCommand: (command) => sendMenuCommand(command),
+    });
 
     void createWindow();
 
@@ -173,6 +222,7 @@ if (!gotSingleInstanceLock) {
     "before-quit",
     createBeforeQuitHandler({
       unregisterIpc: () => unregisterIpc(),
+      unregisterAppearanceListener: () => unregisterAppearanceListener(),
       stopAllServers: () => serverManager.stopAll(),
       quit: () => app.quit(),
       onError: (error) => {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createMemo } from "solid-js";
+import { For, createMemo } from "solid-js";
 import { useTheme } from "../context/theme";
 import { useSyncState } from "../context/sync";
 import { Dialog } from "../ui/dialog";
@@ -72,15 +72,17 @@ function SessionListDialog(props: { onDismiss: () => void }) {
         <scrollbox maxHeight={14} marginBottom={1}>
           {sessions().length > 0 ? (
             <box flexDirection="column">
-              {sessions().map((session) => (
-                <box flexDirection="row" gap={1}>
-                  <text fg={session.id === syncState.sessionId ? theme.accent : theme.textMuted}>
-                    {session.id === syncState.sessionId ? "▸" : " "}
-                  </text>
-                  <text fg={theme.text}>{session.id}</text>
-                  <text fg={theme.textMuted}>{formatAge(session.updatedAtMs)}</text>
-                </box>
-              ))}
+              <For each={sessions()}>
+                {(session) => (
+                  <box flexDirection="row" gap={1}>
+                    <text fg={session.id === syncState.sessionId ? theme.accent : theme.textMuted}>
+                      {session.id === syncState.sessionId ? "▸" : " "}
+                    </text>
+                    <text fg={theme.text}>{session.id}</text>
+                    <text fg={theme.textMuted}>{formatAge(session.updatedAtMs)}</text>
+                  </box>
+                )}
+              </For>
             </box>
           ) : (
             <text fg={theme.textMuted}>No saved sessions found in ~/.cowork/sessions.</text>

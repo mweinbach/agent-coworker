@@ -1,14 +1,21 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { useAppStore } from "./app/store";
+import {
+  getSystemAppearance,
+  onMenuCommand,
+  onSystemAppearanceChanged,
+  setWindowAppearance,
+  showNotification,
+} from "./lib/desktopCommands";
 import { PromptModal } from "./ui/PromptModal";
 import { Sidebar } from "./ui/Sidebar";
 import { ContextSidebar } from "./ui/ContextSidebar";
-import { TitleBar } from "./ui/TitleBar";
 import { AppTopBar } from "./ui/layout/AppTopBar";
 import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
+import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 
 export default function App() {
   const ready = useAppStore((s) => s.ready);
@@ -22,8 +29,12 @@ export default function App() {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const openSkills = useAppStore((s) => s.openSkills);
+  const openSettings = useAppStore((s) => s.openSettings);
+  const notifications = useAppStore((s) => s.notifications);
 
   const newThread = useAppStore((s) => s.newThread);
+  const seenNotificationIds = useRef(new Set<string>());
 
   useEffect(() => {
     if (ready) return;
@@ -34,18 +45,6 @@ export default function App() {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key === "n") {
-        event.preventDefault();
-        void newThread();
-        return;
-      }
-
-      if ((event.metaKey || event.ctrlKey) && event.key === "b") {
-        event.preventDefault();
-        toggleSidebar();
-        return;
-      }
-
       if (event.key === "Escape") {
         const state = useAppStore.getState();
         if (state.promptModal) {
@@ -68,7 +67,69 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [newThread, toggleSidebar]);
+  }, []);
+
+  useEffect(() => {
+    function handleMenuCommand(command: DesktopMenuCommand): void {
+      if (command === "newThread") {
+        void newThread();
+        return;
+      }
+      if (command === "toggleSidebar") {
+        toggleSidebar();
+        return;
+      }
+      if (command === "openSettings") {
+        openSettings();
+        return;
+      }
+      if (command === "openWorkspacesSettings") {
+        openSettings("workspaces");
+        return;
+      }
+      if (command === "openSkills") {
+        void openSkills();
+      }
+    }
+
+    const unsubscribe = onMenuCommand(handleMenuCommand);
+    return unsubscribe;
+  }, [newThread, openSettings, openSkills, toggleSidebar]);
+
+  useEffect(() => {
+    function applySystemAppearance(appearance: SystemAppearance): void {
+      const root = document.documentElement;
+      root.dataset.systemTheme = appearance.shouldUseDarkColors ? "dark" : "light";
+      root.dataset.platform = appearance.platform;
+      root.dataset.highContrast = appearance.shouldUseHighContrastColors || appearance.inForcedColorsMode ? "true" : "false";
+      root.dataset.reducedTransparency = appearance.prefersReducedTransparency ? "true" : "false";
+      root.style.colorScheme = appearance.shouldUseDarkColors ? "dark" : "light";
+    }
+
+    const unsubscribe = onSystemAppearanceChanged(applySystemAppearance);
+    void getSystemAppearance().then(applySystemAppearance).catch(() => {
+      // Keep CSS media-query fallback when system appearance cannot be loaded.
+    });
+    void setWindowAppearance({ themeSource: "system" }).catch(() => {
+      // Ignore and continue with default system theme behavior.
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    for (const notification of notifications) {
+      if (seenNotificationIds.current.has(notification.id)) {
+        continue;
+      }
+      seenNotificationIds.current.add(notification.id);
+      void showNotification({
+        title: notification.title,
+        body: notification.detail,
+      }).catch(() => {
+        // Browser-style in-app notifications already exist; OS toast is best effort.
+      });
+    }
+  }, [notifications]);
 
   const activeThread = useMemo(
     () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
@@ -82,7 +143,6 @@ export default function App() {
   if (view === "settings") {
     return (
       <div className="settingsRoot">
-        <TitleBar />
         <div className="appContent">
           <SettingsContent init={init} ready={ready} startupError={startupError} />
         </div>
@@ -93,7 +153,6 @@ export default function App() {
 
   return (
     <div className="app">
-      <TitleBar />
       <div className="appContent">
         <div
           className={"sidebarContainer" + (sidebarCollapsed ? " sidebarCollapsed" : "")}

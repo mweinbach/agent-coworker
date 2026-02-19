@@ -18,11 +18,25 @@
   line-height: 1.4;
   color: var(--text);
   background: var(--app-bg);
+  color-scheme: light;
   -webkit-font-smoothing: antialiased;
 }
 
+:root[data-system-theme="dark"] {
+  --app-bg: #1f1913;
+  --sidebar-bg: #29221b;
+  --panel-bg: #332a22;
+  --border: rgba(255, 233, 212, 0.12);
+  --text: #f6ece0;
+  --muted: #d8c7b6;
+  --accent: #e29a62;
+  --danger: #e86060;
+  --danger-bg: rgba(232, 96, 96, 0.14);
+  color-scheme: dark;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-system-theme]) {
     --app-bg: #1f1913;
     --sidebar-bg: #29221b;
     --panel-bg: #332a22;
@@ -34,6 +48,17 @@
     --danger-bg: rgba(232, 96, 96, 0.14);
     color-scheme: dark;
   }
+}
+
+:root[data-platform="win32"][data-reduced-transparency="false"] {
+  --app-bg: color-mix(in srgb, var(--app-bg) 88%, transparent);
+  --sidebar-bg: color-mix(in srgb, var(--sidebar-bg) 82%, transparent);
+  --panel-bg: color-mix(in srgb, var(--panel-bg) 90%, transparent);
+}
+
+:root[data-high-contrast="true"] {
+  --border: currentColor;
+  --accent: #1769e0;
 }
 
 html, body, #root { height: 100%; }
@@ -50,7 +75,7 @@ button {
 }
 a { color: inherit; text-decoration: none; }
 
-.navItem, .workspaceRow, .threadRow, .sidebarToggle, .iconButton, .titleBarButton, .settingsProviderRow, .skillsList .skillsItem {
+.navItem, .workspaceRow, .threadRow, .sidebarToggle, .iconButton, .settingsProviderRow, .skillsList .skillsItem {
   border: none;
   background: transparent;
   outline: none;
@@ -67,8 +92,7 @@ a { color: inherit; text-decoration: none; }
 .sidebarToggle:focus-visible,
 .iconButton:focus-visible,
 .settingsProviderRow:focus-visible,
-.skillsList .skillsItem:focus-visible,
-.titleBarButton:focus-visible {
+.skillsList .skillsItem:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
@@ -85,34 +109,6 @@ a { color: inherit; text-decoration: none; }
   display: flex;
   min-height: 0;
 }
-
-.titleBar {
-  height: 34px;
-  display: flex;
-  align-items: center;
-  background: var(--sidebar-bg);
-  border-bottom: 1px solid var(--border);
-  -webkit-app-region: drag;
-  user-select: none;
-}
-
-.titleBarMac { padding-left: 76px; justify-content: center; }
-.titleBarWindows { justify-content: space-between; padding: 0 8px; }
-.titleBarLeft { display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag; }
-.titleBarTitle { font-size: 12px; font-weight: 600; opacity: 0.6; }
-.titleBarCenter { position: absolute; left: 50%; transform: translateX(-50%); }
-.titleBarControls { display: flex; height: 100%; -webkit-app-region: no-drag; }
-.titleBarButton {
-  min-width: 44px;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  transition: background 160ms ease, color 160ms ease;
-}
-.titleBarButton:hover { background: rgba(0, 0, 0, 0.08); color: var(--text); }
-.titleBarButtonClose:hover { background: #c85a5a; color: #fff; }
 
 .sidebarContainer { position: relative; flex-shrink: 0; min-width: 0; overflow: hidden; }
 .sidebarContainer.sidebarCollapsed { width: 0 !important; }
@@ -359,9 +355,15 @@ a { color: inherit; text-decoration: none; }
   background: rgba(0, 0, 0, 0.2);
 }
 
+:root[data-system-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-system-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
 @media (prefers-color-scheme: dark) {
-  ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); }
-  ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+  :root:not([data-system-theme]) ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); }
+  :root:not([data-system-theme]) ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
 }
 
 .composerWrap { 
@@ -526,14 +528,32 @@ a { color: inherit; text-decoration: none; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
 /* Dark mode overrides */
+:root[data-system-theme="dark"] .navItem:hover,
+:root[data-system-theme="dark"] .workspaceRow:hover,
+:root[data-system-theme="dark"] .threadRow:hover,
+:root[data-system-theme="dark"] .sidebarToggle:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+:root[data-system-theme="dark"] .navItem[data-active="true"],
+:root[data-system-theme="dark"] .workspaceRow[data-active="true"],
+:root[data-system-theme="dark"] .threadRow[data-active="true"] {
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-system-theme="dark"] .toolCallCard { background: rgba(255, 255, 255, 0.03); }
+:root[data-system-theme="dark"] .bubble { background: rgba(255, 255, 255, 0.04); }
+:root[data-system-theme="dark"] .inlineCard { background: rgba(255, 255, 255, 0.03); }
+
 @media (prefers-color-scheme: dark) {
-  .navItem:hover, .workspaceRow:hover, .threadRow:hover, .sidebarToggle:hover { background: rgba(255, 255, 255, 0.05); }
-  .navItem[data-active="true"], .workspaceRow[data-active="true"], .threadRow[data-active="true"] { background: rgba(255, 255, 255, 0.1); }
-  .toolCallCard { background: rgba(255, 255, 255, 0.03); }
-  .bubble { background: rgba(255, 255, 255, 0.04); }
-  .inlineCard { background: rgba(255, 255, 255, 0.03); }
-  .titleBarButton:hover { background: rgba(255, 255, 255, 0.12); }
-  .titleBarButtonClose:hover { background: #d46b6b; color: #fff; }
+  :root:not([data-system-theme]) .navItem:hover,
+  :root:not([data-system-theme]) .workspaceRow:hover,
+  :root:not([data-system-theme]) .threadRow:hover,
+  :root:not([data-system-theme]) .sidebarToggle:hover { background: rgba(255, 255, 255, 0.05); }
+  :root:not([data-system-theme]) .navItem[data-active="true"],
+  :root:not([data-system-theme]) .workspaceRow[data-active="true"],
+  :root:not([data-system-theme]) .threadRow[data-active="true"] { background: rgba(255, 255, 255, 0.1); }
+  :root:not([data-system-theme]) .toolCallCard { background: rgba(255, 255, 255, 0.03); }
+  :root:not([data-system-theme]) .bubble { background: rgba(255, 255, 255, 0.04); }
+  :root:not([data-system-theme]) .inlineCard { background: rgba(255, 255, 255, 0.03); }
 }
 
 /* Shared primitives */

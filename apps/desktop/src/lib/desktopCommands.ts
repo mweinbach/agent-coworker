@@ -1,5 +1,12 @@
 import type { PersistedState, TranscriptEvent } from "../app/types";
-import type { FileEntry } from "./desktopApi";
+import type {
+  ConfirmActionInput,
+  DesktopMenuCommand,
+  DesktopNotificationInput,
+  FileEntry,
+  SetWindowAppearanceInput,
+  SystemAppearance,
+} from "./desktopApi";
 
 function requireDesktopApi() {
   const api = window.cowork;
@@ -80,10 +87,37 @@ export async function getPlatform(): Promise<string> {
 }
 
 export async function listDirectory(path: string): Promise<FileEntry[]> {
-  const api = requireDesktopApi();
-  if (typeof api.listDirectory !== "function") {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const api = window.cowork;
+  if (!api || typeof api.listDirectory !== "function") {
     console.warn("listDirectory not implemented in desktop bridge");
     return [];
   }
   return await api.listDirectory({ path });
+}
+
+export async function confirmAction(opts: ConfirmActionInput): Promise<boolean> {
+  return await requireDesktopApi().confirmAction(opts);
+}
+
+export async function showNotification(opts: DesktopNotificationInput): Promise<boolean> {
+  return await requireDesktopApi().showNotification(opts);
+}
+
+export async function getSystemAppearance(): Promise<SystemAppearance> {
+  return await requireDesktopApi().getSystemAppearance();
+}
+
+export async function setWindowAppearance(opts: SetWindowAppearanceInput): Promise<SystemAppearance> {
+  return await requireDesktopApi().setWindowAppearance(opts);
+}
+
+export function onSystemAppearanceChanged(listener: (appearance: SystemAppearance) => void): () => void {
+  return requireDesktopApi().onSystemAppearanceChanged(listener);
+}
+
+export function onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void {
+  return requireDesktopApi().onMenuCommand(listener);
 }

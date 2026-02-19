@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { For, createSignal } from "solid-js";
 import { useTheme } from "../context/theme";
 import { Dialog } from "./dialog";
 import { keyNameFromEvent } from "../util/keyboard";
@@ -49,21 +49,23 @@ export function DialogConfirm(props: DialogConfirmProps) {
           {props.message}
         </text>
         <box flexDirection="row" gap={2}>
-          {options.map((opt, i) => (
-            <box
-              border
-              borderStyle="single"
-              borderColor={selected() === i ? theme.accent : theme.borderSubtle}
-              paddingLeft={1}
-              paddingRight={1}
-              onMouseDown={() => {
-                if (i === 0) props.onConfirm();
-                else props.onCancel();
-              }}
-            >
-              <text fg={selected() === i ? theme.text : theme.textMuted}>{opt}</text>
-            </box>
-          ))}
+          <For each={options}>
+            {(opt, i) => (
+              <box
+                border
+                borderStyle="single"
+                borderColor={selected() === i() ? theme.accent : theme.borderSubtle}
+                paddingLeft={1}
+                paddingRight={1}
+                onMouseDown={() => {
+                  if (i() === 0) props.onConfirm();
+                  else props.onCancel();
+                }}
+              >
+                <text fg={selected() === i() ? theme.text : theme.textMuted}>{opt}</text>
+              </box>
+            )}
+          </For>
         </box>
       </box>
     </Dialog>

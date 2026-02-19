@@ -29,7 +29,7 @@ export function AppTopBar({
   title,
   view,
 }: AppTopBarProps) {
-  const sidebarLabel = sidebarCollapsed ? "Show sidebar (⌘B)" : "Hide sidebar (⌘B)";
+  const sidebarLabel = sidebarCollapsed ? "Show sidebar (Cmd/Ctrl+B)" : "Hide sidebar (Cmd/Ctrl+B)";
 
   return (
     <div className="topbar">

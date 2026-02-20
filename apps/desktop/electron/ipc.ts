@@ -405,7 +405,20 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.trashPath, async (_event, args: TrashPathInput) => {
     await ensureApprovedWorkspaceRoots();
     const safePath = resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), args.path);
-    await shell.trashItem(safePath);
+    try {
+      await shell.trashItem(safePath);
+      return;
+    } catch (trashError) {
+      try {
+        // Fallback for environments where OS trash integration is unavailable for directories.
+        await fs.rm(safePath, { recursive: true, force: false, maxRetries: 2, retryDelay: 50 });
+        return;
+      } catch (deleteError) {
+        const trashDetail = trashError instanceof Error ? trashError.message : String(trashError);
+        const deleteDetail = deleteError instanceof Error ? deleteError.message : String(deleteError);
+        throw new Error(`Unable to move to Trash (${trashDetail}) and permanent delete failed (${deleteDetail})`);
+      }
+    }
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.confirmAction, async (event, args: ConfirmActionInput) => {

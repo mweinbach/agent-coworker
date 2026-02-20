@@ -1,23 +1,16 @@
-import { memo, useEffect } from "react";
+import { memo } from "react";
 
-import { CheckCircle2Icon, CircleDashedIcon, CircleIcon, FileIcon, FolderIcon } from "lucide-react";
+import { CheckCircle2Icon, CircleDashedIcon, CircleIcon } from "lucide-react";
 
 import { useAppStore } from "../app/store";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { cn } from "../lib/utils";
+import { WorkspaceFileExplorer } from "./file-explorer/WorkspaceFileExplorer";
 
 export const ContextSidebar = memo(function ContextSidebar() {
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const todos = useAppStore((s) => selectedThreadId ? s.latestTodosByThreadId[selectedThreadId] : null);
-  const files = useAppStore((s) => selectedWorkspaceId ? s.workspaceFilesById[selectedWorkspaceId] : null);
-  const refresh = useAppStore((s) => s.refreshWorkspaceFiles);
-
-  useEffect(() => {
-    if (selectedWorkspaceId) {
-      void refresh(selectedWorkspaceId).catch(() => {});
-    }
-  }, [refresh, selectedWorkspaceId]);
 
   return (
     <aside className="app-context-sidebar flex h-full w-full flex-col gap-3 p-3 overflow-hidden">
@@ -45,22 +38,15 @@ export const ContextSidebar = memo(function ContextSidebar() {
         </CardContent>
       </Card>
 
-      <Card className="min-h-0 flex-1 border-border/80 bg-card/80">
-        <CardHeader className="pb-2">
+      <Card className="min-h-0 flex-1 border-border/80 bg-card/80 flex flex-col">
+        <CardHeader className="pb-2 flex-none">
           <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">Files</CardTitle>
         </CardHeader>
-        <CardContent className="min-h-0 overflow-auto pt-0">
-          {!files || files.length === 0 ? (
-            <div className="py-3 text-center text-xs text-muted-foreground">No files found</div>
+        <CardContent className="min-h-0 flex-1 p-0">
+          {selectedWorkspaceId ? (
+            <WorkspaceFileExplorer workspaceId={selectedWorkspaceId} />
           ) : (
-            <div className="space-y-1">
-              {files.map((file, index) => (
-                <div key={`${file.name}:${index}`} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted/35 hover:text-foreground" title={file.name}>
-                  {file.isDirectory ? <FolderIcon className="h-3.5 w-3.5 shrink-0" /> : <FileIcon className="h-3.5 w-3.5 shrink-0" />}
-                  <span className="truncate">{file.name}</span>
-                </div>
-              ))}
-            </div>
+            <div className="py-3 text-center text-xs text-muted-foreground">No workspace selected</div>
           )}
         </CardContent>
       </Card>

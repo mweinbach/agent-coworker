@@ -29,6 +29,7 @@ export const Sidebar = memo(function Sidebar() {
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const newThread = useAppStore((s) => s.newThread);
   const removeThread = useAppStore((s) => s.removeThread);
+  const deleteThreadHistory = useAppStore((s) => s.deleteThreadHistory);
   const selectThread = useAppStore((s) => s.selectThread);
   const renameThread = useAppStore((s) => s.renameThread);
   const openSkills = useAppStore((s) => s.openSkills);
@@ -110,6 +111,7 @@ export const Sidebar = memo(function Sidebar() {
       { id: "select", label: "Open thread" },
       { id: "rename", label: "Rename thread" },
       { id: "remove", label: "Remove thread" },
+      { id: "delete_history", label: "Delete session history" },
     ]);
 
     if (result === "select") {
@@ -128,6 +130,19 @@ export const Sidebar = memo(function Sidebar() {
       });
       if (confirmed) {
         void removeThread(tId);
+      }
+    } else if (result === "delete_history") {
+      const confirmed = await confirmAction({
+        title: "Delete session history",
+        message: `Delete session history for \"${tTitle}\"?`,
+        detail: "This removes local transcript and server-side history for this session.",
+        confirmLabel: "Delete history",
+        cancelLabel: "Cancel",
+        kind: "error",
+        defaultAction: "cancel",
+      });
+      if (confirmed) {
+        void deleteThreadHistory(tId);
       }
     }
   };

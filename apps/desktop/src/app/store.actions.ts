@@ -7,6 +7,12 @@ import {
   pickWorkspaceDirectory,
   readTranscript,
   stopWorkspaceServer,
+  openPath,
+  revealPath,
+  copyPath,
+  createDirectory,
+  renamePath,
+  trashPath,
 } from "../lib/desktopCommands";
 import type { ProviderName } from "../lib/wsProtocol";
 
@@ -35,6 +41,7 @@ import {
   sendControl,
   sendThread,
   sendUserMessageToThread,
+  normalizeThreadTitleSource,
   truncateTitle,
 } from "./store.helpers";
 import type { ThreadRecord, ThreadStatus, WorkspaceRecord } from "./types";
@@ -57,10 +64,15 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
           const provider = w.defaultProvider && isProviderName(w.defaultProvider) ? w.defaultProvider : "google";
           const model =
             typeof w.defaultModel === "string" && w.defaultModel.trim() ? w.defaultModel : defaultModelForProvider(provider);
+          const subAgentModel =
+            typeof w.defaultSubAgentModel === "string" && w.defaultSubAgentModel.trim()
+              ? w.defaultSubAgentModel
+              : model;
         return {
             ...w,
             defaultProvider: provider,
             defaultModel: model,
+            defaultSubAgentModel: subAgentModel,
             defaultEnableMcp: typeof w.defaultEnableMcp === "boolean" ? w.defaultEnableMcp : true,
             yolo: typeof w.yolo === "boolean" ? w.yolo : false,
           };
@@ -71,6 +83,12 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
           status: (["active", "disconnected"] as const).includes(t.status as any)
             ? (t.status as ThreadStatus)
             : "disconnected",
+          titleSource: normalizeThreadTitleSource(t.titleSource, t.title),
+          sessionId: typeof t.sessionId === "string" && t.sessionId.trim() ? t.sessionId : null,
+          lastEventSeq:
+            typeof t.lastEventSeq === "number" && Number.isFinite(t.lastEventSeq)
+              ? Math.max(0, Math.floor(t.lastEventSeq))
+              : 0,
         }));
   
         const selectedWorkspaceId = normalizedWorkspaces[0]?.id ?? null;
@@ -85,6 +103,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
           selectedWorkspaceId,
           selectedThreadId,
           developerMode: typeof state.developerMode === "boolean" ? state.developerMode : false,
+          showHiddenFiles: typeof state.showHiddenFiles === "boolean" ? state.showHiddenFiles : false,
           ready: true,
           startupError: null,
         });
@@ -162,6 +181,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
         lastOpenedAt: nowIso(),
         defaultProvider: "google",
         defaultModel: defaultModelForProvider("google"),
+        defaultSubAgentModel: defaultModelForProvider("google"),
         defaultEnableMcp: true,
         yolo: false,
       };
@@ -193,6 +213,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
         RUNTIME.threadSockets.delete(thread.id);
         RUNTIME.optimisticUserMessageIds.delete(thread.id);
         RUNTIME.pendingThreadMessages.delete(thread.id);
+        RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(thread.id);
         RUNTIME.modelStreamByThread.delete(thread.id);
         try {
           sock?.close();
@@ -229,6 +250,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       RUNTIME.threadSockets.delete(threadId);
       RUNTIME.optimisticUserMessageIds.delete(threadId);
       RUNTIME.pendingThreadMessages.delete(threadId);
+      RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
       try {
         sock?.close();
@@ -257,8 +279,49 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       } catch {
         // ignore
       }
-  
+
       await persistNow(get);
+    },
+
+    deleteThreadHistory: async (threadId: string) => {
+      const thread = get().threads.find((t) => t.id === threadId);
+      if (!thread) return;
+      const targetSessionId = get().threadRuntimeById[threadId]?.sessionId ?? thread.sessionId;
+
+      await get().removeThread(threadId);
+
+      if (!targetSessionId) return;
+
+      await ensureServerRunning(get, set, thread.workspaceId);
+      ensureControlSocket(get, set, thread.workspaceId);
+      const ok = sendControl(get, thread.workspaceId, (sessionId) => ({
+        type: "delete_session",
+        sessionId,
+        targetSessionId,
+      }));
+
+      if (ok) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "info",
+            title: "Session history deleted",
+            detail: targetSessionId,
+          }),
+        }));
+        return;
+      }
+
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Delete session history failed",
+          detail: "Control session is unavailable.",
+        }),
+      }));
     },
   
     renameThread: (threadId: string, newTitle: string) => {
@@ -266,7 +329,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       if (!trimmed) return;
 
       set((s) => ({
-        threads: s.threads.map((t) => (t.id === threadId ? { ...t, title: trimmed } : t)),
+        threads: s.threads.map((t) => (t.id === threadId ? { ...t, title: trimmed, titleSource: "manual" } : t)),
       }));
       void persistNow(get);
 
@@ -334,9 +397,12 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
         id: threadId,
         workspaceId,
         title,
+        titleSource: "default",
         createdAt,
         lastMessageAt: createdAt,
         status: "active",
+        sessionId: null,
+        lastEventSeq: 0,
       };
   
       set((s) => ({
@@ -485,6 +551,14 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       set({ developerMode: v });
       void persistNow(get);
     },
+    setShowHiddenFiles: (v) => {
+      set({ showHiddenFiles: v });
+      void persistNow(get);
+      const wsId = get().selectedWorkspaceId;
+      if (wsId) {
+        void get().refreshWorkspaceFiles(wsId);
+      }
+    },
   
     openSkills: async () => {
       let workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
@@ -574,6 +648,11 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       if (!ws) return;
       const rt = get().threadRuntimeById[threadId];
       if (!rt?.sessionId) return;
+      if (rt.busy) {
+        RUNTIME.pendingWorkspaceDefaultApplyThreadIds.add(threadId);
+        return;
+      }
+      RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
   
       const inferredProvider =
         ws.defaultProvider && isProviderName(ws.defaultProvider)
@@ -584,6 +663,8 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
   
       const provider = normalizeProviderChoice(inferredProvider);
       const model = (ws.defaultModel?.trim() || rt.config?.model?.trim() || "") || undefined;
+      const subAgentModel =
+        (ws.defaultSubAgentModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.subAgentModel?.trim() || "") || undefined;
   
       if (provider && model) {
         const ok = sendThread(get, threadId, (sessionId) => ({
@@ -593,6 +674,23 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
           model,
         }));
         if (ok) appendThreadTranscript(threadId, "client", { type: "set_model", sessionId: rt.sessionId, provider, model });
+      }
+
+      if (subAgentModel) {
+        const okConfig = sendThread(get, threadId, (sessionId) => ({
+          type: "set_config",
+          sessionId,
+          config: {
+            subAgentModel,
+          },
+        }));
+        if (okConfig) {
+          appendThreadTranscript(threadId, "client", {
+            type: "set_config",
+            sessionId: rt.sessionId,
+            config: { subAgentModel },
+          });
+        }
       }
   
       const okMcp = sendThread(get, threadId, (sessionId) => ({
@@ -610,6 +708,67 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
         workspaces: s.workspaces.map((w) => (w.id === workspaceId ? { ...w, ...patch } : w)),
       }));
       await persistNow(get);
+
+      const shouldSyncCoreSettings =
+        patch.defaultProvider !== undefined ||
+        patch.defaultModel !== undefined ||
+        patch.defaultSubAgentModel !== undefined ||
+        patch.defaultEnableMcp !== undefined;
+      if (!shouldSyncCoreSettings) {
+        return;
+      }
+
+      const workspace = get().workspaces.find((w) => w.id === workspaceId);
+      if (!workspace) return;
+
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+
+      const provider = normalizeProviderChoice(
+        workspace.defaultProvider && isProviderName(workspace.defaultProvider)
+          ? workspace.defaultProvider
+          : "google"
+      );
+      const model = workspace.defaultModel?.trim() || defaultModelForProvider(provider);
+      const subAgentModel = workspace.defaultSubAgentModel?.trim() || model;
+
+      const modelPersisted = sendControl(get, workspaceId, (sessionId) => ({
+        type: "set_model",
+        sessionId,
+        provider,
+        model,
+      }));
+      const subAgentPersisted = sendControl(get, workspaceId, (sessionId) => ({
+        type: "set_config",
+        sessionId,
+        config: {
+          subAgentModel,
+        },
+      }));
+      const mcpPersisted = sendControl(get, workspaceId, (sessionId) => ({
+        type: "set_enable_mcp",
+        sessionId,
+        enableMcp: workspace.defaultEnableMcp,
+      }));
+
+      if (!modelPersisted || !subAgentPersisted || !mcpPersisted) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Workspace settings partially applied",
+            detail: "Control session is not fully connected yet. Reopen the workspace settings to retry.",
+          }),
+        }));
+      }
+
+      const threadIds = get()
+        .threads.filter((thread) => thread.workspaceId === workspaceId)
+        .map((thread) => thread.id);
+      for (const threadId of threadIds) {
+        void get().applyWorkspaceDefaultsToThread(threadId);
+      }
     },
   
     restartWorkspaceServer: async (workspaceId) => {
@@ -624,6 +783,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
         closeThreadSession(thread.id);
         sock?.close();
         RUNTIME.threadSockets.delete(thread.id);
+        RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(thread.id);
       }
   
       try {
@@ -635,12 +795,76 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
-          [workspaceId]: { ...s.workspaceRuntimeById[workspaceId], serverUrl: null, controlSessionId: null, controlConfig: null },
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            serverUrl: null,
+            controlSessionId: null,
+            controlConfig: null,
+            controlSessionConfig: null,
+          },
         },
       }));
   
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
+    },
+
+    requestWorkspaceMcpServers: async (workspaceId: string) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+
+      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "mcp_servers_get", sessionId }));
+      if (!ok) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to request MCP servers.",
+          }),
+        }));
+      }
+    },
+
+    saveWorkspaceMcpServers: async (workspaceId: string, rawJson: string) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            mcpSaving: true,
+            mcpRawJson: rawJson,
+          },
+        },
+      }));
+
+      const ok = sendControl(get, workspaceId, (sessionId) => ({
+        type: "mcp_servers_set",
+        sessionId,
+        rawJson,
+      }));
+      if (ok) return;
+
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            mcpSaving: false,
+          },
+        },
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to save MCP servers.",
+        }),
+      }));
     },
   
     connectProvider: async (provider, apiKey) => {
@@ -916,14 +1140,130 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     refreshWorkspaceFiles: async (workspaceId: string) => {
       const ws = get().workspaces.find((w) => w.id === workspaceId);
       if (!ws) return;
+      const state = get();
+      const currentExp = state.workspaceExplorerById[workspaceId];
+      const targetPath = currentExp?.currentPath ?? ws.path;
+      await get().navigateWorkspaceFiles(workspaceId, targetPath);
+    },
+
+    navigateWorkspaceFiles: async (workspaceId: string, targetPath: string) => {
+      const state = get();
+      const ws = state.workspaces.find((w) => w.id === workspaceId);
+      if (!ws) return;
+
+      const requestId = Date.now();
+      const prev = state.workspaceExplorerById[workspaceId] ?? {
+        rootPath: ws.path,
+        currentPath: ws.path,
+        entries: [],
+        selectedPath: null,
+        loading: false,
+        error: null,
+        requestId: 0,
+      };
+
+      set((s) => ({
+        workspaceExplorerById: {
+          ...s.workspaceExplorerById,
+          [workspaceId]: { ...prev, currentPath: targetPath, loading: true, error: null, requestId },
+        },
+      }));
+
       try {
-        const files = await listDirectory(ws.path);
+        const entries = await listDirectory({ path: targetPath, includeHidden: get().showHiddenFiles });
+        const current = get().workspaceExplorerById[workspaceId];
+        if (current?.requestId !== requestId) return; // Stale
+
         set((s) => ({
-          workspaceFilesById: { ...s.workspaceFilesById, [workspaceId]: files },
+          workspaceExplorerById: {
+            ...s.workspaceExplorerById,
+            [workspaceId]: {
+              ...current,
+              entries,
+              loading: false,
+              selectedPath: null,
+            },
+          },
         }));
       } catch (err) {
-        console.error("Failed to list directory:", err);
+        const current = get().workspaceExplorerById[workspaceId];
+        if (current?.requestId !== requestId) return; // Stale
+
+        set((s) => ({
+          workspaceExplorerById: {
+            ...s.workspaceExplorerById,
+            [workspaceId]: {
+              ...current,
+              loading: false,
+              error: err instanceof Error ? err.message : String(err),
+            },
+          },
+        }));
       }
+    },
+
+    navigateWorkspaceFilesUp: async (workspaceId: string) => {
+      const state = get();
+      const ws = state.workspaces.find((w) => w.id === workspaceId);
+      const currentPath = state.workspaceExplorerById[workspaceId]?.currentPath;
+      if (!ws || !currentPath) return;
+
+      // don't navigate above workspace root
+      const normalizedRoot = ws.path.replace(/\\/g, "/").replace(/\/$/, "");
+      const normalizedCurrent = currentPath.replace(/\\/g, "/").replace(/\/$/, "");
+      
+      if (normalizedCurrent === normalizedRoot || normalizedCurrent.length < normalizedRoot.length) {
+        return;
+      }
+
+      const parts = normalizedCurrent.split("/");
+      parts.pop();
+      const parent = parts.join("/") || "/";
+      await get().navigateWorkspaceFiles(workspaceId, parent);
+    },
+
+    selectWorkspaceFile: (workspaceId: string, path: string | null) => {
+      set((s) => {
+        const current = s.workspaceExplorerById[workspaceId];
+        if (!current) return {};
+        return {
+          workspaceExplorerById: {
+            ...s.workspaceExplorerById,
+            [workspaceId]: { ...current, selectedPath: path },
+          },
+        };
+      });
+    },
+
+    openWorkspaceFile: async (workspaceId: string, targetPath: string, isDirectory: boolean) => {
+      if (isDirectory) {
+        await get().navigateWorkspaceFiles(workspaceId, targetPath);
+      } else {
+        await openPath({ path: targetPath });
+      }
+    },
+
+    revealWorkspaceFile: async (path: string) => {
+      await revealPath({ path });
+    },
+
+    copyWorkspaceFilePath: async (path: string) => {
+      await copyPath({ path });
+    },
+
+    createWorkspaceDirectory: async (workspaceId: string, parentPath: string, name: string) => {
+      await createDirectory({ parentPath, name });
+      await get().refreshWorkspaceFiles(workspaceId);
+    },
+
+    renameWorkspacePath: async (workspaceId: string, targetPath: string, newName: string) => {
+      await renamePath({ path: targetPath, newName });
+      await get().refreshWorkspaceFiles(workspaceId);
+    },
+
+    trashWorkspacePath: async (workspaceId: string, targetPath: string) => {
+      await trashPath({ path: targetPath });
+      await get().refreshWorkspaceFiles(workspaceId);
     },
   };
 }

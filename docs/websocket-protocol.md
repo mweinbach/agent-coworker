@@ -14,6 +14,8 @@ Changes in `6.0`:
 
 - New client message: `session_close`.
 - Session lifetime is now explicit. Disconnected sessions are not auto-disposed by timeout.
+- Session/history storage is canonicalized in core SQLite (`~/.cowork/sessions.db`) with backward-compatible startup import of legacy JSON snapshots.
+- `server_hello` may include `resumedFromStorage` on cold resume (rehydrated from persisted state).
 
 ## Protocol v5 Notes
 
@@ -42,14 +44,15 @@ When a WebSocket connection opens, the server sends these events in order:
 
 1. `server_hello` — session ID, config, protocol version, capabilities
 2. `session_settings` — current runtime settings (e.g. MCP toggle)
-3. `session_info` — session metadata including title
-4. `observability_status` — Langfuse observability state
-5. `provider_catalog` — available providers and models (async)
-6. `provider_auth_methods` — auth method registry
-7. `provider_status` — current provider auth/connection status (async)
-8. `session_backup_state` — backup/checkpoint state (async)
+3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `subAgentModel`, `maxSteps`)
+4. `session_info` — session metadata including title
+5. `observability_status` — Langfuse observability state
+6. `provider_catalog` — available providers and models (async)
+7. `provider_auth_methods` — auth method registry
+8. `provider_status` — current provider auth/connection status (async)
+9. `session_backup_state` — backup/checkpoint state (async)
 
-If connecting with `?resumeSessionId=<id>`, the server resumes the existing session instead of creating a new one. Session disposal is explicit via `session_close` or server shutdown. On resume, `server_hello` includes additional fields (`isResume`, `busy`, `messageCount`, `hasPendingAsk`, `hasPendingApproval`) and any pending `ask`/`approval` prompts are replayed.
+If connecting with `?resumeSessionId=<id>`, the server resumes the existing session instead of creating a new one (warm in-memory attach or cold rehydrate from persisted storage). `session_close` disposes active runtime bindings but retains persisted history for later resume/view. On resume, `server_hello` includes additional fields (`isResume`, `busy`, `messageCount`, `hasPendingAsk`, `hasPendingApproval`) and may include `resumedFromStorage: true` for cold rehydrate.
 
 ## Validation Rules
 
@@ -732,6 +735,46 @@ Toggle MCP (Model Context Protocol) tool loading for the session.
 
 ---
 
+### mcp_servers_get
+
+Read the workspace-local MCP server document (`<workspace>/.agent/mcp-servers.json`) and resolved server state.
+
+```json
+{ "type": "mcp_servers_get", "sessionId": "..." }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"mcp_servers_get"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+
+**Response:** `mcp_servers`
+
+---
+
+### mcp_servers_set
+
+Validate and write the workspace-local MCP server document (`<workspace>/.agent/mcp-servers.json`).
+
+```json
+{
+  "type": "mcp_servers_set",
+  "sessionId": "...",
+  "rawJson": "{ \"servers\": [] }"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"mcp_servers_set"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `rawJson` | `string` | Yes | Raw JSON document. Max size: 1,000,000 characters |
+
+**Response:** `mcp_servers`
+**Error:** `validation_failed` on invalid JSON/shape, `busy` if a turn is running.
+
+---
+
 ### cancel
 
 Cancel the currently running agent turn. Aborts the model stream and rejects any pending ask/approval prompts.
@@ -751,7 +794,7 @@ Cancel the currently running agent turn. Aborts the model stream and rejects any
 
 ### session_close
 
-Close and dispose the session explicitly. After this message, the session cannot be resumed.
+Close and dispose the active runtime session binding. Persisted history remains available and can be resumed later.
 
 ```json
 { "type": "session_close", "sessionId": "..." }
@@ -762,7 +805,7 @@ Close and dispose the session explicitly. After this message, the session cannot
 | `type` | `"session_close"` | Yes |
 | `sessionId` | `string` | Yes |
 
-**Response:** Session is disposed. Subsequent messages for that `sessionId` are invalid.
+**Response:** Active runtime session is closed and socket is disconnected. Future messages on that socket are invalid; reconnect with `resumeSessionId` to continue from persisted history.
 
 ---
 
@@ -959,7 +1002,7 @@ Manually set the session title.
 
 ### list_sessions
 
-Enumerate all persisted sessions from disk.
+Enumerate all persisted sessions from the server's canonical session store.
 
 ```json
 { "type": "list_sessions", "sessionId": "..." }
@@ -1052,7 +1095,7 @@ Initial handshake event sent immediately on WebSocket connection.
 {
   "type": "server_hello",
   "sessionId": "abc-123-def",
-  "protocolVersion": "5.0",
+  "protocolVersion": "6.0",
   "capabilities": {
     "modelStreamChunk": "v1"
   },
@@ -1062,6 +1105,7 @@ Initial handshake event sent immediately on WebSocket connection.
     "workingDirectory": "/path/to/project"
   },
   "isResume": true,
+  "resumedFromStorage": true,
   "busy": false,
   "messageCount": 12,
   "hasPendingAsk": false,
@@ -1073,10 +1117,11 @@ Initial handshake event sent immediately on WebSocket connection.
 |-------|------|-------------|
 | `type` | `"server_hello"` | — |
 | `sessionId` | `string` | The session identifier. Use this for all subsequent messages |
-| `protocolVersion` | `string?` | Protocol version (currently `"5.0"`) |
+| `protocolVersion` | `string?` | Protocol version (currently `"6.0"`) |
 | `capabilities` | `object?` | Optional capabilities object. Currently: `{ modelStreamChunk: "v1" }` |
 | `config` | `PublicConfig` | Session config: `provider`, `model`, `workingDirectory`, and optionally `outputDirectory` |
 | `isResume` | `boolean?` | Present and `true` only when resuming a disconnected session |
+| `resumedFromStorage` | `boolean?` | Present and `true` on cold resume (rehydrated from persisted store) |
 | `busy` | `boolean?` | Whether the session is mid-turn (only on resume) |
 | `messageCount` | `number?` | Number of messages in history (only on resume) |
 | `hasPendingAsk` | `boolean?` | Whether there's a pending `ask` prompt (only on resume) |
@@ -1133,6 +1178,36 @@ Canonical session metadata snapshot. Sent on connection and whenever title, prov
 | `updatedAt` | `string` | ISO 8601 last update timestamp |
 | `provider` | `ProviderName` | Current provider |
 | `model` | `string` | Current model |
+
+---
+
+### mcp_servers
+
+Workspace-local MCP server document and resolved server state.
+
+```json
+{
+  "type": "mcp_servers",
+  "sessionId": "...",
+  "scope": "project",
+  "path": "/workspace/.agent/mcp-servers.json",
+  "rawJson": "{ \"servers\": [] }\n",
+  "projectServers": [],
+  "effectiveServers": [],
+  "parseError": "mcp-servers.json: invalid JSON: ..."
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"mcp_servers"` | — |
+| `sessionId` | `string` | Session identifier |
+| `scope` | `"project"` | Always project scope in this protocol |
+| `path` | `string` | Absolute path to `<workspace>/.agent/mcp-servers.json` |
+| `rawJson` | `string` | Raw JSON file contents (or default empty document when missing) |
+| `projectServers` | `MCPServerConfig[]` | Parsed servers from project file only (empty on parse error) |
+| `effectiveServers` | `MCPServerConfig[]` | Effective merged MCP servers after config precedence |
+| `parseError` | `string?` | Present when the project file exists but fails validation/parsing |
 
 ---
 
@@ -1831,7 +1906,7 @@ Confirmation of session deletion response to `delete_session`.
 
 ### session_config
 
-Current runtime config response to `set_config`.
+Current runtime config. Sent on connection and after `set_config`.
 
 ```json
 {

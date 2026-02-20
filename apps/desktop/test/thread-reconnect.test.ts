@@ -36,12 +36,19 @@ mock.module("../src/lib/desktopCommands", () => ({
   appendTranscriptBatch: async () => {},
   appendTranscriptEvent: async () => {},
   deleteTranscript: async () => {},
+  listDirectory: async () => [],
   loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
   pickWorkspaceDirectory: async () => null,
   readTranscript: async () => [],
   saveState: async () => {},
   startWorkspaceServer: async () => ({ url: "ws://mock" }),
   stopWorkspaceServer: async () => {},
+  openPath: async () => {},
+  revealPath: async () => {},
+  copyPath: async () => {},
+  createDirectory: async () => {},
+  renamePath: async () => {},
+  trashPath: async () => {},
 }));
 
 mock.module("../src/lib/agentSocket", () => ({
@@ -147,4 +154,3 @@ describe("thread reconnect", () => {
     expect(state.threads.find((t) => t.id === threadId)?.status).toBe("active");
   });
 });
-

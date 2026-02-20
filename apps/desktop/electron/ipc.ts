@@ -1,23 +1,29 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeTheme, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeTheme, shell, clipboard, type IpcMainInvokeEvent } from "electron";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import {
   DESKTOP_IPC_CHANNELS,
   type ConfirmActionInput,
-  type DesktopNotificationInput,
+  type CopyPathInput,
+  type CreateDirectoryInput,
   type DeleteTranscriptInput,
+  type DesktopNotificationInput,
   type ListDirectoryInput,
+  type OpenPathInput,
   type ReadTranscriptInput,
+  type RenamePathInput,
+  type RevealPathInput,
   type SetWindowAppearanceInput,
   type ShowContextMenuInput,
   type StartWorkspaceServerInput,
   type StopWorkspaceServerInput,
   type TranscriptBatchInput,
+  type TrashPathInput,
 } from "../src/lib/desktopApi";
 import type { PersistedState } from "../src/app/types";
 
-import { isTrustedDesktopSenderUrl, resolveAllowedDirectoryPath } from "./services/ipcSecurity";
+import { isTrustedDesktopSenderUrl, resolveAllowedDirectoryPath, resolveAllowedPath } from "./services/ipcSecurity";
 import { applyWindowAppearance, getSystemAppearanceSnapshot } from "./services/appearance";
 import { buildConfirmDialog } from "./services/dialogs";
 import { PersistenceService } from "./services/persistence";
@@ -327,16 +333,92 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
     const safePath = resolveAllowedDirectoryPath(workspaceRoots, requestedPath);
 
     const entries = await fs.readdir(safePath, { withFileTypes: true });
-    return entries
-      .filter((e) => !e.name.startsWith("."))
-      .map((e) => ({
-        name: e.name,
-        isDirectory: e.isDirectory(),
-      }))
+    
+    const results = await Promise.all(
+      entries.map(async (e) => {
+        const isHidden = e.name.startsWith(".");
+        if (!args.includeHidden && isHidden) return null;
+        
+        let sizeBytes: number | null = null;
+        let modifiedAtMs: number | null = null;
+        try {
+          const stat = await fs.stat(path.join(safePath, e.name));
+          sizeBytes = stat.size;
+          modifiedAtMs = stat.mtimeMs;
+        } catch {
+          // Ignore stat errors for broken symlinks etc.
+        }
+
+        return {
+          name: e.name,
+          path: path.join(safePath, e.name),
+          isDirectory: e.isDirectory(),
+          isHidden,
+          sizeBytes,
+          modifiedAtMs,
+        };
+      })
+    );
+
+    return results
+      .filter((e): e is NonNullable<typeof e> => e !== null)
       .sort((a, b) => {
         if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openPath, async (_event, args: OpenPathInput) => {
+    await ensureApprovedWorkspaceRoots();
+    const safePath = resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), args.path);
+    const errString = await shell.openPath(safePath);
+    if (errString) throw new Error(errString);
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.revealPath, async (_event, args: RevealPathInput) => {
+    await ensureApprovedWorkspaceRoots();
+    const safePath = resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), args.path);
+    shell.showItemInFolder(safePath);
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.copyPath, async (_event, args: CopyPathInput) => {
+    clipboard.writeText(args.path);
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.createDirectory, async (_event, args: CreateDirectoryInput) => {
+    await ensureApprovedWorkspaceRoots();
+    const safeParent = resolveAllowedDirectoryPath(Array.from(approvedWorkspaceRoots.values()), args.parentPath);
+    const targetPath = path.join(safeParent, args.name);
+    // ensure the new path is also within roots
+    resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), targetPath);
+    await fs.mkdir(targetPath);
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.renamePath, async (_event, args: RenamePathInput) => {
+    await ensureApprovedWorkspaceRoots();
+    const safePath = resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), args.path);
+    const targetPath = path.join(path.dirname(safePath), args.newName);
+    resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), targetPath);
+    await fs.rename(safePath, targetPath);
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.trashPath, async (_event, args: TrashPathInput) => {
+    await ensureApprovedWorkspaceRoots();
+    const safePath = resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), args.path);
+    try {
+      await shell.trashItem(safePath);
+      return;
+    } catch (trashError) {
+      try {
+        // Fallback for environments where OS trash integration is unavailable for directories.
+        await fs.rm(safePath, { recursive: true, force: false, maxRetries: 2, retryDelay: 50 });
+        return;
+      } catch (deleteError) {
+        const trashDetail = trashError instanceof Error ? trashError.message : String(trashError);
+        const deleteDetail = deleteError instanceof Error ? deleteError.message : String(deleteError);
+        throw new Error(`Unable to move to Trash (${trashDetail}) and permanent delete failed (${deleteDetail})`);
+      }
+    }
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.confirmAction, async (event, args: ConfirmActionInput) => {

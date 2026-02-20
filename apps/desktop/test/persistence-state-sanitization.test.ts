@@ -43,6 +43,7 @@ describe("desktop persistence state sanitization", () => {
           path: validWorkspace,
           createdAt: TS,
           lastOpenedAt: TS,
+          defaultSubAgentModel: "gpt-5.2-mini",
           defaultEnableMcp: true,
           yolo: false,
         },
@@ -75,12 +76,14 @@ describe("desktop persistence state sanitization", () => {
         },
       ],
       developerMode: true,
+      showHiddenFiles: true,
     });
 
     const state = await persistence.loadState();
     expect(state.workspaces.length).toBe(1);
     expect(state.workspaces[0]?.id).toBe("ws_valid");
     expect(state.workspaces[0]?.path).toBe(await fs.realpath(validWorkspace));
+    expect(state.workspaces[0]?.defaultSubAgentModel).toBe("gpt-5.2-mini");
     expect(state.threads.map((thread) => thread.id)).toEqual(["thread_valid"]);
   });
 
@@ -102,6 +105,7 @@ describe("desktop persistence state sanitization", () => {
               path: validWorkspace,
               createdAt: TS,
               lastOpenedAt: TS,
+              defaultSubAgentModel: 123,
               defaultEnableMcp: "yes",
               yolo: "no",
             },
@@ -117,6 +121,7 @@ describe("desktop persistence state sanitization", () => {
             },
           ],
           developerMode: "sometimes",
+          showHiddenFiles: "always",
         },
         null,
         2
@@ -125,10 +130,13 @@ describe("desktop persistence state sanitization", () => {
     );
 
     const state = await persistence.loadState();
-    expect(state.version).toBe(1);
+    expect(state.version).toBe(2);
     expect(state.developerMode).toBe(false);
+    expect(state.showHiddenFiles).toBe(false);
     expect(state.workspaces[0]?.defaultEnableMcp).toBe(true);
+    expect(state.workspaces[0]?.defaultSubAgentModel).toBeUndefined();
     expect(state.workspaces[0]?.yolo).toBe(false);
     expect(state.threads[0]?.status).toBe("disconnected");
+    expect(state.threads[0]?.titleSource).toBe("manual");
   });
 });

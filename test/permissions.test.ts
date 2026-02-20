@@ -58,6 +58,44 @@ describe("isWritePathAllowed", () => {
     });
   });
 
+  // ---- Writes inside uploadsDirectory ---------------------------------------
+
+  describe("allows writes inside uploadsDirectory", () => {
+    test("file directly in uploadsDirectory", () => {
+      const cfg = makeConfig(PROJECT);
+      expect(isWritePathAllowed(path.join(PROJECT, "uploads", "image.png"), cfg)).toBe(true);
+    });
+
+    test("file in subdirectory of uploadsDirectory", () => {
+      const cfg = makeConfig(PROJECT);
+      expect(isWritePathAllowed(path.join(PROJECT, "uploads", "images", "photo.jpg"), cfg)).toBe(true);
+    });
+
+    test("uploadsDirectory root itself", () => {
+      const cfg = makeConfig(PROJECT);
+      expect(isWritePathAllowed(path.join(PROJECT, "uploads"), cfg)).toBe(true);
+    });
+
+    test("uploadsDirectory outside workingDirectory is allowed", () => {
+      const cfg = makeConfig(PROJECT);
+      cfg.uploadsDirectory = "/var/uploads";
+      expect(isWritePathAllowed("/var/uploads/file.png", cfg)).toBe(true);
+    });
+
+    test("uploadsDirectory outside workingDirectory — nested file", () => {
+      const cfg = makeConfig(PROJECT);
+      cfg.uploadsDirectory = "/var/uploads";
+      expect(isWritePathAllowed("/var/uploads/sub/deep/image.png", cfg)).toBe(true);
+    });
+
+    test("denies path outside uploadsDirectory when uploadsDirectory is set externally", () => {
+      const cfg = makeConfig(PROJECT);
+      cfg.uploadsDirectory = "/var/uploads";
+      // /var/other is not inside /var/uploads
+      expect(isWritePathAllowed("/var/other/file.png", cfg)).toBe(false);
+    });
+  });
+
   // ---- Writes inside outputDirectory ----------------------------------------
 
   describe("allows writes inside outputDirectory", () => {
@@ -274,6 +312,35 @@ describe("assertWritePathAllowed", () => {
       assertWritePathAllowed(path.join(link, "pwned.txt"), cfg, "write")
     ).rejects.toThrow(/blocked/i);
   });
+
+  test("allows a regular path inside uploadsDirectory", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-uploads-allow-"));
+    const uploadsDir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-uploads-ext-"));
+    const cfg = makeConfig(dir);
+    cfg.uploadsDirectory = uploadsDir;
+
+    const target = path.join(uploadsDir, "image.png");
+    await expect(assertWritePathAllowed(target, cfg, "write")).resolves.toBe(path.resolve(target));
+  });
+
+  test("rejects symlink escape through uploadsDirectory", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-uploads-sym-"));
+    const uploadsDir = path.join(dir, "uploads");
+    await fs.mkdir(uploadsDir, { recursive: true });
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "perm-uploads-outside-"));
+
+    const cfg = makeConfig(dir);
+    cfg.uploadsDirectory = uploadsDir;
+
+    const link = path.join(uploadsDir, "escape");
+    await fs.symlink(outside, link);
+
+    await expect(
+      assertWritePathAllowed(path.join(link, "pwned.txt"), cfg, "write")
+    ).rejects.toThrow(/blocked/i);
+  });
 });
 
 describe("isReadPathAllowed", () => {
@@ -283,6 +350,17 @@ describe("isReadPathAllowed", () => {
     const cfg = makeConfig(PROJECT);
     expect(isReadPathAllowed(path.join(PROJECT, "src", "index.ts"), cfg)).toBe(true);
     expect(isReadPathAllowed(path.join(PROJECT, "output", "result.json"), cfg)).toBe(true);
+  });
+
+  test("reads inside uploadsDirectory are allowed", () => {
+    const cfg = makeConfig(PROJECT);
+    expect(isReadPathAllowed(path.join(PROJECT, "uploads", "file.png"), cfg)).toBe(true);
+  });
+
+  test("reads inside external uploadsDirectory are allowed", () => {
+    const cfg = makeConfig(PROJECT);
+    cfg.uploadsDirectory = "/var/uploads";
+    expect(isReadPathAllowed("/var/uploads/file.png", cfg)).toBe(true);
   });
 
   test("denies reads outside allowed roots", () => {

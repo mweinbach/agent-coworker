@@ -8,6 +8,7 @@ import { cn } from "../../lib/utils";
 import type { SettingsPageId } from "../../app/types";
 import { ProvidersPage } from "./pages/ProvidersPage";
 import { WorkspacesPage } from "./pages/WorkspacesPage";
+import { DeveloperPage } from "./pages/DeveloperPage";
 
 type SettingsPageDefinition = {
   id: SettingsPageId;
@@ -18,6 +19,7 @@ type SettingsPageDefinition = {
 const SETTINGS_PAGES: SettingsPageDefinition[] = [
   { id: "providers", label: "Providers", render: () => <ProvidersPage /> },
   { id: "workspaces", label: "Workspaces", render: () => <WorkspacesPage /> },
+  { id: "developer", label: "Developer", render: () => <DeveloperPage /> },
 ];
 
 function SettingsNavigation({

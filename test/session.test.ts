@@ -167,6 +167,9 @@ function makeSession(
       model: string;
       subAgentModel: string;
     }) => Promise<void> | void;
+    persistProjectConfigPatchImpl: (
+      patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">>
+    ) => Promise<void> | void;
     generateSessionTitleImpl: (opts: { config: AgentConfig; query: string }) => Promise<{
       title: string;
       source: "default" | "model" | "heuristic";
@@ -190,6 +193,7 @@ function makeSession(
     getProviderStatusesImpl,
     sessionBackupFactory,
     persistModelSelectionImpl: overrides?.persistModelSelectionImpl,
+    persistProjectConfigPatchImpl: overrides?.persistProjectConfigPatchImpl,
     generateSessionTitleImpl: overrides?.generateSessionTitleImpl ?? mockGenerateSessionTitle,
     writePersistedSessionSnapshotImpl:
       overrides?.writePersistedSessionSnapshotImpl ?? mockWritePersistedSessionSnapshot,
@@ -401,17 +405,27 @@ describe("AgentSession", () => {
       expect(session.getEnableMcp()).toBe(false);
     });
 
-    test("setEnableMcp updates config and emits session_settings", () => {
+    test("setEnableMcp updates config and emits session_settings", async () => {
       const dir = "/tmp/test-session";
       const cfg = { ...makeConfig(dir), enableMcp: true };
       const { session, events } = makeSession({ config: cfg });
 
-      session.setEnableMcp(false);
+      await session.setEnableMcp(false);
 
       expect(session.getEnableMcp()).toBe(false);
       const evt = events.find((e) => e.type === "session_settings") as any;
       expect(evt).toBeDefined();
       expect(evt.enableMcp).toBe(false);
+    });
+
+    test("setEnableMcp persists workspace defaults via patch hook", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session } = makeSession({ persistProjectConfigPatchImpl });
+
+      await session.setEnableMcp(false);
+
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({ enableMcp: false });
     });
 
     test("setEnableMcp while running emits Agent is busy", async () => {
@@ -428,13 +442,48 @@ describe("AgentSession", () => {
       const first = session.sendUserMessage("first");
       await new Promise((r) => setTimeout(r, 10));
 
-      session.setEnableMcp(false);
+      await session.setEnableMcp(false);
       const errEvt = events.find((e) => e.type === "error") as any;
       expect(errEvt).toBeDefined();
       expect(errEvt.message).toBe("Agent is busy");
 
       resolveRunTurn();
       await first;
+    });
+  });
+
+  describe("session config", () => {
+    test("getSessionConfigEvent exposes initial runtime session config", () => {
+      const { session } = makeSession();
+      const evt = session.getSessionConfigEvent();
+      expect(evt.type).toBe("session_config");
+      expect(evt.config.yolo).toBe(false);
+      expect(evt.config.observabilityEnabled).toBe(false);
+      expect(evt.config.subAgentModel).toBe("gemini-2.0-flash");
+      expect(evt.config.maxSteps).toBe(100);
+    });
+
+    test("setConfig emits session_config and persists subAgentModel/observability", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session, events } = makeSession({ persistProjectConfigPatchImpl });
+
+      session.setConfig({
+        subAgentModel: "gpt-5.2-mini",
+        observabilityEnabled: true,
+        maxSteps: 25,
+      });
+      await flushAsyncWork();
+
+      const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
+      expect(cfgEvt).toBeDefined();
+      expect(cfgEvt.config.subAgentModel).toBe("gpt-5.2-mini");
+      expect(cfgEvt.config.observabilityEnabled).toBe(true);
+      expect(cfgEvt.config.maxSteps).toBe(25);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        subAgentModel: "gpt-5.2-mini",
+        observabilityEnabled: true,
+      });
     });
   });
 
@@ -1644,6 +1693,27 @@ describe("AgentSession", () => {
       expect(snapshot.context.messages.some((msg: any) => msg.role === "assistant")).toBe(true);
     });
 
+    test("keeps full persisted history while capping runtime context window", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [],
+      }));
+
+      const { session } = makeSession();
+      const totalMessages = 205;
+      for (let i = 0; i < totalMessages; i++) {
+        await session.sendUserMessage(`message ${i + 1}`);
+      }
+      await flushAsyncWork();
+
+      expect(session.messageCount).toBe(totalMessages);
+      const lastRunTurnCall = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(lastRunTurnCall.messages.length).toBe(200);
+      const lastPersistCall = mockWritePersistedSessionSnapshot.mock.calls.at(-1)?.[0] as any;
+      expect(lastPersistCall.snapshot.context.messages.length).toBe(totalMessages);
+    });
+
     test("emits assistant_message when response has text", async () => {
       mockRunTurn.mockImplementation(async () => ({
         text: "Here is my response.",
@@ -2348,6 +2418,638 @@ describe("AgentSession", () => {
 
       await session.sendUserMessage("after dispose");
       expect(mockRunTurn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // =========================================================================
+  // classifyTurnError — error code routing
+  // =========================================================================
+
+  describe("classifyTurnError error code routing", () => {
+    test("'blocked: path is outside' maps to permission_denied / permissions", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("blocked: path is outside the allowed directory");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("permission_denied");
+        expect(errorEvt.source).toBe("permissions");
+      }
+    });
+
+    test("'blocked: canonical target resolves outside' maps to permission_denied / permissions", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("blocked: canonical target resolves outside allowed directories");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("permission_denied");
+        expect(errorEvt.source).toBe("permissions");
+      }
+    });
+
+    test("'outside allowed directories' maps to permission_denied / permissions", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("Write target is outside allowed directories");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("permission_denied");
+        expect(errorEvt.source).toBe("permissions");
+      }
+    });
+
+    test("'blocked private/internal host' maps to permission_denied / permissions", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("blocked private/internal host 192.168.1.1");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("permission_denied");
+        expect(errorEvt.source).toBe("permissions");
+      }
+    });
+
+    test("'blocked url protocol' maps to permission_denied / permissions", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("blocked url protocol ftp");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("permission_denied");
+        expect(errorEvt.source).toBe("permissions");
+      }
+    });
+
+    test("'oauth' maps to provider_error / provider", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("OAuth token exchange failed");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("provider_error");
+        expect(errorEvt.source).toBe("provider");
+      }
+    });
+
+    test("'api key' maps to provider_error / provider", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("Invalid API key provided");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("provider_error");
+        expect(errorEvt.source).toBe("provider");
+      }
+    });
+
+    test("'unsupported provider' maps to provider_error / provider", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("Unsupported provider: foobar");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("provider_error");
+        expect(errorEvt.source).toBe("provider");
+      }
+    });
+
+    test("'checkpoint' (without 'unknown checkpoint id') maps to backup_error / backup", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("checkpoint creation timed out");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("backup_error");
+        expect(errorEvt.source).toBe("backup");
+      }
+    });
+
+    test("'unknown checkpoint id' maps to validation_failed / session (higher priority than checkpoint)", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("unknown checkpoint id: cp-9999");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("validation_failed");
+        expect(errorEvt.source).toBe("session");
+      }
+    });
+
+    test("'is required' maps to validation_failed / session", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("Parameter 'filename' is required");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("validation_failed");
+        expect(errorEvt.source).toBe("session");
+      }
+    });
+
+    test("'invalid ' maps to validation_failed / session", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("invalid configuration value for maxTokens");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("validation_failed");
+        expect(errorEvt.source).toBe("session");
+      }
+    });
+
+    test("'observability' maps to observability_error / observability", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("observability endpoint unreachable");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("observability_error");
+        expect(errorEvt.source).toBe("observability");
+      }
+    });
+
+    test("unclassified error maps to internal_error / session", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("Something completely unexpected happened");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("internal_error");
+        expect(errorEvt.source).toBe("session");
+      }
+    });
+
+    test("session_busy outcome is 'error' for classified errors", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("Invalid API key");
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const busyFalse = events.find(
+        (e) => e.type === "session_busy" && !(e as any).busy
+      ) as any;
+      expect(busyFalse).toBeDefined();
+      expect(busyFalse.outcome).toBe("error");
+    });
+  });
+
+  // =========================================================================
+  // Token usage passthrough
+  // =========================================================================
+
+  describe("Token usage passthrough", () => {
+    test("emits turn_usage event when runTurn returns usage", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "done",
+        reasoningText: undefined,
+        responseMessages: [],
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const usageEvt = events.find((e) => e.type === "turn_usage") as Extract<ServerEvent, { type: "turn_usage" }> | undefined;
+      expect(usageEvt).toBeDefined();
+      if (usageEvt) {
+        expect(usageEvt.sessionId).toBe(session.id);
+        expect(usageEvt.usage.promptTokens).toBe(100);
+        expect(usageEvt.usage.completionTokens).toBe(50);
+        expect(usageEvt.usage.totalTokens).toBe(150);
+        expect(typeof usageEvt.turnId).toBe("string");
+        expect(usageEvt.turnId.length).toBeGreaterThan(0);
+      }
+    });
+
+    test("does not emit turn_usage when runTurn returns no usage", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "done",
+        reasoningText: undefined,
+        responseMessages: [],
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const usageEvt = events.find((e) => e.type === "turn_usage");
+      expect(usageEvt).toBeUndefined();
+    });
+
+    test("turn_usage event has matching turnId with session_busy events", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "done",
+        reasoningText: undefined,
+        responseMessages: [],
+        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const busyTrue = events.find((e) => e.type === "session_busy" && (e as any).busy === true) as any;
+      const usageEvt = events.find((e) => e.type === "turn_usage") as any;
+      expect(busyTrue).toBeDefined();
+      expect(usageEvt).toBeDefined();
+      expect(usageEvt.turnId).toBe(busyTrue.turnId);
+    });
+  });
+
+  // =========================================================================
+  // MAX_MESSAGE_HISTORY truncation
+  // =========================================================================
+
+  describe("MAX_MESSAGE_HISTORY truncation", () => {
+    test("runtime messages are capped at 200 while allMessages grows unbounded", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [],
+      }));
+
+      const { session } = makeSession();
+
+      // Send 205 messages (each adds 1 user message to history)
+      for (let i = 0; i < 205; i++) {
+        await session.sendUserMessage(`msg-${i}`);
+      }
+
+      // allMessages should hold all 205 user messages
+      expect(session.messageCount).toBe(205);
+
+      // The runtime messages passed to runTurn should be capped at 200
+      const lastCall = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(lastCall.messages.length).toBe(200);
+    });
+
+    test("truncated runtime window keeps first message plus last 199", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [],
+      }));
+
+      const { session } = makeSession();
+
+      for (let i = 0; i < 205; i++) {
+        await session.sendUserMessage(`msg-${i}`);
+      }
+
+      const lastCall = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+
+      // First message in the window should be the very first user message ever sent
+      expect(lastCall.messages[0]).toEqual({ role: "user", content: "msg-0" });
+
+      // Last message should be the most recent
+      expect(lastCall.messages[199]).toEqual({ role: "user", content: "msg-204" });
+
+      // Second message in the window should be msg-6 (the 7th overall),
+      // since first + last 199 = msg-0, msg-6..msg-204
+      expect(lastCall.messages[1]).toEqual({ role: "user", content: "msg-6" });
+    });
+
+    test("messages at exactly 200 are not truncated", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [],
+      }));
+
+      const { session } = makeSession();
+
+      for (let i = 0; i < 200; i++) {
+        await session.sendUserMessage(`msg-${i}`);
+      }
+
+      const lastCall = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(lastCall.messages.length).toBe(200);
+      expect(lastCall.messages[0]).toEqual({ role: "user", content: "msg-0" });
+      expect(lastCall.messages[199]).toEqual({ role: "user", content: "msg-199" });
+    });
+
+    test("persisted snapshot keeps all messages even when runtime is truncated", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [],
+      }));
+
+      const { session } = makeSession();
+
+      for (let i = 0; i < 205; i++) {
+        await session.sendUserMessage(`msg-${i}`);
+      }
+      await flushAsyncWork();
+
+      expect(session.messageCount).toBe(205);
+      const lastPersistCall = mockWritePersistedSessionSnapshot.mock.calls.at(-1)?.[0] as any;
+      expect(lastPersistCall.snapshot.context.messages.length).toBe(205);
+    });
+
+    test("truncation with response messages counts both user and assistant messages", async () => {
+      let callNum = 0;
+      let capturedMessagesLength = 0;
+      let capturedFirstMessage: any = null;
+      let capturedLastMessage: any = null;
+      mockRunTurn.mockImplementation(async (params: any) => {
+        callNum++;
+        // Capture length at call time (before response messages mutate the array)
+        capturedMessagesLength = params.messages.length;
+        capturedFirstMessage = params.messages[0];
+        capturedLastMessage = params.messages[params.messages.length - 1];
+        return {
+          text: "",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: `reply-${callNum}` }],
+        };
+      });
+
+      const { session } = makeSession();
+
+      // Each sendUserMessage adds 1 user msg + 1 assistant msg = 2 per call
+      // After 110 calls: 220 messages total (exceeds 200)
+      for (let i = 0; i < 110; i++) {
+        await session.sendUserMessage(`msg-${i}`);
+      }
+
+      // Total messages: 220 (110 user + 110 assistant)
+      expect(session.messageCount).toBe(220);
+
+      // Runtime window at the time of the last runTurn call should be capped at 200
+      expect(capturedMessagesLength).toBe(200);
+
+      // First message is preserved
+      expect(capturedFirstMessage).toEqual({ role: "user", content: "msg-0" });
+
+      // Last message is the user message for the latest call
+      expect(capturedLastMessage).toEqual({ role: "user", content: "msg-109" });
+    });
+  });
+
+  // =========================================================================
+  // extractAssistantTextFromResponseMessages fallback
+  // =========================================================================
+
+  describe("extractAssistantTextFromResponseMessages fallback", () => {
+    test("falls back to output_text parts from responseMessages when text is empty", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "output_text", text: "fallback text from output_text" }],
+          },
+        ],
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt).toBeDefined();
+      expect(assistantEvt.text).toBe("fallback text from output_text");
+    });
+
+    test("falls back to text parts from responseMessages when stream text is empty", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "fallback text from text part" }],
+          },
+        ],
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt).toBeDefined();
+      expect(assistantEvt.text).toBe("fallback text from text part");
+    });
+
+    test("concatenates multiple text chunks from a single assistant message", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "first chunk" },
+              { type: "output_text", text: " second chunk" },
+            ],
+          },
+        ],
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt).toBeDefined();
+      expect(assistantEvt.text).toBe("first chunk second chunk");
+    });
+
+    test("concatenates text from multiple assistant messages with double newline", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "message one" }],
+          },
+          {
+            role: "assistant",
+            content: [{ type: "output_text", text: "message two" }],
+          },
+        ],
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt).toBeDefined();
+      expect(assistantEvt.text).toBe("message one\n\nmessage two");
+    });
+
+    test("ignores non-text/non-output_text parts in the fallback", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "tool_use", name: "read_file", input: {} },
+              { type: "output_text", text: "actual text" },
+            ],
+          },
+        ],
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt).toBeDefined();
+      expect(assistantEvt.text).toBe("actual text");
+    });
+
+    test("does not emit assistant_message when both text and responseMessages have no text", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", name: "bash", input: { command: "ls" } }],
+          },
+        ],
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message");
+      expect(assistantEvt).toBeUndefined();
+    });
+
+    test("prefers stream text over fallback when stream text is non-empty", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "primary stream text",
+        reasoningText: undefined,
+        responseMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "output_text", text: "fallback text" }],
+          },
+        ],
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt).toBeDefined();
+      expect(assistantEvt.text).toBe("primary stream text");
+    });
+
+    test("falls back when text is whitespace-only", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "   \n\t  ",
+        reasoningText: undefined,
+        responseMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "output_text", text: "fallback after whitespace" }],
+          },
+        ],
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt).toBeDefined();
+      expect(assistantEvt.text).toBe("fallback after whitespace");
+    });
+
+    test("handles string content in assistant responseMessages", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [
+          {
+            role: "assistant",
+            content: "simple string content",
+          },
+        ],
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt).toBeDefined();
+      expect(assistantEvt.text).toBe("simple string content");
     });
   });
 });

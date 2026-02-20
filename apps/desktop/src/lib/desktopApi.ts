@@ -37,11 +37,42 @@ export type ShowContextMenuInput = {
 
 export type ListDirectoryInput = {
   path: string;
+  includeHidden?: boolean;
 };
 
-export type FileEntry = {
+export type OpenPathInput = {
+  path: string;
+};
+
+export type RevealPathInput = {
+  path: string;
+};
+
+export type CopyPathInput = {
+  path: string;
+};
+
+export type CreateDirectoryInput = {
+  parentPath: string;
   name: string;
+};
+
+export type RenamePathInput = {
+  path: string;
+  newName: string;
+};
+
+export type TrashPathInput = {
+  path: string;
+};
+
+export type ExplorerEntry = {
+  name: string;
+  path: string;
   isDirectory: boolean;
+  isHidden: boolean;
+  sizeBytes: number | null;
+  modifiedAtMs: number | null;
 };
 
 export type DesktopMenuCommand =
@@ -101,7 +132,13 @@ export interface DesktopApi {
   windowMaximize(): Promise<void>;
   windowClose(): Promise<void>;
   getPlatform(): Promise<string>;
-  listDirectory(opts: ListDirectoryInput): Promise<FileEntry[]>;
+  listDirectory(opts: ListDirectoryInput): Promise<ExplorerEntry[]>;
+  openPath(opts: OpenPathInput): Promise<void>;
+  revealPath(opts: RevealPathInput): Promise<void>;
+  copyPath(opts: CopyPathInput): Promise<void>;
+  createDirectory(opts: CreateDirectoryInput): Promise<void>;
+  renamePath(opts: RenamePathInput): Promise<void>;
+  trashPath(opts: TrashPathInput): Promise<void>;
   confirmAction(opts: ConfirmActionInput): Promise<boolean>;
   showNotification(opts: DesktopNotificationInput): Promise<boolean>;
   getSystemAppearance(): Promise<SystemAppearance>;
@@ -126,6 +163,12 @@ export const DESKTOP_IPC_CHANNELS = {
   windowClose: "desktop:windowClose",
   getPlatform: "desktop:getPlatform",
   listDirectory: "desktop:listDirectory",
+  openPath: "desktop:openPath",
+  revealPath: "desktop:revealPath",
+  copyPath: "desktop:copyPath",
+  createDirectory: "desktop:createDirectory",
+  renamePath: "desktop:renamePath",
+  trashPath: "desktop:trashPath",
   confirmAction: "desktop:confirmAction",
   showNotification: "desktop:showNotification",
   getSystemAppearance: "desktop:getSystemAppearance",

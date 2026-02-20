@@ -57,33 +57,25 @@ describe("Provider model catalog invariants", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Session reasoning kind per provider
+// Session reasoning kind per provider (tests the real function)
 // ---------------------------------------------------------------------------
+import { reasoningModeForProvider } from "../../src/server/modelStream";
+
 describe("Session reasoning kind mapping", () => {
-  const reasoningKind = (provider: ProviderName) =>
-    provider === "openai" || provider === "codex-cli" ? "summary" : "reasoning";
-
-  // The session.ts uses this logic:
-  //   const kind =
-  //     config.provider === "openai" || config.provider === "codex-cli"
-  //       ? "summary"
-  //       : "reasoning";
-  // Test the mapping directly.
-
   test("openai provider maps to 'summary' reasoning kind", () => {
-    expect(reasoningKind("openai")).toBe("summary");
+    expect(reasoningModeForProvider("openai")).toBe("summary");
   });
 
   test("anthropic provider maps to 'reasoning' kind", () => {
-    expect(reasoningKind("anthropic")).toBe("reasoning");
+    expect(reasoningModeForProvider("anthropic")).toBe("reasoning");
   });
 
   test("google provider maps to 'reasoning' kind", () => {
-    expect(reasoningKind("google")).toBe("reasoning");
+    expect(reasoningModeForProvider("google")).toBe("reasoning");
   });
 
   test("codex-cli provider maps to 'summary' reasoning kind", () => {
-    expect(reasoningKind("codex-cli")).toBe("summary");
+    expect(reasoningModeForProvider("codex-cli")).toBe("summary");
   });
 
 });

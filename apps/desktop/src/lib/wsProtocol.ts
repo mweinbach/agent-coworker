@@ -3,6 +3,7 @@ import type { ServerEvent as CoreServerEvent } from "@cowork/server/protocol";
 export { PROVIDER_NAMES } from "@cowork/types";
 export type {
   ApprovalRiskCode,
+  MCPServerConfig,
   ProviderName,
   ServerErrorCode,
   ServerErrorSource,

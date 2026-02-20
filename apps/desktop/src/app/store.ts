@@ -21,7 +21,7 @@ const initialState: AppStoreDataState = {
   threadRuntimeById: {},
 
   latestTodosByThreadId: {},
-  workspaceFilesById: {},
+  workspaceExplorerById: {},
 
   promptModal: null,
   notifications: [],
@@ -39,6 +39,7 @@ const initialState: AppStoreDataState = {
   composerText: "",
   injectContext: false,
   developerMode: false,
+  showHiddenFiles: false,
 
   sidebarCollapsed: false,
   contextSidebarCollapsed: false,

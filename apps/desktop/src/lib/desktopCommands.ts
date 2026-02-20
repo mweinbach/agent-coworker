@@ -3,7 +3,7 @@ import type {
   ConfirmActionInput,
   DesktopMenuCommand,
   DesktopNotificationInput,
-  FileEntry,
+  ExplorerEntry,
   SetWindowAppearanceInput,
   SystemAppearance,
 } from "./desktopApi";
@@ -86,7 +86,7 @@ export async function getPlatform(): Promise<string> {
   return await requireDesktopApi().getPlatform();
 }
 
-export async function listDirectory(path: string): Promise<FileEntry[]> {
+export async function listDirectory(opts: { path: string; includeHidden?: boolean }): Promise<ExplorerEntry[]> {
   if (typeof window === "undefined") {
     return [];
   }
@@ -95,7 +95,31 @@ export async function listDirectory(path: string): Promise<FileEntry[]> {
     console.warn("listDirectory not implemented in desktop bridge");
     return [];
   }
-  return await api.listDirectory({ path });
+  return await api.listDirectory(opts);
+}
+
+export async function openPath(opts: { path: string }): Promise<void> {
+  await requireDesktopApi().openPath(opts);
+}
+
+export async function revealPath(opts: { path: string }): Promise<void> {
+  await requireDesktopApi().revealPath(opts);
+}
+
+export async function copyPath(opts: { path: string }): Promise<void> {
+  await requireDesktopApi().copyPath(opts);
+}
+
+export async function createDirectory(opts: { parentPath: string; name: string }): Promise<void> {
+  await requireDesktopApi().createDirectory(opts);
+}
+
+export async function renamePath(opts: { path: string; newName: string }): Promise<void> {
+  await requireDesktopApi().renamePath(opts);
+}
+
+export async function trashPath(opts: { path: string }): Promise<void> {
+  await requireDesktopApi().trashPath(opts);
 }
 
 export async function confirmAction(opts: ConfirmActionInput): Promise<boolean> {

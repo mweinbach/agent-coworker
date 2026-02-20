@@ -956,6 +956,78 @@ describe("grep tool", () => {
     expect(res).toContain("2:");
   });
 
+  test("constructs correct rg flags for fileGlob, case-insensitive, and contextLines", async () => {
+    const dir = await tmpDir();
+    await fs.writeFile(path.join(dir, "file.ts"), "match\n", "utf-8");
+
+    let capturedCmd = "";
+    let capturedArgs: string[] = [];
+
+    const argCaptureExecFile: any = (cmd: string, args: string[], _opts: any, cb: any) => {
+      capturedCmd = cmd;
+      capturedArgs = [...args];
+      // Simulate rg producing output so the tool returns normally
+      cb(null, `${path.join(dir, "file.ts")}:1:match\n`, "");
+    };
+
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: argCaptureExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+    await t.execute({
+      pattern: "foo",
+      path: dir,
+      fileGlob: "*.ts",
+      contextLines: 3,
+      caseSensitive: false,
+    });
+
+    expect(capturedCmd).toBe("rg");
+    // Verify all expected flags are present
+    expect(capturedArgs).toContain("--line-number");
+    expect(capturedArgs).toContain("-i");
+    expect(capturedArgs).toContain("-C");
+    expect(capturedArgs).toContain("3");
+    expect(capturedArgs).toContain("--glob");
+    expect(capturedArgs).toContain("*.ts");
+
+    // Pattern and path should be the last two positional args
+    const patternIdx = capturedArgs.indexOf("foo");
+    expect(patternIdx).toBeGreaterThan(-1);
+
+    const searchPathArg = capturedArgs[patternIdx + 1];
+    expect(searchPathArg).toBe(path.resolve(dir));
+  });
+
+  test("omits -i flag when caseSensitive is true", async () => {
+    const dir = await tmpDir();
+    await fs.writeFile(path.join(dir, "file.txt"), "data\n", "utf-8");
+
+    let capturedArgs: string[] = [];
+
+    const argCaptureExecFile: any = (cmd: string, args: string[], _opts: any, cb: any) => {
+      capturedArgs = [...args];
+      cb(null, `${path.join(dir, "file.txt")}:1:data\n`, "");
+    };
+
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: argCaptureExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+    await t.execute({
+      pattern: "data",
+      path: dir,
+      caseSensitive: true,
+    });
+
+    expect(capturedArgs).toContain("--line-number");
+    expect(capturedArgs).not.toContain("-i");
+    expect(capturedArgs).not.toContain("--glob");
+    expect(capturedArgs).not.toContain("-C");
+    expect(capturedArgs).toContain("data");
+    expect(capturedArgs).toContain(path.resolve(dir));
+  });
+
   test("searches in subdirectories", async () => {
     const dir = await tmpDir();
     await fs.mkdir(path.join(dir, "sub"), { recursive: true });
@@ -1559,6 +1631,39 @@ describe("webFetch tool", () => {
       ).rejects.toThrow(/non-text content type/i);
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("DNS-pinning: fetch is called with IP-addressed URL", async () => {
+    const dir = await tmpDir();
+
+    // Set up DNS mock to return a known public IP
+    const { __internal: webSafetyInternal } = await import("../src/utils/webSafety");
+    webSafetyInternal.setDnsLookup(async () => [{ address: "93.184.216.34", family: 4 }]);
+
+    const originalFetch = globalThis.fetch;
+    const fetchCalls: string[] = [];
+    globalThis.fetch = mock(async (input: any) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      fetchCalls.push(url);
+      return new Response("<html><body><p>Pinned</p></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      await t.execute({ url: "https://example.com/page", maxLength: 50000 });
+
+      // The fetch should have been called with an IP address instead of the hostname
+      expect(fetchCalls.length).toBeGreaterThanOrEqual(1);
+      const calledUrl = fetchCalls[0];
+      expect(calledUrl).toContain("93.184.216.34");
+      expect(calledUrl).not.toContain("example.com");
+    } finally {
+      globalThis.fetch = originalFetch;
+      webSafetyInternal.resetDnsLookup();
     }
   });
 

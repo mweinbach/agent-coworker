@@ -12,6 +12,7 @@ function isPathAllowed(filePath: string, config: AgentConfig): boolean {
 
   if (isPathInside(config.workingDirectory, resolved)) return true;
   if (config.outputDirectory && isPathInside(config.outputDirectory, resolved)) return true;
+  if (config.uploadsDirectory && isPathInside(config.uploadsDirectory, resolved)) return true;
 
   return false;
 }
@@ -76,15 +77,18 @@ export async function assertWritePathAllowed(
     canonicalizeRoot(config.workingDirectory),
   ];
   if (config.outputDirectory) canonicalPromises.push(canonicalizeRoot(config.outputDirectory));
+  if (config.uploadsDirectory) canonicalPromises.push(canonicalizeRoot(config.uploadsDirectory));
 
   const [canonicalTarget, canonicalProjectRoot, canonicalWorkingDirectory, ...rest] =
     await Promise.all(canonicalPromises);
-  const canonicalOutputDirectory = rest[0]; // undefined when no outputDirectory configured
+  const canonicalOutputDirectory = config.outputDirectory ? rest.shift() : undefined;
+  const canonicalUploadsDirectory = config.uploadsDirectory ? rest.shift() : undefined;
 
   if (
     !isPathInside(canonicalProjectRoot, canonicalTarget) &&
     !isPathInside(canonicalWorkingDirectory, canonicalTarget) &&
-    !(canonicalOutputDirectory && isPathInside(canonicalOutputDirectory, canonicalTarget))
+    !(canonicalOutputDirectory && isPathInside(canonicalOutputDirectory, canonicalTarget)) &&
+    !(canonicalUploadsDirectory && isPathInside(canonicalUploadsDirectory, canonicalTarget))
   ) {
     throw new Error(
       `${action} blocked: canonical target resolves outside allowed directories: ${canonicalTarget}`
@@ -113,15 +117,18 @@ export async function assertReadPathAllowed(
     canonicalizeRoot(config.workingDirectory),
   ];
   if (config.outputDirectory) canonicalPromises.push(canonicalizeRoot(config.outputDirectory));
+  if (config.uploadsDirectory) canonicalPromises.push(canonicalizeRoot(config.uploadsDirectory));
 
   const [canonicalTarget, canonicalProjectRoot, canonicalWorkingDirectory, ...rest] =
     await Promise.all(canonicalPromises);
-  const canonicalOutputDirectory = rest[0]; // undefined when no outputDirectory configured
+  const canonicalOutputDirectory = config.outputDirectory ? rest.shift() : undefined;
+  const canonicalUploadsDirectory = config.uploadsDirectory ? rest.shift() : undefined;
 
   if (
     !isPathInside(canonicalProjectRoot, canonicalTarget) &&
     !isPathInside(canonicalWorkingDirectory, canonicalTarget) &&
-    !(canonicalOutputDirectory && isPathInside(canonicalOutputDirectory, canonicalTarget))
+    !(canonicalOutputDirectory && isPathInside(canonicalOutputDirectory, canonicalTarget)) &&
+    !(canonicalUploadsDirectory && isPathInside(canonicalUploadsDirectory, canonicalTarget))
   ) {
     throw new Error(
       `${action} blocked: canonical target resolves outside allowed directories: ${canonicalTarget}`

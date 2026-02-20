@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../connect";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
 import type { runTurn as runTurnFn } from "../agent";
 import type { AgentConfig } from "../types";
@@ -9,6 +10,7 @@ import { loadConfig } from "../config";
 import { loadSystemPromptWithSkills } from "../prompt";
 
 import { AgentSession } from "./session";
+import { SessionDb } from "./sessionDb";
 import {
   WEBSOCKET_PROTOCOL_VERSION,
   safeParseClientMessage,
@@ -43,18 +45,18 @@ async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unkn
   return {};
 }
 
-async function persistProjectModelDefaults(
+async function persistProjectConfigPatch(
   projectAgentDir: string,
-  defaults: Pick<AgentConfig, "provider" | "model" | "subAgentModel">
+  patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">>
 ): Promise<void> {
+  const entries = Object.entries(patch).filter(([, value]) => value !== undefined);
+  if (entries.length === 0) return;
   const configPath = path.join(projectAgentDir, "config.json");
   const current = await loadJsonObjectSafe(configPath);
-  const next: Record<string, unknown> = {
-    ...current,
-    provider: defaults.provider,
-    model: defaults.model,
-    subAgentModel: defaults.subAgentModel,
-  };
+  const next: Record<string, unknown> = { ...current };
+  for (const [key, value] of entries) {
+    next[key] = value;
+  }
   await fs.mkdir(projectAgentDir, { recursive: true });
   const payload = `${JSON.stringify(next, null, 2)}\n`;
   const tempPath = path.join(
@@ -106,7 +108,7 @@ export async function startAgentServer(
     typeof env.COWORK_BUILTIN_DIR === "string" && env.COWORK_BUILTIN_DIR.trim()
       ? env.COWORK_BUILTIN_DIR
       : undefined;
-  const config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
+  let config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
   const mergedProviderOptions =
     isPlainObject(opts.providerOptions) && isPlainObject(config.providerOptions)
       ? deepMerge(
@@ -123,7 +125,72 @@ export async function startAgentServer(
   await fs.mkdir(config.projectAgentDir, { recursive: true });
 
   const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
+  const getAiCoworkerPathsImpl = opts.getAiCoworkerPathsImpl ?? getAiCoworkerPathsDefault;
+  const sessionDb = await SessionDb.create({
+    paths: getAiCoworkerPathsImpl({ homedir: opts.homedir }),
+  });
   const sessionBindings = new Map<string, SessionBinding>();
+
+  const buildSession = (binding: SessionBinding, persistedSessionId?: string): {
+    session: AgentSession;
+    isResume: boolean;
+    resumedFromStorage: boolean;
+  } => {
+    const emit = (evt: ServerEvent) => {
+      const socket = binding.socket;
+      if (!socket) return;
+      try {
+        socket.send(JSON.stringify(evt));
+      } catch {
+        // ignore
+      }
+    };
+
+    const common = {
+      discoveredSkills,
+      yolo: opts.yolo,
+      connectProviderImpl: opts.connectProviderImpl,
+      getAiCoworkerPathsImpl,
+      runTurnImpl: opts.runTurnImpl,
+      persistModelSelectionImpl: async (selection: {
+        provider: AgentConfig["provider"];
+        model: string;
+        subAgentModel: string;
+      }) => {
+        config.provider = selection.provider;
+        config.model = selection.model;
+        config.subAgentModel = selection.subAgentModel;
+        await persistProjectConfigPatch(config.projectAgentDir, selection);
+      },
+      persistProjectConfigPatchImpl: async (
+        patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">>
+      ) => {
+        config = { ...config, ...patch };
+        await persistProjectConfigPatch(config.projectAgentDir, patch);
+      },
+      sessionDb,
+      emit,
+    };
+
+    if (persistedSessionId) {
+      const persisted = sessionDb.getSessionRecord(persistedSessionId);
+      if (persisted) {
+        const session = AgentSession.fromPersisted({
+          persisted,
+          baseConfig: { ...config },
+          ...common,
+        });
+        return { session, isResume: true, resumedFromStorage: true };
+      }
+    }
+
+    const session = new AgentSession({
+      config: { ...config },
+      system,
+      ...common,
+    });
+    return { session, isResume: false, resumedFromStorage: false };
+  };
 
   function createServer(port: number): ReturnType<typeof Bun.serve> {
     return Bun.serve<{ session?: AgentSession; resumeSessionId?: string }>({
@@ -151,6 +218,7 @@ export async function startAgentServer(
           let session: AgentSession;
           let binding: SessionBinding;
           let isResume = false;
+          let resumedFromStorage = false;
 
           if (resumable && resumable.socket === null) {
             binding = resumable;
@@ -162,30 +230,10 @@ export async function startAgentServer(
               session: undefined as unknown as AgentSession,
               socket: ws,
             };
-            session = new AgentSession({
-              config: { ...config },
-              system,
-              discoveredSkills,
-              yolo: opts.yolo,
-              connectProviderImpl: opts.connectProviderImpl,
-              getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl,
-              runTurnImpl: opts.runTurnImpl,
-              persistModelSelectionImpl: async (selection) => {
-                config.provider = selection.provider;
-                config.model = selection.model;
-                config.subAgentModel = selection.subAgentModel;
-                await persistProjectModelDefaults(config.projectAgentDir, selection);
-              },
-              emit: (evt: ServerEvent) => {
-                const socket = binding.socket;
-                if (!socket) return;
-                try {
-                  socket.send(JSON.stringify(evt));
-                } catch {
-                  // ignore
-                }
-              },
-            });
+            const built = buildSession(binding, resumeSessionId);
+            session = built.session;
+            isResume = built.isResume;
+            resumedFromStorage = built.resumedFromStorage;
             binding.session = session;
             sessionBindings.set(session.id, binding);
           }
@@ -204,6 +252,7 @@ export async function startAgentServer(
             ...(isResume
               ? {
                   isResume: true,
+                  ...(resumedFromStorage ? { resumedFromStorage: true } : {}),
                   busy: session.isBusy,
                   messageCount: session.messageCount,
                   hasPendingAsk: session.hasPendingAsk,
@@ -220,6 +269,7 @@ export async function startAgentServer(
             enableMcp: session.getEnableMcp(),
           };
           ws.send(JSON.stringify(settings));
+          ws.send(JSON.stringify(session.getSessionConfigEvent()));
           ws.send(JSON.stringify(session.getSessionInfoEvent()));
 
           ws.send(JSON.stringify(session.getObservabilityStatusEvent()));
@@ -333,13 +383,16 @@ export async function startAgentServer(
           }
 
           if (msg.type === "session_close") {
-            session.dispose("client requested close");
-            sessionBindings.delete(session.id);
-            try {
-              ws.close();
-            } catch {
-              // ignore
-            }
+            void (async () => {
+              await session.closeForHistory();
+              session.dispose("client requested close");
+              sessionBindings.delete(session.id);
+              try {
+                ws.close();
+              } catch {
+                // ignore
+              }
+            })();
             return;
           }
 
@@ -389,7 +442,17 @@ export async function startAgentServer(
           }
 
           if (msg.type === "set_enable_mcp") {
-            session.setEnableMcp(msg.enableMcp);
+            void session.setEnableMcp(msg.enableMcp);
+            return;
+          }
+
+          if (msg.type === "mcp_servers_get") {
+            void session.emitMcpServers();
+            return;
+          }
+
+          if (msg.type === "mcp_servers_set") {
+            void session.setMcpServers(msg.rawJson);
             return;
           }
 
@@ -503,6 +566,15 @@ export async function startAgentServer(
   }
 
   const server = serveWithPortFallback(requestedPort);
+  const originalStop = server.stop.bind(server);
+  (server as any).stop = () => {
+    try {
+      sessionDb.close();
+    } catch {
+      // ignore
+    }
+    return originalStop();
+  };
 
   const url = `ws://${hostname}:${server.port}/ws`;
   return { server, config, system, url };

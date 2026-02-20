@@ -19,10 +19,12 @@ import type {
   SettingsPageId,
   ThreadRecord,
   ThreadRuntime,
+  ThreadTitleSource,
   TranscriptEvent,
   ViewId,
   WorkspaceRecord,
   WorkspaceRuntime,
+  WorkspaceExplorerState,
 } from "./types";
 import { mapModelStreamChunk, type ModelStreamChunkEvent, type ModelStreamUpdate } from "./modelStream";
 
@@ -43,6 +45,30 @@ function truncateTitle(s: string, max = 34) {
   const trimmed = s.trim().replace(/\s+/g, " ");
   if (trimmed.length <= max) return trimmed;
   return trimmed.slice(0, max - 1) + "…";
+}
+
+function isPlaceholderThreadTitle(title: string): boolean {
+  const normalized = title.trim().toLowerCase();
+  return normalized === "new thread" || normalized === "new session" || normalized === "new conversation";
+}
+
+function normalizeThreadTitleSource(source: unknown, fallbackTitle: string): ThreadTitleSource {
+  if (source === "default" || source === "model" || source === "heuristic" || source === "manual") {
+    return source;
+  }
+  return isPlaceholderThreadTitle(fallbackTitle) ? "default" : "manual";
+}
+
+function shouldAdoptServerTitle(opts: {
+  currentSource: ThreadTitleSource;
+  incomingTitle: string;
+  incomingSource: ThreadTitleSource;
+}): boolean {
+  if (!opts.incomingTitle) return false;
+  if (opts.incomingSource === "manual") return true;
+  if (opts.currentSource === "manual") return false;
+  if (opts.currentSource === "default") return true;
+  return false;
 }
 
 const MAX_FEED_ITEMS = 2000;
@@ -76,6 +102,7 @@ type RuntimeMaps = {
   threadSockets: Map<string, AgentSocket>;
   optimisticUserMessageIds: Map<string, Set<string>>;
   pendingThreadMessages: Map<string, string[]>;
+  pendingWorkspaceDefaultApplyThreadIds: Set<string>;
   workspaceStartPromises: Map<string, Promise<void>>;
   modelStreamByThread: Map<string, ThreadModelStreamRuntime>;
   workspacePickerOpen: boolean;
@@ -86,6 +113,7 @@ const RUNTIME: RuntimeMaps = {
   threadSockets: new Map(),
   optimisticUserMessageIds: new Map(),
   pendingThreadMessages: new Map(),
+  pendingWorkspaceDefaultApplyThreadIds: new Set(),
   workspaceStartPromises: new Map(),
   modelStreamByThread: new Map(),
   workspacePickerOpen: false,
@@ -156,7 +184,14 @@ function defaultWorkspaceRuntime(): WorkspaceRuntime {
     error: null,
     controlSessionId: null,
     controlConfig: null,
+    controlSessionConfig: null,
     controlEnableMcp: null,
+    mcpConfigPath: null,
+    mcpRawJson: "",
+    mcpProjectServers: [],
+    mcpEffectiveServers: [],
+    mcpParseError: null,
+    mcpSaving: false,
     skills: [],
     selectedSkillName: null,
     selectedSkillContent: null,
@@ -169,6 +204,7 @@ function defaultThreadRuntime(): ThreadRuntime {
     connected: false,
     sessionId: null,
     config: null,
+    sessionConfig: null,
     enableMcp: null,
     busy: false,
     busySince: null,
@@ -743,7 +779,7 @@ export type AppStoreState = {
   threadRuntimeById: Record<string, ThreadRuntime>;
 
   latestTodosByThreadId: Record<string, TodoItem[]>;
-  workspaceFilesById: Record<string, FileEntry[]>;
+  workspaceExplorerById: Record<string, WorkspaceExplorerState>;
 
   promptModal: PromptModalState;
   notifications: Notification[];
@@ -761,6 +797,7 @@ export type AppStoreState = {
   composerText: string;
   injectContext: boolean;
   developerMode: boolean;
+  showHiddenFiles: boolean;
 
   sidebarCollapsed: boolean;
   sidebarWidth: number;
@@ -780,6 +817,7 @@ export type AppStoreState = {
 
   newThread: (opts?: { workspaceId?: string; titleHint?: string; firstMessage?: string }) => Promise<void>;
   removeThread: (threadId: string) => Promise<void>;
+  deleteThreadHistory: (threadId: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
   reconnectThread: (threadId: string, firstMessage?: string) => Promise<void>;
   renameThread: (threadId: string, newTitle: string) => void;
@@ -790,6 +828,7 @@ export type AppStoreState = {
   setComposerText: (text: string) => void;
   setInjectContext: (v: boolean) => void;
   setDeveloperMode: (v: boolean) => void;
+  setShowHiddenFiles: (v: boolean) => void;
 
   openSkills: () => Promise<void>;
   selectSkill: (skillName: string) => Promise<void>;
@@ -800,6 +839,8 @@ export type AppStoreState = {
   applyWorkspaceDefaultsToThread: (threadId: string) => Promise<void>;
   updateWorkspaceDefaults: (workspaceId: string, patch: Partial<WorkspaceRecord>) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
+  requestWorkspaceMcpServers: (workspaceId: string) => Promise<void>;
+  saveWorkspaceMcpServers: (workspaceId: string, rawJson: string) => Promise<void>;
 
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
   setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;
@@ -820,6 +861,15 @@ export type AppStoreState = {
   setMessageBarHeight: (height: number) => void;
 
   refreshWorkspaceFiles: (workspaceId: string) => Promise<void>;
+  navigateWorkspaceFiles: (workspaceId: string, path: string) => Promise<void>;
+  navigateWorkspaceFilesUp: (workspaceId: string) => Promise<void>;
+  selectWorkspaceFile: (workspaceId: string, path: string | null) => void;
+  openWorkspaceFile: (workspaceId: string, path: string, isDirectory: boolean) => Promise<void>;
+  revealWorkspaceFile: (path: string) => Promise<void>;
+  copyWorkspaceFilePath: (path: string) => Promise<void>;
+  createWorkspaceDirectory: (workspaceId: string, parentPath: string, name: string) => Promise<void>;
+  renameWorkspacePath: (workspaceId: string, path: string, newName: string) => Promise<void>;
+  trashWorkspacePath: (workspaceId: string, path: string) => Promise<void>;
 };
 
 export type AppStoreActionKeys = {
@@ -840,10 +890,11 @@ function persist(get: () => AppStoreState) {
   _persistTimer = setTimeout(() => {
     _persistTimer = null;
     const state: PersistedState = {
-      version: 1,
+      version: 2,
       workspaces: get().workspaces,
       threads: get().threads,
       developerMode: get().developerMode,
+      showHiddenFiles: get().showHiddenFiles,
     };
     void saveState(state);
   }, PERSIST_DEBOUNCE_MS);
@@ -855,10 +906,11 @@ async function persistNow(get: () => AppStoreState) {
     _persistTimer = null;
   }
   const state: PersistedState = {
-    version: 1,
+    version: 2,
     workspaces: get().workspaces,
     threads: get().threads,
     developerMode: get().developerMode,
+    showHiddenFiles: get().showHiddenFiles,
   };
   await saveState(state);
 }
@@ -971,6 +1023,7 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
               ...s.workspaceRuntimeById[workspaceId],
               controlSessionId: evt.sessionId,
               controlConfig: evt.config,
+              controlSessionConfig: null,
             },
           },
           providerStatusRefreshing: true,
@@ -983,6 +1036,7 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
           socket.send({ type: "provider_catalog_get", sessionId: evt.sessionId });
           socket.send({ type: "provider_auth_methods_get", sessionId: evt.sessionId });
           socket.send({ type: "refresh_provider_status", sessionId: evt.sessionId });
+          socket.send({ type: "mcp_servers_get", sessionId: evt.sessionId });
         } catch {
           // ignore
         }
@@ -996,11 +1050,54 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
 
       if (evt.type === "session_settings") {
         set((s) => ({
+          workspaces: s.workspaces.map((workspace) =>
+            workspace.id === workspaceId
+              ? { ...workspace, defaultEnableMcp: evt.enableMcp }
+              : workspace
+          ),
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,
             [workspaceId]: {
               ...s.workspaceRuntimeById[workspaceId],
               controlEnableMcp: evt.enableMcp,
+            },
+          },
+        }));
+        void persist(get);
+        return;
+      }
+
+      if (evt.type === "session_config") {
+        set((s) => ({
+          workspaces: s.workspaces.map((workspace) =>
+            workspace.id === workspaceId
+              ? { ...workspace, defaultSubAgentModel: evt.config.subAgentModel }
+              : workspace
+          ),
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              controlSessionConfig: evt.config,
+            },
+          },
+        }));
+        void persist(get);
+        return;
+      }
+
+      if (evt.type === "mcp_servers") {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              mcpConfigPath: evt.path,
+              mcpRawJson: evt.rawJson,
+              mcpProjectServers: evt.projectServers,
+              mcpEffectiveServers: evt.effectiveServers,
+              mcpParseError: evt.parseError ?? null,
+              mcpSaving: false,
             },
           },
         }));
@@ -1122,6 +1219,13 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
 
       if (evt.type === "error") {
         set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              mcpSaving: false,
+            },
+          },
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),
@@ -1147,6 +1251,13 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
       set((s) => ({
         providerStatusRefreshing: false,
         providerLastAuthChallenge: null,
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            mcpSaving: false,
+          },
+        },
       }));
     },
     });
@@ -1176,7 +1287,8 @@ function ensureThreadSocket(
   if (RUNTIME.threadSockets.has(threadId)) return;
 
   ensureThreadRuntime(get, set, threadId);
-  const resumeSessionId = get().threadRuntimeById[threadId]?.sessionId ?? undefined;
+  const persistedThreadSessionId = get().threads.find((thread) => thread.id === threadId)?.sessionId ?? undefined;
+  const resumeSessionId = get().threadRuntimeById[threadId]?.sessionId ?? persistedThreadSessionId ?? undefined;
 
   const socket = new AgentSocket({
     url,
@@ -1187,6 +1299,7 @@ function ensureThreadSocket(
     onClose: () => {
       RUNTIME.threadSockets.delete(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
+      RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
         if (!rt) return {};
@@ -1539,6 +1652,14 @@ function handleThreadEvent(
   }
 
   appendThreadTranscript(threadId, "server", evt);
+  set((s) => ({
+    threads: s.threads.map((thread) =>
+      thread.id === threadId
+        ? { ...thread, lastEventSeq: Math.max(0, Math.floor((thread.lastEventSeq ?? 0) + 1)) }
+        : thread
+    ),
+  }));
+  void persist(get);
   const stream = getModelStreamRuntime(threadId);
 
   if (evt.type === "server_hello") {
@@ -1560,7 +1681,9 @@ function handleThreadEvent(
             transcriptOnly: false,
           },
         },
-        threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "active" } : t)),
+        threads: s.threads.map((t) =>
+          t.id === threadId ? { ...t, status: "active", sessionId: evt.sessionId } : t
+        ),
       };
     });
     persist(get);
@@ -1608,6 +1731,9 @@ function handleThreadEvent(
         },
       };
     });
+    if (!evt.busy && RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)) {
+      void get().applyWorkspaceDefaultsToThread(threadId);
+    }
     return;
   }
 
@@ -1625,7 +1751,22 @@ function handleThreadEvent(
     return;
   }
 
+  if (evt.type === "session_config") {
+    set((s) => {
+      const rt = s.threadRuntimeById[threadId];
+      if (!rt) return {};
+      return {
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: { ...rt, sessionConfig: evt.config },
+        },
+      };
+    });
+    return;
+  }
+
   if (evt.type === "session_info") {
+    let titleChanged = false;
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       const nextConfig = rt?.config
@@ -1635,8 +1776,33 @@ function handleThreadEvent(
             model: evt.model,
           }
         : rt?.config ?? null;
+      const incomingTitle = evt.title.trim();
+      const incomingSource = normalizeThreadTitleSource(evt.titleSource, incomingTitle || evt.title);
+      const nextThreads = s.threads.map((t) => {
+        if (t.id !== threadId) return t;
+        const currentSource = normalizeThreadTitleSource(t.titleSource, t.title);
+        if (!shouldAdoptServerTitle({
+          currentSource,
+          incomingTitle,
+          incomingSource,
+        })) {
+          return t;
+        }
+
+        const nextTitle = incomingTitle || t.title;
+        if (nextTitle === t.title && currentSource === incomingSource) {
+          return t;
+        }
+
+        titleChanged = true;
+        return {
+          ...t,
+          title: nextTitle,
+          titleSource: incomingSource,
+        };
+      });
       return {
-        threads: s.threads.map((t) => (t.id === threadId ? { ...t, title: evt.title || t.title } : t)),
+        threads: nextThreads,
         ...(rt
           ? {
               threadRuntimeById: {
@@ -1647,7 +1813,9 @@ function handleThreadEvent(
           : {}),
       };
     });
-    void persist(get);
+    if (titleChanged) {
+      void persist(get);
+    }
     return;
   }
 
@@ -1797,6 +1965,7 @@ export {
   makeId,
   basename,
   truncateTitle,
+  normalizeThreadTitleSource,
   buildContextPreamble,
   isProviderName,
   normalizeProviderChoice,

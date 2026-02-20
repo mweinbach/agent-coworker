@@ -585,6 +585,52 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("mcp_servers_get", () => {
+    test("valid mcp_servers_get message", () => {
+      const msg = expectOk(JSON.stringify({ type: "mcp_servers_get", sessionId: "s1" }));
+      expect(msg.type).toBe("mcp_servers_get");
+      if (msg.type === "mcp_servers_get") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("mcp_servers_get missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "mcp_servers_get" }));
+      expect(err).toBe("mcp_servers_get missing sessionId");
+    });
+  });
+
+  describe("mcp_servers_set", () => {
+    test("valid mcp_servers_set message", () => {
+      const msg = expectOk(
+        JSON.stringify({ type: "mcp_servers_set", sessionId: "s1", rawJson: "{\"servers\":[]}" }),
+      );
+      expect(msg.type).toBe("mcp_servers_set");
+      if (msg.type === "mcp_servers_set") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.rawJson).toBe("{\"servers\":[]}");
+      }
+    });
+
+    test("mcp_servers_set validates required fields and max size", () => {
+      expect(expectErr(JSON.stringify({ type: "mcp_servers_set", rawJson: "{}" }))).toBe(
+        "mcp_servers_set missing sessionId",
+      );
+      expect(expectErr(JSON.stringify({ type: "mcp_servers_set", sessionId: "s1", rawJson: 42 }))).toBe(
+        "mcp_servers_set missing/invalid rawJson",
+      );
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "mcp_servers_set",
+            sessionId: "s1",
+            rawJson: "x".repeat(1_000_001),
+          }),
+        ),
+      ).toBe("mcp_servers_set rawJson exceeds max size 1000000");
+    });
+  });
+
   describe("harness context messages", () => {
     test("harness_context_get parses", () => {
       const msg = expectOk(JSON.stringify({ type: "harness_context_get", sessionId: "s1" }));
@@ -677,6 +723,181 @@ describe("safeParseClientMessage", () => {
       if (msg.type === "reset") {
         expect(msg.sessionId).toBe("abc-def-123");
       }
+    });
+  });
+
+  describe("get_messages", () => {
+    test("valid get_messages without pagination", () => {
+      const msg = expectOk(JSON.stringify({ type: "get_messages", sessionId: "s1" }));
+      expect(msg.type).toBe("get_messages");
+      if (msg.type === "get_messages") {
+        expect(msg.offset).toBeUndefined();
+        expect(msg.limit).toBeUndefined();
+      }
+    });
+
+    test("valid get_messages with offset/limit", () => {
+      const msg = expectOk(
+        JSON.stringify({ type: "get_messages", sessionId: "s1", offset: 10, limit: 50 }),
+      );
+      if (msg.type === "get_messages") {
+        expect(msg.offset).toBe(10);
+        expect(msg.limit).toBe(50);
+      }
+    });
+
+    test("get_messages validates required and numeric fields", () => {
+      expect(expectErr(JSON.stringify({ type: "get_messages" }))).toBe("get_messages missing sessionId");
+      expect(
+        expectErr(JSON.stringify({ type: "get_messages", sessionId: "s1", offset: -1 })),
+      ).toBe("get_messages invalid offset");
+      expect(
+        expectErr(JSON.stringify({ type: "get_messages", sessionId: "s1", offset: "1" })),
+      ).toBe("get_messages invalid offset");
+      expect(
+        expectErr(JSON.stringify({ type: "get_messages", sessionId: "s1", limit: 0 })),
+      ).toBe("get_messages invalid limit");
+      expect(
+        expectErr(JSON.stringify({ type: "get_messages", sessionId: "s1", limit: "10" })),
+      ).toBe("get_messages invalid limit");
+    });
+  });
+
+  describe("set_session_title", () => {
+    test("valid set_session_title", () => {
+      const msg = expectOk(
+        JSON.stringify({ type: "set_session_title", sessionId: "s1", title: "Session A" }),
+      );
+      expect(msg.type).toBe("set_session_title");
+      if (msg.type === "set_session_title") {
+        expect(msg.title).toBe("Session A");
+      }
+    });
+
+    test("set_session_title missing fields fail", () => {
+      expect(expectErr(JSON.stringify({ type: "set_session_title", title: "A" }))).toBe(
+        "set_session_title missing sessionId",
+      );
+      expect(expectErr(JSON.stringify({ type: "set_session_title", sessionId: "s1" }))).toBe(
+        "set_session_title missing/invalid title",
+      );
+      expect(
+        expectErr(JSON.stringify({ type: "set_session_title", sessionId: "s1", title: "" })),
+      ).toBe("set_session_title missing/invalid title");
+    });
+  });
+
+  describe("list_sessions", () => {
+    test("valid list_sessions message", () => {
+      const msg = expectOk(JSON.stringify({ type: "list_sessions", sessionId: "s1" }));
+      expect(msg.type).toBe("list_sessions");
+      if (msg.type === "list_sessions") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("list_sessions missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "list_sessions" }));
+      expect(err).toBe("list_sessions missing sessionId");
+    });
+  });
+
+  describe("delete_session", () => {
+    test("valid delete_session message", () => {
+      const msg = expectOk(
+        JSON.stringify({ type: "delete_session", sessionId: "s1", targetSessionId: "s2" }),
+      );
+      expect(msg.type).toBe("delete_session");
+      if (msg.type === "delete_session") {
+        expect(msg.targetSessionId).toBe("s2");
+      }
+    });
+
+    test("delete_session missing fields fail", () => {
+      expect(expectErr(JSON.stringify({ type: "delete_session", targetSessionId: "s2" }))).toBe(
+        "delete_session missing sessionId",
+      );
+      expect(expectErr(JSON.stringify({ type: "delete_session", sessionId: "s1" }))).toBe(
+        "delete_session missing/invalid targetSessionId",
+      );
+      expect(
+        expectErr(JSON.stringify({ type: "delete_session", sessionId: "s1", targetSessionId: "" })),
+      ).toBe("delete_session missing/invalid targetSessionId");
+    });
+  });
+
+  describe("set_config", () => {
+    test("valid set_config accepts partial config", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_config",
+          sessionId: "s1",
+          config: { yolo: true, observabilityEnabled: false, subAgentModel: "gpt-5.2", maxSteps: 25 },
+        }),
+      );
+      expect(msg.type).toBe("set_config");
+      if (msg.type === "set_config") {
+        expect(msg.config.yolo).toBe(true);
+        expect(msg.config.observabilityEnabled).toBe(false);
+        expect(msg.config.subAgentModel).toBe("gpt-5.2");
+        expect(msg.config.maxSteps).toBe(25);
+      }
+    });
+
+    test("set_config validates field types and ranges", () => {
+      expect(expectErr(JSON.stringify({ type: "set_config", config: {} }))).toBe(
+        "set_config missing sessionId",
+      );
+      expect(expectErr(JSON.stringify({ type: "set_config", sessionId: "s1" }))).toBe(
+        "set_config missing/invalid config",
+      );
+      expect(
+        expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { yolo: "yes" } })),
+      ).toBe("set_config config.yolo must be boolean");
+      expect(
+        expectErr(
+          JSON.stringify({ type: "set_config", sessionId: "s1", config: { observabilityEnabled: "no" } }),
+        ),
+      ).toBe("set_config config.observabilityEnabled must be boolean");
+      expect(
+        expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { subAgentModel: "" } })),
+      ).toBe("set_config config.subAgentModel must be non-empty string");
+      expect(
+        expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { maxSteps: 0 } })),
+      ).toBe("set_config config.maxSteps must be number 1-1000");
+      expect(
+        expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { maxSteps: 1001 } })),
+      ).toBe("set_config config.maxSteps must be number 1-1000");
+    });
+  });
+
+  describe("upload_file", () => {
+    test("valid upload_file message", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "upload_file",
+          sessionId: "s1",
+          filename: "notes.txt",
+          contentBase64: "dGVzdA==",
+        }),
+      );
+      expect(msg.type).toBe("upload_file");
+      if (msg.type === "upload_file") {
+        expect(msg.filename).toBe("notes.txt");
+        expect(msg.contentBase64).toBe("dGVzdA==");
+      }
+    });
+
+    test("upload_file validates required fields", () => {
+      expect(expectErr(JSON.stringify({ type: "upload_file", filename: "a.txt", contentBase64: "" }))).toBe(
+        "upload_file missing sessionId",
+      );
+      expect(expectErr(JSON.stringify({ type: "upload_file", sessionId: "s1", contentBase64: "" }))).toBe(
+        "upload_file missing/invalid filename",
+      );
+      expect(
+        expectErr(JSON.stringify({ type: "upload_file", sessionId: "s1", filename: "a.txt", contentBase64: 12 })),
+      ).toBe("upload_file missing/invalid contentBase64");
     });
   });
 
@@ -1003,12 +1224,16 @@ describe("safeParseClientMessage", () => {
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_authorize")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_callback")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_set_api_key")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("mcp_servers_get")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("mcp_servers_set")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("commands")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_catalog")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_auth_methods")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_auth_challenge")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_auth_result")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("mcp_servers")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("session_info")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("session_config")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("model_stream_chunk")).toBe(true);
     });
 

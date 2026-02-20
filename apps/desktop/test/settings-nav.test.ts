@@ -4,6 +4,7 @@ mock.module("../src/lib/desktopCommands", () => ({
   appendTranscriptBatch: async () => {},
   appendTranscriptEvent: async () => {},
   deleteTranscript: async () => {},
+  listDirectory: async () => [],
   loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
   pickWorkspaceDirectory: async () => null,
   readTranscript: async () => [],
@@ -99,7 +100,7 @@ describe("settings nav (store)", () => {
     expect(state.selectedThreadId).toBe(state.threads[0]?.id);
   });
 
-  test("cancelThread clears busy state when socket is unavailable", () => {
+  test("cancelThread does not auto-reset busy state when socket is unavailable", () => {
     useAppStore.setState({
       threads: [
         {
@@ -129,9 +130,9 @@ describe("settings nav (store)", () => {
 
     useAppStore.getState().cancelThread("t1");
     const state = useAppStore.getState();
-    expect(state.threadRuntimeById.t1?.busy).toBe(false);
-    expect(state.threadRuntimeById.t1?.connected).toBe(false);
-    expect(state.threads[0]?.status).toBe("disconnected");
+    expect(state.threadRuntimeById.t1?.busy).toBe(true);
+    expect(state.threadRuntimeById.t1?.connected).toBe(true);
+    expect(state.threads[0]?.status).toBe("active");
     expect(state.notifications.at(-1)?.title).toBe("Not connected");
   });
 });

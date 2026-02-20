@@ -487,6 +487,50 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("session_close disposes a session so it cannot be resumed", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const originalSessionId = await new Promise<string>((resolve, reject) => {
+        const ws = new WebSocket(url);
+        let sessionId = "";
+        const timer = setTimeout(() => {
+          ws.close();
+          reject(new Error("Timed out waiting for session_close flow"));
+        }, 5000);
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+          if (msg.type !== "server_hello") return;
+          sessionId = msg.sessionId;
+          ws.send(JSON.stringify({ type: "session_close", sessionId }));
+        };
+
+        ws.onclose = () => {
+          clearTimeout(timer);
+          if (!sessionId) {
+            reject(new Error("Session closed before server_hello"));
+            return;
+          }
+          resolve(sessionId);
+        };
+
+        ws.onerror = (event) => {
+          clearTimeout(timer);
+          reject(new Error(`WebSocket error during session_close flow: ${event}`));
+        };
+      });
+
+      const resumed = await collectMessages(`${url}?resumeSessionId=${originalSessionId}`, 1);
+      expect(resumed[0]?.type).toBe("server_hello");
+      expect(typeof resumed[0]?.sessionId).toBe("string");
+      expect(resumed[0]?.sessionId).not.toBe(originalSessionId);
+      expect(resumed[0]?.isResume).not.toBe(true);
+    } finally {
+      server.stop();
+    }
+  });
+
   test("sending client_hello is handled gracefully (no error returned)", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

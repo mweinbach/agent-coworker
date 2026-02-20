@@ -675,15 +675,10 @@ describe("runTurn", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("MCP tool name collision"));
   });
 
-  test("forwards modelSettings maxRetries and timeout to streamText", async () => {
+  test("forwards modelSettings maxRetries to streamText", async () => {
     const config = makeConfig({
       modelSettings: {
         maxRetries: 1,
-        timeout: {
-          totalMs: 60000,
-          stepMs: 10000,
-          chunkMs: 3000,
-        },
       },
     });
 
@@ -691,17 +686,6 @@ describe("runTurn", () => {
 
     const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.maxRetries).toBe(1);
-    expect(callArg.timeout).toEqual({
-      totalMs: 60000,
-      stepMs: 10000,
-      chunkMs: 3000,
-    });
-  });
-
-  test("passes no timeout when modelSettings timeout is not configured", async () => {
-    await runTurn(makeParams());
-    const callArg = mockStreamText.mock.calls[0][0] as any;
-    expect(callArg.timeout).toBeUndefined();
   });
 
   test("stream onError callback forwards to onModelError", async () => {

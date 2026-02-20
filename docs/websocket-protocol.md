@@ -6,7 +6,14 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `5.0`
+- Current protocol version: `6.0`
+
+## Protocol v6 Notes
+
+Changes in `6.0`:
+
+- New client message: `session_close`.
+- Session lifetime is now explicit. Disconnected sessions are not auto-disposed by timeout.
 
 ## Protocol v5 Notes
 
@@ -42,7 +49,7 @@ When a WebSocket connection opens, the server sends these events in order:
 7. `provider_status` — current provider auth/connection status (async)
 8. `session_backup_state` — backup/checkpoint state (async)
 
-If connecting with `?resumeSessionId=<id>`, the server resumes the existing session instead of creating a new one. Disconnected sessions are kept alive for 60 seconds before being disposed. On resume, `server_hello` includes additional fields (`isResume`, `busy`, `messageCount`, `hasPendingAsk`, `hasPendingApproval`) and any pending `ask`/`approval` prompts are replayed.
+If connecting with `?resumeSessionId=<id>`, the server resumes the existing session instead of creating a new one. Session disposal is explicit via `session_close` or server shutdown. On resume, `server_hello` includes additional fields (`isResume`, `busy`, `messageCount`, `hasPendingAsk`, `hasPendingApproval`) and any pending `ask`/`approval` prompts are replayed.
 
 ## Validation Rules
 
@@ -742,6 +749,23 @@ Cancel the currently running agent turn. Aborts the model stream and rejects any
 
 ---
 
+### session_close
+
+Close and dispose the session explicitly. After this message, the session cannot be resumed.
+
+```json
+{ "type": "session_close", "sessionId": "..." }
+```
+
+| Field | Type | Required |
+|-------|------|----------|
+| `type` | `"session_close"` | Yes |
+| `sessionId` | `string` | Yes |
+
+**Response:** Session is disposed. Subsequent messages for that `sessionId` are invalid.
+
+---
+
 ### ping
 
 Keepalive ping.
@@ -1415,7 +1439,7 @@ Confirmation that a `reset` completed.
 
 ### ask
 
-Prompt requiring a text or option response from the user. The turn is paused until an `ask_response` is received (5-minute timeout).
+Prompt requiring a text or option response from the user. The turn is paused until an `ask_response` is received.
 
 ```json
 {
@@ -1439,7 +1463,7 @@ Prompt requiring a text or option response from the user. The turn is paused unt
 
 ### approval
 
-Prompt requiring command approval. The turn is paused until an `approval_response` is received (5-minute timeout).
+Prompt requiring command approval. The turn is paused until an `approval_response` is received.
 
 ```json
 {

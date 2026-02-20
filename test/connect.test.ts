@@ -178,7 +178,6 @@ describe("connectProvider", () => {
           }
           return new Response("not found", { status: 404 });
         },
-        oauthTimeoutMs: 10_000,
       });
 
       expect(result.ok).toBe(true);
@@ -256,7 +255,6 @@ describe("connectProvider", () => {
         }
         return new Response("not found", { status: 404 });
       },
-      oauthTimeoutMs: 10_000,
     });
 
     expect(result.ok).toBe(true);
@@ -329,7 +327,6 @@ describe("connectProvider", () => {
         }
         return new Response("not found", { status: 404 });
       },
-      oauthTimeoutMs: 10_000,
     });
 
     expect(result.ok).toBe(true);

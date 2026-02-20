@@ -144,6 +144,8 @@ type SyncContextValue = {
 
 const SyncContext = createContext<SyncContextValue>();
 
+type ServerHelloEvent = Extract<ServerEvent, { type: "server_hello" }>;
+
 // ── Tool log parser ──────────────────────────────────────────────────────────
 
 type ParsedToolLog = { sub?: string; dir: ">" | "<"; name: string; payload: any };
@@ -331,6 +333,27 @@ export function shouldSuppressLegacyToolLogLine(line: string, modelStreamTurnAct
   return parseToolLogLine(line) !== null;
 }
 
+export function deriveHelloSessionState(evt: ServerHelloEvent): {
+  isResume: boolean;
+  busy: boolean;
+  clearPendingAsk: boolean;
+  clearPendingApproval: boolean;
+} {
+  const isResume = evt.isResume === true;
+  return {
+    isResume,
+    busy: isResume ? Boolean(evt.busy) : false,
+    clearPendingAsk: isResume && evt.hasPendingAsk === false,
+    clearPendingApproval: isResume && evt.hasPendingApproval === false,
+  };
+}
+
+export function buildSessionCloseMessage(sessionId: string | null): { type: "session_close"; sessionId: string } | null {
+  const sid = sessionId?.trim();
+  if (!sid) return null;
+  return { type: "session_close", sessionId: sid };
+}
+
 function normalizeQuestionPreview(question: string, maxChars = 220): string {
   let normalized = question.trim();
   normalized = normalized.replace(/\braw stream part:\s*\{[\s\S]*$/i, "").trim();
@@ -445,6 +468,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
   let modelStreamTurnActive = false;
 
   let socket: AgentSocket | null = null;
+  let latestSessionId: string | null = null;
 
   function resetModelStreamState() {
     streamedAssistantItemIds.clear();
@@ -469,39 +493,50 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
 
   function handleEvent(evt: ServerEvent) {
     if (evt.type === "server_hello") {
-      feedSeq = 0;
+      const helloState = deriveHelloSessionState(evt);
+      if (!helloState.isResume) {
+        feedSeq = 0;
+        sentMessageIds.clear();
+      }
       pendingTools.clear();
-      sentMessageIds.clear();
       resetModelStreamState();
+      latestSessionId = evt.sessionId;
       setState(produce((s) => {
         s.status = "connected";
         s.sessionId = evt.sessionId;
-        s.sessionTitle = null;
+        s.sessionTitle = helloState.isResume ? s.sessionTitle : null;
         s.provider = evt.config.provider;
         s.model = evt.config.model;
         s.cwd = evt.config.workingDirectory;
-        s.enableMcp = true;
-        s.tools = [];
-        s.commands = [];
-        s.providerCatalog = [];
-        s.providerDefault = {};
-        s.providerConnected = [];
-        s.providerAuthMethods = {};
-        s.providerStatuses = [];
-        s.providerAuthChallenge = null;
-        s.providerAuthResult = null;
-        s.observabilityEnabled = false;
-        s.observabilityConfig = null;
-        s.observabilityHealth = null;
-        s.harnessContext = null;
-        s.skills = [];
-        s.backup = null;
-        s.contextUsage = null;
-        s.busy = false;
-        s.feed = [{ id: nextFeedId(), type: "system", line: `connected: ${evt.sessionId}` }];
-        s.todos = [];
-        s.pendingAsk = null;
-        s.pendingApproval = null;
+        s.busy = helloState.busy;
+
+        if (helloState.isResume) {
+          s.feed = [...s.feed, { id: nextFeedId(), type: "system", line: `resumed: ${evt.sessionId}` }];
+          if (helloState.clearPendingAsk) s.pendingAsk = null;
+          if (helloState.clearPendingApproval) s.pendingApproval = null;
+        } else {
+          s.enableMcp = true;
+          s.tools = [];
+          s.commands = [];
+          s.providerCatalog = [];
+          s.providerDefault = {};
+          s.providerConnected = [];
+          s.providerAuthMethods = {};
+          s.providerStatuses = [];
+          s.providerAuthChallenge = null;
+          s.providerAuthResult = null;
+          s.observabilityEnabled = false;
+          s.observabilityConfig = null;
+          s.observabilityHealth = null;
+          s.harnessContext = null;
+          s.skills = [];
+          s.backup = null;
+          s.contextUsage = null;
+          s.feed = [{ id: nextFeedId(), type: "system", line: `connected: ${evt.sessionId}` }];
+          s.todos = [];
+          s.pendingAsk = null;
+          s.pendingApproval = null;
+        }
       }));
       socket?.send({ type: "list_tools", sessionId: evt.sessionId });
       socket?.send({ type: "list_commands", sessionId: evt.sessionId });
@@ -1030,34 +1065,14 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
   createEffect(() => {
     const sock = new AgentSocket({
       url: props.serverUrl,
+      resumeSessionId: latestSessionId ?? undefined,
       client: "tui",
       version: WEBSOCKET_PROTOCOL_VERSION,
       onEvent: handleEvent,
       onClose: () => {
         resetModelStreamState();
-        setState(produce((s) => {
-          s.status = "disconnected";
-          s.sessionId = null;
-          s.sessionTitle = null;
-          s.busy = false;
-          s.tools = [];
-          s.commands = [];
-          s.providerCatalog = [];
-          s.providerDefault = {};
-          s.providerConnected = [];
-          s.providerAuthMethods = {};
-          s.providerStatuses = [];
-          s.providerAuthChallenge = null;
-          s.providerAuthResult = null;
-          s.observabilityEnabled = false;
-          s.observabilityConfig = null;
-          s.harnessContext = null;
-          s.skills = [];
-          s.backup = null;
-          s.contextUsage = null;
-          s.pendingAsk = null;
-          s.pendingApproval = null;
-        }));
+        if (state.sessionId) latestSessionId = state.sessionId;
+        setState("status", "disconnected");
       },
       onOpen: () => {
         setState("status", "connecting");
@@ -1069,6 +1084,9 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     sock.connect();
 
     onCleanup(() => {
+      const closeMessage = buildSessionCloseMessage(state.sessionId ?? latestSessionId);
+      if (closeMessage) sock.send(closeMessage);
+      latestSessionId = null;
       sock.close();
       socket = null;
     });

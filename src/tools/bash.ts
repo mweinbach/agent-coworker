@@ -10,7 +10,7 @@ type ExecResult = { stdout: string; stderr: string; exitCode: number; errorCode?
 function execFileAsync(
   file: string,
   args: string[],
-  opts: { cwd: string; timeout: number; maxBuffer: number; signal?: AbortSignal }
+  opts: { cwd: string; maxBuffer: number; signal?: AbortSignal }
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     execFile(
@@ -18,7 +18,6 @@ function execFileAsync(
       args,
       {
         cwd: opts.cwd,
-        timeout: opts.timeout,
         maxBuffer: opts.maxBuffer,
         windowsHide: true,
         ...(opts.signal ? { signal: opts.signal } : {}),
@@ -45,7 +44,6 @@ function execFileAsync(
 async function runShellCommand(opts: {
   command: string;
   cwd: string;
-  timeout: number;
   abortSignal?: AbortSignal;
 }): Promise<ExecResult> {
   const maxBuffer = 1024 * 1024 * 10;
@@ -55,14 +53,12 @@ async function runShellCommand(opts: {
     const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", opts.command];
     const primary = await execFileAsync("powershell.exe", args, {
       cwd: opts.cwd,
-      timeout: opts.timeout,
       maxBuffer,
       signal: opts.abortSignal,
     });
     if (primary.errorCode !== "ENOENT") return primary;
     return await execFileAsync("pwsh", args, {
       cwd: opts.cwd,
-      timeout: opts.timeout,
       maxBuffer,
       signal: opts.abortSignal,
     });
@@ -71,14 +67,12 @@ async function runShellCommand(opts: {
   // macOS/Linux: prefer bash; fall back to sh.
   const bash = await execFileAsync("bash", ["-lc", opts.command], {
     cwd: opts.cwd,
-    timeout: opts.timeout,
     maxBuffer,
     signal: opts.abortSignal,
   });
   if (bash.errorCode !== "ENOENT") return bash;
   return await execFileAsync("sh", ["-lc", opts.command], {
     cwd: opts.cwd,
-    timeout: opts.timeout,
     maxBuffer,
     signal: opts.abortSignal,
   });
@@ -86,7 +80,7 @@ async function runShellCommand(opts: {
 
 export function createBashTool(ctx: ToolContext) {
   return tool({
-    description: `Execute a shell command with optional timeout. Use for git, npm, docker, system operations, and anything requiring the shell.
+    description: `Execute a shell command. Use for git, npm, docker, system operations, and anything requiring the shell.
 
 Platform notes:
 - Windows: runs in PowerShell
@@ -102,21 +96,12 @@ IMPORTANT: Prefer dedicated tools over bash equivalents:
 Rules:
 - Always quote file paths containing spaces with double quotes
 - Prefer absolute paths; avoid cd
-- Output is truncated
-- Default timeout: 120s; max: 600s`,
+- Output is truncated`,
     inputSchema: z.object({
       command: z.string().describe("The shell command to execute"),
-      timeout: z
-        .number()
-        .int()
-        .min(1)
-        .max(600000)
-        .optional()
-        .default(120000)
-        .describe("Timeout in ms"),
     }),
-    execute: async ({ command, timeout }) => {
-      ctx.log(`tool> bash ${JSON.stringify({ command, timeout })}`);
+    execute: async ({ command }) => {
+      ctx.log(`tool> bash ${JSON.stringify({ command })}`);
 
       if (ctx.abortSignal?.aborted) {
         const res = { stdout: "", stderr: "Command aborted.", exitCode: 130 };
@@ -135,7 +120,6 @@ Rules:
         void runShellCommand({
           command,
           cwd: ctx.config.workingDirectory,
-          timeout,
           abortSignal: ctx.abortSignal,
         }).then(({ stdout, stderr, exitCode }) => {
           const res = {

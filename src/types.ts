@@ -32,15 +32,8 @@ export interface CommandTemplateConfig {
   source?: CommandSource;
 }
 
-export interface ModelTimeoutSettings {
-  totalMs?: number;
-  stepMs?: number;
-  chunkMs?: number;
-}
-
 export interface ModelRuntimeSettings {
   maxRetries?: number;
-  timeout?: ModelTimeoutSettings;
 }
 
 export interface AgentConfig {
@@ -72,7 +65,7 @@ export interface AgentConfig {
 
   /**
    * Optional runtime controls for model calls.
-   * These map to AI SDK call settings such as maxRetries and timeout.
+   * These map to AI SDK call settings such as maxRetries.
    */
   modelSettings?: ModelRuntimeSettings;
 

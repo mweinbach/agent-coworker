@@ -49,10 +49,6 @@ const MAX_FEED_ITEMS = 2000;
 const MAX_NOTIFICATIONS = 50;
 const PERSIST_DEBOUNCE_MS = 300;
 const TRANSCRIPT_BATCH_MS = 200;
-const BUSY_STUCK_MS = 90_000;
-const BUSY_CANCEL_GRACE_MS = 15_000;
-const PROVIDER_STATUS_TIMEOUT_MS = 20_000;
-const WORKSPACE_START_TIMEOUT_MS = 25_000;
 
 type ProviderStatusEvent = Extract<ServerEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
@@ -80,9 +76,6 @@ type RuntimeMaps = {
   threadSockets: Map<string, AgentSocket>;
   optimisticUserMessageIds: Map<string, Set<string>>;
   pendingThreadMessages: Map<string, string[]>;
-  busyWatchdogTimers: Map<string, ReturnType<typeof setTimeout>>;
-  busyCancelGraceTimers: Map<string, ReturnType<typeof setTimeout>>;
-  providerRefreshTimers: Map<string, ReturnType<typeof setTimeout>>;
   workspaceStartPromises: Map<string, Promise<void>>;
   modelStreamByThread: Map<string, ThreadModelStreamRuntime>;
   workspacePickerOpen: boolean;
@@ -93,9 +86,6 @@ const RUNTIME: RuntimeMaps = {
   threadSockets: new Map(),
   optimisticUserMessageIds: new Map(),
   pendingThreadMessages: new Map(),
-  busyWatchdogTimers: new Map(),
-  busyCancelGraceTimers: new Map(),
-  providerRefreshTimers: new Map(),
   workspaceStartPromises: new Map(),
   modelStreamByThread: new Map(),
   workspacePickerOpen: false,
@@ -159,22 +149,6 @@ function drainPendingThreadMessages(threadId: string): string[] {
   return existing;
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      }
-    );
-  });
-}
-
 function defaultWorkspaceRuntime(): WorkspaceRuntime {
   return {
     serverUrl: null,
@@ -231,27 +205,6 @@ function ensureThreadRuntime(
       [threadId]: defaultThreadRuntime(),
     },
   }));
-}
-
-function clearBusyTimers(threadId: string) {
-  const watchdog = RUNTIME.busyWatchdogTimers.get(threadId);
-  if (watchdog) {
-    clearTimeout(watchdog);
-    RUNTIME.busyWatchdogTimers.delete(threadId);
-  }
-  const grace = RUNTIME.busyCancelGraceTimers.get(threadId);
-  if (grace) {
-    clearTimeout(grace);
-    RUNTIME.busyCancelGraceTimers.delete(threadId);
-  }
-}
-
-function clearProviderRefreshTimer(workspaceId: string) {
-  const timer = RUNTIME.providerRefreshTimers.get(workspaceId);
-  if (timer) {
-    clearTimeout(timer);
-    RUNTIME.providerRefreshTimers.delete(workspaceId);
-  }
 }
 
 function pushFeedItem(set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void, threadId: string, item: FeedItem) {
@@ -959,11 +912,7 @@ async function ensureServerRunning(get: () => AppStoreState, set: (fn: (s: AppSt
 
   const startPromise = (async () => {
     try {
-      const res = await withTimeout(
-        startWorkspaceServer({ workspaceId, workspacePath: ws.path, yolo: ws.yolo }),
-        WORKSPACE_START_TIMEOUT_MS,
-        `Starting workspace server for ${ws.name}`
-      );
+      const res = await startWorkspaceServer({ workspaceId, workspacePath: ws.path, yolo: ws.yolo });
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
@@ -1004,11 +953,13 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
   const rt = get().workspaceRuntimeById[workspaceId];
   const url = rt?.serverUrl;
   if (!url) return;
+  const resumeSessionId = rt?.controlSessionId ?? undefined;
 
   if (RUNTIME.controlSockets.has(workspaceId)) return;
 
   const socket = new AgentSocket({
     url,
+    resumeSessionId,
     client: "desktop-control",
     version: "0.1.0",
     onEvent: (evt) => {
@@ -1024,7 +975,6 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
           },
           providerStatusRefreshing: true,
         }));
-        startProviderRefreshTimeout(get, set, workspaceId);
 
         try {
           socket.send({ type: "list_skills", sessionId: evt.sessionId });
@@ -1094,7 +1044,6 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
       if (evt.type === "provider_status") {
         const byName: Partial<Record<ProviderName, ProviderStatus>> = {};
         for (const p of evt.providers) byName[p.provider] = p;
-        clearProviderRefreshTimer(workspaceId);
         const connected = evt.providers
           .filter((p) => p.authorized)
           .map((p) => p.provider)
@@ -1162,19 +1111,16 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
         if (!sid) return;
 
         set((s) => ({ providerStatusRefreshing: true }));
-        startProviderRefreshTimeout(get, set, workspaceId);
         try {
           socket.send({ type: "refresh_provider_status", sessionId: sid });
           socket.send({ type: "provider_catalog_get", sessionId: sid });
         } catch {
-          clearProviderRefreshTimer(workspaceId);
           set((s) => ({ providerStatusRefreshing: false }));
         }
         return;
       }
 
       if (evt.type === "error") {
-        clearProviderRefreshTimer(workspaceId);
         set((s) => ({
           notifications: pushNotification(s.notifications, {
             id: makeId(),
@@ -1198,16 +1144,11 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
     },
     onClose: () => {
       RUNTIME.controlSockets.delete(workspaceId);
-      clearProviderRefreshTimer(workspaceId);
-        set((s) => ({
-          workspaceRuntimeById: {
-            ...s.workspaceRuntimeById,
-            [workspaceId]: { ...s.workspaceRuntimeById[workspaceId], controlSessionId: null, controlConfig: null },
-          },
-          providerStatusRefreshing: false,
-          providerLastAuthChallenge: null,
-        }));
-      },
+      set((s) => ({
+        providerStatusRefreshing: false,
+        providerLastAuthChallenge: null,
+      }));
+    },
     });
 
   RUNTIME.controlSockets.set(workspaceId, socket);
@@ -1235,15 +1176,16 @@ function ensureThreadSocket(
   if (RUNTIME.threadSockets.has(threadId)) return;
 
   ensureThreadRuntime(get, set, threadId);
+  const resumeSessionId = get().threadRuntimeById[threadId]?.sessionId ?? undefined;
 
   const socket = new AgentSocket({
     url,
+    resumeSessionId,
     client: "desktop",
     version: "0.1.0",
     onEvent: (evt) => handleThreadEvent(get, set, threadId, evt, pendingFirstMessage),
     onClose: () => {
       RUNTIME.threadSockets.delete(threadId);
-      clearBusyTimers(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
@@ -1254,7 +1196,6 @@ function ensureThreadSocket(
             [threadId]: {
               ...rt,
               connected: false,
-              sessionId: null,
               busy: false,
               busySince: null,
             },
@@ -1290,29 +1231,6 @@ function sendThread(
   return sock.send(build(sessionId));
 }
 
-function startProviderRefreshTimeout(
-  get: () => AppStoreState,
-  set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void,
-  workspaceId: string
-) {
-  clearProviderRefreshTimer(workspaceId);
-  const timer = setTimeout(() => {
-    const state = get();
-    if (!state.providerStatusRefreshing) return;
-    set((s) => ({
-      providerStatusRefreshing: false,
-      notifications: pushNotification(s.notifications, {
-        id: makeId(),
-        ts: nowIso(),
-        kind: "error",
-        title: "Provider status timed out",
-        detail: "Status check took too long. Try Refresh again.",
-      }),
-    }));
-  }, PROVIDER_STATUS_TIMEOUT_MS);
-  RUNTIME.providerRefreshTimers.set(workspaceId, timer);
-}
-
 function appendThreadTranscript(threadId: string, direction: "server" | "client", payload: unknown) {
   appendThreadTranscriptBatched(threadId, direction, payload);
 }
@@ -1323,81 +1241,6 @@ function pushNotification(notifications: Notification[], entry: Notification): N
     return next.slice(next.length - MAX_NOTIFICATIONS);
   }
   return next;
-}
-
-function queueBusyRecoveryAfterCancel(
-  get: () => AppStoreState,
-  set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void,
-  threadId: string,
-  reason: "manual" | "watchdog"
-) {
-  const existing = RUNTIME.busyCancelGraceTimers.get(threadId);
-  if (existing) clearTimeout(existing);
-
-  const timer = setTimeout(() => {
-    const rt = get().threadRuntimeById[threadId];
-    if (!rt?.busy) return;
-
-    const sock = RUNTIME.threadSockets.get(threadId);
-    try {
-      sock?.close();
-    } catch {
-      // ignore
-    }
-
-    set((s) => {
-      const current = s.threadRuntimeById[threadId];
-      if (!current) return {};
-      return {
-        notifications: pushNotification(s.notifications, {
-          id: makeId(),
-          ts: nowIso(),
-          kind: "error",
-          title: "Run recovery",
-          detail:
-            reason === "manual"
-              ? "Cancel was slow; connection was reset so you can continue."
-              : "Run appeared stuck; connection was reset so you can continue.",
-        }),
-        threadRuntimeById: {
-          ...s.threadRuntimeById,
-          [threadId]: { ...current, busy: false, busySince: null, connected: false, sessionId: null },
-        },
-        threads: s.threads.map((t) =>
-          t.id === threadId ? { ...t, status: "disconnected" } : t
-        ),
-      };
-    });
-  }, BUSY_CANCEL_GRACE_MS);
-
-  RUNTIME.busyCancelGraceTimers.set(threadId, timer);
-}
-
-function startBusyWatchdog(
-  get: () => AppStoreState,
-  set: (fn: (s: AppStoreState) => Partial<AppStoreState>) => void,
-  threadId: string
-) {
-  clearBusyTimers(threadId);
-  const timer = setTimeout(() => {
-    const rt = get().threadRuntimeById[threadId];
-    if (!rt?.busy || !rt.sessionId) return;
-
-    const sent = sendThread(get, threadId, (sessionId) => ({ type: "cancel", sessionId }));
-    set((s) => ({
-      notifications: pushNotification(s.notifications, {
-        id: makeId(),
-        ts: nowIso(),
-        kind: "info",
-        title: "Run taking longer than expected",
-        detail: sent ? "Attempting automatic cancel…" : "Attempting connection recovery…",
-      }),
-    }));
-
-    queueBusyRecoveryAfterCancel(get, set, threadId, "watchdog");
-  }, BUSY_STUCK_MS);
-
-  RUNTIME.busyWatchdogTimers.set(threadId, timer);
 }
 
 function sendUserMessageToThread(
@@ -1703,6 +1546,7 @@ function handleThreadEvent(
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
+      const resumedBusy = evt.isResume ? Boolean(evt.busy) : false;
       return {
         threadRuntimeById: {
           ...s.threadRuntimeById,
@@ -1711,6 +1555,8 @@ function handleThreadEvent(
             connected: true,
             sessionId: evt.sessionId,
             config: evt.config,
+            busy: resumedBusy,
+            busySince: resumedBusy ? rt.busySince ?? nowIso() : null,
             transcriptOnly: false,
           },
         },
@@ -1751,13 +1597,7 @@ function handleThreadEvent(
   }
 
   if (evt.type === "session_busy") {
-    if (evt.busy) {
-      resetModelStreamRuntime(threadId);
-      startBusyWatchdog(get, set, threadId);
-    } else {
-      clearBusyTimers(threadId);
-      resetModelStreamRuntime(threadId);
-    }
+    resetModelStreamRuntime(threadId);
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       if (!rt) return {};
@@ -1965,8 +1805,6 @@ export {
   defaultThreadRuntime,
   ensureWorkspaceRuntime,
   ensureThreadRuntime,
-  clearBusyTimers,
-  clearProviderRefreshTimer,
   mapTranscriptToFeed,
   persist,
   persistNow,
@@ -1975,10 +1813,8 @@ export {
   ensureThreadSocket,
   sendControl,
   sendThread,
-  startProviderRefreshTimeout,
   appendThreadTranscript,
   pushNotification,
-  queueBusyRecoveryAfterCancel,
   sendUserMessageToThread,
   queuePendingThreadMessage,
 };

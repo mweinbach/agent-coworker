@@ -81,10 +81,7 @@ export interface StartAgentServerOptions {
 type SessionBinding = {
   session: AgentSession;
   socket: Bun.ServerWebSocket<{ session?: AgentSession; resumeSessionId?: string }> | null;
-  disposeTimer: ReturnType<typeof setTimeout> | null;
 };
-
-const RESUME_SESSION_TTL_MS = 60_000;
 
 export async function startAgentServer(
   opts: StartAgentServerOptions
@@ -158,17 +155,12 @@ export async function startAgentServer(
           if (resumable && resumable.socket === null) {
             binding = resumable;
             binding.socket = ws;
-            if (binding.disposeTimer) {
-              clearTimeout(binding.disposeTimer);
-              binding.disposeTimer = null;
-            }
             session = binding.session;
             isResume = true;
           } else {
             binding = {
               session: undefined as unknown as AgentSession,
               socket: ws,
-              disposeTimer: null,
             };
             session = new AgentSession({
               config: { ...config },
@@ -340,6 +332,17 @@ export async function startAgentServer(
             return;
           }
 
+          if (msg.type === "session_close") {
+            session.dispose("client requested close");
+            sessionBindings.delete(session.id);
+            try {
+              ws.close();
+            } catch {
+              // ignore
+            }
+            return;
+          }
+
           if (msg.type === "reset") {
             session.reset();
             return;
@@ -454,21 +457,11 @@ export async function startAgentServer(
           const session = ws.data.session;
           if (!session) return;
           const binding = sessionBindings.get(session.id);
-          if (!binding) {
-            session.dispose("websocket closed");
-            return;
-          }
+          if (!binding) return;
 
           if (binding.socket === ws) {
             binding.socket = null;
           }
-
-          if (binding.disposeTimer) clearTimeout(binding.disposeTimer);
-          binding.disposeTimer = setTimeout(() => {
-            if (binding.socket) return;
-            binding.session.dispose("websocket closed");
-            sessionBindings.delete(binding.session.id);
-          }, RESUME_SESSION_TTL_MS);
         },
       },
     });

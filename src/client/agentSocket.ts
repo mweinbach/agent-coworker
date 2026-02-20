@@ -27,6 +27,7 @@ export function safeJsonParse(raw: unknown): any | null {
 
 export type AgentSocketOpts = {
   url: string;
+  resumeSessionId?: string;
   client: string;
   version?: string;
   onEvent: (evt: ServerEvent) => void;
@@ -62,6 +63,7 @@ export class AgentSocket {
   private ws: WebSocket | null = null;
   private ready = deferred<string>();
   private _sessionId: string | null = null;
+  private resumeSessionId: string | null = null;
 
   // Reconnection state.
   private reconnectAttempt = 0;
@@ -76,6 +78,7 @@ export class AgentSocket {
 
   constructor(opts: AgentSocketOpts) {
     this.url = opts.url;
+    this.resumeSessionId = opts.resumeSessionId?.trim() || null;
     this.onEvent = opts.onEvent;
     this.onClose = opts.onClose;
     this.onOpen = opts.onOpen;
@@ -106,8 +109,20 @@ export class AgentSocket {
     this.doConnect();
   }
 
+  private getConnectUrl(): string {
+    if (!this.resumeSessionId) return this.url;
+    try {
+      const parsed = new URL(this.url);
+      parsed.searchParams.set("resumeSessionId", this.resumeSessionId);
+      return parsed.toString();
+    } catch {
+      const separator = this.url.includes("?") ? "&" : "?";
+      return `${this.url}${separator}resumeSessionId=${encodeURIComponent(this.resumeSessionId)}`;
+    }
+  }
+
   private doConnect() {
-    const ws = new this.WebSocketImpl(this.url);
+    const ws = new this.WebSocketImpl(this.getConnectUrl());
     this.ws = ws;
 
     ws.onopen = () => {
@@ -137,6 +152,7 @@ export class AgentSocket {
 
       if (evt.type === "server_hello") {
         this._sessionId = evt.sessionId;
+        this.resumeSessionId = evt.sessionId;
         this.ready.resolve(evt.sessionId);
 
         // Flush any messages that were queued while disconnected.
@@ -153,11 +169,12 @@ export class AgentSocket {
     ws.onclose = () => {
       this.stopPing();
       const hadSession = !!this._sessionId;
+      const hasResumeCandidate = hadSession || !!this.resumeSessionId;
       if (!this._sessionId) this.ready.reject(new Error("websocket closed"));
       this.ws = null;
       this._sessionId = null;
 
-      if (!this.intentionalClose && this.autoReconnect && hadSession) {
+      if (!this.intentionalClose && this.autoReconnect && hasResumeCandidate) {
         this.scheduleReconnect();
       } else {
         this.onClose?.("websocket closed");
@@ -170,6 +187,7 @@ export class AgentSocket {
     this.cancelReconnect();
     this.stopPing();
     this.sendQueue = [];
+    this.resumeSessionId = null;
     try {
       this.ws?.close();
     } catch {

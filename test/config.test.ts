@@ -562,17 +562,12 @@ describe("loadConfig", () => {
     expect(cfg.providerOptions?.google.thinkingConfig.thinkingLevel).toBe("low");
   });
 
-  test("loads modelSettings from config and allows env overrides", async () => {
+  test("loads modelSettings maxRetries from config and allows env overrides", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       modelSettings: {
         maxRetries: 4,
-        timeout: {
-          totalMs: 120000,
-          stepMs: 15000,
-          chunkMs: 5000,
-        },
       },
     });
 
@@ -582,15 +577,10 @@ describe("loadConfig", () => {
       builtInDir: repoRoot(),
       env: {
         AGENT_MODEL_MAX_RETRIES: "1",
-        AGENT_MODEL_TIMEOUT_MS: "60000",
-        AGENT_MODEL_TIMEOUT_CHUNK_MS: "2000",
       },
     });
 
     expect(cfg.modelSettings?.maxRetries).toBe(1);
-    expect(cfg.modelSettings?.timeout?.totalMs).toBe(60000);
-    expect(cfg.modelSettings?.timeout?.stepMs).toBe(15000);
-    expect(cfg.modelSettings?.timeout?.chunkMs).toBe(2000);
   });
 
   test("loads Langfuse observability config from env vars", async () => {

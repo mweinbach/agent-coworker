@@ -104,7 +104,7 @@ describe("mcp auth store", () => {
     }
   });
 
-  test("resolveMCPServerAuthState derives missing/api_key/oauth_pending", async () => {
+  test("resolveMCPServerAuthState derives missing/api_key/oauth_pending and handles expired oauth tokens", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-mode-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-mode-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-mode-builtin-"));
@@ -150,6 +150,21 @@ describe("mcp auth store", () => {
       const oauthExpired = await resolveMCPServerAuthState(config, oauthServer);
       expect(oauthExpired.mode).toBe("error");
       expect(oauthExpired.message).toContain("expired");
+
+      await completeMCPServerOAuth({
+        config,
+        server: oauthServer,
+        tokens: {
+          accessToken: "expired-token-refreshable",
+          tokenType: "Bearer",
+          refreshToken: "refresh-token",
+          expiresAt: new Date(Date.now() - 60_000).toISOString(),
+        },
+      });
+      const oauthRefreshable = await resolveMCPServerAuthState(config, oauthServer);
+      expect(oauthRefreshable.mode).toBe("oauth");
+      expect(oauthRefreshable.message).toContain("refresh token");
+      expect(oauthRefreshable.oauthTokens?.refreshToken).toBe("refresh-token");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

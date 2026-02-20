@@ -356,6 +356,7 @@ export async function resolveMCPServerAuthState(
   const pending = selected.record?.oauth?.pending;
   const tokens = selected.record?.oauth?.tokens;
   const hasAccessToken = Boolean(tokens?.accessToken);
+  const hasRefreshToken = Boolean(tokens?.refreshToken && tokens.refreshToken.trim().length > 0);
   const tokenValid = tokens ? isTokenValid(tokens) : false;
 
   if (hasAccessToken && tokenValid && tokens) {
@@ -364,6 +365,20 @@ export async function resolveMCPServerAuthState(
       scope: selected.scope,
       authType: "oauth",
       message: "OAuth token available.",
+      headers: {
+        Authorization: joinAuthHeader(tokens.tokenType ?? "Bearer", tokens.accessToken),
+      },
+      oauthTokens: tokens,
+      ...(pending ? { oauthPending: pending } : {}),
+    };
+  }
+
+  if (hasAccessToken && !tokenValid && hasRefreshToken && tokens) {
+    return {
+      mode: "oauth",
+      scope: selected.scope,
+      authType: "oauth",
+      message: "OAuth access token expired; refresh token available.",
       headers: {
         Authorization: joinAuthHeader(tokens.tokenType ?? "Bearer", tokens.accessToken),
       },

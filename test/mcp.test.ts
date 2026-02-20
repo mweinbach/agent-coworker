@@ -246,6 +246,53 @@ describe("runtime auth injection", () => {
       await fs.rm(builtInConfigDir, { recursive: true, force: true });
     }
   });
+
+  test("loadMCPServers keeps oauth provider when access token is expired but refreshable", async () => {
+    const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-refresh-workspace-"));
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-refresh-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-refresh-builtin-"));
+
+    try {
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+      await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
+        servers: [
+          {
+            name: "oauth-server",
+            transport: { type: "http", url: "https://mcp.oauth.example.com" },
+            auth: { type: "oauth", oauthMode: "auto" },
+          },
+        ],
+      });
+      await writeJson(path.join(tmpWorkspace, ".cowork", "auth", "mcp-credentials.json"), {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        servers: {
+          "oauth-server": {
+            oauth: {
+              tokens: {
+                accessToken: "expired-oauth-token",
+                tokenType: "Bearer",
+                refreshToken: "refresh-token",
+                expiresAt: new Date(Date.now() - 60_000).toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+            },
+          },
+        },
+      });
+
+      const servers = await loadMCPServers(config);
+      const server = servers.find((entry) => entry.name === "oauth-server");
+      expect(server).toBeDefined();
+      if (server?.transport.type === "http") {
+        expect((server.transport as any).authProvider).toBeDefined();
+      }
+    } finally {
+      await fs.rm(tmpWorkspace, { recursive: true, force: true });
+      await fs.rm(tmpHome, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("loadMCPTools", () => {

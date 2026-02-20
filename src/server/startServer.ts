@@ -598,7 +598,24 @@ export async function startAgentServer(
 
   const server = serveWithPortFallback(requestedPort);
   const originalStop = server.stop.bind(server);
+  let serverStopped = false;
   (server as any).stop = () => {
+    if (serverStopped) return;
+    serverStopped = true;
+    // Dispose all active sessions to abort running turns and close MCP child processes.
+    for (const [id, binding] of sessionBindings) {
+      try {
+        binding.session.dispose("server stopping");
+      } catch {
+        // ignore
+      }
+      try {
+        binding.socket?.close();
+      } catch {
+        // ignore
+      }
+    }
+    sessionBindings.clear();
     try {
       sessionDb.close();
     } catch {

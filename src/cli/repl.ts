@@ -756,6 +756,13 @@ export async function runCliRepl(
     rl.close();
   });
 
+  // Handle terminal close (e.g. closing the terminal window).
+  const onHup = () => {
+    stopServer();
+    process.exit(0);
+  };
+  process.on("SIGHUP", onHup);
+
   await connectToServer(serverUrl, rl, initialResumeSessionId ?? undefined);
 
   console.log("Cowork agent (CLI)");
@@ -1065,9 +1072,14 @@ export async function runCliRepl(
     }
   });
 
+  // Last-resort cleanup if the process exits unexpectedly.
+  process.on("exit", stopServer);
+
   await new Promise<void>((resolve) => {
     rl.on("close", () => resolve());
   });
 
+  process.off("exit", stopServer);
+  process.off("SIGHUP", onHup);
   stopServer();
 }

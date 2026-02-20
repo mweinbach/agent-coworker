@@ -76,6 +76,30 @@ async function main() {
     yolo,
   });
 
+  // Graceful shutdown on signals so child processes are cleaned up.
+  let stopping = false;
+  const shutdown = () => {
+    if (stopping) return;
+    stopping = true;
+    try {
+      server.stop();
+    } catch {
+      // ignore
+    }
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  process.on("SIGHUP", shutdown);
+  process.on("exit", () => {
+    // Last-resort synchronous cleanup.
+    try {
+      server.stop();
+    } catch {
+      // ignore
+    }
+  });
+
   if (json) {
     console.log(
       JSON.stringify({

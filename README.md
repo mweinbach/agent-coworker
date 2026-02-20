@@ -49,26 +49,40 @@ Run the server directly:
 bun run serve
 ```
 
-## Electron Automation (agent-browser skill)
+## Developer Onboarding & Architecture
 
-If you added the `agent-browser` skill in `./.agent/skills/agent-browser`, you can use it to drive the desktop app UI.
+agent-coworker is built on a **WebSocket-first** architecture. This ensures that the core agent logic is entirely decoupled from any user interface.
 
-1. Start the desktop app in dev mode (enables CDP on port `9222` by default):
-```bash
-bun run desktop:dev
-```
+- **Business Logic:** All agent coordination, tool execution, LLM communication, and session state are centralized in the server (primarily within `src/server/session.ts` and `src/agent.ts`).
+- **Thin Clients:** User interfaces (like the TUI, CLI, Desktop app, or Portal) are strictly thin clients. They never touch the AI SDK or execute built-in tools directly. Instead, they consume `ServerEvent`s and send `ClientMessage`s over the WebSocket connection.
+- **WebSocket Protocol:** If you want to build a custom client, alternate UI, or extend the existing ones, the full communication contract is documented in `docs/websocket-protocol.md`. This is the source of truth for interacting with the agent server.
 
-2. In another terminal, run browser actions via the desktop wrapper:
-```bash
-bun run desktop:browser -- snapshot -i
-bun run desktop:browser -- click @e2
-bun run desktop:browser -- screenshot tmp/desktop.png
-```
+## Built-in Tools
 
-3. Keep the ref-based loop from the skill:
-- `snapshot -i` to get refs
-- interact with `@eN`
-- re-snapshot after page/UI changes
+The agent is equipped with a powerful set of built-in tools designed for interacting with your environment and codebase:
+
+- **bash**: Execute terminal commands (includes safety approvals for risky operations).
+- **glob**: Fast file pattern matching to explore codebases.
+- **grep**: Regex-based content search across files.
+- **read**: Read file contents or list directory contents.
+- **write**: Create or overwrite files.
+- **edit**: Perform exact string replacements in existing files.
+- **webSearch**: Search the web for information.
+- **webFetch**: Fetch and convert web pages to Markdown.
+- **todoWrite**: Manage an inline task list for complex, multi-step workflows.
+- **spawnAgent**: Launch specialized sub-agents to execute tasks in parallel.
+- **ask**: Prompt the user for clarification, decisions, or input.
+- **skill**: Dynamically load specialized domain knowledge (see Skills below).
+- **notebookEdit**: Edit and interact with Jupyter notebooks.
+- **memory**: Store and retrieve long-term context across different sessions.
+
+## Skills
+
+Skills are specialized instructional bundles that teach the agent how to perform specific tasks, use certain frameworks, or follow domain-specific best practices. 
+
+- **How they work:** When the agent recognizes a task it needs help with, it uses the `skill` tool to dynamically load the relevant skill's instructions into its context window.
+- **Where they live:** Skills can be global (living in the `skills/` directory) or project-local (living in `.agent/skills/` within your workspace).
+- **Structure:** A skill is defined by a `SKILL.md` file. This file must contain YAML frontmatter (defining the skill's `name` and `description`) followed by a Markdown body containing the actual instructions, rules, workflows, and context the agent needs to succeed.
 
 ## TUI
 
@@ -134,7 +148,7 @@ The TUI renders tool calls with specialized views:
 - **web** — URL/query and summary
 - **todo** — Inline todo list
 
-### Architecture
+### TUI Architecture
 
 The TUI uses Solid.js with 9 context providers stacked in `apps/TUI/index.tsx`:
 
@@ -149,14 +163,28 @@ ExitProvider → KVProvider → ThemeProvider → DialogProvider
 - **ThemeProvider** provides 60+ semantic color tokens to all components
 - **KVProvider** persists UI preferences to `~/.cowork/config/tui-kv.json`
 
-The TUI connects to the agent server over WebSocket — it never touches the agent or AI SDK directly. This follows the project's WebSocket-first architecture.
+The TUI adheres strictly to the WebSocket-first architecture by connecting to the agent server over WebSocket and never touching the agent directly.
 
-## WebSocket Protocol Notes
+## Electron Automation (agent-browser skill)
 
-- Current protocol version is `7.0` (sent in `server_hello.protocolVersion`).
-- v7 adds granular MCP server management messages (`mcp_server_upsert`, `mcp_server_delete`, `mcp_server_validate`, `mcp_server_auth_*`, `mcp_servers_migrate_legacy`) and corresponding server events.
-- v6 added required `sessionId` in `ping`/`pong`, required `code`/`source` in `error` events, and required `reasonCode` in `approval` events.
-- Full message contract and migration details: `docs/websocket-protocol.md`.
+If you added the `agent-browser` skill in `./.agent/skills/agent-browser`, you can use it to drive the desktop app UI.
+
+1. Start the desktop app in dev mode (enables CDP on port `9222` by default):
+```bash
+bun run desktop:dev
+```
+
+2. In another terminal, run browser actions via the desktop wrapper:
+```bash
+bun run desktop:browser -- snapshot -i
+bun run desktop:browser -- click @e2
+bun run desktop:browser -- screenshot tmp/desktop.png
+```
+
+3. Keep the ref-based loop from the skill:
+- `snapshot -i` to get refs
+- interact with `@eN`
+- re-snapshot after page/UI changes
 
 ## Configuration
 
@@ -261,6 +289,13 @@ bun run portal:dev
 bun run portal:build
 bun run portal:start
 ```
+
+### WebSocket Protocol Notes
+
+- Current protocol version is `7.0` (sent in `server_hello.protocolVersion`).
+- v7 adds granular MCP server management messages (`mcp_server_upsert`, `mcp_server_delete`, `mcp_server_validate`, `mcp_server_auth_*`, `mcp_servers_migrate_legacy`) and corresponding server events.
+- v6 added required `sessionId` in `ping`/`pong`, required `code`/`source` in `error` events, and required `reasonCode` in `approval` events.
+- Full message contract and migration details: `docs/websocket-protocol.md`.
 
 Full operational runbook:
 - `docs/harness/runbook.md`

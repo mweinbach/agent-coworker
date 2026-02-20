@@ -207,22 +207,21 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
   // Persistent, user-visible directories should be relative to the project (cwd) by default,
   // not the (potentially temporary) workingDirectory.
-  const outputDirectory = resolveDir(
+  const outputDirRaw =
     env.AGENT_OUTPUT_DIR ||
-      projectConfig.outputDirectory ||
-      userConfig.outputDirectory ||
-      builtInDefaults.outputDirectory ||
-      "output",
-    cwd
-  );
-  const uploadsDirectory = resolveDir(
+    projectConfig.outputDirectory ||
+    userConfig.outputDirectory ||
+    builtInDefaults.outputDirectory ||
+    undefined;
+  const outputDirectory = outputDirRaw ? resolveDir(outputDirRaw, cwd) : undefined;
+
+  const uploadsDirRaw =
     env.AGENT_UPLOADS_DIR ||
-      projectConfig.uploadsDirectory ||
-      userConfig.uploadsDirectory ||
-      builtInDefaults.uploadsDirectory ||
-      "uploads",
-    cwd
-  );
+    projectConfig.uploadsDirectory ||
+    userConfig.uploadsDirectory ||
+    builtInDefaults.uploadsDirectory ||
+    undefined;
+  const uploadsDirectory = uploadsDirRaw ? resolveDir(uploadsDirRaw, cwd) : undefined;
 
   const userName =
     env.AGENT_USER_NAME ||

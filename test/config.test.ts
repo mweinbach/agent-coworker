@@ -726,7 +726,7 @@ describe("directory resolution", () => {
     expect(cfg.uploadsDirectory).toBe("/abs/uploads");
   });
 
-  test("default outputDirectory is 'output' relative to cwd", async () => {
+  test("default outputDirectory is undefined when not configured", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -736,10 +736,10 @@ describe("directory resolution", () => {
       env: {},
     });
 
-    expect(cfg.outputDirectory).toBe(path.join(cwd, "output"));
+    expect(cfg.outputDirectory).toBeUndefined();
   });
 
-  test("default uploadsDirectory is 'uploads' relative to cwd", async () => {
+  test("default uploadsDirectory is undefined when not configured", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -749,7 +749,7 @@ describe("directory resolution", () => {
       env: {},
     });
 
-    expect(cfg.uploadsDirectory).toBe(path.join(cwd, "uploads"));
+    expect(cfg.uploadsDirectory).toBeUndefined();
   });
 
   test("skillsDirs populated with 4 paths (project, global, user, built-in)", async () => {

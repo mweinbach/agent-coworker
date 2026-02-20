@@ -89,7 +89,7 @@ export type ServerEvent =
       capabilities?: {
         modelStreamChunk: "v1";
       };
-      config: Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
+      config: Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & { outputDirectory?: string };
       isResume?: boolean;
       busy?: boolean;
       messageCount?: number;
@@ -164,7 +164,7 @@ export type ServerEvent =
   | {
       type: "config_updated";
       sessionId: string;
-      config: Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
+      config: Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & { outputDirectory?: string };
     }
   | { type: "tools"; sessionId: string; tools: Array<{ name: string; description: string }> }
   | { type: "commands"; sessionId: string; commands: CommandInfo[] }

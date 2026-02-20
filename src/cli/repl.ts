@@ -13,7 +13,7 @@ import type { AgentConfig, ApprovalRiskCode, TodoItem } from "../types";
 
 const UI_PROVIDER_NAMES = PROVIDER_NAMES;
 
-type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
+type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & { outputDirectory?: string };
 
 type AskPrompt = { requestId: string; question: string; options?: string[] };
 type ApprovalPrompt = { requestId: string; command: string; dangerous: boolean; reasonCode: ApprovalRiskCode };

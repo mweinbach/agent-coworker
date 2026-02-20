@@ -215,7 +215,7 @@ export class AgentSession {
       provider: this.config.provider,
       model: this.config.model,
       workingDirectory: this.config.workingDirectory,
-      outputDirectory: this.config.outputDirectory,
+      ...(this.config.outputDirectory ? { outputDirectory: this.config.outputDirectory } : {}),
     };
   }
 
@@ -325,8 +325,8 @@ export class AgentSession {
         model: this.config.model,
         enableMcp: this.getEnableMcp(),
         workingDirectory: this.config.workingDirectory,
-        outputDirectory: this.config.outputDirectory,
-        uploadsDirectory: this.config.uploadsDirectory,
+        ...(this.config.outputDirectory ? { outputDirectory: this.config.outputDirectory } : {}),
+        ...(this.config.uploadsDirectory ? { uploadsDirectory: this.config.uploadsDirectory } : {}),
       },
       context: {
         system: this.system,
@@ -1196,7 +1196,7 @@ export class AgentSession {
       allowedRoots: [
         path.dirname(this.config.projectAgentDir),
         this.config.workingDirectory,
-        this.config.outputDirectory,
+        ...(this.config.outputDirectory ? [this.config.outputDirectory] : []),
       ],
     });
     if (classification.kind === "auto") return true;
@@ -1323,7 +1323,7 @@ export class AgentSession {
       return;
     }
 
-    const uploadsDir = this.config.uploadsDirectory;
+    const uploadsDir = this.config.uploadsDirectory ?? this.config.workingDirectory;
     const filePath = path.resolve(uploadsDir, safeName);
     // Prevent path traversal
     if (!filePath.startsWith(path.resolve(uploadsDir))) {
@@ -1333,7 +1333,10 @@ export class AgentSession {
 
     try {
       const decoded = Buffer.from(contentBase64, "base64");
-      await fs.mkdir(uploadsDir, { recursive: true });
+      // Only create the directory if a custom uploads path is configured
+      if (this.config.uploadsDirectory) {
+        await fs.mkdir(uploadsDir, { recursive: true });
+      }
       await fs.writeFile(filePath, decoded);
       this.emit({ type: "file_uploaded", sessionId: this.id, filename: safeName, path: filePath });
     } catch (err) {

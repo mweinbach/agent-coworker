@@ -98,7 +98,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
       allowedRoots: [
         path.dirname(ctx.config.projectAgentDir),
         ctx.config.workingDirectory,
-        ctx.config.outputDirectory,
+        ...(ctx.config.outputDirectory ? [ctx.config.outputDirectory] : []),
       ],
     }).kind === "auto";
 

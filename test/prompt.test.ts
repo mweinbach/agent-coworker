@@ -29,8 +29,6 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     model: "test-model-id",
     subAgentModel: "test-sub-model",
     workingDirectory: "/test/working",
-    outputDirectory: "/test/output",
-    uploadsDirectory: "/test/uploads",
     userName: "TestUser",
     knowledgeCutoff: "End of May 2025",
     projectAgentDir: "/test/project/.agent",
@@ -87,11 +85,12 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("/my/custom/output/dir");
   });
 
-  test("replaces {{uploadsDirectory}} template variable", async () => {
+  test("uploadsDirectory no longer appears in prompt (uploads go to workingDirectory)", async () => {
     const config = makeConfig({ uploadsDirectory: "/my/custom/uploads/dir" });
     const prompt = await loadSystemPrompt(config);
-    expect(prompt).toContain("/my/custom/uploads/dir");
+    // uploadsDirectory is no longer referenced in the prompt template
     expect(prompt).not.toContain("{{uploadsDirectory}}");
+    expect(prompt).not.toContain("/my/custom/uploads/dir");
   });
 
   test("replaces {{modelName}} template variable", async () => {

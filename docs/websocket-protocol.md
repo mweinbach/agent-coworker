@@ -76,10 +76,11 @@ Returned in `server_hello` and `config_updated`:
 {
   "provider": "openai",
   "model": "gpt-4o",
-  "workingDirectory": "/path/to/project",
-  "outputDirectory": "/path/to/output"
+  "workingDirectory": "/path/to/project"
 }
 ```
+
+`outputDirectory` is optional and only present when explicitly configured.
 
 ### ProviderCatalogEntry
 
@@ -1034,8 +1035,7 @@ Initial handshake event sent immediately on WebSocket connection.
   "config": {
     "provider": "openai",
     "model": "gpt-4o",
-    "workingDirectory": "/path/to/project",
-    "outputDirectory": "/path/to/output"
+    "workingDirectory": "/path/to/project"
   },
   "isResume": true,
   "busy": false,
@@ -1051,7 +1051,7 @@ Initial handshake event sent immediately on WebSocket connection.
 | `sessionId` | `string` | The session identifier. Use this for all subsequent messages |
 | `protocolVersion` | `string?` | Protocol version (currently `"5.0"`) |
 | `capabilities` | `object?` | Optional capabilities object. Currently: `{ modelStreamChunk: "v1" }` |
-| `config` | `PublicConfig` | Session config: `provider`, `model`, `workingDirectory`, `outputDirectory` |
+| `config` | `PublicConfig` | Session config: `provider`, `model`, `workingDirectory`, and optionally `outputDirectory` |
 | `isResume` | `boolean?` | Present and `true` only when resuming a disconnected session |
 | `busy` | `boolean?` | Whether the session is mid-turn (only on resume) |
 | `messageCount` | `number?` | Number of messages in history (only on resume) |
@@ -1474,8 +1474,7 @@ Updated session public config after a `set_model` or other runtime change.
   "config": {
     "provider": "openai",
     "model": "gpt-4o",
-    "workingDirectory": "/path/to/project",
-    "outputDirectory": "/path/to/output"
+    "workingDirectory": "/path/to/project"
   }
 }
 ```

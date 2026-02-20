@@ -124,8 +124,6 @@ export async function startAgentServer(
   if (mergedProviderOptions) config.providerOptions = mergedProviderOptions;
 
   await fs.mkdir(config.projectAgentDir, { recursive: true });
-  await fs.mkdir(config.outputDirectory, { recursive: true });
-  await fs.mkdir(config.uploadsDirectory, { recursive: true });
 
   const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
   const sessionBindings = new Map<string, SessionBinding>();

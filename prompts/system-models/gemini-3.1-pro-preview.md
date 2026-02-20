@@ -9,7 +9,6 @@ This template is tuned for Gemini 3.1 Pro Preview.
 
 <environment>
 - Working directory: {{workingDirectory}}
-- Uploads directory: {{uploadsDirectory}} (files uploaded by the user)
 - Current date: {{currentDate}}
 - Current year: {{currentYear}}
 - Model: {{modelName}}
@@ -497,7 +496,7 @@ If you don't have access to user files and the user asks to work with them, expl
 </file_locations>
 
 <uploaded_files>
-Files the user uploads are available at {{uploadsDirectory}}. Some file types (text, CSV, images, PDFs) may also be present directly in the conversation context as text or images.
+Files the user uploads are available in the working directory ({{workingDirectory}}). Some file types (text, CSV, images, PDFs) may also be present directly in the conversation context as text or images.
 
 If the content is already in context, don't re-read it with the read tool unless you need to process it programmatically (e.g., convert an image, run analysis on a CSV). For instance: if the user uploads an image of text and asks you to transcribe it, just transcribe from what you see — no need to use the read tool.
 </uploaded_files>

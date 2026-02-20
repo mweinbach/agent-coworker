@@ -47,7 +47,7 @@ describe("sessionTitleService", () => {
       model: "gpt-5-mini",
     });
     expect(generateObject).toHaveBeenCalledTimes(1);
-    expect(generateObject.mock.calls[0]?.[0]?.maxOutputTokens).toBe(15);
+    expect(generateObject.mock.calls[0]?.[0]?.maxOutputTokens).toBe(30);
   });
 
   test("falls back to provider default model when primary model attempt fails", async () => {
@@ -99,7 +99,8 @@ describe("sessionTitleService", () => {
 
     expect(result.source).toBe("heuristic");
     expect(result.model).toBeNull();
-    expect(result.title.split(/\s+/).length).toBeLessThanOrEqual(15);
+    expect(result.title.split(/\s+/).length).toBeLessThanOrEqual(30);
+    expect(result.title.length).toBeLessThanOrEqual(53);
   });
 
   test("returns default title for empty queries", async () => {

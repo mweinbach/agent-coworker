@@ -1,7 +1,5 @@
 {
   "provider": "google",
-  "outputDirectory": "output",
-  "uploadsDirectory": "uploads",
   "userName": "",
   "knowledgeCutoff": "End of May 2025",
   "observabilityEnabled": true,

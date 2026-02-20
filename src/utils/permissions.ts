@@ -11,7 +11,7 @@ function isPathAllowed(filePath: string, config: AgentConfig): boolean {
   if (isPathInside(projectRoot, resolved)) return true;
 
   if (isPathInside(config.workingDirectory, resolved)) return true;
-  if (isPathInside(config.outputDirectory, resolved)) return true;
+  if (config.outputDirectory && isPathInside(config.outputDirectory, resolved)) return true;
 
   return false;
 }
@@ -70,18 +70,21 @@ export async function assertWritePathAllowed(
   // Guard against symlink escapes such as:
   // <workingDirectory>/link -> /etc and target <workingDirectory>/link/passwd
   const projectRoot = path.dirname(config.projectAgentDir);
-  const [canonicalTarget, canonicalProjectRoot, canonicalWorkingDirectory, canonicalOutputDirectory] =
-    await Promise.all([
-      canonicalizeExistingPrefix(resolved),
-      canonicalizeRoot(projectRoot),
-      canonicalizeRoot(config.workingDirectory),
-      canonicalizeRoot(config.outputDirectory),
-    ]);
+  const canonicalPromises: Promise<string>[] = [
+    canonicalizeExistingPrefix(resolved),
+    canonicalizeRoot(projectRoot),
+    canonicalizeRoot(config.workingDirectory),
+  ];
+  if (config.outputDirectory) canonicalPromises.push(canonicalizeRoot(config.outputDirectory));
+
+  const [canonicalTarget, canonicalProjectRoot, canonicalWorkingDirectory, ...rest] =
+    await Promise.all(canonicalPromises);
+  const canonicalOutputDirectory = rest[0]; // undefined when no outputDirectory configured
 
   if (
     !isPathInside(canonicalProjectRoot, canonicalTarget) &&
     !isPathInside(canonicalWorkingDirectory, canonicalTarget) &&
-    !isPathInside(canonicalOutputDirectory, canonicalTarget)
+    !(canonicalOutputDirectory && isPathInside(canonicalOutputDirectory, canonicalTarget))
   ) {
     throw new Error(
       `${action} blocked: canonical target resolves outside allowed directories: ${canonicalTarget}`
@@ -104,18 +107,21 @@ export async function assertReadPathAllowed(
   }
 
   const projectRoot = path.dirname(config.projectAgentDir);
-  const [canonicalTarget, canonicalProjectRoot, canonicalWorkingDirectory, canonicalOutputDirectory] =
-    await Promise.all([
-      canonicalizeExistingPrefix(resolved),
-      canonicalizeRoot(projectRoot),
-      canonicalizeRoot(config.workingDirectory),
-      canonicalizeRoot(config.outputDirectory),
-    ]);
+  const canonicalPromises: Promise<string>[] = [
+    canonicalizeExistingPrefix(resolved),
+    canonicalizeRoot(projectRoot),
+    canonicalizeRoot(config.workingDirectory),
+  ];
+  if (config.outputDirectory) canonicalPromises.push(canonicalizeRoot(config.outputDirectory));
+
+  const [canonicalTarget, canonicalProjectRoot, canonicalWorkingDirectory, ...rest] =
+    await Promise.all(canonicalPromises);
+  const canonicalOutputDirectory = rest[0]; // undefined when no outputDirectory configured
 
   if (
     !isPathInside(canonicalProjectRoot, canonicalTarget) &&
     !isPathInside(canonicalWorkingDirectory, canonicalTarget) &&
-    !isPathInside(canonicalOutputDirectory, canonicalTarget)
+    !(canonicalOutputDirectory && isPathInside(canonicalOutputDirectory, canonicalTarget))
   ) {
     throw new Error(
       `${action} blocked: canonical target resolves outside allowed directories: ${canonicalTarget}`

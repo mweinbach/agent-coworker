@@ -45,8 +45,8 @@ export type PersistedSessionSnapshotV1 = {
     model: string;
     enableMcp: boolean;
     workingDirectory: string;
-    outputDirectory: string;
-    uploadsDirectory: string;
+    outputDirectory?: string;
+    uploadsDirectory?: string;
   };
   context: {
     system: string;
@@ -105,9 +105,9 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
   const provider = providerRaw && isProviderName(providerRaw) ? providerRaw : null;
   const model = asNonEmptyString(configRaw.model);
   const workingDirectory = asNonEmptyString(configRaw.workingDirectory);
-  const outputDirectory = asNonEmptyString(configRaw.outputDirectory);
-  const uploadsDirectory = asNonEmptyString(configRaw.uploadsDirectory);
-  if (!provider || !model || !workingDirectory || !outputDirectory || !uploadsDirectory) return null;
+  const outputDirectory = asNonEmptyString(configRaw.outputDirectory) ?? undefined;
+  const uploadsDirectory = asNonEmptyString(configRaw.uploadsDirectory) ?? undefined;
+  if (!provider || !model || !workingDirectory) return null;
 
   const enableMcp = typeof configRaw.enableMcp === "boolean" ? configRaw.enableMcp : false;
   const system = asNonEmptyString(contextRaw.system) ?? "";

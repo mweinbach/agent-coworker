@@ -108,8 +108,6 @@ function extractAssistantTextFromResponseMessages(messages: ModelMessage[]): str
 
 /** Maximum number of message history entries before older entries are pruned. */
 const MAX_MESSAGE_HISTORY = 200;
-const ASK_RESPONSE_TIMEOUT_MS = 5 * 60_000;
-const APPROVAL_RESPONSE_TIMEOUT_MS = 5 * 60_000;
 const AUTO_CHECKPOINT_MIN_INTERVAL_MS = 30_000;
 
 export class AgentSession {
@@ -217,7 +215,7 @@ export class AgentSession {
       provider: this.config.provider,
       model: this.config.model,
       workingDirectory: this.config.workingDirectory,
-      outputDirectory: this.config.outputDirectory,
+      ...(this.config.outputDirectory ? { outputDirectory: this.config.outputDirectory } : {}),
     };
   }
 
@@ -327,8 +325,8 @@ export class AgentSession {
         model: this.config.model,
         enableMcp: this.getEnableMcp(),
         workingDirectory: this.config.workingDirectory,
-        outputDirectory: this.config.outputDirectory,
-        uploadsDirectory: this.config.uploadsDirectory,
+        ...(this.config.outputDirectory ? { outputDirectory: this.config.outputDirectory } : {}),
+        ...(this.config.uploadsDirectory ? { uploadsDirectory: this.config.uploadsDirectory } : {}),
       },
       context: {
         system: this.system,
@@ -1150,37 +1148,10 @@ export class AgentSession {
   private waitForPromptResponse<T>(
     requestId: string,
     bucket: Map<string, Deferred<T>>,
-    timeoutMs: number,
-    timeoutMessage: string
   ): Promise<T> {
     const deferredValue = bucket.get(requestId);
     if (!deferredValue) return Promise.reject(new Error(`Unknown prompt request: ${requestId}`));
-
-    return new Promise<T>((resolve, reject) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        bucket.delete(requestId);
-        deferredValue.reject(new Error(timeoutMessage));
-        reject(new Error(timeoutMessage));
-      }, timeoutMs);
-
-      deferredValue.promise.then(
-        (value) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(value);
-        },
-        (err) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          reject(err);
-        }
-      );
-    });
+    return deferredValue.promise;
   }
 
   private async runInBackupQueue<T>(op: () => Promise<T>): Promise<T> {
@@ -1213,12 +1184,7 @@ export class AgentSession {
     const evt: ServerEvent = { type: "ask", sessionId: this.id, requestId, question, options };
     this.pendingAskEvents.set(requestId, evt);
     this.emit(evt);
-    return await this.waitForPromptResponse(
-      requestId,
-      this.pendingAsk,
-      ASK_RESPONSE_TIMEOUT_MS,
-      "Ask prompt timed out waiting for user response."
-    ).finally(() => {
+    return await this.waitForPromptResponse(requestId, this.pendingAsk).finally(() => {
       this.pendingAskEvents.delete(requestId);
     });
   }
@@ -1230,7 +1196,7 @@ export class AgentSession {
       allowedRoots: [
         path.dirname(this.config.projectAgentDir),
         this.config.workingDirectory,
-        this.config.outputDirectory,
+        ...(this.config.outputDirectory ? [this.config.outputDirectory] : []),
       ],
     });
     if (classification.kind === "auto") return true;
@@ -1250,12 +1216,7 @@ export class AgentSession {
     this.pendingApprovalEvents.set(requestId, evt);
     this.emit(evt);
 
-    return await this.waitForPromptResponse(
-      requestId,
-      this.pendingApproval,
-      APPROVAL_RESPONSE_TIMEOUT_MS,
-      "Command approval timed out waiting for user response."
-    ).finally(() => {
+    return await this.waitForPromptResponse(requestId, this.pendingApproval).finally(() => {
       this.pendingApprovalEvents.delete(requestId);
     });
   }
@@ -1362,7 +1323,7 @@ export class AgentSession {
       return;
     }
 
-    const uploadsDir = this.config.uploadsDirectory;
+    const uploadsDir = this.config.uploadsDirectory ?? this.config.workingDirectory;
     const filePath = path.resolve(uploadsDir, safeName);
     // Prevent path traversal
     if (!filePath.startsWith(path.resolve(uploadsDir))) {
@@ -1372,7 +1333,10 @@ export class AgentSession {
 
     try {
       const decoded = Buffer.from(contentBase64, "base64");
-      await fs.mkdir(uploadsDir, { recursive: true });
+      // Only create the directory if a custom uploads path is configured
+      if (this.config.uploadsDirectory) {
+        await fs.mkdir(uploadsDir, { recursive: true });
+      }
       await fs.writeFile(filePath, decoded);
       this.emit({ type: "file_uploaded", sessionId: this.id, filename: safeName, path: filePath });
     } catch (err) {

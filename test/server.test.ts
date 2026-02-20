@@ -176,23 +176,16 @@ describe("Server Startup", () => {
     }
   });
 
-  test("creates outputDirectory on startup", async () => {
+  test("does NOT create outputDirectory or uploadsDirectory on startup", async () => {
     const tmpDir = await makeTmpProject();
     const { server, config } = await startAgentServer(serverOpts(tmpDir));
     try {
-      const stat = await fs.stat(config.outputDirectory);
-      expect(stat.isDirectory()).toBe(true);
-    } finally {
-      server.stop();
-    }
-  });
-
-  test("creates uploadsDirectory on startup", async () => {
-    const tmpDir = await makeTmpProject();
-    const { server, config } = await startAgentServer(serverOpts(tmpDir));
-    try {
-      const stat = await fs.stat(config.uploadsDirectory);
-      expect(stat.isDirectory()).toBe(true);
+      // outputDirectory and uploadsDirectory should be undefined by default
+      expect(config.outputDirectory).toBeUndefined();
+      expect(config.uploadsDirectory).toBeUndefined();
+      // Verify no 'output' or 'uploads' dirs were created in the project
+      await expect(fs.stat(path.join(tmpDir, "output"))).rejects.toThrow();
+      await expect(fs.stat(path.join(tmpDir, "uploads"))).rejects.toThrow();
     } finally {
       server.stop();
     }
@@ -315,7 +308,7 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
-  test("server_hello contains config with provider, model, workingDirectory, outputDirectory", async () => {
+  test("server_hello contains config with provider, model, workingDirectory", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
     try {
@@ -325,7 +318,8 @@ describe("WebSocket Lifecycle", () => {
       expect(typeof hello.config.provider).toBe("string");
       expect(typeof hello.config.model).toBe("string");
       expect(typeof hello.config.workingDirectory).toBe("string");
-      expect(typeof hello.config.outputDirectory).toBe("string");
+      // outputDirectory is optional and absent by default
+      expect(hello.config.outputDirectory).toBeUndefined();
     } finally {
       server.stop();
     }

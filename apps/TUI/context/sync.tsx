@@ -8,7 +8,6 @@ import type {
   HarnessContextPayload,
   ServerErrorCode,
   ServerErrorSource,
-  SkillEntry,
   TodoItem,
 } from "../../../src/types";
 import { mapModelStreamChunk, type ModelStreamUpdate } from "./modelStream";
@@ -31,15 +30,6 @@ export type FeedItem =
   | { id: string; type: "system"; line: string }
   | { id: string; type: "log"; line: string }
   | { id: string; type: "error"; message: string; code: ServerErrorCode; source: ServerErrorSource }
-  | {
-      id: string;
-      type: "observability_status";
-      enabled: boolean;
-      config: Extract<ServerEvent, { type: "observability_status" }>["config"];
-      health: Extract<ServerEvent, { type: "observability_status" }>["health"];
-    }
-  | { id: string; type: "harness_context"; context: Extract<ServerEvent, { type: "harness_context" }>["context"] }
-  | { id: string; type: "skills_list"; skills: SkillEntry[] }
   | {
       id: string;
       type: "skill_content";
@@ -614,31 +604,14 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         setState("observabilityEnabled", evt.enabled);
         setState("observabilityConfig", evt.config);
         setState("observabilityHealth", evt.health);
-        setState("feed", (f) => [...f, {
-          id: nextFeedId(),
-          type: "observability_status",
-          enabled: evt.enabled,
-          config: evt.config,
-          health: evt.health,
-        }]);
         break;
 
       case "harness_context":
         setState("harnessContext", evt.context);
-        setState("feed", (f) => [...f, {
-          id: nextFeedId(),
-          type: "harness_context",
-          context: evt.context,
-        }]);
         break;
 
       case "skills_list":
         setState("skills", evt.skills);
-        setState("feed", (f) => [...f, {
-          id: nextFeedId(),
-          type: "skills_list",
-          skills: evt.skills,
-        }]);
         break;
 
       case "skill_content":

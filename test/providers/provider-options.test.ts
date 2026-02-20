@@ -1,6 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, mock, beforeEach } from "bun:test";
+import path from "node:path";
 
-import { getModel } from "../../src/config";
+import type { AgentConfig } from "../../src/types";
+import type { RunTurnParams } from "../../src/agent";
+import { createRunTurn } from "../../src/agent";
+import { __internal as observabilityRuntimeInternal } from "../../src/observability/runtime";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig } from "./helpers";
 
 // ---------------------------------------------------------------------------
@@ -55,55 +59,105 @@ describe("Provider options structure", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Agent runTurn providerOptions pass-through
+// Agent runTurn providerOptions pass-through (real DI test)
 // ---------------------------------------------------------------------------
 describe("Agent providerOptions pass-through", () => {
-  test("config with providerOptions preserves all provider configs", () => {
-    const cfg = makeConfig({
+  const mockStreamText = mock(async () => ({
+    text: "hello from model",
+    reasoningText: undefined as string | undefined,
+    response: { messages: [{ role: "assistant", content: "hi" }] },
+  }));
+
+  const mockStepCountIs = mock((_n: number) => "step-count-sentinel");
+  const mockGetModel = mock((_config: AgentConfig, _id?: string) => "model-sentinel");
+  const mockCreateTools = mock((_ctx: any) => ({ bash: { type: "builtin" } }));
+  const mockLoadMCPServers = mock(async (_config: AgentConfig) => [] as any[]);
+  const mockLoadMCPTools = mock(async (_servers: any[], _opts?: any) => ({
+    tools: {} as Record<string, any>,
+    errors: [] as string[],
+  }));
+
+  let runTurn: ReturnType<typeof createRunTurn>;
+
+  function makeRunTurnParams(overrides: Partial<RunTurnParams> = {}): RunTurnParams {
+    return {
+      config: makeConfig(),
+      system: "You are a helpful assistant.",
+      messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }] as any[],
+      log: mock(() => {}),
+      askUser: mock(async () => "yes"),
+      approveCommand: mock(async () => true),
+      ...overrides,
+    };
+  }
+
+  beforeEach(async () => {
+    await observabilityRuntimeInternal.resetForTests();
+
+    mockStreamText.mockClear();
+    mockStepCountIs.mockClear();
+    mockGetModel.mockClear();
+    mockCreateTools.mockClear();
+    mockLoadMCPServers.mockClear();
+    mockLoadMCPTools.mockClear();
+
+    mockStreamText.mockImplementation(async () => ({
+      text: "hello from model",
+      reasoningText: undefined as string | undefined,
+      response: { messages: [{ role: "assistant", content: "hi" }] },
+    }));
+
+    runTurn = createRunTurn({
+      streamText: mockStreamText,
+      stepCountIs: mockStepCountIs,
+      getModel: mockGetModel,
+      createTools: mockCreateTools,
+      loadMCPServers: mockLoadMCPServers,
+      loadMCPTools: mockLoadMCPTools,
+    });
+  });
+
+  test("providerOptions from config is passed through to streamText", async () => {
+    const providerOptions = { openai: { reasoningEffort: "high" } };
+    const config = makeConfig({
+      provider: "openai",
+      model: "gpt-5.2",
+      providerOptions,
+    });
+
+    await runTurn(makeRunTurnParams({ config }));
+
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.providerOptions).toBe(providerOptions);
+    expect(callArg.providerOptions.openai.reasoningEffort).toBe("high");
+  });
+
+  test("providerOptions is undefined in streamText when config has none", async () => {
+    const config = makeConfig({ provider: "openai", model: "gpt-5.2" });
+    delete config.providerOptions;
+
+    await runTurn(makeRunTurnParams({ config }));
+
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.providerOptions).toBeUndefined();
+  });
+
+  test("full DEFAULT_PROVIDER_OPTIONS are forwarded to streamText", async () => {
+    const config = makeConfig({
       provider: "anthropic",
       model: "claude-opus-4-6",
       providerOptions: DEFAULT_PROVIDER_OPTIONS,
     });
 
-    // All three provider options should be present
-    expect(cfg.providerOptions!.openai).toBeDefined();
-    expect(cfg.providerOptions!.google).toBeDefined();
-    expect(cfg.providerOptions!.anthropic).toBeDefined();
+    await runTurn(makeRunTurnParams({ config }));
 
-    // OpenAI reasoning config preserved
-    expect(cfg.providerOptions!.openai.reasoningEffort).toBe("high");
-    expect(cfg.providerOptions!.openai.reasoningSummary).toBe("detailed");
-
-    // Google thinking config preserved
-    expect(cfg.providerOptions!.google.thinkingConfig.includeThoughts).toBe(true);
-    expect(cfg.providerOptions!.google.thinkingConfig.thinkingLevel).toBe("high");
-
-    // Anthropic thinking config preserved
-    expect(cfg.providerOptions!.anthropic.thinking.type).toBe("enabled");
-    expect(cfg.providerOptions!.anthropic.thinking.budgetTokens).toBe(32_000);
-  });
-
-  test("providerOptions is referenced in agent.ts streamText call", () => {
-    // This test verifies the shape expected by agent.ts:
-    //   providerOptions: config.providerOptions
-    // The agent passes providerOptions directly from config to streamText.
-    const cfg = makeConfig({
-      provider: "openai",
-      model: "gpt-5.2",
-      providerOptions: { openai: { reasoningEffort: "high" } },
-    });
-
-    // Simulate what agent.ts does
-    const streamTextArgs: any = {
-      model: getModel(cfg),
-      system: "test",
-      messages: [],
-      tools: {},
-      providerOptions: cfg.providerOptions,
-    };
-
-    expect(streamTextArgs.providerOptions).toBeDefined();
-    expect(streamTextArgs.providerOptions.openai.reasoningEffort).toBe("high");
-    expect(streamTextArgs.model.modelId).toBe("gpt-5.2");
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.providerOptions).toBe(DEFAULT_PROVIDER_OPTIONS);
+    expect(callArg.providerOptions.openai.reasoningEffort).toBe("high");
+    expect(callArg.providerOptions.google.thinkingConfig.includeThoughts).toBe(true);
+    expect(callArg.providerOptions.anthropic.thinking.type).toBe("enabled");
   });
 });

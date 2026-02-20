@@ -28,8 +28,14 @@ export async function loadMCPServers(config: AgentConfig): Promise<MCPServerConf
 
 export async function loadMCPTools(
   servers: MCPServerConfig[],
-  opts: { log?: (line: string) => void } = {}
+  opts: {
+    log?: (line: string) => void;
+    createClient?: typeof createMCPClient;
+    sleep?: (ms: number) => Promise<void>;
+  } = {}
 ): Promise<{ tools: Record<string, any>; errors: string[]; close: () => Promise<void> }> {
+  const createClient = opts.createClient ?? createMCPClient;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const tools: Record<string, any> = {};
   const errors: string[] = [];
   const clients: Array<{ name: string; close: () => Promise<void> }> = [];
@@ -69,7 +75,7 @@ export async function loadMCPTools(
               })
             : (server.transport as any);
 
-        client = await createMCPClient({
+        client = await createClient({
           name: server.name,
           transport,
         });
@@ -107,7 +113,7 @@ export async function loadMCPTools(
           opts.log?.(msg);
         } else {
           opts.log?.(`[MCP] Retrying ${server.name} (attempt ${attempt + 2})...`);
-          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          await sleep(1000 * (attempt + 1));
         }
       }
     }

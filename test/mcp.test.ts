@@ -1,9 +1,7 @@
-import { describe, expect, test, mock, beforeEach, afterEach, afterAll } from "bun:test";
+import { describe, expect, test, mock, beforeEach, afterEach } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import * as REAL_MCP_SDK from "@ai-sdk/mcp";
 
 import type { AgentConfig, MCPServerConfig } from "../src/types";
 
@@ -38,26 +36,22 @@ async function writeJson(filePath: string, obj: unknown) {
   await fs.writeFile(filePath, JSON.stringify(obj, null, 2), "utf-8");
 }
 
-// ---------------------------------------------------------------------------
-// Mock for @ai-sdk/mcp -- used by loadMCPTools tests
-// ---------------------------------------------------------------------------
-
 const mockCreateMCPClient = mock(async (_opts: any) => ({
   tools: mock(async () => ({})),
   close: mock(async () => {}),
 }));
 
-mock.module("@ai-sdk/mcp", () => ({
-  createMCPClient: mockCreateMCPClient,
-}));
-
-// Import after mocks are set up.
 import { loadMCPServers, loadMCPTools } from "../src/mcp/index";
 
-afterAll(() => {
-  // Prevent this file's module mock from leaking into other test files.
-  mock.module("@ai-sdk/mcp", () => REAL_MCP_SDK);
-});
+function loadMCPToolsWithMock(
+  servers: MCPServerConfig[],
+  opts: { log?: (line: string) => void; sleep?: (ms: number) => Promise<void> } = {}
+) {
+  return loadMCPTools(servers, {
+    ...opts,
+    createClient: mockCreateMCPClient as any,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // loadMCPServers
@@ -240,7 +234,7 @@ describe("loadMCPTools", () => {
   });
 
   test("returns empty tools/errors for empty servers array", async () => {
-    const result = await loadMCPTools([]);
+    const result = await loadMCPToolsWithMock([]);
 
     expect(result.tools).toEqual({});
     expect(result.errors).toEqual([]);
@@ -252,7 +246,7 @@ describe("loadMCPTools", () => {
       { name: "myServer", transport: { type: "stdio", command: "echo", args: [] } },
     ];
 
-    const result = await loadMCPTools(servers);
+    const result = await loadMCPToolsWithMock(servers);
 
     expect(result.tools).toHaveProperty("mcp__myServer__toolA");
     expect(result.tools).toHaveProperty("mcp__myServer__toolB");
@@ -276,7 +270,7 @@ describe("loadMCPTools", () => {
       { name: "serverB", transport: { type: "stdio", command: "b", args: [] } },
     ];
 
-    const result = await loadMCPTools(servers);
+    const result = await loadMCPToolsWithMock(servers);
 
     expect(result.tools).toHaveProperty("mcp__serverA__tool1");
     expect(result.tools).toHaveProperty("mcp__serverB__tool2");
@@ -289,7 +283,7 @@ describe("loadMCPTools", () => {
       { name: "flaky", transport: { type: "stdio", command: "x", args: [] }, retries: 0 },
     ];
 
-    const result = await loadMCPTools(servers);
+    const result = await loadMCPToolsWithMock(servers);
 
     expect(result.tools).toEqual({});
     expect(result.errors).toHaveLength(1);
@@ -309,7 +303,7 @@ describe("loadMCPTools", () => {
     globalThis.setTimeout = ((fn: Function) => origSetTimeout(fn, 0)) as any;
 
     try {
-      const result = await loadMCPTools(servers);
+      const result = await loadMCPToolsWithMock(servers);
 
       // retries=2 means 1 initial + 2 retries = 3 total attempts
       expect(mockCreateMCPClient).toHaveBeenCalledTimes(3);
@@ -331,7 +325,7 @@ describe("loadMCPTools", () => {
     globalThis.setTimeout = ((fn: Function) => origSetTimeout(fn, 0)) as any;
 
     try {
-      const result = await loadMCPTools(servers);
+      const result = await loadMCPToolsWithMock(servers);
 
       // default retries=3 means 1 initial + 3 retries = 4 total attempts
       expect(mockCreateMCPClient).toHaveBeenCalledTimes(4);
@@ -354,7 +348,7 @@ describe("loadMCPTools", () => {
       },
     ];
 
-    await expect(loadMCPTools(servers)).rejects.toThrow("critical");
+    await expect(loadMCPToolsWithMock(servers)).rejects.toThrow("critical");
   });
 
   test("required server failure closes previously connected optional clients", async () => {
@@ -381,7 +375,7 @@ describe("loadMCPTools", () => {
       },
     ];
 
-    await expect(loadMCPTools(servers)).rejects.toThrow("required-second");
+    await expect(loadMCPToolsWithMock(servers)).rejects.toThrow("required-second");
     expect(optionalClose).toHaveBeenCalledTimes(1);
   });
 
@@ -391,7 +385,7 @@ describe("loadMCPTools", () => {
       { name: "negative-retry", transport: { type: "stdio", command: "x", args: [] }, retries: -5 },
     ];
 
-    const result = await loadMCPTools(servers);
+    const result = await loadMCPToolsWithMock(servers);
     expect(mockCreateMCPClient).toHaveBeenCalledTimes(1);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("1 attempts");
@@ -409,7 +403,7 @@ describe("loadMCPTools", () => {
       },
     ];
 
-    const result = await loadMCPTools(servers);
+    const result = await loadMCPToolsWithMock(servers);
 
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("optional-server");
@@ -423,7 +417,7 @@ describe("loadMCPTools", () => {
       { name: "logged-server", transport: { type: "stdio", command: "x", args: [] } },
     ];
 
-    await loadMCPTools(servers, { log: logFn });
+    await loadMCPToolsWithMock(servers, { log: logFn });
 
     const logCalls = logFn.mock.calls.map((c) => c[0]);
     const successLog = logCalls.find((msg: string) => msg.includes("Connected to logged-server"));
@@ -439,7 +433,7 @@ describe("loadMCPTools", () => {
       { name: "fail-server", transport: { type: "stdio", command: "x", args: [] }, retries: 0 },
     ];
 
-    await loadMCPTools(servers, { log: logFn });
+    await loadMCPToolsWithMock(servers, { log: logFn });
 
     const logCalls = logFn.mock.calls.map((c) => c[0]);
     const errorLog = logCalls.find((msg: string) => msg.includes("Failed to connect"));
@@ -468,7 +462,7 @@ describe("loadMCPTools", () => {
         { name: "flaky", transport: { type: "stdio", command: "x", args: [] }, retries: 3 },
       ];
 
-      await loadMCPTools(servers, { log: logFn });
+      await loadMCPToolsWithMock(servers, { log: logFn });
 
       const logCalls = logFn.mock.calls.map((c) => c[0]);
       const retryLog = logCalls.find((msg: string) => msg.includes("Retrying"));
@@ -497,7 +491,7 @@ describe("loadMCPTools", () => {
         { name: "recoverable", transport: { type: "stdio", command: "x", args: [] }, retries: 2 },
       ];
 
-      const result = await loadMCPTools(servers);
+      const result = await loadMCPToolsWithMock(servers);
 
       expect(result.tools).toHaveProperty("mcp__recoverable__recovered");
       expect(result.errors).toEqual([]);
@@ -512,7 +506,7 @@ describe("loadMCPTools", () => {
       { name: "check-args", transport },
     ];
 
-    await loadMCPTools(servers);
+    await loadMCPToolsWithMock(servers);
 
     expect(mockCreateMCPClient).toHaveBeenCalledTimes(1);
     const callArg = mockCreateMCPClient.mock.calls[0][0] as any;
@@ -530,7 +524,7 @@ describe("loadMCPTools", () => {
       { name: "http-args", transport },
     ];
 
-    await loadMCPTools(servers);
+    await loadMCPToolsWithMock(servers);
 
     expect(mockCreateMCPClient).toHaveBeenCalledTimes(1);
     const callArg = mockCreateMCPClient.mock.calls[0][0] as any;
@@ -544,7 +538,7 @@ describe("loadMCPTools", () => {
     ];
 
     // Should not throw even though no log function is provided
-    const result = await loadMCPTools(servers);
+    const result = await loadMCPToolsWithMock(servers);
     expect(result.tools).toHaveProperty("mcp__no-log__toolA");
   });
 });
@@ -568,7 +562,7 @@ describe("loadMCPTools().close", () => {
       { name: "srv2", transport: { type: "stdio", command: "y", args: [] } },
     ];
 
-    const result = await loadMCPTools(servers);
+    const result = await loadMCPToolsWithMock(servers);
     await expect(result.close()).resolves.toBeUndefined();
 
     expect(closeFns[0]).toHaveBeenCalledTimes(1);
@@ -588,7 +582,7 @@ describe("loadMCPTools().close", () => {
       { name: "err-close", transport: { type: "stdio", command: "x", args: [] } },
     ];
 
-    const result = await loadMCPTools(servers);
+    const result = await loadMCPToolsWithMock(servers);
     await expect(result.close()).resolves.toBeUndefined();
   });
 
@@ -603,7 +597,7 @@ describe("loadMCPTools().close", () => {
       { name: "idempotent-close", transport: { type: "stdio", command: "x", args: [] } },
     ];
 
-    const result = await loadMCPTools(servers);
+    const result = await loadMCPToolsWithMock(servers);
     await result.close();
     await result.close();
 

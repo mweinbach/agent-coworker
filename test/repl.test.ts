@@ -381,81 +381,107 @@ describe("connect auth method helpers", () => {
 });
 
 // ---------------------------------------------------------------------------
-// createQuestion logic (replicated)
+// resolveAskAnswer (real implementation from repl.ts via __internal)
 // ---------------------------------------------------------------------------
-describe("createQuestion logic", () => {
-  test("returns null when rl is closed", async () => {
-    // Simulate the closed-rl check from createQuestion
-    const closed = true;
-    const result = await new Promise<string | null>((resolve) => {
-      if (closed) return resolve(null);
-      resolve("should not reach");
-    });
-    expect(result).toBeNull();
+describe("resolveAskAnswer", () => {
+  const resolveAskAnswer = replInternal.resolveAskAnswer;
+
+  test("returns option by 1-based index '1'", () => {
+    expect(resolveAskAnswer("1", ["apple", "banana"])).toBe("apple");
   });
 
-  test("returns answer when rl is open", async () => {
-    const closed = false;
-    const mockAnswer = "user input";
-    const result = await new Promise<string | null>((resolve) => {
-      if (closed) return resolve(null);
-      // Simulate rl.question callback
-      resolve(mockAnswer);
-    });
-    expect(result).toBe("user input");
+  test("returns option by 1-based index '2'", () => {
+    expect(resolveAskAnswer("2", ["apple", "banana"])).toBe("banana");
+  });
+
+  test("returns raw string when index '0' is out of range", () => {
+    expect(resolveAskAnswer("0", ["apple"])).toBe("0");
+  });
+
+  test("returns raw string for non-numeric input with options", () => {
+    expect(resolveAskAnswer("yes", ["apple"])).toBe("yes");
+  });
+
+  test("returns raw string '1' when no options are provided", () => {
+    expect(resolveAskAnswer("1")).toBe("1");
+  });
+
+  test("returns empty string for empty input", () => {
+    expect(resolveAskAnswer("")).toBe("");
+  });
+
+  test("returns trimmed text when no options", () => {
+    expect(resolveAskAnswer("  hello  ")).toBe("hello");
+  });
+
+  test("returns raw text when number is out of range (too high)", () => {
+    expect(resolveAskAnswer("5", ["a", "b"])).toBe("5");
+  });
+
+  test("returns raw text when number is negative", () => {
+    expect(resolveAskAnswer("-1", ["a", "b"])).toBe("-1");
+  });
+
+  test("returns raw text when options array is empty", () => {
+    expect(resolveAskAnswer("1", [])).toBe("1");
   });
 });
 
 // ---------------------------------------------------------------------------
-// askUser logic (replicated from REPL)
+// normalizeApprovalAnswer (real implementation from repl.ts via __internal)
 // ---------------------------------------------------------------------------
-describe("askUser logic", () => {
-  function simulateAskUser(rawAnswer: string | null, options?: string[]): string {
-    const ans = (rawAnswer ?? "").trim();
-    const asNum = Number(ans);
-    if (options && options.length > 0 && Number.isInteger(asNum) && asNum >= 1 && asNum <= options.length) {
-      return options[asNum - 1];
-    }
-    return ans;
-  }
+describe("normalizeApprovalAnswer", () => {
+  const normalizeApprovalAnswer = replInternal.normalizeApprovalAnswer;
 
-  test("returns trimmed text answer when no options", () => {
-    expect(simulateAskUser("  hello  ")).toBe("hello");
+  test("'y' returns true", () => {
+    expect(normalizeApprovalAnswer("y")).toBe(true);
   });
 
-  test("returns empty string for null answer", () => {
-    expect(simulateAskUser(null)).toBe("");
+  test("'yes' returns true", () => {
+    expect(normalizeApprovalAnswer("yes")).toBe(true);
   });
 
-  test("returns option by number selection", () => {
-    expect(simulateAskUser("2", ["apple", "banana", "cherry"])).toBe("banana");
+  test("'approve' returns true", () => {
+    expect(normalizeApprovalAnswer("approve")).toBe(true);
   });
 
-  test("returns first option for input '1'", () => {
-    expect(simulateAskUser("1", ["first", "second"])).toBe("first");
+  test("'n' returns false", () => {
+    expect(normalizeApprovalAnswer("n")).toBe(false);
   });
 
-  test("returns last option for valid last number", () => {
-    expect(simulateAskUser("3", ["a", "b", "c"])).toBe("c");
+  test("'no' returns false", () => {
+    expect(normalizeApprovalAnswer("no")).toBe(false);
   });
 
-  test("returns raw text when number is out of range (too high)", () => {
-    expect(simulateAskUser("5", ["a", "b"])).toBe("5");
+  test("'deny' returns false", () => {
+    expect(normalizeApprovalAnswer("deny")).toBe(false);
   });
 
-  test("returns raw text when number is out of range (zero)", () => {
-    expect(simulateAskUser("0", ["a", "b"])).toBe("0");
+  test("empty string returns false", () => {
+    expect(normalizeApprovalAnswer("")).toBe(false);
   });
 
-  test("returns raw text when number is negative", () => {
-    expect(simulateAskUser("-1", ["a", "b"])).toBe("-1");
+  test("'maybe' returns false", () => {
+    expect(normalizeApprovalAnswer("maybe")).toBe(false);
   });
 
-  test("returns raw text when input is not a number and options exist", () => {
-    expect(simulateAskUser("banana", ["a", "b"])).toBe("banana");
+  test("case insensitive: 'YES' returns true", () => {
+    expect(normalizeApprovalAnswer("YES")).toBe(true);
   });
 
-  test("returns raw text when options array is empty", () => {
-    expect(simulateAskUser("1", [])).toBe("1");
+  test("case insensitive: 'NO' returns false", () => {
+    expect(normalizeApprovalAnswer("NO")).toBe(false);
+  });
+
+  test("'approved' returns true", () => {
+    expect(normalizeApprovalAnswer("approved")).toBe(true);
+  });
+
+  test("'denied' returns false", () => {
+    expect(normalizeApprovalAnswer("denied")).toBe(false);
+  });
+
+  test("whitespace-padded 'y' returns true", () => {
+    expect(normalizeApprovalAnswer("  y  ")).toBe(true);
   });
 });

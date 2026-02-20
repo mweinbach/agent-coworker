@@ -143,6 +143,61 @@ describe("emitObservabilityEvent (Langfuse runtime tracer)", () => {
     expect(captured.statusCode).toBe(SpanStatusCode.ERROR);
   });
 
+  test("redacts all secret-like attribute keys", async () => {
+    const cfg = makeConfig();
+    const { tracer, captured } = makeTracer();
+    const ready = makeHealth("ready", "runtime_ready");
+
+    const res = await emitObservabilityEvent(
+      cfg,
+      {
+        name: "agent.turn.completed",
+        at: "2026-02-19T08:00:00.000Z",
+        status: "ok",
+        attributes: {
+          apiKey: "sk-xxx",
+          api_key: "sk-yyy",
+          mySecret: "s3cr3t",
+          accessToken: "tok-123",
+          authorization: "Bearer xxx",
+          sessionCookie: "session=abc",
+          userPassword: "hunter2",
+          privateKey: "-----BEGIN",
+          secretKey: "sk-abc",
+          normalField: "visible",
+          sessionId: "sess-456",
+        },
+      },
+      {
+        tracer: tracer as any,
+        runtime: {
+          ensure: async () => ({ ready: true, health: ready, healthChanged: false }),
+          getHealth: () => ready,
+          noteFailure: () => ({ changed: false, health: ready }),
+          noteSuccess: () => ({ changed: false, health: ready }),
+          forceFlush: async () => {},
+        },
+      }
+    );
+
+    expect(res.emitted).toBe(true);
+
+    // All secret-like keys should be redacted
+    expect(captured.attributes["apiKey"]).toBe("[REDACTED]");
+    expect(captured.attributes["api_key"]).toBe("[REDACTED]");
+    expect(captured.attributes["mySecret"]).toBe("[REDACTED]");
+    expect(captured.attributes["accessToken"]).toBe("[REDACTED]");
+    expect(captured.attributes["authorization"]).toBe("[REDACTED]");
+    expect(captured.attributes["sessionCookie"]).toBe("[REDACTED]");
+    expect(captured.attributes["userPassword"]).toBe("[REDACTED]");
+    expect(captured.attributes["privateKey"]).toBe("[REDACTED]");
+    expect(captured.attributes["secretKey"]).toBe("[REDACTED]");
+
+    // Non-secret keys should be preserved
+    expect(captured.attributes["normalField"]).toBe("visible");
+    expect(captured.attributes["sessionId"]).toBe("sess-456");
+  });
+
   test("sets OK span status for successful events", async () => {
     const cfg = makeConfig();
     const { tracer, captured } = makeTracer();

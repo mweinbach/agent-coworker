@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, Menu, shell } from "electron";
 
 import { DESKTOP_EVENT_CHANNELS, type DesktopMenuCommand } from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
@@ -156,6 +156,33 @@ async function createWindow(): Promise<void> {
   }
   applyInitialWindowAppearance(win);
   applyWindowSecurity(win);
+
+  win.webContents.on("context-menu", (_event, params) => {
+    const hasSelection = params.selectionText.trim().length > 0;
+    const isEditable = params.isEditable;
+
+    const menuItems: Electron.MenuItemConstructorOptions[] = [];
+
+    if (isEditable) {
+      menuItems.push(
+        { role: "cut", enabled: hasSelection },
+        { role: "copy", enabled: hasSelection },
+        { role: "paste" },
+        { type: "separator" },
+        { role: "selectAll" },
+      );
+    } else if (hasSelection) {
+      menuItems.push(
+        { role: "copy" },
+        { type: "separator" },
+        { role: "selectAll" },
+      );
+    } else {
+      menuItems.push({ role: "selectAll" });
+    }
+
+    Menu.buildFromTemplate(menuItems).popup();
+  });
 
   win.on("closed", () => {
     if (mainWindow === win) {

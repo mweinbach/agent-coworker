@@ -30,7 +30,12 @@ import { getObservabilityHealth } from "../observability/runtime";
 import { expandCommandTemplate, listCommands as listServerCommands, resolveCommand } from "./commands";
 import { normalizeModelStreamPart, reasoningModeForProvider } from "./modelStream";
 import { generateSessionTitle, type SessionTitleSource, DEFAULT_SESSION_TITLE } from "./sessionTitleService";
-import { type PersistedSessionSnapshot, writePersistedSessionSnapshot } from "./sessionStore";
+import {
+  type PersistedSessionSnapshot,
+  writePersistedSessionSnapshot,
+  listPersistedSessionSnapshots,
+  deletePersistedSessionSnapshot,
+} from "./sessionStore";
 
 import type { ServerEvent } from "./protocol";
 import {
@@ -113,7 +118,7 @@ export class AgentSession {
   private config: AgentConfig;
   private system: string;
   private discoveredSkills: Array<{ name: string; description: string }>;
-  private readonly yolo: boolean;
+  private yolo: boolean;
   private readonly emit: (evt: ServerEvent) => void;
   private readonly connectProviderImpl: typeof connectModelProvider;
   private readonly getAiCoworkerPathsImpl: typeof getAiCoworkerPaths;
@@ -134,6 +139,12 @@ export class AgentSession {
 
   private readonly pendingAsk = new Map<string, Deferred<string>>();
   private readonly pendingApproval = new Map<string, Deferred<boolean>>();
+  private readonly pendingAskEvents = new Map<string, ServerEvent>();
+  private readonly pendingApprovalEvents = new Map<string, ServerEvent>();
+
+  private currentTurnId: string | null = null;
+  private currentTurnOutcome: "completed" | "cancelled" | "error" = "completed";
+  private maxSteps = 100;
 
   private todos: TodoItem[] = [];
   private sessionInfo: SessionInfoState;
@@ -210,6 +221,22 @@ export class AgentSession {
     };
   }
 
+  get isBusy(): boolean {
+    return this.running;
+  }
+
+  get messageCount(): number {
+    return this.messages.length;
+  }
+
+  get hasPendingAsk(): boolean {
+    return this.pendingAsk.size > 0;
+  }
+
+  get hasPendingApproval(): boolean {
+    return this.pendingApproval.size > 0;
+  }
+
   getEnableMcp() {
     return this.config.enableMcp ?? false;
   }
@@ -244,6 +271,16 @@ export class AgentSession {
       health: getObservabilityHealth(this.config),
       config,
     };
+  }
+
+  /** Re-emit pending ask/approval events for reconnecting clients. */
+  replayPendingPrompts() {
+    for (const evt of this.pendingAskEvents.values()) {
+      this.emit(evt);
+    }
+    for (const evt of this.pendingApprovalEvents.values()) {
+      this.emit(evt);
+    }
   }
 
   private updateSessionInfo(
@@ -329,6 +366,10 @@ export class AgentSession {
 
   private maybeGenerateTitleFromQuery(query: string) {
     if (this.hasGeneratedTitle) return;
+    if (this.sessionInfo.titleSource === "manual") {
+      this.hasGeneratedTitle = true;
+      return;
+    }
     this.hasGeneratedTitle = true;
     const titleConfig: AgentConfig = { ...this.config };
     const prompt = query.trim();
@@ -339,6 +380,7 @@ export class AgentSession {
         config: titleConfig,
         query: prompt,
       });
+      if (this.sessionInfo.titleSource === "manual") return;
       this.updateSessionInfo({
         title: generated.title,
         titleSource: generated.source,
@@ -473,14 +515,20 @@ export class AgentSession {
   }
 
   listTools() {
-    const tools = Object.keys(
-      createTools({
-        config: this.config,
-        log: () => {},
-        askUser: async () => "",
-        approveCommand: async () => false,
+    const toolMap = createTools({
+      config: this.config,
+      log: () => {},
+      askUser: async () => "",
+      approveCommand: async () => false,
+    });
+    // Note: MCP tools are loaded dynamically during turns and not included here.
+    const tools = Object.entries(toolMap)
+      .map(([name, def]) => {
+        const raw = typeof def?.description === "string" ? def.description : "";
+        const description = raw.split("\n")[0] || name;
+        return { name, description };
       })
-    ).sort();
+      .sort((a, b) => a.name.localeCompare(b.name));
     this.emit({ type: "tools", sessionId: this.id, tools });
   }
 
@@ -1044,6 +1092,7 @@ export class AgentSession {
       return;
     }
     this.pendingAsk.delete(requestId);
+    this.pendingAskEvents.delete(requestId);
     d.resolve(answer);
   }
 
@@ -1054,6 +1103,7 @@ export class AgentSession {
       return;
     }
     this.pendingApproval.delete(requestId);
+    this.pendingApprovalEvents.delete(requestId);
     d.resolve(approved);
   }
 
@@ -1067,10 +1117,12 @@ export class AgentSession {
     for (const [id, d] of this.pendingAsk) {
       d.reject(new Error("Cancelled by user"));
       this.pendingAsk.delete(id);
+      this.pendingAskEvents.delete(id);
     }
     for (const [id, d] of this.pendingApproval) {
       d.reject(new Error("Cancelled by user"));
       this.pendingApproval.delete(id);
+      this.pendingApprovalEvents.delete(id);
     }
   }
 
@@ -1079,10 +1131,12 @@ export class AgentSession {
     for (const [id, d] of this.pendingAsk) {
       d.reject(new Error(`Session disposed (${reason})`));
       this.pendingAsk.delete(id);
+      this.pendingAskEvents.delete(id);
     }
     for (const [id, d] of this.pendingApproval) {
       d.reject(new Error(`Session disposed (${reason})`));
       this.pendingApproval.delete(id);
+      this.pendingApprovalEvents.delete(id);
     }
     this.harnessContextStore.clear(this.id);
 
@@ -1156,13 +1210,17 @@ export class AgentSession {
     const d = deferred<string>();
     this.pendingAsk.set(requestId, d);
 
-    this.emit({ type: "ask", sessionId: this.id, requestId, question, options });
+    const evt: ServerEvent = { type: "ask", sessionId: this.id, requestId, question, options };
+    this.pendingAskEvents.set(requestId, evt);
+    this.emit(evt);
     return await this.waitForPromptResponse(
       requestId,
       this.pendingAsk,
       ASK_RESPONSE_TIMEOUT_MS,
       "Ask prompt timed out waiting for user response."
-    );
+    ).finally(() => {
+      this.pendingAskEvents.delete(requestId);
+    });
   }
 
   private async approveCommand(command: string) {
@@ -1181,21 +1239,25 @@ export class AgentSession {
     const d = deferred<boolean>();
     this.pendingApproval.set(requestId, d);
 
-    this.emit({
+    const evt: ServerEvent = {
       type: "approval",
       sessionId: this.id,
       requestId,
       command,
       dangerous: classification.dangerous,
       reasonCode: classification.riskCode,
-    });
+    };
+    this.pendingApprovalEvents.set(requestId, evt);
+    this.emit(evt);
 
     return await this.waitForPromptResponse(
       requestId,
       this.pendingApproval,
       APPROVAL_RESPONSE_TIMEOUT_MS,
       "Command approval timed out waiting for user response."
-    );
+    ).finally(() => {
+      this.pendingApprovalEvents.delete(requestId);
+    });
   }
 
   private updateTodos = (todos: TodoItem[]) => {
@@ -1203,6 +1265,120 @@ export class AgentSession {
     this.emit({ type: "todos", sessionId: this.id, todos });
     this.queuePersistSessionSnapshot("session.todos_updated");
   };
+
+  getMessages(offset = 0, limit = 100) {
+    const total = this.messages.length;
+    const slice = this.messages.slice(offset, offset + limit);
+    this.emit({
+      type: "messages",
+      sessionId: this.id,
+      messages: slice,
+      total,
+      offset,
+      limit,
+    });
+  }
+
+  setSessionTitle(title: string) {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      this.emitError("validation_failed", "session", "Title must be non-empty");
+      return;
+    }
+    this.hasGeneratedTitle = true;
+    this.updateSessionInfo({
+      title: trimmed,
+      titleSource: "manual",
+      titleModel: null,
+    });
+  }
+
+  async listSessions() {
+    try {
+      const paths = this.getCoworkPaths();
+      const sessions = await listPersistedSessionSnapshots(paths);
+      this.emit({ type: "sessions", sessionId: this.id, sessions });
+    } catch (err) {
+      this.emitError("internal_error", "session", `Failed to list sessions: ${String(err)}`);
+    }
+  }
+
+  async deleteSession(targetSessionId: string) {
+    if (targetSessionId === this.id) {
+      this.emitError("validation_failed", "session", "Cannot delete the active session");
+      return;
+    }
+    try {
+      const paths = this.getCoworkPaths();
+      await deletePersistedSessionSnapshot(paths, targetSessionId);
+      this.emit({ type: "session_deleted", sessionId: this.id, targetSessionId });
+    } catch (err) {
+      this.emitError("internal_error", "session", `Failed to delete session: ${String(err)}`);
+    }
+  }
+
+  setConfig(patch: {
+    yolo?: boolean;
+    observabilityEnabled?: boolean;
+    subAgentModel?: string;
+    maxSteps?: number;
+  }) {
+    if (patch.yolo !== undefined) this.yolo = patch.yolo;
+    if (patch.observabilityEnabled !== undefined) {
+      this.config = { ...this.config, observabilityEnabled: patch.observabilityEnabled };
+    }
+    if (patch.subAgentModel !== undefined) {
+      this.config = { ...this.config, subAgentModel: patch.subAgentModel };
+    }
+    if (patch.maxSteps !== undefined) this.maxSteps = patch.maxSteps;
+
+    this.emit({
+      type: "session_config",
+      sessionId: this.id,
+      config: {
+        yolo: this.yolo,
+        observabilityEnabled: this.config.observabilityEnabled ?? false,
+        subAgentModel: this.config.subAgentModel,
+        maxSteps: this.maxSteps,
+      },
+    });
+  }
+
+  async uploadFile(filename: string, contentBase64: string) {
+    if (this.running) {
+      this.emitError("busy", "session", "Agent is busy");
+      return;
+    }
+
+    const safeName = path.basename(filename);
+    if (!safeName || safeName === "." || safeName === "..") {
+      this.emitError("validation_failed", "session", "Invalid filename");
+      return;
+    }
+
+    const MAX_BASE64_SIZE = 10 * 1024 * 1024; // ~7.5MB decoded
+    if (contentBase64.length > MAX_BASE64_SIZE) {
+      this.emitError("validation_failed", "session", "File too large (max ~7.5MB)");
+      return;
+    }
+
+    const uploadsDir = this.config.uploadsDirectory;
+    const filePath = path.resolve(uploadsDir, safeName);
+    // Prevent path traversal
+    if (!filePath.startsWith(path.resolve(uploadsDir))) {
+      this.emitError("validation_failed", "session", "Invalid filename (path traversal)");
+      return;
+    }
+
+    try {
+      const decoded = Buffer.from(contentBase64, "base64");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      await fs.writeFile(filePath, decoded);
+      this.emit({ type: "file_uploaded", sessionId: this.id, filename: safeName, path: filePath });
+    } catch (err) {
+      this.emitError("internal_error", "session", `Failed to upload file: ${String(err)}`);
+    }
+  }
 
   async getSessionBackupState() {
     await this.ensureSessionBackupInitialized();
@@ -1310,9 +1486,13 @@ export class AgentSession {
     this.running = true;
     this.abortController = new AbortController();
     const turnStartedAt = Date.now();
+    const turnId = makeId();
+    this.currentTurnId = turnId;
+    this.currentTurnOutcome = "completed";
+    const cause: "user_message" | "command" = displayText?.startsWith("/") ? "command" : "user_message";
     try {
       this.emit({ type: "user_message", sessionId: this.id, text: displayText ?? text, clientMessageId });
-      this.emit({ type: "session_busy", sessionId: this.id, busy: true });
+      this.emit({ type: "session_busy", sessionId: this.id, busy: true, turnId, cause });
       this.emitTelemetry("agent.turn.started", "ok", {
         sessionId: this.id,
         provider: this.config.provider,
@@ -1329,7 +1509,6 @@ export class AgentSession {
         this.messages = [first, ...this.messages.slice(-(MAX_MESSAGE_HISTORY - 1))];
       }
 
-      const turnId = makeId();
       let streamPartIndex = 0;
       const res = await this.runTurnImpl({
         config: this.config,
@@ -1340,7 +1519,7 @@ export class AgentSession {
         approveCommand: (cmd) => this.approveCommand(cmd),
         updateTodos: (todos) => this.updateTodos(todos),
         discoveredSkills: this.discoveredSkills,
-        maxSteps: 100,
+        maxSteps: this.maxSteps,
         enableMcp: this.config.enableMcp,
         spawnDepth: 0,
         telemetryContext: {
@@ -1399,6 +1578,11 @@ export class AgentSession {
         (res.text || "").trim() ||
         extractAssistantTextFromResponseMessages(res.responseMessages);
       if (out) this.emit({ type: "assistant_message", sessionId: this.id, text: out });
+
+      if (res.usage) {
+        this.emit({ type: "turn_usage", sessionId: this.id, turnId, usage: res.usage });
+      }
+
       this.emitTelemetry(
         "agent.turn.completed",
         "ok",
@@ -1412,6 +1596,7 @@ export class AgentSession {
     } catch (err) {
       const msg = this.formatErrorMessage(err);
       if (!this.isAbortLikeError(err)) {
+        this.currentTurnOutcome = "error";
         const classified = this.classifyTurnError(err);
         this.emitError(classified.code, classified.source, msg);
         this.emitTelemetry(
@@ -1426,6 +1611,7 @@ export class AgentSession {
           Date.now() - turnStartedAt
         );
       } else {
+        this.currentTurnOutcome = "cancelled";
         this.emitTelemetry(
           "agent.turn.aborted",
           "ok",
@@ -1438,9 +1624,16 @@ export class AgentSession {
         );
       }
     } finally {
-      this.emit({ type: "session_busy", sessionId: this.id, busy: false });
+      this.emit({
+        type: "session_busy",
+        sessionId: this.id,
+        busy: false,
+        turnId,
+        outcome: this.currentTurnOutcome,
+      });
       this.running = false;
       this.abortController = null;
+      this.currentTurnId = null;
       // Auto-checkpointing is best-effort and must never block follow-up prompts.
       void this.takeAutomaticSessionCheckpoint().catch(() => {
         // takeAutomaticSessionCheckpoint already emits backup errors/telemetry.

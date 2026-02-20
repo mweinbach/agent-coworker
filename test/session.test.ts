@@ -1038,6 +1038,25 @@ describe("AgentSession", () => {
       const { session } = makeSession();
       expect(() => session.handleAskResponse("", "test")).not.toThrow();
     });
+
+    test("cleans pending ask replay cache when prompt wait rejects", async () => {
+      const { session, events } = makeSession();
+      const sessionAny = session as any;
+      sessionAny.waitForPromptResponse = mock(async () => {
+        throw new Error("Ask prompt timed out waiting for user response.");
+      });
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        await params.askUser("question?").catch(() => {});
+        return { text: "", reasoningText: undefined, responseMessages: [] };
+      });
+
+      await session.sendUserMessage("go");
+
+      const askEvt = events.find((e) => e.type === "ask");
+      expect(askEvt).toBeDefined();
+      expect((sessionAny.pendingAskEvents as Map<string, unknown>).size).toBe(0);
+    });
   });
 
   // =========================================================================
@@ -1113,6 +1132,25 @@ describe("AgentSession", () => {
     test("ignores empty requestId without crashing", () => {
       const { session } = makeSession();
       expect(() => session.handleApprovalResponse("", false)).not.toThrow();
+    });
+
+    test("cleans pending approval replay cache when prompt wait rejects", async () => {
+      const { session, events } = makeSession();
+      const sessionAny = session as any;
+      sessionAny.waitForPromptResponse = mock(async () => {
+        throw new Error("Command approval timed out waiting for user response.");
+      });
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        await params.approveCommand("npm install").catch(() => {});
+        return { text: "", reasoningText: undefined, responseMessages: [] };
+      });
+
+      await session.sendUserMessage("go");
+
+      const approvalEvt = events.find((e) => e.type === "approval");
+      expect(approvalEvt).toBeDefined();
+      expect((sessionAny.pendingApprovalEvents as Map<string, unknown>).size).toBe(0);
     });
 
     test("marks dangerous commands in the approval event", async () => {
@@ -1489,6 +1527,29 @@ describe("AgentSession", () => {
       });
       const infoEvents = events.filter((evt): evt is Extract<ServerEvent, { type: "session_info" }> => evt.type === "session_info");
       expect(infoEvents.some((evt) => evt.title === "First prompt title")).toBe(true);
+    });
+
+    test("manual titles are not overwritten by in-flight auto title generation", async () => {
+      let resolveTitle!: (value: { title: string; source: "heuristic"; model: null }) => void;
+      mockGenerateSessionTitle.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveTitle = resolve;
+          })
+      );
+
+      const { session } = makeSession();
+
+      await session.sendUserMessage("first question");
+      session.setSessionTitle("My Manual Title");
+
+      resolveTitle({ title: "Generated Title", source: "heuristic", model: null });
+      await flushAsyncWork();
+
+      const info = session.getSessionInfoEvent();
+      expect(info.title).toBe("My Manual Title");
+      expect(info.titleSource).toBe("manual");
+      expect(info.titleModel).toBeNull();
     });
 
     test("adds user message to messages array", async () => {

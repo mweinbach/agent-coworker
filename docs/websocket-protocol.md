@@ -6,7 +6,20 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `4.0`
+- Current protocol version: `5.0`
+
+## Protocol v5 Notes
+
+Changes in `5.0`:
+
+- `server_hello` now includes optional reconnect fields: `isResume`, `busy`, `messageCount`, `hasPendingAsk`, `hasPendingApproval`.
+- `session_busy` now includes optional context: `turnId`, `cause`, `outcome`.
+- `tools` event shape changed from `string[]` to `Array<{ name: string; description: string }>`.
+- `session_info.titleSource` now includes `"manual"` option.
+- New server events: `turn_usage`, `messages`, `sessions`, `session_deleted`, `session_config`, `file_uploaded`.
+- New client messages: `get_messages`, `set_session_title`, `list_sessions`, `delete_session`, `set_config`, `upload_file`.
+- Pending `ask`/`approval` prompts are replayed on reconnect.
+- `session_backup_state` is pushed automatically on connect.
 
 ## Protocol v4 Notes
 
@@ -27,8 +40,9 @@ When a WebSocket connection opens, the server sends these events in order:
 5. `provider_catalog` — available providers and models (async)
 6. `provider_auth_methods` — auth method registry
 7. `provider_status` — current provider auth/connection status (async)
+8. `session_backup_state` — backup/checkpoint state (async)
 
-If connecting with `?resumeSessionId=<id>`, the server resumes the existing session instead of creating a new one. Disconnected sessions are kept alive for 60 seconds before being disposed.
+If connecting with `?resumeSessionId=<id>`, the server resumes the existing session instead of creating a new one. Disconnected sessions are kept alive for 60 seconds before being disposed. On resume, `server_hello` includes additional fields (`isResume`, `busy`, `messageCount`, `hasPendingAsk`, `hasPendingApproval`) and any pending `ask`/`approval` prompts are replayed.
 
 ## Validation Rules
 
@@ -62,10 +76,11 @@ Returned in `server_hello` and `config_updated`:
 {
   "provider": "openai",
   "model": "gpt-4o",
-  "workingDirectory": "/path/to/project",
-  "outputDirectory": "/path/to/output"
+  "workingDirectory": "/path/to/project"
 }
 ```
+
+`outputDirectory` is optional and only present when explicitly configured.
 
 ### ProviderCatalogEntry
 
@@ -881,6 +896,128 @@ Reset conversation history and todo state. Clears all messages and todos.
 
 ---
 
+### get_messages
+
+Retrieve message history with pagination.
+
+```json
+{ "type": "get_messages", "sessionId": "...", "offset": 0, "limit": 50 }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"get_messages"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `offset` | `number` | No | Start index (default 0). Must be >= 0 |
+| `limit` | `number` | No | Max messages to return (default 100). Must be >= 1 |
+
+**Response:** `messages`
+
+---
+
+### set_session_title
+
+Manually set the session title.
+
+```json
+{ "type": "set_session_title", "sessionId": "...", "title": "My custom title" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"set_session_title"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `title` | `string` | Yes | Non-empty title string |
+
+**Response:** `session_info` with `titleSource: "manual"`
+
+---
+
+### list_sessions
+
+Enumerate all persisted sessions from disk.
+
+```json
+{ "type": "list_sessions", "sessionId": "..." }
+```
+
+| Field | Type | Required |
+|-------|------|----------|
+| `type` | `"list_sessions"` | Yes |
+| `sessionId` | `string` | Yes |
+
+**Response:** `sessions`
+
+---
+
+### delete_session
+
+Delete a persisted session by its ID. Cannot delete the active session.
+
+```json
+{ "type": "delete_session", "sessionId": "...", "targetSessionId": "old-session-id" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"delete_session"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `targetSessionId` | `string` | Yes | Non-empty ID of the session to delete |
+
+**Response:** `session_deleted`
+**Error:** `validation_failed` if attempting to delete the active session.
+
+---
+
+### set_config
+
+Update runtime configuration values.
+
+```json
+{
+  "type": "set_config",
+  "sessionId": "...",
+  "config": {
+    "yolo": true,
+    "maxSteps": 200
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"set_config"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `config` | `object` | Yes | Patch object with optional fields |
+| `config.yolo` | `boolean` | No | Auto-approve all commands |
+| `config.observabilityEnabled` | `boolean` | No | Toggle observability |
+| `config.subAgentModel` | `string` | No | Non-empty sub-agent model ID |
+| `config.maxSteps` | `number` | No | Max steps per turn (1-1000) |
+
+**Response:** `session_config`
+
+---
+
+### upload_file
+
+Upload a file to the session's uploads directory.
+
+```json
+{ "type": "upload_file", "sessionId": "...", "filename": "image.png", "contentBase64": "iVBORw0KGgo..." }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"upload_file"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `filename` | `string` | Yes | Non-empty filename (basename only, no path separators) |
+| `contentBase64` | `string` | Yes | Base64-encoded file content (max ~10MB encoded / ~7.5MB decoded) |
+
+**Response:** `file_uploaded`
+**Error:** `busy` if a turn is running. `validation_failed` if filename is invalid or file too large.
+
+---
+
 ## Server -> Client Events
 
 ### server_hello
@@ -891,16 +1028,20 @@ Initial handshake event sent immediately on WebSocket connection.
 {
   "type": "server_hello",
   "sessionId": "abc-123-def",
-  "protocolVersion": "4.0",
+  "protocolVersion": "5.0",
   "capabilities": {
     "modelStreamChunk": "v1"
   },
   "config": {
     "provider": "openai",
     "model": "gpt-4o",
-    "workingDirectory": "/path/to/project",
-    "outputDirectory": "/path/to/output"
-  }
+    "workingDirectory": "/path/to/project"
+  },
+  "isResume": true,
+  "busy": false,
+  "messageCount": 12,
+  "hasPendingAsk": false,
+  "hasPendingApproval": false
 }
 ```
 
@@ -908,9 +1049,14 @@ Initial handshake event sent immediately on WebSocket connection.
 |-------|------|-------------|
 | `type` | `"server_hello"` | — |
 | `sessionId` | `string` | The session identifier. Use this for all subsequent messages |
-| `protocolVersion` | `string?` | Protocol version (currently `"4.0"`) |
+| `protocolVersion` | `string?` | Protocol version (currently `"5.0"`) |
 | `capabilities` | `object?` | Optional capabilities object. Currently: `{ modelStreamChunk: "v1" }` |
-| `config` | `PublicConfig` | Session config: `provider`, `model`, `workingDirectory`, `outputDirectory` |
+| `config` | `PublicConfig` | Session config: `provider`, `model`, `workingDirectory`, and optionally `outputDirectory` |
+| `isResume` | `boolean?` | Present and `true` only when resuming a disconnected session |
+| `busy` | `boolean?` | Whether the session is mid-turn (only on resume) |
+| `messageCount` | `number?` | Number of messages in history (only on resume) |
+| `hasPendingAsk` | `boolean?` | Whether there's a pending `ask` prompt (only on resume) |
+| `hasPendingApproval` | `boolean?` | Whether there's a pending `approval` prompt (only on resume) |
 
 ---
 
@@ -957,7 +1103,7 @@ Canonical session metadata snapshot. Sent on connection and whenever title, prov
 | `type` | `"session_info"` | — |
 | `sessionId` | `string` | Session identifier |
 | `title` | `string` | Session title (defaults to `"New conversation"`) |
-| `titleSource` | `"default" \| "model" \| "heuristic"` | How the title was generated |
+| `titleSource` | `"default" \| "model" \| "heuristic" \| "manual"` | How the title was generated |
 | `titleModel` | `string \| null` | Model used for title generation, or `null` |
 | `createdAt` | `string` | ISO 8601 session creation timestamp |
 | `updatedAt` | `string` | ISO 8601 last update timestamp |
@@ -1111,10 +1257,14 @@ Notes:
 
 ### session_busy
 
-Busy/idle state transitions for an agent turn.
+Busy/idle state transitions for an agent turn with context.
 
 ```json
-{ "type": "session_busy", "sessionId": "...", "busy": true }
+{ "type": "session_busy", "sessionId": "...", "busy": true, "turnId": "turn-abc", "cause": "user_message" }
+```
+
+```json
+{ "type": "session_busy", "sessionId": "...", "busy": false, "turnId": "turn-abc", "outcome": "completed" }
 ```
 
 | Field | Type | Description |
@@ -1122,6 +1272,9 @@ Busy/idle state transitions for an agent turn.
 | `type` | `"session_busy"` | — |
 | `sessionId` | `string` | Session identifier |
 | `busy` | `boolean` | `true` when a turn starts, `false` when it ends |
+| `turnId` | `string?` | Unique turn identifier (present on both busy=true and busy=false) |
+| `cause` | `"user_message" \| "command"?` | What triggered the turn (present on busy=true) |
+| `outcome` | `"completed" \| "cancelled" \| "error"?` | How the turn ended (present on busy=false) |
 
 ---
 
@@ -1321,8 +1474,7 @@ Updated session public config after a `set_model` or other runtime change.
   "config": {
     "provider": "openai",
     "model": "gpt-4o",
-    "workingDirectory": "/path/to/project",
-    "outputDirectory": "/path/to/output"
+    "workingDirectory": "/path/to/project"
   }
 }
 ```
@@ -1337,17 +1489,24 @@ Updated session public config after a `set_model` or other runtime change.
 
 ### tools
 
-Tool name list response to `list_tools`.
+Tool metadata list response to `list_tools`.
 
 ```json
-{ "type": "tools", "sessionId": "...", "tools": ["bash", "read_file", "write_file", "glob", "grep", "web_search"] }
+{
+  "type": "tools",
+  "sessionId": "...",
+  "tools": [
+    { "name": "bash", "description": "Execute a shell command" },
+    { "name": "read", "description": "Read a file from disk" }
+  ]
+}
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `type` | `"tools"` | — |
 | `sessionId` | `string` | Session identifier |
-| `tools` | `string[]` | Sorted list of available tool names |
+| `tools` | `Array<{ name: string; description: string }>` | Sorted list of tools with name and first line of description. Note: MCP tools are loaded dynamically during turns and not included |
 
 ---
 
@@ -1528,6 +1687,166 @@ Current harness context state for the session.
 | `context` | `(HarnessContextPayload & { updatedAt: string }) \| null` | Context with timestamp, or `null` if no context is set |
 
 When non-null, `context` contains all [HarnessContextPayload](#harnesscontextpayload) fields plus an `updatedAt` ISO 8601 timestamp.
+
+---
+
+### turn_usage
+
+Token usage data for a completed turn. Emitted after `assistant_message` when the provider returns usage data.
+
+```json
+{
+  "type": "turn_usage",
+  "sessionId": "...",
+  "turnId": "turn-abc",
+  "usage": {
+    "promptTokens": 1234,
+    "completionTokens": 567,
+    "totalTokens": 1801
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"turn_usage"` | — |
+| `sessionId` | `string` | Session identifier |
+| `turnId` | `string` | Turn this usage belongs to |
+| `usage.promptTokens` | `number` | Input tokens consumed |
+| `usage.completionTokens` | `number` | Output tokens generated |
+| `usage.totalTokens` | `number` | Total tokens |
+
+---
+
+### messages
+
+Message history response to `get_messages`.
+
+```json
+{
+  "type": "messages",
+  "sessionId": "...",
+  "messages": [
+    { "role": "user", "content": "Hello" },
+    { "role": "assistant", "content": "Hi there!" }
+  ],
+  "total": 42,
+  "offset": 0,
+  "limit": 100
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"messages"` | — |
+| `sessionId` | `string` | Session identifier |
+| `messages` | `unknown[]` | Slice of AI SDK `ModelMessage` objects |
+| `total` | `number` | Total number of messages in history |
+| `offset` | `number` | Start index of this slice |
+| `limit` | `number` | Requested limit |
+
+---
+
+### sessions
+
+Persisted session list response to `list_sessions`.
+
+```json
+{
+  "type": "sessions",
+  "sessionId": "...",
+  "sessions": [
+    {
+      "sessionId": "abc-123",
+      "title": "Fix login bug",
+      "provider": "openai",
+      "model": "gpt-4o",
+      "createdAt": "2026-02-19T18:00:00.000Z",
+      "updatedAt": "2026-02-19T18:30:00.000Z",
+      "messageCount": 24
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"sessions"` | — |
+| `sessionId` | `string` | Session identifier |
+| `sessions` | `PersistedSessionSummary[]` | List sorted by `updatedAt` descending |
+
+**PersistedSessionSummary:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sessionId` | `string` | Session identifier |
+| `title` | `string` | Session title |
+| `provider` | `ProviderName` | Provider |
+| `model` | `string` | Model |
+| `createdAt` | `string` | ISO 8601 creation timestamp |
+| `updatedAt` | `string` | ISO 8601 last update timestamp |
+| `messageCount` | `number` | Number of messages in history |
+
+---
+
+### session_deleted
+
+Confirmation of session deletion response to `delete_session`.
+
+```json
+{ "type": "session_deleted", "sessionId": "...", "targetSessionId": "old-session-id" }
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"session_deleted"` | — |
+| `sessionId` | `string` | Session identifier |
+| `targetSessionId` | `string` | ID of the deleted session |
+
+---
+
+### session_config
+
+Current runtime config response to `set_config`.
+
+```json
+{
+  "type": "session_config",
+  "sessionId": "...",
+  "config": {
+    "yolo": false,
+    "observabilityEnabled": true,
+    "subAgentModel": "gpt-4o-mini",
+    "maxSteps": 100
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"session_config"` | — |
+| `sessionId` | `string` | Session identifier |
+| `config.yolo` | `boolean` | Whether all commands are auto-approved |
+| `config.observabilityEnabled` | `boolean` | Whether observability is enabled |
+| `config.subAgentModel` | `string` | Sub-agent model identifier |
+| `config.maxSteps` | `number` | Maximum steps per turn |
+
+---
+
+### file_uploaded
+
+File upload confirmation response to `upload_file`.
+
+```json
+{ "type": "file_uploaded", "sessionId": "...", "filename": "image.png", "path": "/path/to/uploads/image.png" }
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"file_uploaded"` | — |
+| `sessionId` | `string` | Session identifier |
+| `filename` | `string` | Sanitized filename |
+| `path` | `string` | Absolute path where the file was written |
 
 ---
 

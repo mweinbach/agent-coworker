@@ -15,11 +15,12 @@ const TITLE_MODEL_BY_PROVIDER = {
   openai: "gpt-5-mini",
 } as const satisfies Record<AgentConfig["provider"], string>;
 
-const TITLE_MAX_TOKENS = 15;
+const TITLE_MAX_TOKENS = 30;
+const TITLE_MAX_CHARS = 50;
 
 export const DEFAULT_SESSION_TITLE = "New session";
 
-export type SessionTitleSource = "default" | "model" | "heuristic";
+export type SessionTitleSource = "default" | "model" | "heuristic" | "manual";
 
 export type SessionTitleResult = {
   title: string;
@@ -72,10 +73,17 @@ function limitTokenCount(value: string, maxTokens: number): string {
   return tokens.slice(0, maxTokens).join(" ");
 }
 
+function truncateToCharLimit(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  const truncated = value.slice(0, maxChars).replace(/\s+\S*$/, "");
+  return (truncated || value.slice(0, maxChars)).trimEnd() + "…";
+}
+
 function sanitizeModelTitle(value: string): string {
   const compact = collapseWhitespace(stripWrappingQuotes(value));
   if (!compact) return "";
-  return limitTokenCount(compact, TITLE_MAX_TOKENS).trim();
+  const tokenBound = limitTokenCount(compact, TITLE_MAX_TOKENS).trim();
+  return truncateToCharLimit(tokenBound, TITLE_MAX_CHARS);
 }
 
 export function heuristicTitleFromQuery(query: string): string {
@@ -84,7 +92,7 @@ export function heuristicTitleFromQuery(query: string): string {
 
   const withoutTrailingPunctuation = compact.replace(/[.!?]+$/g, "").trim();
   const tokenBound = limitTokenCount(withoutTrailingPunctuation || compact, TITLE_MAX_TOKENS);
-  const charBound = tokenBound.length > 96 ? `${tokenBound.slice(0, 95).trimEnd()}…` : tokenBound;
+  const charBound = tokenBound.length > TITLE_MAX_CHARS ? truncateToCharLimit(tokenBound, TITLE_MAX_CHARS) : tokenBound;
   return charBound || DEFAULT_SESSION_TITLE;
 }
 
@@ -107,9 +115,17 @@ function modelCandidatesForProvider(
 
 function buildTitlePrompt(query: string): string {
   return [
-    "Generate a concise session title for this user request.",
-    `Rules: max ${TITLE_MAX_TOKENS} tokens, plain text, no surrounding quotes.`,
-    "Focus on the user intent only.",
+    "Generate a brief title that would help the user find this conversation later.",
+    "",
+    "Rules:",
+    `- Single line, maximum ${TITLE_MAX_CHARS} characters`,
+    "- No surrounding quotes or explanations",
+    "- Grammatically correct",
+    "- NEVER include tool names or technical jargon about the AI",
+    "- Focus on the main topic and user intent",
+    "- Vary phrasing to avoid repetitive patterns",
+    "- When a file is mentioned, focus on WHAT the user wants to do WITH it",
+    "",
     `User request: ${query}`,
   ].join("\n");
 }

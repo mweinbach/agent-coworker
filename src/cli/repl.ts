@@ -13,7 +13,7 @@ import type { AgentConfig, ApprovalRiskCode, TodoItem } from "../types";
 
 const UI_PROVIDER_NAMES = PROVIDER_NAMES;
 
-type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory" | "outputDirectory">;
+type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & { outputDirectory?: string };
 
 type AskPrompt = { requestId: string; question: string; options?: string[] };
 type ApprovalPrompt = { requestId: string; command: string; dangerous: boolean; reasonCode: ApprovalRiskCode };
@@ -88,6 +88,18 @@ function normalizeApprovalAnswer(raw: string): boolean {
   return false;
 }
 
+type ToolListEntry = Extract<ServerEvent, { type: "tools" }>["tools"][number] | string;
+
+export function renderToolsToLines(tools: ToolListEntry[]): string[] {
+  return tools.map((tool) => {
+    if (typeof tool === "string") return `  - ${tool}`;
+    const name = typeof tool?.name === "string" ? tool.name : "unknown";
+    const description = typeof tool?.description === "string" ? tool.description.trim() : "";
+    if (!description || description === name) return `  - ${name}`;
+    return `  - ${name}: ${description}`;
+  });
+}
+
 export type ParsedCommand =
   | { type: "help" | "exit" | "new" | "restart" | "tools" }
   | { type: "model" | "provider" | "connect" | "cwd"; arg: string }
@@ -143,6 +155,7 @@ export function resolveProviderAuthMethodSelection(
 
 export const __internal = {
   renderTodosToLines,
+  renderToolsToLines,
   resolveAndValidateDir,
   resolveAskAnswer,
   normalizeApprovalAnswer,
@@ -575,7 +588,7 @@ export async function runCliRepl(
         }
         break;
       case "tools":
-        console.log(`\nTools:\n${evt.tools.map((t) => `  - ${t}`).join("\n")}\n`);
+        console.log(`\nTools:\n${renderToolsToLines(evt.tools).join("\n")}\n`);
         break;
       case "error":
         console.error(`\nError [${evt.source}/${evt.code}]: ${evt.message}\n`);

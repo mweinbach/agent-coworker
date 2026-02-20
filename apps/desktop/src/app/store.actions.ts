@@ -257,6 +257,22 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       await persistNow(get);
     },
   
+    renameThread: (threadId: string, newTitle: string) => {
+      const trimmed = newTitle.trim();
+      if (!trimmed) return;
+
+      set((s) => ({
+        threads: s.threads.map((t) => (t.id === threadId ? { ...t, title: trimmed } : t)),
+      }));
+      void persistNow(get);
+
+      sendThread(get, threadId, (sessionId) => ({
+        type: "set_session_title",
+        sessionId,
+        title: trimmed,
+      }));
+    },
+
     selectWorkspace: async (workspaceId: string) => {
       set((s) => ({
         selectedWorkspaceId: workspaceId,

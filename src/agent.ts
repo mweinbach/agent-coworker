@@ -8,7 +8,6 @@ import type { AgentConfig, TodoItem } from "./types";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
 
-const DEFAULT_MODEL_STALL_TIMEOUT_MS = 90_000;
 const MODEL_STREAM_DRAIN_GRACE_MS = 750;
 const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
 
@@ -156,6 +155,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
     text: string;
     reasoningText?: string;
     responseMessages: ModelMessage[];
+    usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   }> {
     const { config, system, messages, log, askUser, approveCommand, updateTodos, discoveredSkills, abortSignal } = params;
 
@@ -206,7 +206,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
               ...(typeof timeoutCfg?.stepMs === "number" ? { stepMs: timeoutCfg.stepMs } : {}),
               ...(typeof timeoutCfg?.chunkMs === "number" ? { chunkMs: timeoutCfg.chunkMs } : {}),
             }
-          : { chunkMs: DEFAULT_MODEL_STALL_TIMEOUT_MS };
+          : undefined;
         const telemetry = await buildAiSdkTelemetrySettings(config, {
           functionId: params.telemetryContext?.functionId ?? "agent.runTurn",
           metadata: {
@@ -289,10 +289,23 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
     })();
 
     const responseMessages = (result.response?.messages || []) as ModelMessage[];
+    const rawUsage = result.response?.usage;
+    const usage =
+      rawUsage &&
+      typeof rawUsage.promptTokens === "number" &&
+      typeof rawUsage.completionTokens === "number" &&
+      typeof rawUsage.totalTokens === "number"
+        ? {
+            promptTokens: rawUsage.promptTokens,
+            completionTokens: rawUsage.completionTokens,
+            totalTokens: rawUsage.totalTokens,
+          }
+        : undefined;
     return {
       text: String(result.text ?? ""),
       reasoningText: typeof result.reasoningText === "string" ? result.reasoningText : undefined,
       responseMessages,
+      usage,
     };
   };
 }
@@ -306,6 +319,7 @@ export async function runTurnWithDeps(
   text: string;
   reasoningText?: string;
   responseMessages: ModelMessage[];
+  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
 }> {
   return await createRunTurn(overrides)(params);
 }

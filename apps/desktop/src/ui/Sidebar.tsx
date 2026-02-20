@@ -1,4 +1,4 @@
-import { memo, type MouseEvent } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 
 import {
   CirclePlusIcon,
@@ -30,8 +30,45 @@ export const Sidebar = memo(function Sidebar() {
   const newThread = useAppStore((s) => s.newThread);
   const removeThread = useAppStore((s) => s.removeThread);
   const selectThread = useAppStore((s) => s.selectThread);
+  const renameThread = useAppStore((s) => s.renameThread);
   const openSkills = useAppStore((s) => s.openSkills);
   const openSettings = useAppStore((s) => s.openSettings);
+
+  const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const editInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editingThreadId) {
+      const input = editInputRef.current;
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    }
+  }, [editingThreadId]);
+
+  const commitRename = useCallback(
+    (threadId: string, title: string) => {
+      const trimmed = title.trim();
+      if (trimmed) {
+        renameThread(threadId, trimmed);
+      }
+      setEditingThreadId(null);
+      setEditingTitle("");
+    },
+    [renameThread],
+  );
+
+  const cancelRename = useCallback(() => {
+    setEditingThreadId(null);
+    setEditingTitle("");
+  }, []);
+
+  const startEditing = useCallback((threadId: string, currentTitle: string) => {
+    setEditingThreadId(threadId);
+    setEditingTitle(currentTitle);
+  }, []);
 
   const activeWorkspaceThreads = (selectedWorkspaceId
     ? threads.filter((t) => t.workspaceId === selectedWorkspaceId)
@@ -71,11 +108,14 @@ export const Sidebar = memo(function Sidebar() {
 
     const result = await showContextMenu([
       { id: "select", label: "Open thread" },
+      { id: "rename", label: "Rename thread" },
       { id: "remove", label: "Remove thread" },
     ]);
 
     if (result === "select") {
       void selectThread(tId);
+    } else if (result === "rename") {
+      startEditing(tId, tTitle);
     } else if (result === "remove") {
       const confirmed = await confirmAction({
         title: "Remove session",
@@ -174,6 +214,8 @@ export const Sidebar = memo(function Sidebar() {
                           const runtime = threadRuntimeById[thread.id];
                           const busy = runtime?.busy === true;
                           const isActive = thread.id === selectedThreadId;
+                          const isEditing = editingThreadId === thread.id;
+                          const displayTitle = thread.title || "New thread";
 
                           return (
                               <button
@@ -184,13 +226,35 @@ export const Sidebar = memo(function Sidebar() {
                                     ? "bg-muted/60 text-foreground"
                                     : "text-muted-foreground hover:bg-muted/35 hover:text-foreground",
                                 )}
-                              onClick={() => void selectThread(thread.id)}
-                              onContextMenu={(e) => handleThreadContextMenu(e, thread.id, thread.title || "New thread")}
+                              onClick={() => { if (!isEditing) void selectThread(thread.id); }}
+                              onDoubleClick={() => startEditing(thread.id, displayTitle)}
+                              onContextMenu={(e) => handleThreadContextMenu(e, thread.id, displayTitle)}
                               type="button"
                             >
                               <span className="flex min-w-0 items-center gap-2">
                                 <MessageSquareIcon className="h-3.5 w-3.5 shrink-0" />
-                                <span className="truncate">{thread.title || "New thread"}</span>
+                                {isEditing ? (
+                                  <input
+                                    ref={editInputRef}
+                                    className="min-w-0 flex-1 rounded border border-border bg-background px-1 py-0.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-ring"
+                                    value={editingTitle}
+                                    onChange={(e) => setEditingTitle(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        e.preventDefault();
+                                        commitRename(thread.id, editingTitle);
+                                      } else if (e.key === "Escape") {
+                                        e.preventDefault();
+                                        cancelRename();
+                                      }
+                                    }}
+                                    onBlur={() => commitRename(thread.id, editingTitle)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onDoubleClick={(e) => e.stopPropagation()}
+                                  />
+                                ) : (
+                                  <span className="truncate">{displayTitle}</span>
+                                )}
                               </span>
                               {busy ? <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-primary" aria-hidden="true" /> : null}
                             </button>

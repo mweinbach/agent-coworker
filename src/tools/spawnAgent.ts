@@ -24,7 +24,6 @@ import { createNotebookEditTool } from "./notebookEdit";
 type AgentType = "explore" | "research" | "general";
 const MAX_SUB_AGENT_DEPTH = 2;
 const MAX_SUB_AGENT_TASK_CHARS = 20_000;
-const DEFAULT_MODEL_STALL_TIMEOUT_MS = 90_000;
 
 export type SpawnAgentDeps = Partial<{
   streamText: typeof realStreamText;
@@ -99,7 +98,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
       allowedRoots: [
         path.dirname(ctx.config.projectAgentDir),
         ctx.config.workingDirectory,
-        ctx.config.outputDirectory,
+        ...(ctx.config.outputDirectory ? [ctx.config.outputDirectory] : []),
       ],
     }).kind === "auto";
 
@@ -140,7 +139,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
             ...(typeof timeoutCfg?.stepMs === "number" ? { stepMs: timeoutCfg.stepMs } : {}),
             ...(typeof timeoutCfg?.chunkMs === "number" ? { chunkMs: timeoutCfg.chunkMs } : {}),
           }
-        : { chunkMs: DEFAULT_MODEL_STALL_TIMEOUT_MS };
+        : undefined;
       const googlePrepareStep =
         ctx.config.provider === "google" && Object.keys(tools).length > 0
           ? buildGooglePrepareStep(ctx.config.providerOptions, ctx.log)

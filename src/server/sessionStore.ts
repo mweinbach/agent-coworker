@@ -45,8 +45,8 @@ export type PersistedSessionSnapshotV1 = {
     model: string;
     enableMcp: boolean;
     workingDirectory: string;
-    outputDirectory: string;
-    uploadsDirectory: string;
+    outputDirectory?: string;
+    uploadsDirectory?: string;
   };
   context: {
     system: string;
@@ -57,6 +57,16 @@ export type PersistedSessionSnapshotV1 = {
 };
 
 export type PersistedSessionSnapshot = PersistedSessionSnapshotV1;
+
+export type PersistedSessionSummary = {
+  sessionId: string;
+  title: string;
+  provider: AgentConfig["provider"];
+  model: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+};
 
 export function getPersistedSessionFilePath(paths: Pick<AiCoworkerPaths, "sessionsDir">, sessionId: string): string {
   return path.join(paths.sessionsDir, `${sanitizeSessionId(sessionId)}.json`);
@@ -88,16 +98,16 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
   const title = asNonEmptyString(sessionRaw.title) ?? "New session";
   const titleSourceRaw = asNonEmptyString(sessionRaw.titleSource) ?? "default";
   const titleSource: SessionTitleSource =
-    titleSourceRaw === "model" || titleSourceRaw === "heuristic" ? titleSourceRaw : "default";
+    titleSourceRaw === "model" || titleSourceRaw === "heuristic" || titleSourceRaw === "manual" ? titleSourceRaw : "default";
   const titleModel = typeof sessionRaw.titleModel === "string" ? sessionRaw.titleModel : null;
 
   const providerRaw = asNonEmptyString(configRaw.provider);
   const provider = providerRaw && isProviderName(providerRaw) ? providerRaw : null;
   const model = asNonEmptyString(configRaw.model);
   const workingDirectory = asNonEmptyString(configRaw.workingDirectory);
-  const outputDirectory = asNonEmptyString(configRaw.outputDirectory);
-  const uploadsDirectory = asNonEmptyString(configRaw.uploadsDirectory);
-  if (!provider || !model || !workingDirectory || !outputDirectory || !uploadsDirectory) return null;
+  const outputDirectory = asNonEmptyString(configRaw.outputDirectory) ?? undefined;
+  const uploadsDirectory = asNonEmptyString(configRaw.uploadsDirectory) ?? undefined;
+  if (!provider || !model || !workingDirectory) return null;
 
   const enableMcp = typeof configRaw.enableMcp === "boolean" ? configRaw.enableMcp : false;
   const system = asNonEmptyString(contextRaw.system) ?? "";
@@ -181,4 +191,47 @@ export async function writePersistedSessionSnapshot(opts: {
   }
 
   return filePath;
+}
+
+export async function listPersistedSessionSnapshots(
+  paths: Pick<AiCoworkerPaths, "sessionsDir">
+): Promise<PersistedSessionSummary[]> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(paths.sessionsDir);
+  } catch {
+    return [];
+  }
+
+  const summaries: PersistedSessionSummary[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    try {
+      const raw = await fs.readFile(path.join(paths.sessionsDir, entry), "utf-8");
+      const parsed = parsePersistedSessionSnapshot(JSON.parse(raw));
+      if (!parsed) continue;
+      summaries.push({
+        sessionId: parsed.sessionId,
+        title: parsed.session.title,
+        provider: parsed.session.provider,
+        model: parsed.session.model,
+        createdAt: parsed.createdAt,
+        updatedAt: parsed.updatedAt,
+        messageCount: parsed.context.messages.length,
+      });
+    } catch {
+      // skip unreadable files
+    }
+  }
+
+  summaries.sort((a, b) => (b.updatedAt > a.updatedAt ? 1 : b.updatedAt < a.updatedAt ? -1 : 0));
+  return summaries;
+}
+
+export async function deletePersistedSessionSnapshot(
+  paths: Pick<AiCoworkerPaths, "sessionsDir">,
+  sessionId: string
+): Promise<void> {
+  const filePath = getPersistedSessionFilePath(paths, sessionId);
+  await fs.rm(filePath, { force: true });
 }

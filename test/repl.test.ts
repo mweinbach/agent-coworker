@@ -80,6 +80,10 @@ function renderTodosToLines(todos: TodoItem[]): string[] {
   return replInternal.renderTodosToLines(todos);
 }
 
+function renderToolsToLines(tools: any[]): string[] {
+  return replInternal.renderToolsToLines(tools as any);
+}
+
 describe("renderTodos", () => {
   test("returns empty for empty todos list", () => {
     const lines = renderTodosToLines([]);
@@ -158,6 +162,24 @@ describe("renderTodos", () => {
     expect(lines).toContain("  x A");
     expect(lines).toContain("  > B");
     expect(lines).toContain("  - C");
+  });
+});
+
+describe("renderToolsToLines", () => {
+  test("renders tool objects as name and description", () => {
+    const lines = renderToolsToLines([
+      { name: "bash", description: "Execute a shell command" },
+      { name: "read", description: "read" },
+    ]);
+    expect(lines).toEqual([
+      "  - bash: Execute a shell command",
+      "  - read",
+    ]);
+  });
+
+  test("renders legacy string tool entries", () => {
+    const lines = renderToolsToLines(["bash", "read"]);
+    expect(lines).toEqual(["  - bash", "  - read"]);
   });
 });
 

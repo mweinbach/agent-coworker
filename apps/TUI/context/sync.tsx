@@ -76,6 +76,7 @@ export type ProviderAuthResultState = Extract<ServerEvent, { type: "provider_aut
 export type HarnessContextState = Extract<ServerEvent, { type: "harness_context" }>["context"];
 export type SkillsState = Extract<ServerEvent, { type: "skills_list" }>["skills"];
 export type SessionBackupState = Extract<ServerEvent, { type: "session_backup_state" }>["backup"] | null;
+export type ToolDescriptor = Extract<ServerEvent, { type: "tools" }>["tools"][number];
 export type ContextUsageSnapshot = {
   inputTokens: number | null;
   outputTokens: number | null;
@@ -92,7 +93,7 @@ type SyncState = {
   model: string;
   cwd: string;
   enableMcp: boolean;
-  tools: string[];
+  tools: ToolDescriptor[];
   commands: CommandInfo[];
   providerCatalog: ProviderCatalogState;
   providerDefault: Record<string, string>;
@@ -235,6 +236,31 @@ function extractUsageSnapshot(value: unknown): ContextUsageSnapshot | null {
   }
 
   return { inputTokens, outputTokens, totalTokens };
+}
+
+function normalizeToolDescriptor(value: unknown): ToolDescriptor | null {
+  if (typeof value === "string") {
+    const name = value.trim();
+    if (!name) return null;
+    return { name, description: name };
+  }
+
+  const raw = asRecord(value);
+  if (!raw) return null;
+  const name = typeof raw.name === "string" ? raw.name.trim() : "";
+  if (!name) return null;
+  const descriptionRaw = typeof raw.description === "string" ? raw.description.trim() : "";
+  return { name, description: descriptionRaw || name };
+}
+
+function normalizeToolsPayload(value: unknown): ToolDescriptor[] {
+  if (!Array.isArray(value)) return [];
+  const normalized: ToolDescriptor[] = [];
+  for (const entry of value) {
+    const tool = normalizeToolDescriptor(entry);
+    if (tool) normalized.push(tool);
+  }
+  return normalized;
 }
 
 function parseJsonCandidate(value: string): unknown {
@@ -975,7 +1001,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         break;
 
       case "tools":
-        setState("tools", evt.tools);
+        setState("tools", normalizeToolsPayload(evt.tools));
         break;
 
       case "commands":

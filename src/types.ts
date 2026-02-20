@@ -49,8 +49,8 @@ export interface AgentConfig {
   subAgentModel: string;
 
   workingDirectory: string;
-  outputDirectory: string;
-  uploadsDirectory: string;
+  outputDirectory?: string;
+  uploadsDirectory?: string;
 
   userName: string;
   knowledgeCutoff: string;

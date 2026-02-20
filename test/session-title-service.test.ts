@@ -26,12 +26,12 @@ function makeConfig(provider: AgentConfig["provider"] = "openai"): AgentConfig {
 
 describe("sessionTitleService", () => {
   test("returns sanitized model title on first successful candidate", async () => {
-    const generateObject = mock(async () => ({ object: { title: '  "Hello   World"  ' } }));
+    const generateText = mock(async (_args: any) => ({ output: { title: '  "Hello   World"  ' } }));
     const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateObject: generateObject as any,
+      generateText: generateText as any,
       getModel: getModel as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
@@ -46,22 +46,22 @@ describe("sessionTitleService", () => {
       source: "model",
       model: "gpt-5-mini",
     });
-    expect(generateObject).toHaveBeenCalledTimes(1);
-    expect(generateObject.mock.calls[0]?.[0]?.maxOutputTokens).toBe(30);
+    expect(generateText).toHaveBeenCalledTimes(1);
+    expect(generateText.mock.calls[0]?.[0]?.maxOutputTokens).toBe(150);
   });
 
   test("falls back to provider default model when primary model attempt fails", async () => {
-    const generateObject = mock(async ({ model }: { model: any }) => {
+    const generateText = mock(async ({ model }: { model: any }) => {
       if (model.modelId === "gpt-5-mini") {
         throw new Error("primary unavailable");
       }
-      return { object: { title: "Fallback model title" } };
+      return { output: { title: "Fallback model title" } };
     });
     const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateObject: generateObject as any,
+      generateText: generateText as any,
       getModel: getModel as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
@@ -76,18 +76,18 @@ describe("sessionTitleService", () => {
       source: "model",
       model: "gpt-5.2",
     });
-    expect(generateObject).toHaveBeenCalledTimes(2);
+    expect(generateText).toHaveBeenCalledTimes(2);
   });
 
   test("falls back to deterministic heuristic when all model attempts fail", async () => {
-    const generateObject = mock(async () => {
+    const generateText = mock(async (_args: any) => {
       throw new Error("all failed");
     });
     const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateObject: generateObject as any,
+      generateText: generateText as any,
       getModel: getModel as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
@@ -104,18 +104,18 @@ describe("sessionTitleService", () => {
   });
 
   test("returns default title for empty queries", async () => {
-    const generateObject = mock(async () => ({ object: { title: "unused" } }));
+    const generateText = mock(async (_args: any) => ({ output: { title: "unused" } }));
     const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateObject: generateObject as any,
+      generateText: generateText as any,
       getModel: getModel as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
 
     const result = await generateSessionTitle({ config: makeConfig("openai"), query: "   " });
     expect(result).toEqual({ title: DEFAULT_SESSION_TITLE, source: "default", model: null });
-    expect(generateObject).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
   });
 });

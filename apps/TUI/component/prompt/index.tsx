@@ -278,6 +278,10 @@ export function Prompt(props: {
         return;
 
       case "history_up": {
+        // Only trigger history if cursor is on the first line
+        const offset = composerRef?.cursorOffset ?? prompt.input().length;
+        if (prompt.input().lastIndexOf("\n", offset - 1) !== -1) return;
+        
         e.preventDefault?.();
         const entry = history.navigateUp(prompt.input());
         if (entry !== null) {
@@ -289,6 +293,10 @@ export function Prompt(props: {
       }
 
       case "history_down": {
+        // Only trigger history down if cursor is on the last line
+        const offset = composerRef?.cursorOffset ?? prompt.input().length;
+        if (prompt.input().indexOf("\n", offset) !== -1) return;
+        
         e.preventDefault?.();
         const entry = history.navigateDown();
         if (entry !== null) {
@@ -305,21 +313,6 @@ export function Prompt(props: {
           setPromptInput("");
         }
         return;
-
-      case "stash":
-        e.preventDefault?.();
-        prompt.doStash();
-        setPromptInput("");
-        return;
-
-      case "unstash": {
-        e.preventDefault?.();
-        const restored = prompt.doUnstash();
-        if (restored !== null) {
-          setPromptInput(restored);
-        }
-        return;
-      }
 
       case "shell_mode":
         e.preventDefault?.();

@@ -12,8 +12,6 @@ export type TextareaAction =
   | "history_up"
   | "history_down"
   | "cancel"
-  | "stash"
-  | "unstash"
   | "shell_mode"
   | "none";
 
@@ -41,12 +39,6 @@ export function getTextareaAction(
 
   // Escape = cancel
   if (normalized === "escape") return "cancel";
-
-  // Ctrl+Z = stash
-  if (normalized === "z" && ctrl && !shift) return "stash";
-
-  // Ctrl+Shift+Z = unstash
-  if (normalized === "z" && ctrl && shift) return "unstash";
 
   // Ctrl+] = shell mode toggle
   if (normalized === "]" && ctrl) return "shell_mode";

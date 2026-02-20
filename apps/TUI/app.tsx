@@ -1,4 +1,4 @@
-import { useKeyboard } from "@opentui/solid";
+import { useKeyboard, Portal } from "@opentui/solid";
 import { Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { openCommandPalette } from "./component/dialog-command";
 import { useDialog } from "./context/dialog";
@@ -44,16 +44,18 @@ export function App() {
 
       {/* Dialog overlay */}
       <Show when={dialog.hasDialog()}>
-        <box
-          position="absolute"
-          left={0}
-          top={0}
-          width="100%"
-          height="100%"
-          zIndex={100}
-        >
-          {dialog.stack().length > 0 && dialog.stack()[dialog.stack().length - 1]!.element()}
-        </box>
+        <Portal>
+          <box
+            position="absolute"
+            left={0}
+            top={0}
+            width="100%"
+            height="100%"
+            zIndex={100}
+          >
+            {dialog.stack().length > 0 && dialog.stack()[dialog.stack().length - 1]!.element()}
+          </box>
+        </Portal>
       </Show>
 
       <Toast />
@@ -175,7 +177,7 @@ function GlobalHotkeys() {
       name: "Stash Prompt",
       description: "Save current prompt text",
       category: "prompt",
-      keybind: { key: "z", ctrl: true },
+      keybind: { key: "s", ctrl: true },
       action: () => prompt.doStash(),
     },
     {
@@ -183,7 +185,7 @@ function GlobalHotkeys() {
       name: "Pop Stash",
       description: "Restore last stashed prompt",
       category: "prompt",
-      keybind: { key: "z", ctrl: true, shift: true },
+      keybind: { key: "s", ctrl: true, shift: true },
       action: () => {
         const restored = prompt.doUnstash();
         if (restored !== null) prompt.setInput(restored);

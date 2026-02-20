@@ -45,18 +45,18 @@ async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unkn
   return {};
 }
 
-async function persistProjectModelDefaults(
+async function persistProjectConfigPatch(
   projectAgentDir: string,
-  defaults: Pick<AgentConfig, "provider" | "model" | "subAgentModel">
+  patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">>
 ): Promise<void> {
+  const entries = Object.entries(patch).filter(([, value]) => value !== undefined);
+  if (entries.length === 0) return;
   const configPath = path.join(projectAgentDir, "config.json");
   const current = await loadJsonObjectSafe(configPath);
-  const next: Record<string, unknown> = {
-    ...current,
-    provider: defaults.provider,
-    model: defaults.model,
-    subAgentModel: defaults.subAgentModel,
-  };
+  const next: Record<string, unknown> = { ...current };
+  for (const [key, value] of entries) {
+    next[key] = value;
+  }
   await fs.mkdir(projectAgentDir, { recursive: true });
   const payload = `${JSON.stringify(next, null, 2)}\n`;
   const tempPath = path.join(
@@ -108,7 +108,7 @@ export async function startAgentServer(
     typeof env.COWORK_BUILTIN_DIR === "string" && env.COWORK_BUILTIN_DIR.trim()
       ? env.COWORK_BUILTIN_DIR
       : undefined;
-  const config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
+  let config = await loadConfig({ cwd: opts.cwd, env, homedir: opts.homedir, builtInDir });
   const mergedProviderOptions =
     isPlainObject(opts.providerOptions) && isPlainObject(config.providerOptions)
       ? deepMerge(
@@ -160,7 +160,13 @@ export async function startAgentServer(
         config.provider = selection.provider;
         config.model = selection.model;
         config.subAgentModel = selection.subAgentModel;
-        await persistProjectModelDefaults(config.projectAgentDir, selection);
+        await persistProjectConfigPatch(config.projectAgentDir, selection);
+      },
+      persistProjectConfigPatchImpl: async (
+        patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">>
+      ) => {
+        config = { ...config, ...patch };
+        await persistProjectConfigPatch(config.projectAgentDir, patch);
       },
       sessionDb,
       emit,
@@ -263,6 +269,7 @@ export async function startAgentServer(
             enableMcp: session.getEnableMcp(),
           };
           ws.send(JSON.stringify(settings));
+          ws.send(JSON.stringify(session.getSessionConfigEvent()));
           ws.send(JSON.stringify(session.getSessionInfoEvent()));
 
           ws.send(JSON.stringify(session.getObservabilityStatusEvent()));
@@ -435,7 +442,17 @@ export async function startAgentServer(
           }
 
           if (msg.type === "set_enable_mcp") {
-            session.setEnableMcp(msg.enableMcp);
+            void session.setEnableMcp(msg.enableMcp);
+            return;
+          }
+
+          if (msg.type === "mcp_servers_get") {
+            void session.emitMcpServers();
+            return;
+          }
+
+          if (msg.type === "mcp_servers_set") {
+            void session.setMcpServers(msg.rawJson);
             return;
           }
 

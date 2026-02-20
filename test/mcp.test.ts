@@ -41,7 +41,14 @@ const mockCreateMCPClient = mock(async (_opts: any) => ({
   close: mock(async () => {}),
 }));
 
-import { loadMCPServers, loadMCPTools } from "../src/mcp/index";
+import {
+  DEFAULT_MCP_SERVERS_DOCUMENT,
+  loadMCPServers,
+  loadMCPTools,
+  parseMCPServersDocument,
+  readProjectMCPServersDocument,
+  writeProjectMCPServersDocument,
+} from "../src/mcp/index";
 
 function loadMCPToolsWithMock(
   servers: MCPServerConfig[],
@@ -52,6 +59,96 @@ function loadMCPToolsWithMock(
     createClient: mockCreateMCPClient as any,
   });
 }
+
+describe("workspace MCP document helpers", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  test("parseMCPServersDocument validates well-formed server entries", () => {
+    const parsed = parseMCPServersDocument(
+      JSON.stringify({
+        servers: [
+          {
+            name: "stdio-local",
+            transport: { type: "stdio", command: "node", args: ["server.js"] },
+            required: true,
+            retries: 2,
+          },
+          {
+            name: "http-remote",
+            transport: { type: "http", url: "https://mcp.example.com" },
+          },
+        ],
+      }),
+    );
+
+    expect(parsed.servers).toHaveLength(2);
+    expect(parsed.servers[0]?.name).toBe("stdio-local");
+    expect(parsed.servers[1]?.transport.type).toBe("http");
+  });
+
+  test("parseMCPServersDocument rejects invalid payloads", () => {
+    expect(() => parseMCPServersDocument("[]")).toThrow("root must be an object");
+    expect(() =>
+      parseMCPServersDocument(
+        JSON.stringify({
+          servers: [{ name: "", transport: { type: "stdio", command: "echo" } }],
+        }),
+      ),
+    ).toThrow("servers[0].name is required");
+  });
+
+  test("readProjectMCPServersDocument returns default document when file is missing", async () => {
+    const projectAgentDir = path.join(tmpDir, ".agent");
+    const config = makeConfig({ projectAgentDir, configDirs: [] });
+
+    const payload = await readProjectMCPServersDocument(config);
+
+    expect(payload.path).toBe(path.join(projectAgentDir, "mcp-servers.json"));
+    expect(payload.rawJson).toBe(DEFAULT_MCP_SERVERS_DOCUMENT);
+    expect(payload.projectServers).toEqual([]);
+    expect(payload.effectiveServers).toEqual([]);
+    expect(payload.parseError).toBeUndefined();
+  });
+
+  test("writeProjectMCPServersDocument round-trips with readProjectMCPServersDocument", async () => {
+    const projectAgentDir = path.join(tmpDir, ".agent");
+    const config = makeConfig({ projectAgentDir, configDirs: [projectAgentDir] });
+    const rawJson = JSON.stringify(
+      {
+        servers: [{ name: "roundtrip", transport: { type: "stdio", command: "echo", args: ["ok"] } }],
+      },
+      null,
+      2,
+    );
+
+    await writeProjectMCPServersDocument(projectAgentDir, rawJson);
+    const payload = await readProjectMCPServersDocument(config);
+
+    expect(payload.rawJson).toBe(`${rawJson}\n`);
+    expect(payload.projectServers).toHaveLength(1);
+    expect(payload.projectServers[0]?.name).toBe("roundtrip");
+    expect(payload.effectiveServers.some((server) => server.name === "roundtrip")).toBe(true);
+    expect(payload.parseError).toBeUndefined();
+  });
+
+  test("writeProjectMCPServersDocument rejects invalid JSON before writing", async () => {
+    const projectAgentDir = path.join(tmpDir, ".agent");
+    await expect(
+      writeProjectMCPServersDocument(
+        projectAgentDir,
+        JSON.stringify({ servers: [{ transport: { type: "stdio", command: "echo" } }] }),
+      ),
+    ).rejects.toThrow("name is required");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // loadMCPServers

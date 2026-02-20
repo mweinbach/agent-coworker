@@ -116,6 +116,7 @@ function sendAndCollect(
 
       if (
         msg.type === "session_settings" ||
+        msg.type === "session_config" ||
         msg.type === "session_info" ||
         msg.type === "observability_status" ||
         msg.type === "provider_catalog" ||
@@ -343,7 +344,7 @@ describe("WebSocket Lifecycle", () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
     try {
-      const messages = await collectMessages(url, 3);
+      const messages = await collectMessages(url, 4);
       const hello = messages.find((msg: any) => msg.type === "server_hello");
       const info = messages.find((msg: any) => msg.type === "session_info");
       expect(hello).toBeDefined();
@@ -355,6 +356,23 @@ describe("WebSocket Lifecycle", () => {
       expect(info.model).toBe(hello.config.model);
       expect(typeof info.createdAt).toBe("string");
       expect(typeof info.updatedAt).toBe("string");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("connect emits initial session_config snapshot", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const messages = await collectMessages(url, 4);
+      const configEvt = messages.find((msg: any) => msg.type === "session_config");
+      expect(configEvt).toBeDefined();
+      expect(configEvt.config).toBeDefined();
+      expect(typeof configEvt.config.yolo).toBe("boolean");
+      expect(typeof configEvt.config.observabilityEnabled).toBe("boolean");
+      expect(typeof configEvt.config.subAgentModel).toBe("string");
+      expect(typeof configEvt.config.maxSteps).toBe("number");
     } finally {
       server.stop();
     }
@@ -441,7 +459,7 @@ describe("WebSocket Lifecycle", () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
     try {
-      const messages = await collectMessages(url, 4);
+      const messages = await collectMessages(url, 5);
       const status = messages.find((msg: any) => msg.type === "observability_status");
       expect(status).toBeDefined();
       expect(typeof status.enabled).toBe("boolean");
@@ -590,6 +608,7 @@ describe("WebSocket Lifecycle", () => {
           }
           if (
             msg.type === "session_settings" ||
+            msg.type === "session_config" ||
             msg.type === "session_info" ||
             msg.type === "observability_status" ||
             msg.type === "provider_catalog" ||
@@ -758,6 +777,63 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("mcp_servers_get returns workspace-local MCP document", async () => {
+    const tmpDir = await makeTmpProject();
+    const mcpPath = path.join(tmpDir, ".agent", "mcp-servers.json");
+    await fs.writeFile(
+      mcpPath,
+      JSON.stringify(
+        {
+          servers: [{ name: "grep", transport: { type: "http", url: "https://mcp.grep.app" } }],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const { responses } = await sendAndCollect(
+        url,
+        (sessionId) => ({ type: "mcp_servers_get", sessionId }),
+        1,
+      );
+      expect(responses[0].type).toBe("mcp_servers");
+      expect(responses[0].scope).toBe("project");
+      expect(responses[0].path).toBe(mcpPath);
+      expect(Array.isArray(responses[0].projectServers)).toBe(true);
+      expect(Array.isArray(responses[0].effectiveServers)).toBe(true);
+      expect(responses[0].projectServers[0]?.name).toBe("grep");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("mcp_servers_set persists JSON and re-emits mcp_servers", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    const rawJson = JSON.stringify(
+      {
+        servers: [{ name: "local", transport: { type: "stdio", command: "echo", args: ["ok"] } }],
+      },
+      null,
+      2,
+    );
+    try {
+      const { responses } = await sendAndCollect(
+        url,
+        (sessionId) => ({ type: "mcp_servers_set", sessionId, rawJson }),
+        1,
+      );
+      expect(responses[0].type).toBe("mcp_servers");
+      expect(responses[0].projectServers[0]?.name).toBe("local");
+      const persistedRaw = await fs.readFile(path.join(tmpDir, ".agent", "mcp-servers.json"), "utf-8");
+      expect(persistedRaw).toBe(`${rawJson}\n`);
+    } finally {
+      server.stop();
+    }
+  });
+
   test("list_commands returns commands metadata", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
@@ -917,6 +993,7 @@ describe("WebSocket Lifecycle", () => {
           }
           if (
             msg.type === "session_settings" ||
+            msg.type === "session_config" ||
             msg.type === "session_info" ||
             msg.type === "observability_status" ||
             msg.type === "provider_catalog" ||
@@ -957,6 +1034,7 @@ describe("WebSocket Lifecycle", () => {
           }
           if (
             msg.type === "session_settings" ||
+            msg.type === "session_config" ||
             msg.type === "session_info" ||
             msg.type === "observability_status" ||
             msg.type === "provider_catalog" ||
@@ -997,6 +1075,7 @@ describe("WebSocket Lifecycle", () => {
           }
           if (
             msg.type === "session_settings" ||
+            msg.type === "session_config" ||
             msg.type === "session_info" ||
             msg.type === "observability_status" ||
             msg.type === "provider_catalog" ||

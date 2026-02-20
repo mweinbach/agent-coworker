@@ -585,6 +585,52 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("mcp_servers_get", () => {
+    test("valid mcp_servers_get message", () => {
+      const msg = expectOk(JSON.stringify({ type: "mcp_servers_get", sessionId: "s1" }));
+      expect(msg.type).toBe("mcp_servers_get");
+      if (msg.type === "mcp_servers_get") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("mcp_servers_get missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "mcp_servers_get" }));
+      expect(err).toBe("mcp_servers_get missing sessionId");
+    });
+  });
+
+  describe("mcp_servers_set", () => {
+    test("valid mcp_servers_set message", () => {
+      const msg = expectOk(
+        JSON.stringify({ type: "mcp_servers_set", sessionId: "s1", rawJson: "{\"servers\":[]}" }),
+      );
+      expect(msg.type).toBe("mcp_servers_set");
+      if (msg.type === "mcp_servers_set") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.rawJson).toBe("{\"servers\":[]}");
+      }
+    });
+
+    test("mcp_servers_set validates required fields and max size", () => {
+      expect(expectErr(JSON.stringify({ type: "mcp_servers_set", rawJson: "{}" }))).toBe(
+        "mcp_servers_set missing sessionId",
+      );
+      expect(expectErr(JSON.stringify({ type: "mcp_servers_set", sessionId: "s1", rawJson: 42 }))).toBe(
+        "mcp_servers_set missing/invalid rawJson",
+      );
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "mcp_servers_set",
+            sessionId: "s1",
+            rawJson: "x".repeat(1_000_001),
+          }),
+        ),
+      ).toBe("mcp_servers_set rawJson exceeds max size 1000000");
+    });
+  });
+
   describe("harness context messages", () => {
     test("harness_context_get parses", () => {
       const msg = expectOk(JSON.stringify({ type: "harness_context_get", sessionId: "s1" }));
@@ -1178,12 +1224,16 @@ describe("safeParseClientMessage", () => {
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_authorize")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_callback")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_set_api_key")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("mcp_servers_get")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("mcp_servers_set")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("commands")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_catalog")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_auth_methods")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_auth_challenge")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_auth_result")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("mcp_servers")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("session_info")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("session_config")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("model_stream_chunk")).toBe(true);
     });
 

@@ -153,7 +153,7 @@ The TUI connects to the agent server over WebSocket — it never touches the age
 
 ## WebSocket Protocol Notes
 
-- Current protocol version is `4.0` (sent in `server_hello.protocolVersion`).
+- Current protocol version is `6.0` (sent in `server_hello.protocolVersion`).
 - `ping` now requires `sessionId`, and `pong.sessionId` echoes it.
 - `error` events always include required `code` and `source`.
 - `approval` events always include required `reasonCode`.
@@ -198,6 +198,13 @@ Example `./.agent/config.json`:
 }
 ```
 
+Desktop workspace settings (hybrid persistence):
+- Core workspace defaults are persisted in project files:
+  - `./.agent/config.json`: `provider`, `model`, `subAgentModel`, `enableMcp` (and `observabilityEnabled` when set).
+  - `./.agent/mcp-servers.json`: workspace-local MCP server document.
+- Desktop-only UI/session metadata remains in desktop `state.json` (for example `yolo`, selected workspace/thread, and UI preferences).
+- In the desktop app, Workspace Settings changes are applied immediately to live threads in that workspace; busy threads are retried when they become idle.
+
 ## MCP (Remote Tool Servers)
 
 MCP (Model Context Protocol) servers add extra tools to the agent at runtime.
@@ -206,6 +213,10 @@ Server configs are loaded from (highest priority first):
 - `./.agent/mcp-servers.json` (project)
 - `~/.agent/mcp-servers.json` (user)
 - `./config/mcp-servers.json` (built-in defaults)
+
+Desktop app note:
+- The Workspace Settings page includes a raw JSON editor for `./.agent/mcp-servers.json` with save/reload and effective-server preview.
+- MCP changes are exposed over WebSocket via `mcp_servers_get`, `mcp_servers_set`, and `mcp_servers`.
 
 Example `./.agent/mcp-servers.json` using `mcp.grep.app`:
 ```json

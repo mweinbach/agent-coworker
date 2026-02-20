@@ -167,6 +167,9 @@ function makeSession(
       model: string;
       subAgentModel: string;
     }) => Promise<void> | void;
+    persistProjectConfigPatchImpl: (
+      patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">>
+    ) => Promise<void> | void;
     generateSessionTitleImpl: (opts: { config: AgentConfig; query: string }) => Promise<{
       title: string;
       source: "default" | "model" | "heuristic";
@@ -190,6 +193,7 @@ function makeSession(
     getProviderStatusesImpl,
     sessionBackupFactory,
     persistModelSelectionImpl: overrides?.persistModelSelectionImpl,
+    persistProjectConfigPatchImpl: overrides?.persistProjectConfigPatchImpl,
     generateSessionTitleImpl: overrides?.generateSessionTitleImpl ?? mockGenerateSessionTitle,
     writePersistedSessionSnapshotImpl:
       overrides?.writePersistedSessionSnapshotImpl ?? mockWritePersistedSessionSnapshot,
@@ -401,17 +405,27 @@ describe("AgentSession", () => {
       expect(session.getEnableMcp()).toBe(false);
     });
 
-    test("setEnableMcp updates config and emits session_settings", () => {
+    test("setEnableMcp updates config and emits session_settings", async () => {
       const dir = "/tmp/test-session";
       const cfg = { ...makeConfig(dir), enableMcp: true };
       const { session, events } = makeSession({ config: cfg });
 
-      session.setEnableMcp(false);
+      await session.setEnableMcp(false);
 
       expect(session.getEnableMcp()).toBe(false);
       const evt = events.find((e) => e.type === "session_settings") as any;
       expect(evt).toBeDefined();
       expect(evt.enableMcp).toBe(false);
+    });
+
+    test("setEnableMcp persists workspace defaults via patch hook", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session } = makeSession({ persistProjectConfigPatchImpl });
+
+      await session.setEnableMcp(false);
+
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({ enableMcp: false });
     });
 
     test("setEnableMcp while running emits Agent is busy", async () => {
@@ -428,13 +442,48 @@ describe("AgentSession", () => {
       const first = session.sendUserMessage("first");
       await new Promise((r) => setTimeout(r, 10));
 
-      session.setEnableMcp(false);
+      await session.setEnableMcp(false);
       const errEvt = events.find((e) => e.type === "error") as any;
       expect(errEvt).toBeDefined();
       expect(errEvt.message).toBe("Agent is busy");
 
       resolveRunTurn();
       await first;
+    });
+  });
+
+  describe("session config", () => {
+    test("getSessionConfigEvent exposes initial runtime session config", () => {
+      const { session } = makeSession();
+      const evt = session.getSessionConfigEvent();
+      expect(evt.type).toBe("session_config");
+      expect(evt.config.yolo).toBe(false);
+      expect(evt.config.observabilityEnabled).toBe(false);
+      expect(evt.config.subAgentModel).toBe("gemini-2.0-flash");
+      expect(evt.config.maxSteps).toBe(100);
+    });
+
+    test("setConfig emits session_config and persists subAgentModel/observability", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session, events } = makeSession({ persistProjectConfigPatchImpl });
+
+      session.setConfig({
+        subAgentModel: "gpt-5.2-mini",
+        observabilityEnabled: true,
+        maxSteps: 25,
+      });
+      await flushAsyncWork();
+
+      const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
+      expect(cfgEvt).toBeDefined();
+      expect(cfgEvt.config.subAgentModel).toBe("gpt-5.2-mini");
+      expect(cfgEvt.config.observabilityEnabled).toBe(true);
+      expect(cfgEvt.config.maxSteps).toBe(25);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        subAgentModel: "gpt-5.2-mini",
+        observabilityEnabled: true,
+      });
     });
   });
 

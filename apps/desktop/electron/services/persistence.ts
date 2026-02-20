@@ -154,6 +154,7 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       lastOpenedAt,
       defaultProvider: asOptionalString(item.defaultProvider) as WorkspaceRecord["defaultProvider"],
       defaultModel: asOptionalString(item.defaultModel),
+      defaultSubAgentModel: asOptionalString(item.defaultSubAgentModel),
       defaultEnableMcp: typeof item.defaultEnableMcp === "boolean" ? item.defaultEnableMcp : true,
       yolo: typeof item.yolo === "boolean" ? item.yolo : false,
     });

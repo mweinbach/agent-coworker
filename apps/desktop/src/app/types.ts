@@ -1,9 +1,11 @@
 import type {
   ApprovalRiskCode,
   ConfigSubset,
+  MCPServerConfig,
   ProviderName,
   ServerErrorCode,
   ServerErrorSource,
+  ServerEvent,
   SkillEntry,
   TodoItem,
 } from "../lib/wsProtocol";
@@ -35,6 +37,7 @@ export type WorkspaceRecord = {
   lastOpenedAt: string;
   defaultProvider?: ProviderName;
   defaultModel?: string;
+  defaultSubAgentModel?: string;
   defaultEnableMcp: boolean;
   yolo: boolean;
 };
@@ -85,13 +88,22 @@ export type ViewId = "chat" | "skills" | "settings";
 
 export type SettingsPageId = "providers" | "workspaces" | "developer";
 
+export type SessionConfigSubset = Extract<ServerEvent, { type: "session_config" }>["config"];
+
 export type WorkspaceRuntime = {
   serverUrl: string | null;
   starting: boolean;
   error: string | null;
   controlSessionId: string | null;
   controlConfig: ConfigSubset | null;
+  controlSessionConfig: SessionConfigSubset | null;
   controlEnableMcp: boolean | null;
+  mcpConfigPath: string | null;
+  mcpRawJson: string;
+  mcpProjectServers: MCPServerConfig[];
+  mcpEffectiveServers: MCPServerConfig[];
+  mcpParseError: string | null;
+  mcpSaving: boolean;
   skills: SkillEntry[];
   selectedSkillName: string | null;
   selectedSkillContent: string | null;
@@ -102,6 +114,7 @@ export type ThreadRuntime = {
   connected: boolean;
   sessionId: string | null;
   config: ConfigSubset | null;
+  sessionConfig: SessionConfigSubset | null;
   enableMcp: boolean | null;
   busy: boolean;
   busySince: string | null;

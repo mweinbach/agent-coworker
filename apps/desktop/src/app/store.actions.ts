@@ -64,10 +64,15 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
           const provider = w.defaultProvider && isProviderName(w.defaultProvider) ? w.defaultProvider : "google";
           const model =
             typeof w.defaultModel === "string" && w.defaultModel.trim() ? w.defaultModel : defaultModelForProvider(provider);
+          const subAgentModel =
+            typeof w.defaultSubAgentModel === "string" && w.defaultSubAgentModel.trim()
+              ? w.defaultSubAgentModel
+              : model;
         return {
             ...w,
             defaultProvider: provider,
             defaultModel: model,
+            defaultSubAgentModel: subAgentModel,
             defaultEnableMcp: typeof w.defaultEnableMcp === "boolean" ? w.defaultEnableMcp : true,
             yolo: typeof w.yolo === "boolean" ? w.yolo : false,
           };
@@ -176,6 +181,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
         lastOpenedAt: nowIso(),
         defaultProvider: "google",
         defaultModel: defaultModelForProvider("google"),
+        defaultSubAgentModel: defaultModelForProvider("google"),
         defaultEnableMcp: true,
         yolo: false,
       };
@@ -207,6 +213,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
         RUNTIME.threadSockets.delete(thread.id);
         RUNTIME.optimisticUserMessageIds.delete(thread.id);
         RUNTIME.pendingThreadMessages.delete(thread.id);
+        RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(thread.id);
         RUNTIME.modelStreamByThread.delete(thread.id);
         try {
           sock?.close();
@@ -243,6 +250,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       RUNTIME.threadSockets.delete(threadId);
       RUNTIME.optimisticUserMessageIds.delete(threadId);
       RUNTIME.pendingThreadMessages.delete(threadId);
+      RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
       try {
         sock?.close();
@@ -640,6 +648,11 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       if (!ws) return;
       const rt = get().threadRuntimeById[threadId];
       if (!rt?.sessionId) return;
+      if (rt.busy) {
+        RUNTIME.pendingWorkspaceDefaultApplyThreadIds.add(threadId);
+        return;
+      }
+      RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
   
       const inferredProvider =
         ws.defaultProvider && isProviderName(ws.defaultProvider)
@@ -650,6 +663,8 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
   
       const provider = normalizeProviderChoice(inferredProvider);
       const model = (ws.defaultModel?.trim() || rt.config?.model?.trim() || "") || undefined;
+      const subAgentModel =
+        (ws.defaultSubAgentModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.subAgentModel?.trim() || "") || undefined;
   
       if (provider && model) {
         const ok = sendThread(get, threadId, (sessionId) => ({
@@ -659,6 +674,23 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
           model,
         }));
         if (ok) appendThreadTranscript(threadId, "client", { type: "set_model", sessionId: rt.sessionId, provider, model });
+      }
+
+      if (subAgentModel) {
+        const okConfig = sendThread(get, threadId, (sessionId) => ({
+          type: "set_config",
+          sessionId,
+          config: {
+            subAgentModel,
+          },
+        }));
+        if (okConfig) {
+          appendThreadTranscript(threadId, "client", {
+            type: "set_config",
+            sessionId: rt.sessionId,
+            config: { subAgentModel },
+          });
+        }
       }
   
       const okMcp = sendThread(get, threadId, (sessionId) => ({
@@ -676,6 +708,67 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
         workspaces: s.workspaces.map((w) => (w.id === workspaceId ? { ...w, ...patch } : w)),
       }));
       await persistNow(get);
+
+      const shouldSyncCoreSettings =
+        patch.defaultProvider !== undefined ||
+        patch.defaultModel !== undefined ||
+        patch.defaultSubAgentModel !== undefined ||
+        patch.defaultEnableMcp !== undefined;
+      if (!shouldSyncCoreSettings) {
+        return;
+      }
+
+      const workspace = get().workspaces.find((w) => w.id === workspaceId);
+      if (!workspace) return;
+
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+
+      const provider = normalizeProviderChoice(
+        workspace.defaultProvider && isProviderName(workspace.defaultProvider)
+          ? workspace.defaultProvider
+          : "google"
+      );
+      const model = workspace.defaultModel?.trim() || defaultModelForProvider(provider);
+      const subAgentModel = workspace.defaultSubAgentModel?.trim() || model;
+
+      const modelPersisted = sendControl(get, workspaceId, (sessionId) => ({
+        type: "set_model",
+        sessionId,
+        provider,
+        model,
+      }));
+      const subAgentPersisted = sendControl(get, workspaceId, (sessionId) => ({
+        type: "set_config",
+        sessionId,
+        config: {
+          subAgentModel,
+        },
+      }));
+      const mcpPersisted = sendControl(get, workspaceId, (sessionId) => ({
+        type: "set_enable_mcp",
+        sessionId,
+        enableMcp: workspace.defaultEnableMcp,
+      }));
+
+      if (!modelPersisted || !subAgentPersisted || !mcpPersisted) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Workspace settings partially applied",
+            detail: "Control session is not fully connected yet. Reopen the workspace settings to retry.",
+          }),
+        }));
+      }
+
+      const threadIds = get()
+        .threads.filter((thread) => thread.workspaceId === workspaceId)
+        .map((thread) => thread.id);
+      for (const threadId of threadIds) {
+        void get().applyWorkspaceDefaultsToThread(threadId);
+      }
     },
   
     restartWorkspaceServer: async (workspaceId) => {
@@ -690,6 +783,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
         closeThreadSession(thread.id);
         sock?.close();
         RUNTIME.threadSockets.delete(thread.id);
+        RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(thread.id);
       }
   
       try {
@@ -701,12 +795,76 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
-          [workspaceId]: { ...s.workspaceRuntimeById[workspaceId], serverUrl: null, controlSessionId: null, controlConfig: null },
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            serverUrl: null,
+            controlSessionId: null,
+            controlConfig: null,
+            controlSessionConfig: null,
+          },
         },
       }));
   
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
+    },
+
+    requestWorkspaceMcpServers: async (workspaceId: string) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+
+      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "mcp_servers_get", sessionId }));
+      if (!ok) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to request MCP servers.",
+          }),
+        }));
+      }
+    },
+
+    saveWorkspaceMcpServers: async (workspaceId: string, rawJson: string) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            mcpSaving: true,
+            mcpRawJson: rawJson,
+          },
+        },
+      }));
+
+      const ok = sendControl(get, workspaceId, (sessionId) => ({
+        type: "mcp_servers_set",
+        sessionId,
+        rawJson,
+      }));
+      if (ok) return;
+
+      set((s) => ({
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            mcpSaving: false,
+          },
+        },
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to save MCP servers.",
+        }),
+      }));
     },
   
     connectProvider: async (provider, apiKey) => {

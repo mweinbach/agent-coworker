@@ -4,6 +4,7 @@ import type {
   AgentConfig,
   CommandInfo,
   HarnessContextPayload,
+  MCPServerConfig,
   ObservabilityHealth,
   ServerErrorCode,
   ServerErrorSource,
@@ -56,6 +57,8 @@ export type ClientMessage =
   | { type: "enable_skill"; sessionId: string; skillName: string }
   | { type: "delete_skill"; sessionId: string; skillName: string }
   | { type: "set_enable_mcp"; sessionId: string; enableMcp: boolean }
+  | { type: "mcp_servers_get"; sessionId: string }
+  | { type: "mcp_servers_set"; sessionId: string; rawJson: string }
   | { type: "cancel"; sessionId: string }
   | { type: "session_close"; sessionId: string }
   | { type: "ping"; sessionId: string }
@@ -109,6 +112,16 @@ export type ServerEvent =
       updatedAt: string;
       provider: AgentConfig["provider"];
       model: string;
+    }
+  | {
+      type: "mcp_servers";
+      sessionId: string;
+      scope: "project";
+      path: string;
+      rawJson: string;
+      projectServers: MCPServerConfig[];
+      effectiveServers: MCPServerConfig[];
+      parseError?: string;
     }
   | { type: "provider_catalog"; sessionId: string; all: ProviderCatalogEntry[]; default: Record<string, string>; connected: string[] }
   | { type: "provider_auth_methods"; sessionId: string; methods: Record<string, ProviderAuthMethod[]> }
@@ -250,6 +263,8 @@ export const CLIENT_MESSAGE_TYPES = [
   "enable_skill",
   "delete_skill",
   "set_enable_mcp",
+  "mcp_servers_get",
+  "mcp_servers_set",
   "cancel",
   "session_close",
   "ping",
@@ -272,6 +287,7 @@ export const SERVER_EVENT_TYPES = [
   "server_hello",
   "session_settings",
   "session_info",
+  "mcp_servers",
   "provider_catalog",
   "provider_auth_methods",
   "provider_auth_challenge",
@@ -312,6 +328,8 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.trim().length > 0;
 }
+
+const MAX_MCP_SERVERS_JSON_SIZE = 1_000_000;
 
 export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMessage } | { ok: false; error: string } {
   let parsed: unknown;
@@ -475,6 +493,20 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
       if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "set_enable_mcp missing sessionId" };
       if (typeof obj.enableMcp !== "boolean") {
         return { ok: false, error: "set_enable_mcp missing/invalid enableMcp" };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "mcp_servers_get": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "mcp_servers_get missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "mcp_servers_set": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "mcp_servers_set missing sessionId" };
+      if (typeof obj.rawJson !== "string") {
+        return { ok: false, error: "mcp_servers_set missing/invalid rawJson" };
+      }
+      if (obj.rawJson.length > MAX_MCP_SERVERS_JSON_SIZE) {
+        return { ok: false, error: "mcp_servers_set rawJson exceeds max size 1000000" };
       }
       return { ok: true, msg: obj as ClientMessage };
     }

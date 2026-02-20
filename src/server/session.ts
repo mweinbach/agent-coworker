@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { connectProvider as connectModelProvider, getAiCoworkerPaths, type ConnectProviderResult } from "../connect";
+import { readProjectMCPServersDocument, writeProjectMCPServersDocument } from "../mcp";
 import {
   authorizeProviderAuth,
   callbackProviderAuth as callbackProviderAuthMethod,
@@ -64,6 +65,10 @@ type PersistedModelSelection = {
   model: string;
   subAgentModel: string;
 };
+
+type PersistedProjectConfigPatch = Partial<
+  Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">
+>;
 
 type SessionInfoState = Omit<Extract<ServerEvent, { type: "session_info" }>, "type" | "sessionId">;
 
@@ -138,6 +143,7 @@ export class AgentSession {
   private readonly harnessContextStore: HarnessContextStore;
   private readonly runTurnImpl: typeof runTurn;
   private readonly persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
+  private readonly persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
   private readonly generateSessionTitleImpl: typeof generateSessionTitle;
   private readonly sessionDb: SessionDb | null;
   private readonly writePersistedSessionSnapshotImpl: typeof writePersistedSessionSnapshot;
@@ -183,6 +189,7 @@ export class AgentSession {
     harnessContextStore?: HarnessContextStore;
     runTurnImpl?: typeof runTurn;
     persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
+    persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
     generateSessionTitleImpl?: typeof generateSessionTitle;
     sessionDb?: SessionDb | null;
     writePersistedSessionSnapshotImpl?: typeof writePersistedSessionSnapshot;
@@ -205,6 +212,7 @@ export class AgentSession {
     this.harnessContextStore = opts.harnessContextStore ?? new HarnessContextStore();
     this.runTurnImpl = opts.runTurnImpl ?? runTurn;
     this.persistModelSelectionImpl = opts.persistModelSelectionImpl;
+    this.persistProjectConfigPatchImpl = opts.persistProjectConfigPatchImpl;
     this.generateSessionTitleImpl = opts.generateSessionTitleImpl ?? generateSessionTitle;
     this.sessionDb = opts.sessionDb ?? null;
     this.writePersistedSessionSnapshotImpl = opts.writePersistedSessionSnapshotImpl ?? writePersistedSessionSnapshot;
@@ -255,6 +263,7 @@ export class AgentSession {
     harnessContextStore?: HarnessContextStore;
     runTurnImpl?: typeof runTurn;
     persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
+    persistProjectConfigPatchImpl?: (patch: PersistedProjectConfigPatch) => Promise<void> | void;
     generateSessionTitleImpl?: typeof generateSessionTitle;
     sessionDb?: SessionDb | null;
     writePersistedSessionSnapshotImpl?: typeof writePersistedSessionSnapshot;
@@ -294,6 +303,7 @@ export class AgentSession {
       harnessContextStore: opts.harnessContextStore,
       runTurnImpl: opts.runTurnImpl,
       persistModelSelectionImpl: opts.persistModelSelectionImpl,
+      persistProjectConfigPatchImpl: opts.persistProjectConfigPatchImpl,
       generateSessionTitleImpl: opts.generateSessionTitleImpl,
       sessionDb: opts.sessionDb,
       writePersistedSessionSnapshotImpl: opts.writePersistedSessionSnapshotImpl,
@@ -337,6 +347,19 @@ export class AgentSession {
 
   getEnableMcp() {
     return this.config.enableMcp ?? false;
+  }
+
+  getSessionConfigEvent(): Extract<ServerEvent, { type: "session_config" }> {
+    return {
+      type: "session_config",
+      sessionId: this.id,
+      config: {
+        yolo: this.yolo,
+        observabilityEnabled: this.config.observabilityEnabled ?? false,
+        subAgentModel: this.config.subAgentModel,
+        maxSteps: this.maxSteps,
+      },
+    };
   }
 
   getSessionInfoEvent(): Extract<ServerEvent, { type: "session_info" }> {
@@ -889,7 +912,7 @@ export class AgentSession {
     }
   }
 
-  setEnableMcp(enableMcp: boolean) {
+  async setEnableMcp(enableMcp: boolean) {
     if (this.running) {
       this.emitError("busy", "session", "Agent is busy");
       return;
@@ -897,7 +920,59 @@ export class AgentSession {
 
     this.config = { ...this.config, enableMcp };
     this.emit({ type: "session_settings", sessionId: this.id, enableMcp });
+    let persistDefaultsError: string | null = null;
+    if (this.persistProjectConfigPatchImpl) {
+      try {
+        await this.persistProjectConfigPatchImpl({ enableMcp });
+      } catch (err) {
+        persistDefaultsError = String(err);
+      }
+    }
+    if (persistDefaultsError) {
+      this.emitError(
+        "internal_error",
+        "session",
+        `MCP setting updated for this session, but persisting defaults failed: ${persistDefaultsError}`
+      );
+    }
     this.queuePersistSessionSnapshot("session.enable_mcp");
+  }
+
+  async emitMcpServers() {
+    try {
+      const payload = await readProjectMCPServersDocument(this.config);
+      this.emit({
+        type: "mcp_servers",
+        sessionId: this.id,
+        scope: "project",
+        path: payload.path,
+        rawJson: payload.rawJson,
+        projectServers: payload.projectServers,
+        effectiveServers: payload.effectiveServers,
+        ...(payload.parseError ? { parseError: payload.parseError } : {}),
+      });
+    } catch (err) {
+      this.emitError("internal_error", "session", `Failed to read MCP servers: ${String(err)}`);
+    }
+  }
+
+  async setMcpServers(rawJson: string) {
+    if (this.running) {
+      this.emitError("busy", "session", "Agent is busy");
+      return;
+    }
+    try {
+      await writeProjectMCPServersDocument(this.config.projectAgentDir, rawJson);
+    } catch (err) {
+      const message = String(err);
+      if (message.toLowerCase().includes("mcp-servers.json")) {
+        this.emitError("validation_failed", "session", message);
+        return;
+      }
+      this.emitError("internal_error", "session", `Failed to save MCP servers: ${message}`);
+      return;
+    }
+    await this.emitMcpServers();
   }
 
   getHarnessContext() {
@@ -1469,22 +1544,32 @@ export class AgentSession {
     if (patch.yolo !== undefined) this.yolo = patch.yolo;
     if (patch.observabilityEnabled !== undefined) {
       this.config = { ...this.config, observabilityEnabled: patch.observabilityEnabled };
+      this.emit(this.getObservabilityStatusEvent());
     }
     if (patch.subAgentModel !== undefined) {
       this.config = { ...this.config, subAgentModel: patch.subAgentModel };
     }
     if (patch.maxSteps !== undefined) this.maxSteps = patch.maxSteps;
 
-    this.emit({
-      type: "session_config",
-      sessionId: this.id,
-      config: {
-        yolo: this.yolo,
-        observabilityEnabled: this.config.observabilityEnabled ?? false,
-        subAgentModel: this.config.subAgentModel,
-        maxSteps: this.maxSteps,
-      },
-    });
+    this.emit(this.getSessionConfigEvent());
+    this.queuePersistSessionSnapshot("session.config_updated");
+
+    const persistPatch: PersistedProjectConfigPatch = {};
+    if (patch.subAgentModel !== undefined) {
+      persistPatch.subAgentModel = patch.subAgentModel;
+    }
+    if (patch.observabilityEnabled !== undefined) {
+      persistPatch.observabilityEnabled = patch.observabilityEnabled;
+    }
+    if (Object.keys(persistPatch).length > 0 && this.persistProjectConfigPatchImpl) {
+      void Promise.resolve(this.persistProjectConfigPatchImpl(persistPatch)).catch((err) => {
+        this.emitError(
+          "internal_error",
+          "session",
+          `Config updated for this session, but persisting defaults failed: ${String(err)}`
+        );
+      });
+    }
   }
 
   async uploadFile(filename: string, contentBase64: string) {

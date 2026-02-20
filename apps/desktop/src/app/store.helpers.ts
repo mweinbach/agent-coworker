@@ -102,6 +102,7 @@ type RuntimeMaps = {
   threadSockets: Map<string, AgentSocket>;
   optimisticUserMessageIds: Map<string, Set<string>>;
   pendingThreadMessages: Map<string, string[]>;
+  pendingWorkspaceDefaultApplyThreadIds: Set<string>;
   workspaceStartPromises: Map<string, Promise<void>>;
   modelStreamByThread: Map<string, ThreadModelStreamRuntime>;
   workspacePickerOpen: boolean;
@@ -112,6 +113,7 @@ const RUNTIME: RuntimeMaps = {
   threadSockets: new Map(),
   optimisticUserMessageIds: new Map(),
   pendingThreadMessages: new Map(),
+  pendingWorkspaceDefaultApplyThreadIds: new Set(),
   workspaceStartPromises: new Map(),
   modelStreamByThread: new Map(),
   workspacePickerOpen: false,
@@ -182,7 +184,14 @@ function defaultWorkspaceRuntime(): WorkspaceRuntime {
     error: null,
     controlSessionId: null,
     controlConfig: null,
+    controlSessionConfig: null,
     controlEnableMcp: null,
+    mcpConfigPath: null,
+    mcpRawJson: "",
+    mcpProjectServers: [],
+    mcpEffectiveServers: [],
+    mcpParseError: null,
+    mcpSaving: false,
     skills: [],
     selectedSkillName: null,
     selectedSkillContent: null,
@@ -195,6 +204,7 @@ function defaultThreadRuntime(): ThreadRuntime {
     connected: false,
     sessionId: null,
     config: null,
+    sessionConfig: null,
     enableMcp: null,
     busy: false,
     busySince: null,
@@ -829,6 +839,8 @@ export type AppStoreState = {
   applyWorkspaceDefaultsToThread: (threadId: string) => Promise<void>;
   updateWorkspaceDefaults: (workspaceId: string, patch: Partial<WorkspaceRecord>) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
+  requestWorkspaceMcpServers: (workspaceId: string) => Promise<void>;
+  saveWorkspaceMcpServers: (workspaceId: string, rawJson: string) => Promise<void>;
 
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
   setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;
@@ -1011,6 +1023,7 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
               ...s.workspaceRuntimeById[workspaceId],
               controlSessionId: evt.sessionId,
               controlConfig: evt.config,
+              controlSessionConfig: null,
             },
           },
           providerStatusRefreshing: true,
@@ -1023,6 +1036,7 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
           socket.send({ type: "provider_catalog_get", sessionId: evt.sessionId });
           socket.send({ type: "provider_auth_methods_get", sessionId: evt.sessionId });
           socket.send({ type: "refresh_provider_status", sessionId: evt.sessionId });
+          socket.send({ type: "mcp_servers_get", sessionId: evt.sessionId });
         } catch {
           // ignore
         }
@@ -1036,11 +1050,54 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
 
       if (evt.type === "session_settings") {
         set((s) => ({
+          workspaces: s.workspaces.map((workspace) =>
+            workspace.id === workspaceId
+              ? { ...workspace, defaultEnableMcp: evt.enableMcp }
+              : workspace
+          ),
           workspaceRuntimeById: {
             ...s.workspaceRuntimeById,
             [workspaceId]: {
               ...s.workspaceRuntimeById[workspaceId],
               controlEnableMcp: evt.enableMcp,
+            },
+          },
+        }));
+        void persist(get);
+        return;
+      }
+
+      if (evt.type === "session_config") {
+        set((s) => ({
+          workspaces: s.workspaces.map((workspace) =>
+            workspace.id === workspaceId
+              ? { ...workspace, defaultSubAgentModel: evt.config.subAgentModel }
+              : workspace
+          ),
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              controlSessionConfig: evt.config,
+            },
+          },
+        }));
+        void persist(get);
+        return;
+      }
+
+      if (evt.type === "mcp_servers") {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              mcpConfigPath: evt.path,
+              mcpRawJson: evt.rawJson,
+              mcpProjectServers: evt.projectServers,
+              mcpEffectiveServers: evt.effectiveServers,
+              mcpParseError: evt.parseError ?? null,
+              mcpSaving: false,
             },
           },
         }));
@@ -1162,6 +1219,13 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
 
       if (evt.type === "error") {
         set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              mcpSaving: false,
+            },
+          },
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),
@@ -1187,6 +1251,13 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
       set((s) => ({
         providerStatusRefreshing: false,
         providerLastAuthChallenge: null,
+        workspaceRuntimeById: {
+          ...s.workspaceRuntimeById,
+          [workspaceId]: {
+            ...s.workspaceRuntimeById[workspaceId],
+            mcpSaving: false,
+          },
+        },
       }));
     },
     });
@@ -1228,6 +1299,7 @@ function ensureThreadSocket(
     onClose: () => {
       RUNTIME.threadSockets.delete(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
+      RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
         if (!rt) return {};
@@ -1659,6 +1731,9 @@ function handleThreadEvent(
         },
       };
     });
+    if (!evt.busy && RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)) {
+      void get().applyWorkspaceDefaultsToThread(threadId);
+    }
     return;
   }
 
@@ -1670,6 +1745,20 @@ function handleThreadEvent(
         threadRuntimeById: {
           ...s.threadRuntimeById,
           [threadId]: { ...rt, config: evt.config },
+        },
+      };
+    });
+    return;
+  }
+
+  if (evt.type === "session_config") {
+    set((s) => {
+      const rt = s.threadRuntimeById[threadId];
+      if (!rt) return {};
+      return {
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: { ...rt, sessionConfig: evt.config },
         },
       };
     });

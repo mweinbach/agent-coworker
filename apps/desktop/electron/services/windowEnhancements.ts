@@ -34,15 +34,26 @@ interface ApplyMacosPremiumEnhancementsOptions {
 export function macosBrowserWindowOptions(
   platform: NodeJS.Platform = process.platform,
 ): Partial<BrowserWindowConstructorOptions> {
-  if (platform !== "darwin") {
-    return {};
+  if (platform === "darwin") {
+    return {
+      titleBarStyle: "hiddenInset",
+      trafficLightPosition: MACOS_TRAFFIC_LIGHT_POSITION,
+      transparent: true,
+    };
   }
 
-  return {
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: MACOS_TRAFFIC_LIGHT_POSITION,
-    transparent: true,
-  };
+  if (platform === "win32") {
+    return {
+      titleBarStyle: "hidden",
+      titleBarOverlay: {
+        color: "#00000000", // Transparent to show the app's background underneath
+        symbolColor: "#5a4736", // Matches --muted for the warm theme
+        height: 48, // Matches the h-12 (3rem) height of AppTopBar
+      },
+    };
+  }
+
+  return {};
 }
 
 function defaultImporter(specifier: string): Promise<unknown> {

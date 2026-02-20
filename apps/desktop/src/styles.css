@@ -104,11 +104,16 @@ body {
   padding-left: 5.75rem;
 }
 
+:root[data-platform="win32"] .app-topbar {
+  padding-right: 9rem; /* Prevent overlap with native Windows controls */
+}
+
 .app-shell {
   position: relative;
 }
 
-:root[data-platform="darwin"] .app-window-drag-strip {
+:root[data-platform="darwin"] .app-window-drag-strip,
+:root[data-platform="win32"] .app-window-drag-strip {
   position: absolute;
   top: 0;
   left: 0;
@@ -118,15 +123,18 @@ body {
   -webkit-app-region: drag;
 }
 
-:root[data-platform="darwin"] .settings-shell__nav {
+:root[data-platform="darwin"] .settings-shell__nav,
+:root[data-platform="win32"] .settings-shell__nav {
   padding-top: 2.75rem;
 }
 
-:root[data-platform="darwin"] .settings-shell__back-button {
+:root[data-platform="darwin"] .settings-shell__back-button,
+:root[data-platform="win32"] .settings-shell__back-button {
   margin-top: 0;
 }
 
-:root[data-platform="darwin"] .settings-shell__drag-zone {
+:root[data-platform="darwin"] .settings-shell__drag-zone,
+:root[data-platform="win32"] .settings-shell__drag-zone {
   position: absolute;
   top: 0;
   left: 0;

@@ -44,9 +44,8 @@
 }
 
 :root[data-platform="win32"][data-reduced-transparency="false"] {
-  --app-bg: color-mix(in srgb, var(--app-bg) 88%, transparent);
-  --sidebar-bg: color-mix(in srgb, var(--sidebar-bg) 82%, transparent);
-  --panel-bg: color-mix(in srgb, var(--panel-bg) 90%, transparent);
+  /* Removed circular dependency that caused backgrounds to become invalid on Windows.
+     If transparency is needed later, define --base-app-bg etc. first. */
 }
 
 :root[data-high-contrast="true"] {

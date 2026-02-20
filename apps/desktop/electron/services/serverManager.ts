@@ -9,10 +9,13 @@ import { assertSafeId, assertWorkspaceDirectory } from "./validation";
 
 const SERVER_STARTUP_TIMEOUT_MS = 15_000;
 const SIDECAR_BASE_NAME = "cowork-server";
+const STDERR_TAIL_LIMIT = 16_384;
+const WINDOWS_SOURCE_START_ATTEMPTS = 2;
 
 type ServerHandle = {
   child: ChildProcessWithoutNullStreams;
   url: string;
+  cleanup: () => void;
 };
 
 type ServerListening = {
@@ -137,6 +140,25 @@ async function gracefulKill(child: ChildProcessWithoutNullStreams): Promise<void
 function waitForServerListening(child: ChildProcessWithoutNullStreams): Promise<ServerListening> {
   return new Promise((resolve, reject) => {
     const rl = readline.createInterface({ input: child.stdout });
+    const recentLines: string[] = [];
+
+    const recordLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        return;
+      }
+      recentLines.push(trimmed);
+      if (recentLines.length > 5) {
+        recentLines.shift();
+      }
+    };
+
+    const withRecentOutput = (message: string) => {
+      if (recentLines.length === 0) {
+        return message;
+      }
+      return `${message}; output=${recentLines.join(" | ")}`;
+    };
 
     const onError = (error: Error) => {
       cleanup();
@@ -145,12 +167,14 @@ function waitForServerListening(child: ChildProcessWithoutNullStreams): Promise<
 
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       cleanup();
-      reject(new Error(`Server exited before startup JSON (code=${code ?? "null"}, signal=${signal ?? "null"})`));
+      reject(
+        new Error(withRecentOutput(`Server exited before startup JSON (code=${code ?? "null"}, signal=${signal ?? "null"})`))
+      );
     };
 
     const timeout = setTimeout(() => {
       cleanup();
-      reject(new Error(`Server startup timed out after ${SERVER_STARTUP_TIMEOUT_MS / 1000} seconds`));
+      reject(new Error(withRecentOutput(`Server startup timed out after ${SERVER_STARTUP_TIMEOUT_MS / 1000} seconds`)));
     }, SERVER_STARTUP_TIMEOUT_MS);
 
     const cleanup = () => {
@@ -162,20 +186,24 @@ function waitForServerListening(child: ChildProcessWithoutNullStreams): Promise<
     };
 
     const onLine = (line: string) => {
-      cleanup();
+      recordLine(line);
+      const trimmed = line.trim();
+      if (!trimmed) {
+        return;
+      }
       try {
-        const parsed = JSON.parse(line.trim()) as ServerListening;
+        const parsed = JSON.parse(trimmed) as ServerListening;
         if (!parsed?.url || parsed.type !== "server_listening") {
-          reject(new Error("Server startup output missing server_listening payload"));
           return;
         }
+        cleanup();
         resolve(parsed);
-      } catch (error) {
-        reject(new Error(`Failed to parse server startup JSON: ${String(error)}`));
+      } catch {
+        // Ignore non-JSON lines while waiting for the startup event.
       }
     };
 
-    rl.once("line", onLine);
+    rl.on("line", onLine);
     child.once("error", onError);
     child.once("exit", onExit);
   });
@@ -193,6 +221,53 @@ function buildServerEnv(): NodeJS.ProcessEnv {
   return { ...process.env };
 }
 
+function buildSourceEnvForAttempt(baseEnv: NodeJS.ProcessEnv, attempt: number): { env: NodeJS.ProcessEnv; cleanup: () => void } {
+  if (process.platform !== "win32") {
+    return { env: baseEnv, cleanup: () => {} };
+  }
+
+  const tempRoot = path.join(app.getPath("temp"), "cowork-bun-transpiler-cache");
+  fs.mkdirSync(tempRoot, { recursive: true });
+  const cacheDir = fs.mkdtempSync(path.join(tempRoot, "run-"));
+
+  const env: NodeJS.ProcessEnv = {
+    ...baseEnv,
+    BUN_RUNTIME_TRANSPILER_CACHE_PATH: cacheDir,
+  };
+
+  // If Bun crashes during startup, retry once with async transpilation disabled.
+  if (attempt > 1) {
+    env.BUN_FEATURE_FLAG_DISABLE_ASYNC_TRANSPILER = "1";
+  }
+
+  return {
+    env,
+    cleanup: () => {
+      try {
+        fs.rmSync(cacheDir, { recursive: true, force: true });
+      } catch {
+        // Best effort cleanup.
+      }
+    },
+  };
+}
+
+function isLikelyBunSegfault(stderrOutput: string): boolean {
+  const normalized = stderrOutput.toLowerCase();
+  return (
+    normalized.includes("panic(main thread)") ||
+    normalized.includes("segmentation fault") ||
+    normalized.includes("bun has crashed")
+  );
+}
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
 export class ServerManager {
   private readonly servers = new Map<string, ServerHandle>();
 
@@ -208,64 +283,111 @@ export class ServerManager {
         return { url: existing.url };
       }
       this.servers.delete(workspaceId);
+      existing.cleanup();
     }
 
     const useSource = !app.isPackaged || process.env.COWORK_DESKTOP_USE_SOURCE === "1";
     const spawnArgs = buildSpawnArgs(workspacePath, yolo);
     const repoRoot = resolveRepoRoot();
-    const serverEnv = buildServerEnv();
-
-    let child: ChildProcessWithoutNullStreams;
-    if (useSource) {
-      const entry = path.join(repoRoot, "src", "server", "index.ts");
-      if (!fs.existsSync(entry)) {
-        throw new Error(`Server entrypoint not found: ${entry}`);
-      }
-
-      child = spawn("bun", [entry, ...spawnArgs], {
-        cwd: repoRoot,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: serverEnv,
-      });
-    } else {
-      const builtInDir = path.join(process.resourcesPath, "dist");
-      if (!fs.existsSync(builtInDir)) {
-        throw new Error(`Bundled dist directory not found: ${builtInDir}`);
-      }
-
-      const sidecar = findSidecarBinary();
-      child = spawn(sidecar, spawnArgs, {
-        cwd: process.resourcesPath,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: {
-          ...serverEnv,
-          COWORK_BUILTIN_DIR: builtInDir,
-          COWORK_DESKTOP_BUNDLE: "1",
-        },
-      });
+    const sourceEntry = path.join(repoRoot, "src", "server", "index.ts");
+    if (useSource && !fs.existsSync(sourceEntry)) {
+      throw new Error(`Server entrypoint not found: ${sourceEntry}`);
     }
 
-    child.stderr.on("data", (chunk) => {
-      process.stderr.write(`[cowork-server] ${chunk.toString()}`);
-    });
+    const sidecar = !useSource ? findSidecarBinary() : null;
+    const builtInDir = !useSource ? path.join(process.resourcesPath, "dist") : null;
+    if (!useSource && builtInDir && !fs.existsSync(builtInDir)) {
+      throw new Error(`Bundled dist directory not found: ${builtInDir}`);
+    }
 
-    try {
-      const listening = await waitForServerListening(child);
-      const url = listening.url;
-      this.servers.set(workspaceId, { child, url });
+    const attemptCount = useSource && process.platform === "win32" ? WINDOWS_SOURCE_START_ATTEMPTS : 1;
+    let previousError: unknown = null;
 
-      child.once("exit", () => {
-        const handle = this.servers.get(workspaceId);
-        if (handle?.child === child) {
-          this.servers.delete(workspaceId);
+    for (let attempt = 1; attempt <= attemptCount; attempt += 1) {
+      const serverEnv = buildServerEnv();
+      const sourceEnvForAttempt = useSource ? buildSourceEnvForAttempt(serverEnv, attempt) : null;
+      const cleanup = sourceEnvForAttempt?.cleanup ?? (() => {});
+
+      const child = useSource
+        ? spawn("bun", [sourceEntry, ...spawnArgs], {
+            cwd: repoRoot,
+            stdio: ["ignore", "pipe", "pipe"],
+            env: sourceEnvForAttempt!.env,
+          })
+        : spawn(sidecar!, spawnArgs, {
+            cwd: process.resourcesPath,
+            stdio: ["ignore", "pipe", "pipe"],
+            env: {
+              ...serverEnv,
+              COWORK_BUILTIN_DIR: builtInDir!,
+              COWORK_DESKTOP_BUNDLE: "1",
+            },
+          });
+
+      let stderrTail = "";
+      child.stderr.on("data", (chunk) => {
+        const text = chunk.toString();
+        stderrTail += text;
+        if (stderrTail.length > STDERR_TAIL_LIMIT) {
+          stderrTail = stderrTail.slice(-STDERR_TAIL_LIMIT);
         }
+        process.stderr.write(`[cowork-server] ${text}`);
       });
 
-      return { url };
-    } catch (error) {
-      await gracefulKill(child);
-      throw error;
+      try {
+        const listening = await waitForServerListening(child);
+        const url = listening.url;
+
+        let cleaned = false;
+        const cleanupOnce = () => {
+          if (cleaned) {
+            return;
+          }
+          cleaned = true;
+          cleanup();
+        };
+
+        this.servers.set(workspaceId, { child, url, cleanup: cleanupOnce });
+
+        child.once("exit", () => {
+          cleanupOnce();
+          const handle = this.servers.get(workspaceId);
+          if (handle?.child === child) {
+            this.servers.delete(workspaceId);
+          }
+        });
+
+        return { url };
+      } catch (error) {
+        await gracefulKill(child);
+        cleanup();
+
+        const shouldRetry =
+          useSource &&
+          process.platform === "win32" &&
+          attempt < attemptCount &&
+          isLikelyBunSegfault(stderrTail);
+
+        if (shouldRetry) {
+          previousError = error;
+          process.stderr.write(
+            "[cowork-server] Bun crashed during startup; retrying with async transpiler disabled.\n"
+          );
+          continue;
+        }
+
+        if (isLikelyBunSegfault(stderrTail)) {
+          throw new Error(
+            `Cowork server crashed inside Bun while starting: ${toErrorMessage(error)}. ` +
+              "Try upgrading Bun and retrying."
+          );
+        }
+
+        throw error;
+      }
     }
+
+    throw (previousError as Error) ?? new Error("Failed to start workspace server");
   }
 
   async stopWorkspaceServer(workspaceId: string): Promise<void> {
@@ -278,6 +400,7 @@ export class ServerManager {
 
     this.servers.delete(workspaceId);
     await gracefulKill(handle.child);
+    handle.cleanup();
   }
 
   async stopAll(): Promise<void> {
@@ -286,6 +409,13 @@ export class ServerManager {
 
     for (const [, handle] of entries) {
       await gracefulKill(handle.child);
+      handle.cleanup();
     }
   }
 }
+
+export const __internal = {
+  buildSourceEnvForAttempt,
+  isLikelyBunSegfault,
+  waitForServerListening,
+};

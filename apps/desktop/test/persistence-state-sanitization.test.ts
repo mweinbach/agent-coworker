@@ -133,5 +133,6 @@ describe("desktop persistence state sanitization", () => {
     expect(state.workspaces[0]?.defaultEnableMcp).toBe(true);
     expect(state.workspaces[0]?.yolo).toBe(false);
     expect(state.threads[0]?.status).toBe("disconnected");
+    expect(state.threads[0]?.titleSource).toBe("manual");
   });
 });

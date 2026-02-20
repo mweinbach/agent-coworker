@@ -254,6 +254,74 @@ describe("desktop protocol v2 mapping", () => {
     expect(thread?.title).toBe("Session title from server");
   });
 
+  test("non-manual session_info titles are applied once", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "session_info",
+      sessionId: "thread-session",
+      title: "First generated title",
+      titleSource: "model",
+      titleModel: "gpt-5-mini",
+      createdAt: "2026-02-19T00:00:00.000Z",
+      updatedAt: "2026-02-19T00:00:01.000Z",
+      provider: "openai",
+      model: "gpt-5.2",
+    });
+
+    threadSocket.emit({
+      type: "session_info",
+      sessionId: "thread-session",
+      title: "Second generated title",
+      titleSource: "heuristic",
+      titleModel: null,
+      createdAt: "2026-02-19T00:00:00.000Z",
+      updatedAt: "2026-02-19T00:00:02.000Z",
+      provider: "openai",
+      model: "gpt-5.2",
+    });
+
+    const thread = useAppStore.getState().threads.find((item) => item.id === threadId);
+    expect(thread?.title).toBe("First generated title");
+    expect(thread?.titleSource).toBe("model");
+  });
+
+  test("manual local rename is not overwritten by non-manual session_info", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    useAppStore.getState().renameThread(threadId, "My Manual Title");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "session_info",
+      sessionId: "thread-session",
+      title: "Generated Title",
+      titleSource: "model",
+      titleModel: "gpt-5-mini",
+      createdAt: "2026-02-19T00:00:00.000Z",
+      updatedAt: "2026-02-19T00:00:01.000Z",
+      provider: "openai",
+      model: "gpt-5.2",
+    });
+
+    const thread = useAppStore.getState().threads.find((item) => item.id === threadId);
+    expect(thread?.title).toBe("My Manual Title");
+    expect(thread?.titleSource).toBe("manual");
+  });
+
   test("error feed + notification keep required source/code", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const threadId = useAppStore.getState().selectedThreadId;

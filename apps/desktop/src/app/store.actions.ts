@@ -41,6 +41,7 @@ import {
   sendControl,
   sendThread,
   sendUserMessageToThread,
+  normalizeThreadTitleSource,
   truncateTitle,
 } from "./store.helpers";
 import type { ThreadRecord, ThreadStatus, WorkspaceRecord } from "./types";
@@ -77,6 +78,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
           status: (["active", "disconnected"] as const).includes(t.status as any)
             ? (t.status as ThreadStatus)
             : "disconnected",
+          titleSource: normalizeThreadTitleSource(t.titleSource, t.title),
           sessionId: typeof t.sessionId === "string" && t.sessionId.trim() ? t.sessionId : null,
           lastEventSeq:
             typeof t.lastEventSeq === "number" && Number.isFinite(t.lastEventSeq)
@@ -319,7 +321,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       if (!trimmed) return;
 
       set((s) => ({
-        threads: s.threads.map((t) => (t.id === threadId ? { ...t, title: trimmed } : t)),
+        threads: s.threads.map((t) => (t.id === threadId ? { ...t, title: trimmed, titleSource: "manual" } : t)),
       }));
       void persistNow(get);
 
@@ -387,6 +389,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
         id: threadId,
         workspaceId,
         title,
+        titleSource: "default",
         createdAt,
         lastMessageAt: createdAt,
         status: "active",

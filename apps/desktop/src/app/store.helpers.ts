@@ -19,6 +19,7 @@ import type {
   SettingsPageId,
   ThreadRecord,
   ThreadRuntime,
+  ThreadTitleSource,
   TranscriptEvent,
   ViewId,
   WorkspaceRecord,
@@ -44,6 +45,30 @@ function truncateTitle(s: string, max = 34) {
   const trimmed = s.trim().replace(/\s+/g, " ");
   if (trimmed.length <= max) return trimmed;
   return trimmed.slice(0, max - 1) + "…";
+}
+
+function isPlaceholderThreadTitle(title: string): boolean {
+  const normalized = title.trim().toLowerCase();
+  return normalized === "new thread" || normalized === "new session" || normalized === "new conversation";
+}
+
+function normalizeThreadTitleSource(source: unknown, fallbackTitle: string): ThreadTitleSource {
+  if (source === "default" || source === "model" || source === "heuristic" || source === "manual") {
+    return source;
+  }
+  return isPlaceholderThreadTitle(fallbackTitle) ? "default" : "manual";
+}
+
+function shouldAdoptServerTitle(opts: {
+  currentSource: ThreadTitleSource;
+  incomingTitle: string;
+  incomingSource: ThreadTitleSource;
+}): boolean {
+  if (!opts.incomingTitle) return false;
+  if (opts.incomingSource === "manual") return true;
+  if (opts.currentSource === "manual") return false;
+  if (opts.currentSource === "default") return true;
+  return false;
 }
 
 const MAX_FEED_ITEMS = 2000;
@@ -1652,6 +1677,7 @@ function handleThreadEvent(
   }
 
   if (evt.type === "session_info") {
+    let titleChanged = false;
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
       const nextConfig = rt?.config
@@ -1661,8 +1687,33 @@ function handleThreadEvent(
             model: evt.model,
           }
         : rt?.config ?? null;
+      const incomingTitle = evt.title.trim();
+      const incomingSource = normalizeThreadTitleSource(evt.titleSource, incomingTitle || evt.title);
+      const nextThreads = s.threads.map((t) => {
+        if (t.id !== threadId) return t;
+        const currentSource = normalizeThreadTitleSource(t.titleSource, t.title);
+        if (!shouldAdoptServerTitle({
+          currentSource,
+          incomingTitle,
+          incomingSource,
+        })) {
+          return t;
+        }
+
+        const nextTitle = incomingTitle || t.title;
+        if (nextTitle === t.title && currentSource === incomingSource) {
+          return t;
+        }
+
+        titleChanged = true;
+        return {
+          ...t,
+          title: nextTitle,
+          titleSource: incomingSource,
+        };
+      });
       return {
-        threads: s.threads.map((t) => (t.id === threadId ? { ...t, title: evt.title || t.title } : t)),
+        threads: nextThreads,
         ...(rt
           ? {
               threadRuntimeById: {
@@ -1673,7 +1724,9 @@ function handleThreadEvent(
           : {}),
       };
     });
-    void persist(get);
+    if (titleChanged) {
+      void persist(get);
+    }
     return;
   }
 
@@ -1823,6 +1876,7 @@ export {
   makeId,
   basename,
   truncateTitle,
+  normalizeThreadTitleSource,
   buildContextPreamble,
   isProviderName,
   normalizeProviderChoice,

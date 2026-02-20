@@ -41,10 +41,13 @@ export type WorkspaceRecord = {
 
 export type ThreadStatus = "active" | "disconnected";
 
+export type ThreadTitleSource = "default" | "model" | "heuristic" | "manual";
+
 export type ThreadRecord = {
   id: string;
   workspaceId: string;
   title: string;
+  titleSource?: ThreadTitleSource;
   createdAt: string;
   lastMessageAt: string;
   status: ThreadStatus;

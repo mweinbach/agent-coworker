@@ -3,7 +3,14 @@ import path from "node:path";
 
 import { app } from "electron";
 
-import type { PersistedState, ThreadRecord, ThreadStatus, TranscriptEvent, WorkspaceRecord } from "../../src/app/types";
+import type {
+  PersistedState,
+  ThreadRecord,
+  ThreadStatus,
+  ThreadTitleSource,
+  TranscriptEvent,
+  WorkspaceRecord,
+} from "../../src/app/types";
 import type { TranscriptBatchInput } from "../../src/lib/desktopApi";
 
 import { assertDirection, assertSafeId, assertWithinTranscriptsDir } from "./validation";
@@ -81,6 +88,18 @@ function asOptionalString(value: unknown): string | undefined {
 
 function asThreadStatus(value: unknown): ThreadStatus {
   return value === "active" || value === "disconnected" ? value : "disconnected";
+}
+
+function isPlaceholderThreadTitle(title: string): boolean {
+  const normalized = title.trim().toLowerCase();
+  return normalized === "new thread" || normalized === "new session" || normalized === "new conversation";
+}
+
+function asThreadTitleSource(value: unknown, fallbackTitle: string): ThreadTitleSource {
+  if (value === "default" || value === "model" || value === "heuristic" || value === "manual") {
+    return value;
+  }
+  return isPlaceholderThreadTitle(fallbackTitle) ? "default" : "manual";
 }
 
 function asNonNegativeInteger(value: unknown, fallback = 0): number {
@@ -172,6 +191,7 @@ function sanitizeThreads(value: unknown, workspaceIds: Set<string>): ThreadRecor
       id,
       workspaceId,
       title,
+      titleSource: asThreadTitleSource(item.titleSource, title),
       createdAt,
       lastMessageAt,
       status: asThreadStatus(item.status),

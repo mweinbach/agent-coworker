@@ -105,7 +105,7 @@ describe("spawnAgent tool", () => {
     expect(lastGenerateTextArgs.prompt).toBe("do the thing");
     expect(lastGenerateTextArgs.stopWhen).toBe("stepCountIs:50");
     expect(lastGenerateTextArgs.providerOptions).toEqual(ctx.config.providerOptions);
-    expect(lastGenerateTextArgs.timeout).toEqual({ chunkMs: 90000 });
+    expect(lastGenerateTextArgs.timeout).toBeUndefined();
 
     const toolNames = Object.keys(lastGenerateTextArgs.tools).sort();
     expect(toolNames).toEqual(

@@ -698,10 +698,10 @@ describe("runTurn", () => {
     });
   });
 
-  test("applies default chunk timeout when modelSettings timeout is not configured", async () => {
+  test("passes no timeout when modelSettings timeout is not configured", async () => {
     await runTurn(makeParams());
     const callArg = mockStreamText.mock.calls[0][0] as any;
-    expect(callArg.timeout).toEqual({ chunkMs: 90000 });
+    expect(callArg.timeout).toBeUndefined();
   });
 
   test("stream onError callback forwards to onModelError", async () => {

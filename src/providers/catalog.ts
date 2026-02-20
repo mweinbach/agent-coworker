@@ -15,8 +15,8 @@ export const PROVIDER_MODEL_CATALOG = {
     availableModels: ["gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.2"],
   },
   google: {
-    defaultModel: "gemini-3-flash-preview",
-    availableModels: ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-3.1-pro-preview"],
+    defaultModel: "gemini-3.1-pro-preview-customtools",
+    availableModels: ["gemini-3.1-pro-preview-customtools", "gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-3.1-pro-preview"],
   },
   openai: {
     defaultModel: "gpt-5.2",

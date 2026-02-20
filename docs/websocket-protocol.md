@@ -6,7 +6,16 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `6.0`
+- Current protocol version: `7.0`
+
+## Protocol v7 Notes
+
+Changes in `7.0`:
+
+- MCP server management moved to granular control messages (`mcp_server_upsert`, `mcp_server_delete`, `mcp_server_validate`, auth/migration flows).
+- `mcp_servers` event now returns layered effective servers, file diagnostics, and legacy visibility.
+- New MCP server events: `mcp_server_validation`, `mcp_server_auth_challenge`, `mcp_server_auth_result`.
+- MCP config layering now targets `.cowork` (`workspace`, `user`, built-in) with `.agent` legacy fallback read-only visibility.
 
 ## Protocol v6 Notes
 
@@ -50,7 +59,8 @@ When a WebSocket connection opens, the server sends these events in order:
 6. `provider_catalog` — available providers and models (async)
 7. `provider_auth_methods` — auth method registry
 8. `provider_status` — current provider auth/connection status (async)
-9. `session_backup_state` — backup/checkpoint state (async)
+9. `mcp_servers` — layered MCP snapshot (async)
+10. `session_backup_state` — backup/checkpoint state (async)
 
 If connecting with `?resumeSessionId=<id>`, the server resumes the existing session instead of creating a new one (warm in-memory attach or cold rehydrate from persisted storage). `session_close` disposes active runtime bindings but retains persisted history for later resume/view. On resume, `server_hello` includes additional fields (`isResume`, `busy`, `messageCount`, `hasPendingAsk`, `hasPendingApproval`) and may include `resumedFromStorage: true` for cold rehydrate.
 
@@ -737,7 +747,7 @@ Toggle MCP (Model Context Protocol) tool loading for the session.
 
 ### mcp_servers_get
 
-Read the workspace-local MCP server document (`<workspace>/.agent/mcp-servers.json`) and resolved server state.
+Read the layered MCP server snapshot (workspace/user/system plus legacy fallback visibility).
 
 ```json
 { "type": "mcp_servers_get", "sessionId": "..." }
@@ -752,26 +762,142 @@ Read the workspace-local MCP server document (`<workspace>/.agent/mcp-servers.js
 
 ---
 
-### mcp_servers_set
+### mcp_server_upsert
 
-Validate and write the workspace-local MCP server document (`<workspace>/.agent/mcp-servers.json`).
+Create or update a workspace MCP server entry in `<workspace>/.cowork/mcp-servers.json`.
 
 ```json
 {
-  "type": "mcp_servers_set",
+  "type": "mcp_server_upsert",
   "sessionId": "...",
-  "rawJson": "{ \"servers\": [] }"
+  "server": {
+    "name": "grep",
+    "transport": { "type": "http", "url": "https://mcp.grep.app" },
+    "auth": { "type": "oauth", "oauthMode": "auto" }
+  },
+  "previousName": "old-name"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `type` | `"mcp_servers_set"` | Yes | — |
+| `type` | `"mcp_server_upsert"` | Yes | — |
 | `sessionId` | `string` | Yes | Non-empty session ID |
-| `rawJson` | `string` | Yes | Raw JSON document. Max size: 1,000,000 characters |
+| `server` | `MCPServerConfig` | Yes | Server entry to validate and persist |
+| `previousName` | `string` | No | Previous server name when renaming |
 
 **Response:** `mcp_servers`
-**Error:** `validation_failed` on invalid JSON/shape, `busy` if a turn is running.
+**Error:** `validation_failed` on invalid shape, `busy` if a turn is running.
+
+---
+
+### mcp_server_delete
+
+Delete a workspace MCP server by name.
+
+```json
+{ "type": "mcp_server_delete", "sessionId": "...", "name": "grep" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"mcp_server_delete"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `name` | `string` | Yes | Non-empty server name |
+
+**Response:** `mcp_servers`
+
+---
+
+### mcp_server_validate
+
+Validate MCP connectivity/auth for a specific effective server.
+
+```json
+{ "type": "mcp_server_validate", "sessionId": "...", "name": "grep" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"mcp_server_validate"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `name` | `string` | Yes | Non-empty server name |
+
+**Response:** `mcp_server_validation`
+
+---
+
+### mcp_server_auth_authorize
+
+Start MCP OAuth authorization for a server.
+
+```json
+{ "type": "mcp_server_auth_authorize", "sessionId": "...", "name": "grep" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"mcp_server_auth_authorize"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `name` | `string` | Yes | Non-empty server name |
+
+**Response:** `mcp_server_auth_challenge`
+
+---
+
+### mcp_server_auth_callback
+
+Complete MCP OAuth flow with an optional manual code (auto callback path can omit `code`).
+
+```json
+{ "type": "mcp_server_auth_callback", "sessionId": "...", "name": "grep", "code": "abc123" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"mcp_server_auth_callback"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `name` | `string` | Yes | Non-empty server name |
+| `code` | `string` | No | Optional manual auth code |
+
+**Response:** `mcp_server_auth_result`
+
+---
+
+### mcp_server_auth_set_api_key
+
+Persist MCP API key credential for a server (credentials are stored in `.cowork/auth/mcp-credentials.json`).
+
+```json
+{ "type": "mcp_server_auth_set_api_key", "sessionId": "...", "name": "grep", "apiKey": "..." }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"mcp_server_auth_set_api_key"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `name` | `string` | Yes | Non-empty server name |
+| `apiKey` | `string` | Yes | Non-empty API key payload |
+
+**Response:** `mcp_server_auth_result`
+
+---
+
+### mcp_servers_migrate_legacy
+
+Migrate legacy `.agent/mcp-servers.json` entries into `.cowork` scope.
+
+```json
+{ "type": "mcp_servers_migrate_legacy", "sessionId": "...", "scope": "workspace" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"mcp_servers_migrate_legacy"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `scope` | `"workspace" \| "user"` | Yes | Migration destination scope |
+
+**Response:** `mcp_servers`
 
 ---
 
@@ -1183,18 +1309,38 @@ Canonical session metadata snapshot. Sent on connection and whenever title, prov
 
 ### mcp_servers
 
-Workspace-local MCP server document and resolved server state.
+Layered MCP server snapshot with auth status, source attribution, and legacy visibility.
 
 ```json
 {
   "type": "mcp_servers",
   "sessionId": "...",
-  "scope": "project",
-  "path": "/workspace/.agent/mcp-servers.json",
-  "rawJson": "{ \"servers\": [] }\n",
-  "projectServers": [],
-  "effectiveServers": [],
-  "parseError": "mcp-servers.json: invalid JSON: ..."
+  "servers": [
+    {
+      "name": "grep",
+      "transport": { "type": "http", "url": "https://mcp.grep.app" },
+      "source": "workspace",
+      "inherited": false,
+      "authMode": "oauth",
+      "authScope": "workspace",
+      "authMessage": "OAuth token available."
+    }
+  ],
+  "legacy": {
+    "workspace": { "path": "/workspace/.agent/mcp-servers.json", "exists": true },
+    "user": { "path": "/Users/me/.agent/mcp-servers.json", "exists": false }
+  },
+  "files": [
+    {
+      "source": "workspace",
+      "path": "/workspace/.cowork/mcp-servers.json",
+      "exists": true,
+      "editable": true,
+      "legacy": false,
+      "serverCount": 1
+    }
+  ],
+  "warnings": ["workspace_legacy: mcp-servers.json: invalid JSON: ..."]
 }
 ```
 
@@ -1202,12 +1348,93 @@ Workspace-local MCP server document and resolved server state.
 |-------|------|-------------|
 | `type` | `"mcp_servers"` | — |
 | `sessionId` | `string` | Session identifier |
-| `scope` | `"project"` | Always project scope in this protocol |
-| `path` | `string` | Absolute path to `<workspace>/.agent/mcp-servers.json` |
-| `rawJson` | `string` | Raw JSON file contents (or default empty document when missing) |
-| `projectServers` | `MCPServerConfig[]` | Parsed servers from project file only (empty on parse error) |
-| `effectiveServers` | `MCPServerConfig[]` | Effective merged MCP servers after config precedence |
-| `parseError` | `string?` | Present when the project file exists but fails validation/parsing |
+| `servers` | `Array<MCPServerConfig & { source, inherited, authMode, authScope, authMessage }>` | Effective servers with layer/auth metadata |
+| `legacy` | `{ workspace, user }` | Legacy `.agent` file paths and existence flags |
+| `files` | `Array<{ source, path, exists, editable, legacy, parseError?, serverCount }>` | File-level diagnostics per layer |
+| `warnings` | `string[]` | Optional non-fatal parse warnings |
+
+---
+
+### mcp_server_validation
+
+Result of `mcp_server_validate` (or best-effort auto-validation after save/auth operations).
+
+```json
+{
+  "type": "mcp_server_validation",
+  "sessionId": "...",
+  "name": "grep",
+  "ok": true,
+  "mode": "oauth",
+  "message": "MCP server validation succeeded.",
+  "toolCount": 12,
+  "latencyMs": 143
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"mcp_server_validation"` | — |
+| `sessionId` | `string` | Session identifier |
+| `name` | `string` | Server name |
+| `ok` | `boolean` | Validation status |
+| `mode` | `"none" \| "missing" \| "api_key" \| "oauth" \| "oauth_pending" \| "error"` | Effective auth mode |
+| `message` | `string` | Validation detail |
+| `toolCount` | `number?` | Tools discovered on success |
+| `latencyMs` | `number?` | Validation duration in milliseconds |
+
+---
+
+### mcp_server_auth_challenge
+
+MCP OAuth challenge payload for browser/manual code completion.
+
+```json
+{
+  "type": "mcp_server_auth_challenge",
+  "sessionId": "...",
+  "name": "grep",
+  "challenge": {
+    "method": "auto",
+    "instructions": "Complete sign-in in your browser.",
+    "url": "https://mcp.grep.app?...",
+    "expiresAt": "2026-02-20T21:10:00.000Z"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"mcp_server_auth_challenge"` | — |
+| `sessionId` | `string` | Session identifier |
+| `name` | `string` | Server name |
+| `challenge` | `{ method, instructions, url?, expiresAt? }` | OAuth challenge metadata |
+
+---
+
+### mcp_server_auth_result
+
+Result for MCP auth operations (`mcp_server_auth_callback` / `mcp_server_auth_set_api_key`).
+
+```json
+{
+  "type": "mcp_server_auth_result",
+  "sessionId": "...",
+  "name": "grep",
+  "ok": true,
+  "mode": "api_key",
+  "message": "API key saved."
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"mcp_server_auth_result"` | — |
+| `sessionId` | `string` | Session identifier |
+| `name` | `string` | Server name |
+| `ok` | `boolean` | Auth operation status |
+| `mode` | `"none" \| "missing" \| "api_key" \| "oauth" \| "oauth_pending" \| "error"` | Optional resulting auth mode |
+| `message` | `string` | Result detail |
 
 ---
 

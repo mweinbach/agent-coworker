@@ -141,61 +141,81 @@ describe("workspace MCP editor flow", () => {
     controlSocket.emit({
       type: "mcp_servers",
       sessionId: "control-session",
-      scope: "project",
-      path: "/tmp/workspace/.agent/mcp-servers.json",
-      rawJson: "{\n  \"servers\": []\n}\n",
-      projectServers: [],
-      effectiveServers: [
+      servers: [
         {
           name: "grep",
           transport: { type: "http", url: "https://mcp.grep.app" },
+          source: "workspace",
+          inherited: false,
+          authMode: "missing",
+          authScope: "workspace",
+          authMessage: "OAuth required.",
         },
       ],
-      parseError: "mcp-servers.json: invalid JSON: SyntaxError: Unexpected token } in JSON at position 3",
+      legacy: {
+        workspace: { path: "/tmp/workspace/.agent/mcp-servers.json", exists: true },
+        user: { path: "/tmp/home/.agent/mcp-servers.json", exists: false },
+      },
+      files: [
+        {
+          source: "workspace",
+          path: "/tmp/workspace/.cowork/mcp-servers.json",
+          exists: true,
+          editable: true,
+          legacy: false,
+          serverCount: 1,
+        },
+      ],
+      warnings: ["workspace_legacy: invalid JSON"],
     });
 
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(runtime?.mcpConfigPath).toBe("/tmp/workspace/.agent/mcp-servers.json");
-    expect(runtime?.mcpRawJson).toBe("{\n  \"servers\": []\n}\n");
-    expect(runtime?.mcpProjectServers).toEqual([]);
-    expect(runtime?.mcpEffectiveServers).toHaveLength(1);
-    expect(runtime?.mcpParseError).toContain("invalid JSON");
+    expect(runtime?.mcpServers).toHaveLength(1);
+    expect(runtime?.mcpServers[0]?.name).toBe("grep");
+    expect(runtime?.mcpFiles[0]?.path).toBe("/tmp/workspace/.cowork/mcp-servers.json");
+    expect(runtime?.mcpWarnings[0]).toContain("invalid JSON");
   });
 
-  test("saveWorkspaceMcpServers sends mcp_servers_set and clears saving after response", async () => {
+  test("upsertWorkspaceMcpServer sends mcp_server_upsert and accepts refreshed snapshot", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     controlSocket.sent = [];
 
-    const rawJson = JSON.stringify(
-      {
-        servers: [{ name: "local", transport: { type: "stdio", command: "echo", args: ["ok"] } }],
-      },
-      null,
-      2,
-    );
+    await useAppStore.getState().upsertWorkspaceMcpServer(workspaceId, {
+      name: "local",
+      transport: { type: "stdio", command: "echo", args: ["ok"] },
+      auth: { type: "none" },
+    });
 
-    await useAppStore.getState().saveWorkspaceMcpServers(workspaceId, rawJson);
-    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.mcpSaving).toBe(true);
-
-    const sentSet = controlSocket.sent.find((message) => message?.type === "mcp_servers_set");
+    const sentSet = controlSocket.sent.find((message) => message?.type === "mcp_server_upsert");
     expect(sentSet).toBeDefined();
-    expect(sentSet?.rawJson).toBe(rawJson);
+    expect(sentSet?.server?.name).toBe("local");
 
     controlSocket.emit({
       type: "mcp_servers",
       sessionId: "control-session",
-      scope: "project",
-      path: "/tmp/workspace/.agent/mcp-servers.json",
-      rawJson: `${rawJson}\n`,
-      projectServers: [{ name: "local", transport: { type: "stdio", command: "echo", args: ["ok"] } }],
-      effectiveServers: [{ name: "local", transport: { type: "stdio", command: "echo", args: ["ok"] } }],
+      servers: [
+        {
+          name: "local",
+          transport: { type: "stdio", command: "echo", args: ["ok"] },
+          auth: { type: "none" },
+          source: "workspace",
+          inherited: false,
+          authMode: "none",
+          authScope: "workspace",
+          authMessage: "No authentication required.",
+        },
+      ],
+      legacy: {
+        workspace: { path: "/tmp/workspace/.agent/mcp-servers.json", exists: false },
+        user: { path: "/tmp/home/.agent/mcp-servers.json", exists: false },
+      },
+      files: [],
     });
 
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(runtime?.mcpSaving).toBe(false);
-    expect(runtime?.mcpProjectServers[0]?.name).toBe("local");
+    expect(runtime?.mcpServers[0]?.name).toBe("local");
   });
 
   test("requestWorkspaceMcpServers sends mcp_servers_get", async () => {

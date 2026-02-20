@@ -276,6 +276,7 @@ export async function startAgentServer(
           void session.emitProviderCatalog();
           session.emitProviderAuthMethods();
           void session.refreshProviderStatus();
+          void session.emitMcpServers();
           // Feature 7: push backup state on connect
           void session.getSessionBackupState();
           // Feature 1: replay pending prompts on reconnect
@@ -451,8 +452,38 @@ export async function startAgentServer(
             return;
           }
 
-          if (msg.type === "mcp_servers_set") {
-            void session.setMcpServers(msg.rawJson);
+          if (msg.type === "mcp_server_upsert") {
+            void session.upsertMcpServer(msg.server, msg.previousName);
+            return;
+          }
+
+          if (msg.type === "mcp_server_delete") {
+            void session.deleteMcpServer(msg.name);
+            return;
+          }
+
+          if (msg.type === "mcp_server_validate") {
+            void session.validateMcpServer(msg.name);
+            return;
+          }
+
+          if (msg.type === "mcp_server_auth_authorize") {
+            void session.authorizeMcpServerAuth(msg.name);
+            return;
+          }
+
+          if (msg.type === "mcp_server_auth_callback") {
+            void session.callbackMcpServerAuth(msg.name, msg.code);
+            return;
+          }
+
+          if (msg.type === "mcp_server_auth_set_api_key") {
+            void session.setMcpServerApiKey(msg.name, msg.apiKey);
+            return;
+          }
+
+          if (msg.type === "mcp_servers_migrate_legacy") {
+            void session.migrateLegacyMcpServers(msg.scope);
             return;
           }
 

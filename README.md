@@ -201,7 +201,7 @@ Example `./.agent/config.json`:
 Desktop workspace settings (hybrid persistence):
 - Core workspace defaults are persisted in project files:
   - `./.agent/config.json`: `provider`, `model`, `subAgentModel`, `enableMcp` (and `observabilityEnabled` when set).
-  - `./.agent/mcp-servers.json`: workspace-local MCP server document.
+  - `./.cowork/mcp-servers.json`: workspace-local MCP server document.
 - Desktop-only UI/session metadata remains in desktop `state.json` (for example `yolo`, selected workspace/thread, and UI preferences).
 - In the desktop app, Workspace Settings changes are applied immediately to live threads in that workspace; busy threads are retried when they become idle.
 
@@ -210,21 +210,27 @@ Desktop workspace settings (hybrid persistence):
 MCP (Model Context Protocol) servers add extra tools to the agent at runtime.
 
 Server configs are loaded from (highest priority first):
-- `./.agent/mcp-servers.json` (project)
-- `~/.agent/mcp-servers.json` (user)
+- `./.cowork/mcp-servers.json` (workspace editable layer)
+- `~/.cowork/config/mcp-servers.json` (user layer)
 - `./config/mcp-servers.json` (built-in defaults)
+- Legacy read-only fallback: `./.agent/mcp-servers.json`, `~/.agent/mcp-servers.json`
+
+Credentials are stored separately (never inline in `mcp-servers.json`):
+- `./.cowork/auth/mcp-credentials.json` (workspace-scoped credentials)
+- `~/.cowork/auth/mcp-credentials.json` (user-scoped credentials)
 
 Desktop app note:
-- The Workspace Settings page includes a raw JSON editor for `./.agent/mcp-servers.json` with save/reload and effective-server preview.
-- MCP changes are exposed over WebSocket via `mcp_servers_get`, `mcp_servers_set`, and `mcp_servers`.
+- The MCP Settings page shows effective servers with source badges, workspace edit controls, auth actions, validation, and legacy migration.
+- MCP management is exposed over WebSocket via `mcp_servers_get`, `mcp_server_upsert`, `mcp_server_delete`, `mcp_server_validate`, `mcp_server_auth_authorize`, `mcp_server_auth_callback`, `mcp_server_auth_set_api_key`, `mcp_servers_migrate_legacy`, plus `mcp_servers`/`mcp_server_*` events.
 
-Example `./.agent/mcp-servers.json` using `mcp.grep.app`:
+Example `./.cowork/mcp-servers.json` using `mcp.grep.app`:
 ```json
 {
   "servers": [
     {
       "name": "grep",
-      "transport": { "type": "http", "url": "https://mcp.grep.app" }
+      "transport": { "type": "http", "url": "https://mcp.grep.app" },
+      "auth": { "type": "oauth", "oauthMode": "auto" }
     }
   ]
 }

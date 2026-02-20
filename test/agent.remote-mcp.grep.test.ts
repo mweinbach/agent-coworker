@@ -23,10 +23,10 @@ function makeConfig(baseDir: string, configDir: string): AgentConfig {
     uploadsDirectory: path.join(baseDir, "uploads"),
     userName: "tester",
     knowledgeCutoff: "unknown",
-    projectAgentDir: baseDir,
-    userAgentDir: baseDir,
+    projectAgentDir: path.join(baseDir, ".agent"),
+    userAgentDir: path.join(baseDir, ".agent-user"),
     builtInDir: baseDir,
-    builtInConfigDir: baseDir,
+    builtInConfigDir: path.join(baseDir, "config"),
     skillsDirs: [],
     memoryDirs: [],
     configDirs: [configDir],
@@ -61,8 +61,9 @@ describe("runTurn + remote MCP (mcp.grep.app)", () => {
 
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-remote-mcp-"));
       try {
+        await fs.mkdir(path.join(tmpDir, ".cowork"), { recursive: true });
         await fs.writeFile(
-          path.join(tmpDir, "mcp-servers.json"),
+          path.join(tmpDir, ".cowork", "mcp-servers.json"),
           JSON.stringify(
             {
               servers: [

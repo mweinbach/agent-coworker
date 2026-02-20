@@ -122,6 +122,10 @@ function sendAndCollect(
         msg.type === "provider_catalog" ||
         msg.type === "provider_auth_methods" ||
         msg.type === "provider_status" ||
+        msg.type === "mcp_servers" ||
+        msg.type === "mcp_server_validation" ||
+        msg.type === "mcp_server_auth_challenge" ||
+        msg.type === "mcp_server_auth_result" ||
         msg.type === "model_stream_chunk"
       ) {
         return;
@@ -137,6 +141,43 @@ function sendAndCollect(
 
     ws.onerror = (e) => {
       clearTimeout(timer);
+      reject(new Error(`WebSocket error: ${e}`));
+    };
+  });
+}
+
+function sendAndWaitForEvent(
+  url: string,
+  buildMsg: (sessionId: string) => object,
+  match: (message: any) => boolean,
+  timeoutMs = 5000,
+): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let sessionId = "";
+    const ws = new WebSocket(url);
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("Timed out waiting for matching event"));
+    }, timeoutMs);
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+      if (!sessionId && msg.type === "server_hello") {
+        sessionId = msg.sessionId;
+        ws.send(JSON.stringify(buildMsg(sessionId)));
+        return;
+      }
+      if (!sessionId || msg.sessionId !== sessionId) return;
+      if (!match(msg)) return;
+
+      clearTimeout(timer);
+      ws.close();
+      resolve(msg);
+    };
+
+    ws.onerror = (e) => {
+      clearTimeout(timer);
+      ws.close();
       reject(new Error(`WebSocket error: ${e}`));
     };
   });
@@ -606,15 +647,7 @@ describe("WebSocket Lifecycle", () => {
             ws.send("this is not valid json {{{");
             return;
           }
-          if (
-            msg.type === "session_settings" ||
-            msg.type === "session_config" ||
-            msg.type === "session_info" ||
-            msg.type === "observability_status" ||
-            msg.type === "provider_catalog" ||
-            msg.type === "provider_auth_methods" ||
-            msg.type === "provider_status"
-          ) return;
+          if (msg.type !== "error") return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);
@@ -777,14 +810,21 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
-  test("mcp_servers_get returns workspace-local MCP document", async () => {
+  test("mcp_servers_get returns layered MCP snapshot", async () => {
     const tmpDir = await makeTmpProject();
-    const mcpPath = path.join(tmpDir, ".agent", "mcp-servers.json");
+    const mcpPath = path.join(tmpDir, ".cowork", "mcp-servers.json");
+    await fs.mkdir(path.dirname(mcpPath), { recursive: true });
     await fs.writeFile(
       mcpPath,
       JSON.stringify(
         {
-          servers: [{ name: "grep", transport: { type: "http", url: "https://mcp.grep.app" } }],
+          servers: [
+            {
+              name: "grep",
+              transport: { type: "http", url: "https://mcp.grep.app" },
+              auth: { type: "oauth", oauthMode: "auto" },
+            },
+          ],
         },
         null,
         2,
@@ -793,42 +833,127 @@ describe("WebSocket Lifecycle", () => {
     );
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
     try {
-      const { responses } = await sendAndCollect(
+      const response = await sendAndWaitForEvent(
         url,
         (sessionId) => ({ type: "mcp_servers_get", sessionId }),
-        1,
+        (msg) => msg.type === "mcp_servers",
       );
-      expect(responses[0].type).toBe("mcp_servers");
-      expect(responses[0].scope).toBe("project");
-      expect(responses[0].path).toBe(mcpPath);
-      expect(Array.isArray(responses[0].projectServers)).toBe(true);
-      expect(Array.isArray(responses[0].effectiveServers)).toBe(true);
-      expect(responses[0].projectServers[0]?.name).toBe("grep");
+      expect(response.type).toBe("mcp_servers");
+      expect(Array.isArray(response.servers)).toBe(true);
+      expect(Array.isArray(response.files)).toBe(true);
+      expect(response.servers[0]?.name).toBe("grep");
+      expect(response.servers[0]?.source).toBe("workspace");
+      expect(response.files.some((file: any) => file.path === mcpPath)).toBe(true);
+      expect(response.legacy.workspace.path.endsWith(".agent/mcp-servers.json")).toBe(true);
     } finally {
       server.stop();
     }
   });
 
-  test("mcp_servers_set persists JSON and re-emits mcp_servers", async () => {
+  test("mcp_server_upsert persists workspace .cowork config and re-emits mcp_servers", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
-    const rawJson = JSON.stringify(
-      {
-        servers: [{ name: "local", transport: { type: "stdio", command: "echo", args: ["ok"] } }],
-      },
-      null,
-      2,
-    );
     try {
-      const { responses } = await sendAndCollect(
+      const response = await sendAndWaitForEvent(
         url,
-        (sessionId) => ({ type: "mcp_servers_set", sessionId, rawJson }),
-        1,
+        (sessionId) => ({
+          type: "mcp_server_upsert",
+          sessionId,
+          server: {
+            name: "local",
+            transport: { type: "stdio", command: "echo", args: ["ok"] },
+            auth: { type: "none" },
+          },
+        }),
+        (msg) => msg.type === "mcp_servers" && msg.servers.some((server: any) => server.name === "local"),
       );
-      expect(responses[0].type).toBe("mcp_servers");
-      expect(responses[0].projectServers[0]?.name).toBe("local");
-      const persistedRaw = await fs.readFile(path.join(tmpDir, ".agent", "mcp-servers.json"), "utf-8");
-      expect(persistedRaw).toBe(`${rawJson}\n`);
+      expect(response.type).toBe("mcp_servers");
+      expect(response.servers.some((entry: any) => entry.name === "local")).toBe(true);
+
+      const persistedRaw = await fs.readFile(path.join(tmpDir, ".cowork", "mcp-servers.json"), "utf-8");
+      const persisted = JSON.parse(persistedRaw) as any;
+      expect(Array.isArray(persisted.servers)).toBe(true);
+      expect(persisted.servers.some((entry: any) => entry.name === "local")).toBe(true);
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("mcp_server_validate emits validation event", async () => {
+    const tmpDir = await makeTmpProject();
+    const configPath = path.join(tmpDir, ".cowork", "mcp-servers.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          servers: [{ name: "broken", transport: { type: "stdio", command: "echo", args: ["hello"] } }],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const response = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({ type: "mcp_server_validate", sessionId, name: "broken" }),
+        (msg) => msg.type === "mcp_server_validation" && msg.name === "broken",
+      );
+      expect(response.type).toBe("mcp_server_validation");
+      expect(typeof response.ok).toBe("boolean");
+      expect(typeof response.message).toBe("string");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("mcp_server_auth_set_api_key stores credential outside mcp-servers.json", async () => {
+    const tmpDir = await makeTmpProject();
+    const configPath = path.join(tmpDir, ".cowork", "mcp-servers.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          servers: [
+            {
+              name: "protected",
+              transport: { type: "http", url: "https://mcp.example.com" },
+              auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const response = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({
+          type: "mcp_server_auth_set_api_key",
+          sessionId,
+          name: "protected",
+          apiKey: "test-secret",
+        }),
+        (msg) => msg.type === "mcp_server_auth_result" && msg.name === "protected",
+      );
+      expect(response.type).toBe("mcp_server_auth_result");
+      expect(response.ok).toBe(true);
+      expect(response.mode).toBe("api_key");
+
+      const credentialsPath = path.join(tmpDir, ".cowork", "auth", "mcp-credentials.json");
+      const credentialsRaw = await fs.readFile(credentialsPath, "utf-8");
+      expect(credentialsRaw).toContain("test-secret");
+
+      const configRaw = await fs.readFile(configPath, "utf-8");
+      expect(configRaw).not.toContain("test-secret");
     } finally {
       server.stop();
     }
@@ -991,15 +1116,7 @@ describe("WebSocket Lifecycle", () => {
             ws.send(JSON.stringify("just a string"));
             return;
           }
-          if (
-            msg.type === "session_settings" ||
-            msg.type === "session_config" ||
-            msg.type === "session_info" ||
-            msg.type === "observability_status" ||
-            msg.type === "provider_catalog" ||
-            msg.type === "provider_auth_methods" ||
-            msg.type === "provider_status"
-          ) return;
+          if (msg.type !== "error") return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);
@@ -1032,15 +1149,7 @@ describe("WebSocket Lifecycle", () => {
             ws.send("null");
             return;
           }
-          if (
-            msg.type === "session_settings" ||
-            msg.type === "session_config" ||
-            msg.type === "session_info" ||
-            msg.type === "observability_status" ||
-            msg.type === "provider_catalog" ||
-            msg.type === "provider_auth_methods" ||
-            msg.type === "provider_status"
-          ) return;
+          if (msg.type !== "error") return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);
@@ -1073,15 +1182,7 @@ describe("WebSocket Lifecycle", () => {
             ws.send(JSON.stringify([1, 2, 3]));
             return;
           }
-          if (
-            msg.type === "session_settings" ||
-            msg.type === "session_config" ||
-            msg.type === "session_info" ||
-            msg.type === "observability_status" ||
-            msg.type === "provider_catalog" ||
-            msg.type === "provider_auth_methods" ||
-            msg.type === "provider_status"
-          ) return;
+          if (msg.type !== "error") return;
           clearTimeout(timer);
           ws.close();
           resolve(msg);

@@ -3,7 +3,22 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { connectProvider as connectModelProvider, getAiCoworkerPaths, type ConnectProviderResult } from "../connect";
-import { readProjectMCPServersDocument, writeProjectMCPServersDocument } from "../mcp";
+import { loadMCPServers, loadMCPTools, readMCPServersSnapshot } from "../mcp";
+import {
+  completeMCPServerOAuth,
+  readMCPServerOAuthPending,
+  resolveMCPServerAuthState,
+  setMCPServerApiKeyCredential,
+  setMCPServerOAuthPending,
+} from "../mcp/authStore";
+import {
+  deleteWorkspaceMCPServer,
+  loadMCPConfigRegistry,
+  migrateLegacyMCPServers,
+  upsertWorkspaceMCPServer,
+  type MCPRegistryServer,
+} from "../mcp/configRegistry";
+import { authorizeMCPServerOAuth, consumeCapturedOAuthCode, exchangeMCPServerOAuthCode } from "../mcp/oauthProvider";
 import {
   authorizeProviderAuth,
   callbackProviderAuth as callbackProviderAuthMethod,
@@ -19,6 +34,7 @@ import type {
   AgentConfig,
   HarnessContextState,
   HarnessContextPayload,
+  MCPServerConfig,
   ServerErrorCode,
   ServerErrorSource,
   TodoItem,
@@ -126,6 +142,7 @@ function extractAssistantTextFromResponseMessages(messages: ModelMessage[]): str
 /** Maximum number of message history entries before older entries are pruned. */
 const MAX_MESSAGE_HISTORY = 200;
 const AUTO_CHECKPOINT_MIN_INTERVAL_MS = 30_000;
+const MCP_VALIDATION_TIMEOUT_MS = 3_000;
 
 export class AgentSession {
   readonly id: string;
@@ -940,36 +957,425 @@ export class AgentSession {
 
   async emitMcpServers() {
     try {
-      const payload = await readProjectMCPServersDocument(this.config);
+      const payload = await readMCPServersSnapshot(this.config);
       this.emit({
         type: "mcp_servers",
         sessionId: this.id,
-        scope: "project",
-        path: payload.path,
-        rawJson: payload.rawJson,
-        projectServers: payload.projectServers,
-        effectiveServers: payload.effectiveServers,
-        ...(payload.parseError ? { parseError: payload.parseError } : {}),
+        servers: payload.servers,
+        legacy: payload.legacy,
+        files: payload.files,
+        ...(payload.warnings.length > 0 ? { warnings: payload.warnings } : {}),
       });
     } catch (err) {
       this.emitError("internal_error", "session", `Failed to read MCP servers: ${String(err)}`);
     }
   }
 
-  async setMcpServers(rawJson: string) {
+  private async getMcpServerByName(nameRaw: string): Promise<MCPRegistryServer | null> {
+    const name = nameRaw.trim();
+    if (!name) {
+      this.emitError("validation_failed", "session", "MCP server name is required");
+      return null;
+    }
+
+    const registry = await loadMCPConfigRegistry(this.config);
+    const server = registry.servers.find((entry) => entry.name === name) ?? null;
+    if (!server) {
+      this.emitError("validation_failed", "session", `MCP server \"${name}\" not found.`);
+      return null;
+    }
+    return server;
+  }
+
+  async upsertMcpServer(server: MCPServerConfig, previousName?: string) {
     if (this.running) {
       this.emitError("busy", "session", "Agent is busy");
       return;
     }
+    if (this.connecting) {
+      this.emitError("busy", "session", "Connection flow already running");
+      return;
+    }
     try {
-      await writeProjectMCPServersDocument(this.config.projectAgentDir, rawJson);
+      await upsertWorkspaceMCPServer(this.config, server, previousName);
     } catch (err) {
       const message = String(err);
       if (message.toLowerCase().includes("mcp-servers.json")) {
         this.emitError("validation_failed", "session", message);
         return;
       }
-      this.emitError("internal_error", "session", `Failed to save MCP servers: ${message}`);
+      this.emitError("internal_error", "session", `Failed to upsert MCP server: ${message}`);
+      return;
+    }
+    await this.emitMcpServers();
+    void this.validateMcpServer(server.name);
+  }
+
+  async deleteMcpServer(nameRaw: string) {
+    if (this.running) {
+      this.emitError("busy", "session", "Agent is busy");
+      return;
+    }
+    if (this.connecting) {
+      this.emitError("busy", "session", "Connection flow already running");
+      return;
+    }
+    try {
+      await deleteWorkspaceMCPServer(this.config, nameRaw);
+    } catch (err) {
+      const message = String(err);
+      if (message.toLowerCase().includes("mcp-servers.json") || message.toLowerCase().includes("server name")) {
+        this.emitError("validation_failed", "session", message);
+        return;
+      }
+      this.emitError("internal_error", "session", `Failed to delete MCP server: ${message}`);
+      return;
+    }
+    await this.emitMcpServers();
+  }
+
+  async validateMcpServer(nameRaw: string) {
+    const name = nameRaw.trim();
+    if (!name) {
+      this.emitError("validation_failed", "session", "MCP server name is required");
+      return;
+    }
+    if (this.running) {
+      this.emitError("busy", "session", "Agent is busy");
+      return;
+    }
+    if (this.connecting) {
+      this.emitError("busy", "session", "Connection flow already running");
+      return;
+    }
+
+    const server = await this.getMcpServerByName(name);
+    if (!server) {
+      this.emit({
+        type: "mcp_server_validation",
+        sessionId: this.id,
+        name,
+        ok: false,
+        mode: "error",
+        message: `MCP server \"${name}\" not found.`,
+      });
+      return;
+    }
+
+    const authState = await resolveMCPServerAuthState(this.config, server);
+    if (authState.mode === "missing" || authState.mode === "oauth_pending" || authState.mode === "error") {
+      this.emit({
+        type: "mcp_server_validation",
+        sessionId: this.id,
+        name: server.name,
+        ok: false,
+        mode: authState.mode,
+        message: authState.message,
+      });
+      return;
+    }
+
+    const runtimeServers = await loadMCPServers(this.config);
+    const runtimeServer = runtimeServers.find((entry) => entry.name === server.name);
+    if (!runtimeServer) {
+      this.emit({
+        type: "mcp_server_validation",
+        sessionId: this.id,
+        name: server.name,
+        ok: false,
+        mode: "error",
+        message: "Server is not active in current MCP layering.",
+      });
+      return;
+    }
+
+    const startedAt = Date.now();
+    const loadPromise = loadMCPTools([runtimeServer], { log: (line) => this.log(line) });
+    let loadTimeout: ReturnType<typeof setTimeout> | null = null;
+    let timedOut = false;
+    try {
+      const loaded = await Promise.race([
+        loadPromise,
+        new Promise<never>((_, reject) => {
+          loadTimeout = setTimeout(() => {
+            timedOut = true;
+            reject(new Error(`MCP server validation timed out after ${MCP_VALIDATION_TIMEOUT_MS}ms.`));
+          }, MCP_VALIDATION_TIMEOUT_MS);
+        }),
+      ]);
+      const toolCount = Object.keys(loaded.tools).length;
+      const latencyMs = Date.now() - startedAt;
+
+      const ok = loaded.errors.length === 0;
+      const message = ok ? "MCP server validation succeeded." : loaded.errors[0] ?? "MCP server validation failed.";
+      this.emit({
+        type: "mcp_server_validation",
+        sessionId: this.id,
+        name: server.name,
+        ok,
+        mode: authState.mode,
+        message,
+        toolCount,
+        latencyMs,
+      });
+      await loaded.close();
+    } catch (err) {
+      if (timedOut) {
+        void loadPromise
+          .then(async (loaded) => {
+            try {
+              await loaded.close();
+            } catch {
+              // ignore
+            }
+          })
+          .catch(() => {
+            // ignore
+          });
+      }
+      this.emit({
+        type: "mcp_server_validation",
+        sessionId: this.id,
+        name: server.name,
+        ok: false,
+        mode: authState.mode,
+        message: String(err),
+        latencyMs: Date.now() - startedAt,
+      });
+    } finally {
+      if (loadTimeout) clearTimeout(loadTimeout);
+    }
+  }
+
+  async authorizeMcpServerAuth(nameRaw: string) {
+    if (this.running) {
+      this.emitError("busy", "session", "Agent is busy");
+      return;
+    }
+    if (this.connecting) {
+      this.emitError("busy", "session", "Connection flow already running");
+      return;
+    }
+
+    const server = await this.getMcpServerByName(nameRaw);
+    if (!server) return;
+
+    if (!server.auth || server.auth.type !== "oauth") {
+      this.emit({
+        type: "mcp_server_auth_result",
+        sessionId: this.id,
+        name: server.name,
+        ok: false,
+        mode: "missing",
+        message: `MCP server \"${server.name}\" does not support OAuth authorization.`,
+      });
+      return;
+    }
+
+    this.connecting = true;
+    try {
+      const result = await authorizeMCPServerOAuth(server);
+      await setMCPServerOAuthPending({
+        config: this.config,
+        server,
+        pending: result.pending,
+      });
+      this.emit({
+        type: "mcp_server_auth_challenge",
+        sessionId: this.id,
+        name: server.name,
+        challenge: result.challenge,
+      });
+      await this.emitMcpServers();
+    } catch (err) {
+      this.emit({
+        type: "mcp_server_auth_result",
+        sessionId: this.id,
+        name: server.name,
+        ok: false,
+        mode: "error",
+        message: `MCP OAuth authorization failed: ${String(err)}`,
+      });
+    } finally {
+      this.connecting = false;
+    }
+  }
+
+  async callbackMcpServerAuth(nameRaw: string, codeRaw?: string) {
+    if (this.running) {
+      this.emitError("busy", "session", "Agent is busy");
+      return;
+    }
+    if (this.connecting) {
+      this.emitError("busy", "session", "Connection flow already running");
+      return;
+    }
+
+    const server = await this.getMcpServerByName(nameRaw);
+    if (!server) return;
+
+    if (!server.auth || server.auth.type !== "oauth") {
+      this.emit({
+        type: "mcp_server_auth_result",
+        sessionId: this.id,
+        name: server.name,
+        ok: false,
+        mode: "missing",
+        message: `MCP server \"${server.name}\" does not support OAuth authorization.`,
+      });
+      return;
+    }
+
+    this.connecting = true;
+    let validateName: string | null = null;
+    try {
+      const pendingState = await readMCPServerOAuthPending({ config: this.config, server });
+      const pending = pendingState.pending;
+      if (!pending) {
+        this.emit({
+          type: "mcp_server_auth_result",
+          sessionId: this.id,
+          name: server.name,
+          ok: false,
+          mode: "missing",
+          message: "No pending OAuth challenge found. Start authorization first.",
+        });
+        return;
+      }
+
+      let code = codeRaw?.trim() || undefined;
+      if (!code) {
+        code = await consumeCapturedOAuthCode(pending.challengeId);
+      }
+      if (!code) {
+        this.emit({
+          type: "mcp_server_auth_result",
+          sessionId: this.id,
+          name: server.name,
+          ok: true,
+          mode: "oauth_pending",
+          message: "OAuth callback is still pending. Paste a code to continue manually.",
+        });
+        return;
+      }
+
+      const exchange = await exchangeMCPServerOAuthCode({ server, code, pending });
+      await completeMCPServerOAuth({
+        config: this.config,
+        server,
+        tokens: exchange.tokens,
+        clearPending: true,
+      });
+
+      this.emit({
+        type: "mcp_server_auth_result",
+        sessionId: this.id,
+        name: server.name,
+        ok: true,
+        mode: "oauth",
+        message: exchange.message,
+      });
+      await this.emitMcpServers();
+      validateName = server.name;
+    } catch (err) {
+      this.emit({
+        type: "mcp_server_auth_result",
+        sessionId: this.id,
+        name: server.name,
+        ok: false,
+        mode: "error",
+        message: `MCP OAuth callback failed: ${String(err)}`,
+      });
+    } finally {
+      this.connecting = false;
+      if (validateName) {
+        void this.validateMcpServer(validateName);
+      }
+    }
+  }
+
+  async setMcpServerApiKey(nameRaw: string, apiKeyRaw: string) {
+    if (this.running) {
+      this.emitError("busy", "session", "Agent is busy");
+      return;
+    }
+    if (this.connecting) {
+      this.emitError("busy", "session", "Connection flow already running");
+      return;
+    }
+
+    const server = await this.getMcpServerByName(nameRaw);
+    if (!server) return;
+
+    if (!server.auth || server.auth.type !== "api_key") {
+      this.emit({
+        type: "mcp_server_auth_result",
+        sessionId: this.id,
+        name: server.name,
+        ok: false,
+        mode: "missing",
+        message: `MCP server \"${server.name}\" is not configured for API key auth.`,
+      });
+      return;
+    }
+
+    this.connecting = true;
+    let validateName: string | null = null;
+    try {
+      const result = await setMCPServerApiKeyCredential({
+        config: this.config,
+        server,
+        apiKey: apiKeyRaw,
+        keyId: server.auth.keyId,
+      });
+      this.emit({
+        type: "mcp_server_auth_result",
+        sessionId: this.id,
+        name: server.name,
+        ok: true,
+        mode: "api_key",
+        message: `API key saved (${result.maskedApiKey}) to ${result.scope} auth store.`,
+      });
+      await this.emitMcpServers();
+      validateName = server.name;
+    } catch (err) {
+      this.emit({
+        type: "mcp_server_auth_result",
+        sessionId: this.id,
+        name: server.name,
+        ok: false,
+        mode: "error",
+        message: `Setting MCP API key failed: ${String(err)}`,
+      });
+    } finally {
+      this.connecting = false;
+      if (validateName) {
+        void this.validateMcpServer(validateName);
+      }
+    }
+  }
+
+  async migrateLegacyMcpServers(scope: "workspace" | "user") {
+    if (this.running) {
+      this.emitError("busy", "session", "Agent is busy");
+      return;
+    }
+    if (this.connecting) {
+      this.emitError("busy", "session", "Connection flow already running");
+      return;
+    }
+    try {
+      const result = await migrateLegacyMCPServers(this.config, scope);
+      this.emit({
+        type: "assistant_message",
+        sessionId: this.id,
+        text:
+          `Legacy MCP migration (${scope}) complete: imported ${result.imported}, ` +
+          `skipped ${result.skippedConflicts}.` +
+          (result.archivedPath ? ` Archived legacy file to ${result.archivedPath}.` : ""),
+      });
+    } catch (err) {
+      this.emitError("internal_error", "session", `Failed to migrate legacy MCP servers: ${String(err)}`);
       return;
     }
     await this.emitMcpServers();

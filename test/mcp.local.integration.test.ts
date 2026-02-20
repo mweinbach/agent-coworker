@@ -66,8 +66,9 @@ describe("local MCP integration", () => {
   test("runTurnWithDeps exposes local MCP tools to streamText", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-local-mcp-"));
     try {
+      await fs.mkdir(path.join(tmpDir, ".cowork"), { recursive: true });
       await fs.writeFile(
-        path.join(tmpDir, "mcp-servers.json"),
+        path.join(tmpDir, ".cowork", "mcp-servers.json"),
         JSON.stringify(
           {
             servers: [

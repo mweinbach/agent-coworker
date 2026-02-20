@@ -5,7 +5,7 @@ import {
   saveState,
   startWorkspaceServer,
 } from "../lib/desktopCommands";
-import type { ClientMessage, ProviderName, ServerEvent, TodoItem } from "../lib/wsProtocol";
+import type { ClientMessage, MCPServerConfig, ProviderName, ServerEvent, TodoItem } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 
 import type {
@@ -186,12 +186,13 @@ function defaultWorkspaceRuntime(): WorkspaceRuntime {
     controlConfig: null,
     controlSessionConfig: null,
     controlEnableMcp: null,
-    mcpConfigPath: null,
-    mcpRawJson: "",
-    mcpProjectServers: [],
-    mcpEffectiveServers: [],
-    mcpParseError: null,
-    mcpSaving: false,
+    mcpServers: [],
+    mcpLegacy: null,
+    mcpFiles: [],
+    mcpWarnings: [],
+    mcpValidationByName: {},
+    mcpLastAuthChallenge: null,
+    mcpLastAuthResult: null,
     skills: [],
     selectedSkillName: null,
     selectedSkillContent: null,
@@ -840,7 +841,23 @@ export type AppStoreState = {
   updateWorkspaceDefaults: (workspaceId: string, patch: Partial<WorkspaceRecord>) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
   requestWorkspaceMcpServers: (workspaceId: string) => Promise<void>;
-  saveWorkspaceMcpServers: (workspaceId: string, rawJson: string) => Promise<void>;
+  upsertWorkspaceMcpServer: (
+    workspaceId: string,
+    server: {
+      name: string;
+      transport: MCPServerConfig["transport"];
+      required?: boolean;
+      retries?: number;
+      auth?: MCPServerConfig["auth"];
+    },
+    previousName?: string,
+  ) => Promise<void>;
+  deleteWorkspaceMcpServer: (workspaceId: string, name: string) => Promise<void>;
+  validateWorkspaceMcpServer: (workspaceId: string, name: string) => Promise<void>;
+  authorizeWorkspaceMcpServerAuth: (workspaceId: string, name: string) => Promise<void>;
+  callbackWorkspaceMcpServerAuth: (workspaceId: string, name: string, code?: string) => Promise<void>;
+  setWorkspaceMcpServerApiKey: (workspaceId: string, name: string, apiKey: string) => Promise<void>;
+  migrateWorkspaceMcpLegacy: (workspaceId: string, scope: "workspace" | "user") => Promise<void>;
 
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
   setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;
@@ -1092,14 +1109,75 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
             ...s.workspaceRuntimeById,
             [workspaceId]: {
               ...s.workspaceRuntimeById[workspaceId],
-              mcpConfigPath: evt.path,
-              mcpRawJson: evt.rawJson,
-              mcpProjectServers: evt.projectServers,
-              mcpEffectiveServers: evt.effectiveServers,
-              mcpParseError: evt.parseError ?? null,
-              mcpSaving: false,
+              mcpServers: evt.servers,
+              mcpLegacy: evt.legacy,
+              mcpFiles: evt.files,
+              mcpWarnings: evt.warnings ?? [],
             },
           },
+        }));
+        return;
+      }
+
+      if (evt.type === "mcp_server_validation") {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              mcpValidationByName: {
+                ...s.workspaceRuntimeById[workspaceId].mcpValidationByName,
+                [evt.name]: evt,
+              },
+            },
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: evt.ok ? "info" : "error",
+            title: evt.ok ? `MCP validation passed: ${evt.name}` : `MCP validation failed: ${evt.name}`,
+            detail: evt.message,
+          }),
+        }));
+        return;
+      }
+
+      if (evt.type === "mcp_server_auth_challenge") {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              mcpLastAuthChallenge: evt,
+            },
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "info",
+            title: `MCP auth challenge: ${evt.name}`,
+            detail: `${evt.challenge.instructions}${evt.challenge.url ? ` URL: ${evt.challenge.url}` : ""}`,
+          }),
+        }));
+        return;
+      }
+
+      if (evt.type === "mcp_server_auth_result") {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              mcpLastAuthResult: evt,
+            },
+          },
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: evt.ok ? "info" : "error",
+            title: evt.ok ? `MCP auth updated: ${evt.name}` : `MCP auth failed: ${evt.name}`,
+            detail: evt.message,
+          }),
         }));
         return;
       }
@@ -1219,13 +1297,6 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
 
       if (evt.type === "error") {
         set((s) => ({
-          workspaceRuntimeById: {
-            ...s.workspaceRuntimeById,
-            [workspaceId]: {
-              ...s.workspaceRuntimeById[workspaceId],
-              mcpSaving: false,
-            },
-          },
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),
@@ -1251,13 +1322,6 @@ function ensureControlSocket(get: () => AppStoreState, set: (fn: (s: AppStoreSta
       set((s) => ({
         providerStatusRefreshing: false,
         providerLastAuthChallenge: null,
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            mcpSaving: false,
-          },
-        },
       }));
     },
     });

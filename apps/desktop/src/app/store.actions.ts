@@ -827,42 +827,160 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       }
     },
 
-    saveWorkspaceMcpServers: async (workspaceId: string, rawJson: string) => {
+    upsertWorkspaceMcpServer: async (workspaceId, server, previousName) => {
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
 
-      set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            mcpSaving: true,
-            mcpRawJson: rawJson,
-          },
-        },
-      }));
-
       const ok = sendControl(get, workspaceId, (sessionId) => ({
-        type: "mcp_servers_set",
+        type: "mcp_server_upsert",
         sessionId,
-        rawJson,
+        server,
+        previousName,
       }));
       if (ok) return;
 
       set((s) => ({
-        workspaceRuntimeById: {
-          ...s.workspaceRuntimeById,
-          [workspaceId]: {
-            ...s.workspaceRuntimeById[workspaceId],
-            mcpSaving: false,
-          },
-        },
         notifications: pushNotification(s.notifications, {
           id: makeId(),
           ts: nowIso(),
           kind: "error",
           title: "Not connected",
-          detail: "Unable to save MCP servers.",
+          detail: "Unable to save MCP server.",
+        }),
+      }));
+    },
+
+    deleteWorkspaceMcpServer: async (workspaceId, name) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+      const ok = sendControl(get, workspaceId, (sessionId) => ({
+        type: "mcp_server_delete",
+        sessionId,
+        name,
+      }));
+      if (ok) return;
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to delete MCP server.",
+        }),
+      }));
+    },
+
+    validateWorkspaceMcpServer: async (workspaceId, name) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+      const ok = sendControl(get, workspaceId, (sessionId) => ({
+        type: "mcp_server_validate",
+        sessionId,
+        name,
+      }));
+      if (ok) return;
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to validate MCP server.",
+        }),
+      }));
+    },
+
+    authorizeWorkspaceMcpServerAuth: async (workspaceId, name) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+      const ok = sendControl(get, workspaceId, (sessionId) => ({
+        type: "mcp_server_auth_authorize",
+        sessionId,
+        name,
+      }));
+      if (ok) return;
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to start MCP auth flow.",
+        }),
+      }));
+    },
+
+    callbackWorkspaceMcpServerAuth: async (workspaceId, name, code) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+      const ok = sendControl(get, workspaceId, (sessionId) => ({
+        type: "mcp_server_auth_callback",
+        sessionId,
+        name,
+        code: code?.trim() ? code.trim() : undefined,
+      }));
+      if (ok) return;
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to complete MCP auth callback.",
+        }),
+      }));
+    },
+
+    setWorkspaceMcpServerApiKey: async (workspaceId, name, apiKey) => {
+      const trimmedKey = apiKey.trim();
+      if (!trimmedKey) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Missing API key",
+            detail: "Enter an API key before saving.",
+          }),
+        }));
+        return;
+      }
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+      const ok = sendControl(get, workspaceId, (sessionId) => ({
+        type: "mcp_server_auth_set_api_key",
+        sessionId,
+        name,
+        apiKey: trimmedKey,
+      }));
+      if (ok) return;
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to save MCP API key.",
+        }),
+      }));
+    },
+
+    migrateWorkspaceMcpLegacy: async (workspaceId, scope) => {
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+      const ok = sendControl(get, workspaceId, (sessionId) => ({
+        type: "mcp_servers_migrate_legacy",
+        sessionId,
+        scope,
+      }));
+      if (ok) return;
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Not connected",
+          detail: "Unable to migrate legacy MCP servers.",
         }),
       }));
     },

@@ -2,132 +2,228 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { createMCPClient } from "@ai-sdk/mcp";
+import type { OAuthClientProvider } from "@ai-sdk/mcp";
 import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
 
 import type { AgentConfig, MCPServerConfig } from "../types";
+import {
+  completeMCPServerOAuth,
+  resolveMCPServerAuthState,
+  type MCPAuthMode,
+  type MCPAuthScope,
+  type MCPServerOAuthTokens,
+} from "./authStore";
+import {
+  DEFAULT_MCP_SERVERS_DOCUMENT,
+  MCP_SERVERS_FILE_NAME,
+  loadMCPConfigRegistry,
+  parseMCPServersDocument,
+  readWorkspaceMCPServersDocument,
+  resolveMcpConfigPaths,
+  writeWorkspaceMCPServersDocument,
+  type MCPConfigRegistrySnapshot,
+  type MCPRegistryFileState,
+  type MCPRegistryLegacyState,
+  type MCPRegistryServer,
+} from "./configRegistry";
 
-const PROJECT_MCP_FILE_NAME = "mcp-servers.json";
-const DEFAULT_MCP_SERVERS = { servers: [] } as const;
+export {
+  DEFAULT_MCP_SERVERS_DOCUMENT,
+  parseMCPServersDocument,
+  loadMCPConfigRegistry,
+  resolveMcpConfigPaths,
+  readWorkspaceMCPServersDocument,
+  writeWorkspaceMCPServersDocument,
+};
 
-export const DEFAULT_MCP_SERVERS_DOCUMENT = `${JSON.stringify(DEFAULT_MCP_SERVERS, null, 2)}\n`;
+export type MCPServerEffectiveState = MCPRegistryServer & {
+  authMode: MCPAuthMode;
+  authScope: MCPAuthScope;
+  authMessage: string;
+};
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+export interface MCPServersSnapshot {
+  servers: MCPServerEffectiveState[];
+  files: MCPRegistryFileState[];
+  legacy: MCPRegistryLegacyState;
+  warnings: string[];
 }
 
-function asNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
+function toOAuthTokensForSdk(tokens: MCPServerOAuthTokens): {
+  access_token: string;
+  token_type: string;
+  refresh_token?: string;
+  expires_in?: number;
+  scope?: string;
+} {
+  const expiresIn = (() => {
+    if (!tokens.expiresAt) return undefined;
+    const expiresAt = Date.parse(tokens.expiresAt);
+    if (!Number.isFinite(expiresAt)) return undefined;
+    const seconds = Math.floor((expiresAt - Date.now()) / 1000);
+    return Math.max(0, seconds);
+  })();
+
+  return {
+    access_token: tokens.accessToken,
+    token_type: tokens.tokenType ?? "Bearer",
+    ...(tokens.refreshToken ? { refresh_token: tokens.refreshToken } : {}),
+    ...(typeof expiresIn === "number" ? { expires_in: expiresIn } : {}),
+    ...(tokens.scope ? { scope: tokens.scope } : {}),
+  };
 }
 
-function parseStringMap(value: unknown, fieldName: string): Record<string, string> | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value)) {
-    throw new Error(`mcp-servers.json: ${fieldName} must be an object`);
-  }
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(value)) {
-    if (typeof v !== "string") {
-      throw new Error(`mcp-servers.json: ${fieldName}.${k} must be a string`);
-    }
-    out[k] = v;
-  }
-  return out;
+function toStoredOAuthTokens(tokens: {
+  access_token: string;
+  token_type?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  scope?: string;
+}): Omit<MCPServerOAuthTokens, "updatedAt"> {
+  const expiresAt = (() => {
+    if (typeof tokens.expires_in !== "number" || !Number.isFinite(tokens.expires_in)) return undefined;
+    return new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+  })();
+
+  return {
+    accessToken: tokens.access_token,
+    ...(tokens.token_type ? { tokenType: tokens.token_type } : {}),
+    ...(tokens.refresh_token ? { refreshToken: tokens.refresh_token } : {}),
+    ...(tokens.scope ? { scope: tokens.scope } : {}),
+    ...(expiresAt ? { expiresAt } : {}),
+  };
 }
 
-function parseTransport(
-  value: unknown,
-  index: number
-): MCPServerConfig["transport"] {
-  if (!isRecord(value)) {
-    throw new Error(`mcp-servers.json: servers[${index}].transport must be an object`);
-  }
-  const type = asNonEmptyString(value.type);
-  if (!type) {
-    throw new Error(`mcp-servers.json: servers[${index}].transport.type is required`);
-  }
-  if (type === "stdio") {
-    const command = asNonEmptyString(value.command);
-    if (!command) {
-      throw new Error(`mcp-servers.json: servers[${index}].transport.command is required for stdio`);
-    }
-    const argsRaw = value.args;
-    if (argsRaw !== undefined && (!Array.isArray(argsRaw) || !argsRaw.every((arg) => typeof arg === "string"))) {
-      throw new Error(`mcp-servers.json: servers[${index}].transport.args must be a string[]`);
-    }
-    const env = parseStringMap(value.env, `servers[${index}].transport.env`);
-    const cwd = asNonEmptyString(value.cwd) ?? undefined;
-    return {
-      type: "stdio",
-      command,
-      ...(argsRaw !== undefined ? { args: argsRaw } : {}),
-      ...(env ? { env } : {}),
-      ...(cwd ? { cwd } : {}),
+function createRuntimeOAuthProvider(opts: {
+  config: AgentConfig;
+  server: MCPRegistryServer;
+  mode: MCPAuthMode;
+  tokens?: MCPServerOAuthTokens;
+  codeVerifier?: string;
+  redirectUri?: string;
+}): OAuthClientProvider | undefined {
+  if (opts.mode !== "oauth" || !opts.tokens) return undefined;
+
+  let latestTokens: MCPServerOAuthTokens | undefined = opts.tokens;
+  const redirectUrl = opts.redirectUri ?? "http://127.0.0.1/oauth/callback";
+
+  return {
+    tokens: async () => {
+      if (!latestTokens) return undefined;
+      return toOAuthTokensForSdk(latestTokens);
+    },
+    saveTokens: async (tokens) => {
+      latestTokens = {
+        ...toStoredOAuthTokens(tokens as any),
+        updatedAt: new Date().toISOString(),
+      };
+      try {
+        await completeMCPServerOAuth({
+          config: opts.config,
+          server: opts.server,
+          tokens: toStoredOAuthTokens(tokens as any),
+          clearPending: false,
+        });
+      } catch {
+        // best effort persistence only
+      }
+    },
+    redirectToAuthorization: async () => {
+      // Runtime MCP discovery should not trigger interactive auth flows.
+      throw new Error(`MCP server \"${opts.server.name}\" requires interactive OAuth re-authorization.`);
+    },
+    saveCodeVerifier: async () => {
+      // verifier persistence is handled by explicit session auth flows.
+    },
+    codeVerifier: async () => opts.codeVerifier ?? "",
+    get redirectUrl() {
+      return redirectUrl;
+    },
+    get clientMetadata() {
+      return {
+        redirect_uris: [redirectUrl],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
+      };
+    },
+    clientInformation: async () => undefined,
+  };
+}
+
+async function hydrateServerForRuntime(config: AgentConfig, server: MCPRegistryServer): Promise<MCPServerConfig> {
+  const auth = await resolveMCPServerAuthState(config, server);
+
+  if (server.transport.type === "http" || server.transport.type === "sse") {
+    const existingHeaders = server.transport.headers ?? {};
+    const mergedHeaders = auth.headers ? { ...existingHeaders, ...auth.headers } : existingHeaders;
+
+    const runtimeServer: MCPServerConfig = {
+      name: server.name,
+      required: server.required,
+      retries: server.retries,
+      auth: server.auth,
+      transport: {
+        ...server.transport,
+        ...(Object.keys(mergedHeaders).length > 0 ? { headers: mergedHeaders } : {}),
+      },
     };
-  }
-  if (type === "http" || type === "sse") {
-    const url = asNonEmptyString(value.url);
-    if (!url) {
-      throw new Error(`mcp-servers.json: servers[${index}].transport.url is required for ${type}`);
+
+    if (server.auth?.type === "oauth") {
+      const provider = createRuntimeOAuthProvider({
+        config,
+        server,
+        mode: auth.mode,
+        tokens: auth.oauthTokens,
+        codeVerifier: auth.oauthPending?.codeVerifier,
+        redirectUri: auth.oauthPending?.redirectUri,
+      });
+      if (provider) {
+        runtimeServer.transport = {
+          ...(runtimeServer.transport as any),
+          authProvider: provider,
+        } as any;
+      }
     }
-    const headers = parseStringMap(value.headers, `servers[${index}].transport.headers`);
-    return {
-      type,
-      url,
-      ...(headers ? { headers } : {}),
-    };
+
+    return runtimeServer;
   }
-  throw new Error(`mcp-servers.json: servers[${index}].transport.type "${type}" is not supported`);
+
+  return {
+    name: server.name,
+    transport: server.transport,
+    required: server.required,
+    retries: server.retries,
+    auth: server.auth,
+  };
 }
 
-export function parseMCPServersDocument(rawJson: string): { servers: MCPServerConfig[] } {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawJson);
-  } catch (error) {
-    throw new Error(`mcp-servers.json: invalid JSON: ${String(error)}`);
-  }
-  if (!isRecord(parsed)) {
-    throw new Error("mcp-servers.json: root must be an object");
-  }
+export async function readMCPServersSnapshot(config: AgentConfig): Promise<MCPServersSnapshot> {
+  const registry = await loadMCPConfigRegistry(config);
+  const serversWithAuth = await Promise.all(
+    registry.servers.map(async (server) => {
+      const auth = await resolveMCPServerAuthState(config, server);
+      return {
+        ...server,
+        authMode: auth.mode,
+        authScope: auth.scope,
+        authMessage: auth.message,
+      };
+    }),
+  );
 
-  const serversRaw = parsed.servers;
-  if (serversRaw === undefined) {
-    return { servers: [] };
-  }
-  if (!Array.isArray(serversRaw)) {
-    throw new Error("mcp-servers.json: servers must be an array");
-  }
+  return {
+    servers: serversWithAuth,
+    files: registry.files,
+    legacy: registry.legacy,
+    warnings: registry.warnings,
+  };
+}
 
-  const servers: MCPServerConfig[] = [];
-  for (let i = 0; i < serversRaw.length; i++) {
-    const item = serversRaw[i];
-    if (!isRecord(item)) {
-      throw new Error(`mcp-servers.json: servers[${i}] must be an object`);
-    }
-    const name = asNonEmptyString(item.name);
-    if (!name) {
-      throw new Error(`mcp-servers.json: servers[${i}].name is required`);
-    }
-    const transport = parseTransport(item.transport, i);
-    if (item.required !== undefined && typeof item.required !== "boolean") {
-      throw new Error(`mcp-servers.json: servers[${i}].required must be a boolean`);
-    }
-    if (
-      item.retries !== undefined &&
-      (typeof item.retries !== "number" || !Number.isFinite(item.retries))
-    ) {
-      throw new Error(`mcp-servers.json: servers[${i}].retries must be a number`);
-    }
-    servers.push({
-      name,
-      transport,
-      ...(item.required !== undefined ? { required: item.required } : {}),
-      ...(item.retries !== undefined ? { retries: item.retries } : {}),
-    });
-  }
-  return { servers };
+export async function loadMCPServers(config: AgentConfig): Promise<MCPServerConfig[]> {
+  const registry = await loadMCPConfigRegistry(config);
+  const hydrated = await Promise.all(registry.servers.map(async (server) => await hydrateServerForRuntime(config, server)));
+  return hydrated;
 }
 
 export async function readProjectMCPServersDocument(config: AgentConfig): Promise<{
@@ -137,66 +233,28 @@ export async function readProjectMCPServersDocument(config: AgentConfig): Promis
   effectiveServers: MCPServerConfig[];
   parseError?: string;
 }> {
-  const filePath = path.join(config.projectAgentDir, PROJECT_MCP_FILE_NAME);
-  let rawJson = DEFAULT_MCP_SERVERS_DOCUMENT;
-  try {
-    rawJson = await fs.readFile(filePath, "utf-8");
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    if (code !== "ENOENT") {
-      throw error;
-    }
-  }
-
-  let projectServers: MCPServerConfig[] = [];
-  let parseError: string | undefined;
-  try {
-    projectServers = parseMCPServersDocument(rawJson).servers;
-  } catch (error) {
-    parseError = String(error);
-  }
-
+  const workspaceDoc = await readWorkspaceMCPServersDocument(config);
   const effectiveServers = await loadMCPServers(config);
   return {
-    path: filePath,
-    rawJson,
-    projectServers,
+    path: workspaceDoc.path,
+    rawJson: workspaceDoc.rawJson,
+    projectServers: workspaceDoc.workspaceServers,
     effectiveServers,
-    ...(parseError ? { parseError } : {}),
+    ...(workspaceDoc.parseError ? { parseError: workspaceDoc.parseError } : {}),
   };
 }
 
 export async function writeProjectMCPServersDocument(projectAgentDir: string, rawJson: string): Promise<void> {
   parseMCPServersDocument(rawJson);
   await fs.mkdir(projectAgentDir, { recursive: true });
-  const filePath = path.join(projectAgentDir, PROJECT_MCP_FILE_NAME);
+  const filePath = path.join(projectAgentDir, MCP_SERVERS_FILE_NAME);
   const payload = rawJson.endsWith("\n") ? rawJson : `${rawJson}\n`;
   const tempPath = path.join(
     projectAgentDir,
-    `.mcp-servers.json.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
+    `.mcp-servers.json.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
   );
   await fs.writeFile(tempPath, payload, "utf-8");
   await fs.rename(tempPath, filePath);
-}
-
-export async function loadMCPServers(config: AgentConfig): Promise<MCPServerConfig[]> {
-  const serversByName = new Map<string, MCPServerConfig>();
-
-  // Load in low->high priority order so higher priority overwrites.
-  for (const dir of [...config.configDirs].reverse()) {
-    const p = path.join(dir, PROJECT_MCP_FILE_NAME);
-    try {
-      const raw = await fs.readFile(p, "utf-8");
-      const parsed = JSON.parse(raw) as { servers?: MCPServerConfig[] };
-      for (const server of parsed.servers || []) {
-        if (server?.name) serversByName.set(server.name, server);
-      }
-    } catch {
-      // ignore missing/invalid files
-    }
-  }
-
-  return Array.from(serversByName.values());
 }
 
 export async function loadMCPTools(
@@ -205,7 +263,7 @@ export async function loadMCPTools(
     log?: (line: string) => void;
     createClient?: typeof createMCPClient;
     sleep?: (ms: number) => Promise<void>;
-  } = {}
+  } = {},
 ): Promise<{ tools: Record<string, any>; errors: string[]; close: () => Promise<void> }> {
   const createClient = opts.createClient ?? createMCPClient;
   const sleep = opts.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -214,18 +272,17 @@ export async function loadMCPTools(
   const clients: Array<{ name: string; close: () => Promise<void> }> = [];
   let closed = false;
 
-  const retriesFor = (v: unknown): number => {
-    if (typeof v !== "number" || !Number.isFinite(v)) return 3;
-    return Math.max(0, Math.floor(v));
+  const retriesFor = (value: unknown): number => {
+    if (typeof value !== "number" || !Number.isFinite(value)) return 3;
+    return Math.max(0, Math.floor(value));
   };
 
   const close = async () => {
     if (closed) return;
     closed = true;
-    // Close in reverse order (last opened, first closed), in case transports depend on ordering.
-    for (const c of [...clients].reverse()) {
+    for (const client of [...clients].reverse()) {
       try {
-        await c.close();
+        await client.close();
       } catch {
         // ignore
       }
@@ -255,19 +312,15 @@ export async function loadMCPTools(
 
         const discovered = await client.tools();
 
-        for (const [name, t] of Object.entries(discovered)) {
-          tools[`mcp__${server.name}__${name}`] = t;
+        for (const [name, toolDef] of Object.entries(discovered)) {
+          tools[`mcp__${server.name}__${name}`] = toolDef;
         }
 
         clients.push({ name: server.name, close: client.close.bind(client) });
 
-        opts.log?.(
-          `[MCP] Connected to ${server.name}: ${Object.keys(discovered).length} tools`
-        );
+        opts.log?.(`[MCP] Connected to ${server.name}: ${Object.keys(discovered).length} tools`);
         break;
-      } catch (err) {
-        // If we created a client for this attempt, close it; otherwise we'd leak
-        // transports (especially stdio processes).
+      } catch (error) {
         try {
           await client?.close?.();
         } catch {
@@ -275,15 +328,13 @@ export async function loadMCPTools(
         }
 
         if (attempt === retries) {
-          const msg = `[MCP] Failed to connect to ${server.name} after ${attempt + 1} attempts: ${String(
-            err
-          )}`;
+          const message = `[MCP] Failed to connect to ${server.name} after ${attempt + 1} attempts: ${String(error)}`;
           if (server.required) {
             await close();
-            throw new Error(msg);
+            throw new Error(message);
           }
-          errors.push(msg);
-          opts.log?.(msg);
+          errors.push(message);
+          opts.log?.(message);
         } else {
           opts.log?.(`[MCP] Retrying ${server.name} (attempt ${attempt + 2})...`);
           await sleep(1000 * (attempt + 1));
@@ -293,4 +344,15 @@ export async function loadMCPTools(
   }
 
   return { tools, errors, close };
+}
+
+export function snapshotToRegistry(snapshot: MCPServersSnapshot): MCPConfigRegistrySnapshot {
+  return {
+    servers: snapshot.servers.map(({ authMode: _authMode, authMessage: _authMessage, authScope: _authScope, ...server }) => ({
+      ...server,
+    })),
+    files: snapshot.files,
+    legacy: snapshot.legacy,
+    warnings: snapshot.warnings,
+  };
 }

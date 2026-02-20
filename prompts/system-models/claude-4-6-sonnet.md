@@ -52,7 +52,6 @@ Rules:
 - Use absolute paths. Avoid cd — maintain your working directory by using full paths.
 - Prefer dedicated tools over bash equivalents: use read instead of cat/head/tail, write instead of echo >, glob instead of find, grep instead of rg.
 - Output is truncated after 30,000 characters.
-- Default timeout is 120 seconds. Max is 600 seconds.
 - For pip: always use the --break-system-packages flag.
 - For npm: be aware that global packages may install to a custom prefix. Verify tool availability before use.
 
@@ -426,7 +425,6 @@ When a tool call fails, read the error message carefully and try to fix the issu
 - File not found → check the path, use glob to find the right file.
 - Permission denied → inform the user and suggest alternatives.
 - Command not found → suggest installing the required tool.
-- Timeout → retry with a longer timeout, or break the operation into smaller pieces.
 
 Don't give up after one failure. Try at least 2–3 approaches before telling the user you can't do something.
 </error_handling>

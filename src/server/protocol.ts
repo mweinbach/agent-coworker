@@ -57,6 +57,7 @@ export type ClientMessage =
   | { type: "delete_skill"; sessionId: string; skillName: string }
   | { type: "set_enable_mcp"; sessionId: string; enableMcp: boolean }
   | { type: "cancel"; sessionId: string }
+  | { type: "session_close"; sessionId: string }
   | { type: "ping"; sessionId: string }
   | { type: "session_backup_get"; sessionId: string }
   | { type: "session_backup_checkpoint"; sessionId: string }
@@ -225,7 +226,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "5.0";
+export const WEBSOCKET_PROTOCOL_VERSION = "6.0";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -249,6 +250,7 @@ export const CLIENT_MESSAGE_TYPES = [
   "delete_skill",
   "set_enable_mcp",
   "cancel",
+  "session_close",
   "ping",
   "session_backup_get",
   "session_backup_checkpoint",
@@ -375,6 +377,10 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
     }
     case "cancel": {
       if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "cancel missing sessionId" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "session_close": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "session_close missing sessionId" };
       return { ok: true, msg: obj as ClientMessage };
     }
     case "reset": {

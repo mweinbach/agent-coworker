@@ -588,4 +588,66 @@ describe("desktop protocol v2 mapping", () => {
     const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
     expect(feed.some((item) => item.kind === "log")).toBe(false);
   });
+
+  test("manual cancel sends cancel only and does not auto-reset busy state", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+    threadSocket.sent = [];
+
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-1",
+      cause: "user_message",
+    });
+
+    useAppStore.getState().cancelThread(threadId);
+
+    expect(threadSocket.sent.some((msg) => msg?.type === "cancel")).toBe(true);
+    expect(threadSocket.sent.some((msg) => msg?.type === "session_close")).toBe(false);
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.busy).toBe(true);
+  });
+
+  test("session_busy does not trigger automatic cancel even with accelerated timers", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+    threadSocket.sent = [];
+
+    const originalSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: Function) => originalSetTimeout(fn, 0)) as any;
+
+    try {
+      threadSocket.emit({
+        type: "session_busy",
+        sessionId: "thread-session",
+        busy: true,
+        turnId: "turn-2",
+        cause: "user_message",
+      });
+
+      await new Promise((resolve) => originalSetTimeout(resolve, 5));
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+    }
+
+    expect(threadSocket.sent.some((msg) => msg?.type === "cancel")).toBe(false);
+    expect(
+      useAppStore
+        .getState()
+        .notifications.some((n) => n.detail?.includes("Attempting automatic cancel"))
+    ).toBe(false);
+  });
 });

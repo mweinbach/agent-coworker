@@ -85,7 +85,6 @@ Rules:
 - Always quote file paths containing spaces with double quotes.
 - Use absolute paths. Avoid cd.
 - Prefer dedicated tools over bash equivalents: read instead of cat/head/tail, write instead of echo >, glob instead of find, grep instead of rg.
-- Output truncated after 30,000 characters. Default timeout 120s, max 600s.
 - For pip: always use --break-system-packages. For npm: global packages may use a custom prefix — verify availability.
 
 Git rules:
@@ -324,7 +323,6 @@ In long conversations: use sub-agents for new complex tasks, be more concise, do
 
 ## Error Handling
 
-When a tool fails, read the error and try to fix it. File not found -> check path, use glob. Permission denied -> inform user. Command not found -> suggest install. Timeout -> retry longer or break into pieces. Try 2-3 approaches before giving up.
 
 # Knowledge Cutoff
 

@@ -128,18 +128,6 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
         agentType === "research" ? ctx.config.model : ctx.config.subAgentModel;
 
       const tools = createSubAgentTools(ctx, agentType, safeApprove, normalizedTask);
-      const timeoutCfg = ctx.config.modelSettings?.timeout;
-      const hasExplicitTimeout =
-        typeof timeoutCfg?.totalMs === "number" ||
-        typeof timeoutCfg?.stepMs === "number" ||
-        typeof timeoutCfg?.chunkMs === "number";
-      const timeout = hasExplicitTimeout
-        ? {
-            ...(typeof timeoutCfg?.totalMs === "number" ? { totalMs: timeoutCfg.totalMs } : {}),
-            ...(typeof timeoutCfg?.stepMs === "number" ? { stepMs: timeoutCfg.stepMs } : {}),
-            ...(typeof timeoutCfg?.chunkMs === "number" ? { chunkMs: timeoutCfg.chunkMs } : {}),
-          }
-        : undefined;
       const googlePrepareStep =
         ctx.config.provider === "google" && Object.keys(tools).length > 0
           ? buildGooglePrepareStep(ctx.config.providerOptions, ctx.log)
@@ -161,7 +149,6 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
         providerOptions: ctx.config.providerOptions,
         ...(telemetry ? { experimental_telemetry: telemetry } : {}),
         ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
-        timeout,
         ...(typeof ctx.config.modelSettings?.maxRetries === "number"
           ? { maxRetries: ctx.config.modelSettings.maxRetries }
           : {}),

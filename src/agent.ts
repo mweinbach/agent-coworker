@@ -8,8 +8,8 @@ import type { AgentConfig, TodoItem } from "./types";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
 
-const MODEL_STREAM_DRAIN_GRACE_MS = 750;
 const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
+const MAX_STREAM_SETTLE_TICKS = 64;
 
 export interface RunTurnParams {
   config: AgentConfig;
@@ -83,15 +83,6 @@ function mergeToolSets(
     merged[alias] = toolDef;
   }
   return merged;
-}
-
-function cancelStreamIterator(iterator: AsyncIterator<unknown> | undefined): void {
-  if (!iterator || typeof iterator.return !== "function") return;
-  try {
-    void iterator.return(undefined);
-  } catch {
-    // ignore iterator cancellation errors
-  }
 }
 
 function extractTurnUserPrompt(messages: ModelMessage[]): string | undefined {
@@ -195,18 +186,6 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
 
     const result = await (async () => {
       try {
-        const timeoutCfg = config.modelSettings?.timeout;
-        const hasExplicitTimeout =
-          typeof timeoutCfg?.totalMs === "number" ||
-          typeof timeoutCfg?.stepMs === "number" ||
-          typeof timeoutCfg?.chunkMs === "number";
-        const timeout = hasExplicitTimeout
-          ? {
-              ...(typeof timeoutCfg?.totalMs === "number" ? { totalMs: timeoutCfg.totalMs } : {}),
-              ...(typeof timeoutCfg?.stepMs === "number" ? { stepMs: timeoutCfg.stepMs } : {}),
-              ...(typeof timeoutCfg?.chunkMs === "number" ? { chunkMs: timeoutCfg.chunkMs } : {}),
-            }
-          : undefined;
         const telemetry = await buildAiSdkTelemetrySettings(config, {
           functionId: params.telemetryContext?.functionId ?? "agent.runTurn",
           metadata: {
@@ -224,7 +203,6 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           stopWhen: deps.stepCountIs(params.maxSteps ?? 100),
           ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
           abortSignal,
-          timeout,
           ...(typeof config.modelSettings?.maxRetries === "number"
             ? { maxRetries: config.modelSettings.maxRetries }
             : {}),
@@ -239,19 +217,23 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           includeRawChunks: params.includeRawChunks ?? true,
         } as any);
 
-        let streamIterator: AsyncIterator<unknown> | undefined;
+        let streamConsumptionSettled = false;
+        let streamPartCount = 0;
         const streamConsumption = (async () => {
           if (!params.onModelStreamPart) return;
           const fullStream = (streamResult as any).fullStream;
           if (!fullStream || typeof fullStream[Symbol.asyncIterator] !== "function") return;
 
-          streamIterator = (fullStream as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+          const streamIterator = (fullStream as AsyncIterable<unknown>)[Symbol.asyncIterator]();
           while (true) {
             const next = await streamIterator.next();
             if (next.done) break;
             await params.onModelStreamPart(next.value);
+            streamPartCount += 1;
           }
-        })();
+        })().finally(() => {
+          streamConsumptionSettled = true;
+        });
 
         const [text, reasoningText, response] = await Promise.all([
           streamResult.text,
@@ -260,20 +242,29 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
         ]);
 
         if (params.onModelStreamPart) {
-          const streamDrained = await Promise.race([
-            streamConsumption.then(() => true),
-            new Promise<false>((resolve) => {
-              setTimeout(() => resolve(false), MODEL_STREAM_DRAIN_GRACE_MS);
-            }),
-          ]);
-
-          if (!streamDrained) {
-            log(
-              `[warn] Model stream did not drain within ${MODEL_STREAM_DRAIN_GRACE_MS}ms after response completion; continuing turn.`
-            );
-            cancelStreamIterator(streamIterator);
+          let previousCount = streamPartCount;
+          let stableTicks = 0;
+          let ticks = 0;
+          while (!streamConsumptionSettled && stableTicks < 2 && ticks < MAX_STREAM_SETTLE_TICKS) {
+            await Promise.resolve();
+            ticks += 1;
+            if (streamPartCount === previousCount) {
+              stableTicks += 1;
+            } else {
+              previousCount = streamPartCount;
+              stableTicks = 0;
+            }
+          }
+          if (streamConsumptionSettled) {
+            try {
+              await streamConsumption;
+            } catch (error) {
+              log(`[warn] Model stream ended with error: ${String(error)}`);
+            }
+          } else {
+            log("[warn] Model stream did not drain after response completion; continuing turn.");
             void streamConsumption.catch((error) => {
-              log(`[warn] Model stream ended with error after timeout: ${String(error)}`);
+              log(`[warn] Model stream ended with error after response completion: ${String(error)}`);
             });
           }
         }

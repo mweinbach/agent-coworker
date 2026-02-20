@@ -539,9 +539,7 @@ async function runCodexBrowserOAuth(opts: {
   fetchImpl: typeof fetch;
   onLine?: (line: string) => void;
   openUrl?: UrlOpener;
-  timeoutMs?: number;
 }): Promise<string> {
-  const timeoutMs = opts.timeoutMs ?? 5 * 60_000;
   const codeVerifier = generatePkceVerifier();
   const codeChallenge = generatePkceChallenge(codeVerifier);
   const state = generateOauthState();
@@ -616,10 +614,6 @@ async function runCodexBrowserOAuth(opts: {
     opts.onLine?.(`[auth] open this URL to continue: ${authUrl}`);
   }
 
-  const timeout = setTimeout(() => {
-    settle({ error: new Error("OAuth callback timeout.") });
-  }, timeoutMs);
-
   try {
     const code = await codePromise;
     const tokens = await exchangeCodexAuthorizationCode({
@@ -634,7 +628,6 @@ async function runCodexBrowserOAuth(opts: {
     });
     return material.file;
   } finally {
-    clearTimeout(timeout);
     listener.close();
   }
 }
@@ -644,9 +637,7 @@ async function runCodexDeviceOAuth(opts: {
   fetchImpl: typeof fetch;
   onLine?: (line: string) => void;
   openUrl?: UrlOpener;
-  timeoutMs?: number;
 }): Promise<string> {
-  const timeoutMs = opts.timeoutMs ?? 15 * 60_000;
   const opener = opts.openUrl ?? openExternalUrl;
   const verificationUrl = `${CODEX_OAUTH_ISSUER}/codex/device`;
 
@@ -668,8 +659,7 @@ async function runCodexDeviceOAuth(opts: {
   opts.onLine?.(`[auth] open ${verificationUrl} and enter code: ${userCode}`);
   await opener(verificationUrl);
 
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
+  while (true) {
     const pollResponse = await opts.fetchImpl(`${CODEX_OAUTH_ISSUER}/api/accounts/deviceauth/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "User-Agent": "agent-coworker" },
@@ -707,8 +697,6 @@ async function runCodexDeviceOAuth(opts: {
 
     await wait(intervalSec * 1000 + 3000);
   }
-
-  throw new Error("Device-code auth timed out.");
 }
 
 export type ConnectProviderResult =
@@ -736,7 +724,6 @@ export async function connectProvider(opts: {
   oauthRunner?: OauthCommandRunner;
   fetchImpl?: typeof fetch;
   openUrl?: UrlOpener;
-  oauthTimeoutMs?: number;
 }): Promise<ConnectProviderResult> {
   const provider = opts.provider;
   const apiKey = (opts.apiKey ?? "").trim();
@@ -832,14 +819,12 @@ export async function connectProvider(opts: {
               fetchImpl,
               onLine: opts.onOauthLine,
               openUrl: opts.openUrl,
-              timeoutMs: opts.oauthTimeoutMs,
             })
           : await runCodexBrowserOAuth({
               paths,
               fetchImpl,
               onLine: opts.onOauthLine,
               openUrl: opts.openUrl,
-              timeoutMs: opts.oauthTimeoutMs,
             });
 
       store.services[provider] = {

@@ -8,8 +8,6 @@ import { z } from "zod";
 import type { ToolContext } from "./context";
 import { truncateText } from "../utils/paths";
 
-const MEMORY_SEARCH_TIMEOUT_MS = 30_000;
-
 async function readIfExists(p: string): Promise<string | null> {
   try {
     return await fs.readFile(p, "utf-8");
@@ -120,7 +118,6 @@ Use action=read to retrieve memory, action=write to store new information, and a
             ["-n", "--no-heading", query, projectMemoryDir, userMemoryDir],
             {
               maxBuffer: 1024 * 1024 * 5,
-              timeout: MEMORY_SEARCH_TIMEOUT_MS,
               ...(ctx.abortSignal ? { signal: ctx.abortSignal } : {}),
             },
             (err, stdout, stderr) => {

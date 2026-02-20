@@ -457,7 +457,7 @@ describe("bash tool", () => {
   test("executes simple command and returns stdout", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
-    const res = await t.execute({ command: "echo hello", timeout: 5000 });
+    const res = await t.execute({ command: "echo hello" });
     expect(res.stdout.trim()).toBe("hello");
     expect(res.exitCode).toBe(0);
   });
@@ -465,7 +465,7 @@ describe("bash tool", () => {
   test("returns exit code on failure", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
-    const res = await t.execute({ command: "exit 42", timeout: 5000 });
+    const res = await t.execute({ command: "exit 42" });
     expect(res.exitCode).not.toBe(0);
   });
 
@@ -476,7 +476,7 @@ describe("bash tool", () => {
     ctx.approveCommand = approveFn;
 
     const t: any = createBashTool(ctx);
-    await t.execute({ command: "echo test", timeout: 5000 });
+    await t.execute({ command: "echo test" });
     expect(approveFn).toHaveBeenCalledWith("echo test");
   });
 
@@ -486,7 +486,7 @@ describe("bash tool", () => {
     ctx.approveCommand = async () => false;
 
     const t: any = createBashTool(ctx);
-    const res = await t.execute({ command: "echo secret", timeout: 5000 });
+    const res = await t.execute({ command: "echo secret" });
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain("rejected");
   });
@@ -496,7 +496,6 @@ describe("bash tool", () => {
     const t: any = createBashTool(makeCtx(dir));
     const res = await t.execute({
       command: `bun -e "console.error('error')"`,
-      timeout: 5000,
     });
     expect(res.stderr.trim()).toBe("error");
   });
@@ -504,7 +503,7 @@ describe("bash tool", () => {
   test("uses workingDirectory as cwd", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
-    const res = await t.execute({ command: `bun -e "console.log(process.cwd())"`, timeout: 5000 });
+    const res = await t.execute({ command: `bun -e "console.log(process.cwd())"` });
     // Resolve symlinks for macOS /private/var/... vs /var/...
     const normalizedStdout = await fs.realpath(res.stdout.trim());
     const normalizedDir = await fs.realpath(dir);
@@ -516,7 +515,6 @@ describe("bash tool", () => {
     const t: any = createBashTool(makeCtx(dir));
     const res = await t.execute({
       command: `bun -e "process.stdout.write('x'.repeat(50000))"`,
-      timeout: 15000,
     });
     expect(res.stdout.length).toBeLessThanOrEqual(30000);
   });
@@ -526,7 +524,6 @@ describe("bash tool", () => {
     const t: any = createBashTool(makeCtx(dir));
     const res = await t.execute({
       command: `bun -e "console.log('out'); console.error('err')"`,
-      timeout: 5000,
     });
     expect(res.stdout.trim()).toBe("out");
     expect(res.stderr.trim()).toBe("err");
@@ -539,7 +536,7 @@ describe("bash tool", () => {
     ctx.approveCommand = async () => false;
 
     const t: any = createBashTool(ctx);
-    await t.execute({ command: `touch "${p}"`, timeout: 5000 });
+    await t.execute({ command: `touch "${p}"` });
     // File should not have been created since command was rejected
     await expect(fs.access(p)).rejects.toThrow();
   });
@@ -550,7 +547,7 @@ describe("bash tool", () => {
     ctx.approveCommand = async () => false;
 
     const t: any = createBashTool(ctx);
-    const res = await t.execute({ command: "echo should not see", timeout: 5000 });
+    const res = await t.execute({ command: "echo should not see" });
     expect(res.stdout).toBe("");
   });
 
@@ -559,7 +556,7 @@ describe("bash tool", () => {
     const controller = new AbortController();
     controller.abort();
     const t: any = createBashTool(makeCtx(dir, { abortSignal: controller.signal }));
-    const res = await t.execute({ command: "echo hello", timeout: 5000 });
+    const res = await t.execute({ command: "echo hello" });
     expect(res.exitCode).toBe(130);
     expect(res.stderr.toLowerCase()).toContain("aborted");
   });

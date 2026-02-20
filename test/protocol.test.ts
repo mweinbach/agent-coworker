@@ -480,6 +480,21 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("session_close", () => {
+    test("valid session_close message", () => {
+      const msg = expectOk(JSON.stringify({ type: "session_close", sessionId: "s1" }));
+      expect(msg.type).toBe("session_close");
+      if (msg.type === "session_close") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("session_close missing sessionId fails", () => {
+      const err = expectErr(JSON.stringify({ type: "session_close" }));
+      expect(err).toBe("session_close missing sessionId");
+    });
+  });
+
   describe("read_skill", () => {
     test("valid read_skill message", () => {
       const msg = expectOk(JSON.stringify({ type: "read_skill", sessionId: "s1", skillName: "pdf" }));

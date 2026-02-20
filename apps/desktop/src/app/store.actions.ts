@@ -18,8 +18,6 @@ import {
   appendThreadTranscript,
   basename,
   buildContextPreamble,
-  clearBusyTimers,
-  clearProviderRefreshTimer,
   ensureControlSocket,
   ensureServerRunning,
   ensureThreadRuntime,
@@ -33,17 +31,23 @@ import {
   persistNow,
   providerAuthMethodsFor,
   pushNotification,
-  queueBusyRecoveryAfterCancel,
   queuePendingThreadMessage,
   sendControl,
   sendThread,
   sendUserMessageToThread,
-  startProviderRefreshTimeout,
   truncateTitle,
 } from "./store.helpers";
 import type { ThreadRecord, ThreadStatus, WorkspaceRecord } from "./types";
 
 export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions {
+  const closeControlSession = (workspaceId: string) => {
+    sendControl(get, workspaceId, (sessionId) => ({ type: "session_close", sessionId }));
+  };
+
+  const closeThreadSession = (threadId: string) => {
+    sendThread(get, threadId, (sessionId) => ({ type: "session_close", sessionId }));
+  };
+
   return {
     init: async () => {
       set({ startupError: null });
@@ -174,8 +178,8 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
   
     removeWorkspace: async (workspaceId: string) => {
       const control = RUNTIME.controlSockets.get(workspaceId);
+      closeControlSession(workspaceId);
       RUNTIME.controlSockets.delete(workspaceId);
-      clearProviderRefreshTimer(workspaceId);
       try {
         control?.close();
       } catch {
@@ -185,11 +189,11 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       for (const thread of get().threads) {
         if (thread.workspaceId !== workspaceId) continue;
         const sock = RUNTIME.threadSockets.get(thread.id);
+        closeThreadSession(thread.id);
         RUNTIME.threadSockets.delete(thread.id);
         RUNTIME.optimisticUserMessageIds.delete(thread.id);
         RUNTIME.pendingThreadMessages.delete(thread.id);
         RUNTIME.modelStreamByThread.delete(thread.id);
-        clearBusyTimers(thread.id);
         try {
           sock?.close();
         } catch {
@@ -221,11 +225,11 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
   
     removeThread: async (threadId: string) => {
       const sock = RUNTIME.threadSockets.get(threadId);
+      closeThreadSession(threadId);
       RUNTIME.threadSockets.delete(threadId);
       RUNTIME.optimisticUserMessageIds.delete(threadId);
       RUNTIME.pendingThreadMessages.delete(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
-      clearBusyTimers(threadId);
       try {
         sock?.close();
       } catch {
@@ -450,32 +454,16 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     cancelThread: (threadId: string) => {
       const ok = sendThread(get, threadId, (sid) => ({ type: "cancel", sessionId: sid }));
       if (!ok) {
-        set((s) => {
-          const rt = s.threadRuntimeById[threadId];
-          const isBusy = rt?.busy === true;
-        return {
-            notifications: pushNotification(s.notifications, {
-              id: makeId(),
-              ts: nowIso(),
-              kind: "error",
-              title: "Not connected",
-              detail: isBusy ? "Run connection lost. Resetting session state." : "Unable to cancel this run.",
-            }),
-            threadRuntimeById:
-              isBusy && rt
-                ? {
-                    ...s.threadRuntimeById,
-                    [threadId]: { ...rt, busy: false, busySince: null, connected: false, sessionId: null },
-                  }
-                : s.threadRuntimeById,
-            threads: isBusy
-              ? s.threads.map((t) => (t.id === threadId ? { ...t, status: "disconnected" } : t))
-              : s.threads,
-          };
-        });
-        return;
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to cancel this run.",
+          }),
+        }));
       }
-      queueBusyRecoveryAfterCancel(get, set, threadId, "manual");
     },
   
     setThreadModel: (threadId, provider, model) => {
@@ -626,16 +614,16 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
   
     restartWorkspaceServer: async (workspaceId) => {
       const control = RUNTIME.controlSockets.get(workspaceId);
+      closeControlSession(workspaceId);
       control?.close();
       RUNTIME.controlSockets.delete(workspaceId);
-      clearProviderRefreshTimer(workspaceId);
-  
+
       for (const thread of get().threads) {
         if (thread.workspaceId !== workspaceId) continue;
         const sock = RUNTIME.threadSockets.get(thread.id);
+        closeThreadSession(thread.id);
         sock?.close();
         RUNTIME.threadSockets.delete(thread.id);
-        clearBusyTimers(thread.id);
       }
   
       try {
@@ -883,13 +871,11 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
   
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
-  
+
       set({ providerStatusRefreshing: true });
-      startProviderRefreshTimeout(get, set, workspaceId);
       const sid = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
       const sock = RUNTIME.controlSockets.get(workspaceId);
       if (!sid || !sock) {
-        clearProviderRefreshTimer(workspaceId);
         set({ providerStatusRefreshing: false });
         return;
       }
@@ -899,7 +885,6 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
         sock.send({ type: "provider_catalog_get", sessionId: sid });
         sock.send({ type: "provider_auth_methods_get", sessionId: sid });
       } catch {
-        clearProviderRefreshTimer(workspaceId);
         set((s) => ({
           providerStatusRefreshing: false,
           notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to refresh provider status." }),

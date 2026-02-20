@@ -10,7 +10,6 @@ import { truncateText } from "../utils/paths";
 import { resolveSafeWebUrl } from "../utils/webSafety";
 
 const MAX_REDIRECTS = 5;
-const FETCH_TIMEOUT_MS = 15_000;
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
@@ -39,37 +38,30 @@ function buildPinnedUrl(resolved: { url: URL; addresses: { address: string; fami
   return { pinnedUrl, hostHeader };
 }
 
-async function fetchWithSafeRedirects(url: string): Promise<Response> {
+async function fetchWithSafeRedirects(url: string, abortSignal?: AbortSignal): Promise<Response> {
   let current = await resolveSafeWebUrl(url);
 
   for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
     const { pinnedUrl, hostHeader } = buildPinnedUrl(current);
 
-    try {
-      const res = await fetch(pinnedUrl, {
-        redirect: "manual",
-        headers: {
-          "User-Agent": "agent-coworker/0.1",
-          Host: hostHeader,
-        },
-        signal: controller.signal,
-      });
+    const res = await fetch(pinnedUrl, {
+      redirect: "manual",
+      headers: {
+        "User-Agent": "agent-coworker/0.1",
+        Host: hostHeader,
+      },
+      ...(abortSignal ? { signal: abortSignal } : {}),
+    });
 
-      if (!isRedirectStatus(res.status)) return res;
+    if (!isRedirectStatus(res.status)) return res;
 
-      const location = res.headers.get("location");
-      if (!location) {
-        throw new Error(`Redirect missing location header: ${current.url.toString()}`);
-      }
-
-      const next = new URL(location, current.url).toString();
-      current = await resolveSafeWebUrl(next);
-    } finally {
-      clearTimeout(timeout);
+    const location = res.headers.get("location");
+    if (!location) {
+      throw new Error(`Redirect missing location header: ${current.url.toString()}`);
     }
+
+    const next = new URL(location, current.url).toString();
+    current = await resolveSafeWebUrl(next);
   }
 
   throw new Error(`Too many redirects while fetching URL: ${url}`);
@@ -86,7 +78,7 @@ export function createWebFetchTool(ctx: ToolContext) {
     execute: async ({ url, maxLength }) => {
       ctx.log(`tool> webFetch ${JSON.stringify({ url, maxLength })}`);
 
-      const res = await fetchWithSafeRedirects(url);
+      const res = await fetchWithSafeRedirects(url, ctx.abortSignal);
       if (!res.ok) {
         throw new Error(`webFetch failed: ${res.status} ${res.statusText}`);
       }

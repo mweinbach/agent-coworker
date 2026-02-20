@@ -289,9 +289,6 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const mergedModelSettings = isPlainObject((merged as Record<string, unknown>).modelSettings)
     ? ((merged as Record<string, unknown>).modelSettings as Record<string, unknown>)
     : {};
-  const mergedModelTimeout = isPlainObject(mergedModelSettings.timeout)
-    ? (mergedModelSettings.timeout as Record<string, unknown>)
-    : {};
 
   const modelSettings: AgentConfig["modelSettings"] = {
     ...(normalizeNonNegativeInt(env.AGENT_MODEL_MAX_RETRIES) !== undefined
@@ -299,33 +296,11 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
       : normalizeNonNegativeInt(mergedModelSettings.maxRetries) !== undefined
         ? { maxRetries: normalizeNonNegativeInt(mergedModelSettings.maxRetries) }
         : {}),
-    timeout: {
-      ...(normalizePositiveInt(env.AGENT_MODEL_TIMEOUT_TOTAL_MS ?? env.AGENT_MODEL_TIMEOUT_MS) !== undefined
-        ? { totalMs: normalizePositiveInt(env.AGENT_MODEL_TIMEOUT_TOTAL_MS ?? env.AGENT_MODEL_TIMEOUT_MS) }
-        : normalizePositiveInt(mergedModelTimeout.totalMs) !== undefined
-          ? { totalMs: normalizePositiveInt(mergedModelTimeout.totalMs) }
-          : {}),
-      ...(normalizePositiveInt(env.AGENT_MODEL_TIMEOUT_STEP_MS) !== undefined
-        ? { stepMs: normalizePositiveInt(env.AGENT_MODEL_TIMEOUT_STEP_MS) }
-        : normalizePositiveInt(mergedModelTimeout.stepMs) !== undefined
-          ? { stepMs: normalizePositiveInt(mergedModelTimeout.stepMs) }
-          : {}),
-      ...(normalizePositiveInt(env.AGENT_MODEL_TIMEOUT_CHUNK_MS) !== undefined
-        ? { chunkMs: normalizePositiveInt(env.AGENT_MODEL_TIMEOUT_CHUNK_MS) }
-        : normalizePositiveInt(mergedModelTimeout.chunkMs) !== undefined
-          ? { chunkMs: normalizePositiveInt(mergedModelTimeout.chunkMs) }
-          : {}),
-    },
   };
-  const hasModelTimeout =
-    typeof modelSettings.timeout?.totalMs === "number" ||
-    typeof modelSettings.timeout?.stepMs === "number" ||
-    typeof modelSettings.timeout?.chunkMs === "number";
   const normalizedModelSettings: AgentConfig["modelSettings"] =
-    typeof modelSettings.maxRetries === "number" || hasModelTimeout
+    typeof modelSettings.maxRetries === "number"
       ? {
           ...(typeof modelSettings.maxRetries === "number" ? { maxRetries: modelSettings.maxRetries } : {}),
-          ...(hasModelTimeout ? { timeout: modelSettings.timeout } : {}),
         }
       : undefined;
 

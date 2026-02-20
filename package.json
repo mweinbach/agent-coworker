@@ -25,7 +25,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.45",
+    "@ai-sdk/anthropic": "^3.0.46",
     "@ai-sdk/google": "^3.0.30",
     "@ai-sdk/mcp": "^1.0.21",
     "@ai-sdk/openai": "^3.0.30",
@@ -36,7 +36,7 @@
     "@opentui/core": "^0.1.80",
     "@opentui/react": "^0.1.80",
     "@opentui/solid": "^0.1.80",
-    "ai": "^6.0.93",
+    "ai": "^6.0.95",
     "exa-js": "^2.4.0",
     "fast-glob": "^3.3.3",
     "fuzzysort": "^3.1.0",

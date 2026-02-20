@@ -11,6 +11,12 @@ mock.module("../src/lib/desktopCommands", () => ({
   saveState: async () => {},
   startWorkspaceServer: async () => ({ url: "ws://mock" }),
   stopWorkspaceServer: async () => {},
+  openPath: async () => {},
+  revealPath: async () => {},
+  copyPath: async () => {},
+  createDirectory: async () => {},
+  renamePath: async () => {},
+  trashPath: async () => {},
 }));
 
 mock.module("../src/lib/agentSocket", () => ({

@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   isTrustedDesktopSenderUrl,
   resolveAllowedDirectoryPath,
+  resolveAllowedPath,
 } from "../electron/services/ipcSecurity";
 
 describe("desktop IPC security helpers", () => {
@@ -69,6 +70,21 @@ describe("desktop IPC security helpers", () => {
     } finally {
       await fs.rm(workspaceRoot, { recursive: true, force: true });
       await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("resolveAllowedPath enforces boundary for new or non-existent files", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-root-"));
+    const workspaceRoot = await fs.realpath(tempRoot);
+    try {
+      const newFile = path.join(workspaceRoot, "new_file.txt");
+      const resolved = resolveAllowedPath([workspaceRoot], newFile);
+      expect(resolved).toBe(newFile); // Since it doesn't exist, realpathSync fails and it returns resolve() which is within root
+
+      const outsideFile = path.join(workspaceRoot, "..", "new_file.txt");
+      expect(() => resolveAllowedPath([workspaceRoot], outsideFile)).toThrow("outside allowed workspace roots");
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
 });

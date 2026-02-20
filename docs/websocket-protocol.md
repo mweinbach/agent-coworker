@@ -14,6 +14,8 @@ Changes in `6.0`:
 
 - New client message: `session_close`.
 - Session lifetime is now explicit. Disconnected sessions are not auto-disposed by timeout.
+- Session/history storage is canonicalized in core SQLite (`~/.cowork/sessions.db`) with backward-compatible startup import of legacy JSON snapshots.
+- `server_hello` may include `resumedFromStorage` on cold resume (rehydrated from persisted state).
 
 ## Protocol v5 Notes
 
@@ -49,7 +51,7 @@ When a WebSocket connection opens, the server sends these events in order:
 7. `provider_status` — current provider auth/connection status (async)
 8. `session_backup_state` — backup/checkpoint state (async)
 
-If connecting with `?resumeSessionId=<id>`, the server resumes the existing session instead of creating a new one. Session disposal is explicit via `session_close` or server shutdown. On resume, `server_hello` includes additional fields (`isResume`, `busy`, `messageCount`, `hasPendingAsk`, `hasPendingApproval`) and any pending `ask`/`approval` prompts are replayed.
+If connecting with `?resumeSessionId=<id>`, the server resumes the existing session instead of creating a new one (warm in-memory attach or cold rehydrate from persisted storage). `session_close` disposes active runtime bindings but retains persisted history for later resume/view. On resume, `server_hello` includes additional fields (`isResume`, `busy`, `messageCount`, `hasPendingAsk`, `hasPendingApproval`) and may include `resumedFromStorage: true` for cold rehydrate.
 
 ## Validation Rules
 
@@ -751,7 +753,7 @@ Cancel the currently running agent turn. Aborts the model stream and rejects any
 
 ### session_close
 
-Close and dispose the session explicitly. After this message, the session cannot be resumed.
+Close and dispose the active runtime session binding. Persisted history remains available and can be resumed later.
 
 ```json
 { "type": "session_close", "sessionId": "..." }
@@ -762,7 +764,7 @@ Close and dispose the session explicitly. After this message, the session cannot
 | `type` | `"session_close"` | Yes |
 | `sessionId` | `string` | Yes |
 
-**Response:** Session is disposed. Subsequent messages for that `sessionId` are invalid.
+**Response:** Active runtime session is closed and socket is disconnected. Future messages on that socket are invalid; reconnect with `resumeSessionId` to continue from persisted history.
 
 ---
 
@@ -959,7 +961,7 @@ Manually set the session title.
 
 ### list_sessions
 
-Enumerate all persisted sessions from disk.
+Enumerate all persisted sessions from the server's canonical session store.
 
 ```json
 { "type": "list_sessions", "sessionId": "..." }
@@ -1052,7 +1054,7 @@ Initial handshake event sent immediately on WebSocket connection.
 {
   "type": "server_hello",
   "sessionId": "abc-123-def",
-  "protocolVersion": "5.0",
+  "protocolVersion": "6.0",
   "capabilities": {
     "modelStreamChunk": "v1"
   },
@@ -1062,6 +1064,7 @@ Initial handshake event sent immediately on WebSocket connection.
     "workingDirectory": "/path/to/project"
   },
   "isResume": true,
+  "resumedFromStorage": true,
   "busy": false,
   "messageCount": 12,
   "hasPendingAsk": false,
@@ -1073,10 +1076,11 @@ Initial handshake event sent immediately on WebSocket connection.
 |-------|------|-------------|
 | `type` | `"server_hello"` | — |
 | `sessionId` | `string` | The session identifier. Use this for all subsequent messages |
-| `protocolVersion` | `string?` | Protocol version (currently `"5.0"`) |
+| `protocolVersion` | `string?` | Protocol version (currently `"6.0"`) |
 | `capabilities` | `object?` | Optional capabilities object. Currently: `{ modelStreamChunk: "v1" }` |
 | `config` | `PublicConfig` | Session config: `provider`, `model`, `workingDirectory`, and optionally `outputDirectory` |
 | `isResume` | `boolean?` | Present and `true` only when resuming a disconnected session |
+| `resumedFromStorage` | `boolean?` | Present and `true` on cold resume (rehydrated from persisted store) |
 | `busy` | `boolean?` | Whether the session is mid-turn (only on resume) |
 | `messageCount` | `number?` | Number of messages in history (only on resume) |
 | `hasPendingAsk` | `boolean?` | Whether there's a pending `ask` prompt (only on resume) |

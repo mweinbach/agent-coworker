@@ -252,6 +252,18 @@ describe("REPL command parsing", () => {
     expect(parseReplInput("/tools")).toEqual({ type: "tools" });
   });
 
+  test("/sessions is parsed as sessions command", () => {
+    expect(parseReplInput("/sessions")).toEqual({ type: "sessions" });
+  });
+
+  test("/resume with id is parsed correctly", () => {
+    const result = parseReplInput("/resume abc123");
+    expect(result.type).toBe("resume");
+    if (result.type === "resume") {
+      expect(result.arg).toBe("abc123");
+    }
+  });
+
   test("unknown slash command is parsed as unknown", () => {
     const result = parseReplInput("/foobar");
     expect(result.type).toBe("unknown");

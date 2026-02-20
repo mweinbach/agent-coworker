@@ -109,6 +109,7 @@ type SyncState = {
   skills: SkillsState;
   backup: SessionBackupState;
   contextUsage: ContextUsageSnapshot | null;
+  sessionSummaries: Extract<ServerEvent, { type: "sessions" }>["sessions"];
   busy: boolean;
   feed: FeedItem[];
   todos: TodoItem[];
@@ -133,6 +134,8 @@ type SyncActions = {
   requestHarnessContext: () => void;
   setHarnessContext: (context: HarnessContextPayload) => void;
   executeCommand: (name: string, args?: string, displayText?: string) => boolean;
+  requestSessions: () => void;
+  resumeSession: (sessionId: string) => void;
   reset: () => void;
   cancel: () => void;
 };
@@ -448,6 +451,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     skills: [],
     backup: null,
     contextUsage: null,
+    sessionSummaries: [],
     busy: false,
     feed: [],
     todos: [],
@@ -469,6 +473,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
 
   let socket: AgentSocket | null = null;
   let latestSessionId: string | null = null;
+  let socketGeneration = 0;
 
   function resetModelStreamState() {
     streamedAssistantItemIds.clear();
@@ -489,6 +494,34 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         return update(item);
       })
     );
+  }
+
+  function connectSocket(resumeSessionId?: string) {
+    const generation = ++socketGeneration;
+    const sock = new AgentSocket({
+      url: props.serverUrl,
+      resumeSessionId: resumeSessionId?.trim() || latestSessionId || undefined,
+      client: "tui",
+      version: WEBSOCKET_PROTOCOL_VERSION,
+      onEvent: (evt) => {
+        if (generation !== socketGeneration) return;
+        handleEvent(evt);
+      },
+      onClose: () => {
+        if (generation !== socketGeneration) return;
+        resetModelStreamState();
+        if (state.sessionId) latestSessionId = state.sessionId;
+        setState("status", "disconnected");
+      },
+      onOpen: () => {
+        if (generation !== socketGeneration) return;
+        setState("status", "connecting");
+      },
+      autoReconnect: true,
+    });
+
+    socket = sock;
+    sock.connect();
   }
 
   function handleEvent(evt: ServerEvent) {
@@ -532,6 +565,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           s.skills = [];
           s.backup = null;
           s.contextUsage = null;
+          s.sessionSummaries = [];
           s.feed = [{ id: nextFeedId(), type: "system", line: `connected: ${evt.sessionId}` }];
           s.todos = [];
           s.pendingAsk = null;
@@ -546,6 +580,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       socket?.send({ type: "list_skills", sessionId: evt.sessionId });
       socket?.send({ type: "session_backup_get", sessionId: evt.sessionId });
       socket?.send({ type: "harness_context_get", sessionId: evt.sessionId });
+      socket?.send({ type: "list_sessions", sessionId: evt.sessionId });
       return;
     }
 
@@ -1043,6 +1078,10 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         setState("commands", evt.commands);
         break;
 
+      case "sessions":
+        setState("sessionSummaries", evt.sessions);
+        break;
+
       case "error":
         setState("feed", (f) => [...f, {
           id: nextFeedId(),
@@ -1063,31 +1102,14 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
   }
 
   createEffect(() => {
-    const sock = new AgentSocket({
-      url: props.serverUrl,
-      resumeSessionId: latestSessionId ?? undefined,
-      client: "tui",
-      version: WEBSOCKET_PROTOCOL_VERSION,
-      onEvent: handleEvent,
-      onClose: () => {
-        resetModelStreamState();
-        if (state.sessionId) latestSessionId = state.sessionId;
-        setState("status", "disconnected");
-      },
-      onOpen: () => {
-        setState("status", "connecting");
-      },
-      autoReconnect: true,
-    });
-
-    socket = sock;
-    sock.connect();
+    connectSocket(latestSessionId ?? undefined);
 
     onCleanup(() => {
       const closeMessage = buildSessionCloseMessage(state.sessionId ?? latestSessionId);
-      if (closeMessage) sock.send(closeMessage);
+      if (closeMessage) socket?.send(closeMessage);
+      socketGeneration++;
       latestSessionId = null;
-      sock.close();
+      socket?.close();
       socket = null;
     });
   });
@@ -1263,6 +1285,25 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         arguments: trimmedArgs || undefined,
         clientMessageId,
       });
+    },
+
+    requestSessions() {
+      const sid = state.sessionId;
+      if (!sid || !socket) return;
+      socket.send({ type: "list_sessions", sessionId: sid });
+    },
+
+    resumeSession(targetSessionId: string) {
+      const nextSessionId = targetSessionId.trim();
+      if (!nextSessionId) return;
+      const closeMessage = buildSessionCloseMessage(state.sessionId);
+      if (closeMessage) socket?.send(closeMessage);
+      latestSessionId = nextSessionId;
+      socketGeneration++;
+      socket?.close();
+      socket = null;
+      setState("status", "connecting");
+      connectSocket(nextSessionId);
     },
 
     reset() {

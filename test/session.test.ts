@@ -1644,6 +1644,27 @@ describe("AgentSession", () => {
       expect(snapshot.context.messages.some((msg: any) => msg.role === "assistant")).toBe(true);
     });
 
+    test("keeps full persisted history while capping runtime context window", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [],
+      }));
+
+      const { session } = makeSession();
+      const totalMessages = 205;
+      for (let i = 0; i < totalMessages; i++) {
+        await session.sendUserMessage(`message ${i + 1}`);
+      }
+      await flushAsyncWork();
+
+      expect(session.messageCount).toBe(totalMessages);
+      const lastRunTurnCall = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(lastRunTurnCall.messages.length).toBe(200);
+      const lastPersistCall = mockWritePersistedSessionSnapshot.mock.calls.at(-1)?.[0] as any;
+      expect(lastPersistCall.snapshot.context.messages.length).toBe(totalMessages);
+    });
+
     test("emits assistant_message when response has text", async () => {
       mockRunTurn.mockImplementation(async () => ({
         text: "Here is my response.",

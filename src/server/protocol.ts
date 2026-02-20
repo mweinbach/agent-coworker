@@ -15,7 +15,7 @@ import { resolveProviderAuthMethod, type ProviderAuthMethod, type ProviderAuthCh
 import type { ProviderCatalogEntry } from "../providers/connectionCatalog";
 import type { ModelStreamPartType } from "./modelStream";
 import type { SessionBackupPublicState } from "./sessionBackup";
-import type { PersistedSessionSummary } from "./sessionStore";
+import type { PersistedSessionSummary } from "./sessionDb";
 
 export type ClientMessage =
   | { type: "client_hello"; client: "tui" | "cli" | string; version?: string }
@@ -92,6 +92,7 @@ export type ServerEvent =
       };
       config: Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & { outputDirectory?: string };
       isResume?: boolean;
+      resumedFromStorage?: boolean;
       busy?: boolean;
       messageCount?: number;
       hasPendingAsk?: boolean;

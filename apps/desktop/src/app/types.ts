@@ -8,9 +8,23 @@ import type {
   TodoItem,
 } from "../lib/wsProtocol";
 
-export type FileEntry = {
+export type ExplorerEntry = {
   name: string;
+  path: string;
   isDirectory: boolean;
+  isHidden: boolean;
+  sizeBytes: number | null;
+  modifiedAtMs: number | null;
+};
+
+export type WorkspaceExplorerState = {
+  rootPath: string | null;
+  currentPath: string | null;
+  entries: ExplorerEntry[];
+  selectedPath: string | null;
+  loading: boolean;
+  error: string | null;
+  requestId: number;
 };
 
 export type WorkspaceRecord = {
@@ -34,6 +48,8 @@ export type ThreadRecord = {
   createdAt: string;
   lastMessageAt: string;
   status: ThreadStatus;
+  sessionId: string | null;
+  lastEventSeq: number;
 };
 
 export type PersistedState = {
@@ -41,6 +57,7 @@ export type PersistedState = {
   workspaces: WorkspaceRecord[];
   threads: ThreadRecord[];
   developerMode?: boolean;
+  showHiddenFiles?: boolean;
 };
 
 export type TranscriptDirection = "server" | "client";
@@ -63,7 +80,7 @@ export type FeedItem =
 
 export type ViewId = "chat" | "skills" | "settings";
 
-export type SettingsPageId = "providers" | "workspaces";
+export type SettingsPageId = "providers" | "workspaces" | "developer";
 
 export type WorkspaceRuntime = {
   serverUrl: string | null;

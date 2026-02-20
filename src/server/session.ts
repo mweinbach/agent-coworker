@@ -16,6 +16,7 @@ import { discoverSkills, stripSkillFrontMatter } from "../skills";
 import { isProviderName } from "../types";
 import type {
   AgentConfig,
+  HarnessContextState,
   HarnessContextPayload,
   ServerErrorCode,
   ServerErrorSource,
@@ -30,6 +31,7 @@ import { getObservabilityHealth } from "../observability/runtime";
 import { expandCommandTemplate, listCommands as listServerCommands, resolveCommand } from "./commands";
 import { normalizeModelStreamPart, reasoningModeForProvider } from "./modelStream";
 import { generateSessionTitle, type SessionTitleSource, DEFAULT_SESSION_TITLE } from "./sessionTitleService";
+import { type PersistedSessionRecord, type SessionPersistenceStatus, SessionDb } from "./sessionDb";
 import {
   type PersistedSessionSnapshot,
   writePersistedSessionSnapshot,
@@ -64,6 +66,16 @@ type PersistedModelSelection = {
 };
 
 type SessionInfoState = Omit<Extract<ServerEvent, { type: "session_info" }>, "type" | "sessionId">;
+
+type HydratedSessionState = {
+  sessionId: string;
+  sessionInfo: SessionInfoState;
+  status: SessionPersistenceStatus;
+  hasGeneratedTitle: boolean;
+  messages: ModelMessage[];
+  todos: TodoItem[];
+  harnessContext: HarnessContextState | null;
+};
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (v: T) => void;
@@ -127,9 +139,11 @@ export class AgentSession {
   private readonly runTurnImpl: typeof runTurn;
   private readonly persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
   private readonly generateSessionTitleImpl: typeof generateSessionTitle;
+  private readonly sessionDb: SessionDb | null;
   private readonly writePersistedSessionSnapshotImpl: typeof writePersistedSessionSnapshot;
 
   private messages: ModelMessage[] = [];
+  private allMessages: ModelMessage[] = [];
   private running = false;
   private connecting = false;
   private refreshingProviderStatus = false;
@@ -146,6 +160,7 @@ export class AgentSession {
 
   private todos: TodoItem[] = [];
   private sessionInfo: SessionInfoState;
+  private persistenceStatus: SessionPersistenceStatus = "active";
   private hasGeneratedTitle = false;
   private sessionSnapshotQueue: Promise<void> = Promise.resolve();
   private sessionBackup: SessionBackupHandle | null = null;
@@ -169,9 +184,13 @@ export class AgentSession {
     runTurnImpl?: typeof runTurn;
     persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
     generateSessionTitleImpl?: typeof generateSessionTitle;
+    sessionDb?: SessionDb | null;
     writePersistedSessionSnapshotImpl?: typeof writePersistedSessionSnapshot;
+    hydratedState?: HydratedSessionState;
+    skipInitialPersist?: boolean;
   }) {
-    this.id = makeId();
+    const hydrated = opts.hydratedState;
+    this.id = hydrated?.sessionId ?? makeId();
     this.config = opts.config;
     this.system = opts.system;
     this.discoveredSkills = opts.discoveredSkills ?? [];
@@ -187,9 +206,10 @@ export class AgentSession {
     this.runTurnImpl = opts.runTurnImpl ?? runTurn;
     this.persistModelSelectionImpl = opts.persistModelSelectionImpl;
     this.generateSessionTitleImpl = opts.generateSessionTitleImpl ?? generateSessionTitle;
+    this.sessionDb = opts.sessionDb ?? null;
     this.writePersistedSessionSnapshotImpl = opts.writePersistedSessionSnapshotImpl ?? writePersistedSessionSnapshot;
     const now = new Date().toISOString();
-    this.sessionInfo = {
+    this.sessionInfo = hydrated?.sessionInfo ?? {
       title: DEFAULT_SESSION_TITLE,
       titleSource: "default",
       titleModel: null,
@@ -198,6 +218,15 @@ export class AgentSession {
       provider: this.config.provider,
       model: this.config.model,
     };
+    this.persistenceStatus = hydrated?.status ?? "active";
+    this.hasGeneratedTitle = hydrated?.hasGeneratedTitle ?? false;
+    this.allMessages = [...(hydrated?.messages ?? [])];
+    this.messages = [];
+    this.refreshRuntimeMessagesFromHistory();
+    this.todos = hydrated?.todos ?? [];
+    if (hydrated?.harnessContext) {
+      this.harnessContextStore.set(this.id, hydrated.harnessContext);
+    }
     this.sessionBackupState = {
       status: "initializing",
       sessionId: this.id,
@@ -207,7 +236,78 @@ export class AgentSession {
       originalSnapshot: { kind: "pending" },
       checkpoints: [],
     };
-    this.queuePersistSessionSnapshot("session.created");
+    if (!opts.skipInitialPersist) {
+      this.queuePersistSessionSnapshot("session.created");
+    }
+  }
+
+  static fromPersisted(opts: {
+    persisted: PersistedSessionRecord;
+    baseConfig: AgentConfig;
+    discoveredSkills?: Array<{ name: string; description: string }>;
+    yolo?: boolean;
+    emit: (evt: ServerEvent) => void;
+    connectProviderImpl?: typeof connectModelProvider;
+    getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
+    getProviderCatalogImpl?: typeof getProviderCatalog;
+    getProviderStatusesImpl?: typeof getProviderStatuses;
+    sessionBackupFactory?: SessionBackupFactory;
+    harnessContextStore?: HarnessContextStore;
+    runTurnImpl?: typeof runTurn;
+    persistModelSelectionImpl?: (selection: PersistedModelSelection) => Promise<void> | void;
+    generateSessionTitleImpl?: typeof generateSessionTitle;
+    sessionDb?: SessionDb | null;
+    writePersistedSessionSnapshotImpl?: typeof writePersistedSessionSnapshot;
+  }): AgentSession {
+    const { persisted } = opts;
+    const config: AgentConfig = {
+      ...opts.baseConfig,
+      provider: persisted.provider,
+      model: persisted.model,
+      workingDirectory: persisted.workingDirectory,
+      enableMcp: persisted.enableMcp,
+      outputDirectory: persisted.outputDirectory,
+      uploadsDirectory: persisted.uploadsDirectory,
+    };
+
+    const sessionInfo: SessionInfoState = {
+      title: persisted.title,
+      titleSource: persisted.titleSource,
+      titleModel: persisted.titleModel,
+      createdAt: persisted.createdAt,
+      updatedAt: persisted.updatedAt,
+      provider: persisted.provider,
+      model: persisted.model,
+    };
+
+    return new AgentSession({
+      config,
+      system: persisted.systemPrompt,
+      discoveredSkills: opts.discoveredSkills,
+      yolo: opts.yolo,
+      emit: opts.emit,
+      connectProviderImpl: opts.connectProviderImpl,
+      getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl,
+      getProviderCatalogImpl: opts.getProviderCatalogImpl,
+      getProviderStatusesImpl: opts.getProviderStatusesImpl,
+      sessionBackupFactory: opts.sessionBackupFactory,
+      harnessContextStore: opts.harnessContextStore,
+      runTurnImpl: opts.runTurnImpl,
+      persistModelSelectionImpl: opts.persistModelSelectionImpl,
+      generateSessionTitleImpl: opts.generateSessionTitleImpl,
+      sessionDb: opts.sessionDb,
+      writePersistedSessionSnapshotImpl: opts.writePersistedSessionSnapshotImpl,
+      hydratedState: {
+        sessionId: persisted.sessionId,
+        sessionInfo,
+        status: "active",
+        hasGeneratedTitle: persisted.titleSource !== "default" || persisted.messageCount > 0,
+        messages: persisted.messages,
+        todos: persisted.todos,
+        harnessContext: persisted.harnessContext,
+      },
+      skipInitialPersist: true,
+    });
   }
 
   getPublicConfig() {
@@ -224,7 +324,7 @@ export class AgentSession {
   }
 
   get messageCount(): number {
-    return this.messages.length;
+    return this.allMessages.length;
   }
 
   get hasPendingAsk(): boolean {
@@ -308,11 +408,15 @@ export class AgentSession {
   }
 
   private buildPersistedSnapshot(): PersistedSessionSnapshot {
+    return this.buildPersistedSnapshotAt(new Date().toISOString());
+  }
+
+  private buildPersistedSnapshotAt(updatedAt: string): PersistedSessionSnapshot {
     return {
       version: 1,
       sessionId: this.id,
       createdAt: this.sessionInfo.createdAt,
-      updatedAt: new Date().toISOString(),
+      updatedAt,
       session: {
         title: this.sessionInfo.title,
         titleSource: this.sessionInfo.titleSource,
@@ -330,21 +434,75 @@ export class AgentSession {
       },
       context: {
         system: this.system,
-        messages: this.messages,
+        messages: this.allMessages,
         todos: this.todos,
         harnessContext: this.harnessContextStore.get(this.id),
       },
     };
   }
 
+  private buildCanonicalSnapshot(updatedAt: string): PersistedSessionMutation["snapshot"] {
+    return {
+      title: this.sessionInfo.title,
+      titleSource: this.sessionInfo.titleSource,
+      titleModel: this.sessionInfo.titleModel,
+      provider: this.config.provider,
+      model: this.config.model,
+      workingDirectory: this.config.workingDirectory,
+      ...(this.config.outputDirectory ? { outputDirectory: this.config.outputDirectory } : {}),
+      ...(this.config.uploadsDirectory ? { uploadsDirectory: this.config.uploadsDirectory } : {}),
+      enableMcp: this.getEnableMcp(),
+      createdAt: this.sessionInfo.createdAt,
+      updatedAt,
+      status: this.persistenceStatus,
+      hasPendingAsk: this.hasPendingAsk,
+      hasPendingApproval: this.hasPendingApproval,
+      systemPrompt: this.system,
+      messages: this.allMessages,
+      todos: this.todos,
+      harnessContext: this.harnessContextStore.get(this.id),
+    };
+  }
+
+  private refreshRuntimeMessagesFromHistory() {
+    if (this.allMessages.length <= MAX_MESSAGE_HISTORY) {
+      this.messages = [...this.allMessages];
+      return;
+    }
+    const first = this.allMessages[0];
+    this.messages = [first, ...this.allMessages.slice(-(MAX_MESSAGE_HISTORY - 1))];
+  }
+
+  private appendMessagesToHistory(messages: ModelMessage[]) {
+    if (messages.length === 0) return;
+    this.allMessages.push(...messages);
+    this.messages.push(...messages);
+    if (this.messages.length > MAX_MESSAGE_HISTORY) {
+      const first = this.messages[0];
+      this.messages = [first, ...this.messages.slice(-(MAX_MESSAGE_HISTORY - 1))];
+    }
+  }
+
   private queuePersistSessionSnapshot(reason: string) {
     const run = async () => {
       const startedAt = Date.now();
-      const snapshot = this.buildPersistedSnapshot();
-      await this.writePersistedSessionSnapshotImpl({
-        paths: this.getCoworkPaths(),
-        snapshot,
-      });
+      const updatedAt = new Date().toISOString();
+      if (this.sessionDb) {
+        this.sessionDb.persistSessionMutation({
+          sessionId: this.id,
+          eventType: reason,
+          eventTs: updatedAt,
+          direction: "system",
+          payload: { reason },
+          snapshot: this.buildCanonicalSnapshot(updatedAt),
+        });
+      } else {
+        const snapshot = this.buildPersistedSnapshotAt(updatedAt);
+        await this.writePersistedSessionSnapshotImpl({
+          paths: this.getCoworkPaths(),
+          snapshot,
+        });
+      }
       this.emitTelemetry("session.snapshot.persist", "ok", { sessionId: this.id, reason }, Date.now() - startedAt);
     };
 
@@ -359,6 +517,7 @@ export class AgentSession {
           "error",
           { sessionId: this.id, reason, error: this.formatErrorMessage(err) }
         );
+        this.emitError("internal_error", "session", `Failed to persist session state: ${this.formatErrorMessage(err)}`);
       });
   }
 
@@ -506,6 +665,7 @@ export class AgentSession {
       return;
     }
     this.messages = [];
+    this.allMessages = [];
     this.todos = [];
     this.emit({ type: "todos", sessionId: this.id, todos: [] });
     this.emit({ type: "reset_done", sessionId: this.id });
@@ -1091,6 +1251,7 @@ export class AgentSession {
     }
     this.pendingAsk.delete(requestId);
     this.pendingAskEvents.delete(requestId);
+    this.queuePersistSessionSnapshot("session.ask_resolved");
     d.resolve(answer);
   }
 
@@ -1102,6 +1263,7 @@ export class AgentSession {
     }
     this.pendingApproval.delete(requestId);
     this.pendingApprovalEvents.delete(requestId);
+    this.queuePersistSessionSnapshot("session.approval_resolved");
     d.resolve(approved);
   }
 
@@ -1122,6 +1284,12 @@ export class AgentSession {
       this.pendingApproval.delete(id);
       this.pendingApprovalEvents.delete(id);
     }
+  }
+
+  async closeForHistory(): Promise<void> {
+    this.persistenceStatus = "closed";
+    this.queuePersistSessionSnapshot("session.closed");
+    await this.sessionSnapshotQueue.catch(() => {});
   }
 
   dispose(reason: string) {
@@ -1184,6 +1352,7 @@ export class AgentSession {
     const evt: ServerEvent = { type: "ask", sessionId: this.id, requestId, question, options };
     this.pendingAskEvents.set(requestId, evt);
     this.emit(evt);
+    this.queuePersistSessionSnapshot("session.ask_pending");
     return await this.waitForPromptResponse(requestId, this.pendingAsk).finally(() => {
       this.pendingAskEvents.delete(requestId);
     });
@@ -1215,6 +1384,7 @@ export class AgentSession {
     };
     this.pendingApprovalEvents.set(requestId, evt);
     this.emit(evt);
+    this.queuePersistSessionSnapshot("session.approval_pending");
 
     return await this.waitForPromptResponse(requestId, this.pendingApproval).finally(() => {
       this.pendingApprovalEvents.delete(requestId);
@@ -1228,15 +1398,22 @@ export class AgentSession {
   };
 
   getMessages(offset = 0, limit = 100) {
-    const total = this.messages.length;
-    const slice = this.messages.slice(offset, offset + limit);
+    const safeOffset = Math.max(0, Math.floor(offset));
+    const safeLimit = Math.max(1, Math.floor(limit));
+    let total = this.allMessages.length;
+    let slice = this.allMessages.slice(safeOffset, safeOffset + safeLimit);
+    if (this.sessionDb) {
+      const persisted = this.sessionDb.getMessages(this.id, safeOffset, safeLimit);
+      total = persisted.total;
+      slice = persisted.messages;
+    }
     this.emit({
       type: "messages",
       sessionId: this.id,
       messages: slice,
       total,
-      offset,
-      limit,
+      offset: safeOffset,
+      limit: safeLimit,
     });
   }
 
@@ -1256,8 +1433,9 @@ export class AgentSession {
 
   async listSessions() {
     try {
-      const paths = this.getCoworkPaths();
-      const sessions = await listPersistedSessionSnapshots(paths);
+      const sessions = this.sessionDb
+        ? this.sessionDb.listSessions()
+        : await listPersistedSessionSnapshots(this.getCoworkPaths());
       this.emit({ type: "sessions", sessionId: this.id, sessions });
     } catch (err) {
       this.emitError("internal_error", "session", `Failed to list sessions: ${String(err)}`);
@@ -1270,8 +1448,12 @@ export class AgentSession {
       return;
     }
     try {
-      const paths = this.getCoworkPaths();
-      await deletePersistedSessionSnapshot(paths, targetSessionId);
+      if (this.sessionDb) {
+        this.sessionDb.deleteSession(targetSessionId);
+      } else {
+        const paths = this.getCoworkPaths();
+        await deletePersistedSessionSnapshot(paths, targetSessionId);
+      }
       this.emit({ type: "session_deleted", sessionId: this.id, targetSessionId });
     } catch (err) {
       this.emitError("internal_error", "session", `Failed to delete session: ${String(err)}`);
@@ -1462,16 +1644,9 @@ export class AgentSession {
         provider: this.config.provider,
         model: this.config.model,
       });
-      this.messages.push({ role: "user", content: text });
+      this.appendMessagesToHistory([{ role: "user", content: text }]);
       this.maybeGenerateTitleFromQuery(text);
       this.queuePersistSessionSnapshot("session.user_message");
-
-      // Trim message history to prevent unbounded memory growth.
-      // Keep the first message (initial context) plus the most recent entries.
-      if (this.messages.length > MAX_MESSAGE_HISTORY) {
-        const first = this.messages[0];
-        this.messages = [first, ...this.messages.slice(-(MAX_MESSAGE_HISTORY - 1))];
-      }
 
       let streamPartIndex = 0;
       const res = await this.runTurnImpl({
@@ -1529,7 +1704,7 @@ export class AgentSession {
         },
       });
 
-      this.messages.push(...res.responseMessages);
+      this.appendMessagesToHistory(res.responseMessages);
       this.queuePersistSessionSnapshot("session.turn_response");
 
       const reasoning = (res.reasoningText || "").trim();

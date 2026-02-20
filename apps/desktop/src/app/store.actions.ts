@@ -7,6 +7,12 @@ import {
   pickWorkspaceDirectory,
   readTranscript,
   stopWorkspaceServer,
+  openPath,
+  revealPath,
+  copyPath,
+  createDirectory,
+  renamePath,
+  trashPath,
 } from "../lib/desktopCommands";
 import type { ProviderName } from "../lib/wsProtocol";
 
@@ -71,6 +77,11 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
           status: (["active", "disconnected"] as const).includes(t.status as any)
             ? (t.status as ThreadStatus)
             : "disconnected",
+          sessionId: typeof t.sessionId === "string" && t.sessionId.trim() ? t.sessionId : null,
+          lastEventSeq:
+            typeof t.lastEventSeq === "number" && Number.isFinite(t.lastEventSeq)
+              ? Math.max(0, Math.floor(t.lastEventSeq))
+              : 0,
         }));
   
         const selectedWorkspaceId = normalizedWorkspaces[0]?.id ?? null;
@@ -85,6 +96,7 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
           selectedWorkspaceId,
           selectedThreadId,
           developerMode: typeof state.developerMode === "boolean" ? state.developerMode : false,
+          showHiddenFiles: typeof state.showHiddenFiles === "boolean" ? state.showHiddenFiles : false,
           ready: true,
           startupError: null,
         });
@@ -257,8 +269,49 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
       } catch {
         // ignore
       }
-  
+
       await persistNow(get);
+    },
+
+    deleteThreadHistory: async (threadId: string) => {
+      const thread = get().threads.find((t) => t.id === threadId);
+      if (!thread) return;
+      const targetSessionId = get().threadRuntimeById[threadId]?.sessionId ?? thread.sessionId;
+
+      await get().removeThread(threadId);
+
+      if (!targetSessionId) return;
+
+      await ensureServerRunning(get, set, thread.workspaceId);
+      ensureControlSocket(get, set, thread.workspaceId);
+      const ok = sendControl(get, thread.workspaceId, (sessionId) => ({
+        type: "delete_session",
+        sessionId,
+        targetSessionId,
+      }));
+
+      if (ok) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "info",
+            title: "Session history deleted",
+            detail: targetSessionId,
+          }),
+        }));
+        return;
+      }
+
+      set((s) => ({
+        notifications: pushNotification(s.notifications, {
+          id: makeId(),
+          ts: nowIso(),
+          kind: "error",
+          title: "Delete session history failed",
+          detail: "Control session is unavailable.",
+        }),
+      }));
     },
   
     renameThread: (threadId: string, newTitle: string) => {
@@ -337,6 +390,8 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
         createdAt,
         lastMessageAt: createdAt,
         status: "active",
+        sessionId: null,
+        lastEventSeq: 0,
       };
   
       set((s) => ({
@@ -484,6 +539,14 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     setDeveloperMode: (v) => {
       set({ developerMode: v });
       void persistNow(get);
+    },
+    setShowHiddenFiles: (v) => {
+      set({ showHiddenFiles: v });
+      void persistNow(get);
+      const wsId = get().selectedWorkspaceId;
+      if (wsId) {
+        void get().refreshWorkspaceFiles(wsId);
+      }
     },
   
     openSkills: async () => {
@@ -916,14 +979,130 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     refreshWorkspaceFiles: async (workspaceId: string) => {
       const ws = get().workspaces.find((w) => w.id === workspaceId);
       if (!ws) return;
+      const state = get();
+      const currentExp = state.workspaceExplorerById[workspaceId];
+      const targetPath = currentExp?.currentPath ?? ws.path;
+      await get().navigateWorkspaceFiles(workspaceId, targetPath);
+    },
+
+    navigateWorkspaceFiles: async (workspaceId: string, targetPath: string) => {
+      const state = get();
+      const ws = state.workspaces.find((w) => w.id === workspaceId);
+      if (!ws) return;
+
+      const requestId = Date.now();
+      const prev = state.workspaceExplorerById[workspaceId] ?? {
+        rootPath: ws.path,
+        currentPath: ws.path,
+        entries: [],
+        selectedPath: null,
+        loading: false,
+        error: null,
+        requestId: 0,
+      };
+
+      set((s) => ({
+        workspaceExplorerById: {
+          ...s.workspaceExplorerById,
+          [workspaceId]: { ...prev, currentPath: targetPath, loading: true, error: null, requestId },
+        },
+      }));
+
       try {
-        const files = await listDirectory(ws.path);
+        const entries = await listDirectory({ path: targetPath, includeHidden: get().showHiddenFiles });
+        const current = get().workspaceExplorerById[workspaceId];
+        if (current?.requestId !== requestId) return; // Stale
+
         set((s) => ({
-          workspaceFilesById: { ...s.workspaceFilesById, [workspaceId]: files },
+          workspaceExplorerById: {
+            ...s.workspaceExplorerById,
+            [workspaceId]: {
+              ...current,
+              entries,
+              loading: false,
+              selectedPath: null,
+            },
+          },
         }));
       } catch (err) {
-        console.error("Failed to list directory:", err);
+        const current = get().workspaceExplorerById[workspaceId];
+        if (current?.requestId !== requestId) return; // Stale
+
+        set((s) => ({
+          workspaceExplorerById: {
+            ...s.workspaceExplorerById,
+            [workspaceId]: {
+              ...current,
+              loading: false,
+              error: err instanceof Error ? err.message : String(err),
+            },
+          },
+        }));
       }
+    },
+
+    navigateWorkspaceFilesUp: async (workspaceId: string) => {
+      const state = get();
+      const ws = state.workspaces.find((w) => w.id === workspaceId);
+      const currentPath = state.workspaceExplorerById[workspaceId]?.currentPath;
+      if (!ws || !currentPath) return;
+
+      // don't navigate above workspace root
+      const normalizedRoot = ws.path.replace(/\\/g, "/").replace(/\/$/, "");
+      const normalizedCurrent = currentPath.replace(/\\/g, "/").replace(/\/$/, "");
+      
+      if (normalizedCurrent === normalizedRoot || normalizedCurrent.length < normalizedRoot.length) {
+        return;
+      }
+
+      const parts = normalizedCurrent.split("/");
+      parts.pop();
+      const parent = parts.join("/") || "/";
+      await get().navigateWorkspaceFiles(workspaceId, parent);
+    },
+
+    selectWorkspaceFile: (workspaceId: string, path: string | null) => {
+      set((s) => {
+        const current = s.workspaceExplorerById[workspaceId];
+        if (!current) return {};
+        return {
+          workspaceExplorerById: {
+            ...s.workspaceExplorerById,
+            [workspaceId]: { ...current, selectedPath: path },
+          },
+        };
+      });
+    },
+
+    openWorkspaceFile: async (workspaceId: string, targetPath: string, isDirectory: boolean) => {
+      if (isDirectory) {
+        await get().navigateWorkspaceFiles(workspaceId, targetPath);
+      } else {
+        await openPath({ path: targetPath });
+      }
+    },
+
+    revealWorkspaceFile: async (path: string) => {
+      await revealPath({ path });
+    },
+
+    copyWorkspaceFilePath: async (path: string) => {
+      await copyPath({ path });
+    },
+
+    createWorkspaceDirectory: async (workspaceId: string, parentPath: string, name: string) => {
+      await createDirectory({ parentPath, name });
+      await get().refreshWorkspaceFiles(workspaceId);
+    },
+
+    renameWorkspacePath: async (workspaceId: string, targetPath: string, newName: string) => {
+      await renamePath({ path: targetPath, newName });
+      await get().refreshWorkspaceFiles(workspaceId);
+    },
+
+    trashWorkspacePath: async (workspaceId: string, targetPath: string) => {
+      await trashPath({ path: targetPath });
+      await get().refreshWorkspaceFiles(workspaceId);
     },
   };
 }

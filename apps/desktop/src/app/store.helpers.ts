@@ -23,6 +23,7 @@ import type {
   ViewId,
   WorkspaceRecord,
   WorkspaceRuntime,
+  WorkspaceExplorerState,
 } from "./types";
 import { mapModelStreamChunk, type ModelStreamChunkEvent, type ModelStreamUpdate } from "./modelStream";
 
@@ -743,7 +744,7 @@ export type AppStoreState = {
   threadRuntimeById: Record<string, ThreadRuntime>;
 
   latestTodosByThreadId: Record<string, TodoItem[]>;
-  workspaceFilesById: Record<string, FileEntry[]>;
+  workspaceExplorerById: Record<string, WorkspaceExplorerState>;
 
   promptModal: PromptModalState;
   notifications: Notification[];
@@ -761,6 +762,7 @@ export type AppStoreState = {
   composerText: string;
   injectContext: boolean;
   developerMode: boolean;
+  showHiddenFiles: boolean;
 
   sidebarCollapsed: boolean;
   sidebarWidth: number;
@@ -780,6 +782,7 @@ export type AppStoreState = {
 
   newThread: (opts?: { workspaceId?: string; titleHint?: string; firstMessage?: string }) => Promise<void>;
   removeThread: (threadId: string) => Promise<void>;
+  deleteThreadHistory: (threadId: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
   reconnectThread: (threadId: string, firstMessage?: string) => Promise<void>;
   renameThread: (threadId: string, newTitle: string) => void;
@@ -790,6 +793,7 @@ export type AppStoreState = {
   setComposerText: (text: string) => void;
   setInjectContext: (v: boolean) => void;
   setDeveloperMode: (v: boolean) => void;
+  setShowHiddenFiles: (v: boolean) => void;
 
   openSkills: () => Promise<void>;
   selectSkill: (skillName: string) => Promise<void>;
@@ -820,6 +824,15 @@ export type AppStoreState = {
   setMessageBarHeight: (height: number) => void;
 
   refreshWorkspaceFiles: (workspaceId: string) => Promise<void>;
+  navigateWorkspaceFiles: (workspaceId: string, path: string) => Promise<void>;
+  navigateWorkspaceFilesUp: (workspaceId: string) => Promise<void>;
+  selectWorkspaceFile: (workspaceId: string, path: string | null) => void;
+  openWorkspaceFile: (workspaceId: string, path: string, isDirectory: boolean) => Promise<void>;
+  revealWorkspaceFile: (path: string) => Promise<void>;
+  copyWorkspaceFilePath: (path: string) => Promise<void>;
+  createWorkspaceDirectory: (workspaceId: string, parentPath: string, name: string) => Promise<void>;
+  renameWorkspacePath: (workspaceId: string, path: string, newName: string) => Promise<void>;
+  trashWorkspacePath: (workspaceId: string, path: string) => Promise<void>;
 };
 
 export type AppStoreActionKeys = {
@@ -840,10 +853,11 @@ function persist(get: () => AppStoreState) {
   _persistTimer = setTimeout(() => {
     _persistTimer = null;
     const state: PersistedState = {
-      version: 1,
+      version: 2,
       workspaces: get().workspaces,
       threads: get().threads,
       developerMode: get().developerMode,
+      showHiddenFiles: get().showHiddenFiles,
     };
     void saveState(state);
   }, PERSIST_DEBOUNCE_MS);
@@ -855,10 +869,11 @@ async function persistNow(get: () => AppStoreState) {
     _persistTimer = null;
   }
   const state: PersistedState = {
-    version: 1,
+    version: 2,
     workspaces: get().workspaces,
     threads: get().threads,
     developerMode: get().developerMode,
+    showHiddenFiles: get().showHiddenFiles,
   };
   await saveState(state);
 }
@@ -1176,7 +1191,8 @@ function ensureThreadSocket(
   if (RUNTIME.threadSockets.has(threadId)) return;
 
   ensureThreadRuntime(get, set, threadId);
-  const resumeSessionId = get().threadRuntimeById[threadId]?.sessionId ?? undefined;
+  const persistedThreadSessionId = get().threads.find((thread) => thread.id === threadId)?.sessionId ?? undefined;
+  const resumeSessionId = get().threadRuntimeById[threadId]?.sessionId ?? persistedThreadSessionId ?? undefined;
 
   const socket = new AgentSocket({
     url,
@@ -1539,6 +1555,14 @@ function handleThreadEvent(
   }
 
   appendThreadTranscript(threadId, "server", evt);
+  set((s) => ({
+    threads: s.threads.map((thread) =>
+      thread.id === threadId
+        ? { ...thread, lastEventSeq: Math.max(0, Math.floor((thread.lastEventSeq ?? 0) + 1)) }
+        : thread
+    ),
+  }));
+  void persist(get);
   const stream = getModelStreamRuntime(threadId);
 
   if (evt.type === "server_hello") {
@@ -1560,7 +1584,9 @@ function handleThreadEvent(
             transcriptOnly: false,
           },
         },
-        threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "active" } : t)),
+        threads: s.threads.map((t) =>
+          t.id === threadId ? { ...t, status: "active", sessionId: evt.sessionId } : t
+        ),
       };
     });
     persist(get);

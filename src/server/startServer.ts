@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../connect";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
 import type { runTurn as runTurnFn } from "../agent";
 import type { AgentConfig } from "../types";
@@ -9,6 +10,7 @@ import { loadConfig } from "../config";
 import { loadSystemPromptWithSkills } from "../prompt";
 
 import { AgentSession } from "./session";
+import { SessionDb } from "./sessionDb";
 import {
   WEBSOCKET_PROTOCOL_VERSION,
   safeParseClientMessage,
@@ -123,7 +125,66 @@ export async function startAgentServer(
   await fs.mkdir(config.projectAgentDir, { recursive: true });
 
   const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
+  const getAiCoworkerPathsImpl = opts.getAiCoworkerPathsImpl ?? getAiCoworkerPathsDefault;
+  const sessionDb = await SessionDb.create({
+    paths: getAiCoworkerPathsImpl({ homedir: opts.homedir }),
+  });
   const sessionBindings = new Map<string, SessionBinding>();
+
+  const buildSession = (binding: SessionBinding, persistedSessionId?: string): {
+    session: AgentSession;
+    isResume: boolean;
+    resumedFromStorage: boolean;
+  } => {
+    const emit = (evt: ServerEvent) => {
+      const socket = binding.socket;
+      if (!socket) return;
+      try {
+        socket.send(JSON.stringify(evt));
+      } catch {
+        // ignore
+      }
+    };
+
+    const common = {
+      discoveredSkills,
+      yolo: opts.yolo,
+      connectProviderImpl: opts.connectProviderImpl,
+      getAiCoworkerPathsImpl,
+      runTurnImpl: opts.runTurnImpl,
+      persistModelSelectionImpl: async (selection: {
+        provider: AgentConfig["provider"];
+        model: string;
+        subAgentModel: string;
+      }) => {
+        config.provider = selection.provider;
+        config.model = selection.model;
+        config.subAgentModel = selection.subAgentModel;
+        await persistProjectModelDefaults(config.projectAgentDir, selection);
+      },
+      sessionDb,
+      emit,
+    };
+
+    if (persistedSessionId) {
+      const persisted = sessionDb.getSessionRecord(persistedSessionId);
+      if (persisted) {
+        const session = AgentSession.fromPersisted({
+          persisted,
+          baseConfig: { ...config },
+          ...common,
+        });
+        return { session, isResume: true, resumedFromStorage: true };
+      }
+    }
+
+    const session = new AgentSession({
+      config: { ...config },
+      system,
+      ...common,
+    });
+    return { session, isResume: false, resumedFromStorage: false };
+  };
 
   function createServer(port: number): ReturnType<typeof Bun.serve> {
     return Bun.serve<{ session?: AgentSession; resumeSessionId?: string }>({
@@ -151,6 +212,7 @@ export async function startAgentServer(
           let session: AgentSession;
           let binding: SessionBinding;
           let isResume = false;
+          let resumedFromStorage = false;
 
           if (resumable && resumable.socket === null) {
             binding = resumable;
@@ -162,30 +224,10 @@ export async function startAgentServer(
               session: undefined as unknown as AgentSession,
               socket: ws,
             };
-            session = new AgentSession({
-              config: { ...config },
-              system,
-              discoveredSkills,
-              yolo: opts.yolo,
-              connectProviderImpl: opts.connectProviderImpl,
-              getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl,
-              runTurnImpl: opts.runTurnImpl,
-              persistModelSelectionImpl: async (selection) => {
-                config.provider = selection.provider;
-                config.model = selection.model;
-                config.subAgentModel = selection.subAgentModel;
-                await persistProjectModelDefaults(config.projectAgentDir, selection);
-              },
-              emit: (evt: ServerEvent) => {
-                const socket = binding.socket;
-                if (!socket) return;
-                try {
-                  socket.send(JSON.stringify(evt));
-                } catch {
-                  // ignore
-                }
-              },
-            });
+            const built = buildSession(binding, resumeSessionId);
+            session = built.session;
+            isResume = built.isResume;
+            resumedFromStorage = built.resumedFromStorage;
             binding.session = session;
             sessionBindings.set(session.id, binding);
           }
@@ -204,6 +246,7 @@ export async function startAgentServer(
             ...(isResume
               ? {
                   isResume: true,
+                  ...(resumedFromStorage ? { resumedFromStorage: true } : {}),
                   busy: session.isBusy,
                   messageCount: session.messageCount,
                   hasPendingAsk: session.hasPendingAsk,
@@ -333,13 +376,16 @@ export async function startAgentServer(
           }
 
           if (msg.type === "session_close") {
-            session.dispose("client requested close");
-            sessionBindings.delete(session.id);
-            try {
-              ws.close();
-            } catch {
-              // ignore
-            }
+            void (async () => {
+              await session.closeForHistory();
+              session.dispose("client requested close");
+              sessionBindings.delete(session.id);
+              try {
+                ws.close();
+              } catch {
+                // ignore
+              }
+            })();
             return;
           }
 
@@ -503,6 +549,15 @@ export async function startAgentServer(
   }
 
   const server = serveWithPortFallback(requestedPort);
+  const originalStop = server.stop.bind(server);
+  (server as any).stop = () => {
+    try {
+      sessionDb.close();
+    } catch {
+      // ignore
+    }
+    return originalStop();
+  };
 
   const url = `ws://${hostname}:${server.port}/ws`;
   return { server, config, system, url };

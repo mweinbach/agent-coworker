@@ -487,7 +487,27 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
-  test("session_close disposes a session so it cannot be resumed", async () => {
+  test("resumeSessionId cold-rehydrates from storage after full server restart", async () => {
+    const tmpDir = await makeTmpProject();
+
+    const first = await startAgentServer(serverOpts(tmpDir));
+    const originalSessionId = (await collectMessages(first.url, 1))[0]?.sessionId as string;
+    expect(typeof originalSessionId).toBe("string");
+    first.server.stop();
+
+    const second = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const resumed = await collectMessages(`${second.url}?resumeSessionId=${originalSessionId}`, 1);
+      expect(resumed[0]?.type).toBe("server_hello");
+      expect(resumed[0]?.sessionId).toBe(originalSessionId);
+      expect(resumed[0]?.isResume).toBe(true);
+      expect(resumed[0]?.resumedFromStorage).toBe(true);
+    } finally {
+      second.server.stop();
+    }
+  });
+
+  test("session_close disposes runtime binding but keeps persisted history resumable", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
     try {
@@ -523,9 +543,9 @@ describe("WebSocket Lifecycle", () => {
 
       const resumed = await collectMessages(`${url}?resumeSessionId=${originalSessionId}`, 1);
       expect(resumed[0]?.type).toBe("server_hello");
-      expect(typeof resumed[0]?.sessionId).toBe("string");
-      expect(resumed[0]?.sessionId).not.toBe(originalSessionId);
-      expect(resumed[0]?.isResume).not.toBe(true);
+      expect(resumed[0]?.sessionId).toBe(originalSessionId);
+      expect(resumed[0]?.isResume).toBe(true);
+      expect(resumed[0]?.resumedFromStorage).toBe(true);
     } finally {
       server.stop();
     }

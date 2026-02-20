@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 
+import { AgentSocket } from "../client/agentSocket";
+import { getAiCoworkerPaths } from "../connect";
 import { defaultModelForProvider } from "../config";
 import { startAgentServer } from "../server/startServer";
 import type { ClientMessage, ServerEvent } from "../server/protocol";
@@ -101,8 +103,8 @@ export function renderToolsToLines(tools: ToolListEntry[]): string[] {
 }
 
 export type ParsedCommand =
-  | { type: "help" | "exit" | "new" | "restart" | "tools" }
-  | { type: "model" | "provider" | "connect" | "cwd"; arg: string }
+  | { type: "help" | "exit" | "new" | "restart" | "tools" | "sessions" }
+  | { type: "model" | "provider" | "connect" | "cwd" | "resume"; arg: string }
   | { type: "unknown"; name: string; arg: string }
   | { type: "message"; arg: string };
 
@@ -119,11 +121,13 @@ export function parseReplInput(input: string): ParsedCommand {
     case "new":
     case "restart":
     case "tools":
+    case "sessions":
       return { type: cmd };
     case "model":
     case "provider":
     case "connect":
     case "cwd":
+    case "resume":
       return { type: cmd, arg };
     default:
       return { type: "unknown", name: cmd, arg };
@@ -164,6 +168,64 @@ export const __internal = {
   resolveProviderAuthMethodSelection,
 };
 
+type CliState = {
+  version: 1;
+  lastSessionByCwd: Record<string, string>;
+};
+
+function getCliStateFilePath(): string {
+  const paths = getAiCoworkerPaths();
+  return path.join(paths.rootDir, "state", "cli-state.json");
+}
+
+async function readCliState(): Promise<CliState> {
+  const filePath = getCliStateFilePath();
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const map = typeof parsed.lastSessionByCwd === "object" && parsed.lastSessionByCwd
+      ? parsed.lastSessionByCwd as Record<string, unknown>
+      : {};
+    const normalized: Record<string, string> = {};
+    for (const [cwd, sessionId] of Object.entries(map)) {
+      if (typeof cwd !== "string" || !cwd.trim()) continue;
+      if (typeof sessionId !== "string" || !sessionId.trim()) continue;
+      normalized[path.resolve(cwd)] = sessionId.trim();
+    }
+    return {
+      version: 1,
+      lastSessionByCwd: normalized,
+    };
+  } catch {
+    return { version: 1, lastSessionByCwd: {} };
+  }
+}
+
+async function persistCliState(state: CliState): Promise<void> {
+  const filePath = getCliStateFilePath();
+  const dirPath = path.dirname(filePath);
+  await fs.mkdir(dirPath, { recursive: true, mode: 0o700 });
+  const payload = `${JSON.stringify(state, null, 2)}\n`;
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, payload, { encoding: "utf-8", mode: 0o600 });
+  await fs.rename(tempPath, filePath);
+}
+
+async function getStoredSessionForCwd(cwd: string): Promise<string | null> {
+  const state = await readCliState();
+  const key = path.resolve(cwd);
+  const sessionId = state.lastSessionByCwd[key];
+  return typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : null;
+}
+
+async function setStoredSessionForCwd(cwd: string, sessionId: string): Promise<void> {
+  const sid = sessionId.trim();
+  if (!sid) return;
+  const state = await readCliState();
+  state.lastSessionByCwd[path.resolve(cwd)] = sid;
+  await persistCliState(state);
+}
+
 export async function runCliRepl(
   opts: {
     dir?: string;
@@ -179,9 +241,10 @@ export async function runCliRepl(
 ) {
   const initialDir = opts.dir ? await resolveAndValidateDir(opts.dir) : process.cwd();
   if (opts.dir) process.chdir(initialDir);
+  const initialResumeSessionId = await getStoredSessionForCwd(initialDir);
 
   const startAgentServerImpl = opts.__internal?.startAgentServer ?? startAgentServer;
-  const WebSocketCtor = opts.__internal?.WebSocket ?? WebSocket;
+  const WebSocketImpl = opts.__internal?.WebSocket;
   const createReadlineInterface =
     opts.__internal?.createReadlineInterface ??
     (() => readline.createInterface({ input: process.stdin, output: process.stdout }));
@@ -204,6 +267,14 @@ export async function runCliRepl(
   const stopServer = () => {
     if (serverStopping) return;
     serverStopping = true;
+    if (socket) {
+      try {
+        socket.close();
+      } catch {
+        // ignore
+      }
+      socket = null;
+    }
     try {
       server.stop();
     } catch {
@@ -211,8 +282,10 @@ export async function runCliRepl(
     }
   };
 
-  let ws: WebSocket | null = null;
+  let socket: AgentSocket | null = null;
+  let socketEpoch = 0;
   let sessionId: string | null = null;
+  let lastKnownSessionId: string | null = initialResumeSessionId;
   let config: PublicConfig | null = null;
   let disconnectNotified = false;
 
@@ -257,13 +330,7 @@ export async function runCliRepl(
   };
 
   const send = (msg: ClientMessage) => {
-    if (!ws || ws.readyState !== WebSocketCtor.OPEN) return false;
-    try {
-      ws.send(JSON.stringify(msg));
-      return true;
-    } catch {
-      return false;
-    }
+    return socket?.send(msg) ?? false;
   };
 
   const printHelp = () => {
@@ -271,11 +338,13 @@ export async function runCliRepl(
     console.log("  /help                 Show help");
     console.log("  /exit                 Quit");
     console.log("  /new                  Clear conversation");
-    console.log("  /restart              Restart server + new session");
+    console.log("  /restart              Restart server and auto-resume latest session");
     console.log("  /model <id>            Set model id for this session");
     console.log(`  /provider <name>       Set provider (${UI_PROVIDER_NAMES.join("|")})`);
     console.log(`  /connect <name> [key]  Connect via auth methods (${UI_PROVIDER_NAMES.join("|")})`);
     console.log("  /cwd <path>            Set working directory for this session");
+    console.log("  /sessions             List sessions from the server");
+    console.log("  /resume <sessionId>   Reconnect to a specific session");
     console.log("  /tools                List tool names\n");
   };
 
@@ -368,7 +437,7 @@ export async function runCliRepl(
   const handleDisconnect = (rl: readline.Interface, reason: string) => {
     const silent = serverStopping;
 
-    ws = null;
+    socket = null;
     sessionId = null;
     config = null;
     busy = false;
@@ -386,7 +455,7 @@ export async function runCliRepl(
     if (!silent) {
       if (!disconnectNotified) {
         disconnectNotified = true;
-        console.log(`disconnected: ${reason}. Use /restart to start a new session.`);
+        console.log(`disconnected: ${reason}. Use /restart to reconnect.`);
       }
       activateNextPrompt(rl);
     }
@@ -395,6 +464,7 @@ export async function runCliRepl(
   const handleServerEvent = (evt: ServerEvent, rl: readline.Interface) => {
     if (evt.type === "server_hello") {
       sessionId = evt.sessionId;
+      lastKnownSessionId = evt.sessionId;
       config = evt.config;
       busy = false;
       disconnectNotified = false;
@@ -402,6 +472,7 @@ export async function runCliRepl(
       console.log(`connected: ${evt.sessionId}`);
       console.log(`provider=${evt.config.provider} model=${evt.config.model}`);
       console.log(`cwd=${evt.config.workingDirectory}`);
+      void setStoredSessionForCwd(process.cwd(), evt.sessionId);
       send({ type: "provider_catalog_get", sessionId: evt.sessionId });
       send({ type: "provider_auth_methods_get", sessionId: evt.sessionId });
       send({ type: "refresh_provider_status", sessionId: evt.sessionId });
@@ -590,6 +661,21 @@ export async function runCliRepl(
       case "tools":
         console.log(`\nTools:\n${renderToolsToLines(evt.tools).join("\n")}\n`);
         break;
+      case "sessions": {
+        if (evt.sessions.length === 0) {
+          console.log("\nNo sessions found.\n");
+          break;
+        }
+        console.log("\nSessions:");
+        for (const session of evt.sessions) {
+          const marker = sessionId === session.sessionId ? "*" : " ";
+          console.log(
+            `${marker} ${session.sessionId}  ${session.provider}/${session.model}  ${session.title}  (${session.updatedAt})`
+          );
+        }
+        console.log("");
+        break;
+      }
       case "error":
         console.error(`\nError [${evt.source}/${evt.code}]: ${evt.message}\n`);
         break;
@@ -598,10 +684,10 @@ export async function runCliRepl(
     }
   };
 
-  const connectToServer = async (url: string, rl: readline.Interface) => {
-    if (ws) {
+  const connectToServer = async (url: string, rl: readline.Interface, resumeSessionId?: string) => {
+    if (socket) {
       try {
-        ws.close();
+        socket.close();
       } catch {
         // ignore
       }
@@ -610,65 +696,38 @@ export async function runCliRepl(
     sessionId = null;
     config = null;
 
-    await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocketCtor(url);
-      ws = socket;
-      let ready = false;
-
-      const onReady = (evt: ServerEvent) => {
-        if (evt.type === "server_hello") {
-          handleServerEvent(evt, rl);
-          ready = true;
-          resolve();
-        }
-      };
-
-      socket.onopen = () => {
-        if (ws !== socket) return;
-        const hello: ClientMessage = { type: "client_hello", client: "cli", version: "0.1.0" };
-        socket.send(JSON.stringify(hello));
-      };
-
-      socket.onerror = () => {
-        if (ws !== socket) return;
-        if (!ready) {
-          reject(new Error(`Failed to connect to ${url}`));
-          return;
-        }
-        handleDisconnect(rl, "websocket error");
-      };
-
-      socket.onmessage = (ev) => {
-        if (ws !== socket) return;
-        let parsed: ServerEvent;
-        try {
-          parsed = JSON.parse(String(ev.data));
-        } catch {
-          console.error(`bad event: ${String(ev.data)}`);
-          return;
-        }
-        onReady(parsed);
-        if (parsed.type !== "server_hello") handleServerEvent(parsed, rl);
-      };
-
-      socket.onclose = () => {
-        if (ws !== socket) return;
-        if (!ready) {
-          reject(new Error(`WebSocket closed before handshake: ${url}`));
-          return;
-        }
-        handleDisconnect(rl, "websocket closed");
-      };
+    const epoch = ++socketEpoch;
+    const nextSocket = new AgentSocket({
+      url,
+      resumeSessionId: resumeSessionId?.trim() || lastKnownSessionId || undefined,
+      client: "cli",
+      version: "0.1.0",
+      onEvent: (evt) => {
+        if (epoch !== socketEpoch) return;
+        handleServerEvent(evt, rl);
+      },
+      onClose: (reason) => {
+        if (epoch !== socketEpoch) return;
+        handleDisconnect(rl, reason);
+      },
+      WebSocketImpl,
+      autoReconnect: false,
+      pingIntervalMs: 30_000,
     });
+
+    socket = nextSocket;
+    nextSocket.connect();
+    await nextSocket.readyPromise;
   };
 
   const restartServer = async (cwd: string, rl: readline.Interface) => {
     serverStopping = true;
     try {
       // Clear client state and suppress disconnect noise during intentional restarts.
-      if (ws) {
+      const resumeCandidate = sessionId ?? lastKnownSessionId;
+      if (socket) {
         try {
-          ws.close();
+          socket.close();
         } catch {
           // ignore
         }
@@ -683,7 +742,7 @@ export async function runCliRepl(
       serverInfo = await startServerForDir(cwd);
       server = serverInfo.server;
       serverUrl = serverInfo.url;
-      await connectToServer(serverUrl, rl);
+      await connectToServer(serverUrl, rl, resumeCandidate ?? undefined);
       pendingAsk = [];
       pendingApproval = [];
       activateNextPrompt(rl);
@@ -697,7 +756,7 @@ export async function runCliRepl(
     rl.close();
   });
 
-  await connectToServer(serverUrl, rl);
+  await connectToServer(serverUrl, rl, initialResumeSessionId ?? undefined);
 
   console.log("Cowork agent (CLI)");
   if (opts.yolo) console.log("YOLO mode enabled: command approvals are bypassed.");
@@ -944,6 +1003,34 @@ export async function runCliRepl(
             handleDisconnect(rl, "unable to send (not connected)");
             return;
           }
+          activateNextPrompt(rl);
+          return;
+        }
+
+        if (cmd === "sessions") {
+          if (!sessionId) {
+            console.log("not connected: cannot list sessions yet");
+            activateNextPrompt(rl);
+            return;
+          }
+          const ok = send({ type: "list_sessions", sessionId });
+          if (!ok) {
+            handleDisconnect(rl, "unable to send (not connected)");
+            return;
+          }
+          activateNextPrompt(rl);
+          return;
+        }
+
+        if (cmd === "resume") {
+          const targetSessionId = rest.join(" ").trim();
+          if (!targetSessionId) {
+            console.log("usage: /resume <sessionId>");
+            activateNextPrompt(rl);
+            return;
+          }
+          console.log(`resuming session ${targetSessionId}...`);
+          await connectToServer(serverUrl, rl, targetSessionId);
           activateNextPrompt(rl);
           return;
         }

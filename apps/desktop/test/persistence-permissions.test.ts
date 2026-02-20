@@ -37,6 +37,7 @@ describe("desktop persistence permissions", () => {
       workspaces: [],
       threads: [],
       developerMode: false,
+      showHiddenFiles: false,
     });
 
     const statePath = path.join(userDataDir, "state.json");

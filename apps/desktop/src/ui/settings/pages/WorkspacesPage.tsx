@@ -41,8 +41,6 @@ export function WorkspacesPage() {
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
   const restartWorkspaceServer = useAppStore((s) => s.restartWorkspaceServer);
-  const developerMode = useAppStore((s) => s.developerMode);
-  const setDeveloperMode = useAppStore((s) => s.setDeveloperMode);
 
   const ws = useMemo(
     () => workspaces.find((w) => w.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
@@ -210,18 +208,6 @@ export function WorkspacesPage() {
                       void updateWorkspaceDefaults(ws.id, { yolo: next }).then(() => restartWorkspaceServer(ws.id));
                     }
                   }}
-                />
-              </div>
-
-              <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-                <div>
-                  <div className="text-sm font-medium">Developer mode</div>
-                  <div className="text-xs text-muted-foreground">Show internal system notices in the chat feed.</div>
-                </div>
-                <Checkbox
-                  checked={developerMode}
-                  aria-label="Enable developer mode"
-                  onCheckedChange={(checked) => setDeveloperMode(toBoolean(checked))}
                 />
               </div>
             </CardContent>

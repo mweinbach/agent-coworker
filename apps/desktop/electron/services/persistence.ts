@@ -33,10 +33,11 @@ class AsyncLock {
 
 function defaultState(): PersistedState {
   return {
-    version: 1,
+    version: 2,
     workspaces: [],
     threads: [],
     developerMode: false,
+    showHiddenFiles: false,
   };
 }
 
@@ -80,6 +81,11 @@ function asOptionalString(value: unknown): string | undefined {
 
 function asThreadStatus(value: unknown): ThreadStatus {
   return value === "active" || value === "disconnected" ? value : "disconnected";
+}
+
+function asNonNegativeInteger(value: unknown, fallback = 0): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
 }
 
 async function resolveWorkspacePath(value: unknown): Promise<string | null> {
@@ -169,6 +175,8 @@ function sanitizeThreads(value: unknown, workspaceIds: Set<string>): ThreadRecor
       createdAt,
       lastMessageAt,
       status: asThreadStatus(item.status),
+      sessionId: asNonEmptyString(item.sessionId) ?? null,
+      lastEventSeq: asNonNegativeInteger(item.lastEventSeq, 0),
     });
     seenThreadIds.add(id);
   }
@@ -184,11 +192,16 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
   const workspaces = await sanitizeWorkspaces(value.workspaces);
   const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
   const threads = sanitizeThreads(value.threads, workspaceIds);
+  const parsedVersion =
+    typeof value.version === "number" && Number.isFinite(value.version)
+      ? Math.max(0, Math.floor(value.version))
+      : 0;
   return {
-    version: typeof value.version === "number" && Number.isFinite(value.version) ? value.version : 1,
+    version: parsedVersion >= 2 ? parsedVersion : 2,
     workspaces,
     threads,
     developerMode: typeof value.developerMode === "boolean" ? value.developerMode : false,
+    showHiddenFiles: typeof (value as any).showHiddenFiles === "boolean" ? (value as any).showHiddenFiles : false,
   };
 }
 
@@ -238,7 +251,7 @@ export class PersistenceService {
 
       const sanitizedState = await sanitizePersistedState(state);
       const tempPath = `${this.stateFilePath}.tmp`;
-      const payload = JSON.stringify({ ...sanitizedState, version: sanitizedState.version || 1 }, null, 2);
+      const payload = JSON.stringify({ ...sanitizedState, version: sanitizedState.version || 2 }, null, 2);
 
       await fs.writeFile(tempPath, payload, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
       await fs.rename(tempPath, this.stateFilePath);

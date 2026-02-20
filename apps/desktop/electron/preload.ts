@@ -6,16 +6,22 @@ import {
   type ConfirmActionInput,
   type DeleteTranscriptInput,
   type DesktopMenuCommand,
-  type DesktopNotificationInput,
+  type CopyPathInput,
+  type CreateDirectoryInput,
   type DesktopApi,
+  type DesktopNotificationInput,
   type ListDirectoryInput,
+  type OpenPathInput,
   type ReadTranscriptInput,
+  type RenamePathInput,
+  type RevealPathInput,
   type SetWindowAppearanceInput,
   type ShowContextMenuInput,
   type StartWorkspaceServerInput,
   type StopWorkspaceServerInput,
   type SystemAppearance,
   type TranscriptBatchInput,
+  type TrashPathInput,
 } from "../src/lib/desktopApi";
 import type { PersistedState } from "../src/app/types";
 
@@ -102,6 +108,47 @@ function assertShowContextMenuInput(opts: ShowContextMenuInput): void {
 
 function assertListDirectoryInput(opts: ListDirectoryInput): void {
   assertObject(opts, "listDirectory options");
+  assertString(opts.path, "path");
+  if (opts.includeHidden !== undefined && typeof opts.includeHidden !== "boolean") {
+    throw new Error("includeHidden must be a boolean when provided");
+  }
+}
+
+function assertOpenPathInput(opts: OpenPathInput): void {
+  assertObject(opts, "openPath options");
+  assertString(opts.path, "path");
+}
+
+function assertRevealPathInput(opts: RevealPathInput): void {
+  assertObject(opts, "revealPath options");
+  assertString(opts.path, "path");
+}
+
+function assertCopyPathInput(opts: CopyPathInput): void {
+  assertObject(opts, "copyPath options");
+  assertString(opts.path, "path");
+}
+
+function assertCreateDirectoryInput(opts: CreateDirectoryInput): void {
+  assertObject(opts, "createDirectory options");
+  assertString(opts.parentPath, "parentPath");
+  assertString(opts.name, "name");
+  if (opts.name.includes("/") || opts.name.includes("\\") || opts.name.includes("\0") || opts.name === ".." || opts.name === ".") {
+    throw new Error("Invalid directory name");
+  }
+}
+
+function assertRenamePathInput(opts: RenamePathInput): void {
+  assertObject(opts, "renamePath options");
+  assertString(opts.path, "path");
+  assertString(opts.newName, "newName");
+  if (opts.newName.includes("/") || opts.newName.includes("\\") || opts.newName.includes("\0") || opts.newName === ".." || opts.newName === ".") {
+    throw new Error("Invalid new name");
+  }
+}
+
+function assertTrashPathInput(opts: TrashPathInput): void {
+  assertObject(opts, "trashPath options");
   assertString(opts.path, "path");
 }
 
@@ -239,6 +286,36 @@ const desktopApi = Object.freeze<DesktopApi>({
   listDirectory: (opts: ListDirectoryInput) => {
     assertListDirectoryInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.listDirectory, opts);
+  },
+
+  openPath: (opts: OpenPathInput) => {
+    assertOpenPathInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.openPath, opts);
+  },
+
+  revealPath: (opts: RevealPathInput) => {
+    assertRevealPathInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.revealPath, opts);
+  },
+
+  copyPath: (opts: CopyPathInput) => {
+    assertCopyPathInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.copyPath, opts);
+  },
+
+  createDirectory: (opts: CreateDirectoryInput) => {
+    assertCreateDirectoryInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.createDirectory, opts);
+  },
+
+  renamePath: (opts: RenamePathInput) => {
+    assertRenamePathInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.renamePath, opts);
+  },
+
+  trashPath: (opts: TrashPathInput) => {
+    assertTrashPathInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.trashPath, opts);
   },
 
   confirmAction: (opts: ConfirmActionInput) => {

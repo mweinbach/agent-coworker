@@ -75,6 +75,7 @@ describe("desktop persistence state sanitization", () => {
         },
       ],
       developerMode: true,
+      showHiddenFiles: true,
     });
 
     const state = await persistence.loadState();
@@ -117,6 +118,7 @@ describe("desktop persistence state sanitization", () => {
             },
           ],
           developerMode: "sometimes",
+          showHiddenFiles: "always",
         },
         null,
         2
@@ -125,8 +127,9 @@ describe("desktop persistence state sanitization", () => {
     );
 
     const state = await persistence.loadState();
-    expect(state.version).toBe(1);
+    expect(state.version).toBe(2);
     expect(state.developerMode).toBe(false);
+    expect(state.showHiddenFiles).toBe(false);
     expect(state.workspaces[0]?.defaultEnableMcp).toBe(true);
     expect(state.workspaces[0]?.yolo).toBe(false);
     expect(state.threads[0]?.status).toBe("disconnected");

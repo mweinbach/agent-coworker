@@ -8,13 +8,26 @@ function normalizeBoundaryPath(targetPath: string): string {
   try {
     return fs.realpathSync(resolved);
   } catch {
-    return resolved;
+    // If file doesn't exist, try to get realpath of the parent directory
+    try {
+      const parent = path.dirname(resolved);
+      const parentRealpath = fs.realpathSync(parent);
+      return path.join(parentRealpath, path.basename(resolved));
+    } catch {
+      return resolved;
+    }
   }
 }
 
 export function assertSafeId(id: string, label: string): void {
   if (!SAFE_ID.test(id)) {
     throw new Error(`${label} contains invalid characters`);
+  }
+}
+
+export function assertValidFileName(name: string, label: string): void {
+  if (!name || name.includes("/") || name.includes("\\") || name.includes("\0") || name === ".." || name === ".") {
+    throw new Error(`${label} is invalid`);
   }
 }
 

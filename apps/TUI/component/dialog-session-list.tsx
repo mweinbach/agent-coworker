@@ -1,63 +1,12 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { For, Show, createMemo } from "solid-js";
-import { useTheme } from "../context/theme";
-import { useSyncState } from "../context/sync";
-import { Dialog } from "../ui/dialog";
+import { createEffect, createMemo } from "solid-js";
+
 import { useDialog } from "../context/dialog";
+import { useSync } from "../context/sync";
+import { DialogSelect, type SelectItem } from "../ui/dialog-select";
 
-type SessionEntry = {
-  id: string;
-  title: string | null;
-  updatedAtMs: number;
-};
-
-const SESSION_DIR = path.join(os.homedir(), ".cowork", "sessions");
-const MAX_SESSION_ROWS = 100;
-
-function loadSessionEntries(): SessionEntry[] {
-  try {
-    const files = fs.readdirSync(SESSION_DIR, { withFileTypes: true });
-    return files
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-      .flatMap((entry) => {
-        try {
-          const fullPath = path.join(SESSION_DIR, entry.name);
-          const stat = fs.statSync(fullPath);
-          let title: string | null = null;
-          let updatedAtMs = stat.mtimeMs;
-          try {
-            const raw = fs.readFileSync(fullPath, "utf-8");
-            const parsed = JSON.parse(raw) as Record<string, unknown>;
-            const session = parsed?.session as Record<string, unknown> | undefined;
-            if (session && typeof session.title === "string" && session.title.trim()) {
-              title = session.title.trim();
-            }
-            if (typeof parsed?.updatedAt === "string") {
-              const parsedMs = Date.parse(parsed.updatedAt);
-              if (Number.isFinite(parsedMs)) updatedAtMs = parsedMs;
-            }
-          } catch {
-            // fall back to filesystem metadata
-          }
-          return [{
-            id: entry.name.replace(/\.json$/, ""),
-            title,
-            updatedAtMs,
-          }];
-        } catch {
-          return [];
-        }
-      })
-      .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
-      .slice(0, MAX_SESSION_ROWS);
-  } catch {
-    return [];
-  }
-}
-
-function formatAge(updatedAtMs: number): string {
+function formatAge(updatedAt: string): string {
+  const updatedAtMs = Date.parse(updatedAt);
+  if (!Number.isFinite(updatedAtMs)) return "unknown";
   const diffMs = Math.max(0, Date.now() - updatedAtMs);
   const minutes = Math.floor(diffMs / 60000);
   if (minutes < 1) return "just now";
@@ -76,46 +25,35 @@ export function openSessionList(dialog: ReturnType<typeof useDialog>) {
 }
 
 function SessionListDialog(props: { onDismiss: () => void }) {
-  const theme = useTheme();
-  const syncState = useSyncState();
-  const sessions = createMemo(() => loadSessionEntries());
+  const { state, actions } = useSync();
+
+  createEffect(() => {
+    actions.requestSessions();
+  });
+
+  const items = createMemo<SelectItem[]>(() => {
+    return state.sessionSummaries.map((session) => {
+      const current = session.sessionId === state.sessionId;
+      const subtitle = `${session.provider}/${session.model} · ${formatAge(session.updatedAt)}`;
+      return {
+        label: current ? `${session.title} (current)` : session.title,
+        value: session.sessionId,
+        description: subtitle,
+      };
+    });
+  });
 
   return (
-    <Dialog onDismiss={props.onDismiss} width="60%">
-      <box flexDirection="column">
-        <text fg={theme.text} marginBottom={1}>
-          <strong>Sessions ({sessions().length})</strong>
-        </text>
-
-        <scrollbox maxHeight={14} marginBottom={1}>
-          {sessions().length > 0 ? (
-            <box flexDirection="column">
-              <For each={sessions()}>
-                {(session) => (
-                  <box flexDirection="column" marginBottom={1}>
-                    <box flexDirection="row" gap={1}>
-                      <text fg={session.id === syncState.sessionId ? theme.accent : theme.textMuted}>
-                        {session.id === syncState.sessionId ? "▸" : " "}
-                      </text>
-                      <text fg={theme.text}>{session.title ?? session.id}</text>
-                      <text fg={theme.textMuted}>{formatAge(session.updatedAtMs)}</text>
-                    </box>
-                    <Show when={session.title !== null}>
-                      <text fg={theme.textMuted}>{session.id}</text>
-                    </Show>
-                  </box>
-                )}
-              </For>
-            </box>
-          ) : (
-            <text fg={theme.textMuted}>No saved sessions found in ~/.cowork/sessions.</text>
-          )}
-        </scrollbox>
-
-        <text fg={theme.textMuted}>
-          Session resume is server-managed for now. Press Escape to close.
-        </text>
-      </box>
-    </Dialog>
+    <DialogSelect
+      title={`Sessions (${state.sessionSummaries.length})`}
+      items={items()}
+      placeholder="Search sessions..."
+      width="70%"
+      onDismiss={props.onDismiss}
+      onSelect={(item) => {
+        actions.resumeSession(item.value);
+        props.onDismiss();
+      }}
+    />
   );
 }

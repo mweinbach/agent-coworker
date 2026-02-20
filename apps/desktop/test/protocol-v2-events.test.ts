@@ -39,6 +39,12 @@ mock.module("../src/lib/desktopCommands", () => ({
   saveState: async () => {},
   startWorkspaceServer: async () => ({ url: "ws://mock" }),
   stopWorkspaceServer: async () => {},
+  openPath: async () => {},
+  revealPath: async () => {},
+  copyPath: async () => {},
+  createDirectory: async () => {},
+  renamePath: async () => {},
+  trashPath: async () => {},
 }));
 
 mock.module("../src/lib/agentSocket", () => ({
@@ -667,6 +673,33 @@ describe("desktop protocol v2 mapping", () => {
 
     expect(
       threadSocket.sent.some((msg) => msg?.type === "session_close" && msg?.sessionId === "thread-session")
+    ).toBe(true);
+  });
+
+  test("deleteThreadHistory sends delete_session via control socket after closing thread session", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+    controlSocket.sent = [];
+    threadSocket.sent = [];
+
+    await useAppStore.getState().deleteThreadHistory(threadId);
+
+    expect(
+      threadSocket.sent.some((msg) => msg?.type === "session_close" && msg?.sessionId === "thread-session")
+    ).toBe(true);
+    expect(
+      controlSocket.sent.some(
+        (msg) =>
+          msg?.type === "delete_session"
+          && msg?.sessionId === "control-session"
+          && msg?.targetSessionId === "thread-session"
+      )
     ).toBe(true);
   });
 

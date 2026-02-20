@@ -34,3 +34,7 @@ export function isTrustedDesktopSenderUrl(senderUrl: string, opts: TrustedSender
 export function resolveAllowedDirectoryPath(workspaceRoots: string[], requestedPath: string): string {
   return assertPathWithinRoots(workspaceRoots, requestedPath, "path");
 }
+
+export function resolveAllowedPath(workspaceRoots: string[], requestedPath: string): string {
+  return assertPathWithinRoots(workspaceRoots, requestedPath, "path");
+}

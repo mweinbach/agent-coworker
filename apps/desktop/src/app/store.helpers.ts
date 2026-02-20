@@ -829,6 +829,7 @@ export type AppStoreState = {
   removeThread: (threadId: string) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
   reconnectThread: (threadId: string, firstMessage?: string) => Promise<void>;
+  renameThread: (threadId: string, newTitle: string) => void;
 
   sendMessage: (text: string) => Promise<void>;
   cancelThread: (threadId: string) => void;

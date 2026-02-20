@@ -1049,101 +1049,106 @@ export class AgentSession {
       return;
     }
 
-    const server = await this.getMcpServerByName(name);
-    if (!server) {
-      this.emit({
-        type: "mcp_server_validation",
-        sessionId: this.id,
-        name,
-        ok: false,
-        mode: "error",
-        message: `MCP server \"${name}\" not found.`,
-      });
-      return;
-    }
-
-    const authState = await resolveMCPServerAuthState(this.config, server);
-    if (authState.mode === "missing" || authState.mode === "oauth_pending" || authState.mode === "error") {
-      this.emit({
-        type: "mcp_server_validation",
-        sessionId: this.id,
-        name: server.name,
-        ok: false,
-        mode: authState.mode,
-        message: authState.message,
-      });
-      return;
-    }
-
-    const runtimeServers = await loadMCPServers(this.config);
-    const runtimeServer = runtimeServers.find((entry) => entry.name === server.name);
-    if (!runtimeServer) {
-      this.emit({
-        type: "mcp_server_validation",
-        sessionId: this.id,
-        name: server.name,
-        ok: false,
-        mode: "error",
-        message: "Server is not active in current MCP layering.",
-      });
-      return;
-    }
-
-    const startedAt = Date.now();
-    const loadPromise = loadMCPTools([runtimeServer], { log: (line) => this.log(line) });
-    let loadTimeout: ReturnType<typeof setTimeout> | null = null;
-    let timedOut = false;
+    this.connecting = true;
     try {
-      const loaded = await Promise.race([
-        loadPromise,
-        new Promise<never>((_, reject) => {
-          loadTimeout = setTimeout(() => {
-            timedOut = true;
-            reject(new Error(`MCP server validation timed out after ${MCP_VALIDATION_TIMEOUT_MS}ms.`));
-          }, MCP_VALIDATION_TIMEOUT_MS);
-        }),
-      ]);
-      const toolCount = Object.keys(loaded.tools).length;
-      const latencyMs = Date.now() - startedAt;
-
-      const ok = loaded.errors.length === 0;
-      const message = ok ? "MCP server validation succeeded." : loaded.errors[0] ?? "MCP server validation failed.";
-      this.emit({
-        type: "mcp_server_validation",
-        sessionId: this.id,
-        name: server.name,
-        ok,
-        mode: authState.mode,
-        message,
-        toolCount,
-        latencyMs,
-      });
-      await loaded.close();
-    } catch (err) {
-      if (timedOut) {
-        void loadPromise
-          .then(async (loaded) => {
-            try {
-              await loaded.close();
-            } catch {
-              // ignore
-            }
-          })
-          .catch(() => {
-            // ignore
-          });
+      const server = await this.getMcpServerByName(name);
+      if (!server) {
+        this.emit({
+          type: "mcp_server_validation",
+          sessionId: this.id,
+          name,
+          ok: false,
+          mode: "error",
+          message: `MCP server \"${name}\" not found.`,
+        });
+        return;
       }
-      this.emit({
-        type: "mcp_server_validation",
-        sessionId: this.id,
-        name: server.name,
-        ok: false,
-        mode: authState.mode,
-        message: String(err),
-        latencyMs: Date.now() - startedAt,
-      });
+
+      const authState = await resolveMCPServerAuthState(this.config, server);
+      if (authState.mode === "missing" || authState.mode === "oauth_pending" || authState.mode === "error") {
+        this.emit({
+          type: "mcp_server_validation",
+          sessionId: this.id,
+          name: server.name,
+          ok: false,
+          mode: authState.mode,
+          message: authState.message,
+        });
+        return;
+      }
+
+      const runtimeServers = await loadMCPServers(this.config);
+      const runtimeServer = runtimeServers.find((entry) => entry.name === server.name);
+      if (!runtimeServer) {
+        this.emit({
+          type: "mcp_server_validation",
+          sessionId: this.id,
+          name: server.name,
+          ok: false,
+          mode: "error",
+          message: "Server is not active in current MCP layering.",
+        });
+        return;
+      }
+
+      const startedAt = Date.now();
+      const loadPromise = loadMCPTools([runtimeServer], { log: (line) => this.log(line) });
+      let loadTimeout: ReturnType<typeof setTimeout> | null = null;
+      let timedOut = false;
+      try {
+        const loaded = await Promise.race([
+          loadPromise,
+          new Promise<never>((_, reject) => {
+            loadTimeout = setTimeout(() => {
+              timedOut = true;
+              reject(new Error(`MCP server validation timed out after ${MCP_VALIDATION_TIMEOUT_MS}ms.`));
+            }, MCP_VALIDATION_TIMEOUT_MS);
+          }),
+        ]);
+        const toolCount = Object.keys(loaded.tools).length;
+        const latencyMs = Date.now() - startedAt;
+
+        const ok = loaded.errors.length === 0;
+        const message = ok ? "MCP server validation succeeded." : loaded.errors[0] ?? "MCP server validation failed.";
+        this.emit({
+          type: "mcp_server_validation",
+          sessionId: this.id,
+          name: server.name,
+          ok,
+          mode: authState.mode,
+          message,
+          toolCount,
+          latencyMs,
+        });
+        await loaded.close();
+      } catch (err) {
+        if (timedOut) {
+          void loadPromise
+            .then(async (loaded) => {
+              try {
+                await loaded.close();
+              } catch {
+                // ignore
+              }
+            })
+            .catch(() => {
+              // ignore
+            });
+        }
+        this.emit({
+          type: "mcp_server_validation",
+          sessionId: this.id,
+          name: server.name,
+          ok: false,
+          mode: authState.mode,
+          message: String(err),
+          latencyMs: Date.now() - startedAt,
+        });
+      } finally {
+        if (loadTimeout) clearTimeout(loadTimeout);
+      }
     } finally {
-      if (loadTimeout) clearTimeout(loadTimeout);
+      this.connecting = false;
     }
   }
 

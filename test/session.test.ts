@@ -503,6 +503,36 @@ describe("AgentSession", () => {
       }
     });
 
+    test("validateMcpServer blocks concurrent validation while connection flow is active", async () => {
+      const { session, events } = makeSession();
+      let releaseLookup: (() => void) | null = null;
+      let lookupCalls = 0;
+      const firstLookup = new Promise<void>((resolve) => {
+        releaseLookup = resolve;
+      });
+
+      (session as any).getMcpServerByName = async () => {
+        lookupCalls += 1;
+        if (lookupCalls === 1) {
+          await firstLookup;
+        }
+        return null;
+      };
+
+      const firstValidation = session.validateMcpServer("server-a");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await session.validateMcpServer("server-a");
+
+      expect(lookupCalls).toBe(1);
+      const busyErr = events.find(
+        (entry) => entry.type === "error" && entry.message === "Connection flow already running",
+      );
+      expect(busyErr).toBeDefined();
+
+      releaseLookup?.();
+      await firstValidation;
+    });
+
     test("setMcpServerApiKey emits auth result and writes auth file", async () => {
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-mcp-api-key-"));
       try {

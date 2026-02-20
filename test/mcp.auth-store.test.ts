@@ -5,6 +5,7 @@ import path from "node:path";
 
 import type { AgentConfig } from "../src/types";
 import {
+  completeMCPServerOAuth,
   readMCPAuthFiles,
   resolveMCPServerAuthState,
   setMCPServerApiKeyCredential,
@@ -136,6 +137,19 @@ describe("mcp auth store", () => {
       await setMCPServerOAuthPending({ config, server: oauthServer, pending });
       const oauthPending = await resolveMCPServerAuthState(config, oauthServer);
       expect(oauthPending.mode).toBe("oauth_pending");
+
+      await completeMCPServerOAuth({
+        config,
+        server: oauthServer,
+        tokens: {
+          accessToken: "expired-token",
+          tokenType: "Bearer",
+          expiresAt: new Date(Date.now() - 60_000).toISOString(),
+        },
+      });
+      const oauthExpired = await resolveMCPServerAuthState(config, oauthServer);
+      expect(oauthExpired.mode).toBe("error");
+      expect(oauthExpired.message).toContain("expired");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

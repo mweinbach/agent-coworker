@@ -252,6 +252,12 @@ function isPendingValid(pending: MCPServerOAuthPending): boolean {
   return Number.isFinite(expiresAt) && Date.now() < expiresAt;
 }
 
+function isTokenValid(tokens: MCPServerOAuthTokens): boolean {
+  if (!tokens.expiresAt) return true;
+  const expiresAt = Date.parse(tokens.expiresAt);
+  return Number.isFinite(expiresAt) && Date.now() < expiresAt;
+}
+
 function joinAuthHeader(prefix: string | undefined, value: string): string {
   const trimmedPrefix = prefix?.trim();
   if (!trimmedPrefix) return value;
@@ -349,8 +355,10 @@ export async function resolveMCPServerAuthState(
 
   const pending = selected.record?.oauth?.pending;
   const tokens = selected.record?.oauth?.tokens;
+  const hasAccessToken = Boolean(tokens?.accessToken);
+  const tokenValid = tokens ? isTokenValid(tokens) : false;
 
-  if (tokens?.accessToken) {
+  if (hasAccessToken && tokenValid && tokens) {
     return {
       mode: "oauth",
       scope: selected.scope,
@@ -371,6 +379,17 @@ export async function resolveMCPServerAuthState(
       authType: "oauth",
       message: "OAuth flow is waiting for callback.",
       oauthPending: pending,
+    };
+  }
+
+  if (hasAccessToken && !tokenValid && tokens) {
+    return {
+      mode: "error",
+      scope: selected.scope,
+      authType: "oauth",
+      message: "OAuth token expired. Re-authorize this server.",
+      oauthTokens: tokens,
+      ...(pending ? { oauthPending: pending } : {}),
     };
   }
 

@@ -33,6 +33,30 @@ type DraftState = {
   oauthMode: "auto" | "code";
 };
 
+function defaultDraftState(): DraftState {
+  return {
+    name: "",
+    transportType: "stdio",
+    command: "",
+    args: "",
+    cwd: "",
+    url: "",
+    required: false,
+    retries: "",
+    authType: "none",
+    headerName: "",
+    prefix: "",
+    keyId: "",
+    scope: "",
+    resource: "",
+    oauthMode: "auto",
+  };
+}
+
+function credentialDraftKey(workspaceId: string, serverName: string): string {
+  return `${workspaceId}::${serverName}`;
+}
+
 function toBool(checked: boolean | "indeterminate") {
   return checked === true;
 }
@@ -129,7 +153,8 @@ function buildServerFromDraft(draft: DraftState): MCPServerConfig | null {
   })();
   if (!transport) return null;
 
-  const retries = Number(draft.retries);
+  const retriesValue = draft.retries.trim();
+  const retries = retriesValue.length > 0 ? Number(retriesValue) : undefined;
   const auth: MCPServerConfig["auth"] = (() => {
     if (draft.authType === "none") return { type: "none" };
     if (draft.authType === "api_key") {
@@ -152,7 +177,7 @@ function buildServerFromDraft(draft: DraftState): MCPServerConfig | null {
     name,
     transport,
     ...(draft.required ? { required: true } : {}),
-    ...(Number.isFinite(retries) ? { retries } : {}),
+    ...(typeof retries === "number" && Number.isFinite(retries) ? { retries } : {}),
     ...(auth ? { auth } : {}),
   };
 }
@@ -179,28 +204,14 @@ export function McpServersPage() {
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
 
   const [editingName, setEditingName] = useState<string | null>(null);
-  const [draft, setDraft] = useState<DraftState>({
-    name: "",
-    transportType: "stdio",
-    command: "",
-    args: "",
-    cwd: "",
-    url: "",
-    required: false,
-    retries: "",
-    authType: "none",
-    headerName: "",
-    prefix: "",
-    keyId: "",
-    scope: "",
-    resource: "",
-    oauthMode: "auto",
-  });
+  const [draft, setDraft] = useState<DraftState>(defaultDraftState);
   const [oauthCodeByName, setOauthCodeByName] = useState<Record<string, string>>({});
   const [apiKeyByName, setApiKeyByName] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!workspace) return;
+    setEditingName(null);
+    setDraft(defaultDraftState());
     void requestWorkspaceMcpServers(workspace.id);
   }, [workspace?.id]);
 
@@ -213,23 +224,7 @@ export function McpServersPage() {
 
   const resetDraft = () => {
     setEditingName(null);
-    setDraft({
-      name: "",
-      transportType: "stdio",
-      command: "",
-      args: "",
-      cwd: "",
-      url: "",
-      required: false,
-      retries: "",
-      authType: "none",
-      headerName: "",
-      prefix: "",
-      keyId: "",
-      scope: "",
-      resource: "",
-      oauthMode: "auto",
-    });
+    setDraft(defaultDraftState());
   };
 
   return (
@@ -461,10 +456,11 @@ export function McpServersPage() {
         <CardContent className="space-y-3">
           {servers.length === 0 ? <div className="text-xs text-muted-foreground">No MCP servers configured.</div> : null}
           {servers.map((server) => {
+            const draftKey = workspace ? credentialDraftKey(workspace.id, server.name) : server.name;
             const validation = validationByName[server.name];
             const canEdit = server.source === "workspace";
-            const apiKeyDraft = apiKeyByName[server.name] ?? "";
-            const oauthCode = oauthCodeByName[server.name] ?? "";
+            const apiKeyDraft = apiKeyByName[draftKey] ?? "";
+            const oauthCode = oauthCodeByName[draftKey] ?? "";
 
             return (
               <div key={server.name} className="rounded-md border border-border/70 bg-muted/20 p-3 text-xs">
@@ -527,7 +523,7 @@ export function McpServersPage() {
                       onChange={(event) =>
                         setOauthCodeByName((prev) => ({
                           ...prev,
-                          [server.name]: event.target.value,
+                          [draftKey]: event.target.value,
                         }))
                       }
                     />
@@ -557,7 +553,7 @@ export function McpServersPage() {
                       onChange={(event) =>
                         setApiKeyByName((prev) => ({
                           ...prev,
-                          [server.name]: event.target.value,
+                          [draftKey]: event.target.value,
                         }))
                       }
                     />

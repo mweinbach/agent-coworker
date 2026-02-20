@@ -153,6 +153,8 @@ async function createWindow(): Promise<void> {
   mainWindow = win;
   if (process.platform === "darwin") {
     win.setWindowButtonVisibility(true);
+  } else if (process.platform === "win32") {
+    win.setMenu(null);
   }
   applyInitialWindowAppearance(win);
   applyWindowSecurity(win);

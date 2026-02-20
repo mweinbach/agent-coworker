@@ -4,6 +4,7 @@ mock.module("../src/lib/desktopCommands", () => ({
   appendTranscriptBatch: async () => {},
   appendTranscriptEvent: async () => {},
   deleteTranscript: async () => {},
+  listDirectory: async () => [],
   loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
   pickWorkspaceDirectory: async () => null,
   readTranscript: async () => [],

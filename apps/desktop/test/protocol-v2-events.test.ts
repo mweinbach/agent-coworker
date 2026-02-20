@@ -32,6 +32,7 @@ mock.module("../src/lib/desktopCommands", () => ({
   appendTranscriptBatch: async () => {},
   appendTranscriptEvent: async () => {},
   deleteTranscript: async () => {},
+  listDirectory: async () => [],
   loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
   pickWorkspaceDirectory: async () => null,
   readTranscript: async () => [],
@@ -649,5 +650,45 @@ describe("desktop protocol v2 mapping", () => {
         .getState()
         .notifications.some((n) => n.detail?.includes("Attempting automatic cancel"))
     ).toBe(false);
+  });
+
+  test("removeThread sends session_close for connected thread sessions", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+    threadSocket.sent = [];
+
+    await useAppStore.getState().removeThread(threadId);
+
+    expect(
+      threadSocket.sent.some((msg) => msg?.type === "session_close" && msg?.sessionId === "thread-session")
+    ).toBe(true);
+  });
+
+  test("removeWorkspace sends session_close for control and thread sessions", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+    controlSocket.sent = [];
+    threadSocket.sent = [];
+
+    await useAppStore.getState().removeWorkspace(workspaceId);
+
+    expect(
+      controlSocket.sent.some((msg) => msg?.type === "session_close" && msg?.sessionId === "control-session")
+    ).toBe(true);
+    expect(
+      threadSocket.sent.some((msg) => msg?.type === "session_close" && msg?.sessionId === "thread-session")
+    ).toBe(true);
   });
 });

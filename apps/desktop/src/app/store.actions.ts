@@ -1235,7 +1235,12 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     },
   
     answerAsk: (threadId, requestId, answer) => {
-      sendThread(get, threadId, (sessionId) => ({ type: "ask_response", sessionId, requestId, answer }));
+      const sent = sendThread(get, threadId, (sessionId) => ({ type: "ask_response", sessionId, requestId, answer }));
+      if (!sent) {
+        // Socket disconnected — keep the modal open so the user can retry
+        // once reconnected rather than silently swallowing the answer.
+        return;
+      }
       appendThreadTranscript(threadId, "client", { type: "ask_response", sessionId: get().threadRuntimeById[threadId]?.sessionId, requestId, answer });
       set({ promptModal: null });
     },

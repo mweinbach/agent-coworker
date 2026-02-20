@@ -82,7 +82,17 @@ export default function App() {
       if (event.key === "Escape") {
         const state = useAppStore.getState();
         if (state.promptModal) {
-          state.dismissPrompt();
+          // For ask modals, send a response so the server-side deferred promise
+          // resolves instead of hanging forever.
+          if (state.promptModal.kind === "ask") {
+            state.answerAsk(
+              state.promptModal.threadId,
+              state.promptModal.prompt.requestId,
+              "[skipped]",
+            );
+          } else {
+            state.dismissPrompt();
+          }
           return;
         }
         if (state.view === "settings") {

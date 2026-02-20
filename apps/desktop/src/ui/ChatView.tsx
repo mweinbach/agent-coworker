@@ -118,7 +118,7 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
     if (!developerMode) return null;
     return (
       <Card className="max-w-3xl border-border/70 bg-muted/30">
-        <CardContent className="p-3 text-xs text-muted-foreground">
+        <CardContent className="select-text p-3 text-xs text-muted-foreground">
           <div className="mb-1 font-semibold uppercase tracking-wide text-primary">Log</div>
           <div className="whitespace-pre-wrap">{item.line}</div>
         </CardContent>
@@ -129,7 +129,7 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
   if (item.kind === "error") {
     return (
       <Card className="max-w-3xl border-destructive/40 bg-destructive/10">
-        <CardContent className="p-3 text-sm">
+        <CardContent className="select-text p-3 text-sm">
           <div className="mb-1 font-semibold uppercase tracking-wide text-destructive">Error</div>
           <div>{item.message}</div>
         </CardContent>
@@ -140,7 +140,7 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
   if (item.kind === "system") {
     return (
       <Card className="max-w-3xl border-border/70 bg-muted/30">
-        <CardContent className="p-3 text-xs text-muted-foreground">
+        <CardContent className="select-text p-3 text-xs text-muted-foreground">
           <div className="mb-1 font-semibold uppercase tracking-wide text-primary">System</div>
           <div className="whitespace-pre-wrap">{item.line}</div>
         </CardContent>

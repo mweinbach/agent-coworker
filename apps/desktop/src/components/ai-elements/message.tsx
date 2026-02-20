@@ -32,7 +32,7 @@ export function MessageContent({ className, ...props }: MessageContentProps) {
   return (
     <div
       className={cn(
-        "min-w-0 rounded-xl border border-border/80 px-4 py-3 text-sm leading-6",
+        "select-text min-w-0 rounded-xl border border-border/80 px-4 py-3 text-sm leading-6",
         "group-[.is-user]:border-primary/35 group-[.is-user]:bg-primary group-[.is-user]:text-primary-foreground",
         "group-[.is-assistant]:bg-card/80 group-[.is-assistant]:text-foreground",
         className,

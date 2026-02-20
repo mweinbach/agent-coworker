@@ -52,6 +52,7 @@ body {
   color: var(--text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  user-select: none;
 }
 
 * {
@@ -60,6 +61,11 @@ body {
 
 ::selection {
   background: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: inherit;
+}
+
+.is-user ::selection {
+  background: color-mix(in srgb, var(--color-primary-foreground) 30%, transparent);
   color: inherit;
 }
 

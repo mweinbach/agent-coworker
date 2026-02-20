@@ -153,10 +153,9 @@ The TUI connects to the agent server over WebSocket — it never touches the age
 
 ## WebSocket Protocol Notes
 
-- Current protocol version is `6.0` (sent in `server_hello.protocolVersion`).
-- `ping` now requires `sessionId`, and `pong.sessionId` echoes it.
-- `error` events always include required `code` and `source`.
-- `approval` events always include required `reasonCode`.
+- Current protocol version is `7.0` (sent in `server_hello.protocolVersion`).
+- v7 adds granular MCP server management messages (`mcp_server_upsert`, `mcp_server_delete`, `mcp_server_validate`, `mcp_server_auth_*`, `mcp_servers_migrate_legacy`) and corresponding server events.
+- v6 added required `sessionId` in `ping`/`pong`, required `code`/`source` in `error` events, and required `reasonCode` in `approval` events.
 - Full message contract and migration details: `docs/websocket-protocol.md`.
 
 ## Configuration

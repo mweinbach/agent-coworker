@@ -8,6 +8,44 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 - Session resume: `?resumeSessionId=<sessionId>`
 - Current protocol version: `7.0`
 
+## Table of Contents
+
+- [Connection](#connection)
+- [Protocol Version Notes](#protocol-v7-notes)
+  - [v7 Notes](#protocol-v7-notes)
+  - [v6 Notes](#protocol-v6-notes)
+  - [v5 Notes](#protocol-v5-notes)
+  - [v4 Notes](#protocol-v4-notes)
+- [Connection Lifecycle](#connection-lifecycle)
+- [Validation Rules](#validation-rules)
+- [Shared Types](#shared-types)
+  - [ProviderName](#providername) | [PublicConfig](#publicconfig) | [ProviderCatalogEntry](#providercatalogentry) | [ProviderAuthMethod](#providerauthmethod) | [ProviderAuthChallenge](#providerauthchallenge) | [ProviderStatus](#providerstatus)
+  - [TodoItem](#todoitem) | [CommandInfo](#commandinfo) | [SkillEntry](#skillentry) | [HarnessContextPayload](#harnesscontextpayload)
+  - [SessionBackupPublicState](#sessionbackuppublicstate) | [ObservabilityHealth](#observabilityhealth)
+  - [ModelStreamPartType](#modelstreamparttype) | [ApprovalRiskCode](#approvalriskcode) | [ServerErrorCode](#servererrorcode) | [ServerErrorSource](#servererrorsource)
+- [Client -> Server Messages](#client---server-messages)
+  - Handshake: [client_hello](#client_hello)
+  - Conversation: [user_message](#user_message) | [ask_response](#ask_response) | [approval_response](#approval_response) | [cancel](#cancel) | [reset](#reset)
+  - Model & Provider: [set_model](#set_model) | [refresh_provider_status](#refresh_provider_status) | [provider_catalog_get](#provider_catalog_get) | [provider_auth_methods_get](#provider_auth_methods_get) | [provider_auth_authorize](#provider_auth_authorize) | [provider_auth_callback](#provider_auth_callback) | [provider_auth_set_api_key](#provider_auth_set_api_key)
+  - Tools & Commands: [list_tools](#list_tools) | [list_commands](#list_commands) | [execute_command](#execute_command)
+  - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill)
+  - MCP: [set_enable_mcp](#set_enable_mcp) | [mcp_servers_get](#mcp_servers_get) | [mcp_server_upsert](#mcp_server_upsert) | [mcp_server_delete](#mcp_server_delete) | [mcp_server_validate](#mcp_server_validate) | [mcp_server_auth_authorize](#mcp_server_auth_authorize) | [mcp_server_auth_callback](#mcp_server_auth_callback) | [mcp_server_auth_set_api_key](#mcp_server_auth_set_api_key) | [mcp_servers_migrate_legacy](#mcp_servers_migrate_legacy)
+  - Session Management: [session_close](#session_close) | [get_messages](#get_messages) | [set_session_title](#set_session_title) | [list_sessions](#list_sessions) | [delete_session](#delete_session) | [set_config](#set_config) | [upload_file](#upload_file)
+  - Backup: [session_backup_get](#session_backup_get) | [session_backup_checkpoint](#session_backup_checkpoint) | [session_backup_restore](#session_backup_restore) | [session_backup_delete_checkpoint](#session_backup_delete_checkpoint)
+  - Harness: [harness_context_get](#harness_context_get) | [harness_context_set](#harness_context_set)
+  - Keepalive: [ping](#ping)
+- [Server -> Client Events](#server---client-events)
+  - Handshake & Lifecycle: [server_hello](#server_hello) | [session_settings](#session_settings) | [session_info](#session_info) | [session_busy](#session_busy) | [session_config](#session_config)
+  - Conversation: [user_message](#user_message-1) | [model_stream_chunk](#model_stream_chunk) | [assistant_message](#assistant_message) | [reasoning](#reasoning) | [log](#log) | [todos](#todos) | [reset_done](#reset_done)
+  - Prompts: [ask](#ask) | [approval](#approval)
+  - Provider: [provider_catalog](#provider_catalog) | [provider_auth_methods](#provider_auth_methods) | [provider_auth_challenge](#provider_auth_challenge) | [provider_auth_result](#provider_auth_result) | [provider_status](#provider_status) | [config_updated](#config_updated)
+  - Tools & Skills: [tools](#tools) | [commands](#commands) | [skills_list](#skills_list) | [skill_content](#skill_content)
+  - MCP: [mcp_servers](#mcp_servers) | [mcp_server_validation](#mcp_server_validation) | [mcp_server_auth_challenge](#mcp_server_auth_challenge) | [mcp_server_auth_result](#mcp_server_auth_result)
+  - Session Data: [messages](#messages) | [sessions](#sessions) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage)
+  - Backup & Observability: [session_backup_state](#session_backup_state) | [observability_status](#observability_status)
+  - Harness: [harness_context](#harness_context)
+  - Error & Keepalive: [error](#error) | [pong](#pong)
+
 ## Protocol v7 Notes
 
 Changes in `7.0`:

@@ -226,7 +226,7 @@ async function readDoc(filePath: string): Promise<MCPServerCredentialsDocument> 
   } catch (error) {
     const code = (error as NodeJS.ErrnoException | undefined)?.code;
     if (code === "ENOENT") return { ...DEFAULT_DOC, updatedAt: nowIso(), servers: {} };
-    return { ...DEFAULT_DOC, updatedAt: nowIso(), servers: {} };
+    throw new Error(`Failed to read MCP credential store at ${filePath}: ${String(error)}`);
   }
 }
 
@@ -291,6 +291,13 @@ export async function readMCPAuthFiles(config: AgentConfig): Promise<{ workspace
       doc: userDoc,
     },
   };
+}
+
+async function readMCPAuthFileByScope(config: AgentConfig, scope: MCPAuthScope): Promise<MCPAuthFileState> {
+  const paths = resolveMcpConfigPaths(config);
+  const filePath = scope === "workspace" ? paths.workspaceAuthFile : paths.userAuthFile;
+  const doc = await readDoc(filePath);
+  return { scope, filePath, doc };
 }
 
 function selectCredentialRecord(opts: {
@@ -431,8 +438,7 @@ async function mutateScopeDoc(
   scope: MCPAuthScope,
   mutate: (doc: MCPServerCredentialsDocument, filePath: string) => void,
 ): Promise<string> {
-  const files = await readMCPAuthFiles(config);
-  const current = files[scope];
+  const current = await readMCPAuthFileByScope(config, scope);
   const next: MCPServerCredentialsDocument = {
     ...current.doc,
     updatedAt: nowIso(),

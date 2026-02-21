@@ -204,4 +204,33 @@ describe("mcp auth store", () => {
       await fs.rm(builtInConfigDir, { recursive: true, force: true });
     }
   });
+
+  test("setMCPServerApiKeyCredential propagates malformed auth store read errors", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-malformed-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-malformed-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-malformed-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+    const authFile = path.join(workspace, ".cowork", "auth", "mcp-credentials.json");
+    const malformedDoc = "{ this is not valid JSON";
+
+    try {
+      await fs.mkdir(path.dirname(authFile), { recursive: true });
+      await fs.writeFile(authFile, malformedDoc, "utf-8");
+
+      await expect(
+        setMCPServerApiKeyCredential({
+          config,
+          server: workspaceServer("workspace-key"),
+          apiKey: "workspace-secret",
+        }),
+      ).rejects.toThrow("Failed to read MCP credential store");
+
+      const rawAfter = await fs.readFile(authFile, "utf-8");
+      expect(rawAfter).toBe(malformedDoc);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
 });

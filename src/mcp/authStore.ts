@@ -488,6 +488,34 @@ export async function setMCPServerApiKeyCredential(opts: {
   };
 }
 
+export async function renameMCPServerCredentials(opts: {
+  config: AgentConfig;
+  source: MCPServerSource;
+  previousName: string;
+  nextName: string;
+}): Promise<{ moved: boolean; scope: MCPAuthScope; storageFile?: string }> {
+  const previousName = normalizeServerName(opts.previousName);
+  const nextName = normalizeServerName(opts.nextName);
+  const defaultScope = resolvePrimaryScope(opts.source);
+  if (previousName === nextName) {
+    return { moved: false, scope: defaultScope };
+  }
+
+  const files = await readMCPAuthFiles(opts.config);
+  const scope = resolveScopeReadOrder(opts.source).find((candidate) => files[candidate].doc.servers[previousName] !== undefined);
+  if (!scope) {
+    return { moved: false, scope: defaultScope };
+  }
+
+  const storageFile = await mutateScopeDoc(opts.config, scope, (doc) => {
+    const existing = doc.servers[previousName];
+    if (!existing) return;
+    doc.servers[nextName] = existing;
+    delete doc.servers[previousName];
+  });
+  return { moved: true, scope, storageFile };
+}
+
 export async function setMCPServerOAuthPending(opts: {
   config: AgentConfig;
   server: MCPRegistryServer;

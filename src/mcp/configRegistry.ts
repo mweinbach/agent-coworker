@@ -453,6 +453,16 @@ export async function upsertWorkspaceMCPServer(
   });
   nextServers.push(validated);
   await writeWorkspaceServers(config, nextServers);
+
+  if (trimmedPrevious && trimmedPrevious.length > 0 && trimmedPrevious !== validated.name) {
+    const { renameMCPServerCredentials } = await import("./authStore");
+    await renameMCPServerCredentials({
+      config,
+      source: "workspace",
+      previousName: trimmedPrevious,
+      nextName: validated.name,
+    });
+  }
 }
 
 export async function deleteWorkspaceMCPServer(config: AgentConfig, nameRaw: string): Promise<void> {

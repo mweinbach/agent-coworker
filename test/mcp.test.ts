@@ -9,8 +9,10 @@ import {
   loadMCPServers,
   loadMCPTools,
   parseMCPServersDocument,
+  readProjectMCPServersDocument,
   readMCPServersSnapshot,
   readWorkspaceMCPServersDocument,
+  writeProjectMCPServersDocument,
   writeWorkspaceMCPServersDocument,
 } from "../src/mcp";
 
@@ -108,6 +110,32 @@ describe("workspace mcp document", () => {
       await writeWorkspaceMCPServersDocument(config, raw);
       const persisted = await fs.readFile(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), "utf-8");
       expect(persisted).toBe(`${raw}\n`);
+    } finally {
+      await fs.rm(tmpWorkspace, { recursive: true, force: true });
+      await fs.rm(tmpHome, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("writeProjectMCPServersDocument writes to the .cowork path used by readProjectMCPServersDocument", async () => {
+    const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-project-write-workspace-"));
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-project-write-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-project-write-builtin-"));
+    try {
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+      const raw = JSON.stringify({ servers: [{ name: "project", transport: { type: "stdio", command: "echo" } }] }, null, 2);
+      await writeProjectMCPServersDocument(config.projectAgentDir, raw);
+
+      const workspaceFile = path.join(tmpWorkspace, ".cowork", "mcp-servers.json");
+      const legacyFile = path.join(tmpWorkspace, ".agent", "mcp-servers.json");
+      const persisted = await fs.readFile(workspaceFile, "utf-8");
+      expect(persisted).toBe(`${raw}\n`);
+      await expect(fs.access(legacyFile)).rejects.toBeDefined();
+
+      const projectDoc = await readProjectMCPServersDocument(config);
+      expect(projectDoc.path).toBe(workspaceFile);
+      expect(projectDoc.rawJson).toBe(`${raw}\n`);
+      expect(projectDoc.projectServers.map((server) => server.name)).toEqual(["project"]);
     } finally {
       await fs.rm(tmpWorkspace, { recursive: true, force: true });
       await fs.rm(tmpHome, { recursive: true, force: true });

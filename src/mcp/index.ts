@@ -246,11 +246,13 @@ export async function readProjectMCPServersDocument(config: AgentConfig): Promis
 
 export async function writeProjectMCPServersDocument(projectAgentDir: string, rawJson: string): Promise<void> {
   parseMCPServersDocument(rawJson);
-  await fs.mkdir(projectAgentDir, { recursive: true });
-  const filePath = path.join(projectAgentDir, MCP_SERVERS_FILE_NAME);
+  const workspaceRoot = path.dirname(projectAgentDir);
+  const workspaceCoworkDir = path.join(workspaceRoot, ".cowork");
+  await fs.mkdir(workspaceCoworkDir, { recursive: true });
+  const filePath = path.join(workspaceCoworkDir, MCP_SERVERS_FILE_NAME);
   const payload = rawJson.endsWith("\n") ? rawJson : `${rawJson}\n`;
   const tempPath = path.join(
-    projectAgentDir,
+    workspaceCoworkDir,
     `.mcp-servers.json.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
   );
   await fs.writeFile(tempPath, payload, "utf-8");

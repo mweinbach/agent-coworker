@@ -84,6 +84,52 @@ describe("mcp config registry", () => {
     }
   });
 
+  test("upsertWorkspaceMCPServer moves workspace credential keys when renaming", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-rename-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-rename-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-rename-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      await writeJson(path.join(workspace, ".cowork", "auth", "mcp-credentials.json"), {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        servers: {
+          old: {
+            apiKey: {
+              value: "secret-key",
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        },
+      });
+
+      await upsertWorkspaceMCPServer(config, {
+        name: "old",
+        transport: { type: "stdio", command: "echo", args: ["before"] },
+      });
+      await upsertWorkspaceMCPServer(
+        config,
+        {
+          name: "new",
+          transport: { type: "stdio", command: "echo", args: ["after"] },
+        },
+        "old",
+      );
+
+      const authRaw = await fs.readFile(path.join(workspace, ".cowork", "auth", "mcp-credentials.json"), "utf-8");
+      const authDoc = JSON.parse(authRaw) as {
+        servers: Record<string, { apiKey?: { value?: string } }>;
+      };
+      expect(authDoc.servers.old).toBeUndefined();
+      expect(authDoc.servers.new?.apiKey?.value).toBe("secret-key");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("migrateLegacyMCPServers preserves existing .cowork entries and archives legacy file", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-migrate-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-migrate-home-"));

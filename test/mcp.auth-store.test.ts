@@ -7,6 +7,7 @@ import type { AgentConfig } from "../src/types";
 import {
   completeMCPServerOAuth,
   readMCPAuthFiles,
+  renameMCPServerCredentials,
   resolveMCPServerAuthState,
   setMCPServerApiKeyCredential,
   setMCPServerOAuthPending,
@@ -227,6 +228,43 @@ describe("mcp auth store", () => {
 
       const rawAfter = await fs.readFile(authFile, "utf-8");
       expect(rawAfter).toBe(malformedDoc);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("renameMCPServerCredentials re-keys workspace credentials for renamed servers", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-rename-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-rename-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-rename-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      await setMCPServerApiKeyCredential({
+        config,
+        server: workspaceServer("old-name"),
+        apiKey: "workspace-secret",
+      });
+
+      const rename = await renameMCPServerCredentials({
+        config,
+        source: "workspace",
+        previousName: "old-name",
+        nextName: "new-name",
+      });
+      expect(rename.moved).toBe(true);
+      expect(rename.scope).toBe("workspace");
+
+      const files = await readMCPAuthFiles(config);
+      expect(files.workspace.doc.servers["old-name"]).toBeUndefined();
+      expect(files.workspace.doc.servers["new-name"]?.apiKey?.value).toBe("workspace-secret");
+
+      const newState = await resolveMCPServerAuthState(config, workspaceServer("new-name"));
+      expect(newState.mode).toBe("api_key");
+      const oldState = await resolveMCPServerAuthState(config, workspaceServer("old-name"));
+      expect(oldState.mode).toBe("missing");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

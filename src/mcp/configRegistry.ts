@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
-import type { AgentConfig, MCPServerAuthConfig, MCPServerConfig } from "../types";
+import type { AgentConfig, MCPServerConfig } from "../types";
 
 export const MCP_SERVERS_FILE_NAME = "mcp-servers.json";
 const LEGACY_ARCHIVE_FILE_NAME = "mcp-servers.legacy-migrated.json";

@@ -9,6 +9,7 @@ import {
   setWindowAppearance,
   showNotification,
 } from "./lib/desktopCommands";
+import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { ContextSidebar } from "./ui/ContextSidebar";
 import { PromptModal } from "./ui/PromptModal";
 import { Sidebar } from "./ui/Sidebar";
@@ -82,7 +83,17 @@ export default function App() {
       if (event.key === "Escape") {
         const state = useAppStore.getState();
         if (state.promptModal) {
-          state.dismissPrompt();
+          // For ask modals, send a response so the server-side deferred promise
+          // resolves instead of hanging forever.
+          if (state.promptModal.kind === "ask") {
+            state.answerAsk(
+              state.promptModal.threadId,
+              state.promptModal.prompt.requestId,
+              ASK_SKIP_TOKEN,
+            );
+          } else {
+            state.dismissPrompt();
+          }
           return;
         }
         if (state.view === "settings") {

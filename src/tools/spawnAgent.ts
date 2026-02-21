@@ -100,6 +100,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
         ctx.config.workingDirectory,
         ...(ctx.config.outputDirectory ? [ctx.config.outputDirectory] : []),
       ],
+      workingDirectory: ctx.config.workingDirectory,
     }).kind === "auto";
 
   return tool({

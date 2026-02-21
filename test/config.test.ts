@@ -106,8 +106,8 @@ describe("loadConfig", () => {
     });
 
     expect(cfg.provider).toBe("google");
-    expect(cfg.model).toBe("gemini-3-flash-preview");
-    expect(cfg.subAgentModel).toBe("gemini-3-flash-preview");
+    expect(cfg.model).toBe(defaultModelForProvider("google"));
+    expect(cfg.subAgentModel).toBe(defaultModelForProvider("google"));
     expect(cfg.knowledgeCutoff).toBe("End of May 2025");
     expect(cfg.userName).toBe("");
     expect(cfg.observabilityEnabled).toBe(true);
@@ -282,7 +282,7 @@ describe("loadConfig", () => {
     });
 
     expect(cfg.provider).toBe("google");
-    expect(cfg.model).toBe("gemini-3-flash-preview");
+    expect(cfg.model).toBe(defaultModelForProvider("google"));
   });
 
   test("merge precedence across all three tiers for recognized fields", async () => {

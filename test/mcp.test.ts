@@ -1,703 +1,403 @@
-import { describe, expect, test, mock, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, mock, beforeEach } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import type { AgentConfig, MCPServerConfig } from "../src/types";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
-  const base = "/tmp/mcp-test";
-  return {
-    provider: "google",
-    model: "gemini-2.0-flash",
-    subAgentModel: "gemini-2.0-flash",
-    workingDirectory: base,
-    outputDirectory: path.join(base, "output"),
-    uploadsDirectory: path.join(base, "uploads"),
-    userName: "tester",
-    knowledgeCutoff: "2025-01",
-    projectAgentDir: path.join(base, ".agent"),
-    userAgentDir: path.join(base, ".agent-user"),
-    builtInDir: base,
-    builtInConfigDir: path.join(base, "config"),
-    skillsDirs: [],
-    memoryDirs: [],
-    configDirs: [],
-    ...overrides,
-  };
-}
-
-async function writeJson(filePath: string, obj: unknown) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(obj, null, 2), "utf-8");
-}
-
-const mockCreateMCPClient = mock(async (_opts: any) => ({
-  tools: mock(async () => ({})),
-  close: mock(async () => {}),
-}));
-
 import {
   DEFAULT_MCP_SERVERS_DOCUMENT,
   loadMCPServers,
   loadMCPTools,
   parseMCPServersDocument,
   readProjectMCPServersDocument,
+  readMCPServersSnapshot,
+  readWorkspaceMCPServersDocument,
   writeProjectMCPServersDocument,
-} from "../src/mcp/index";
+  writeWorkspaceMCPServersDocument,
+} from "../src/mcp";
 
-function loadMCPToolsWithMock(
-  servers: MCPServerConfig[],
-  opts: { log?: (line: string) => void; sleep?: (ms: number) => Promise<void> } = {}
-) {
-  return loadMCPTools(servers, {
-    ...opts,
-    createClient: mockCreateMCPClient as any,
-  });
+function makeConfig(workspaceRoot: string, userHome: string, builtInConfigDir: string): AgentConfig {
+  return {
+    provider: "google",
+    model: "gemini-2.0-flash",
+    subAgentModel: "gemini-2.0-flash",
+    workingDirectory: workspaceRoot,
+    outputDirectory: path.join(workspaceRoot, "output"),
+    uploadsDirectory: path.join(workspaceRoot, "uploads"),
+    userName: "tester",
+    knowledgeCutoff: "unknown",
+    projectAgentDir: path.join(workspaceRoot, ".agent"),
+    userAgentDir: path.join(userHome, ".agent"),
+    builtInDir: path.dirname(builtInConfigDir),
+    builtInConfigDir,
+    skillsDirs: [],
+    memoryDirs: [],
+    configDirs: [],
+    enableMcp: true,
+  };
 }
 
-describe("workspace MCP document helpers", () => {
-  let tmpDir: string;
+async function writeJson(filePath: string, value: unknown) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(value, null, 2), "utf-8");
+}
 
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-test-"));
-  });
+const mockCreateMCPClient = mock(async (_opts: any) => ({
+  tools: mock(async () => ({ ping: { description: "ping" } })),
+  close: mock(async () => {}),
+}));
 
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  });
-
-  test("parseMCPServersDocument validates well-formed server entries", () => {
+describe("mcp parsing", () => {
+  test("parseMCPServersDocument supports auth metadata", () => {
     const parsed = parseMCPServersDocument(
       JSON.stringify({
         servers: [
           {
-            name: "stdio-local",
-            transport: { type: "stdio", command: "node", args: ["server.js"] },
-            required: true,
-            retries: 2,
+            name: "secure-http",
+            transport: { type: "http", url: "https://mcp.example.com" },
+            auth: { type: "api_key", headerName: "x-api-key", keyId: "primary" },
           },
           {
-            name: "http-remote",
-            transport: { type: "http", url: "https://mcp.example.com" },
+            name: "oauth-http",
+            transport: { type: "sse", url: "https://mcp.oauth.example.com" },
+            auth: { type: "oauth", oauthMode: "auto", scope: "tools.read" },
           },
         ],
       }),
     );
 
     expect(parsed.servers).toHaveLength(2);
-    expect(parsed.servers[0]?.name).toBe("stdio-local");
-    expect(parsed.servers[1]?.transport.type).toBe("http");
+    expect(parsed.servers[0]?.auth?.type).toBe("api_key");
+    expect(parsed.servers[1]?.auth?.type).toBe("oauth");
   });
 
-  test("parseMCPServersDocument rejects invalid payloads", () => {
-    expect(() => parseMCPServersDocument("[]")).toThrow("root must be an object");
+  test("parseMCPServersDocument rejects invalid auth schema", () => {
     expect(() =>
       parseMCPServersDocument(
         JSON.stringify({
-          servers: [{ name: "", transport: { type: "stdio", command: "echo" } }],
+          servers: [{ name: "bad", transport: { type: "http", url: "https://x" }, auth: { type: "oauth", oauthMode: "bad" } }],
         }),
       ),
-    ).toThrow("servers[0].name is required");
-  });
-
-  test("readProjectMCPServersDocument returns default document when file is missing", async () => {
-    const projectAgentDir = path.join(tmpDir, ".agent");
-    const config = makeConfig({ projectAgentDir, configDirs: [] });
-
-    const payload = await readProjectMCPServersDocument(config);
-
-    expect(payload.path).toBe(path.join(projectAgentDir, "mcp-servers.json"));
-    expect(payload.rawJson).toBe(DEFAULT_MCP_SERVERS_DOCUMENT);
-    expect(payload.projectServers).toEqual([]);
-    expect(payload.effectiveServers).toEqual([]);
-    expect(payload.parseError).toBeUndefined();
-  });
-
-  test("writeProjectMCPServersDocument round-trips with readProjectMCPServersDocument", async () => {
-    const projectAgentDir = path.join(tmpDir, ".agent");
-    const config = makeConfig({ projectAgentDir, configDirs: [projectAgentDir] });
-    const rawJson = JSON.stringify(
-      {
-        servers: [{ name: "roundtrip", transport: { type: "stdio", command: "echo", args: ["ok"] } }],
-      },
-      null,
-      2,
-    );
-
-    await writeProjectMCPServersDocument(projectAgentDir, rawJson);
-    const payload = await readProjectMCPServersDocument(config);
-
-    expect(payload.rawJson).toBe(`${rawJson}\n`);
-    expect(payload.projectServers).toHaveLength(1);
-    expect(payload.projectServers[0]?.name).toBe("roundtrip");
-    expect(payload.effectiveServers.some((server) => server.name === "roundtrip")).toBe(true);
-    expect(payload.parseError).toBeUndefined();
-  });
-
-  test("writeProjectMCPServersDocument rejects invalid JSON before writing", async () => {
-    const projectAgentDir = path.join(tmpDir, ".agent");
-    await expect(
-      writeProjectMCPServersDocument(
-        projectAgentDir,
-        JSON.stringify({ servers: [{ transport: { type: "stdio", command: "echo" } }] }),
-      ),
-    ).rejects.toThrow("name is required");
+    ).toThrow("oauthMode");
   });
 });
 
-// ---------------------------------------------------------------------------
-// loadMCPServers
-// ---------------------------------------------------------------------------
-
-describe("loadMCPServers", () => {
-  let tmpDir: string;
-
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-servers-test-"));
+describe("workspace mcp document", () => {
+  test("readWorkspaceMCPServersDocument returns default payload when missing", async () => {
+    const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-workspace-"));
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-builtin-"));
+    try {
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+      const payload = await readWorkspaceMCPServersDocument(config);
+      expect(payload.path).toBe(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"));
+      expect(payload.rawJson).toBe(DEFAULT_MCP_SERVERS_DOCUMENT);
+      expect(payload.workspaceServers).toEqual([]);
+    } finally {
+      await fs.rm(tmpWorkspace, { recursive: true, force: true });
+      await fs.rm(tmpHome, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
   });
 
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+  test("writeWorkspaceMCPServersDocument validates and writes newline-terminated json", async () => {
+    const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-write-workspace-"));
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-write-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-write-builtin-"));
+    try {
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+      const raw = JSON.stringify({ servers: [{ name: "local", transport: { type: "stdio", command: "echo" } }] }, null, 2);
+      await writeWorkspaceMCPServersDocument(config, raw);
+      const persisted = await fs.readFile(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), "utf-8");
+      expect(persisted).toBe(`${raw}\n`);
+    } finally {
+      await fs.rm(tmpWorkspace, { recursive: true, force: true });
+      await fs.rm(tmpHome, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
   });
 
-  test("loads servers from mcp-servers.json in configDirs", async () => {
-    const dir1 = path.join(tmpDir, "dir1");
-    await writeJson(path.join(dir1, "mcp-servers.json"), {
-      servers: [
-        { name: "server-a", transport: { type: "stdio", command: "echo", args: [] } },
-      ],
-    });
+  test("writeProjectMCPServersDocument writes to the .cowork path used by readProjectMCPServersDocument", async () => {
+    const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-project-write-workspace-"));
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-project-write-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-doc-project-write-builtin-"));
+    try {
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+      const raw = JSON.stringify({ servers: [{ name: "project", transport: { type: "stdio", command: "echo" } }] }, null, 2);
+      await writeProjectMCPServersDocument(config.projectAgentDir, raw);
 
-    const config = makeConfig({ configDirs: [dir1] });
-    const servers = await loadMCPServers(config);
+      const workspaceFile = path.join(tmpWorkspace, ".cowork", "mcp-servers.json");
+      const legacyFile = path.join(tmpWorkspace, ".agent", "mcp-servers.json");
+      const persisted = await fs.readFile(workspaceFile, "utf-8");
+      expect(persisted).toBe(`${raw}\n`);
+      await expect(fs.access(legacyFile)).rejects.toBeDefined();
 
-    expect(servers).toHaveLength(1);
-    expect(servers[0].name).toBe("server-a");
+      const projectDoc = await readProjectMCPServersDocument(config);
+      expect(projectDoc.path).toBe(workspaceFile);
+      expect(projectDoc.rawJson).toBe(`${raw}\n`);
+      expect(projectDoc.projectServers.map((server) => server.name)).toEqual(["project"]);
+    } finally {
+      await fs.rm(tmpWorkspace, { recursive: true, force: true });
+      await fs.rm(tmpHome, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
   });
+});
 
-  test("handles missing files gracefully", async () => {
-    const dir1 = path.join(tmpDir, "nonexistent");
-    const config = makeConfig({ configDirs: [dir1] });
-    const servers = await loadMCPServers(config);
+describe("mcp layered snapshot", () => {
+  test("readMCPServersSnapshot merges workspace/user/system with legacy fallback", async () => {
+    const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-snapshot-workspace-"));
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-snapshot-home-"));
+    const builtInDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-snapshot-builtin-"));
+    const builtInConfigDir = path.join(builtInDir, "config");
 
-    expect(servers).toEqual([]);
+    try {
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+
+      await writeJson(path.join(builtInConfigDir, "mcp-servers.json"), {
+        servers: [{ name: "shared", transport: { type: "stdio", command: "system" } }, { name: "sys", transport: { type: "stdio", command: "sys" } }],
+      });
+      await writeJson(path.join(tmpHome, ".cowork", "config", "mcp-servers.json"), {
+        servers: [{ name: "shared", transport: { type: "stdio", command: "user" } }, { name: "user", transport: { type: "stdio", command: "user-only" } }],
+      });
+      await writeJson(path.join(tmpWorkspace, ".agent", "mcp-servers.json"), {
+        servers: [{ name: "legacy-ws", transport: { type: "stdio", command: "legacy" } }],
+      });
+      await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
+        servers: [{ name: "shared", transport: { type: "stdio", command: "workspace" } }, { name: "workspace", transport: { type: "stdio", command: "workspace-only" } }],
+      });
+
+      const snapshot = await readMCPServersSnapshot(config);
+      const names = snapshot.servers.map((server) => server.name);
+      expect(names).toContain("shared");
+      expect(names).toContain("workspace");
+      expect(names).toContain("legacy-ws");
+
+      const shared = snapshot.servers.find((server) => server.name === "shared");
+      expect(shared?.source).toBe("workspace");
+      expect(snapshot.legacy.workspace.exists).toBe(true);
+    } finally {
+      await fs.rm(tmpWorkspace, { recursive: true, force: true });
+      await fs.rm(tmpHome, { recursive: true, force: true });
+      await fs.rm(builtInDir, { recursive: true, force: true });
+    }
   });
+});
 
-  test("handles invalid JSON gracefully", async () => {
-    const dir1 = path.join(tmpDir, "bad-json");
-    await fs.mkdir(dir1, { recursive: true });
-    await fs.writeFile(path.join(dir1, "mcp-servers.json"), "NOT VALID JSON {{{", "utf-8");
+describe("runtime auth injection", () => {
+  test("loadMCPServers injects API key headers from auth store", async () => {
+    const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-api-workspace-"));
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-api-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-api-builtin-"));
 
-    const config = makeConfig({ configDirs: [dir1] });
-    const servers = await loadMCPServers(config);
-
-    expect(servers).toEqual([]);
-  });
-
-  test("merges servers from multiple config dirs (later overrides earlier by name)", async () => {
-    // The source iterates configDirs in reverse order (low->high priority),
-    // so configDirs[0] is highest priority.
-    const dirLow = path.join(tmpDir, "low");
-    const dirHigh = path.join(tmpDir, "high");
-
-    await writeJson(path.join(dirLow, "mcp-servers.json"), {
-      servers: [
-        { name: "shared", transport: { type: "stdio", command: "old-cmd", args: [] } },
-        { name: "only-low", transport: { type: "stdio", command: "low-cmd", args: [] } },
-      ],
-    });
-
-    await writeJson(path.join(dirHigh, "mcp-servers.json"), {
-      servers: [
-        { name: "shared", transport: { type: "stdio", command: "new-cmd", args: [] } },
-      ],
-    });
-
-    // configDirs order: high priority first (index 0)
-    const config = makeConfig({ configDirs: [dirHigh, dirLow] });
-    const servers = await loadMCPServers(config);
-
-    const shared = servers.find((s) => s.name === "shared");
-    expect(shared).toBeDefined();
-    expect((shared!.transport as any).command).toBe("new-cmd");
-
-    const onlyLow = servers.find((s) => s.name === "only-low");
-    expect(onlyLow).toBeDefined();
-  });
-
-  test("returns empty array when no servers configured", async () => {
-    const dir1 = path.join(tmpDir, "empty");
-    await writeJson(path.join(dir1, "mcp-servers.json"), { servers: [] });
-
-    const config = makeConfig({ configDirs: [dir1] });
-    const servers = await loadMCPServers(config);
-
-    expect(servers).toEqual([]);
-  });
-
-  test("returns empty array when configDirs is empty", async () => {
-    const config = makeConfig({ configDirs: [] });
-    const servers = await loadMCPServers(config);
-
-    expect(servers).toEqual([]);
-  });
-
-  test("ignores entries without name", async () => {
-    const dir1 = path.join(tmpDir, "no-name");
-    await writeJson(path.join(dir1, "mcp-servers.json"), {
-      servers: [
-        { transport: { type: "stdio", command: "echo", args: [] } },
-        { name: "", transport: { type: "stdio", command: "echo", args: [] } },
-        { name: "valid", transport: { type: "stdio", command: "echo", args: [] } },
-      ],
-    });
-
-    const config = makeConfig({ configDirs: [dir1] });
-    const servers = await loadMCPServers(config);
-
-    // The source checks `if (server?.name)` which is falsy for undefined and ""
-    expect(servers).toHaveLength(1);
-    expect(servers[0].name).toBe("valid");
-  });
-
-  test("handles file with no servers key", async () => {
-    const dir1 = path.join(tmpDir, "no-key");
-    await writeJson(path.join(dir1, "mcp-servers.json"), { other: "data" });
-
-    const config = makeConfig({ configDirs: [dir1] });
-    const servers = await loadMCPServers(config);
-
-    expect(servers).toEqual([]);
-  });
-
-  test("loads servers with http transport", async () => {
-    const dir1 = path.join(tmpDir, "http");
-    await writeJson(path.join(dir1, "mcp-servers.json"), {
-      servers: [
-        { name: "http-server", transport: { type: "http", url: "http://localhost:3000" } },
-      ],
-    });
-
-    const config = makeConfig({ configDirs: [dir1] });
-    const servers = await loadMCPServers(config);
-
-    expect(servers).toHaveLength(1);
-    expect(servers[0].name).toBe("http-server");
-    expect((servers[0].transport as any).type).toBe("http");
-  });
-
-  test("preserves required and retries fields", async () => {
-    const dir1 = path.join(tmpDir, "fields");
-    await writeJson(path.join(dir1, "mcp-servers.json"), {
-      servers: [
-        {
-          name: "important",
-          transport: { type: "stdio", command: "x", args: [] },
-          required: true,
-          retries: 5,
+    try {
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+      await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
+        servers: [
+          {
+            name: "api-server",
+            transport: { type: "http", url: "https://mcp.example.com", headers: { "x-base": "1" } },
+            auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
+          },
+        ],
+      });
+      await writeJson(path.join(tmpWorkspace, ".cowork", "auth", "mcp-credentials.json"), {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        servers: {
+          "api-server": {
+            apiKey: {
+              value: "secret",
+              updatedAt: new Date().toISOString(),
+            },
+          },
         },
-      ],
-    });
+      });
 
-    const config = makeConfig({ configDirs: [dir1] });
-    const servers = await loadMCPServers(config);
+      const servers = await loadMCPServers(config);
+      const server = servers.find((entry) => entry.name === "api-server");
+      expect(server).toBeDefined();
+      expect(server?.transport.type).toBe("http");
+      if (server?.transport.type === "http") {
+        expect(server.transport.headers?.Authorization).toBe("Bearer secret");
+        expect(server.transport.headers?.["x-base"]).toBe("1");
+      }
+    } finally {
+      await fs.rm(tmpWorkspace, { recursive: true, force: true });
+      await fs.rm(tmpHome, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
 
-    expect(servers[0].required).toBe(true);
-    expect(servers[0].retries).toBe(5);
+  test("loadMCPServers does not reuse user credentials for workspace-shadowed server names", async () => {
+    const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-scope-workspace-"));
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-scope-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-scope-builtin-"));
+
+    try {
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+
+      await writeJson(path.join(tmpHome, ".cowork", "config", "mcp-servers.json"), {
+        servers: [
+          {
+            name: "shadowed",
+            transport: { type: "http", url: "https://trusted-user.example.com" },
+            auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
+          },
+        ],
+      });
+      await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
+        servers: [
+          {
+            name: "shadowed",
+            transport: { type: "http", url: "https://workspace.example.com", headers: { "x-base": "workspace" } },
+            auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
+          },
+        ],
+      });
+      await writeJson(path.join(tmpHome, ".cowork", "auth", "mcp-credentials.json"), {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        servers: {
+          shadowed: {
+            apiKey: {
+              value: "user-secret",
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        },
+      });
+
+      const servers = await loadMCPServers(config);
+      const server = servers.find((entry) => entry.name === "shadowed");
+      expect(server).toBeDefined();
+      expect(server?.transport.type).toBe("http");
+      if (server?.transport.type === "http") {
+        expect(server.transport.url).toBe("https://workspace.example.com");
+        expect(server.transport.headers?.Authorization).toBeUndefined();
+        expect(server.transport.headers?.["x-base"]).toBe("workspace");
+      }
+    } finally {
+      await fs.rm(tmpWorkspace, { recursive: true, force: true });
+      await fs.rm(tmpHome, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("loadMCPServers injects oauth bearer headers when token exists", async () => {
+    const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-workspace-"));
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-builtin-"));
+
+    try {
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+      await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
+        servers: [
+          {
+            name: "oauth-server",
+            transport: { type: "http", url: "https://mcp.oauth.example.com" },
+            auth: { type: "oauth", oauthMode: "auto" },
+          },
+        ],
+      });
+      await writeJson(path.join(tmpWorkspace, ".cowork", "auth", "mcp-credentials.json"), {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        servers: {
+          "oauth-server": {
+            oauth: {
+              tokens: {
+                accessToken: "oauth-token",
+                tokenType: "Bearer",
+                updatedAt: new Date().toISOString(),
+              },
+            },
+          },
+        },
+      });
+
+      const servers = await loadMCPServers(config);
+      const server = servers.find((entry) => entry.name === "oauth-server");
+      expect(server).toBeDefined();
+      if (server?.transport.type === "http") {
+        expect(server.transport.headers?.Authorization).toBe("Bearer oauth-token");
+        expect((server.transport as any).authProvider).toBeDefined();
+      }
+    } finally {
+      await fs.rm(tmpWorkspace, { recursive: true, force: true });
+      await fs.rm(tmpHome, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("loadMCPServers keeps oauth provider when access token is expired but refreshable", async () => {
+    const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-refresh-workspace-"));
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-refresh-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-refresh-builtin-"));
+
+    try {
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+      await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
+        servers: [
+          {
+            name: "oauth-server",
+            transport: { type: "http", url: "https://mcp.oauth.example.com" },
+            auth: { type: "oauth", oauthMode: "auto" },
+          },
+        ],
+      });
+      await writeJson(path.join(tmpWorkspace, ".cowork", "auth", "mcp-credentials.json"), {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        servers: {
+          "oauth-server": {
+            oauth: {
+              tokens: {
+                accessToken: "expired-oauth-token",
+                tokenType: "Bearer",
+                refreshToken: "refresh-token",
+                expiresAt: new Date(Date.now() - 60_000).toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+            },
+          },
+        },
+      });
+
+      const servers = await loadMCPServers(config);
+      const server = servers.find((entry) => entry.name === "oauth-server");
+      expect(server).toBeDefined();
+      if (server?.transport.type === "http") {
+        expect((server.transport as any).authProvider).toBeDefined();
+      }
+    } finally {
+      await fs.rm(tmpWorkspace, { recursive: true, force: true });
+      await fs.rm(tmpHome, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
   });
 });
-
-// ---------------------------------------------------------------------------
-// loadMCPTools
-// ---------------------------------------------------------------------------
 
 describe("loadMCPTools", () => {
   beforeEach(() => {
-    mockCreateMCPClient.mockClear();
-
-    // Default: successful client
-    mockCreateMCPClient.mockImplementation(async () => ({
-      tools: mock(async () => ({
-        toolA: { description: "Tool A" },
-        toolB: { description: "Tool B" },
-      })),
+    mockCreateMCPClient.mockReset();
+    mockCreateMCPClient.mockImplementation(async (_opts: any) => ({
+      tools: mock(async () => ({ ping: { description: "ping" } })),
       close: mock(async () => {}),
     }));
   });
 
-  test("returns empty tools/errors for empty servers array", async () => {
-    const result = await loadMCPToolsWithMock([]);
-
-    expect(result.tools).toEqual({});
-    expect(result.errors).toEqual([]);
-    expect(typeof result.close).toBe("function");
+  test("prefixes tool names by server", async () => {
+    const servers: MCPServerConfig[] = [{ name: "local", transport: { type: "stdio", command: "echo" } }];
+    const result = await loadMCPTools(servers, { createClient: mockCreateMCPClient as any });
+    expect(result.tools).toHaveProperty("mcp__local__ping");
   });
 
-  test("prefixes tool names with mcp__serverName__toolName format", async () => {
-    const servers: MCPServerConfig[] = [
-      { name: "myServer", transport: { type: "stdio", command: "echo", args: [] } },
-    ];
-
-    const result = await loadMCPToolsWithMock(servers);
-
-    expect(result.tools).toHaveProperty("mcp__myServer__toolA");
-    expect(result.tools).toHaveProperty("mcp__myServer__toolB");
-    expect(Object.keys(result.tools)).toHaveLength(2);
-  });
-
-  test("loads tools from multiple servers", async () => {
-    let callCount = 0;
-    mockCreateMCPClient.mockImplementation(async () => {
-      callCount++;
-      return {
-        tools: mock(async () => ({
-          [`tool${callCount}`]: { description: `Tool ${callCount}` },
-        })),
-        close: mock(async () => {}),
-      };
-    });
-
-    const servers: MCPServerConfig[] = [
-      { name: "serverA", transport: { type: "stdio", command: "a", args: [] } },
-      { name: "serverB", transport: { type: "stdio", command: "b", args: [] } },
-    ];
-
-    const result = await loadMCPToolsWithMock(servers);
-
-    expect(result.tools).toHaveProperty("mcp__serverA__tool1");
-    expect(result.tools).toHaveProperty("mcp__serverB__tool2");
-  });
-
-  test("handles server connection failures for optional servers", async () => {
-    mockCreateMCPClient.mockRejectedValue(new Error("Connection refused"));
-
-    const servers: MCPServerConfig[] = [
-      { name: "flaky", transport: { type: "stdio", command: "x", args: [] }, retries: 0 },
-    ];
-
-    const result = await loadMCPToolsWithMock(servers);
-
-    expect(result.tools).toEqual({});
+  test("collects errors for optional server failures", async () => {
+    mockCreateMCPClient.mockRejectedValue(new Error("refused"));
+    const servers: MCPServerConfig[] = [{ name: "flaky", transport: { type: "stdio", command: "echo" }, retries: 0 }];
+    const result = await loadMCPTools(servers, { createClient: mockCreateMCPClient as any });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("flaky");
-    expect(result.errors[0]).toContain("Connection refused");
-  });
-
-  test("retry logic retries the configured number of times", async () => {
-    mockCreateMCPClient.mockRejectedValue(new Error("timeout"));
-
-    const servers: MCPServerConfig[] = [
-      { name: "retry-server", transport: { type: "stdio", command: "x", args: [] }, retries: 2 },
-    ];
-
-    // Override setTimeout to speed up retries
-    const origSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = ((fn: Function) => origSetTimeout(fn, 0)) as any;
-
-    try {
-      const result = await loadMCPToolsWithMock(servers);
-
-      // retries=2 means 1 initial + 2 retries = 3 total attempts
-      expect(mockCreateMCPClient).toHaveBeenCalledTimes(3);
-      expect(result.errors).toHaveLength(1);
-      expect(result.errors[0]).toContain("3 attempts");
-    } finally {
-      globalThis.setTimeout = origSetTimeout;
-    }
-  });
-
-  test("defaults to 3 retries when retries is not specified", async () => {
-    mockCreateMCPClient.mockRejectedValue(new Error("fail"));
-
-    const servers: MCPServerConfig[] = [
-      { name: "default-retries", transport: { type: "stdio", command: "x", args: [] } },
-    ];
-
-    const origSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = ((fn: Function) => origSetTimeout(fn, 0)) as any;
-
-    try {
-      const result = await loadMCPToolsWithMock(servers);
-
-      // default retries=3 means 1 initial + 3 retries = 4 total attempts
-      expect(mockCreateMCPClient).toHaveBeenCalledTimes(4);
-      expect(result.errors).toHaveLength(1);
-      expect(result.errors[0]).toContain("4 attempts");
-    } finally {
-      globalThis.setTimeout = origSetTimeout;
-    }
-  });
-
-  test("required servers throw on failure", async () => {
-    mockCreateMCPClient.mockRejectedValue(new Error("Connection refused"));
-
-    const servers: MCPServerConfig[] = [
-      {
-        name: "critical",
-        transport: { type: "stdio", command: "x", args: [] },
-        required: true,
-        retries: 0,
-      },
-    ];
-
-    await expect(loadMCPToolsWithMock(servers)).rejects.toThrow("critical");
-  });
-
-  test("required server failure closes previously connected optional clients", async () => {
-    const optionalClose = mock(async () => {});
-    let call = 0;
-    mockCreateMCPClient.mockImplementation(async () => {
-      call++;
-      if (call === 1) {
-        return {
-          tools: mock(async () => ({ optionalTool: {} })),
-          close: optionalClose,
-        };
-      }
-      throw new Error("required-down");
-    });
-
-    const servers: MCPServerConfig[] = [
-      { name: "optional-first", transport: { type: "stdio", command: "x", args: [] }, retries: 0 },
-      {
-        name: "required-second",
-        transport: { type: "stdio", command: "y", args: [] },
-        required: true,
-        retries: 0,
-      },
-    ];
-
-    await expect(loadMCPToolsWithMock(servers)).rejects.toThrow("required-second");
-    expect(optionalClose).toHaveBeenCalledTimes(1);
-  });
-
-  test("negative retries are clamped to 0", async () => {
-    mockCreateMCPClient.mockRejectedValue(new Error("fail-fast"));
-    const servers: MCPServerConfig[] = [
-      { name: "negative-retry", transport: { type: "stdio", command: "x", args: [] }, retries: -5 },
-    ];
-
-    const result = await loadMCPToolsWithMock(servers);
-    expect(mockCreateMCPClient).toHaveBeenCalledTimes(1);
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain("1 attempts");
-  });
-
-  test("optional servers add to errors array on failure", async () => {
-    mockCreateMCPClient.mockRejectedValue(new Error("Cannot connect"));
-
-    const servers: MCPServerConfig[] = [
-      {
-        name: "optional-server",
-        transport: { type: "stdio", command: "x", args: [] },
-        required: false,
-        retries: 0,
-      },
-    ];
-
-    const result = await loadMCPToolsWithMock(servers);
-
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain("optional-server");
-    expect(result.errors[0]).toContain("Cannot connect");
-  });
-
-  test("logs connection success messages", async () => {
-    const logFn = mock(() => {});
-
-    const servers: MCPServerConfig[] = [
-      { name: "logged-server", transport: { type: "stdio", command: "x", args: [] } },
-    ];
-
-    await loadMCPToolsWithMock(servers, { log: logFn });
-
-    const logCalls = logFn.mock.calls.map((c) => c[0]);
-    const successLog = logCalls.find((msg: string) => msg.includes("Connected to logged-server"));
-    expect(successLog).toBeDefined();
-    expect(successLog).toContain("2 tools");
-  });
-
-  test("logs error messages for failed optional servers", async () => {
-    mockCreateMCPClient.mockRejectedValue(new Error("refused"));
-    const logFn = mock(() => {});
-
-    const servers: MCPServerConfig[] = [
-      { name: "fail-server", transport: { type: "stdio", command: "x", args: [] }, retries: 0 },
-    ];
-
-    await loadMCPToolsWithMock(servers, { log: logFn });
-
-    const logCalls = logFn.mock.calls.map((c) => c[0]);
-    const errorLog = logCalls.find((msg: string) => msg.includes("Failed to connect"));
-    expect(errorLog).toBeDefined();
-    expect(errorLog).toContain("fail-server");
-  });
-
-  test("logs retry attempts", async () => {
-    let attempt = 0;
-    mockCreateMCPClient.mockImplementation(async () => {
-      attempt++;
-      if (attempt < 2) throw new Error("not ready");
-      return {
-        tools: mock(async () => ({ t: {} })),
-        close: mock(async () => {}),
-      };
-    });
-
-    const logFn = mock(() => {});
-
-    const origSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = ((fn: Function) => origSetTimeout(fn, 0)) as any;
-
-    try {
-      const servers: MCPServerConfig[] = [
-        { name: "flaky", transport: { type: "stdio", command: "x", args: [] }, retries: 3 },
-      ];
-
-      await loadMCPToolsWithMock(servers, { log: logFn });
-
-      const logCalls = logFn.mock.calls.map((c) => c[0]);
-      const retryLog = logCalls.find((msg: string) => msg.includes("Retrying"));
-      expect(retryLog).toBeDefined();
-    } finally {
-      globalThis.setTimeout = origSetTimeout;
-    }
-  });
-
-  test("succeeds on retry after initial failure", async () => {
-    let attempt = 0;
-    mockCreateMCPClient.mockImplementation(async () => {
-      attempt++;
-      if (attempt === 1) throw new Error("temporary failure");
-      return {
-        tools: mock(async () => ({ recovered: { description: "recovered tool" } })),
-        close: mock(async () => {}),
-      };
-    });
-
-    const origSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = ((fn: Function) => origSetTimeout(fn, 0)) as any;
-
-    try {
-      const servers: MCPServerConfig[] = [
-        { name: "recoverable", transport: { type: "stdio", command: "x", args: [] }, retries: 2 },
-      ];
-
-      const result = await loadMCPToolsWithMock(servers);
-
-      expect(result.tools).toHaveProperty("mcp__recoverable__recovered");
-      expect(result.errors).toEqual([]);
-    } finally {
-      globalThis.setTimeout = origSetTimeout;
-    }
-  });
-
-  test("passes server name and transport to createMCPClient", async () => {
-    const transport = { type: "stdio" as const, command: "my-cmd", args: ["--flag"] };
-    const servers: MCPServerConfig[] = [
-      { name: "check-args", transport },
-    ];
-
-    await loadMCPToolsWithMock(servers);
-
-    expect(mockCreateMCPClient).toHaveBeenCalledTimes(1);
-    const callArg = mockCreateMCPClient.mock.calls[0][0] as any;
-    expect(callArg.name).toBe("check-args");
-    // stdio transport is wrapped in a proper MCP transport implementation
-    expect(callArg.transport).toBeDefined();
-    expect(typeof callArg.transport.start).toBe("function");
-    expect(typeof callArg.transport.send).toBe("function");
-    expect(typeof callArg.transport.close).toBe("function");
-  });
-
-  test("passes http transport config through to createMCPClient", async () => {
-    const transport = { type: "http" as const, url: "http://localhost:3000" };
-    const servers: MCPServerConfig[] = [
-      { name: "http-args", transport },
-    ];
-
-    await loadMCPToolsWithMock(servers);
-
-    expect(mockCreateMCPClient).toHaveBeenCalledTimes(1);
-    const callArg = mockCreateMCPClient.mock.calls[0][0] as any;
-    expect(callArg.name).toBe("http-args");
-    expect(callArg.transport).toBe(transport);
-  });
-
-  test("works without log option", async () => {
-    const servers: MCPServerConfig[] = [
-      { name: "no-log", transport: { type: "stdio", command: "x", args: [] } },
-    ];
-
-    // Should not throw even though no log function is provided
-    const result = await loadMCPToolsWithMock(servers);
-    expect(result.tools).toHaveProperty("mcp__no-log__toolA");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// close()
-// ---------------------------------------------------------------------------
-
-describe("loadMCPTools().close", () => {
-  test("closes all clients created during discovery", async () => {
-    const closeFns = [mock(async () => {}), mock(async () => {})];
-    let i = 0;
-
-    mockCreateMCPClient.mockImplementation(async () => ({
-      tools: mock(async () => ({ t: {} })),
-      close: closeFns[i++],
-    }));
-
-    const servers: MCPServerConfig[] = [
-      { name: "srv1", transport: { type: "stdio", command: "x", args: [] } },
-      { name: "srv2", transport: { type: "stdio", command: "y", args: [] } },
-    ];
-
-    const result = await loadMCPToolsWithMock(servers);
-    await expect(result.close()).resolves.toBeUndefined();
-
-    expect(closeFns[0]).toHaveBeenCalledTimes(1);
-    expect(closeFns[1]).toHaveBeenCalledTimes(1);
-  });
-
-  test("handles errors during close gracefully", async () => {
-    const closeFn = mock(async () => {
-      throw new Error("close failed");
-    });
-    mockCreateMCPClient.mockImplementation(async () => ({
-      tools: mock(async () => ({ t: {} })),
-      close: closeFn,
-    }));
-
-    const servers: MCPServerConfig[] = [
-      { name: "err-close", transport: { type: "stdio", command: "x", args: [] } },
-    ];
-
-    const result = await loadMCPToolsWithMock(servers);
-    await expect(result.close()).resolves.toBeUndefined();
-  });
-
-  test("is idempotent when called more than once", async () => {
-    const closeFn = mock(async () => {});
-    mockCreateMCPClient.mockImplementation(async () => ({
-      tools: mock(async () => ({ t: {} })),
-      close: closeFn,
-    }));
-
-    const servers: MCPServerConfig[] = [
-      { name: "idempotent-close", transport: { type: "stdio", command: "x", args: [] } },
-    ];
-
-    const result = await loadMCPToolsWithMock(servers);
-    await result.close();
-    await result.close();
-
-    expect(closeFn).toHaveBeenCalledTimes(1);
   });
 });

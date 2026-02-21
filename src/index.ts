@@ -84,11 +84,23 @@ async function main() {
     }
   };
 
+  // Last-resort cleanup: if the process exits without the TUI cleaning up,
+  // ensure the server (and its child processes) are torn down.
+  process.on("exit", stop);
+  // Handle terminal close (e.g. closing the terminal window).
+  const onHup = () => {
+    stop();
+    process.exit(0);
+  };
+  process.on("SIGHUP", onHup);
+
   const tuiRunner = await loadModernRunTui();
   try {
     await tuiRunner(url, { onDestroy: stop, useMouse: args.mouse });
   } finally {
     stop();
+    process.off("exit", stop);
+    process.off("SIGHUP", onHup);
   }
 }
 

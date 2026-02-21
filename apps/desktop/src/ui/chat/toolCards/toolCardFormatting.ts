@@ -1,3 +1,5 @@
+import { ASK_SKIP_TOKEN } from "../../../lib/wsProtocol";
+
 type ToolCardDetailsRow = {
   label: string;
   value: string;
@@ -81,7 +83,39 @@ function summarizeArgs(name: string, args: unknown): string {
   return common ? truncate(toText(common), 90) : "";
 }
 
-function summarizeResult(status: "running" | "done" | "error", result: unknown): string {
+function summarizeAskResult(result: unknown): string | null {
+  if (!isRecord(result)) return null;
+
+  const directAnswer = getRecordValue(result, ["answer"]);
+  if (typeof directAnswer === "string") {
+    const trimmed = directAnswer.trim();
+    if (!trimmed) return "No answer (rejected)";
+    if (trimmed === ASK_SKIP_TOKEN) return "Skipped";
+    return `Answer: ${truncate(trimmed, 90)}`;
+  }
+
+  const answers = getRecordValue(result, ["answers"]);
+  if (!isRecord(answers)) return null;
+  const normalizedAnswers = Object.values(answers)
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim());
+
+  if (normalizedAnswers.length === 0) return null;
+  const nonEmpty = normalizedAnswers.filter((value) => value.length > 0);
+  if (nonEmpty.length === 0) return "No answer (rejected)";
+
+  if (nonEmpty.length === 1) {
+    if (nonEmpty[0] === ASK_SKIP_TOKEN) return "Skipped";
+    return `Answer: ${truncate(nonEmpty[0], 90)}`;
+  }
+
+  const skippedCount = nonEmpty.filter((value) => value === ASK_SKIP_TOKEN).length;
+  if (skippedCount === nonEmpty.length) return `Skipped ${nonEmpty.length} questions`;
+  if (skippedCount > 0) return `Answered ${nonEmpty.length} questions (${skippedCount} skipped)`;
+  return `Answered ${nonEmpty.length} questions`;
+}
+
+function summarizeResult(name: string, status: "running" | "done" | "error", result: unknown): string {
   if (status === "running") return "Working…";
   if (status === "error") {
     if (isRecord(result)) {
@@ -92,6 +126,11 @@ function summarizeResult(status: "running" | "done" | "error", result: unknown):
   }
 
   if (!isRecord(result)) return "Completed";
+
+  if (name.toLowerCase() === "ask") {
+    const askSummary = summarizeAskResult(result);
+    if (askSummary) return askSummary;
+  }
 
   const exitCode = getRecordValue(result, ["exitCode"]);
   if (exitCode !== undefined) return `Exit code: ${toText(exitCode)}`;
@@ -153,7 +192,7 @@ export function formatToolCard(
 ): ToolCardFormatting {
   const title = humanizeToolName(name);
   const argsSummary = summarizeArgs(name, args);
-  const resultSummary = summarizeResult(status, result);
+  const resultSummary = summarizeResult(name, status, result);
   const subtitle = argsSummary ? `${argsSummary} • ${resultSummary}` : resultSummary;
 
   return {

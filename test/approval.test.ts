@@ -406,6 +406,37 @@ describe("classifyCommandDetailed", () => {
     });
   });
 
+  test("returns outside_allowed_scope for relative parent traversal when workingDirectory is provided", () => {
+    const cwd = "/home/user/project";
+    expect(
+      classifyCommandDetailed("cat ../secrets.txt", {
+        allowedRoots: [cwd],
+        workingDirectory: cwd,
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "outside_allowed_scope",
+    });
+  });
+
+  test("keeps in-scope relative file reads as file_read_command_requires_review", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-approval-relative-"));
+    const filePath = path.join(rootDir, "allowed.txt");
+    await fs.writeFile(filePath, "ok");
+
+    expect(
+      classifyCommandDetailed("cat ./allowed.txt", {
+        allowedRoots: [rootDir],
+        workingDirectory: rootDir,
+      })
+    ).toEqual({
+      kind: "prompt",
+      dangerous: false,
+      riskCode: "file_read_command_requires_review",
+    });
+  });
+
   test("returns file_read_command_requires_review for in-scope file-read commands", async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-approval-in-scope-"));
     const filePath = path.join(rootDir, "allowed.txt");

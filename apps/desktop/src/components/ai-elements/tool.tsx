@@ -93,7 +93,7 @@ export function ToolHeader({ className, title, subtitle, status, ...props }: Too
 export type ToolContentProps = ComponentProps<typeof CollapsibleContent>;
 
 export function ToolContent({ className, ...props }: ToolContentProps) {
-  return <CollapsibleContent className={cn("space-y-4 px-3 pb-3 pt-1", className)} {...props} />;
+  return <CollapsibleContent className={cn("select-text space-y-4 px-3 pb-3 pt-1", className)} {...props} />;
 }
 
 export type ToolCodeBlockProps = {

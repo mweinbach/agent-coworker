@@ -1,5 +1,7 @@
 import { createContext, useContext, createSignal, type JSX, type Accessor } from "solid-js";
 
+import { promptStash } from "./prompt-stash";
+
 type PromptContextValue = {
   input: Accessor<string>;
   setInput: (v: string) => void;
@@ -25,7 +27,6 @@ export function PromptProvider(props: { children: JSX.Element }) {
   const [shellMode, setShellModeSignal] = createSignal(false);
   const [history, setHistory] = createSignal<string[]>([]);
   const [historyIndex, setHistoryIndex] = createSignal(-1);
-  const [stash, setStash] = createSignal<string | null>(null);
 
   const value: PromptContextValue = {
     input,
@@ -75,21 +76,21 @@ export function PromptProvider(props: { children: JSX.Element }) {
       setHistoryIndex(-1);
     },
 
-    stash,
+    stash() {
+      const entries = promptStash.list();
+      const latest = entries[entries.length - 1];
+      return latest ? latest.input : null;
+    },
     doStash() {
       const current = input();
       if (current.trim()) {
-        setStash(current);
+        promptStash.push(current);
         setInput("");
       }
     },
     doUnstash(): string | null {
-      const saved = stash();
-      if (saved !== null) {
-        setStash(null);
-        return saved;
-      }
-      return null;
+      const entry = promptStash.pop();
+      return entry ? entry.input : null;
     },
   };
 

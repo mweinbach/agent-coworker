@@ -217,6 +217,23 @@ function buildSpawnArgs(workspacePath: string, yolo: boolean): string[] {
   return args;
 }
 
+function resolveSourceStartup(
+  useSource: boolean,
+  resolveRepoRootImpl: () => string = resolveRepoRoot
+): { repoRoot: string | null; sourceEntry: string | null } {
+  if (!useSource) {
+    return { repoRoot: null, sourceEntry: null };
+  }
+
+  const repoRoot = resolveRepoRootImpl();
+  const sourceEntry = path.join(repoRoot, "src", "server", "index.ts");
+  if (!fs.existsSync(sourceEntry)) {
+    throw new Error(`Server entrypoint not found: ${sourceEntry}`);
+  }
+
+  return { repoRoot, sourceEntry };
+}
+
 function buildServerEnv(): NodeJS.ProcessEnv {
   return { ...process.env };
 }
@@ -288,11 +305,7 @@ export class ServerManager {
 
     const useSource = !app.isPackaged || process.env.COWORK_DESKTOP_USE_SOURCE === "1";
     const spawnArgs = buildSpawnArgs(workspacePath, yolo);
-    const repoRoot = resolveRepoRoot();
-    const sourceEntry = path.join(repoRoot, "src", "server", "index.ts");
-    if (useSource && !fs.existsSync(sourceEntry)) {
-      throw new Error(`Server entrypoint not found: ${sourceEntry}`);
-    }
+    const { repoRoot, sourceEntry } = resolveSourceStartup(useSource);
 
     const sidecar = !useSource ? findSidecarBinary() : null;
     const builtInDir = !useSource ? path.join(process.resourcesPath, "dist") : null;
@@ -309,8 +322,8 @@ export class ServerManager {
       const cleanup = sourceEnvForAttempt?.cleanup ?? (() => {});
 
       const child = useSource
-        ? spawn("bun", [sourceEntry, ...spawnArgs], {
-            cwd: repoRoot,
+        ? spawn("bun", [sourceEntry!, ...spawnArgs], {
+            cwd: repoRoot!,
             stdio: ["ignore", "pipe", "pipe"],
             env: sourceEnvForAttempt!.env,
           })
@@ -417,5 +430,6 @@ export class ServerManager {
 export const __internal = {
   buildSourceEnvForAttempt,
   isLikelyBunSegfault,
+  resolveSourceStartup,
   waitForServerListening,
 };

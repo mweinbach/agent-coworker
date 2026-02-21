@@ -3,6 +3,7 @@ import { useTheme } from "../../context/theme";
 import { useSyncActions } from "../../context/sync";
 import type { AskRequest } from "../../context/sync";
 import { keyNameFromEvent } from "../../util/keyboard";
+import { ASK_SKIP_TOKEN } from "../../../../src/shared/ask";
 
 function decodeJsonStringLiteral(value: string): string | null {
   try {
@@ -86,6 +87,10 @@ export function shouldRenderAskOptions(options: string[]): boolean {
   return options.length >= 2;
 }
 
+export function resolveAskEscapeAnswer(): string {
+  return ASK_SKIP_TOKEN;
+}
+
 export function QuestionPrompt(props: { ask: AskRequest }) {
   const theme = useTheme();
   const actions = useSyncActions();
@@ -122,7 +127,7 @@ export function QuestionPrompt(props: { ask: AskRequest }) {
         handleSubmit();
         e.preventDefault?.();
       } else if (key === "escape") {
-        actions.answerAsk(props.ask.requestId, "");
+        actions.answerAsk(props.ask.requestId, resolveAskEscapeAnswer());
         e.preventDefault?.();
       }
     } else {
@@ -131,7 +136,7 @@ export function QuestionPrompt(props: { ask: AskRequest }) {
         handleSubmit();
         e.preventDefault?.();
       } else if (key === "escape") {
-        actions.answerAsk(props.ask.requestId, "");
+        actions.answerAsk(props.ask.requestId, resolveAskEscapeAnswer());
         e.preventDefault?.();
       }
     }

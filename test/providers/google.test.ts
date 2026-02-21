@@ -7,11 +7,11 @@ import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot } from "./helpers";
 
 // ---------------------------------------------------------------------------
-// Google provider - gemini-3-flash-preview
+// Google provider - gemini-3.1-pro-preview-customtools
 // ---------------------------------------------------------------------------
-describe("Google provider (gemini-3-flash-preview)", () => {
-  test("defaultModelForProvider returns gemini-3-flash-preview", () => {
-    expect(defaultModelForProvider("google")).toBe("gemini-3-flash-preview");
+describe("Google provider (gemini-3.1-pro-preview-customtools)", () => {
+  test("defaultModelForProvider returns gemini-3.1-pro-preview-customtools", () => {
+    expect(defaultModelForProvider("google")).toBe("gemini-3.1-pro-preview-customtools");
   });
 
   test("catalog includes gemini-3.1-pro-preview", () => {
@@ -83,6 +83,6 @@ describe("Google provider (gemini-3-flash-preview)", () => {
     });
 
     expect(cfg.provider).toBe("google");
-    expect(cfg.model).toBe("gemini-3-flash-preview");
+    expect(cfg.model).toBe("gemini-3.1-pro-preview-customtools");
   });
 });

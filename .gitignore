@@ -17,6 +17,7 @@ coverage/
 output/
 uploads/
 .agent/
+.cowork/
 
 # Env / misc
 .env

@@ -1,7 +1,6 @@
 import type {
   ApprovalRiskCode,
   ConfigSubset,
-  MCPServerConfig,
   ProviderName,
   ServerErrorCode,
   ServerErrorSource,
@@ -86,9 +85,13 @@ export type FeedItem =
 
 export type ViewId = "chat" | "skills" | "settings";
 
-export type SettingsPageId = "providers" | "workspaces" | "developer";
+export type SettingsPageId = "providers" | "workspaces" | "mcp" | "developer";
 
 export type SessionConfigSubset = Extract<ServerEvent, { type: "session_config" }>["config"];
+export type MCPServersEvent = Extract<ServerEvent, { type: "mcp_servers" }>;
+export type MCPServerValidationEvent = Extract<ServerEvent, { type: "mcp_server_validation" }>;
+export type MCPServerAuthChallengeEvent = Extract<ServerEvent, { type: "mcp_server_auth_challenge" }>;
+export type MCPServerAuthResultEvent = Extract<ServerEvent, { type: "mcp_server_auth_result" }>;
 
 export type WorkspaceRuntime = {
   serverUrl: string | null;
@@ -98,12 +101,13 @@ export type WorkspaceRuntime = {
   controlConfig: ConfigSubset | null;
   controlSessionConfig: SessionConfigSubset | null;
   controlEnableMcp: boolean | null;
-  mcpConfigPath: string | null;
-  mcpRawJson: string;
-  mcpProjectServers: MCPServerConfig[];
-  mcpEffectiveServers: MCPServerConfig[];
-  mcpParseError: string | null;
-  mcpSaving: boolean;
+  mcpServers: MCPServersEvent["servers"];
+  mcpLegacy: MCPServersEvent["legacy"] | null;
+  mcpFiles: MCPServersEvent["files"];
+  mcpWarnings: string[];
+  mcpValidationByName: Record<string, MCPServerValidationEvent>;
+  mcpLastAuthChallenge: MCPServerAuthChallengeEvent | null;
+  mcpLastAuthResult: MCPServerAuthResultEvent | null;
   skills: SkillEntry[];
   selectedSkillName: string | null;
   selectedSkillContent: string | null;

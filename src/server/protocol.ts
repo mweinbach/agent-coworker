@@ -14,9 +14,14 @@ import type {
 import type { ProviderStatus } from "../providerStatus";
 import { resolveProviderAuthMethod, type ProviderAuthMethod, type ProviderAuthChallenge } from "../providers/authRegistry";
 import type { ProviderCatalogEntry } from "../providers/connectionCatalog";
+import { parseMCPServersDocument } from "../mcp/configRegistry";
 import type { ModelStreamPartType } from "./modelStream";
 import type { SessionBackupPublicState } from "./sessionBackup";
 import type { PersistedSessionSummary } from "./sessionDb";
+export { ASK_SKIP_TOKEN } from "../shared/ask";
+
+export type MCPServerEventSource = "workspace" | "user" | "system" | "workspace_legacy" | "user_legacy";
+export type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pending" | "error";
 
 export type ClientMessage =
   | { type: "client_hello"; client: "tui" | "cli" | string; version?: string }
@@ -58,7 +63,13 @@ export type ClientMessage =
   | { type: "delete_skill"; sessionId: string; skillName: string }
   | { type: "set_enable_mcp"; sessionId: string; enableMcp: boolean }
   | { type: "mcp_servers_get"; sessionId: string }
-  | { type: "mcp_servers_set"; sessionId: string; rawJson: string }
+  | { type: "mcp_server_upsert"; sessionId: string; server: MCPServerConfig; previousName?: string }
+  | { type: "mcp_server_delete"; sessionId: string; name: string }
+  | { type: "mcp_server_validate"; sessionId: string; name: string }
+  | { type: "mcp_server_auth_authorize"; sessionId: string; name: string }
+  | { type: "mcp_server_auth_callback"; sessionId: string; name: string; code?: string }
+  | { type: "mcp_server_auth_set_api_key"; sessionId: string; name: string; apiKey: string }
+  | { type: "mcp_servers_migrate_legacy"; sessionId: string; scope: "workspace" | "user" }
   | { type: "cancel"; sessionId: string }
   | { type: "session_close"; sessionId: string }
   | { type: "ping"; sessionId: string }
@@ -116,12 +127,58 @@ export type ServerEvent =
   | {
       type: "mcp_servers";
       sessionId: string;
-      scope: "project";
-      path: string;
-      rawJson: string;
-      projectServers: MCPServerConfig[];
-      effectiveServers: MCPServerConfig[];
-      parseError?: string;
+      servers: Array<
+        MCPServerConfig & {
+          source: MCPServerEventSource;
+          inherited: boolean;
+          authMode: MCPServerAuthMode;
+          authScope: "workspace" | "user";
+          authMessage: string;
+        }
+      >;
+      legacy: {
+        workspace: { path: string; exists: boolean };
+        user: { path: string; exists: boolean };
+      };
+      files: Array<{
+        source: MCPServerEventSource;
+        path: string;
+        exists: boolean;
+        editable: boolean;
+        legacy: boolean;
+        parseError?: string;
+        serverCount: number;
+      }>;
+      warnings?: string[];
+    }
+  | {
+      type: "mcp_server_validation";
+      sessionId: string;
+      name: string;
+      ok: boolean;
+      mode: MCPServerAuthMode;
+      message: string;
+      toolCount?: number;
+      latencyMs?: number;
+    }
+  | {
+      type: "mcp_server_auth_challenge";
+      sessionId: string;
+      name: string;
+      challenge: {
+        method: "auto" | "code";
+        instructions: string;
+        url?: string;
+        expiresAt?: string;
+      };
+    }
+  | {
+      type: "mcp_server_auth_result";
+      sessionId: string;
+      name: string;
+      ok: boolean;
+      mode?: MCPServerAuthMode;
+      message: string;
     }
   | { type: "provider_catalog"; sessionId: string; all: ProviderCatalogEntry[]; default: Record<string, string>; connected: string[] }
   | { type: "provider_auth_methods"; sessionId: string; methods: Record<string, ProviderAuthMethod[]> }
@@ -240,7 +297,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "6.0";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.0";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -264,7 +321,13 @@ export const CLIENT_MESSAGE_TYPES = [
   "delete_skill",
   "set_enable_mcp",
   "mcp_servers_get",
-  "mcp_servers_set",
+  "mcp_server_upsert",
+  "mcp_server_delete",
+  "mcp_server_validate",
+  "mcp_server_auth_authorize",
+  "mcp_server_auth_callback",
+  "mcp_server_auth_set_api_key",
+  "mcp_servers_migrate_legacy",
   "cancel",
   "session_close",
   "ping",
@@ -288,6 +351,9 @@ export const SERVER_EVENT_TYPES = [
   "session_settings",
   "session_info",
   "mcp_servers",
+  "mcp_server_validation",
+  "mcp_server_auth_challenge",
+  "mcp_server_auth_result",
   "provider_catalog",
   "provider_auth_methods",
   "provider_auth_challenge",
@@ -329,7 +395,17 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.trim().length > 0;
 }
 
-const MAX_MCP_SERVERS_JSON_SIZE = 1_000_000;
+const MAX_MCP_API_KEY_SIZE = 100_000;
+
+function validateMcpServerPayload(value: unknown): string | null {
+  if (!isPlainObject(value)) return "mcp_server_upsert missing/invalid server";
+  try {
+    parseMCPServersDocument(JSON.stringify({ servers: [value] }));
+    return null;
+  } catch (error) {
+    return `mcp_server_upsert invalid server: ${String(error)}`;
+  }
+}
 
 export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMessage } | { ok: false; error: string } {
   let parsed: unknown;
@@ -500,13 +576,67 @@ export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMess
       if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "mcp_servers_get missing sessionId" };
       return { ok: true, msg: obj as ClientMessage };
     }
-    case "mcp_servers_set": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "mcp_servers_set missing sessionId" };
-      if (typeof obj.rawJson !== "string") {
-        return { ok: false, error: "mcp_servers_set missing/invalid rawJson" };
+    case "mcp_server_upsert": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "mcp_server_upsert missing sessionId" };
+      const validationError = validateMcpServerPayload(obj.server);
+      if (validationError) return { ok: false, error: validationError };
+      if (obj.previousName !== undefined && !isNonEmptyString(obj.previousName)) {
+        return { ok: false, error: "mcp_server_upsert invalid previousName" };
       }
-      if (obj.rawJson.length > MAX_MCP_SERVERS_JSON_SIZE) {
-        return { ok: false, error: "mcp_servers_set rawJson exceeds max size 1000000" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "mcp_server_delete": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "mcp_server_delete missing sessionId" };
+      if (!isNonEmptyString(obj.name)) return { ok: false, error: "mcp_server_delete missing/invalid name" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "mcp_server_validate": {
+      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "mcp_server_validate missing sessionId" };
+      if (!isNonEmptyString(obj.name)) return { ok: false, error: "mcp_server_validate missing/invalid name" };
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "mcp_server_auth_authorize": {
+      if (!isNonEmptyString(obj.sessionId)) {
+        return { ok: false, error: "mcp_server_auth_authorize missing sessionId" };
+      }
+      if (!isNonEmptyString(obj.name)) {
+        return { ok: false, error: "mcp_server_auth_authorize missing/invalid name" };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "mcp_server_auth_callback": {
+      if (!isNonEmptyString(obj.sessionId)) {
+        return { ok: false, error: "mcp_server_auth_callback missing sessionId" };
+      }
+      if (!isNonEmptyString(obj.name)) {
+        return { ok: false, error: "mcp_server_auth_callback missing/invalid name" };
+      }
+      if (obj.code !== undefined && typeof obj.code !== "string") {
+        return { ok: false, error: "mcp_server_auth_callback invalid code" };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "mcp_server_auth_set_api_key": {
+      if (!isNonEmptyString(obj.sessionId)) {
+        return { ok: false, error: "mcp_server_auth_set_api_key missing sessionId" };
+      }
+      if (!isNonEmptyString(obj.name)) {
+        return { ok: false, error: "mcp_server_auth_set_api_key missing/invalid name" };
+      }
+      if (!isNonEmptyString(obj.apiKey)) {
+        return { ok: false, error: "mcp_server_auth_set_api_key missing/invalid apiKey" };
+      }
+      if (obj.apiKey.length > MAX_MCP_API_KEY_SIZE) {
+        return { ok: false, error: "mcp_server_auth_set_api_key apiKey exceeds max size 100000" };
+      }
+      return { ok: true, msg: obj as ClientMessage };
+    }
+    case "mcp_servers_migrate_legacy": {
+      if (!isNonEmptyString(obj.sessionId)) {
+        return { ok: false, error: "mcp_servers_migrate_legacy missing sessionId" };
+      }
+      if (obj.scope !== "workspace" && obj.scope !== "user") {
+        return { ok: false, error: "mcp_servers_migrate_legacy missing/invalid scope" };
       }
       return { ok: true, msg: obj as ClientMessage };
     }

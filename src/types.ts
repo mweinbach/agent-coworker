@@ -214,9 +214,25 @@ export type MCPServerTransport =
     }
   | { type: "http" | "sse"; url: string; headers?: Record<string, string> };
 
+export type MCPServerAuthConfig =
+  | { type: "none" }
+  | {
+      type: "api_key";
+      headerName?: string;
+      prefix?: string;
+      keyId?: string;
+    }
+  | {
+      type: "oauth";
+      scope?: string;
+      resource?: string;
+      oauthMode?: "auto" | "code";
+    };
+
 export interface MCPServerConfig {
   name: string;
   transport: MCPServerTransport;
   required?: boolean;
   retries?: number;
+  auth?: MCPServerAuthConfig;
 }

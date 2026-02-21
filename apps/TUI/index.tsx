@@ -101,6 +101,7 @@ export async function runTui(
       resolved = true;
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);
+      process.off("SIGHUP", onSignal);
       renderer.off(CliRenderEvents.DESTROY, onDestroy);
       opts?.onDestroy?.();
       resolve();
@@ -118,6 +119,7 @@ export async function runTui(
 
     process.on("SIGINT", onSignal);
     process.on("SIGTERM", onSignal);
+    process.on("SIGHUP", onSignal);
     renderer.on(CliRenderEvents.DESTROY, onDestroy);
   });
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 
@@ -7,7 +7,6 @@ import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
 import { Checkbox } from "../../../components/ui/checkbox";
-import { Textarea } from "../../../components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -17,7 +16,7 @@ import {
 } from "../../../components/ui/select";
 import { confirmAction } from "../../../lib/desktopCommands";
 import { MODEL_CHOICES, modelOptionsForProvider, UI_DISABLED_PROVIDERS } from "../../../lib/modelChoices";
-import type { MCPServerConfig, ProviderName } from "../../../lib/wsProtocol";
+import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 
 function displayProviderName(provider: ProviderName): string {
@@ -33,36 +32,20 @@ function toBoolean(checked: boolean | "indeterminate"): boolean {
   return checked === true;
 }
 
-function describeTransport(server: MCPServerConfig): string {
-  const transport = server.transport;
-  if (transport.type === "stdio") {
-    const args = Array.isArray(transport.args) ? ` ${transport.args.join(" ")}` : "";
-    return `stdio: ${transport.command}${args}`;
-  }
-  if (transport.type === "http" || transport.type === "sse") {
-    return `${transport.type}: ${transport.url}`;
-  }
-  return transport.type;
-}
-
 export function WorkspacesPage() {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
-  const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
 
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
   const restartWorkspaceServer = useAppStore((s) => s.restartWorkspaceServer);
-  const requestWorkspaceMcpServers = useAppStore((s) => s.requestWorkspaceMcpServers);
-  const saveWorkspaceMcpServers = useAppStore((s) => s.saveWorkspaceMcpServers);
 
   const ws = useMemo(
     () => workspaces.find((w) => w.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
     [selectedWorkspaceId, workspaces],
   );
-  const wsRuntime = ws ? workspaceRuntimeById[ws.id] : null;
 
   const provider = (ws?.defaultProvider ?? "google") as ProviderName;
   const model = (ws?.defaultModel ?? "").trim();
@@ -75,39 +58,6 @@ export function WorkspacesPage() {
   const hasCustomModel = Boolean(model && !curatedModels.includes(model));
   const subAgentModelOptions = modelOptionsForProvider(provider, subAgentModel);
   const hasCustomSubAgentModel = Boolean(subAgentModel && !curatedModels.includes(subAgentModel));
-
-  const [mcpDraft, setMcpDraft] = useState("");
-  const [mcpDraftDirty, setMcpDraftDirty] = useState(false);
-
-  useEffect(() => {
-    if (!ws) {
-      setMcpDraft("");
-      setMcpDraftDirty(false);
-      return;
-    }
-    const rawJson = wsRuntime?.mcpRawJson ?? "";
-    setMcpDraft(rawJson);
-    setMcpDraftDirty(false);
-    void requestWorkspaceMcpServers(ws.id);
-  }, [ws?.id]);
-
-  useEffect(() => {
-    if (!ws) return;
-    const rawJson = wsRuntime?.mcpRawJson ?? "";
-    if (!mcpDraftDirty) {
-      setMcpDraft(rawJson);
-      return;
-    }
-    if (mcpDraft === rawJson) {
-      setMcpDraftDirty(false);
-    }
-  }, [ws?.id, wsRuntime?.mcpRawJson]);
-
-  const mcpConfigPath = wsRuntime?.mcpConfigPath ?? (ws ? `${ws.path.replace(/\/+$/, "")}/.agent/mcp-servers.json` : null);
-  const mcpProjectServers = wsRuntime?.mcpProjectServers ?? [];
-  const mcpEffectiveServers = wsRuntime?.mcpEffectiveServers ?? [];
-  const mcpParseError = wsRuntime?.mcpParseError ?? null;
-  const mcpSaving = wsRuntime?.mcpSaving ?? false;
 
   return (
     <div className="space-y-5">
@@ -285,88 +235,6 @@ export function WorkspacesPage() {
                     }
                   }}
                 />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-border/80 bg-card/85">
-            <CardHeader>
-              <CardTitle>MCP servers</CardTitle>
-              <CardDescription>
-                Edit the workspace-local MCP server config JSON and reload effective server state.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <div className="text-sm font-medium text-foreground">Config path</div>
-                <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 font-mono text-xs text-muted-foreground">
-                  {mcpConfigPath ?? "(unavailable)"}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="text-sm font-medium text-foreground">Raw JSON</div>
-                <Textarea
-                  value={mcpDraft}
-                  className="min-h-56 font-mono text-xs"
-                  spellCheck={false}
-                  aria-label="Workspace MCP JSON editor"
-                  onChange={(event) => {
-                    setMcpDraft(event.target.value);
-                    setMcpDraftDirty(true);
-                  }}
-                />
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => ws && void requestWorkspaceMcpServers(ws.id)}
-                  >
-                    Reload
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={() => ws && void saveWorkspaceMcpServers(ws.id, mcpDraft)}
-                    disabled={!ws || mcpSaving || (!mcpDraftDirty && mcpDraft === (wsRuntime?.mcpRawJson ?? ""))}
-                  >
-                    {mcpSaving ? "Saving..." : "Save"}
-                  </Button>
-                </div>
-              </div>
-
-              {mcpParseError ? (
-                <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                  Parse error: {mcpParseError}
-                </div>
-              ) : null}
-
-              <div className="space-y-2">
-                <div className="text-sm font-medium text-foreground">
-                  Effective servers <span className="text-xs text-muted-foreground">({mcpEffectiveServers.length})</span>
-                </div>
-                {mcpEffectiveServers.length === 0 ? (
-                  <div className="text-xs text-muted-foreground">No MCP servers are currently active.</div>
-                ) : (
-                  <div className="space-y-2">
-                    {mcpEffectiveServers.map((server) => {
-                      const isProjectServer = mcpProjectServers.some((project) => project.name === server.name);
-                      return (
-                        <div
-                          key={server.name}
-                          className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium text-foreground">{server.name}</span>
-                            <Badge variant={isProjectServer ? "default" : "secondary"}>
-                              {isProjectServer ? "workspace" : "inherited"}
-                            </Badge>
-                          </div>
-                          <div className="mt-1 font-mono text-muted-foreground">{describeTransport(server)}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
               </div>
             </CardContent>
           </Card>

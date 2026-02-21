@@ -1,195 +1,190 @@
-# agent-coworker
+<p align="center">
+  <strong>agent-coworker</strong>
+</p>
 
-Terminal-first "coworker" agent built on Bun + the Vercel AI SDK, with:
-- a WebSocket agent server
-- an OpenTUI + Solid.js TUI (default) — modeled after [opencode](https://github.com/anomalyco/opencode)'s design
-- a plain CLI REPL
-- a built-in toolbelt for file/code/web tasks (with command approval for risky ops)
+<p align="center">
+  A terminal-first AI coworker that actually works with you — not just for you.
+</p>
+
+<p align="center">
+  Built on <a href="https://bun.sh">Bun</a> + <a href="https://ai-sdk.dev">Vercel AI SDK</a> · WebSocket-first architecture · TUI, CLI, Desktop, and Web interfaces
+</p>
+
+---
+
+## What is this?
+
+agent-coworker is a local AI agent that lives in your terminal and helps you write, debug, and ship code. It has a full toolbelt — file ops, shell execution, web research, code search, sub-agents, task management — and a command approval system so it doesn't `rm -rf` your life.
+
+It's built on a **WebSocket-first architecture**, which means the agent brain is completely decoupled from the UI. The TUI, CLI REPL, desktop app, and web portal are all thin clients talking to the same server. You can build your own client too — the [protocol is documented](docs/websocket-protocol.md).
+
+### Why?
+
+Most AI coding tools are either cloud-locked, single-interface, or treat the terminal as an afterthought. agent-coworker is:
+
+- **Local-first** — your code never leaves your machine unless you want it to
+- **Provider-agnostic** — swap between Gemini, GPT, Claude, or community CLI providers
+- **Interface-agnostic** — same agent, same tools, whether you're in the TUI, a desktop app, or a custom client
+- **Extensible** — skills, MCP servers, and sub-agents let you teach it anything
 
 ## Quickstart
 
-Prereqs: Bun installed.
+**Prerequisites:** [Bun](https://bun.sh) installed.
 
 ```bash
+git clone <repo-url> && cd agent-coworker
 bun install
 ```
 
-Set an API key for the provider you want:
-- Google Gemini: `GOOGLE_GENERATIVE_AI_API_KEY`
-- OpenAI: `OPENAI_API_KEY`
-- Anthropic: `ANTHROPIC_API_KEY`
+Set an API key for your provider of choice:
 
-Or use OAuth-capable community providers:
-- Codex CLI: install `@openai/codex` and run `codex login`
-- Claude Code: install `@anthropic-ai/claude-code` and run `claude login`
+| Provider | Environment Variable |
+|---|---|
+| Google Gemini | `GOOGLE_GENERATIVE_AI_API_KEY` |
+| OpenAI | `OPENAI_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` |
 
-Run the TUI (starts the server automatically):
+Or use OAuth via community CLI providers:
+
 ```bash
-bun run start
-# target a specific directory:
-bun run start -- --dir /path/to/project
-# bypass command approvals (dangerous):
-bun run start -- --yolo
+# OpenAI via Codex CLI
+npx @openai/codex login
+
+# Anthropic via Claude Code
+npx @anthropic-ai/claude-code login
 ```
 
-Run the TUI standalone (connect to an existing server):
+Then run it:
+
 ```bash
-bun run tui -- --server ws://127.0.0.1:7337/ws
+bun run start                          # TUI (starts server automatically)
+bun run start -- --dir /path/to/project  # target a specific directory
+bun run start -- --yolo                  # bypass command approvals (you asked for it)
 ```
 
-Run the CLI REPL:
+## Interfaces
+
+### TUI (default)
+
+The primary interface. Built with [OpenTUI](https://github.com/anthropics/opentui) + Solid.js, inspired by [opencode](https://github.com/anomalyco/opencode).
+
+**Home screen** — centered prompt, random tips, provider/model info.
+
+**Session screen** — scrollable message feed with rendered markdown, tool calls, reasoning blocks, and an optional sidebar (`Ctrl+E`) showing context usage, MCP status, and todos.
+
+#### Key shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+K` | Command palette (fuzzy search across all commands) |
+| `Ctrl+N` | New session |
+| `Ctrl+E` | Toggle sidebar |
+| `Ctrl+Shift+L` | Switch model |
+| `Ctrl+X T` | Switch theme (31 built-in: catppuccin, dracula, gruvbox, nord, etc.) |
+| `Ctrl+X S` | List sessions |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Stash / pop prompt |
+| `Ctrl+]` | Toggle shell mode |
+| `Escape` | Cancel agent turn / dismiss dialog |
+| `?` | Help / keybinding reference |
+
+#### Prompt features
+
+- **History** — `Up`/`Down` cycle through previous prompts (persisted in `~/.cowork/state/prompt-history.jsonl`)
+- **Autocomplete** — `@` for file completions, `/` for commands
+- **Shell mode** — prefix with `!` to run shell commands directly (e.g. `!ls -la`)
+- **Stash** — save the current prompt for later, restore it when you need it
+
+### CLI REPL
+
 ```bash
 bun run cli
-# bypass command approvals (dangerous):
-bun run cli -- --yolo
 ```
 
-Run the server directly:
-```bash
-bun run serve
-```
+Lightweight REPL that connects to the same WebSocket server. Same agent, same tools, no UI overhead.
 
-## Electron Automation (agent-browser skill)
+### Desktop App
 
-If you added the `agent-browser` skill in `./.agent/skills/agent-browser`, you can use it to drive the desktop app UI.
-
-1. Start the desktop app in dev mode (enables CDP on port `9222` by default):
 ```bash
 bun run desktop:dev
 ```
 
-2. In another terminal, run browser actions via the desktop wrapper:
+Electron-based wrapper with workspace management, MCP settings UI, and browser automation via CDP.
+
+### Web Portal
+
 ```bash
-bun run desktop:browser -- snapshot -i
-bun run desktop:browser -- click @e2
-bun run desktop:browser -- screenshot tmp/desktop.png
+bun run portal:dev
 ```
 
-3. Keep the ref-based loop from the skill:
-- `snapshot -i` to get refs
-- interact with `@eN`
-- re-snapshot after page/UI changes
+Next.js realtime dashboard for session monitoring, harness context, and live trace inspection.
 
-## TUI
+### Standalone Server
 
-The default interface is a terminal UI built with [OpenTUI](https://github.com/anthropics/opentui) + Solid.js, inspired by [opencode](https://github.com/anomalyco/opencode)'s design. It lives in `apps/TUI/`.
+```bash
+bun run serve
+```
 
-### Screens
+Run just the WebSocket server. Connect any client to `ws://127.0.0.1:7337/ws`. Build your own UI — the [WebSocket protocol spec](docs/websocket-protocol.md) has everything you need.
 
-**Home** — A centered prompt with the cowork logo, a random tip, and a footer showing provider/model info. Type a message and press Enter to start a session.
+## Tools
 
-**Session** — The main workspace with:
-- A header showing the active provider, model, and working directory
-- A scrollable message feed with rendered markdown, tool calls, and reasoning
-- An optional sidebar (toggle with `Ctrl+E`) showing context usage, MCP status, and todos
-- A multi-line prompt at the bottom with autocomplete and history
+16 built-in tools, all executed server-side with safety approvals for risky operations:
 
-### Keyboard Shortcuts
-
-| Shortcut | Action |
+| Tool | What it does |
 |---|---|
-| `Ctrl+K` | Open command palette |
-| `Ctrl+N` | New session |
-| `Ctrl+E` | Toggle sidebar |
-| `Ctrl+C` | Clear input / exit |
-| `Escape` | Cancel agent turn / dismiss dialog |
-| `Ctrl+Shift+L` | Switch model |
-| `Ctrl+X T` | Switch theme |
-| `Ctrl+X S` | List sessions |
-| `Ctrl+Z` | Stash current prompt |
-| `Ctrl+Shift+Z` | Pop stashed prompt |
-| `Ctrl+]` | Toggle shell mode |
-| `Shift+Enter` | Insert newline in prompt |
-| `Enter` | Submit prompt |
-| `Up/Down` | Navigate prompt history |
-| `PageUp/PageDown` | Scroll conversation |
-| `?` | Show help / keybinding reference |
+| `bash` | Execute terminal commands (with approval for dangerous ops) |
+| `glob` | Fast file pattern matching ([fast-glob](https://github.com/mrmlnc/fast-glob)) |
+| `grep` | Regex content search across files |
+| `read` | Read files or list directories |
+| `write` | Create or overwrite files |
+| `edit` | Exact string replacements in files |
+| `webSearch` | Web search via [Exa](https://exa.ai) |
+| `webFetch` | Fetch web pages, convert to Markdown |
+| `todoWrite` | Inline task list for multi-step workflows |
+| `spawnAgent` | Launch sub-agents for parallel work |
+| `ask` | Prompt the user for clarification |
+| `skill` | Load domain-specific knowledge on demand |
+| `notebookEdit` | Edit Jupyter notebooks |
+| `memory` | Long-term context storage across sessions |
 
-### Command Palette
+## Skills
 
-Press `Ctrl+K` to open the command palette with fuzzy search. Commands are grouped into categories:
+Skills are instruction bundles that teach the agent domain-specific knowledge — frameworks, workflows, best practices. They're loaded on demand via the `skill` tool.
 
-- **Session** — New session, reset, cancel turn, copy last response, export transcript
-- **Display** — Toggle thinking, tool details, sidebar, timestamps
-- **Prompt** — Stash/unstash prompt, view stash, toggle shell mode
-- **System** — Switch model, switch theme, connect provider, MCP servers, help, status, exit
+- **Global skills** live in `skills/` (built-in: `doc`, `pdf`, `slides`, `spreadsheet`)
+- **Project skills** live in `.agent/skills/` in your workspace
+- **Structure:** a `SKILL.md` file with YAML frontmatter (`name`, `description`) + markdown instructions
 
-### Prompt Features
+## MCP (Remote Tool Servers)
 
-- **History** — `Up`/`Down` arrows cycle through previous prompts (persisted across sessions in `~/.cowork/state/prompt-history.jsonl`)
-- **Autocomplete** — Type `@` for file completions, `/` for command completions (fuzzy matched)
-- **Shell mode** — Start a message with `!` to run shell commands directly (e.g., `!ls -la`)
-- **Stash** — `Ctrl+Z` saves the current prompt for later, `Ctrl+Shift+Z` restores it
+[Model Context Protocol](https://modelcontextprotocol.io/) servers extend the agent with additional tools at runtime. Supports HTTP/SSE and stdio transports, OAuth and API key auth.
 
-### Themes
-
-31 built-in themes. Switch with `Ctrl+X T` or the command palette. Your choice is persisted automatically. Themes include: opencode (default), catppuccin-mocha, catppuccin-latte, dracula, gruvbox, nord, one-dark, solarized, tokyonight, github, and more.
-
-### Tool Renderers
-
-The TUI renders tool calls with specialized views:
-- **bash** — Shows `$ command`, output preview, and exit code
-- **read/write/edit** — File path with colored diffs for edits
-- **glob/grep** — Pattern and match count
-- **web** — URL/query and summary
-- **todo** — Inline todo list
-
-### Architecture
-
-The TUI uses Solid.js with 9 context providers stacked in `apps/TUI/index.tsx`:
-
-```
-ExitProvider → KVProvider → ThemeProvider → DialogProvider
-→ SyncProvider → KeybindProvider → LocalProvider → RouteProvider
-→ PromptProvider → App
+```json
+{
+  "servers": [
+    {
+      "name": "grep",
+      "transport": { "type": "http", "url": "https://mcp.grep.app" },
+      "auth": { "type": "oauth", "oauthMode": "auto" }
+    }
+  ]
+}
 ```
 
-- **SyncProvider** bridges the WebSocket (`AgentSocket`) to Solid.js reactive stores
-- **DialogProvider** manages a stack of overlay dialogs
-- **ThemeProvider** provides 60+ semantic color tokens to all components
-- **KVProvider** persists UI preferences to `~/.cowork/config/tui-kv.json`
+Tools are namespaced as `mcp__{serverName}__{toolName}`. Config is loaded from (highest priority first):
 
-The TUI connects to the agent server over WebSocket — it never touches the agent or AI SDK directly. This follows the project's WebSocket-first architecture.
+1. `.cowork/mcp-servers.json` (workspace)
+2. `~/.cowork/config/mcp-servers.json` (user)
+3. `config/mcp-servers.json` (built-in defaults)
 
-## WebSocket Protocol Notes
-
-- Current protocol version is `6.0` (sent in `server_hello.protocolVersion`).
-- `ping` now requires `sessionId`, and `pong.sessionId` echoes it.
-- `error` events always include required `code` and `source`.
-- `approval` events always include required `reasonCode`.
-- Full message contract and migration details: `docs/websocket-protocol.md`.
+See [docs/mcp-guide.md](docs/mcp-guide.md) for the full setup guide.
 
 ## Configuration
 
-Config precedence: built-in defaults < user < project < environment variables.
+Three-tier hierarchy: **built-in defaults** < **user config** < **project config** < **env vars**.
 
-Environment variables:
-- `AGENT_PROVIDER` (`google|openai|anthropic|codex-cli|claude-code`)
-- `AGENT_MODEL` (main model id)
-- `AGENT_WORKING_DIR` (directory the agent should operate in)
-- `AGENT_OUTPUT_DIR`, `AGENT_UPLOADS_DIR`
-- `AGENT_USER_NAME`
-- `AGENT_ENABLE_MCP` (`true|false`, defaults to `true`)
-- `AGENT_OBSERVABILITY_ENABLED` (`true|false`, defaults to `true`)
-- `LANGFUSE_PUBLIC_KEY`
-- `LANGFUSE_SECRET_KEY`
-- `LANGFUSE_BASE_URL` (defaults to `https://cloud.langfuse.com`)
-- `LANGFUSE_TRACING_ENVIRONMENT`
-- `LANGFUSE_RELEASE`
-- `AGENT_HARNESS_REPORT_ONLY` (`true|false`, defaults to `true`)
-- `AGENT_HARNESS_STRICT_MODE` (`true|false`, defaults to `false`)
-
-Langfuse behavior:
-- When enabled and configured, lifecycle telemetry plus AI SDK model-call traces are exported through the Langfuse OpenTelemetry processor.
-- AI SDK telemetry records inputs/outputs (`recordInputs=true`, `recordOutputs=true`) for full LLM I/O trace visibility.
-- Export/runtime failures are non-fatal; health is surfaced via `observability_status.health` (`disabled | ready | degraded`).
-
-Config files (optional):
-- `./.agent/config.json` (project)
-- `~/.agent/config.json` (user)
-
-Example `./.agent/config.json`:
 ```json
+// .agent/config.json (project-level)
 {
   "provider": "openai",
   "model": "gpt-5.2",
@@ -198,65 +193,91 @@ Example `./.agent/config.json`:
 }
 ```
 
-Desktop workspace settings (hybrid persistence):
-- Core workspace defaults are persisted in project files:
-  - `./.agent/config.json`: `provider`, `model`, `subAgentModel`, `enableMcp` (and `observabilityEnabled` when set).
-  - `./.agent/mcp-servers.json`: workspace-local MCP server document.
-- Desktop-only UI/session metadata remains in desktop `state.json` (for example `yolo`, selected workspace/thread, and UI preferences).
-- In the desktop app, Workspace Settings changes are applied immediately to live threads in that workspace; busy threads are retried when they become idle.
+| Env Variable | Purpose |
+|---|---|
+| `AGENT_PROVIDER` | `google` · `openai` · `anthropic` · `codex-cli` · `claude-code` |
+| `AGENT_MODEL` | Model ID |
+| `AGENT_WORKING_DIR` | Working directory for the agent |
+| `AGENT_USER_NAME` | Your name (used in system prompt) |
+| `AGENT_ENABLE_MCP` | Enable/disable MCP (`true`/`false`) |
 
-## MCP (Remote Tool Servers)
+### Observability
 
-MCP (Model Context Protocol) servers add extra tools to the agent at runtime.
+Built-in [Langfuse](https://langfuse.com) + OpenTelemetry integration. Set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and optionally `LANGFUSE_BASE_URL` to enable full LLM I/O tracing.
 
-Server configs are loaded from (highest priority first):
-- `./.agent/mcp-servers.json` (project)
-- `~/.agent/mcp-servers.json` (user)
-- `./config/mcp-servers.json` (built-in defaults)
+## Architecture
 
-Desktop app note:
-- The Workspace Settings page includes a raw JSON editor for `./.agent/mcp-servers.json` with save/reload and effective-server preview.
-- MCP changes are exposed over WebSocket via `mcp_servers_get`, `mcp_servers_set`, and `mcp_servers`.
-
-Example `./.agent/mcp-servers.json` using `mcp.grep.app`:
-```json
-{
-  "servers": [
-    {
-      "name": "grep",
-      "transport": { "type": "http", "url": "https://mcp.grep.app" }
-    }
-  ]
-}
+```
+┌─────────────────────────────────────────────────────────┐
+│  Thin Clients                                           │
+│  TUI (OpenTUI+Solid.js) · CLI REPL · Desktop · Portal  │
+└──────────────────────────┬──────────────────────────────┘
+                           │ WebSocket (protocol v7.0)
+┌──────────────────────────▼──────────────────────────────┐
+│  Server                                                 │
+│  AgentSession · Model Streaming · Session Persistence   │
+│  MCP Management · Command Approval · SQLite Storage     │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────┐
+│  Agent Engine (Vercel AI SDK)                           │
+│  createRunTurn() · System Prompt · Tool Execution       │
+└────────┬─────────────────┬──────────────────┬───────────┘
+         │                 │                  │
+    Built-in Tools    Provider Registry    MCP Tools
+    (16 tools)        (Gemini/GPT/Claude)  (runtime-loaded)
 ```
 
-Tools are namespaced as `mcp__{serverName}__{toolName}` (e.g. `mcp__grep__searchGitHub`).
+Everything flows through the WebSocket protocol. UIs never touch the AI SDK or tools directly.
+
+### Key source paths
+
+| Path | What |
+|---|---|
+| `src/agent.ts` | Core agent loop (`createRunTurn()` factory) |
+| `src/server/session.ts` | Session state, turn execution, ask/approval flows |
+| `src/server/protocol.ts` | WebSocket message types (`ClientMessage`, `ServerEvent`) |
+| `src/tools/` | All 16 built-in tool implementations |
+| `src/providers/` | Provider registry (Google, OpenAI, Anthropic, community CLIs) |
+| `src/mcp/` | MCP config loading, OAuth, auth storage |
+| `apps/TUI/` | Terminal UI (OpenTUI + Solid.js) |
+| `apps/desktop/` | Electron desktop app |
+| `apps/portal/` | Next.js web portal |
+
+## Docs
+
+| Document | Description |
+|---|---|
+| [WebSocket Protocol](docs/websocket-protocol.md) | Full protocol spec (v7.0) — the source of truth for building clients |
+| [Architecture](docs/architecture.md) | System design and component relationships |
+| [MCP Guide](docs/mcp-guide.md) | Setting up and using MCP remote tool servers |
+| [Custom Tools](docs/custom-tools.md) | How to add your own tools |
+| [Session Storage](docs/session-storage-architecture.md) | Session persistence and backup architecture |
+| [Harness Runbook](docs/harness/runbook.md) | Running the evaluation harness |
+| [Harness Observability](docs/harness/observability.md) | Monitoring and tracing harness runs |
 
 ## Development
 
-Run tests:
 ```bash
-bun test
+bun install          # Install all dependencies (root + apps)
+bun test             # Run tests (Bun test runner)
+bun run dev          # Watch mode
+bun run desktop:dev  # Desktop app dev mode
+bun run portal:dev   # Web portal dev mode
+bun run harness:run  # Run evaluation harness
+bun run docs:check   # Validate documentation
 ```
 
-Watch mode:
-```bash
-bun run dev
-```
+## Tech Stack
 
-Harness helper:
-```bash
-bun run harness:run
-```
-
-Harness web portal (Next.js realtime dashboard):
-```bash
-bun run portal:dev
-# build/start:
-bun run portal:build
-bun run portal:start
-```
-
-Full operational runbook:
-- `docs/harness/runbook.md`
-- `docs/harness/observability.md`
+| | |
+|---|---|
+| **Runtime** | [Bun](https://bun.sh) |
+| **AI** | [Vercel AI SDK](https://ai-sdk.dev) v6 |
+| **TUI** | [OpenTUI](https://github.com/anthropics/opentui) + [Solid.js](https://www.solidjs.com/) |
+| **Desktop** | Electron |
+| **Web** | [Next.js](https://nextjs.org/) |
+| **MCP** | [Model Context Protocol](https://modelcontextprotocol.io/) v1.26 |
+| **Observability** | [Langfuse](https://langfuse.com) + OpenTelemetry |
+| **Testing** | Bun built-in test runner |
+| **Persistence** | SQLite (`~/.cowork/sessions.db`) |

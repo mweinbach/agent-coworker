@@ -68,6 +68,11 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().settingsPage).toBe("workspaces");
   });
 
+  test("setSettingsPage accepts mcp page", () => {
+    useAppStore.getState().setSettingsPage("mcp");
+    expect(useAppStore.getState().settingsPage).toBe("mcp");
+  });
+
   test("setDeveloperMode updates developer mode state", () => {
     useAppStore.getState().setDeveloperMode(true);
     expect(useAppStore.getState().developerMode).toBe(true);

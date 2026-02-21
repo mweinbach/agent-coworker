@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { useAppStore } from "../app/store";
 import type { PromptModalState } from "../app/types";
+import { ASK_SKIP_TOKEN } from "../lib/wsProtocol";
 import { Button } from "../components/ui/button";
 import {
   Dialog,
@@ -99,7 +100,6 @@ type AskModalState = Extract<NonNullable<PromptModalState>, { kind: "ask" }>;
 function AskPromptContent(props: {
   modal: AskModalState;
   answerAsk: (threadId: string, requestId: string, answer: string) => void;
-  dismiss: () => void;
 }) {
   const [freeText, setFreeText] = useState("");
   const opts = normalizeAskOptions(props.modal.prompt.options);
@@ -109,6 +109,10 @@ function AskPromptContent(props: {
   const submitFreeText = () => {
     if (!freeText.trim()) return;
     props.answerAsk(props.modal.threadId, props.modal.prompt.requestId, freeText);
+  };
+
+  const skip = () => {
+    props.answerAsk(props.modal.threadId, props.modal.prompt.requestId, ASK_SKIP_TOKEN);
   };
 
   return (
@@ -153,13 +157,11 @@ function AskPromptContent(props: {
         </Button>
       </div>
 
-      {!hasOptions ? (
-        <DialogFooter>
-          <Button variant="outline" type="button" onClick={props.dismiss}>
-            Cancel
-          </Button>
-        </DialogFooter>
-      ) : null}
+      <DialogFooter>
+        <Button variant="outline" type="button" onClick={skip}>
+          Skip
+        </Button>
+      </DialogFooter>
     </>
   );
 }
@@ -170,18 +172,34 @@ export function PromptModal() {
   const answerApproval = useAppStore((s) => s.answerApproval);
   const dismiss = useAppStore((s) => s.dismissPrompt);
 
+  const isAsk = modal?.kind === "ask";
+
   return (
     <Dialog open={Boolean(modal)} onOpenChange={(open) => {
+      // For ask modals, always send a response so the server-side deferred
+      // promise resolves.  Dismissing without answering would leave the agent
+      // hanging forever.
+      if (!open && isAsk) {
+        answerAsk(modal.threadId, modal.prompt.requestId, ASK_SKIP_TOKEN);
+        return;
+      }
       if (!open) dismiss();
     }}>
       {modal ? (
-        <DialogContent>
+        <DialogContent
+          onEscapeKeyDown={isAsk ? () => {
+            // Let the onOpenChange handler deal with it so a response is sent.
+          } : undefined}
+          onInteractOutside={isAsk ? (e) => {
+            // Prevent click-outside from closing without a response.
+            e.preventDefault();
+          } : undefined}
+        >
           {modal.kind === "ask" ? (
             <AskPromptContent
               key={modal.prompt.requestId}
               modal={modal}
               answerAsk={answerAsk}
-              dismiss={dismiss}
             />
           ) : (
             <>

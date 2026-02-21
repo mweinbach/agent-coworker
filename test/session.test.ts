@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { AgentConfig, TodoItem } from "../src/types";
-import type { ServerEvent } from "../src/server/protocol";
+import { ASK_SKIP_TOKEN, type ServerEvent } from "../src/server/protocol";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import type {
   SessionBackupHandle,
@@ -449,6 +449,167 @@ describe("AgentSession", () => {
 
       resolveRunTurn();
       await first;
+    });
+  });
+
+  describe("mcp management", () => {
+    test("emitMcpServers emits layered snapshot event", async () => {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-mcp-emit-"));
+      try {
+        const config = makeConfig(tmpDir);
+        await fs.mkdir(path.join(tmpDir, ".cowork"), { recursive: true });
+        await fs.writeFile(
+          path.join(tmpDir, ".cowork", "mcp-servers.json"),
+          JSON.stringify(
+            {
+              servers: [{ name: "grep", transport: { type: "http", url: "https://mcp.grep.app" } }],
+            },
+            null,
+            2,
+          ),
+          "utf-8",
+        );
+
+        const { session, events } = makeSession({ config });
+        await session.emitMcpServers();
+
+        const evt = events.find((entry) => entry.type === "mcp_servers");
+        expect(evt).toBeDefined();
+        if (evt && evt.type === "mcp_servers") {
+          expect(evt.servers.some((server) => server.name === "grep")).toBe(true);
+          expect(evt.files.some((file) => file.source === "workspace")).toBe(true);
+          expect(typeof evt.legacy.workspace.exists).toBe("boolean");
+        }
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("upsertMcpServer writes workspace .cowork mcp config", async () => {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-mcp-upsert-"));
+      try {
+        const config = makeConfig(tmpDir);
+        const { session } = makeSession({ config });
+        await session.upsertMcpServer({
+          name: "local",
+          transport: { type: "stdio", command: "echo", args: ["ok"] },
+          auth: { type: "none" },
+        });
+
+        const persistedRaw = await fs.readFile(path.join(tmpDir, ".cowork", "mcp-servers.json"), "utf-8");
+        expect(persistedRaw).toContain("\"name\": \"local\"");
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("validateMcpServer blocks concurrent validation while connection flow is active", async () => {
+      const { session, events } = makeSession();
+      let releaseLookup: (() => void) | null = null;
+      let lookupCalls = 0;
+      const firstLookup = new Promise<void>((resolve) => {
+        releaseLookup = resolve;
+      });
+
+      (session as any).getMcpServerByName = async () => {
+        lookupCalls += 1;
+        if (lookupCalls === 1) {
+          await firstLookup;
+        }
+        return null;
+      };
+
+      const firstValidation = session.validateMcpServer("server-a");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await session.validateMcpServer("server-a");
+
+      expect(lookupCalls).toBe(1);
+      const busyErr = events.find(
+        (entry) => entry.type === "error" && entry.message === "Connection flow already running",
+      );
+      expect(busyErr).toBeDefined();
+
+      releaseLookup?.();
+      await firstValidation;
+    });
+
+    test("setMcpServerApiKey emits auth result and writes auth file", async () => {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-mcp-api-key-"));
+      try {
+        const config = makeConfig(tmpDir);
+        await fs.mkdir(path.join(tmpDir, ".cowork"), { recursive: true });
+        await fs.writeFile(
+          path.join(tmpDir, ".cowork", "mcp-servers.json"),
+          JSON.stringify(
+            {
+              servers: [
+                {
+                  name: "protected",
+                  transport: { type: "http", url: "https://mcp.example.com" },
+                  auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
+                },
+              ],
+            },
+            null,
+            2,
+          ),
+          "utf-8",
+        );
+
+        const { session, events } = makeSession({ config });
+        await session.setMcpServerApiKey("protected", "secret-token");
+
+        const resultEvt = events.find((entry) => entry.type === "mcp_server_auth_result");
+        expect(resultEvt).toBeDefined();
+        if (resultEvt && resultEvt.type === "mcp_server_auth_result") {
+          expect(resultEvt.ok).toBe(true);
+          expect(resultEvt.mode).toBe("api_key");
+        }
+
+        const authRaw = await fs.readFile(path.join(tmpDir, ".cowork", "auth", "mcp-credentials.json"), "utf-8");
+        expect(authRaw).toContain("secret-token");
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("migrateLegacyMcpServers imports .agent fallback entries", async () => {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-mcp-migrate-"));
+      try {
+        const config = makeConfig(tmpDir);
+        await fs.mkdir(path.join(tmpDir, ".agent"), { recursive: true });
+        await fs.writeFile(
+          path.join(tmpDir, ".agent", "mcp-servers.json"),
+          JSON.stringify(
+            {
+              servers: [
+                { name: "legacy-one", transport: { type: "stdio", command: "echo", args: ["legacy"] } },
+              ],
+            },
+            null,
+            2,
+          ),
+          "utf-8",
+        );
+        await fs.mkdir(path.join(tmpDir, ".cowork"), { recursive: true });
+        await fs.writeFile(
+          path.join(tmpDir, ".cowork", "mcp-servers.json"),
+          JSON.stringify({ servers: [{ name: "existing", transport: { type: "stdio", command: "echo" } }] }, null, 2),
+          "utf-8",
+        );
+
+        const { session } = makeSession({ config });
+        await session.migrateLegacyMcpServers("workspace");
+
+        const migratedRaw = await fs.readFile(path.join(tmpDir, ".cowork", "mcp-servers.json"), "utf-8");
+        expect(migratedRaw).toContain("\"name\": \"existing\"");
+        expect(migratedRaw).toContain("\"name\": \"legacy-one\"");
+
+        const archived = await fs.readFile(path.join(tmpDir, ".agent", "mcp-servers.legacy-migrated.json"), "utf-8");
+        expect(archived).toContain("\"legacy-one\"");
+      } finally {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -1058,6 +1219,73 @@ describe("AgentSession", () => {
       const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
       expect(assistantEvt).toBeDefined();
       expect(assistantEvt.text).toBe("Alice");
+    });
+
+    test("rejects blank ask answers, emits validation error, and replays same ask request", async () => {
+      const { session, events } = makeSession();
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const answer = await params.askUser("What should I do?");
+        return { text: answer, reasoningText: undefined, responseMessages: [] };
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const firstAsk = events.find((e) => e.type === "ask") as any;
+      expect(firstAsk).toBeDefined();
+
+      let settled = false;
+      void sendPromise.then(() => {
+        settled = true;
+      });
+
+      session.handleAskResponse(firstAsk.requestId, "   ");
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(settled).toBe(false);
+
+      const errorEvt = events.find((e) => e.type === "error") as any;
+      expect(errorEvt).toBeDefined();
+      expect(errorEvt.code).toBe("validation_failed");
+      expect(errorEvt.source).toBe("session");
+      expect(errorEvt.message).toContain("cannot be empty");
+
+      const askEvents = events.filter((e) => e.type === "ask") as any[];
+      expect(askEvents.length).toBeGreaterThanOrEqual(2);
+      expect(askEvents[1]?.requestId).toBe(firstAsk.requestId);
+
+      session.handleAskResponse(firstAsk.requestId, "Proceed");
+      await sendPromise;
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt).toBeDefined();
+      expect(assistantEvt.text).toBe("Proceed");
+    });
+
+    test("accepts explicit ask skip token", async () => {
+      const { session, events } = makeSession();
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const answer = await params.askUser("Continue?");
+        return { text: answer, reasoningText: undefined, responseMessages: [] };
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const askEvt = events.find((e) => e.type === "ask") as any;
+      expect(askEvt).toBeDefined();
+
+      session.handleAskResponse(askEvt.requestId, ASK_SKIP_TOKEN);
+      await sendPromise;
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt).toBeDefined();
+      expect(assistantEvt.text).toBe(ASK_SKIP_TOKEN);
+
+      const validationErrors = events.filter((e) => e.type === "error" && (e as any).code === "validation_failed");
+      expect(validationErrors.length).toBe(0);
     });
 
     test("removes request from pending map after resolution", async () => {

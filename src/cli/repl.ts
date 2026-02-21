@@ -5,6 +5,7 @@ import readline from "node:readline";
 import { AgentSocket } from "../client/agentSocket";
 import { getAiCoworkerPaths } from "../connect";
 import { defaultModelForProvider } from "../config";
+import { ASK_SKIP_TOKEN } from "../server/protocol";
 import { startAgentServer } from "../server/startServer";
 import type { ClientMessage, ServerEvent } from "../server/protocol";
 import { isProviderName, PROVIDER_NAMES } from "../types";
@@ -756,6 +757,13 @@ export async function runCliRepl(
     rl.close();
   });
 
+  // Handle terminal close (e.g. closing the terminal window).
+  const onHup = () => {
+    stopServer();
+    process.exit(0);
+  };
+  process.on("SIGHUP", onHup);
+
   await connectToServer(serverUrl, rl, initialResumeSessionId ?? undefined);
 
   console.log("Cowork agent (CLI)");
@@ -774,6 +782,11 @@ export async function runCliRepl(
           return;
         }
         const answer = resolveAskAnswer(line, activeAsk.options);
+        if (!answer) {
+          console.log(`Please enter a response, or type ${ASK_SKIP_TOKEN} to skip.`);
+          rl.prompt();
+          return;
+        }
         const ok = send({ type: "ask_response", sessionId, requestId: activeAsk.requestId, answer });
         if (!ok) {
           handleDisconnect(rl, "unable to send (not connected)");
@@ -1065,9 +1078,14 @@ export async function runCliRepl(
     }
   });
 
+  // Last-resort cleanup if the process exits unexpectedly.
+  process.on("exit", stopServer);
+
   await new Promise<void>((resolve) => {
     rl.on("close", () => resolve());
   });
 
+  process.off("exit", stopServer);
+  process.off("SIGHUP", onHup);
   stopServer();
 }

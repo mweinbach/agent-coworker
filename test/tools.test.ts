@@ -741,6 +741,10 @@ describe("grep tool", () => {
             fileGlob = rest.shift();
             continue;
           }
+          if (a === "--") {
+            rest.shift();
+            break;
+          }
           break;
         }
 
@@ -990,6 +994,7 @@ describe("grep tool", () => {
     expect(capturedArgs).toContain("3");
     expect(capturedArgs).toContain("--glob");
     expect(capturedArgs).toContain("*.ts");
+    expect(capturedArgs).toContain("--");
 
     // Pattern and path should be the last two positional args
     const patternIdx = capturedArgs.indexOf("foo");
@@ -1024,8 +1029,36 @@ describe("grep tool", () => {
     expect(capturedArgs).not.toContain("-i");
     expect(capturedArgs).not.toContain("--glob");
     expect(capturedArgs).not.toContain("-C");
+    expect(capturedArgs).toContain("--");
     expect(capturedArgs).toContain("data");
     expect(capturedArgs).toContain(path.resolve(dir));
+  });
+
+  test("inserts -- before dash-prefixed patterns", async () => {
+    const dir = await tmpDir();
+    await fs.writeFile(path.join(dir, "flags.txt"), "--files-with-matches\n", "utf-8");
+
+    let capturedArgs: string[] = [];
+    const argCaptureExecFile: any = (_cmd: string, args: string[], _opts: any, cb: any) => {
+      capturedArgs = [...args];
+      cb(null, `${path.join(dir, "flags.txt")}:1:--files-with-matches\n`, "");
+    };
+
+    const t: any = createGrepTool(makeCtx(dir), {
+      execFileImpl: argCaptureExecFile,
+      ensureRipgrepImpl: fakeEnsureRipgrep,
+    });
+
+    const res: string = await t.execute({
+      pattern: "--files-with-matches",
+      path: dir,
+      caseSensitive: true,
+    });
+
+    expect(res).toContain("--files-with-matches");
+    expect(capturedArgs).toContain("--");
+    const delimiterIdx = capturedArgs.indexOf("--");
+    expect(capturedArgs[delimiterIdx + 1]).toBe("--files-with-matches");
   });
 
   test("searches in subdirectories", async () => {
@@ -2440,6 +2473,18 @@ describe("memory tool", () => {
     expect(content).toBe("Config data");
   });
 
+  test("rejects memory key traversal outside memory directory", async () => {
+    const dir = await tmpDir();
+    const t: any = createMemoryTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        action: "write",
+        key: "../outside",
+        content: "secret",
+      })
+    ).rejects.toThrow(/outside memory directory/i);
+  });
+
   test("write throws when content is missing", async () => {
     const dir = await tmpDir();
     const t: any = createMemoryTool(makeCtx(dir));
@@ -2462,6 +2507,25 @@ describe("memory tool", () => {
     const t: any = createMemoryTool(makeCtx(dir));
     const res: string = await t.execute({ action: "search", query: "TypeScript" });
     expect(res).toContain("TypeScript");
+  });
+
+  test("memory search passes -- before query for dash-prefixed patterns", async () => {
+    const dir = await tmpDir();
+
+    let capturedArgs: string[] = [];
+    const execFileImpl: any = (_cmd: string, args: string[], _opts: any, cb: any) => {
+      capturedArgs = [...args];
+      const err: any = new Error("no matches");
+      err.code = 1;
+      cb(err, "", "");
+    };
+
+    const t: any = createMemoryTool(makeCtx(dir), { execFileImpl });
+    await t.execute({ action: "search", query: "--files-with-matches" });
+
+    expect(capturedArgs).toContain("--");
+    const delimiterIdx = capturedArgs.indexOf("--");
+    expect(capturedArgs[delimiterIdx + 1]).toBe("--files-with-matches");
   });
 
   test("search returns 'no memory found' when nothing matches", async () => {

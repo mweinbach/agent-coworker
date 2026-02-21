@@ -40,7 +40,7 @@ export type ReasoningContentProps = ComponentProps<typeof CollapsibleContent> & 
 
 export function ReasoningContent({ className, children, ...props }: ReasoningContentProps) {
   return (
-    <CollapsibleContent className={cn("px-3 pb-3 pt-0 text-sm text-muted-foreground", className)} {...props}>
+    <CollapsibleContent className={cn("select-text px-3 pb-3 pt-0 text-sm text-muted-foreground", className)} {...props}>
       <MessageResponse>{children}</MessageResponse>
     </CollapsibleContent>
   );

@@ -124,6 +124,58 @@ describe("desktop protocol v2 mapping", () => {
     expect(sentTypes).toContain("provider_catalog_get");
     expect(sentTypes).toContain("provider_auth_methods_get");
     expect(sentTypes).toContain("refresh_provider_status");
+    expect(sentTypes).toContain("mcp_servers_get");
+  });
+
+  test("mcp events update runtime slices and notifications", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+
+    controlSocket.emit({
+      type: "mcp_servers",
+      sessionId: "control-session",
+      servers: [
+        {
+          name: "grep",
+          transport: { type: "http", url: "https://mcp.grep.app" },
+          source: "workspace",
+          inherited: false,
+          authMode: "missing",
+          authScope: "workspace",
+          authMessage: "OAuth required.",
+        },
+      ],
+      legacy: {
+        workspace: { path: "/tmp/workspace/.agent/mcp-servers.json", exists: false },
+        user: { path: "/tmp/home/.agent/mcp-servers.json", exists: false },
+      },
+      files: [],
+    });
+    controlSocket.emit({
+      type: "mcp_server_validation",
+      sessionId: "control-session",
+      name: "grep",
+      ok: false,
+      mode: "missing",
+      message: "OAuth required.",
+    });
+    controlSocket.emit({
+      type: "mcp_server_auth_result",
+      sessionId: "control-session",
+      name: "grep",
+      ok: false,
+      mode: "error",
+      message: "Auth failed.",
+    });
+
+    const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
+    expect(runtime?.mcpServers[0]?.name).toBe("grep");
+    expect(runtime?.mcpValidationByName.grep?.ok).toBe(false);
+    expect(runtime?.mcpLastAuthResult?.name).toBe("grep");
+
+    const notification = useAppStore.getState().notifications.at(-1);
+    expect(notification?.title).toBe("MCP auth failed: grep");
   });
 
   test("connectProvider sends provider_auth_set_api_key for keyed providers", async () => {

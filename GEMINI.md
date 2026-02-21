@@ -8,14 +8,14 @@
 *   **Main Technologies:**
     *   **Runtime:** Bun (high-performance JavaScript/TypeScript runtime).
     *   **Agent Framework:** Vercel AI SDK (`ai` package).
-    *   **UI/UX:** OpenTUI + React for the terminal interface; Electron for the desktop application.
+    *   **UI/UX:** OpenTUI + Solid.js for the terminal interface; Electron for the desktop application.
     *   **Communication:** Custom WebSocket protocol for decoupled client-server interaction.
 *   **Core Architecture:**
     *   **Server (`src/server/`):** Manages `AgentSession` state, LLM orchestration, and WebSocket communication.
     *   **Agent (`src/agent.ts`):** Implements the agent loop, system prompt management, and tool execution.
     *   **Tools (`src/tools/`):** Built-in capabilities including `bash`, `read`, `write`, `edit`, `glob`, `grep`, `webSearch`, `webFetch`, and `spawnAgent`.
-    *   **Clients:** 
-        *   **TUI (`src/tui/`):** Default interactive terminal UI.
+    *   **Clients:**
+        *   **TUI (`apps/TUI/`):** Default interactive terminal UI built with OpenTUI + Solid.js. `src/tui/` is a thin launcher wrapper.
         *   **CLI (`src/cli/`):** Minimal REPL for direct interaction.
         *   **Desktop (`apps/desktop/`):** Native GUI wrapper using Electron.
 
@@ -44,7 +44,7 @@
     *   TypeScript in `strict` mode.
     *   ES Modules (ESM) throughout the project.
     *   2-space indentation.
-    *   `camelCase` for variables and functions; `PascalCase` for types and React components.
+    *   `camelCase` for variables and functions; `PascalCase` for types and components.
 *   **WebSocket-First Logic:**
     *   All business logic MUST reside in the server/agent layer.
     *   UIs are thin clients that communicate via the protocol defined in `docs/websocket-protocol.md`.
@@ -54,7 +54,7 @@
     *   Files are named `*.test.ts`.
     *   Mocks and temp directories are preferred over live network or system calls.
 *   **Configuration:**
-    *   Precedence: Defaults < User (`~/.agent/`) < Project (`./.agent/`) < Environment Variables.
+    *   Precedence: Defaults < User (`~/.agent/`) < Project (`./.agent/`) < Environment Variables. MCP server configs, auth, and session backups also live in `~/.cowork/` and `.cowork/`.
     *   Environment Variables: `AGENT_PROVIDER`, `AGENT_MODEL`, `AGENT_WORKING_DIR`.
 
 ## Key Files and Directories

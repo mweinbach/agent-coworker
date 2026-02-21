@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 
 mock.module("electron", () => ({
@@ -58,6 +61,35 @@ describe("desktop server manager startup parsing", () => {
       const message = error instanceof Error ? error.message : String(error);
       expect(message).toContain("Server exited before startup JSON");
       expect(message).toContain("output=warming up");
+    }
+  });
+});
+
+describe("desktop server manager startup mode", () => {
+  test("resolveSourceStartup does not resolve repo root when source mode is disabled", () => {
+    const startup = __internal.resolveSourceStartup(false, () => {
+      throw new Error("resolveRepoRoot should not be called");
+    });
+
+    expect(startup).toEqual({
+      repoRoot: null,
+      sourceEntry: null,
+    });
+  });
+
+  test("resolveSourceStartup resolves source entry when source mode is enabled", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-repo-"));
+    const sourceEntry = path.join(repoRoot, "src", "server", "index.ts");
+
+    try {
+      await fs.mkdir(path.dirname(sourceEntry), { recursive: true });
+      await fs.writeFile(sourceEntry, 'console.log("ok");\n', "utf-8");
+
+      const startup = __internal.resolveSourceStartup(true, () => repoRoot);
+      expect(startup.repoRoot).toBe(repoRoot);
+      expect(startup.sourceEntry).toBe(sourceEntry);
+    } finally {
+      await fs.rm(repoRoot, { recursive: true, force: true });
     }
   });
 });

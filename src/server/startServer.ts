@@ -8,6 +8,7 @@ import type { AgentConfig } from "../types";
 import type { ServerErrorCode } from "../types";
 import { loadConfig } from "../config";
 import { loadSystemPromptWithSkills } from "../prompt";
+import { writeTextFileAtomic } from "../utils/atomicFile";
 
 import { AgentSession } from "./session";
 import { SessionDb } from "./sessionDb";
@@ -59,12 +60,7 @@ async function persistProjectConfigPatch(
   }
   await fs.mkdir(projectAgentDir, { recursive: true });
   const payload = `${JSON.stringify(next, null, 2)}\n`;
-  const tempPath = path.join(
-    projectAgentDir,
-    `.config.json.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
-  );
-  await fs.writeFile(tempPath, payload, "utf-8");
-  await fs.rename(tempPath, configPath);
+  await writeTextFileAtomic(configPath, payload);
 }
 
 export interface StartAgentServerOptions {
@@ -276,6 +272,7 @@ export async function startAgentServer(
           void session.emitProviderCatalog();
           session.emitProviderAuthMethods();
           void session.refreshProviderStatus();
+          void session.emitMcpServers();
           // Feature 7: push backup state on connect
           void session.getSessionBackupState();
           // Feature 1: replay pending prompts on reconnect
@@ -451,8 +448,38 @@ export async function startAgentServer(
             return;
           }
 
-          if (msg.type === "mcp_servers_set") {
-            void session.setMcpServers(msg.rawJson);
+          if (msg.type === "mcp_server_upsert") {
+            void session.upsertMcpServer(msg.server, msg.previousName);
+            return;
+          }
+
+          if (msg.type === "mcp_server_delete") {
+            void session.deleteMcpServer(msg.name);
+            return;
+          }
+
+          if (msg.type === "mcp_server_validate") {
+            void session.validateMcpServer(msg.name);
+            return;
+          }
+
+          if (msg.type === "mcp_server_auth_authorize") {
+            void session.authorizeMcpServerAuth(msg.name);
+            return;
+          }
+
+          if (msg.type === "mcp_server_auth_callback") {
+            void session.callbackMcpServerAuth(msg.name, msg.code);
+            return;
+          }
+
+          if (msg.type === "mcp_server_auth_set_api_key") {
+            void session.setMcpServerApiKey(msg.name, msg.apiKey);
+            return;
+          }
+
+          if (msg.type === "mcp_servers_migrate_legacy") {
+            void session.migrateLegacyMcpServers(msg.scope);
             return;
           }
 
@@ -567,7 +594,24 @@ export async function startAgentServer(
 
   const server = serveWithPortFallback(requestedPort);
   const originalStop = server.stop.bind(server);
+  let serverStopped = false;
   (server as any).stop = () => {
+    if (serverStopped) return;
+    serverStopped = true;
+    // Dispose all active sessions to abort running turns and close MCP child processes.
+    for (const [id, binding] of sessionBindings) {
+      try {
+        binding.session.dispose("server stopping");
+      } catch {
+        // ignore
+      }
+      try {
+        binding.socket?.close();
+      } catch {
+        // ignore
+      }
+    }
+    sessionBindings.clear();
     try {
       sessionDb.close();
     } catch {

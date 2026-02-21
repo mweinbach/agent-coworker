@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-agent-coworker is a terminal-first coworker agent built on Bun + TypeScript (ESM) with a WebSocket server, an OpenTUI (React) client, and a CLI REPL. 
+agent-coworker is a terminal-first coworker agent built on Bun + TypeScript (ESM) with a WebSocket server, an OpenTUI + Solid.js TUI, and a CLI REPL.
 
 When you have access to subagents or agent teams, feel free to use them. Subagents are good for delegating tasks for searching and performing specific actions. Be specific with your delegation, and feel free to use them liberally.  
 
@@ -8,10 +8,13 @@ When you have access to subagents or agent teams, feel free to use them. Subagen
 
 - `src/`: application code
 - `src/server/`: WebSocket server, protocol, and session state
-- `src/tui/`: OpenTUI + React UI (`src/tui/index.tsx`)
+- `src/tui/`: thin TUI wrapper (launches the main TUI from `apps/TUI/`)
 - `src/cli/`: CLI REPL and argument parsing
 - `src/providers/`: model/provider integrations (OpenAI/Google/Anthropic and `*-cli`)
 - `src/tools/`: built-in tools (`bash`, `read`, `write`, `webSearch`, etc.)
+- `apps/TUI/`: main TUI built with OpenTUI + Solid.js
+- `apps/desktop/`: Electron desktop application
+- `apps/portal/`: portal web application
 - `test/`: Bun tests (`*.test.ts`)
 - `config/`: built-in defaults and MCP server defaults
 - `config/observability/`: local observability stack definitions (Vector + Victoria)
@@ -60,8 +63,8 @@ When adding a new WebSocket message or event:
 
 ## Security & Configuration Tips
 
-- Don’t commit secrets or local state. `.env`, `.agent/`, `output/`, and `uploads/` are gitignored.
-- Prefer environment variables (e.g. `OPENAI_API_KEY`) and local `.agent/config.json` / `.agent/mcp-servers.json` for developer setup.
+- Don’t commit secrets or local state. `.env`, `.agent/`, `.cowork/`, `output/`, and `uploads/` are gitignored.
+- Prefer environment variables (e.g. `OPENAI_API_KEY`) and local `.agent/config.json` / `.agent/mcp-servers.json` for developer setup. MCP server configs, auth, and session backups also live in `.cowork/` (project-level or `~/.cowork/`).
 - `--yolo` bypasses command approvals; use only for local experiments.
 - Make commits liberally as you go with meaningful detailed messages.
 

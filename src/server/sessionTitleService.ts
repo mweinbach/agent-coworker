@@ -1,4 +1,4 @@
-import { generateObject } from "ai";
+import { generateText, Output } from "ai";
 import { z } from "zod";
 
 import { defaultModelForProvider, getModel } from "../config";
@@ -10,12 +10,12 @@ const TITLE_SCHEMA = z.object({
 
 const TITLE_MODEL_BY_PROVIDER = {
   anthropic: "claude-4-5-haiku",
-  "codex-cli": "gpt-5.1-codex-mini",
-  google: "gemini-2.5-flash-lite",
+  "codex-cli": "gpt-5.2-codex",
+  google: "gemini-3-flash-preview",
   openai: "gpt-5-mini",
 } as const satisfies Record<AgentConfig["provider"], string>;
 
-const TITLE_MAX_TOKENS = 30;
+const TITLE_MAX_TOKENS = 150;
 const TITLE_MAX_CHARS = 50;
 
 export const DEFAULT_SESSION_TITLE = "New session";
@@ -29,7 +29,7 @@ export type SessionTitleResult = {
 };
 
 type SessionTitleDeps = {
-  generateObject: typeof generateObject;
+  generateText: typeof generateText;
   getModel: typeof getModel;
   defaultModelForProvider: typeof defaultModelForProvider;
 };
@@ -132,7 +132,7 @@ function buildTitlePrompt(query: string): string {
 
 export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps> = {}) {
   const deps: SessionTitleDeps = {
-    generateObject,
+    generateText,
     getModel,
     defaultModelForProvider,
     ...overrides,
@@ -154,14 +154,14 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
     const candidates = modelCandidatesForProvider(opts.config.provider, deps.defaultModelForProvider);
     for (const modelId of candidates) {
       try {
-        const { object } = await deps.generateObject({
-          model: deps.getModel(opts.config, modelId),
-          schema: TITLE_SCHEMA,
+        const { output } = await deps.generateText({
+          model: deps.getModel(opts.config, modelId) as any,
+          output: Output.object({ schema: TITLE_SCHEMA }),
           prompt: buildTitlePrompt(query),
           maxOutputTokens: TITLE_MAX_TOKENS,
         });
 
-        const title = sanitizeModelTitle(object.title);
+        const title = sanitizeModelTitle(output.title);
         if (!title) continue;
 
         return {

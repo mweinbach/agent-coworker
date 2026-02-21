@@ -1,11 +1,8 @@
-import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { getAiCoworkerPaths, maskApiKey, readConnectionStore, type AiCoworkerPaths, type ConnectionStore } from "./connect";
-import { isTokenExpiring, readCodexAuthMaterial, refreshCodexAuthMaterial } from "./providers/codex-auth";
+import { decodeJwtPayload, isTokenExpiring, readCodexAuthMaterial, refreshCodexAuthMaterial } from "./providers/codex-auth";
 import { PROVIDER_NAMES, type ProviderName } from "./types";
 
 export type ProviderStatusMode = "missing" | "error" | "api_key" | "oauth" | "oauth_pending";
@@ -76,51 +73,6 @@ const defaultCommandRunner: CommandRunner = async ({ command, args, cwd, env, ti
     });
   });
 };
-
-function isObjectLike(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-async function fileExists(p: string): Promise<boolean> {
-  try {
-    const st = await fs.stat(p);
-    return st.isFile();
-  } catch {
-    return false;
-  }
-}
-
-async function readJsonFile<T>(p: string): Promise<T | null> {
-  try {
-    const raw = await fs.readFile(p, "utf-8");
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-function base64UrlDecodeToString(s: string): string | null {
-  try {
-    const pad = "=".repeat((4 - (s.length % 4)) % 4);
-    const b64 = (s + pad).replace(/-/g, "+").replace(/_/g, "/");
-    return Buffer.from(b64, "base64").toString("utf-8");
-  } catch {
-    return null;
-  }
-}
-
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
-  const parts = token.split(".");
-  if (parts.length < 2) return null;
-  const payload = base64UrlDecodeToString(parts[1] ?? "");
-  if (!payload) return null;
-  try {
-    const parsed = JSON.parse(payload);
-    return isObjectLike(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
 
 function joinUrl(base: string, suffix: string): string {
   const b = base.endsWith("/") ? base.slice(0, -1) : base;

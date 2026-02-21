@@ -6,11 +6,7 @@ import path from "node:path";
 import type { AiCoworkerPaths } from "../connect";
 import { isProviderName } from "../types";
 import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
-import {
-  parsePersistedSessionSnapshot,
-  type PersistedSessionSnapshot,
-  type PersistedSessionSummary,
-} from "./sessionStore";
+import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionTitleSource } from "./sessionTitleService";
 
 export type { PersistedSessionSummary } from "./sessionStore";
@@ -488,7 +484,7 @@ export class SessionDb {
     }
 
     if (!appliedMigrations.has(LEGACY_IMPORT_MIGRATION)) {
-      await this.importLegacySnapshots();
+      // Legacy JSON snapshot import was a one-time migration. New installs skip it.
       this.markMigration(LEGACY_IMPORT_MIGRATION);
     }
   }
@@ -547,147 +543,6 @@ export class SessionDb {
     this.db
       .query("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)")
       .run(version, new Date().toISOString());
-  }
-
-  private async importLegacySnapshots(): Promise<void> {
-    let entries: string[];
-    try {
-      entries = await fs.readdir(this.sessionsDir);
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      if (!entry.endsWith(".json")) continue;
-      const filePath = path.join(this.sessionsDir, entry);
-      let snapshot: PersistedSessionSnapshot | null = null;
-      try {
-        const raw = await fs.readFile(filePath, "utf-8");
-        snapshot = parsePersistedSessionSnapshot(JSON.parse(raw));
-      } catch {
-        snapshot = null;
-      }
-      if (!snapshot) continue;
-      this.importLegacySnapshot(snapshot);
-    }
-  }
-
-  private importLegacySnapshot(snapshot: PersistedSessionSnapshot): void {
-    const run = this.db.transaction((legacy: PersistedSessionSnapshot) => {
-      const existing = this.db
-        .query("SELECT status, has_pending_ask, has_pending_approval, last_event_seq FROM sessions WHERE session_id = ?")
-        .get(legacy.sessionId) as Record<string, unknown> | null;
-
-      const existingLastEventSeq = existing ? asPositiveInteger(existing.last_event_seq) : 0;
-      const lastEventSeq = Math.max(existingLastEventSeq, 1);
-      const status = existing?.status === "closed" ? "closed" : "active";
-      const hasPendingAsk = existing ? asIntegerFlag(existing.has_pending_ask) : 0;
-      const hasPendingApproval = existing ? asIntegerFlag(existing.has_pending_approval) : 0;
-
-      this.db
-        .query(
-          `INSERT INTO sessions (
-             session_id,
-             title,
-             title_source,
-             title_model,
-             provider,
-             model,
-             working_directory,
-             output_directory,
-             uploads_directory,
-             enable_mcp,
-             created_at,
-             updated_at,
-             status,
-             has_pending_ask,
-             has_pending_approval,
-             message_count,
-             last_event_seq
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(session_id) DO UPDATE SET
-             title = excluded.title,
-             title_source = excluded.title_source,
-             title_model = excluded.title_model,
-             provider = excluded.provider,
-             model = excluded.model,
-             working_directory = excluded.working_directory,
-             output_directory = excluded.output_directory,
-             uploads_directory = excluded.uploads_directory,
-             enable_mcp = excluded.enable_mcp,
-             created_at = excluded.created_at,
-             updated_at = excluded.updated_at,
-             message_count = excluded.message_count,
-             last_event_seq = CASE
-               WHEN sessions.last_event_seq > excluded.last_event_seq THEN sessions.last_event_seq
-               ELSE excluded.last_event_seq
-             END`
-        )
-        .run(
-          legacy.sessionId,
-          legacy.session.title,
-          legacy.session.titleSource,
-          legacy.session.titleModel,
-          legacy.session.provider,
-          legacy.session.model,
-          legacy.config.workingDirectory,
-          legacy.config.outputDirectory ?? null,
-          legacy.config.uploadsDirectory ?? null,
-          legacy.config.enableMcp ? 1 : 0,
-          asIsoTimestamp(legacy.createdAt),
-          asIsoTimestamp(legacy.updatedAt),
-          status,
-          hasPendingAsk,
-          hasPendingApproval,
-          legacy.context.messages.length,
-          lastEventSeq
-        );
-
-      this.db
-        .query(
-          `INSERT INTO session_state (
-             session_id,
-             system_prompt,
-             messages_json,
-             todos_json,
-             harness_context_json
-           ) VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(session_id) DO UPDATE SET
-             system_prompt = excluded.system_prompt,
-             messages_json = excluded.messages_json,
-             todos_json = excluded.todos_json,
-             harness_context_json = excluded.harness_context_json`
-        )
-        .run(
-          legacy.sessionId,
-          legacy.context.system,
-          toJsonString(legacy.context.messages),
-          toJsonString(legacy.context.todos),
-          toJsonString(legacy.context.harnessContext)
-        );
-
-      this.db
-        .query(
-          `INSERT OR IGNORE INTO session_events (
-             session_id,
-             seq,
-             ts,
-             direction,
-             event_type,
-             payload_json
-           ) VALUES (?, ?, ?, ?, ?, ?)`
-        )
-        .run(
-          legacy.sessionId,
-          1,
-          asIsoTimestamp(legacy.updatedAt),
-          "server",
-          "legacy_import_snapshot",
-          toJsonString({ version: legacy.version })
-        );
-    });
-
-    run(snapshot);
   }
 
   private async hardenDbFile(): Promise<void> {

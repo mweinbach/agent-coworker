@@ -315,232 +315,58 @@ export async function startAgentServer(
             return;
           }
 
-          if (msg.type === "ping") {
-            try {
-              ws.send(JSON.stringify({ type: "pong", sessionId: msg.sessionId } satisfies ServerEvent));
-            } catch {
-              // ignore
-            }
-            return;
-          }
-
-          if (msg.type === "user_message") {
-            void session.sendUserMessage(msg.text, msg.clientMessageId);
-            return;
-          }
-
-          if (msg.type === "ask_response") {
-            session.handleAskResponse(msg.requestId, msg.answer);
-            return;
-          }
-
-          if (msg.type === "approval_response") {
-            session.handleApprovalResponse(msg.requestId, msg.approved);
-            return;
-          }
-
-          if (msg.type === "set_model") {
-            void session.setModel(msg.model, msg.provider);
-            return;
-          }
-
-          if (msg.type === "refresh_provider_status") {
-            void session.refreshProviderStatus();
-            return;
-          }
-
-          if (msg.type === "provider_catalog_get") {
-            void session.emitProviderCatalog();
-            return;
-          }
-
-          if (msg.type === "provider_auth_methods_get") {
-            session.emitProviderAuthMethods();
-            return;
-          }
-
-          if (msg.type === "provider_auth_authorize") {
-            void session.authorizeProviderAuth(msg.provider, msg.methodId);
-            return;
-          }
-
-          if (msg.type === "provider_auth_callback") {
-            void session.callbackProviderAuth(msg.provider, msg.methodId, msg.code);
-            return;
-          }
-
-          if (msg.type === "provider_auth_set_api_key") {
-            void session.setProviderApiKey(msg.provider, msg.methodId, msg.apiKey);
-            return;
-          }
-
-          if (msg.type === "cancel") {
-            session.cancel();
-            return;
-          }
-
-          if (msg.type === "session_close") {
-            void (async () => {
-              await session.closeForHistory();
-              session.dispose("client requested close");
-              sessionBindings.delete(session.id);
-              try {
-                ws.close();
-              } catch {
-                // ignore
-              }
-            })();
-            return;
-          }
-
-          if (msg.type === "reset") {
-            session.reset();
-            return;
-          }
-
-          if (msg.type === "list_tools") {
-            session.listTools();
-            return;
-          }
-
-          if (msg.type === "list_commands") {
-            void session.listCommands();
-            return;
-          }
-
-          if (msg.type === "execute_command") {
-            void session.executeCommand(msg.name, msg.arguments ?? "", msg.clientMessageId);
-            return;
-          }
-
-          if (msg.type === "list_skills") {
-            void session.listSkills();
-            return;
-          }
-
-          if (msg.type === "read_skill") {
-            void session.readSkill(msg.skillName);
-            return;
-          }
-
-          if (msg.type === "disable_skill") {
-            void session.disableSkill(msg.skillName);
-            return;
-          }
-
-          if (msg.type === "enable_skill") {
-            void session.enableSkill(msg.skillName);
-            return;
-          }
-
-          if (msg.type === "delete_skill") {
-            void session.deleteSkill(msg.skillName);
-            return;
-          }
-
-          if (msg.type === "set_enable_mcp") {
-            void session.setEnableMcp(msg.enableMcp);
-            return;
-          }
-
-          if (msg.type === "mcp_servers_get") {
-            void session.emitMcpServers();
-            return;
-          }
-
-          if (msg.type === "mcp_server_upsert") {
-            void session.upsertMcpServer(msg.server, msg.previousName);
-            return;
-          }
-
-          if (msg.type === "mcp_server_delete") {
-            void session.deleteMcpServer(msg.name);
-            return;
-          }
-
-          if (msg.type === "mcp_server_validate") {
-            void session.validateMcpServer(msg.name);
-            return;
-          }
-
-          if (msg.type === "mcp_server_auth_authorize") {
-            void session.authorizeMcpServerAuth(msg.name);
-            return;
-          }
-
-          if (msg.type === "mcp_server_auth_callback") {
-            void session.callbackMcpServerAuth(msg.name, msg.code);
-            return;
-          }
-
-          if (msg.type === "mcp_server_auth_set_api_key") {
-            void session.setMcpServerApiKey(msg.name, msg.apiKey);
-            return;
-          }
-
-          if (msg.type === "mcp_servers_migrate_legacy") {
-            void session.migrateLegacyMcpServers(msg.scope);
-            return;
-          }
-
-          if (msg.type === "harness_context_get") {
-            session.getHarnessContext();
-            return;
-          }
-
-          if (msg.type === "harness_context_set") {
-            session.setHarnessContext(msg.context);
-            return;
-          }
-
-          if (msg.type === "session_backup_get") {
-            void session.getSessionBackupState();
-            return;
-          }
-
-          if (msg.type === "session_backup_checkpoint") {
-            void session.createManualSessionCheckpoint();
-            return;
-          }
-
-          if (msg.type === "session_backup_restore") {
-            void session.restoreSessionBackup(msg.checkpointId);
-            return;
-          }
-
-          if (msg.type === "session_backup_delete_checkpoint") {
-            void session.deleteSessionCheckpoint(msg.checkpointId);
-            return;
-          }
-
-          if (msg.type === "get_messages") {
-            session.getMessages(msg.offset, msg.limit);
-            return;
-          }
-
-          if (msg.type === "set_session_title") {
-            session.setSessionTitle(msg.title);
-            return;
-          }
-
-          if (msg.type === "list_sessions") {
-            void session.listSessions();
-            return;
-          }
-
-          if (msg.type === "delete_session") {
-            void session.deleteSession(msg.targetSessionId);
-            return;
-          }
-
-          if (msg.type === "set_config") {
-            session.setConfig(msg.config);
-            return;
-          }
-
-          if (msg.type === "upload_file") {
-            void session.uploadFile(msg.filename, msg.contentBase64);
-            return;
+          switch (msg.type) {
+            case "ping":
+              try { ws.send(JSON.stringify({ type: "pong", sessionId: msg.sessionId } satisfies ServerEvent)); } catch {}
+              return;
+            case "user_message": return void session.sendUserMessage(msg.text, msg.clientMessageId);
+            case "ask_response": return session.handleAskResponse(msg.requestId, msg.answer);
+            case "approval_response": return session.handleApprovalResponse(msg.requestId, msg.approved);
+            case "set_model": return void session.setModel(msg.model, msg.provider);
+            case "refresh_provider_status": return void session.refreshProviderStatus();
+            case "provider_catalog_get": return void session.emitProviderCatalog();
+            case "provider_auth_methods_get": return session.emitProviderAuthMethods();
+            case "provider_auth_authorize": return void session.authorizeProviderAuth(msg.provider, msg.methodId);
+            case "provider_auth_callback": return void session.callbackProviderAuth(msg.provider, msg.methodId, msg.code);
+            case "provider_auth_set_api_key": return void session.setProviderApiKey(msg.provider, msg.methodId, msg.apiKey);
+            case "cancel": return session.cancel();
+            case "session_close":
+              return void (async () => {
+                await session.closeForHistory();
+                session.dispose("client requested close");
+                sessionBindings.delete(session.id);
+                try { ws.close(); } catch {}
+              })();
+            case "reset": return session.reset();
+            case "list_tools": return session.listTools();
+            case "list_commands": return void session.listCommands();
+            case "execute_command": return void session.executeCommand(msg.name, msg.arguments ?? "", msg.clientMessageId);
+            case "list_skills": return void session.listSkills();
+            case "read_skill": return void session.readSkill(msg.skillName);
+            case "disable_skill": return void session.disableSkill(msg.skillName);
+            case "enable_skill": return void session.enableSkill(msg.skillName);
+            case "delete_skill": return void session.deleteSkill(msg.skillName);
+            case "set_enable_mcp": return void session.setEnableMcp(msg.enableMcp);
+            case "mcp_servers_get": return void session.emitMcpServers();
+            case "mcp_server_upsert": return void session.upsertMcpServer(msg.server, msg.previousName);
+            case "mcp_server_delete": return void session.deleteMcpServer(msg.name);
+            case "mcp_server_validate": return void session.validateMcpServer(msg.name);
+            case "mcp_server_auth_authorize": return void session.authorizeMcpServerAuth(msg.name);
+            case "mcp_server_auth_callback": return void session.callbackMcpServerAuth(msg.name, msg.code);
+            case "mcp_server_auth_set_api_key": return void session.setMcpServerApiKey(msg.name, msg.apiKey);
+            case "mcp_servers_migrate_legacy": return void session.migrateLegacyMcpServers(msg.scope);
+            case "harness_context_get": return session.getHarnessContext();
+            case "harness_context_set": return session.setHarnessContext(msg.context);
+            case "session_backup_get": return void session.getSessionBackupState();
+            case "session_backup_checkpoint": return void session.createManualSessionCheckpoint();
+            case "session_backup_restore": return void session.restoreSessionBackup(msg.checkpointId);
+            case "session_backup_delete_checkpoint": return void session.deleteSessionCheckpoint(msg.checkpointId);
+            case "get_messages": return session.getMessages(msg.offset, msg.limit);
+            case "set_session_title": return session.setSessionTitle(msg.title);
+            case "list_sessions": return void session.listSessions();
+            case "delete_session": return void session.deleteSession(msg.targetSessionId);
+            case "set_config": return session.setConfig(msg.config);
+            case "upload_file": return void session.uploadFile(msg.filename, msg.contentBase64);
           }
         },
         close(ws) {

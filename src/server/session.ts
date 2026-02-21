@@ -980,14 +980,7 @@ export class AgentSession {
   }
 
   async upsertMcpServer(server: MCPServerConfig, previousName?: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
     try {
       await upsertWorkspaceMCPServer(this.config, server, previousName);
     } catch (err) {
@@ -1004,14 +997,7 @@ export class AgentSession {
   }
 
   async deleteMcpServer(nameRaw: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
     try {
       await deleteWorkspaceMCPServer(this.config, nameRaw);
     } catch (err) {
@@ -1032,14 +1018,7 @@ export class AgentSession {
       this.emitError("validation_failed", "session", "MCP server name is required");
       return;
     }
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
 
     this.connecting = true;
     try {
@@ -1145,14 +1124,7 @@ export class AgentSession {
   }
 
   async authorizeMcpServerAuth(nameRaw: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
 
     const server = await this.getMcpServerByName(nameRaw);
     if (!server) return;
@@ -1215,14 +1187,7 @@ export class AgentSession {
   }
 
   async callbackMcpServerAuth(nameRaw: string, codeRaw?: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
 
     const server = await this.getMcpServerByName(nameRaw);
     if (!server) return;
@@ -1318,14 +1283,7 @@ export class AgentSession {
   }
 
   async setMcpServerApiKey(nameRaw: string, apiKeyRaw: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
 
     const server = await this.getMcpServerByName(nameRaw);
     if (!server) return;
@@ -1379,14 +1337,7 @@ export class AgentSession {
   }
 
   async migrateLegacyMcpServers(scope: "workspace" | "user") {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
     try {
       const result = await migrateLegacyMCPServers(this.config, scope);
       this.emit({
@@ -1421,6 +1372,13 @@ export class AgentSession {
       objectiveLength: context.objective.length,
     });
     this.queuePersistSessionSnapshot("session.harness_context");
+  }
+
+  /** Returns true when the session is free to start a new blocking operation. */
+  private guardBusy(): boolean {
+    if (this.running) { this.emitError("busy", "session", "Agent is busy"); return false; }
+    if (this.connecting) { this.emitError("busy", "session", "Connection flow already running"); return false; }
+    return true;
   }
 
   private formatErrorMessage(err: unknown): string {
@@ -1562,14 +1520,7 @@ export class AgentSession {
   }
 
   async callbackProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string, codeRaw?: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
     if (!isProviderName(providerRaw)) {
       this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
       return;
@@ -1643,14 +1594,7 @@ export class AgentSession {
   }
 
   async setProviderApiKey(providerRaw: AgentConfig["provider"], methodIdRaw: string, apiKeyRaw: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
     if (!isProviderName(providerRaw)) {
       this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
       return;

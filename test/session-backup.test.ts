@@ -36,28 +36,34 @@ describe("SessionBackupManager", () => {
       homedir: home,
     });
 
+    // Verify original archive was created with correct permissions.
+    const backupDir = manager.getPublicState().backupDirectory;
+    expect(backupDir).toBeDefined();
+    if (backupDir && process.platform !== "win32") {
+      const backupSt = await fs.stat(backupDir);
+      expect(backupSt.mode & 0o777).toBe(0o700);
+
+      const metadataSt = await fs.stat(path.join(backupDir, "metadata.json"));
+      expect(metadataSt.mode & 0o777).toBe(0o600);
+
+      const originalSt = await fs.stat(path.join(backupDir, "original.tar.gz"));
+      expect(originalSt.mode & 0o777).toBe(0o600);
+    }
+
     await fs.writeFile(path.join(workspace, "a.txt"), "two\n", "utf-8");
     await fs.writeFile(path.join(workspace, "new.txt"), "new\n", "utf-8");
     await fs.rm(path.join(workspace, "sub", "b.txt"), { force: true });
 
     const checkpoint = await manager.createCheckpoint("auto");
     expect(checkpoint.changed).toBe(true);
+    expect(checkpoint.patchBytes).toBeGreaterThan(0);
 
-    if (process.platform !== "win32") {
-      const backupDir = manager.getPublicState().backupDirectory;
-      expect(backupDir).toBeDefined();
-      if (backupDir) {
-        const backupSt = await fs.stat(backupDir);
-        expect(backupSt.mode & 0o777).toBe(0o700);
-
-        const metadataSt = await fs.stat(path.join(backupDir, "metadata.json"));
-        expect(metadataSt.mode & 0o777).toBe(0o600);
-
-        const patchSt = await fs.stat(path.join(backupDir, "checkpoints", `${checkpoint.id}.patch.gz`));
-        expect(patchSt.mode & 0o777).toBe(0o600);
-      }
+    if (backupDir && process.platform !== "win32") {
+      const cpSt = await fs.stat(path.join(backupDir, "checkpoints", `${checkpoint.id}.tar.gz`));
+      expect(cpSt.mode & 0o777).toBe(0o600);
     }
 
+    // Modify files further, then restore checkpoint.
     await fs.writeFile(path.join(workspace, "a.txt"), "three\n", "utf-8");
     await fs.rm(path.join(workspace, "new.txt"), { force: true });
     await fs.writeFile(path.join(workspace, "sub", "b.txt"), "different\n", "utf-8");
@@ -67,6 +73,7 @@ describe("SessionBackupManager", () => {
     expect(await fs.readFile(path.join(workspace, "new.txt"), "utf-8")).toBe("new\n");
     expect(await fileExists(path.join(workspace, "sub", "b.txt"))).toBe(false);
 
+    // Restore to original state.
     await manager.restoreOriginal();
     expect(await fs.readFile(path.join(workspace, "a.txt"), "utf-8")).toBe("one\n");
     expect(await fs.readFile(path.join(workspace, "sub", "b.txt"), "utf-8")).toBe("orig\n");
@@ -93,32 +100,6 @@ describe("SessionBackupManager", () => {
 
     const removedAgain = await manager.deleteCheckpoint(checkpoint.id);
     expect(removedAgain).toBe(false);
-  });
-
-  test("compactClosedSessions compresses closed originals", async () => {
-    const { home, workspace } = await makeTmpWorkspace();
-    await fs.writeFile(path.join(workspace, "a.txt"), "one\n", "utf-8");
-
-    const sessionId = crypto.randomUUID();
-    const manager = await SessionBackupManager.create({
-      sessionId,
-      workingDirectory: workspace,
-      homedir: home,
-    });
-    await manager.close();
-
-    const backupsRoot = path.join(home, ".cowork", "session-backups");
-    const sessionDir = path.join(backupsRoot, sessionId);
-    const originalDir = path.join(sessionDir, "original");
-    const originalArchive = path.join(sessionDir, "original.tar.gz");
-
-    // Close now triggers best-effort compaction, so either form can exist here.
-    const hadOriginalDir = await fileExists(originalDir);
-    const hadArchive = await fileExists(originalArchive);
-    expect(hadOriginalDir || hadArchive).toBe(true);
-    await SessionBackupManager.compactClosedSessions(backupsRoot);
-    expect(await fileExists(originalArchive)).toBe(true);
-    expect(await fileExists(originalDir)).toBe(false);
   });
 
   test("pruneClosedSessions removes old closed sessions beyond retention", async () => {

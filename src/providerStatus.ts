@@ -1,6 +1,3 @@
-import { spawn } from "node:child_process";
-import path from "node:path";
-
 import { getAiCoworkerPaths, maskApiKey, readConnectionStore, type AiCoworkerPaths, type ConnectionStore } from "./connect";
 import { decodeJwtPayload, isTokenExpiring, readCodexAuthMaterial, refreshCodexAuthMaterial } from "./providers/codex-auth";
 import { PROVIDER_NAMES, type ProviderName } from "./types";
@@ -21,57 +18,6 @@ export type ProviderStatus = {
   message: string;
   checkedAt: string;
   savedApiKeyMasks?: Partial<Record<string, string>>;
-};
-
-export type CommandRunner = (opts: {
-  command: string;
-  args: string[];
-  cwd?: string;
-  env?: Record<string, string | undefined>;
-  timeoutMs?: number;
-}) => Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>;
-
-const defaultCommandRunner: CommandRunner = async ({ command, args, cwd, env, timeoutMs }) => {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      env: env ? { ...process.env, ...env } : process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    const onData = (buf: Buffer, which: "stdout" | "stderr") => {
-      const str = buf.toString("utf-8");
-      if (which === "stdout") stdout += str;
-      else stderr += str;
-    };
-
-    child.stdout?.on("data", (b) => onData(b as Buffer, "stdout"));
-    child.stderr?.on("data", (b) => onData(b as Buffer, "stderr"));
-
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-    if (timeoutMs && Number.isFinite(timeoutMs) && timeoutMs > 0) {
-      timeout = setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore
-        }
-      }, timeoutMs);
-    }
-
-    child.once("error", (err) => {
-      if (timeout) clearTimeout(timeout);
-      reject(err);
-    });
-
-    child.once("close", (exitCode, signal) => {
-      if (timeout) clearTimeout(timeout);
-      resolve({ exitCode, signal, stdout, stderr });
-    });
-  });
 };
 
 function joinUrl(base: string, suffix: string): string {
@@ -311,7 +257,6 @@ async function getCodexCliStatus(opts: {
 export async function getProviderStatuses(opts: {
   homedir?: string;
   paths?: AiCoworkerPaths;
-  runner?: CommandRunner;
   fetchImpl?: typeof fetch;
   now?: () => Date;
 } = {}): Promise<ProviderStatus[]> {

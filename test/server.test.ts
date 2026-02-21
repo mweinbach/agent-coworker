@@ -5,7 +5,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startAgentServer, type StartAgentServerOptions } from "../src/server/startServer";
-import { CLIENT_MESSAGE_TYPES, SERVER_EVENT_TYPES, WEBSOCKET_PROTOCOL_VERSION } from "../src/server/protocol";
+import {
+  ASK_SKIP_TOKEN,
+  CLIENT_MESSAGE_TYPES,
+  SERVER_EVENT_TYPES,
+  WEBSOCKET_PROTOCOL_VERSION,
+} from "../src/server/protocol";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -1318,6 +1323,195 @@ describe("Message Parsing (via protocol)", () => {
       );
       expect(responses[0].type).toBe("error");
       expect(responses[0].message).toContain("Unknown sessionId");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("whitespace ask_response is rejected and the same ask is replayed", async () => {
+    const tmpDir = await makeTmpProject();
+    const runTurnImpl = async (params: any) => {
+      const answer = await params.askUser("What kind of doc?");
+      return { text: `answer:${answer}`, reasoningText: undefined, responseMessages: [] };
+    };
+    const { server, url } = await startAgentServer({
+      ...serverOpts(tmpDir),
+      runTurnImpl: runTurnImpl as any,
+    });
+
+    try {
+      const result = await new Promise<{
+        askRequestIds: string[];
+        errors: any[];
+        assistant: any;
+      }>((resolve, reject) => {
+        const ws = new WebSocket(url);
+        const askRequestIds: string[] = [];
+        const errors: any[] = [];
+        let sessionId = "";
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          ws.close();
+          reject(new Error("Timed out waiting for ask replay flow"));
+        }, 15_000);
+
+        const finish = (assistant: any) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          ws.close();
+          resolve({ askRequestIds, errors, assistant });
+        };
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+          if (!sessionId && msg.type === "server_hello") {
+            sessionId = msg.sessionId;
+            ws.send(JSON.stringify({ type: "user_message", sessionId, text: "start ask" }));
+            return;
+          }
+
+          if (msg.type === "ask") {
+            askRequestIds.push(msg.requestId);
+            if (askRequestIds.length === 1) {
+              ws.send(JSON.stringify({
+                type: "ask_response",
+                sessionId,
+                requestId: msg.requestId,
+                answer: "   ",
+              }));
+            } else if (askRequestIds.length === 2) {
+              ws.send(JSON.stringify({
+                type: "ask_response",
+                sessionId,
+                requestId: msg.requestId,
+                answer: ASK_SKIP_TOKEN,
+              }));
+            }
+            return;
+          }
+
+          if (msg.type === "error") {
+            errors.push(msg);
+            return;
+          }
+
+          if (msg.type === "assistant_message") {
+            finish(msg);
+          }
+        };
+
+        ws.onerror = (e) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          ws.close();
+          reject(new Error(`WebSocket error: ${e}`));
+        };
+      });
+
+      expect(result.askRequestIds.length).toBeGreaterThanOrEqual(2);
+      expect(result.askRequestIds[0]).toBe(result.askRequestIds[1]);
+      expect(
+        result.errors.some(
+          (err) =>
+            err.type === "error" &&
+            err.code === "validation_failed" &&
+            err.source === "session" &&
+            typeof err.message === "string" &&
+            err.message.includes("cannot be empty")
+        )
+      ).toBe(true);
+      expect(result.assistant.text).toBe(`answer:${ASK_SKIP_TOKEN}`);
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("ask_response accepts explicit skip token without validation error", async () => {
+    const tmpDir = await makeTmpProject();
+    const runTurnImpl = async (params: any) => {
+      const answer = await params.askUser("Pick one");
+      return { text: `answer:${answer}`, reasoningText: undefined, responseMessages: [] };
+    };
+    const { server, url } = await startAgentServer({
+      ...serverOpts(tmpDir),
+      runTurnImpl: runTurnImpl as any,
+    });
+
+    try {
+      const result = await new Promise<{
+        askCount: number;
+        validationErrors: any[];
+        assistant: any;
+      }>((resolve, reject) => {
+        const ws = new WebSocket(url);
+        let askCount = 0;
+        const validationErrors: any[] = [];
+        let sessionId = "";
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          ws.close();
+          reject(new Error("Timed out waiting for explicit skip ask flow"));
+        }, 15_000);
+
+        const finish = (assistant: any) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          ws.close();
+          resolve({ askCount, validationErrors, assistant });
+        };
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+          if (!sessionId && msg.type === "server_hello") {
+            sessionId = msg.sessionId;
+            ws.send(JSON.stringify({ type: "user_message", sessionId, text: "start ask" }));
+            return;
+          }
+
+          if (msg.type === "ask") {
+            askCount += 1;
+            ws.send(JSON.stringify({
+              type: "ask_response",
+              sessionId,
+              requestId: msg.requestId,
+              answer: ASK_SKIP_TOKEN,
+            }));
+            return;
+          }
+
+          if (
+            msg.type === "error" &&
+            msg.code === "validation_failed" &&
+            msg.source === "session"
+          ) {
+            validationErrors.push(msg);
+            return;
+          }
+
+          if (msg.type === "assistant_message") {
+            finish(msg);
+          }
+        };
+
+        ws.onerror = (e) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          ws.close();
+          reject(new Error(`WebSocket error: ${e}`));
+        };
+      });
+
+      expect(result.askCount).toBe(1);
+      expect(result.validationErrors.length).toBe(0);
+      expect(result.assistant.text).toBe(`answer:${ASK_SKIP_TOKEN}`);
     } finally {
       server.stop();
     }

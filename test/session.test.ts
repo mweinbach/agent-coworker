@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { AgentConfig, TodoItem } from "../src/types";
-import type { ServerEvent } from "../src/server/protocol";
+import { ASK_SKIP_TOKEN, type ServerEvent } from "../src/server/protocol";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import type {
   SessionBackupHandle,
@@ -1219,6 +1219,73 @@ describe("AgentSession", () => {
       const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
       expect(assistantEvt).toBeDefined();
       expect(assistantEvt.text).toBe("Alice");
+    });
+
+    test("rejects blank ask answers, emits validation error, and replays same ask request", async () => {
+      const { session, events } = makeSession();
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const answer = await params.askUser("What should I do?");
+        return { text: answer, reasoningText: undefined, responseMessages: [] };
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const firstAsk = events.find((e) => e.type === "ask") as any;
+      expect(firstAsk).toBeDefined();
+
+      let settled = false;
+      void sendPromise.then(() => {
+        settled = true;
+      });
+
+      session.handleAskResponse(firstAsk.requestId, "   ");
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(settled).toBe(false);
+
+      const errorEvt = events.find((e) => e.type === "error") as any;
+      expect(errorEvt).toBeDefined();
+      expect(errorEvt.code).toBe("validation_failed");
+      expect(errorEvt.source).toBe("session");
+      expect(errorEvt.message).toContain("cannot be empty");
+
+      const askEvents = events.filter((e) => e.type === "ask") as any[];
+      expect(askEvents.length).toBeGreaterThanOrEqual(2);
+      expect(askEvents[1]?.requestId).toBe(firstAsk.requestId);
+
+      session.handleAskResponse(firstAsk.requestId, "Proceed");
+      await sendPromise;
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt).toBeDefined();
+      expect(assistantEvt.text).toBe("Proceed");
+    });
+
+    test("accepts explicit ask skip token", async () => {
+      const { session, events } = makeSession();
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const answer = await params.askUser("Continue?");
+        return { text: answer, reasoningText: undefined, responseMessages: [] };
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const askEvt = events.find((e) => e.type === "ask") as any;
+      expect(askEvt).toBeDefined();
+
+      session.handleAskResponse(askEvt.requestId, ASK_SKIP_TOKEN);
+      await sendPromise;
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt).toBeDefined();
+      expect(assistantEvt.text).toBe(ASK_SKIP_TOKEN);
+
+      const validationErrors = events.filter((e) => e.type === "error" && (e as any).code === "validation_failed");
+      expect(validationErrors.length).toBe(0);
     });
 
     test("removes request from pending map after resolution", async () => {

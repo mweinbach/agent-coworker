@@ -18,6 +18,7 @@ import { parseMCPServersDocument } from "../mcp/configRegistry";
 import type { ModelStreamPartType } from "./modelStream";
 import type { SessionBackupPublicState } from "./sessionBackup";
 import type { PersistedSessionSummary } from "./sessionDb";
+export { ASK_SKIP_TOKEN } from "../shared/ask";
 
 export type MCPServerEventSource = "workspace" | "user" | "system" | "workspace_legacy" | "user_legacy";
 export type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pending" | "error";

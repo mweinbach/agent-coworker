@@ -465,7 +465,9 @@ Respond to an `ask` event.
 | `type` | `"ask_response"` | Yes | — |
 | `sessionId` | `string` | Yes | Non-empty session ID |
 | `requestId` | `string` | Yes | Non-empty. Must match the `requestId` from a pending `ask` event |
-| `answer` | `string` | Yes | User's response text (empty string is allowed) |
+| `answer` | `string` | Yes | User response text. Must be non-empty after trimming whitespace, or the explicit skip token `"[skipped]"` |
+
+If `answer` is empty/whitespace, the server emits an `error` (`code: "validation_failed"`, `source: "session"`) and re-emits the pending `ask` event with the same `requestId`.
 
 ---
 
@@ -1798,6 +1800,10 @@ Prompt requiring a text or option response from the user. The turn is paused unt
 | `requestId` | `string` | Unique request ID. Send this back in `ask_response` |
 | `question` | `string` | The question to present to the user |
 | `options` | `string[]?` | Optional list of suggested options |
+
+Client guidance:
+- Use `"[skipped]"` as an explicit skip response when the user dismisses/skips.
+- Do not send blank answers. Blank/whitespace `ask_response.answer` values are rejected and the same ask is re-sent.
 
 ---
 

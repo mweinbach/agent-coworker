@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { useAppStore } from "../app/store";
 import type { PromptModalState } from "../app/types";
+import { ASK_SKIP_TOKEN } from "../lib/wsProtocol";
 import { Button } from "../components/ui/button";
 import {
   Dialog,
@@ -111,7 +112,7 @@ function AskPromptContent(props: {
   };
 
   const skip = () => {
-    props.answerAsk(props.modal.threadId, props.modal.prompt.requestId, "[skipped]");
+    props.answerAsk(props.modal.threadId, props.modal.prompt.requestId, ASK_SKIP_TOKEN);
   };
 
   return (
@@ -179,7 +180,7 @@ export function PromptModal() {
       // promise resolves.  Dismissing without answering would leave the agent
       // hanging forever.
       if (!open && isAsk) {
-        answerAsk(modal.threadId, modal.prompt.requestId, "[skipped]");
+        answerAsk(modal.threadId, modal.prompt.requestId, ASK_SKIP_TOKEN);
         return;
       }
       if (!open) dismiss();

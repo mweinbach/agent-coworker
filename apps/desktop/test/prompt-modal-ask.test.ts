@@ -5,6 +5,7 @@ import {
   normalizeAskQuestion,
   shouldRenderAskOptions,
 } from "../src/ui/PromptModal";
+import { ASK_SKIP_TOKEN } from "../src/lib/wsProtocol";
 
 describe("desktop ask prompt helpers", () => {
   test("normalizes and truncates long question text", () => {
@@ -32,5 +33,9 @@ describe("desktop ask prompt helpers", () => {
     expect(shouldRenderAskOptions([])).toBe(false);
     expect(shouldRenderAskOptions(["Only one"])).toBe(false);
     expect(shouldRenderAskOptions(["A", "B"])).toBe(true);
+  });
+
+  test("uses shared skip token constant", () => {
+    expect(ASK_SKIP_TOKEN).toBe("[skipped]");
   });
 });

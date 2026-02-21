@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  ASK_SKIP_TOKEN,
   CLIENT_MESSAGE_TYPES,
   SERVER_EVENT_TYPES,
   safeParseClientMessage,
@@ -150,7 +151,7 @@ describe("safeParseClientMessage", () => {
       }
     });
 
-    test("ask_response with empty answer", () => {
+    test("ask_response with empty answer remains syntactically valid (semantic validation happens in session)", () => {
       const msg = expectOk(
         JSON.stringify({
           type: "ask_response",
@@ -161,6 +162,34 @@ describe("safeParseClientMessage", () => {
       );
       if (msg.type === "ask_response") {
         expect(msg.answer).toBe("");
+      }
+    });
+
+    test("ask_response with whitespace answer remains syntactically valid (semantic validation happens in session)", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "ask_response",
+          sessionId: "s1",
+          requestId: "r1",
+          answer: "   ",
+        }),
+      );
+      if (msg.type === "ask_response") {
+        expect(msg.answer).toBe("   ");
+      }
+    });
+
+    test("ask_response accepts explicit skip token", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "ask_response",
+          sessionId: "s1",
+          requestId: "r1",
+          answer: ASK_SKIP_TOKEN,
+        }),
+      );
+      if (msg.type === "ask_response") {
+        expect(msg.answer).toBe(ASK_SKIP_TOKEN);
       }
     });
   });

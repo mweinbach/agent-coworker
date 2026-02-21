@@ -1,4 +1,5 @@
 import type { ServerEvent as CoreServerEvent } from "@cowork/server/protocol";
+export { ASK_SKIP_TOKEN } from "@cowork/shared/ask";
 
 export { PROVIDER_NAMES } from "@cowork/types";
 export type {

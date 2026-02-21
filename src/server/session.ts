@@ -56,7 +56,7 @@ import {
   deletePersistedSessionSnapshot,
 } from "./sessionStore";
 
-import type { ServerEvent } from "./protocol";
+import { ASK_SKIP_TOKEN, type ServerEvent } from "./protocol";
 import {
   SessionBackupManager,
   type SessionBackupHandle,
@@ -1743,6 +1743,20 @@ export class AgentSession {
       this.log(`[warn] ask_response for unknown requestId: ${requestId}`);
       return;
     }
+
+    if (answer.trim().length === 0) {
+      this.emitError(
+        "validation_failed",
+        "session",
+        `Ask response cannot be empty. Reply with text or ${ASK_SKIP_TOKEN} to skip.`
+      );
+      const pendingEvt = this.pendingAskEvents.get(requestId);
+      if (pendingEvt) {
+        this.emit(pendingEvt);
+      }
+      return;
+    }
+
     this.pendingAsk.delete(requestId);
     this.pendingAskEvents.delete(requestId);
     this.queuePersistSessionSnapshot("session.ask_resolved");

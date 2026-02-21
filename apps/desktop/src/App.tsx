@@ -9,6 +9,7 @@ import {
   setWindowAppearance,
   showNotification,
 } from "./lib/desktopCommands";
+import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { ContextSidebar } from "./ui/ContextSidebar";
 import { PromptModal } from "./ui/PromptModal";
 import { Sidebar } from "./ui/Sidebar";
@@ -88,7 +89,7 @@ export default function App() {
             state.answerAsk(
               state.promptModal.threadId,
               state.promptModal.prompt.requestId,
-              "[skipped]",
+              ASK_SKIP_TOKEN,
             );
           } else {
             state.dismissPrompt();

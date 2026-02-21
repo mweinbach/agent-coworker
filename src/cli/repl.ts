@@ -15,6 +15,7 @@ import type { AgentConfig, ApprovalRiskCode, TodoItem } from "../types";
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
 
 const UI_PROVIDER_NAMES = PROVIDER_NAMES;
+const NOT_CONNECTED_MSG = "unable to send (not connected)";
 
 type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & { outputDirectory?: string };
 
@@ -789,7 +790,7 @@ export async function runCliRepl(
         }
         const ok = send({ type: "ask_response", sessionId, requestId: activeAsk.requestId, answer });
         if (!ok) {
-          handleDisconnect(rl, "unable to send (not connected)");
+          handleDisconnect(rl, NOT_CONNECTED_MSG);
           return;
         }
         activateNextPrompt(rl);
@@ -804,7 +805,7 @@ export async function runCliRepl(
         const approved = normalizeApprovalAnswer(line);
         const ok = send({ type: "approval_response", sessionId, requestId: activeApproval.requestId, approved });
         if (!ok) {
-          handleDisconnect(rl, "unable to send (not connected)");
+          handleDisconnect(rl, NOT_CONNECTED_MSG);
           return;
         }
         activateNextPrompt(rl);
@@ -845,7 +846,7 @@ export async function runCliRepl(
           if (sessionId) {
             const ok = send({ type: "reset", sessionId });
             if (!ok) {
-              handleDisconnect(rl, "unable to send (not connected)");
+              handleDisconnect(rl, NOT_CONNECTED_MSG);
               return;
             }
           }
@@ -863,7 +864,7 @@ export async function runCliRepl(
           if (sessionId) {
             const ok = send({ type: "set_model", sessionId, model: id });
             if (!ok) {
-              handleDisconnect(rl, "unable to send (not connected)");
+              handleDisconnect(rl, NOT_CONNECTED_MSG);
               return;
             }
           }
@@ -882,7 +883,7 @@ export async function runCliRepl(
           if (sessionId) {
             const ok = send({ type: "set_model", sessionId, provider: name, model: nextModel });
             if (!ok) {
-              handleDisconnect(rl, "unable to send (not connected)");
+              handleDisconnect(rl, NOT_CONNECTED_MSG);
               return;
             }
           }
@@ -944,7 +945,7 @@ export async function runCliRepl(
               apiKey: apiKeyArg,
             });
             if (!ok) {
-              handleDisconnect(rl, "unable to send (not connected)");
+              handleDisconnect(rl, NOT_CONNECTED_MSG);
               return;
             }
             console.log(`saving key for ${serviceToken}...`);
@@ -974,7 +975,7 @@ export async function runCliRepl(
               apiKey: promptedKey,
             });
             if (!ok) {
-              handleDisconnect(rl, "unable to send (not connected)");
+              handleDisconnect(rl, NOT_CONNECTED_MSG);
               return;
             }
             console.log(`saving key for ${serviceToken}...`);
@@ -989,7 +990,7 @@ export async function runCliRepl(
             methodId: method.id,
           });
           if (!ok) {
-            handleDisconnect(rl, "unable to send (not connected)");
+            handleDisconnect(rl, NOT_CONNECTED_MSG);
             return;
           }
           if (method.oauthMode === "auto") {
@@ -1013,7 +1014,7 @@ export async function runCliRepl(
           }
           const ok = send({ type: "list_tools", sessionId });
           if (!ok) {
-            handleDisconnect(rl, "unable to send (not connected)");
+            handleDisconnect(rl, NOT_CONNECTED_MSG);
             return;
           }
           activateNextPrompt(rl);
@@ -1028,7 +1029,7 @@ export async function runCliRepl(
           }
           const ok = send({ type: "list_sessions", sessionId });
           if (!ok) {
-            handleDisconnect(rl, "unable to send (not connected)");
+            handleDisconnect(rl, NOT_CONNECTED_MSG);
             return;
           }
           activateNextPrompt(rl);
@@ -1068,7 +1069,7 @@ export async function runCliRepl(
       const clientMessageId = crypto.randomUUID();
       const ok = send({ type: "user_message", sessionId, text: line, clientMessageId });
       if (!ok) {
-        handleDisconnect(rl, "unable to send (not connected)");
+        handleDisconnect(rl, NOT_CONNECTED_MSG);
         return;
       }
       activateNextPrompt(rl);

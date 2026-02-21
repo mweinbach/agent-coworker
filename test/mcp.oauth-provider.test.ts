@@ -25,7 +25,12 @@ describe("mcp oauth provider", () => {
     const result = await authorizeMCPServerOAuth(server);
 
     expect(result.challenge.method).toBe("code");
-    expect(result.challenge.url).toContain("response_type=code");
+    // The SDK builds the URL from discovered metadata (or falls back to origin).
+    // Verify we get a valid URL with the expected OAuth parameters.
+    expect(result.challenge.url).toBeDefined();
+    const authUrl = new URL(result.challenge.url!);
+    expect(authUrl.searchParams.get("response_type")).toBe("code");
+    expect(authUrl.searchParams.get("code_challenge_method")).toBe("S256");
     expect(result.pending.state.length).toBeGreaterThan(0);
     expect(result.pending.codeVerifier.length).toBeGreaterThan(0);
   });
@@ -54,9 +59,25 @@ describe("mcp oauth provider", () => {
 
     beforeAll(async () => {
       tokenServer = createServer((req, res) => {
+        // Serve RFC 9728 protected resource metadata.
+        if (req.url?.startsWith("/.well-known/oauth-protected-resource")) {
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({
+            resource: tokenServerUrl,
+            authorization_servers: [tokenServerUrl],
+          }));
+          return;
+        }
+        // Serve RFC 8414 authorization server metadata.
         if (req.url?.startsWith("/.well-known/oauth-authorization-server")) {
           res.setHeader("content-type", "application/json");
-          res.end(JSON.stringify({ token_endpoint: `${tokenServerUrl}/token` }));
+          res.end(JSON.stringify({
+            issuer: tokenServerUrl,
+            authorization_endpoint: `${tokenServerUrl}/authorize`,
+            token_endpoint: `${tokenServerUrl}/token`,
+            response_types_supported: ["code"],
+            code_challenge_methods_supported: ["S256"],
+          }));
           return;
         }
         if (req.url === "/token" && req.method === "POST") {
@@ -103,6 +124,7 @@ describe("mcp oauth provider", () => {
         redirectUri: "http://127.0.0.1:9999/oauth/callback",
         createdAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        authorizationServerUrl: tokenServerUrl,
       };
 
       lastTokenRequest = undefined;
@@ -112,21 +134,53 @@ describe("mcp oauth provider", () => {
         pending,
       });
 
-      // Verify the token endpoint received correct parameters
+      // Verify the token endpoint received correct parameters.
       expect(lastTokenRequest).toBeDefined();
       expect(lastTokenRequest!.body.get("grant_type")).toBe("authorization_code");
       expect(lastTokenRequest!.body.get("code")).toBe("auth-code-123");
+      // The SDK sends the client_id (fallback or registered).
       expect(lastTokenRequest!.body.get("client_id")).toBe("agent-coworker-desktop");
       expect(lastTokenRequest!.body.get("redirect_uri")).toBe("http://127.0.0.1:9999/oauth/callback");
       expect(lastTokenRequest!.body.get("code_verifier")).toBe("test-verifier");
 
-      // Verify returned tokens come from the token endpoint response
+      // Verify returned tokens come from the token endpoint response.
       expect(result.tokens.accessToken).toBe("real-access-token");
       expect(result.tokens.tokenType).toBe("Bearer");
       expect(result.tokens.refreshToken).toBe("real-refresh-token");
       expect(result.tokens.scope).toBe("tools.read");
       expect(result.tokens.expiresAt).toBeDefined();
       expect(result.message).toContain("successful");
+    });
+
+    test("uses stored client information when provided", async () => {
+      const server = makeOAuthServer({
+        transport: { type: "http", url: `${tokenServerUrl}/mcp` },
+        auth: { type: "oauth", oauthMode: "code", scope: "tools.read" },
+      });
+      const pending = {
+        challengeId: "challenge",
+        state: "state",
+        codeVerifier: "test-verifier",
+        redirectUri: "http://127.0.0.1:9999/oauth/callback",
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        authorizationServerUrl: tokenServerUrl,
+      };
+
+      lastTokenRequest = undefined;
+      await exchangeMCPServerOAuthCode({
+        server,
+        code: "auth-code-456",
+        pending,
+        storedClientInfo: {
+          clientId: "registered-client-123",
+          clientSecret: "secret-456",
+          updatedAt: new Date().toISOString(),
+        },
+      });
+
+      expect(lastTokenRequest).toBeDefined();
+      expect(lastTokenRequest!.body.get("client_id")).toBe("registered-client-123");
     });
 
     test("rejects when token endpoint returns error", async () => {
@@ -159,11 +213,12 @@ describe("mcp oauth provider", () => {
           redirectUri: "http://127.0.0.1/cb",
           createdAt: new Date().toISOString(),
           expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          authorizationServerUrl: errorUrl,
         };
 
         await expect(
           exchangeMCPServerOAuthCode({ server, code: "bad-code", pending }),
-        ).rejects.toThrow(/Token exchange failed/);
+        ).rejects.toThrow();
       } finally {
         errorServer.close();
       }

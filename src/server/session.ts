@@ -6,9 +6,11 @@ import { connectProvider as connectModelProvider, getAiCoworkerPaths, type Conne
 import { loadMCPServers, loadMCPTools, readMCPServersSnapshot } from "../mcp";
 import {
   completeMCPServerOAuth,
+  readMCPServerOAuthClientInformation,
   readMCPServerOAuthPending,
   resolveMCPServerAuthState,
   setMCPServerApiKeyCredential,
+  setMCPServerOAuthClientInformation,
   setMCPServerOAuthPending,
 } from "../mcp/authStore";
 import {
@@ -1187,7 +1189,23 @@ export class AgentSession {
 
     this.connecting = true;
     try {
-      const result = await authorizeMCPServerOAuth(server);
+      // Read any previously stored client credentials (from dynamic registration).
+      const storedClientState = await readMCPServerOAuthClientInformation({
+        config: this.config,
+        server,
+      });
+
+      const result = await authorizeMCPServerOAuth(server, storedClientState.clientInformation);
+
+      // Persist newly registered client information if dynamic registration occurred.
+      if (result.clientInformation) {
+        await setMCPServerOAuthClientInformation({
+          config: this.config,
+          server,
+          clientInformation: result.clientInformation,
+        });
+      }
+
       await setMCPServerOAuthPending({
         config: this.config,
         server,
@@ -1272,7 +1290,17 @@ export class AgentSession {
         return;
       }
 
-      const exchange = await exchangeMCPServerOAuthCode({ server, code, pending });
+      // Read stored client credentials to pass through to token exchange.
+      const storedClientState = await readMCPServerOAuthClientInformation({
+        config: this.config,
+        server,
+      });
+      const exchange = await exchangeMCPServerOAuthCode({
+        server,
+        code,
+        pending,
+        storedClientInfo: storedClientState.clientInformation,
+      });
       await completeMCPServerOAuth({
         config: this.config,
         server,

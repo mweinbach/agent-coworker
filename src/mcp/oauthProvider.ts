@@ -1,9 +1,24 @@
 import { spawn } from "node:child_process";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 
+import {
+  discoverOAuthProtectedResourceMetadata,
+  discoverAuthorizationServerMetadata,
+  startAuthorization,
+  exchangeAuthorization,
+  registerClient,
+} from "@modelcontextprotocol/sdk/client/auth.js";
+import type {
+  OAuthClientInformationMixed,
+} from "@modelcontextprotocol/sdk/shared/auth.js";
+import type { AuthorizationServerMetadata } from "@modelcontextprotocol/sdk/client/auth.js";
+
 import type { MCPRegistryServer } from "./configRegistry";
-import type { MCPServerOAuthPending, MCPServerOAuthTokens } from "./authStore";
+import type { MCPServerOAuthClientInfo, MCPServerOAuthPending, MCPServerOAuthTokens } from "./authStore";
+
+/** Default client_id used when no dynamic registration endpoint is available. */
+const FALLBACK_CLIENT_ID = "agent-coworker-desktop";
 
 export interface MCPOAuthChallenge {
   method: "auto" | "code";
@@ -16,6 +31,8 @@ export interface MCPOAuthAuthorizeResult {
   challenge: MCPOAuthChallenge;
   pending: MCPServerOAuthPending;
   openedBrowser: boolean;
+  /** Client information obtained from dynamic registration or stored credentials. */
+  clientInformation?: MCPServerOAuthClientInfo;
 }
 
 type CallbackCapture = {
@@ -46,45 +63,8 @@ function generateOpaqueValue(bytes: number): string {
   return toBase64Url(randomBytes(bytes));
 }
 
-function generatePkceChallenge(verifier: string): string {
-  const digest = createHash("sha256").update(verifier, "utf-8").digest();
-  return toBase64Url(digest);
-}
-
 function isHttpLikeServer(server: MCPRegistryServer): boolean {
   return server.transport.type === "http" || server.transport.type === "sse";
-}
-
-function buildAuthorizationUrl(opts: {
-  server: MCPRegistryServer;
-  redirectUri: string;
-  state: string;
-  codeVerifier: string;
-}): string {
-  if (!isHttpLikeServer(opts.server)) {
-    throw new Error("OAuth is only supported for HTTP/SSE MCP transports.");
-  }
-  if (!opts.server.auth || opts.server.auth.type !== "oauth") {
-    throw new Error(`Server \"${opts.server.name}\" does not use OAuth auth.`);
-  }
-
-  const url = new URL(opts.server.transport.url);
-  const codeChallenge = generatePkceChallenge(opts.codeVerifier);
-
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("client_id", "agent-coworker-desktop");
-  url.searchParams.set("redirect_uri", opts.redirectUri);
-  url.searchParams.set("state", opts.state);
-  url.searchParams.set("code_challenge", codeChallenge);
-  url.searchParams.set("code_challenge_method", "S256");
-  if (opts.server.auth.scope) {
-    url.searchParams.set("scope", opts.server.auth.scope);
-  }
-  if (opts.server.auth.resource) {
-    url.searchParams.set("resource", opts.server.auth.resource);
-  }
-
-  return url.toString();
 }
 
 async function runCommand(command: string, args: string[]): Promise<boolean> {
@@ -192,7 +172,101 @@ async function createCallbackCapture(challengeId: string, state: string, expires
   return capture;
 }
 
-export async function authorizeMCPServerOAuth(server: MCPRegistryServer): Promise<MCPOAuthAuthorizeResult> {
+/**
+ * Discover the authorization server URL for an MCP server via RFC 9728 protected
+ * resource metadata. Falls back to the server's origin when discovery is unavailable.
+ */
+async function resolveAuthorizationServerUrl(serverUrl: string): Promise<string> {
+  try {
+    const resourceMeta = await discoverOAuthProtectedResourceMetadata(serverUrl);
+    const authServers = resourceMeta.authorization_servers;
+    if (Array.isArray(authServers) && authServers.length > 0 && typeof authServers[0] === "string") {
+      return authServers[0];
+    }
+  } catch {
+    // Discovery unavailable — fall through to default.
+  }
+  return new URL(serverUrl).origin;
+}
+
+/**
+ * Discover OAuth/OIDC authorization server metadata (RFC 8414 / OIDC Discovery).
+ * Returns undefined when the server doesn't publish metadata.
+ */
+async function resolveAuthServerMetadata(
+  authServerUrl: string,
+): Promise<AuthorizationServerMetadata | undefined> {
+  try {
+    return await discoverAuthorizationServerMetadata(authServerUrl);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Ensure we have client credentials for this server.
+ * If storedClientInfo is provided, use it. Otherwise attempt RFC 7591 dynamic
+ * client registration. Falls back to a hardcoded client_id when the server
+ * doesn't support dynamic registration.
+ */
+async function ensureClientInformation(opts: {
+  authServerUrl: string;
+  metadata?: AuthorizationServerMetadata;
+  redirectUri: string;
+  storedClientInfo?: MCPServerOAuthClientInfo;
+  scope?: string;
+}): Promise<{ clientInfo: OAuthClientInformationMixed; registered?: MCPServerOAuthClientInfo }> {
+  // Use stored credentials if available.
+  if (opts.storedClientInfo) {
+    const info: OAuthClientInformationMixed = {
+      client_id: opts.storedClientInfo.clientId,
+      ...(opts.storedClientInfo.clientSecret
+        ? { client_secret: opts.storedClientInfo.clientSecret }
+        : {}),
+    };
+    return { clientInfo: info };
+  }
+
+  // Attempt dynamic client registration (RFC 7591).
+  const registrationEndpoint = (opts.metadata as Record<string, unknown> | undefined)
+    ?.registration_endpoint;
+  if (typeof registrationEndpoint === "string" && registrationEndpoint.length > 0) {
+    try {
+      const registered = await registerClient(opts.authServerUrl, {
+        metadata: opts.metadata,
+        clientMetadata: {
+          redirect_uris: [opts.redirectUri],
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
+          token_endpoint_auth_method: "none",
+          client_name: "Agent Coworker",
+          ...(opts.scope ? { scope: opts.scope } : {}),
+        },
+      });
+
+      const clientInfo: MCPServerOAuthClientInfo = {
+        clientId: registered.client_id,
+        ...(registered.client_secret ? { clientSecret: registered.client_secret } : {}),
+        updatedAt: nowIso(),
+      };
+
+      return {
+        clientInfo: registered,
+        registered: clientInfo,
+      };
+    } catch {
+      // Registration failed — fall through to hardcoded client_id.
+    }
+  }
+
+  // Fallback: hardcoded client_id (no registration endpoint or registration failed).
+  return { clientInfo: { client_id: FALLBACK_CLIENT_ID } };
+}
+
+export async function authorizeMCPServerOAuth(
+  server: MCPRegistryServer,
+  storedClientInfo?: MCPServerOAuthClientInfo,
+): Promise<MCPOAuthAuthorizeResult> {
   if (!isHttpLikeServer(server)) {
     throw new Error("OAuth is only supported for HTTP/SSE MCP transports.");
   }
@@ -204,21 +278,39 @@ export async function authorizeMCPServerOAuth(server: MCPRegistryServer): Promis
   const createdAt = nowIso();
   const expiresAt = addMinutesIso(10);
   const state = generateOpaqueValue(24);
-  const codeVerifier = generateOpaqueValue(64);
   const challengeId = randomUUID();
 
+  // 1. Set up redirect URI (callback server or OOB).
   let redirectUri = "urn:ietf:wg:oauth:2.0:oob";
   if (method === "auto") {
     const capture = await createCallbackCapture(challengeId, state, expiresAt);
     redirectUri = capture.redirectUri;
   }
 
-  const url = buildAuthorizationUrl({
-    server,
+  // 2. Discover authorization server via RFC 9728 + RFC 8414.
+  const authServerUrl = await resolveAuthorizationServerUrl(server.transport.url);
+  const metadata = await resolveAuthServerMetadata(authServerUrl);
+
+  // 3. Ensure we have client credentials (stored, registered, or fallback).
+  const { clientInfo, registered } = await ensureClientInformation({
+    authServerUrl,
+    metadata,
     redirectUri,
-    state,
-    codeVerifier,
+    storedClientInfo,
+    scope: server.auth.scope,
   });
+
+  // 4. Build the authorization URL using the SDK (handles PKCE internally).
+  const { authorizationUrl, codeVerifier } = await startAuthorization(authServerUrl, {
+    metadata,
+    clientInformation: clientInfo,
+    redirectUrl: redirectUri,
+    scope: server.auth.scope,
+    state,
+    ...(server.auth.resource ? { resource: new URL(server.auth.resource) } : {}),
+  });
+
+  const url = authorizationUrl.toString();
 
   let openedBrowser = false;
   if (method === "auto") {
@@ -232,6 +324,7 @@ export async function authorizeMCPServerOAuth(server: MCPRegistryServer): Promis
     redirectUri,
     createdAt,
     expiresAt,
+    authorizationServerUrl: authServerUrl,
   };
 
   const instructions = method === "auto"
@@ -249,6 +342,7 @@ export async function authorizeMCPServerOAuth(server: MCPRegistryServer): Promis
     },
     pending,
     openedBrowser,
+    ...(registered ? { clientInformation: registered } : {}),
   };
 }
 
@@ -269,39 +363,11 @@ export async function consumeCapturedOAuthCode(challengeId: string): Promise<str
   return undefined;
 }
 
-/**
- * Resolve the token endpoint for an MCP server via RFC 8414 metadata discovery.
- * Falls back to `{origin}/token` when discovery is unavailable.
- */
-async function resolveTokenEndpoint(serverUrl: string): Promise<string> {
-  const parsed = new URL(serverUrl);
-  // RFC 8414: /.well-known/oauth-authorization-server optionally suffixed with the path
-  const pathSuffix = parsed.pathname === "/" ? "" : parsed.pathname;
-  const wellKnownUrl = `${parsed.origin}/.well-known/oauth-authorization-server${pathSuffix}`;
-
-  try {
-    const res = await fetch(wellKnownUrl, {
-      method: "GET",
-      headers: { accept: "application/json" },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (res.ok) {
-      const meta = (await res.json()) as Record<string, unknown>;
-      if (typeof meta.token_endpoint === "string" && meta.token_endpoint.length > 0) {
-        return meta.token_endpoint;
-      }
-    }
-  } catch {
-    // Discovery unavailable — fall through to default.
-  }
-
-  return `${parsed.origin}/token`;
-}
-
 export async function exchangeMCPServerOAuthCode(opts: {
   server: MCPRegistryServer;
   code: string;
   pending: MCPServerOAuthPending;
+  storedClientInfo?: MCPServerOAuthClientInfo;
 }): Promise<{ tokens: MCPServerOAuthTokens; message: string }> {
   const code = opts.code.trim();
   if (!code) {
@@ -314,49 +380,47 @@ export async function exchangeMCPServerOAuthCode(opts: {
     throw new Error("OAuth is only supported for HTTP/SSE MCP transports.");
   }
 
-  const tokenEndpoint = await resolveTokenEndpoint(opts.server.transport.url);
+  // Resolve authorization server URL — use stored value from pending, or re-discover.
+  const authServerUrl = opts.pending.authorizationServerUrl
+    ?? await resolveAuthorizationServerUrl(opts.server.transport.url);
 
-  const body = new URLSearchParams({
-    grant_type: "authorization_code",
-    code,
-    client_id: "agent-coworker-desktop",
-    redirect_uri: opts.pending.redirectUri,
-    code_verifier: opts.pending.codeVerifier,
+  // Discover metadata for the token endpoint.
+  const metadata = await resolveAuthServerMetadata(authServerUrl);
+
+  // Resolve client credentials.
+  const clientInfo: OAuthClientInformationMixed = opts.storedClientInfo
+    ? {
+        client_id: opts.storedClientInfo.clientId,
+        ...(opts.storedClientInfo.clientSecret
+          ? { client_secret: opts.storedClientInfo.clientSecret }
+          : {}),
+      }
+    : { client_id: FALLBACK_CLIENT_ID };
+
+  // Exchange the authorization code for tokens using the SDK.
+  const sdkTokens = await exchangeAuthorization(authServerUrl, {
+    metadata,
+    clientInformation: clientInfo,
+    authorizationCode: code,
+    codeVerifier: opts.pending.codeVerifier,
+    redirectUri: opts.pending.redirectUri,
+    ...(opts.server.auth.resource ? { resource: new URL(opts.server.auth.resource) } : {}),
   });
-
-  const res = await fetch(tokenEndpoint, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-    body: body.toString(),
-    signal: AbortSignal.timeout(30_000),
-  });
-
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Token exchange failed (${res.status}): ${detail || res.statusText}`);
-  }
-
-  const data = (await res.json()) as Record<string, unknown>;
-  const accessToken = data.access_token;
-  if (typeof accessToken !== "string" || accessToken.length === 0) {
-    throw new Error("Token endpoint response is missing access_token.");
-  }
 
   const expiresAt = (() => {
-    const expiresIn = data.expires_in;
-    if (typeof expiresIn === "number" && Number.isFinite(expiresIn) && expiresIn > 0) {
-      return new Date(Date.now() + expiresIn * 1000).toISOString();
+    if (typeof sdkTokens.expires_in === "number" && Number.isFinite(sdkTokens.expires_in) && sdkTokens.expires_in > 0) {
+      return new Date(Date.now() + sdkTokens.expires_in * 1000).toISOString();
     }
     return undefined;
   })();
 
   const tokens: MCPServerOAuthTokens = {
-    accessToken,
-    tokenType: typeof data.token_type === "string" ? data.token_type : "Bearer",
+    accessToken: sdkTokens.access_token,
+    tokenType: sdkTokens.token_type ?? "Bearer",
     updatedAt: nowIso(),
-    ...(typeof data.refresh_token === "string" ? { refreshToken: data.refresh_token } : {}),
+    ...(sdkTokens.refresh_token ? { refreshToken: sdkTokens.refresh_token } : {}),
     ...(expiresAt ? { expiresAt } : {}),
-    ...(typeof data.scope === "string" ? { scope: data.scope } : {}),
+    ...(sdkTokens.scope ? { scope: sdkTokens.scope } : {}),
     ...(opts.server.auth.resource ? { resource: opts.server.auth.resource } : {}),
   };
 

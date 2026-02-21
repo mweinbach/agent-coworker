@@ -9,8 +9,10 @@ import type { AgentConfig, MCPServerConfig } from "../types";
 import {
   completeMCPServerOAuth,
   resolveMCPServerAuthState,
+  setMCPServerOAuthClientInformation,
   type MCPAuthMode,
   type MCPAuthScope,
+  type MCPServerOAuthClientInfo,
   type MCPServerOAuthTokens,
 } from "./authStore";
 import {
@@ -101,10 +103,12 @@ function createRuntimeOAuthProvider(opts: {
   tokens?: MCPServerOAuthTokens;
   codeVerifier?: string;
   redirectUri?: string;
+  clientInfo?: MCPServerOAuthClientInfo;
 }): OAuthClientProvider | undefined {
   if (opts.mode !== "oauth" || !opts.tokens) return undefined;
 
   let latestTokens: MCPServerOAuthTokens | undefined = opts.tokens;
+  let latestClientInfo: MCPServerOAuthClientInfo | undefined = opts.clientInfo;
   const redirectUrl = opts.redirectUri ?? "http://127.0.0.1/oauth/callback";
 
   return {
@@ -145,9 +149,37 @@ function createRuntimeOAuthProvider(opts: {
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
         token_endpoint_auth_method: "none",
+        client_name: "Agent Coworker",
       };
     },
-    clientInformation: async () => undefined,
+    clientInformation: async () => {
+      if (!latestClientInfo) return undefined;
+      return {
+        client_id: latestClientInfo.clientId,
+        ...(latestClientInfo.clientSecret
+          ? { client_secret: latestClientInfo.clientSecret }
+          : {}),
+      };
+    },
+    saveClientInformation: async (info) => {
+      const clientId = typeof info === "object" && info ? (info as Record<string, unknown>).client_id : undefined;
+      if (typeof clientId !== "string" || !clientId) return;
+      const clientSecret = typeof info === "object" && info ? (info as Record<string, unknown>).client_secret : undefined;
+      latestClientInfo = {
+        clientId,
+        ...(typeof clientSecret === "string" && clientSecret ? { clientSecret } : {}),
+        updatedAt: new Date().toISOString(),
+      };
+      try {
+        await setMCPServerOAuthClientInformation({
+          config: opts.config,
+          server: opts.server,
+          clientInformation: { clientId, ...(typeof clientSecret === "string" && clientSecret ? { clientSecret } : {}) },
+        });
+      } catch {
+        // best effort persistence only
+      }
+    },
   };
 }
 
@@ -177,6 +209,7 @@ async function hydrateServerForRuntime(config: AgentConfig, server: MCPRegistryS
         tokens: auth.oauthTokens,
         codeVerifier: auth.oauthPending?.codeVerifier,
         redirectUri: auth.oauthPending?.redirectUri,
+        clientInfo: auth.oauthClientInfo,
       });
       if (provider) {
         runtimeServer.transport = {

@@ -15,6 +15,8 @@ export interface MCPServerOAuthPending {
   redirectUri: string;
   createdAt: string;
   expiresAt: string;
+  /** Authorization server URL resolved during the authorize phase (RFC 9728 / RFC 8414). */
+  authorizationServerUrl?: string;
 }
 
 export interface MCPServerOAuthTokens {
@@ -27,6 +29,12 @@ export interface MCPServerOAuthTokens {
   updatedAt: string;
 }
 
+export interface MCPServerOAuthClientInfo {
+  clientId: string;
+  clientSecret?: string;
+  updatedAt: string;
+}
+
 export interface MCPServerCredentialRecord {
   apiKey?: {
     value: string;
@@ -36,6 +44,7 @@ export interface MCPServerCredentialRecord {
   oauth?: {
     pending?: MCPServerOAuthPending;
     tokens?: MCPServerOAuthTokens;
+    clientInformation?: MCPServerOAuthClientInfo;
   };
 }
 
@@ -60,6 +69,7 @@ export interface MCPResolvedServerAuth {
   apiKey?: string;
   oauthTokens?: MCPServerOAuthTokens;
   oauthPending?: MCPServerOAuthPending;
+  oauthClientInfo?: MCPServerOAuthClientInfo;
 }
 
 const DEFAULT_DOC: MCPServerCredentialsDocument = {
@@ -160,6 +170,9 @@ function normalizeCredentialRecord(input: unknown): MCPServerCredentialRecord {
           redirectUri,
           createdAt,
           expiresAt,
+          ...(asNonEmptyString(oauthRaw.pending.authorizationServerUrl)
+            ? { authorizationServerUrl: asNonEmptyString(oauthRaw.pending.authorizationServerUrl) }
+            : {}),
         };
       }
     }
@@ -184,10 +197,25 @@ function normalizeCredentialRecord(input: unknown): MCPServerCredentialRecord {
       }
     }
 
-    if (pending || tokens) {
+    let clientInformation: MCPServerOAuthClientInfo | undefined;
+    if (isRecord(oauthRaw.clientInformation)) {
+      const clientId = asNonEmptyString(oauthRaw.clientInformation.clientId);
+      if (clientId) {
+        clientInformation = {
+          clientId,
+          updatedAt: asIsoDate(oauthRaw.clientInformation.updatedAt) ?? nowIso(),
+          ...(asNonEmptyString(oauthRaw.clientInformation.clientSecret)
+            ? { clientSecret: asNonEmptyString(oauthRaw.clientInformation.clientSecret) }
+            : {}),
+        };
+      }
+    }
+
+    if (pending || tokens || clientInformation) {
       oauth = {
         ...(pending ? { pending } : {}),
         ...(tokens ? { tokens } : {}),
+        ...(clientInformation ? { clientInformation } : {}),
       };
     }
   }
@@ -364,6 +392,7 @@ export async function resolveMCPServerAuthState(
 
   const pending = selected.record?.oauth?.pending;
   const tokens = selected.record?.oauth?.tokens;
+  const clientInfo = selected.record?.oauth?.clientInformation;
   const hasAccessToken = Boolean(tokens?.accessToken);
   const hasRefreshToken = Boolean(tokens?.refreshToken && tokens.refreshToken.trim().length > 0);
   const tokenValid = tokens ? isTokenValid(tokens) : false;
@@ -379,6 +408,7 @@ export async function resolveMCPServerAuthState(
       },
       oauthTokens: tokens,
       ...(pending ? { oauthPending: pending } : {}),
+      ...(clientInfo ? { oauthClientInfo: clientInfo } : {}),
     };
   }
 
@@ -393,6 +423,7 @@ export async function resolveMCPServerAuthState(
       },
       oauthTokens: tokens,
       ...(pending ? { oauthPending: pending } : {}),
+      ...(clientInfo ? { oauthClientInfo: clientInfo } : {}),
     };
   }
 
@@ -403,6 +434,7 @@ export async function resolveMCPServerAuthState(
       authType: "oauth",
       message: "OAuth flow is waiting for callback.",
       oauthPending: pending,
+      ...(clientInfo ? { oauthClientInfo: clientInfo } : {}),
     };
   }
 
@@ -414,6 +446,7 @@ export async function resolveMCPServerAuthState(
       message: "OAuth token expired. Re-authorize this server.",
       oauthTokens: tokens,
       ...(pending ? { oauthPending: pending } : {}),
+      ...(clientInfo ? { oauthClientInfo: clientInfo } : {}),
     };
   }
 
@@ -424,6 +457,7 @@ export async function resolveMCPServerAuthState(
       authType: "oauth",
       message: "OAuth authorization expired. Re-authorize this server.",
       oauthPending: pending,
+      ...(clientInfo ? { oauthClientInfo: clientInfo } : {}),
     };
   }
 
@@ -579,6 +613,48 @@ export async function completeMCPServerOAuth(opts: {
       oauth: {
         ...(pending ? { pending } : {}),
         tokens: nextTokens,
+      },
+    };
+  });
+  return { storageFile: filePath, scope };
+}
+
+export async function readMCPServerOAuthClientInformation(opts: {
+  config: AgentConfig;
+  server: MCPRegistryServer;
+}): Promise<{ clientInformation?: MCPServerOAuthClientInfo; scope: MCPAuthScope }> {
+  const files = await readMCPAuthFiles(opts.config);
+  const selected = selectCredentialRecord({
+    byScope: files,
+    source: opts.server.source,
+    serverName: opts.server.name,
+  });
+  return {
+    scope: selected.scope,
+    clientInformation: selected.record?.oauth?.clientInformation,
+  };
+}
+
+export async function setMCPServerOAuthClientInformation(opts: {
+  config: AgentConfig;
+  server: MCPRegistryServer;
+  clientInformation: Omit<MCPServerOAuthClientInfo, "updatedAt">;
+}): Promise<{ storageFile: string; scope: MCPAuthScope }> {
+  const scope = resolvePrimaryScope(opts.server.source);
+  const filePath = await mutateScopeDoc(opts.config, scope, (doc) => {
+    const name = normalizeServerName(opts.server.name);
+    const existing = doc.servers[name] ?? {};
+    doc.servers[name] = {
+      ...existing,
+      oauth: {
+        ...(existing.oauth ?? {}),
+        clientInformation: {
+          clientId: opts.clientInformation.clientId,
+          ...(opts.clientInformation.clientSecret
+            ? { clientSecret: opts.clientInformation.clientSecret }
+            : {}),
+          updatedAt: nowIso(),
+        },
       },
     };
   });

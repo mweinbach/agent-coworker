@@ -13,173 +13,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
-import type { MCPServerConfig } from "../../../lib/wsProtocol";
-
-type DraftState = {
-  name: string;
-  transportType: "stdio" | "http" | "sse";
-  command: string;
-  args: string;
-  cwd: string;
-  url: string;
-  required: boolean;
-  retries: string;
-  authType: "none" | "api_key" | "oauth";
-  headerName: string;
-  prefix: string;
-  keyId: string;
-  scope: string;
-  resource: string;
-  oauthMode: "auto" | "code";
-};
-
-function defaultDraftState(): DraftState {
-  return {
-    name: "",
-    transportType: "stdio",
-    command: "",
-    args: "",
-    cwd: "",
-    url: "",
-    required: false,
-    retries: "",
-    authType: "none",
-    headerName: "",
-    prefix: "",
-    keyId: "",
-    scope: "",
-    resource: "",
-    oauthMode: "auto",
-  };
-}
+import {
+  buildServerFromDraft,
+  defaultDraftState,
+  draftFromServer,
+  formatTransport,
+  sourceLabel,
+  toBool,
+  type DraftState,
+} from "./mcpServerDraft";
 
 function credentialDraftKey(workspaceId: string, serverName: string): string {
   return `${workspaceId}::${serverName}`;
-}
-
-function toBool(checked: boolean | "indeterminate") {
-  return checked === true;
-}
-
-function parseArgs(value: string): string[] | undefined {
-  const split = value
-    .split(/\s+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  return split.length > 0 ? split : undefined;
-}
-
-function formatTransport(server: MCPServerConfig): string {
-  if (server.transport.type === "stdio") {
-    const args = server.transport.args?.length ? ` ${server.transport.args.join(" ")}` : "";
-    return `stdio: ${server.transport.command}${args}`;
-  }
-  return `${server.transport.type}: ${server.transport.url}`;
-}
-
-function sourceLabel(source: string): string {
-  if (source === "workspace") return "workspace";
-  if (source === "user") return "user";
-  if (source === "system") return "system";
-  if (source === "workspace_legacy") return "workspace legacy";
-  if (source === "user_legacy") return "user legacy";
-  return source;
-}
-
-function draftFromServer(server: MCPServerConfig): DraftState {
-  const base: DraftState = {
-    name: server.name,
-    transportType: server.transport.type,
-    command: "",
-    args: "",
-    cwd: "",
-    url: "",
-    required: server.required === true,
-    retries: typeof server.retries === "number" ? String(server.retries) : "",
-    authType: server.auth?.type ?? "none",
-    headerName: "",
-    prefix: "",
-    keyId: "",
-    scope: "",
-    resource: "",
-    oauthMode: "auto",
-  };
-
-  if (server.transport.type === "stdio") {
-    base.command = server.transport.command;
-    base.args = server.transport.args?.join(" ") ?? "";
-    base.cwd = server.transport.cwd ?? "";
-  } else {
-    base.url = server.transport.url;
-  }
-
-  if (server.auth?.type === "api_key") {
-    base.headerName = server.auth.headerName ?? "";
-    base.prefix = server.auth.prefix ?? "";
-    base.keyId = server.auth.keyId ?? "";
-  }
-
-  if (server.auth?.type === "oauth") {
-    base.scope = server.auth.scope ?? "";
-    base.resource = server.auth.resource ?? "";
-    base.oauthMode = server.auth.oauthMode ?? "auto";
-  }
-
-  return base;
-}
-
-function buildServerFromDraft(draft: DraftState): MCPServerConfig | null {
-  const name = draft.name.trim();
-  if (!name) return null;
-
-  const transport = (() => {
-    if (draft.transportType === "stdio") {
-      const command = draft.command.trim();
-      if (!command) return null;
-      return {
-        type: "stdio" as const,
-        command,
-        ...(parseArgs(draft.args) ? { args: parseArgs(draft.args) } : {}),
-        ...(draft.cwd.trim() ? { cwd: draft.cwd.trim() } : {}),
-      };
-    }
-
-    const url = draft.url.trim();
-    if (!url) return null;
-    return {
-      type: draft.transportType,
-      url,
-    };
-  })();
-  if (!transport) return null;
-
-  const retriesValue = draft.retries.trim();
-  const retries = retriesValue.length > 0 ? Number(retriesValue) : undefined;
-  const auth: MCPServerConfig["auth"] = (() => {
-    if (draft.authType === "none") return { type: "none" };
-    if (draft.authType === "api_key") {
-      return {
-        type: "api_key",
-        ...(draft.headerName.trim() ? { headerName: draft.headerName.trim() } : {}),
-        ...(draft.prefix.trim() ? { prefix: draft.prefix.trim() } : {}),
-        ...(draft.keyId.trim() ? { keyId: draft.keyId.trim() } : {}),
-      };
-    }
-    return {
-      type: "oauth",
-      ...(draft.scope.trim() ? { scope: draft.scope.trim() } : {}),
-      ...(draft.resource.trim() ? { resource: draft.resource.trim() } : {}),
-      oauthMode: draft.oauthMode,
-    };
-  })();
-
-  return {
-    name,
-    transport,
-    ...(draft.required ? { required: true } : {}),
-    ...(typeof retries === "number" && Number.isFinite(retries) ? { retries } : {}),
-    ...(auth ? { auth } : {}),
-  };
 }
 
 export function McpServersPage() {
@@ -324,7 +169,7 @@ export function McpServersPage() {
                   onChange={(event) => setDraft((prev) => ({ ...prev, command: event.target.value }))}
                 />
                 <Input
-                  placeholder="Args (space separated)"
+                  placeholder="Args (shell-style, optional)"
                   value={draft.args}
                   onChange={(event) => setDraft((prev) => ({ ...prev, args: event.target.value }))}
                 />

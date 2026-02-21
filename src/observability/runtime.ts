@@ -4,6 +4,7 @@ import { NodeSDK } from "@opentelemetry/sdk-node";
 import type { TelemetrySettings } from "ai";
 
 import type { AgentConfig, ObservabilityConfig, ObservabilityHealth } from "../types";
+import { nowIso } from "../utils/typeGuards";
 
 const DEFAULT_LANGFUSE_BASE_URL = "https://cloud.langfuse.com";
 const WARN_ONCE_KEYS = new Set<string>();
@@ -42,11 +43,7 @@ const state: RuntimeState = {
   },
 };
 
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function formatErrorMessage(err: unknown): string {
+export function formatErrorMessage(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
   return String(err);
 }

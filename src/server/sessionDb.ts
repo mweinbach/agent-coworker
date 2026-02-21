@@ -8,6 +8,7 @@ import { isProviderName } from "../types";
 import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
 import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionTitleSource } from "./sessionTitleService";
+import { isRecord } from "../utils/typeGuards";
 
 export type { PersistedSessionSummary } from "./sessionStore";
 
@@ -16,10 +17,6 @@ const PRIVATE_DIR_MODE = 0o700;
 const BASE_SCHEMA_MIGRATION = 1;
 const LEGACY_IMPORT_MIGRATION = 2;
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function asNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;

@@ -2,6 +2,8 @@ import type { ModelMessage } from "ai";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { isRecord } from "../utils/typeGuards";
+
 import { connectProvider as connectModelProvider, getAiCoworkerPaths, type ConnectProviderResult } from "../connect";
 import { loadMCPServers, loadMCPTools, readMCPServersSnapshot } from "../mcp";
 import {
@@ -93,10 +95,6 @@ type HydratedSessionState = {
   todos: TodoItem[];
   harnessContext: HarnessContextState | null;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function extractAssistantTextFromMessageContent(content: unknown): string {
   if (typeof content === "string") return content;

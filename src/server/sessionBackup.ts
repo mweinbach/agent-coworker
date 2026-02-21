@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -47,6 +49,7 @@ export interface SessionBackupHandle {
 // ---------------------------------------------------------------------------
 
 type SessionBackupMetadataCheckpoint = SessionBackupPublicCheckpoint & {
+  fingerprint: string;
   snapshot: {
     kind: "directory" | "tar_gz";
     path: string;
@@ -204,6 +207,52 @@ async function directoryByteSize(rootDir: string): Promise<number> {
   return total;
 }
 
+async function updateHashWithFileContent(hash: ReturnType<typeof createHash>, filePath: string): Promise<void> {
+  const stream = createReadStream(filePath);
+  for await (const chunk of stream) {
+    hash.update(chunk);
+  }
+}
+
+async function updateHashWithDirectory(
+  hash: ReturnType<typeof createHash>,
+  rootDir: string,
+  currentDir: string
+): Promise<void> {
+  const entries = await fs.readdir(currentDir, { withFileTypes: true });
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+
+  for (const entry of entries) {
+    const absolutePath = path.join(currentDir, entry.name);
+    const relativePath = path.relative(rootDir, absolutePath).split(path.sep).join("/");
+    if (entry.isDirectory()) {
+      hash.update(`D:${relativePath}\n`);
+      await updateHashWithDirectory(hash, rootDir, absolutePath);
+      continue;
+    }
+    if (entry.isFile()) {
+      hash.update(`F:${relativePath}\n`);
+      await updateHashWithFileContent(hash, absolutePath);
+      hash.update("\n");
+      continue;
+    }
+    if (entry.isSymbolicLink()) {
+      const target = await fs.readlink(absolutePath).catch(() => "<unreadable>");
+      hash.update(`L:${relativePath}->${target}\n`);
+      continue;
+    }
+    const stat = await fs.lstat(absolutePath);
+    hash.update(`O:${relativePath}:${stat.mode}:${stat.size}\n`);
+  }
+}
+
+async function workspaceFingerprint(rootDir: string): Promise<string> {
+  const hash = createHash("sha256");
+  hash.update("session-backup-workspace-v1\n");
+  await updateHashWithDirectory(hash, rootDir, rootDir);
+  return hash.digest("hex");
+}
+
 async function createSnapshotWithTarFallback(opts: {
   sourceDir: string;
   sessionDir: string;
@@ -354,6 +403,7 @@ export class SessionBackupManager implements SessionBackupHandle {
     await ensureSecureDirectory(sessionDir);
     await ensureSecureDirectory(path.join(sessionDir, CHECKPOINTS_DIR));
     await ensureWorkingDirectory(workingDirectory);
+    const originalFingerprint = await workspaceFingerprint(workingDirectory);
 
     const originalSnapshot = await createSnapshotWithTarFallback({
       sourceDir: workingDirectory,
@@ -374,19 +424,22 @@ export class SessionBackupManager implements SessionBackupHandle {
     const metadataPath = path.join(sessionDir, METADATA_FILE);
     await writeJson(metadataPath, metadata);
 
-    return new SessionBackupManager({ metadata, sessionDir, metadataPath });
+    return new SessionBackupManager({ metadata, originalFingerprint, sessionDir, metadataPath });
   }
 
   private metadata: SessionBackupMetadata;
+  private readonly originalFingerprint: string;
   private readonly sessionDir: string;
   private readonly metadataPath: string;
 
   private constructor(opts: {
     metadata: SessionBackupMetadata;
+    originalFingerprint: string;
     sessionDir: string;
     metadataPath: string;
   }) {
     this.metadata = opts.metadata;
+    this.originalFingerprint = opts.originalFingerprint;
     this.sessionDir = opts.sessionDir;
     this.metadataPath = opts.metadataPath;
   }
@@ -411,34 +464,47 @@ export class SessionBackupManager implements SessionBackupHandle {
   }
 
   async createCheckpoint(trigger: SessionBackupCheckpointTrigger): Promise<SessionBackupPublicCheckpoint> {
+    await ensureWorkingDirectory(this.metadata.workingDirectory);
     const index = this.metadata.checkpoints.length + 1;
     const id = makeCheckpointId(index);
     const createdAt = new Date().toISOString();
-    const tarPath = path.join(CHECKPOINTS_DIR, `${id}.tar.gz`);
-    const directoryPath = path.join(CHECKPOINTS_DIR, id);
+    const previousCheckpoint = this.metadata.checkpoints[this.metadata.checkpoints.length - 1];
+    const currentFingerprint = await workspaceFingerprint(this.metadata.workingDirectory);
+    const previousFingerprint = previousCheckpoint?.fingerprint ?? this.originalFingerprint;
+    const changed = currentFingerprint !== previousFingerprint;
 
-    const snapshot = await createSnapshotWithTarFallback({
-      sourceDir: this.metadata.workingDirectory,
-      sessionDir: this.sessionDir,
-      tarPath,
-      directoryPath,
-    });
-    const patchBytes = await snapshotByteSize(this.sessionDir, snapshot);
+    let patchBytes = 0;
+    let snapshot: SessionBackupMetadataCheckpoint["snapshot"];
+    if (changed) {
+      const tarPath = path.join(CHECKPOINTS_DIR, `${id}.tar.gz`);
+      const directoryPath = path.join(CHECKPOINTS_DIR, id);
+      snapshot = await createSnapshotWithTarFallback({
+        sourceDir: this.metadata.workingDirectory,
+        sessionDir: this.sessionDir,
+        tarPath,
+        directoryPath,
+      });
+      patchBytes = await snapshotByteSize(this.sessionDir, snapshot);
+    } else {
+      const previousSnapshot = previousCheckpoint?.snapshot ?? this.metadata.originalSnapshot;
+      snapshot = { kind: previousSnapshot.kind, path: previousSnapshot.path };
+    }
 
     const checkpoint: SessionBackupMetadataCheckpoint = {
       id,
       index,
       createdAt,
       trigger,
-      changed: true,
+      changed,
       patchBytes,
+      fingerprint: currentFingerprint,
       snapshot,
     };
 
     this.metadata.checkpoints.push(checkpoint);
     await this.persistMetadata();
 
-    return { id, index, createdAt, trigger, changed: true, patchBytes };
+    return { id, index, createdAt, trigger, changed, patchBytes };
   }
 
   async restoreOriginal(): Promise<void> {
@@ -464,7 +530,15 @@ export class SessionBackupManager implements SessionBackupHandle {
 
     const checkpoint = this.metadata.checkpoints[idx];
     this.metadata.checkpoints.splice(idx, 1);
-    await fs.rm(path.join(this.sessionDir, checkpoint.snapshot.path), { recursive: true, force: true });
+    const snapshotStillReferenced =
+      this.metadata.checkpoints.some(
+        (cp) => cp.snapshot.kind === checkpoint.snapshot.kind && cp.snapshot.path === checkpoint.snapshot.path
+      ) ||
+      (this.metadata.originalSnapshot.kind === checkpoint.snapshot.kind &&
+        this.metadata.originalSnapshot.path === checkpoint.snapshot.path);
+    if (!snapshotStillReferenced) {
+      await fs.rm(path.join(this.sessionDir, checkpoint.snapshot.path), { recursive: true, force: true });
+    }
     await this.persistMetadata();
     return true;
   }

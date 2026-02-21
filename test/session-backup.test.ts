@@ -140,6 +140,70 @@ describe("SessionBackupManager", () => {
     }
   });
 
+  test("createCheckpoint skips snapshot creation when workspace is unchanged", async () => {
+    const { home, workspace } = await makeTmpWorkspace();
+    await fs.writeFile(path.join(workspace, "a.txt"), "one\n", "utf-8");
+
+    const manager = await SessionBackupManager.create({
+      sessionId: crypto.randomUUID(),
+      workingDirectory: workspace,
+      homedir: home,
+    });
+
+    const backupState = manager.getPublicState();
+    if (!backupState.backupDirectory) throw new Error("Expected backup directory");
+
+    const checkpoint = await manager.createCheckpoint("auto");
+    expect(checkpoint.changed).toBe(false);
+    expect(checkpoint.patchBytes).toBe(0);
+    expect(await fileExists(path.join(backupState.backupDirectory, "checkpoints", `${checkpoint.id}.tar.gz`))).toBe(false);
+    expect(await fileExists(path.join(backupState.backupDirectory, "checkpoints", checkpoint.id))).toBe(false);
+
+    await fs.writeFile(path.join(workspace, "a.txt"), "mutated\n", "utf-8");
+    await manager.restoreCheckpoint(checkpoint.id);
+    expect(await fs.readFile(path.join(workspace, "a.txt"), "utf-8")).toBe("one\n");
+  });
+
+  test("deleteCheckpoint preserves shared snapshot artifacts until last reference is removed", async () => {
+    const { home, workspace } = await makeTmpWorkspace();
+    await fs.writeFile(path.join(workspace, "a.txt"), "one\n", "utf-8");
+
+    const manager = await SessionBackupManager.create({
+      sessionId: crypto.randomUUID(),
+      workingDirectory: workspace,
+      homedir: home,
+    });
+
+    await fs.writeFile(path.join(workspace, "a.txt"), "two\n", "utf-8");
+    const changedCheckpoint = await manager.createCheckpoint("manual");
+    expect(changedCheckpoint.changed).toBe(true);
+
+    const backupState = manager.getPublicState();
+    if (!backupState.backupDirectory) throw new Error("Expected backup directory");
+    const sharedTarPath = path.join(backupState.backupDirectory, "checkpoints", `${changedCheckpoint.id}.tar.gz`);
+    const sharedDirPath = path.join(backupState.backupDirectory, "checkpoints", changedCheckpoint.id);
+    expect((await fileExists(sharedTarPath)) || (await fileExists(sharedDirPath))).toBe(true);
+
+    const unchangedCheckpoint = await manager.createCheckpoint("auto");
+    expect(unchangedCheckpoint.changed).toBe(false);
+    expect(unchangedCheckpoint.patchBytes).toBe(0);
+    expect(await fileExists(path.join(backupState.backupDirectory, "checkpoints", `${unchangedCheckpoint.id}.tar.gz`))).toBe(false);
+    expect(await fileExists(path.join(backupState.backupDirectory, "checkpoints", unchangedCheckpoint.id))).toBe(false);
+
+    const removedChanged = await manager.deleteCheckpoint(changedCheckpoint.id);
+    expect(removedChanged).toBe(true);
+    expect((await fileExists(sharedTarPath)) || (await fileExists(sharedDirPath))).toBe(true);
+
+    await fs.writeFile(path.join(workspace, "a.txt"), "three\n", "utf-8");
+    await manager.restoreCheckpoint(unchangedCheckpoint.id);
+    expect(await fs.readFile(path.join(workspace, "a.txt"), "utf-8")).toBe("two\n");
+
+    const removedUnchanged = await manager.deleteCheckpoint(unchangedCheckpoint.id);
+    expect(removedUnchanged).toBe(true);
+    expect(await fileExists(sharedTarPath)).toBe(false);
+    expect(await fileExists(sharedDirPath)).toBe(false);
+  });
+
   test("restoreOriginal does not clear workspace when original snapshot is missing", async () => {
     const { home, workspace } = await makeTmpWorkspace();
     await fs.writeFile(path.join(workspace, "a.txt"), "one\n", "utf-8");

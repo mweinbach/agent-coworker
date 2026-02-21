@@ -8,6 +8,7 @@ import type { AgentConfig } from "../types";
 import type { ServerErrorCode } from "../types";
 import { loadConfig } from "../config";
 import { loadSystemPromptWithSkills } from "../prompt";
+import { writeTextFileAtomic } from "../utils/atomicFile";
 
 import { AgentSession } from "./session";
 import { SessionDb } from "./sessionDb";
@@ -59,12 +60,7 @@ async function persistProjectConfigPatch(
   }
   await fs.mkdir(projectAgentDir, { recursive: true });
   const payload = `${JSON.stringify(next, null, 2)}\n`;
-  const tempPath = path.join(
-    projectAgentDir,
-    `.config.json.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
-  );
-  await fs.writeFile(tempPath, payload, "utf-8");
-  await fs.rename(tempPath, configPath);
+  await writeTextFileAtomic(configPath, payload);
 }
 
 export interface StartAgentServerOptions {

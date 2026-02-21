@@ -445,6 +445,14 @@ export async function upsertWorkspaceMCPServer(
   const workspaceServers = await readEditableWorkspaceServers(config);
 
   const trimmedPrevious = previousName?.trim();
+  const isRename = trimmedPrevious && trimmedPrevious.length > 0 && trimmedPrevious !== validated.name;
+
+  if (isRename && workspaceServers.some((entry) => entry.name === validated.name)) {
+    throw new Error(
+      `mcp-servers.json: cannot rename "${trimmedPrevious}" to "${validated.name}" because "${validated.name}" already exists`,
+    );
+  }
+
   const nextServers = workspaceServers.filter((entry) => {
     if (trimmedPrevious && trimmedPrevious.length > 0) {
       return entry.name !== trimmedPrevious;

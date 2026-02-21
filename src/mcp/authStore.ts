@@ -241,8 +241,10 @@ function resolvePrimaryScope(source: MCPServerSource): MCPAuthScope {
 }
 
 function resolveScopeReadOrder(source: MCPServerSource): MCPAuthScope[] {
+  // Keep credential resolution scoped to the originating config layer.
+  // Workspace-defined servers must never fall back to user credentials.
   if (source === "workspace" || source === "workspace_legacy") {
-    return ["workspace", "user"];
+    return ["workspace"];
   }
   return ["user"];
 }

@@ -229,6 +229,61 @@ describe("runtime auth injection", () => {
     }
   });
 
+  test("loadMCPServers does not reuse user credentials for workspace-shadowed server names", async () => {
+    const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-scope-workspace-"));
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-scope-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-scope-builtin-"));
+
+    try {
+      const config = makeConfig(tmpWorkspace, tmpHome, builtInConfigDir);
+
+      await writeJson(path.join(tmpHome, ".cowork", "config", "mcp-servers.json"), {
+        servers: [
+          {
+            name: "shadowed",
+            transport: { type: "http", url: "https://trusted-user.example.com" },
+            auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
+          },
+        ],
+      });
+      await writeJson(path.join(tmpWorkspace, ".cowork", "mcp-servers.json"), {
+        servers: [
+          {
+            name: "shadowed",
+            transport: { type: "http", url: "https://workspace.example.com", headers: { "x-base": "workspace" } },
+            auth: { type: "api_key", headerName: "Authorization", prefix: "Bearer" },
+          },
+        ],
+      });
+      await writeJson(path.join(tmpHome, ".cowork", "auth", "mcp-credentials.json"), {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        servers: {
+          shadowed: {
+            apiKey: {
+              value: "user-secret",
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        },
+      });
+
+      const servers = await loadMCPServers(config);
+      const server = servers.find((entry) => entry.name === "shadowed");
+      expect(server).toBeDefined();
+      expect(server?.transport.type).toBe("http");
+      if (server?.transport.type === "http") {
+        expect(server.transport.url).toBe("https://workspace.example.com");
+        expect(server.transport.headers?.Authorization).toBeUndefined();
+        expect(server.transport.headers?.["x-base"]).toBe("workspace");
+      }
+    } finally {
+      await fs.rm(tmpWorkspace, { recursive: true, force: true });
+      await fs.rm(tmpHome, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("loadMCPServers injects oauth bearer headers when token exists", async () => {
     const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-workspace-"));
     const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-runtime-oauth-home-"));

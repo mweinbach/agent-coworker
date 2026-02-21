@@ -105,6 +105,30 @@ describe("mcp auth store", () => {
     }
   });
 
+  test("workspace auth resolution does not fall back to user credentials for shadowed names", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-scope-workspace-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-scope-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-scope-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      await setMCPServerApiKeyCredential({
+        config,
+        server: inheritedServer("shadowed"),
+        apiKey: "user-secret",
+      });
+
+      const state = await resolveMCPServerAuthState(config, workspaceServer("shadowed"));
+      expect(state.mode).toBe("missing");
+      expect(state.scope).toBe("workspace");
+      expect(state.message).toContain("API key required");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
   test("resolveMCPServerAuthState derives missing/api_key/oauth_pending and handles expired oauth tokens", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-mode-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-mode-home-"));

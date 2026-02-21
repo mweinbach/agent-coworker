@@ -269,6 +269,35 @@ export async function consumeCapturedOAuthCode(challengeId: string): Promise<str
   return undefined;
 }
 
+/**
+ * Resolve the token endpoint for an MCP server via RFC 8414 metadata discovery.
+ * Falls back to `{origin}/token` when discovery is unavailable.
+ */
+async function resolveTokenEndpoint(serverUrl: string): Promise<string> {
+  const parsed = new URL(serverUrl);
+  // RFC 8414: /.well-known/oauth-authorization-server optionally suffixed with the path
+  const pathSuffix = parsed.pathname === "/" ? "" : parsed.pathname;
+  const wellKnownUrl = `${parsed.origin}/.well-known/oauth-authorization-server${pathSuffix}`;
+
+  try {
+    const res = await fetch(wellKnownUrl, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.ok) {
+      const meta = (await res.json()) as Record<string, unknown>;
+      if (typeof meta.token_endpoint === "string" && meta.token_endpoint.length > 0) {
+        return meta.token_endpoint;
+      }
+    }
+  } catch {
+    // Discovery unavailable — fall through to default.
+  }
+
+  return `${parsed.origin}/token`;
+}
+
 export async function exchangeMCPServerOAuthCode(opts: {
   server: MCPRegistryServer;
   code: string;
@@ -281,21 +310,58 @@ export async function exchangeMCPServerOAuthCode(opts: {
   if (!opts.server.auth || opts.server.auth.type !== "oauth") {
     throw new Error(`Server \"${opts.server.name}\" is not configured for OAuth.`);
   }
+  if (!isHttpLikeServer(opts.server)) {
+    throw new Error("OAuth is only supported for HTTP/SSE MCP transports.");
+  }
 
-  // Generic adapter fallback: treat exchanged code as bearer token material.
-  // Servers that require full OAuth token exchange can still use manual API key mode.
-  const expiresAt = addMinutesIso(60 * 8);
+  const tokenEndpoint = await resolveTokenEndpoint(opts.server.transport.url);
+
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    client_id: "agent-coworker-desktop",
+    redirect_uri: opts.pending.redirectUri,
+    code_verifier: opts.pending.codeVerifier,
+  });
+
+  const res = await fetch(tokenEndpoint, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+    body: body.toString(),
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Token exchange failed (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const data = (await res.json()) as Record<string, unknown>;
+  const accessToken = data.access_token;
+  if (typeof accessToken !== "string" || accessToken.length === 0) {
+    throw new Error("Token endpoint response is missing access_token.");
+  }
+
+  const expiresAt = (() => {
+    const expiresIn = data.expires_in;
+    if (typeof expiresIn === "number" && Number.isFinite(expiresIn) && expiresIn > 0) {
+      return new Date(Date.now() + expiresIn * 1000).toISOString();
+    }
+    return undefined;
+  })();
+
   const tokens: MCPServerOAuthTokens = {
-    accessToken: code,
-    tokenType: "Bearer",
-    expiresAt,
-    ...(opts.server.auth.scope ? { scope: opts.server.auth.scope } : {}),
-    ...(opts.server.auth.resource ? { resource: opts.server.auth.resource } : {}),
+    accessToken,
+    tokenType: typeof data.token_type === "string" ? data.token_type : "Bearer",
     updatedAt: nowIso(),
+    ...(typeof data.refresh_token === "string" ? { refreshToken: data.refresh_token } : {}),
+    ...(expiresAt ? { expiresAt } : {}),
+    ...(typeof data.scope === "string" ? { scope: data.scope } : {}),
+    ...(opts.server.auth.resource ? { resource: opts.server.auth.resource } : {}),
   };
 
   return {
     tokens,
-    message: "OAuth authorization code saved as bearer credentials.",
+    message: "OAuth token exchange successful.",
   };
 }

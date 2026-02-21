@@ -6,7 +6,7 @@ import { tool } from "ai";
 import { z } from "zod";
 
 import type { ToolContext } from "./context";
-import { truncateText } from "../utils/paths";
+import { isPathInside, truncateText } from "../utils/paths";
 
 async function readIfExists(p: string): Promise<string | null> {
   try {
@@ -18,7 +18,11 @@ async function readIfExists(p: string): Promise<string | null> {
 
 function keyToPath(baseDir: string, key: string): string {
   const normalized = key.endsWith(".md") ? key : `${key}.md`;
-  return path.join(baseDir, normalized);
+  const resolved = path.resolve(baseDir, normalized);
+  if (!isPathInside(baseDir, resolved)) {
+    throw new Error(`Memory key resolves outside memory directory: ${key}`);
+  }
+  return resolved;
 }
 
 async function findHotCache(ctx: ToolContext): Promise<{ path: string; content: string } | null> {
@@ -34,7 +38,12 @@ async function findHotCache(ctx: ToolContext): Promise<{ path: string; content: 
   return null;
 }
 
-export function createMemoryTool(ctx: ToolContext) {
+export function createMemoryTool(
+  ctx: ToolContext,
+  opts: { execFileImpl?: typeof execFile } = {}
+) {
+  const execFileImpl = opts.execFileImpl ?? execFile;
+
   return tool({
     description: `Read or update persistent memory.
 
@@ -113,9 +122,9 @@ Use action=read to retrieve memory, action=write to store new information, and a
         }
 
         const rgOut = await new Promise<string | null>((resolve) => {
-          execFile(
+          execFileImpl(
             "rg",
-            ["-n", "--no-heading", query, projectMemoryDir, userMemoryDir],
+            ["-n", "--no-heading", "--", query, projectMemoryDir, userMemoryDir],
             {
               maxBuffer: 1024 * 1024 * 5,
               ...(ctx.abortSignal ? { signal: ctx.abortSignal } : {}),

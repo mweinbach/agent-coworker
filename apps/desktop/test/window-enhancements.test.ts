@@ -13,8 +13,19 @@ function createWindowStub() {
 }
 
 describe("macosBrowserWindowOptions", () => {
-  test("returns an empty object on non-macOS", () => {
-    expect(macosBrowserWindowOptions("win32")).toEqual({});
+  test("returns title bar overlay options on Windows", () => {
+    expect(macosBrowserWindowOptions("win32")).toEqual({
+      titleBarStyle: "hidden",
+      titleBarOverlay: {
+        color: "#00000000",
+        symbolColor: "#5a4736",
+        height: 48,
+      },
+    });
+  });
+
+  test("returns an empty object on Linux", () => {
+    expect(macosBrowserWindowOptions("linux")).toEqual({});
   });
 
   test("adds hidden inset title bar and traffic lights on macOS", () => {

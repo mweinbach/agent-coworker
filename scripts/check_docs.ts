@@ -3,7 +3,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { WEBSOCKET_PROTOCOL_VERSION } from "../src/server/protocol";
+
 type CheckResult = { ok: true } | { ok: false; message: string };
+
+export function protocolVersionNeedle(version: string = WEBSOCKET_PROTOCOL_VERSION): string {
+  return `Current protocol version: \`${version}\``;
+}
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -53,7 +59,7 @@ async function main() {
     assertContains(harnessIndex, "slo.md", "docs/harness/index.md"),
     assertContains(wsProtocol, "harness_context_get", "docs/websocket-protocol.md"),
     assertContains(wsProtocol, "observability_status", "docs/websocket-protocol.md"),
-    assertContains(wsProtocol, "protocol version: `4.0`", "docs/websocket-protocol.md"),
+    assertContains(wsProtocol, protocolVersionNeedle(), "docs/websocket-protocol.md"),
   ];
 
   const failures = checks.filter((check): check is { ok: false; message: string } => !check.ok);

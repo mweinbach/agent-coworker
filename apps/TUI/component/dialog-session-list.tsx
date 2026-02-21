@@ -1,6 +1,7 @@
 import { createEffect, createMemo } from "solid-js";
 
 import { useDialog } from "../context/dialog";
+import { useRoute } from "../context/route";
 import { useSync } from "../context/sync";
 import { DialogSelect, type SelectItem } from "../ui/dialog-select";
 
@@ -26,6 +27,7 @@ export function openSessionList(dialog: ReturnType<typeof useDialog>) {
 
 function SessionListDialog(props: { onDismiss: () => void }) {
   const { state, actions } = useSync();
+  const route = useRoute();
 
   createEffect(() => {
     actions.requestSessions();
@@ -51,6 +53,7 @@ function SessionListDialog(props: { onDismiss: () => void }) {
       width="70%"
       onDismiss={props.onDismiss}
       onSelect={(item) => {
+        route.navigate({ route: "session", sessionId: item.value });
         actions.resumeSession(item.value);
         props.onDismiss();
       }}

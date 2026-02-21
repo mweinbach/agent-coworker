@@ -47,7 +47,7 @@ import { emitObservabilityEvent } from "../observability/otel";
 import { getObservabilityHealth } from "../observability/runtime";
 import { expandCommandTemplate, listCommands as listServerCommands, resolveCommand } from "./commands";
 import { normalizeModelStreamPart, reasoningModeForProvider } from "./modelStream";
-import { generateSessionTitle, type SessionTitleSource, DEFAULT_SESSION_TITLE } from "./sessionTitleService";
+import { generateSessionTitle, heuristicTitleFromQuery, type SessionTitleSource, DEFAULT_SESSION_TITLE } from "./sessionTitleService";
 import { type PersistedSessionRecord, type SessionPersistenceStatus, SessionDb } from "./sessionDb";
 import {
   type PersistedSessionSnapshot,
@@ -571,6 +571,14 @@ export class AgentSession {
     const titleConfig: AgentConfig = { ...this.config };
     const prompt = query.trim();
     if (!prompt) return;
+    const heuristicTitle = heuristicTitleFromQuery(prompt);
+    if (this.sessionInfo.titleSource === "default" && heuristicTitle && heuristicTitle !== DEFAULT_SESSION_TITLE) {
+      this.updateSessionInfo({
+        title: heuristicTitle,
+        titleSource: "heuristic",
+        titleModel: null,
+      });
+    }
 
     void (async () => {
       const generated = await this.generateSessionTitleImpl({
@@ -1853,6 +1861,7 @@ export class AgentSession {
         this.config.workingDirectory,
         ...(this.config.outputDirectory ? [this.config.outputDirectory] : []),
       ],
+      workingDirectory: this.config.workingDirectory,
     });
     if (classification.kind === "auto") return true;
 

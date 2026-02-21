@@ -1,4 +1,4 @@
-import { createContext, useContext, createSignal, type JSX, type Accessor } from "solid-js";
+import { createContext, useContext, createSignal, onCleanup, type JSX, type Accessor } from "solid-js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -34,6 +34,21 @@ function saveStore(store: Record<string, string>) {
 
 export function KVProvider(props: { children: JSX.Element }) {
   const store = loadStore();
+  const subscribersByKey = new Map<string, Set<(nextRaw: string) => void>>();
+
+  const notifySubscribers = (key: string, nextRaw: string) => {
+    const subscribers = subscribersByKey.get(key);
+    if (!subscribers) return;
+    for (const subscriber of subscribers) {
+      subscriber(nextRaw);
+    }
+  };
+
+  const setValue = (key: string, val: string) => {
+    store[key] = val;
+    saveStore(store);
+    notifySubscribers(key, val);
+  };
 
   const value: KVContextValue = {
     get(key: string, defaultValue = "") {
@@ -41,18 +56,30 @@ export function KVProvider(props: { children: JSX.Element }) {
     },
 
     set(key: string, val: string) {
-      store[key] = val;
-      saveStore(store);
+      setValue(key, val);
     },
 
     signal(key: string, defaultValue: boolean): [Accessor<boolean>, (v: boolean) => void] {
       const initial = store[key] !== undefined ? store[key] === "true" : defaultValue;
       const [val, setVal] = createSignal(initial);
 
+      const subscriber = (nextRaw: string) => setVal(nextRaw === "true");
+      const existing = subscribersByKey.get(key);
+      if (existing) {
+        existing.add(subscriber);
+      } else {
+        subscribersByKey.set(key, new Set([subscriber]));
+      }
+
+      onCleanup(() => {
+        const subscribers = subscribersByKey.get(key);
+        if (!subscribers) return;
+        subscribers.delete(subscriber);
+        if (subscribers.size === 0) subscribersByKey.delete(key);
+      });
+
       const setter = (v: boolean) => {
-        setVal(v);
-        store[key] = String(v);
-        saveStore(store);
+        setValue(key, String(v));
       };
 
       return [val, setter];

@@ -41,7 +41,7 @@ export function createGrepTool(
         "grep"
       );
 
-      args.push(pattern);
+      args.push("--", pattern);
       args.push(validatedSearchPath);
 
       let rgPath: string;

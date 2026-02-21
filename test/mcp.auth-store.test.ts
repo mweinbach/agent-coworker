@@ -190,8 +190,14 @@ describe("mcp auth store", () => {
       const fileStat = await fs.stat(files.workspace.filePath);
       const dirStat = await fs.stat(authDirPath);
 
-      expect(fileStat.mode & 0o777).toBe(0o600);
-      expect(dirStat.mode & 0o777).toBe(0o700);
+      if (process.platform === "win32") {
+        // Windows only exposes limited POSIX mode semantics; assert writable owner bits exist.
+        expect(fileStat.mode & 0o200).toBe(0o200);
+        expect(dirStat.mode & 0o200).toBe(0o200);
+      } else {
+        expect(fileStat.mode & 0o777).toBe(0o600);
+        expect(dirStat.mode & 0o777).toBe(0o700);
+      }
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

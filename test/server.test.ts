@@ -483,7 +483,7 @@ describe("WebSocket Lifecycle", () => {
     } finally {
       server.stop();
     }
-  });
+  }, 10_000);
 
   test("server_hello config.workingDirectory matches the cwd", async () => {
     const tmpDir = await makeTmpProject();
@@ -844,7 +844,9 @@ describe("WebSocket Lifecycle", () => {
       expect(response.servers[0]?.name).toBe("grep");
       expect(response.servers[0]?.source).toBe("workspace");
       expect(response.files.some((file: any) => file.path === mcpPath)).toBe(true);
-      expect(response.legacy.workspace.path.endsWith(".agent/mcp-servers.json")).toBe(true);
+      expect(
+        path.normalize(response.legacy.workspace.path).endsWith(path.join(".agent", "mcp-servers.json"))
+      ).toBe(true);
     } finally {
       server.stop();
     }

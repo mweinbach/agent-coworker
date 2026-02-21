@@ -4,7 +4,7 @@ import { useSyncActions } from "../../context/sync";
 import type { ApprovalRequest } from "../../context/sync";
 import { keyNameFromEvent } from "../../util/keyboard";
 
-const OPTIONS = ["Allow once", "Allow always", "Reject"];
+const OPTIONS = ["Allow", "Reject"];
 
 export function PermissionPrompt(props: { approval: ApprovalRequest }) {
   const theme = useTheme();
@@ -13,11 +13,11 @@ export function PermissionPrompt(props: { approval: ApprovalRequest }) {
 
   const handleSelect = () => {
     const idx = selected();
-    if (idx === 2) {
+    if (idx === 1) {
       // Reject
       actions.respondApproval(props.approval.requestId, false);
     } else {
-      // Allow (once or always)
+      // Allow
       actions.respondApproval(props.approval.requestId, true);
     }
   };

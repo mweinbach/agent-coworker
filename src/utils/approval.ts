@@ -41,6 +41,7 @@ export type CommandApprovalClassificationDetailed =
 
 export type CommandApprovalContext = {
   allowedRoots?: string[];
+  workingDirectory?: string;
 };
 
 const FILE_READ_REVIEW_PATTERNS: RegExp[] = [/^cat\b/, /^head\b/, /^tail\b/, /^man\b/];
@@ -116,27 +117,55 @@ function canonicalizeRootSync(rootPath: string): string {
 }
 
 /** Extract path-like values from option-assigned forms: --option=/path or -o=/path */
-function extractPathsFromToken(token: string): string[] {
+function stripWrappingQuotes(value: string): string {
+  let current = value;
+  while (
+    current.length >= 2 &&
+    ((current.startsWith('"') && current.endsWith('"')) ||
+      (current.startsWith("'") && current.endsWith("'")) ||
+      (current.startsWith("`") && current.endsWith("`")))
+  ) {
+    current = current.slice(1, -1);
+  }
+  return current;
+}
+
+function isRelativePathLike(value: string): boolean {
+  if (!value || value.startsWith("-")) return false;
+  if (path.posix.isAbsolute(value) || path.win32.isAbsolute(value)) return false;
+
+  return (
+    value === "." ||
+    value === ".." ||
+    value.startsWith("./") ||
+    value.startsWith(".\\") ||
+    value.startsWith("../") ||
+    value.startsWith("..\\") ||
+    value.includes("/") ||
+    value.includes("\\")
+  );
+}
+
+function extractPathsFromToken(token: string, workingDirectory?: string): string[] {
   const paths: string[] = [];
   const optionValueMatch = token.match(/^(?:--[a-zA-Z0-9-]+|-[a-zA-Z0-9])=(.+)$/);
   if (optionValueMatch) {
-    let value = optionValueMatch[1];
-    while (
-      value.length >= 2 &&
-      ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'")) ||
-        (value.startsWith("`") && value.endsWith("`")))
-    ) {
-      value = value.slice(1, -1);
-    }
+    const value = stripWrappingQuotes(optionValueMatch[1] ?? "");
+    if (!value) return paths;
+
     if (path.posix.isAbsolute(value) || path.win32.isAbsolute(value)) {
       paths.push(value);
+      return paths;
+    }
+
+    if (workingDirectory && isRelativePathLike(value)) {
+      paths.push(path.resolve(workingDirectory, value));
     }
   }
   return paths;
 }
 
-function hasOutsideAllowedScope(command: string, allowedRoots?: string[]): boolean {
+function hasOutsideAllowedScope(command: string, allowedRoots?: string[], workingDirectory?: string): boolean {
   if (!allowedRoots || allowedRoots.length === 0) return false;
   const normalizedRoots = allowedRoots.map((root) => {
     try {
@@ -145,12 +174,24 @@ function hasOutsideAllowedScope(command: string, allowedRoots?: string[]): boole
       return path.resolve(root);
     }
   });
+  const normalizedWorkingDirectory = (() => {
+    if (!workingDirectory) return undefined;
+    try {
+      return canonicalizeRootSync(workingDirectory);
+    } catch {
+      return path.resolve(workingDirectory);
+    }
+  })();
+
   for (const token of tokenizeCommand(command)) {
     const pathsToCheck: string[] = [];
     if (path.posix.isAbsolute(token) || path.win32.isAbsolute(token)) {
       pathsToCheck.push(token);
     }
-    pathsToCheck.push(...extractPathsFromToken(token));
+    if (normalizedWorkingDirectory && isRelativePathLike(token)) {
+      pathsToCheck.push(path.resolve(normalizedWorkingDirectory, token));
+    }
+    pathsToCheck.push(...extractPathsFromToken(token, normalizedWorkingDirectory));
     for (const p of pathsToCheck) {
       let resolved: string;
       try {
@@ -178,7 +219,7 @@ export function classifyCommandDetailed(
     return { kind: "prompt", dangerous: false, riskCode: "contains_shell_control_operator" };
   }
 
-  if (hasOutsideAllowedScope(command, ctx.allowedRoots)) {
+  if (hasOutsideAllowedScope(command, ctx.allowedRoots, ctx.workingDirectory)) {
     return { kind: "prompt", dangerous: false, riskCode: "outside_allowed_scope" };
   }
 

@@ -2,9 +2,10 @@ import { createMemo, For, Show } from "solid-js";
 import { useTheme } from "../context/theme";
 import { Dialog } from "../ui/dialog";
 import { useDialog } from "../context/dialog";
-import { createPromptStash, formatRelativeTime, type StashEntry } from "./prompt/stash";
+import { promptStash } from "../context/prompt-stash";
+import { formatRelativeTime, type StashEntry } from "./prompt/stash";
 
-const stash = createPromptStash();
+const stash = promptStash;
 
 export { stash };
 

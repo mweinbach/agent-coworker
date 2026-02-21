@@ -65,20 +65,50 @@ describe("sessionDb", () => {
     }
   });
 
-  test("marks legacy import migration as applied without importing (legacy code removed)", async () => {
+  test("imports legacy JSON snapshots before marking legacy migration as applied", async () => {
     const paths = await makeTmpCoworkHome();
-    // Even with JSON files in the sessions dir, no legacy import occurs — the migration
-    // is marked as applied immediately (legacy import code was removed).
+    const now = new Date().toISOString();
+
     await fs.writeFile(
       path.join(paths.sessionsDir, "legacy-1.json"),
-      JSON.stringify({ version: 1, sessionId: "legacy-1" }),
+      JSON.stringify({
+        version: 1,
+        sessionId: "legacy-1",
+        createdAt: now,
+        updatedAt: now,
+        session: {
+          title: "Legacy Session",
+          titleSource: "default",
+          titleModel: null,
+          provider: "google",
+          model: "gemini-2.0-flash",
+        },
+        config: {
+          provider: "google",
+          model: "gemini-2.0-flash",
+          enableMcp: false,
+          workingDirectory: "/tmp/legacy",
+        },
+        context: {
+          system: "legacy",
+          messages: [{ role: "user", content: "hello from legacy" }],
+          todos: [],
+          harnessContext: null,
+        },
+      }),
       "utf-8",
     );
 
     const db = await SessionDb.create({ paths });
     try {
       const sessions = db.listSessions();
-      expect(sessions).toHaveLength(0);
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]?.sessionId).toBe("legacy-1");
+      expect(sessions[0]?.messageCount).toBe(1);
+
+      const persisted = db.getSessionRecord("legacy-1");
+      expect(persisted?.title).toBe("Legacy Session");
+      expect(persisted?.messages).toHaveLength(1);
     } finally {
       db.close();
     }

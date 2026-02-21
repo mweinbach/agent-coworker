@@ -47,7 +47,10 @@ export interface SessionBackupHandle {
 // ---------------------------------------------------------------------------
 
 type SessionBackupMetadataCheckpoint = SessionBackupPublicCheckpoint & {
-  archiveFile: string;
+  snapshot: {
+    kind: "directory" | "tar_gz";
+    path: string;
+  };
 };
 
 type SessionBackupMetadata = {
@@ -57,7 +60,10 @@ type SessionBackupMetadata = {
   createdAt: string;
   state: "active" | "closed";
   closedAt?: string;
-  originalArchive: string;
+  originalSnapshot: {
+    kind: "directory" | "tar_gz";
+    path: string;
+  };
   checkpoints: SessionBackupMetadataCheckpoint[];
 };
 
@@ -66,6 +72,7 @@ type SessionBackupMetadata = {
 // ---------------------------------------------------------------------------
 
 const METADATA_FILE = "metadata.json";
+const ORIGINAL_DIR = "original";
 const ORIGINAL_ARCHIVE = "original.tar.gz";
 const CHECKPOINTS_DIR = "checkpoints";
 const DEFAULT_MAX_CLOSED_SESSIONS = 20;
@@ -137,15 +144,6 @@ async function runCommand(
   return { exitCode, stdout, stderr };
 }
 
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await fs.stat(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function ensureSecureDirectory(p: string): Promise<void> {
   await fs.mkdir(p, { recursive: true, mode: 0o700 });
   try {
@@ -169,6 +167,83 @@ async function emptyDirectory(dir: string): Promise<void> {
   for (const entry of entries) {
     await fs.rm(path.join(dir, entry.name), { recursive: true, force: true });
   }
+}
+
+async function ensureDirectory(dir: string): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+}
+
+async function copyDirectory(sourceDir: string, destinationDir: string): Promise<void> {
+  await fs.rm(destinationDir, { recursive: true, force: true });
+  await fs.cp(sourceDir, destinationDir, { recursive: true, force: true, errorOnExist: false });
+}
+
+async function copyDirectoryContents(sourceDir: string, destinationDir: string): Promise<void> {
+  await ensureDirectory(destinationDir);
+  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const destinationPath = path.join(destinationDir, entry.name);
+    await fs.cp(sourcePath, destinationPath, { recursive: true, force: true, errorOnExist: false });
+  }
+}
+
+async function directoryByteSize(rootDir: string): Promise<number> {
+  let total = 0;
+  const entries = await fs.readdir(rootDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(rootDir, entry.name);
+    if (entry.isDirectory()) {
+      total += await directoryByteSize(entryPath);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const stat = await fs.stat(entryPath);
+    total += stat.size;
+  }
+  return total;
+}
+
+async function createSnapshotWithTarFallback(opts: {
+  sourceDir: string;
+  sessionDir: string;
+  tarPath: string;
+  directoryPath: string;
+}): Promise<{ kind: "directory" | "tar_gz"; path: string }> {
+  const archivePath = path.join(opts.sessionDir, opts.tarPath);
+  try {
+    await createTarGz(opts.sourceDir, archivePath);
+    return { kind: "tar_gz", path: opts.tarPath };
+  } catch {
+    const directoryPath = path.join(opts.sessionDir, opts.directoryPath);
+    await copyDirectory(opts.sourceDir, directoryPath);
+    return { kind: "directory", path: opts.directoryPath };
+  }
+}
+
+async function snapshotByteSize(
+  sessionDir: string,
+  snapshot: { kind: "directory" | "tar_gz"; path: string }
+): Promise<number> {
+  const absolutePath = path.join(sessionDir, snapshot.path);
+  if (snapshot.kind === "tar_gz") {
+    const stat = await fs.stat(absolutePath);
+    return stat.size;
+  }
+  return directoryByteSize(absolutePath);
+}
+
+async function restoreSnapshot(opts: {
+  sessionDir: string;
+  targetDir: string;
+  snapshot: { kind: "directory" | "tar_gz"; path: string };
+}): Promise<void> {
+  const absolutePath = path.join(opts.sessionDir, opts.snapshot.path);
+  if (opts.snapshot.kind === "tar_gz") {
+    await extractTarGz(absolutePath, opts.targetDir);
+    return;
+  }
+  await copyDirectoryContents(absolutePath, opts.targetDir);
 }
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {
@@ -280,8 +355,12 @@ export class SessionBackupManager implements SessionBackupHandle {
     await ensureSecureDirectory(path.join(sessionDir, CHECKPOINTS_DIR));
     await ensureWorkingDirectory(workingDirectory);
 
-    const originalArchivePath = path.join(sessionDir, ORIGINAL_ARCHIVE);
-    await createTarGz(workingDirectory, originalArchivePath);
+    const originalSnapshot = await createSnapshotWithTarFallback({
+      sourceDir: workingDirectory,
+      sessionDir,
+      tarPath: ORIGINAL_ARCHIVE,
+      directoryPath: ORIGINAL_DIR,
+    });
 
     const metadata: SessionBackupMetadata = {
       version: 1,
@@ -289,7 +368,7 @@ export class SessionBackupManager implements SessionBackupHandle {
       workingDirectory,
       createdAt: new Date().toISOString(),
       state: "active",
-      originalArchive: ORIGINAL_ARCHIVE,
+      originalSnapshot,
       checkpoints: [],
     };
     const metadataPath = path.join(sessionDir, METADATA_FILE);
@@ -319,7 +398,7 @@ export class SessionBackupManager implements SessionBackupHandle {
       workingDirectory: this.metadata.workingDirectory,
       backupDirectory: this.sessionDir,
       createdAt: this.metadata.createdAt,
-      originalSnapshot: { kind: "tar_gz" },
+      originalSnapshot: { kind: this.metadata.originalSnapshot.kind },
       checkpoints: this.metadata.checkpoints.map((cp) => ({
         id: cp.id,
         index: cp.index,
@@ -335,11 +414,16 @@ export class SessionBackupManager implements SessionBackupHandle {
     const index = this.metadata.checkpoints.length + 1;
     const id = makeCheckpointId(index);
     const createdAt = new Date().toISOString();
-    const archiveFile = path.join(CHECKPOINTS_DIR, `${id}.tar.gz`);
-    const archivePath = path.join(this.sessionDir, archiveFile);
+    const tarPath = path.join(CHECKPOINTS_DIR, `${id}.tar.gz`);
+    const directoryPath = path.join(CHECKPOINTS_DIR, id);
 
-    await createTarGz(this.metadata.workingDirectory, archivePath);
-    const stat = await fs.stat(archivePath);
+    const snapshot = await createSnapshotWithTarFallback({
+      sourceDir: this.metadata.workingDirectory,
+      sessionDir: this.sessionDir,
+      tarPath,
+      directoryPath,
+    });
+    const patchBytes = await snapshotByteSize(this.sessionDir, snapshot);
 
     const checkpoint: SessionBackupMetadataCheckpoint = {
       id,
@@ -347,14 +431,14 @@ export class SessionBackupManager implements SessionBackupHandle {
       createdAt,
       trigger,
       changed: true,
-      patchBytes: stat.size,
-      archiveFile,
+      patchBytes,
+      snapshot,
     };
 
     this.metadata.checkpoints.push(checkpoint);
     await this.persistMetadata();
 
-    return { id, index, createdAt, trigger, changed: true, patchBytes: stat.size };
+    return { id, index, createdAt, trigger, changed: true, patchBytes };
   }
 
   async restoreOriginal(): Promise<void> {
@@ -363,7 +447,11 @@ export class SessionBackupManager implements SessionBackupHandle {
     }
     await ensureWorkingDirectory(this.metadata.workingDirectory);
     await emptyDirectory(this.metadata.workingDirectory);
-    await extractTarGz(path.join(this.sessionDir, this.metadata.originalArchive), this.metadata.workingDirectory);
+    await restoreSnapshot({
+      sessionDir: this.sessionDir,
+      targetDir: this.metadata.workingDirectory,
+      snapshot: this.metadata.originalSnapshot,
+    });
   }
 
   async restoreCheckpoint(checkpointId: string): Promise<void> {
@@ -375,7 +463,11 @@ export class SessionBackupManager implements SessionBackupHandle {
     }
     await ensureWorkingDirectory(this.metadata.workingDirectory);
     await emptyDirectory(this.metadata.workingDirectory);
-    await extractTarGz(path.join(this.sessionDir, checkpoint.archiveFile), this.metadata.workingDirectory);
+    await restoreSnapshot({
+      sessionDir: this.sessionDir,
+      targetDir: this.metadata.workingDirectory,
+      snapshot: checkpoint.snapshot,
+    });
   }
 
   async deleteCheckpoint(checkpointId: string): Promise<boolean> {
@@ -384,7 +476,7 @@ export class SessionBackupManager implements SessionBackupHandle {
 
     const checkpoint = this.metadata.checkpoints[idx];
     this.metadata.checkpoints.splice(idx, 1);
-    await fs.rm(path.join(this.sessionDir, checkpoint.archiveFile), { force: true });
+    await fs.rm(path.join(this.sessionDir, checkpoint.snapshot.path), { recursive: true, force: true });
     await this.persistMetadata();
     return true;
   }

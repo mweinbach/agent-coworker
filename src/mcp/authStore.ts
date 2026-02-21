@@ -302,10 +302,6 @@ function resolveApiKeyHeader(auth: Extract<MCPServerAuthConfig, { type: "api_key
   };
 }
 
-export function resolveMCPCredentialScope(source: MCPServerSource): MCPAuthScope {
-  return resolvePrimaryScope(source);
-}
-
 export async function readMCPAuthFiles(config: AgentConfig): Promise<{ workspace: MCPAuthFileState; user: MCPAuthFileState }> {
   const paths = resolveMcpConfigPaths(config);
   const [workspaceDoc, userDoc] = await Promise.all([readDoc(paths.workspaceAuthFile), readDoc(paths.userAuthFile)]);
@@ -661,21 +657,3 @@ export async function setMCPServerOAuthClientInformation(opts: {
   return { storageFile: filePath, scope };
 }
 
-export async function clearMCPServerOAuthPending(opts: {
-  config: AgentConfig;
-  server: MCPRegistryServer;
-}): Promise<{ storageFile: string; scope: MCPAuthScope }> {
-  const scope = resolvePrimaryScope(opts.server.source);
-  const filePath = await mutateScopeDoc(opts.config, scope, (doc) => {
-    const name = normalizeServerName(opts.server.name);
-    const existing = doc.servers[name] ?? {};
-    if (!existing.oauth?.pending) return;
-    const nextOauth = { ...(existing.oauth ?? {}) };
-    delete nextOauth.pending;
-    doc.servers[name] = {
-      ...existing,
-      ...(Object.keys(nextOauth).length > 0 ? { oauth: nextOauth } : {}),
-    };
-  });
-  return { storageFile: filePath, scope };
-}

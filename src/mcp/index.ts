@@ -23,7 +23,6 @@ import {
   readWorkspaceMCPServersDocument,
   resolveMcpConfigPaths,
   writeWorkspaceMCPServersDocument,
-  type MCPConfigRegistrySnapshot,
   type MCPRegistryFileState,
   type MCPRegistryLegacyState,
   type MCPRegistryServer,
@@ -381,13 +380,3 @@ export async function loadMCPTools(
   return { tools, errors, close };
 }
 
-export function snapshotToRegistry(snapshot: MCPServersSnapshot): MCPConfigRegistrySnapshot {
-  return {
-    servers: snapshot.servers.map(({ authMode: _authMode, authMessage: _authMessage, authScope: _authScope, ...server }) => ({
-      ...server,
-    })),
-    files: snapshot.files,
-    legacy: snapshot.legacy,
-    warnings: snapshot.warnings,
-  };
-}

@@ -140,6 +140,65 @@ describe("SessionBackupManager", () => {
     }
   });
 
+  test("restoreOriginal does not clear workspace when original snapshot is missing", async () => {
+    const { home, workspace } = await makeTmpWorkspace();
+    await fs.writeFile(path.join(workspace, "a.txt"), "one\n", "utf-8");
+    await fs.writeFile(path.join(workspace, "keep.txt"), "keep\n", "utf-8");
+
+    const manager = await SessionBackupManager.create({
+      sessionId: crypto.randomUUID(),
+      workingDirectory: workspace,
+      homedir: home,
+    });
+
+    await fs.writeFile(path.join(workspace, "a.txt"), "mutated\n", "utf-8");
+    await fs.writeFile(path.join(workspace, "keep.txt"), "still-here\n", "utf-8");
+
+    const backupState = manager.getPublicState();
+    if (!backupState.backupDirectory) throw new Error("Expected backup directory");
+    const originalArtifactPath =
+      backupState.originalSnapshot.kind === "tar_gz"
+        ? path.join(backupState.backupDirectory, "original.tar.gz")
+        : path.join(backupState.backupDirectory, "original");
+    await fs.rm(originalArtifactPath, { recursive: true, force: true });
+
+    await expect(manager.restoreOriginal()).rejects.toThrow();
+    expect(await fs.readFile(path.join(workspace, "a.txt"), "utf-8")).toBe("mutated\n");
+    expect(await fs.readFile(path.join(workspace, "keep.txt"), "utf-8")).toBe("still-here\n");
+  });
+
+  test("restoreCheckpoint does not clear workspace when checkpoint snapshot is missing", async () => {
+    const { home, workspace } = await makeTmpWorkspace();
+    await fs.writeFile(path.join(workspace, "a.txt"), "one\n", "utf-8");
+
+    const manager = await SessionBackupManager.create({
+      sessionId: crypto.randomUUID(),
+      workingDirectory: workspace,
+      homedir: home,
+    });
+
+    await fs.writeFile(path.join(workspace, "a.txt"), "checkpoint\n", "utf-8");
+    const checkpoint = await manager.createCheckpoint("manual");
+
+    await fs.writeFile(path.join(workspace, "a.txt"), "latest\n", "utf-8");
+    await fs.writeFile(path.join(workspace, "keep.txt"), "keep\n", "utf-8");
+
+    const backupState = manager.getPublicState();
+    if (!backupState.backupDirectory) throw new Error("Expected backup directory");
+    await fs.rm(path.join(backupState.backupDirectory, "checkpoints", `${checkpoint.id}.tar.gz`), {
+      recursive: true,
+      force: true,
+    });
+    await fs.rm(path.join(backupState.backupDirectory, "checkpoints", checkpoint.id), {
+      recursive: true,
+      force: true,
+    });
+
+    await expect(manager.restoreCheckpoint(checkpoint.id)).rejects.toThrow();
+    expect(await fs.readFile(path.join(workspace, "a.txt"), "utf-8")).toBe("latest\n");
+    expect(await fs.readFile(path.join(workspace, "keep.txt"), "utf-8")).toBe("keep\n");
+  });
+
   test("deleteCheckpoint removes stored checkpoint", async () => {
     const { home, workspace } = await makeTmpWorkspace();
     await fs.writeFile(path.join(workspace, "a.txt"), "one\n", "utf-8");

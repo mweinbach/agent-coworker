@@ -445,13 +445,7 @@ export class SessionBackupManager implements SessionBackupHandle {
     if (isPathWithin(this.metadata.workingDirectory, this.sessionDir)) {
       throw new Error("Refusing to restore: backup directory is inside the working directory");
     }
-    await ensureWorkingDirectory(this.metadata.workingDirectory);
-    await emptyDirectory(this.metadata.workingDirectory);
-    await restoreSnapshot({
-      sessionDir: this.sessionDir,
-      targetDir: this.metadata.workingDirectory,
-      snapshot: this.metadata.originalSnapshot,
-    });
+    await this.restoreSnapshotSafely(this.metadata.originalSnapshot);
   }
 
   async restoreCheckpoint(checkpointId: string): Promise<void> {
@@ -461,13 +455,7 @@ export class SessionBackupManager implements SessionBackupHandle {
     if (isPathWithin(this.metadata.workingDirectory, this.sessionDir)) {
       throw new Error("Refusing to restore: backup directory is inside the working directory");
     }
-    await ensureWorkingDirectory(this.metadata.workingDirectory);
-    await emptyDirectory(this.metadata.workingDirectory);
-    await restoreSnapshot({
-      sessionDir: this.sessionDir,
-      targetDir: this.metadata.workingDirectory,
-      snapshot: checkpoint.snapshot,
-    });
+    await this.restoreSnapshotSafely(checkpoint.snapshot);
   }
 
   async deleteCheckpoint(checkpointId: string): Promise<boolean> {
@@ -497,5 +485,24 @@ export class SessionBackupManager implements SessionBackupHandle {
 
   private async persistMetadata(): Promise<void> {
     await writeJson(this.metadataPath, this.metadata);
+  }
+
+  private async restoreSnapshotSafely(snapshot: {
+    kind: "directory" | "tar_gz";
+    path: string;
+  }): Promise<void> {
+    await ensureWorkingDirectory(this.metadata.workingDirectory);
+    const restoreStageDir = await fs.mkdtemp(path.join(this.sessionDir, ".restore-stage-"));
+    try {
+      await restoreSnapshot({
+        sessionDir: this.sessionDir,
+        targetDir: restoreStageDir,
+        snapshot,
+      });
+      await emptyDirectory(this.metadata.workingDirectory);
+      await copyDirectoryContents(restoreStageDir, this.metadata.workingDirectory);
+    } finally {
+      await fs.rm(restoreStageDir, { recursive: true, force: true });
+    }
   }
 }

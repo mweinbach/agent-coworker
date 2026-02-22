@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { z } from "zod";
 
 import { listenOnLocalhost, OAUTH_FAILURE_HTML, OAUTH_LOOPBACK_HOST, OAUTH_SUCCESS_HTML } from "../auth/oauth-server";
 import type { AiCoworkerPaths, ConnectService } from "../store/connections";
@@ -6,9 +7,27 @@ import type { UrlOpener } from "../utils/browser";
 import { openExternalUrl } from "../utils/browser";
 import { CODEX_OAUTH_CLIENT_ID, CODEX_OAUTH_ISSUER, persistCodexAuthFromTokenResponse } from "./codex-auth";
 
-function isObjectLike(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
+const finiteNumberFromUnknownSchema = z.preprocess((value) => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}, z.number().finite());
+
+const tokenExchangeResponseSchema = z.record(z.string(), z.unknown());
+
+const deviceAuthStartResponseSchema = z.object({
+  device_auth_id: z.string().trim().min(1),
+  user_code: z.string().trim().min(1),
+  interval: finiteNumberFromUnknownSchema.optional(),
+}).strict();
+
+const deviceAuthTokenPollResponseSchema = z.object({
+  authorization_code: z.string().trim().min(1),
+  code_verifier: z.string().trim().min(1),
+}).strict();
 
 export function isOauthCliProvider(service: ConnectService): service is "codex-cli" {
   return service === "codex-cli";
@@ -16,15 +35,6 @@ export function isOauthCliProvider(service: ConnectService): service is "codex-c
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function toNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return undefined;
 }
 
 function toBase64Url(value: Buffer): string {
@@ -84,9 +94,10 @@ async function exchangeCodexAuthorizationCode(opts: {
     throw new Error(`Token exchange failed (${response.status}): ${text.slice(0, 500)}`.trim());
   }
 
-  const json = (await response.json()) as unknown;
-  if (!isObjectLike(json)) throw new Error("Token exchange returned an invalid response.");
-  return json;
+  const json = await response.json();
+  const parsed = tokenExchangeResponseSchema.safeParse(json);
+  if (!parsed.success) throw new Error("Token exchange returned an invalid response.");
+  return parsed.data;
 }
 
 export async function runCodexBrowserOAuth(opts: {
@@ -205,11 +216,11 @@ export async function runCodexDeviceOAuth(opts: {
     const text = await userCodeResponse.text().catch(() => "");
     throw new Error(`Failed to start device-code auth (${userCodeResponse.status}): ${text.slice(0, 500)}`.trim());
   }
-  const userCodeData = (await userCodeResponse.json()) as Record<string, unknown>;
-  const deviceAuthId = typeof userCodeData.device_auth_id === "string" ? userCodeData.device_auth_id : "";
-  const userCode = typeof userCodeData.user_code === "string" ? userCodeData.user_code : "";
-  const intervalSec = Math.max(1, Math.floor(toNumber(userCodeData.interval) ?? 5));
-  if (!deviceAuthId || !userCode) throw new Error("Device-code auth response was missing required fields.");
+  const userCodeData = deviceAuthStartResponseSchema.safeParse(await userCodeResponse.json());
+  if (!userCodeData.success) throw new Error("Device-code auth response was missing required fields.");
+  const deviceAuthId = userCodeData.data.device_auth_id;
+  const userCode = userCodeData.data.user_code;
+  const intervalSec = Math.max(1, Math.floor(userCodeData.data.interval ?? 5));
 
   opts.onLine?.(`[auth] open ${verificationUrl} and enter code: ${userCode}`);
   await opener(verificationUrl);
@@ -225,12 +236,12 @@ export async function runCodexDeviceOAuth(opts: {
     });
 
     if (pollResponse.ok) {
-      const pollData = (await pollResponse.json()) as Record<string, unknown>;
-      const authorizationCode = typeof pollData.authorization_code === "string" ? pollData.authorization_code : "";
-      const codeVerifier = typeof pollData.code_verifier === "string" ? pollData.code_verifier : "";
-      if (!authorizationCode || !codeVerifier) {
+      const pollData = deviceAuthTokenPollResponseSchema.safeParse(await pollResponse.json());
+      if (!pollData.success) {
         throw new Error("Device-code token poll returned an invalid payload.");
       }
+      const authorizationCode = pollData.data.authorization_code;
+      const codeVerifier = pollData.data.code_verifier;
 
       const tokens = await exchangeCodexAuthorizationCode({
         code: authorizationCode,

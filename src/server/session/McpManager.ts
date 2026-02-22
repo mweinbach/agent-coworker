@@ -30,23 +30,17 @@ export class McpManager {
       return;
     }
 
-    this.context.state.config = { ...this.context.state.config, enableMcp };
-    this.context.emit({ type: "session_settings", sessionId: this.context.id, enableMcp });
-    let persistDefaultsError: string | null = null;
     if (this.context.deps.persistProjectConfigPatchImpl) {
       try {
         await this.context.deps.persistProjectConfigPatchImpl({ enableMcp });
       } catch (err) {
-        persistDefaultsError = String(err);
+        this.context.emitError("internal_error", "session", `Failed to persist MCP defaults: ${String(err)}`);
+        return;
       }
     }
-    if (persistDefaultsError) {
-      this.context.emitError(
-        "internal_error",
-        "session",
-        `MCP setting updated for this session, but persisting defaults failed: ${persistDefaultsError}`
-      );
-    }
+
+    this.context.state.config = { ...this.context.state.config, enableMcp };
+    this.context.emit({ type: "session_settings", sessionId: this.context.id, enableMcp });
     this.context.queuePersistSessionSnapshot("session.enable_mcp");
   }
 

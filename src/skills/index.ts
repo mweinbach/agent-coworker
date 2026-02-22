@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 import type { SkillEntry } from "../types";
 
@@ -21,6 +22,17 @@ type ParsedSkillDocument = {
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const metadataSchema = z.record(z.string(), z.string());
+const skillFrontMatterSchema = z.object({
+  name: z.string().trim().min(1).max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  description: z.string().trim().min(1).max(1024),
+  license: nonEmptyTrimmedStringSchema.optional(),
+  compatibility: z.string().trim().min(1).max(500).optional(),
+  metadata: metadataSchema.optional(),
+  "allowed-tools": nonEmptyTrimmedStringSchema.optional(),
+}).passthrough();
 
 function stripQuotes(v: string): string {
   const trimmed = v.trim();
@@ -44,21 +56,12 @@ function splitFrontMatter(raw: string): { frontMatterRaw: string | null; body: s
 function parseYamlFrontMatter(frontMatterRaw: string): Record<string, unknown> | null {
   try {
     const parsed = Bun.YAML.parse(frontMatterRaw);
-    if (!isPlainRecord(parsed)) return null;
-    return parsed;
+    const validated = z.record(z.string(), z.unknown()).safeParse(parsed);
+    if (!validated.success) return null;
+    return validated.data;
   } catch {
     return null;
   }
-}
-
-function parseMetadataMap(value: unknown): Record<string, string> | null {
-  if (!isPlainRecord(value)) return null;
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(value)) {
-    if (typeof v !== "string") return null;
-    out[k] = v;
-  }
-  return out;
 }
 
 function parseSkillFrontMatter(raw: string, skillDirName: string): ParsedSkillDocument | null {
@@ -67,64 +70,21 @@ function parseSkillFrontMatter(raw: string, skillDirName: string): ParsedSkillDo
 
   const parsed = parseYamlFrontMatter(frontMatterRaw);
   if (!parsed) return null;
+  const validated = skillFrontMatterSchema.safeParse(parsed);
+  if (!validated.success) return null;
+  const data = validated.data;
 
-  const nameRaw = parsed.name;
-  const descriptionRaw = parsed.description;
-
-  if (typeof nameRaw !== "string" || typeof descriptionRaw !== "string") {
-    return null;
-  }
-
-  const name = nameRaw.trim();
-  const description = descriptionRaw.trim();
-
-  // Agent Skills spec constraints.
-  if (!name || name.length > 64) return null;
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) return null;
-  if (name !== skillDirName) return null;
-
-  if (!description || description.length > 1024) return null;
-
-  let license: string | undefined;
-  if (parsed.license !== undefined) {
-    if (typeof parsed.license !== "string") return null;
-    const value = parsed.license.trim();
-    if (!value) return null;
-    license = value;
-  }
-
-  let compatibility: string | undefined;
-  if (parsed.compatibility !== undefined) {
-    if (typeof parsed.compatibility !== "string") return null;
-    const value = parsed.compatibility.trim();
-    if (!value || value.length > 500) return null;
-    compatibility = value;
-  }
-
-  let metadata: Record<string, string> | undefined;
-  if (parsed.metadata !== undefined) {
-    const m = parseMetadataMap(parsed.metadata);
-    if (!m) return null;
-    metadata = m;
-  }
-
-  let allowedTools: string | undefined;
-  const allowedToolsRaw = parsed["allowed-tools"];
-  if (allowedToolsRaw !== undefined) {
-    if (typeof allowedToolsRaw !== "string") return null;
-    const value = allowedToolsRaw.trim();
-    if (!value) return null;
-    allowedTools = value;
-  }
+  // Agent Skills spec constraint: frontmatter name must match directory name.
+  if (data.name !== skillDirName) return null;
 
   return {
     frontMatter: {
-      name,
-      description,
-      ...(license ? { license } : {}),
-      ...(compatibility ? { compatibility } : {}),
-      ...(metadata ? { metadata } : {}),
-      ...(allowedTools ? { allowedTools } : {}),
+      name: data.name,
+      description: data.description,
+      ...(data.license ? { license: data.license } : {}),
+      ...(data.compatibility ? { compatibility: data.compatibility } : {}),
+      ...(data.metadata ? { metadata: data.metadata } : {}),
+      ...(data["allowed-tools"] ? { allowedTools: data["allowed-tools"] } : {}),
     },
     rawFrontMatter: parsed,
     body,

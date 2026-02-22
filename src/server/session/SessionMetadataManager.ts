@@ -149,12 +149,32 @@ export class SessionMetadataManager {
     });
   }
 
-  setConfig(patch: {
+  async setConfig(patch: {
     yolo?: boolean;
     observabilityEnabled?: boolean;
     subAgentModel?: string;
     maxSteps?: number;
   }) {
+    const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
+    if (patch.subAgentModel !== undefined) {
+      persistPatch.subAgentModel = patch.subAgentModel;
+    }
+    if (patch.observabilityEnabled !== undefined) {
+      persistPatch.observabilityEnabled = patch.observabilityEnabled;
+    }
+    if (Object.keys(persistPatch).length > 0 && this.context.deps.persistProjectConfigPatchImpl) {
+      try {
+        await this.context.deps.persistProjectConfigPatchImpl(persistPatch);
+      } catch (err) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to persist config defaults: ${String(err)}`
+        );
+        return;
+      }
+    }
+
     if (patch.yolo !== undefined) this.context.state.yolo = patch.yolo;
     if (patch.observabilityEnabled !== undefined) {
       this.context.state.config = { ...this.context.state.config, observabilityEnabled: patch.observabilityEnabled };
@@ -167,23 +187,6 @@ export class SessionMetadataManager {
 
     this.context.emit(this.getSessionConfigEvent());
     this.context.queuePersistSessionSnapshot("session.config_updated");
-
-    const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
-    if (patch.subAgentModel !== undefined) {
-      persistPatch.subAgentModel = patch.subAgentModel;
-    }
-    if (patch.observabilityEnabled !== undefined) {
-      persistPatch.observabilityEnabled = patch.observabilityEnabled;
-    }
-    if (Object.keys(persistPatch).length > 0 && this.context.deps.persistProjectConfigPatchImpl) {
-      void Promise.resolve(this.context.deps.persistProjectConfigPatchImpl(persistPatch)).catch((err) => {
-        this.context.emitError(
-          "internal_error",
-          "session",
-          `Config updated for this session, but persisting defaults failed: ${String(err)}`
-        );
-      });
-    }
   }
 
   getHarnessContext() {

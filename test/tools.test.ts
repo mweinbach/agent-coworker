@@ -2071,6 +2071,22 @@ describe("notebookEdit tool", () => {
     ).rejects.toThrow(/expected a \.ipynb file/i);
   });
 
+  test("rejects invalid notebook JSON", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "nb.ipynb");
+    await fs.writeFile(p, "{ not-valid-json", "utf-8");
+
+    const t: any = createNotebookEditTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        notebookPath: p,
+        cellIndex: 0,
+        newSource: "x = 2",
+        editMode: "replace",
+      })
+    ).rejects.toThrow(/Invalid notebook JSON/);
+  });
+
   test("rejects path outside allowed dirs", async () => {
     const dir = await tmpDir();
     const outsideDir = await tmpDir();

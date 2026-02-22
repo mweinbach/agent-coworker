@@ -1913,4 +1913,23 @@ describe("Protocol Doc Parity", () => {
       server.stop();
     }
   });
+
+  test("set_model surfaces project config parse errors", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      await fs.writeFile(path.join(tmpDir, ".agent", "config.json"), "{ not valid json", "utf-8");
+
+      const result = await sendAndCollect(
+        url,
+        (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.2" }),
+        1,
+      );
+
+      expect(result.responses[0].type).toBe("error");
+      expect(result.responses[0].message).toContain("Invalid JSON in config file");
+    } finally {
+      server.stop();
+    }
+  });
 });

@@ -525,13 +525,13 @@ export class AgentSession {
     await this.adminManager.deleteSession(targetSessionId);
   }
 
-  setConfig(patch: {
+  async setConfig(patch: {
     yolo?: boolean;
     observabilityEnabled?: boolean;
     subAgentModel?: string;
     maxSteps?: number;
   }) {
-    this.metadataManager.setConfig(patch);
+    await this.metadataManager.setConfig(patch);
   }
 
   async uploadFile(filename: string, contentBase64: string) {

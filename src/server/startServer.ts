@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../connect";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
@@ -35,15 +36,28 @@ function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
   return out as T;
 }
 
+const jsonObjectSchema = z.record(z.string(), z.unknown());
+
 async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unknown>> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (isPlainObject(parsed)) return parsed as Record<string, unknown>;
-  } catch {
-    // Ignore read/parse failures and fall back to an empty object.
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`Invalid JSON in config file ${filePath}: ${String(error)}`);
+    }
+    const parsedObject = jsonObjectSchema.safeParse(parsedJson);
+    if (!parsedObject.success) {
+      throw new Error(`Config file must contain a JSON object: ${filePath}`);
+    }
+    return parsedObject.data;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return {};
+    if (error instanceof Error) throw error;
+    throw new Error(`Failed to load config file ${filePath}: ${String(error)}`);
   }
-  return {};
 }
 
 async function persistProjectConfigPatch(
@@ -153,16 +167,14 @@ export async function startAgentServer(
         model: string;
         subAgentModel: string;
       }) => {
-        config.provider = selection.provider;
-        config.model = selection.model;
-        config.subAgentModel = selection.subAgentModel;
         await persistProjectConfigPatch(config.projectAgentDir, selection);
+        config = { ...config, ...selection };
       },
       persistProjectConfigPatchImpl: async (
         patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">>
       ) => {
-        config = { ...config, ...patch };
         await persistProjectConfigPatch(config.projectAgentDir, patch);
+        config = { ...config, ...patch };
       },
       sessionDb,
       emit,
@@ -365,7 +377,7 @@ export async function startAgentServer(
             case "set_session_title": return session.setSessionTitle(msg.title);
             case "list_sessions": return void session.listSessions();
             case "delete_session": return void session.deleteSession(msg.targetSessionId);
-            case "set_config": return session.setConfig(msg.config);
+            case "set_config": return void session.setConfig(msg.config);
             case "upload_file": return void session.uploadFile(msg.filename, msg.contentBase64);
           }
         },

@@ -11,7 +11,9 @@ const serverEventEnvelopeSchema = z.object({
   }, z.string()),
 }).passthrough();
 
-export function safeJsonParse(raw: unknown): any | null {
+const jsonObjectSchema = z.record(z.string(), z.unknown());
+
+export function safeJsonParse(raw: unknown): unknown | null {
   if (typeof raw !== "string") return null;
   try {
     return JSON.parse(raw);
@@ -22,13 +24,14 @@ export function safeJsonParse(raw: unknown): any | null {
 
 export function safeParseServerEvent(raw: unknown): ServerEvent | null {
   const parsedJson = safeJsonParse(raw);
-  if (!parsedJson || typeof parsedJson !== "object" || Array.isArray(parsedJson)) {
+  const parsedObject = jsonObjectSchema.safeParse(parsedJson);
+  if (!parsedObject.success) {
     return null;
   }
 
-  const envelope = serverEventEnvelopeSchema.safeParse(parsedJson);
+  const envelope = serverEventEnvelopeSchema.safeParse(parsedObject.data);
   if (!envelope.success) return null;
-  return parsedJson as ServerEvent;
+  return parsedObject.data as ServerEvent;
 }
 
 export type AgentSocketOpts = {

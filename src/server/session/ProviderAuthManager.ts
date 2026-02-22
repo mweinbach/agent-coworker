@@ -66,14 +66,6 @@ export class ProviderAuthManager {
       ? modelId
       : currentConfig.subAgentModel;
 
-    this.opts.setConfig({
-      ...currentConfig,
-      provider: nextProvider,
-      model: modelId,
-      subAgentModel: nextSubAgentModel,
-    });
-
-    let persistDefaultsError: string | null = null;
     if (this.opts.persistModelSelection) {
       try {
         await this.opts.persistModelSelection({
@@ -82,22 +74,23 @@ export class ProviderAuthManager {
           subAgentModel: nextSubAgentModel,
         });
       } catch (err) {
-        persistDefaultsError = String(err);
+        this.opts.emitError("internal_error", "session", `Failed to persist model defaults: ${String(err)}`);
+        return;
       }
     }
+
+    this.opts.setConfig({
+      ...currentConfig,
+      provider: nextProvider,
+      model: modelId,
+      subAgentModel: nextSubAgentModel,
+    });
 
     this.opts.emitConfigUpdated();
     this.opts.updateSessionInfo({
       provider: nextProvider,
       model: modelId,
     });
-    if (persistDefaultsError) {
-      this.opts.emitError(
-        "internal_error",
-        "session",
-        `Model updated for this session, but persisting defaults failed: ${persistDefaultsError}`
-      );
-    }
 
     this.opts.queuePersistSessionSnapshot("session.model_updated");
     await this.opts.emitProviderCatalog();

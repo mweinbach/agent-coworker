@@ -52,7 +52,7 @@ import { getObservabilityHealth } from "../observability/runtime";
 import { expandCommandTemplate, listCommands as listServerCommands, resolveCommand } from "./commands";
 import { normalizeModelStreamPart, reasoningModeForProvider } from "./modelStream";
 import { generateSessionTitle, heuristicTitleFromQuery, type SessionTitleSource, DEFAULT_SESSION_TITLE } from "./sessionTitleService";
-import { type PersistedSessionRecord, type SessionPersistenceStatus, SessionDb } from "./sessionDb";
+import { type PersistedSessionMutation, type PersistedSessionRecord, type SessionPersistenceStatus, SessionDb } from "./sessionDb";
 import {
   type PersistedSessionSnapshot,
   writePersistedSessionSnapshot,
@@ -67,6 +67,10 @@ import {
   type SessionBackupInitOptions,
   type SessionBackupPublicState,
 } from "./sessionBackup";
+import { HistoryManager } from "./session/HistoryManager";
+import { McpManager } from "./session/McpManager";
+import { PersistenceManager } from "./session/PersistenceManager";
+import { TurnExecutionManager } from "./session/TurnExecutionManager";
 
 function makeId(): string {
   return crypto.randomUUID();
@@ -164,12 +168,15 @@ export class AgentSession {
   private currentTurnId: string | null = null;
   private currentTurnOutcome: "completed" | "cancelled" | "error" = "completed";
   private maxSteps = 100;
+  private readonly historyManager: HistoryManager;
+  private readonly mcpManager: McpManager;
+  private readonly turnExecutionManager: TurnExecutionManager;
 
   private todos: TodoItem[] = [];
   private sessionInfo: SessionInfoState;
   private persistenceStatus: SessionPersistenceStatus = "active";
   private hasGeneratedTitle = false;
-  private sessionSnapshotQueue: Promise<void> = Promise.resolve();
+  private readonly persistenceManager: PersistenceManager;
   private sessionBackup: SessionBackupHandle | null = null;
   private sessionBackupState: SessionBackupPublicState;
   private sessionBackupInit: Promise<void> | null = null;
@@ -217,6 +224,39 @@ export class AgentSession {
     this.generateSessionTitleImpl = opts.generateSessionTitleImpl ?? generateSessionTitle;
     this.sessionDb = opts.sessionDb ?? null;
     this.writePersistedSessionSnapshotImpl = opts.writePersistedSessionSnapshotImpl ?? writePersistedSessionSnapshot;
+    this.persistenceManager = new PersistenceManager({
+      sessionId: this.id,
+      sessionDb: this.sessionDb,
+      getCoworkPaths: () => this.getCoworkPaths(),
+      writePersistedSessionSnapshot: this.writePersistedSessionSnapshotImpl,
+      buildCanonicalSnapshot: (updatedAt) => this.buildCanonicalSnapshot(updatedAt),
+      buildPersistedSnapshotAt: (updatedAt) => this.buildPersistedSnapshotAt(updatedAt),
+      emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
+      emitError: (message) => this.emitError("internal_error", "session", message),
+      formatError: (err) => this.formatErrorMessage(err),
+    });
+    this.historyManager = new HistoryManager({
+      refreshRuntimeMessagesFromHistory: () => this.refreshRuntimeMessagesFromHistoryImpl(),
+      appendMessagesToHistory: (messages) => this.appendMessagesToHistoryImpl(messages),
+    });
+    this.mcpManager = new McpManager({
+      setEnableMcp: (enableMcp) => this.setEnableMcpImpl(enableMcp),
+      emitMcpServers: () => this.emitMcpServersImpl(),
+      upsertMcpServer: (server, previousName) => this.upsertMcpServerImpl(server, previousName),
+      deleteMcpServer: (nameRaw) => this.deleteMcpServerImpl(nameRaw),
+      validateMcpServer: (nameRaw) => this.validateMcpServerImpl(nameRaw),
+      authorizeMcpServerAuth: (nameRaw) => this.authorizeMcpServerAuthImpl(nameRaw),
+      callbackMcpServerAuth: (nameRaw, codeRaw) => this.callbackMcpServerAuthImpl(nameRaw, codeRaw),
+      setMcpServerApiKey: (nameRaw, apiKeyRaw) => this.setMcpServerApiKeyImpl(nameRaw, apiKeyRaw),
+      migrateLegacyMcpServers: (scope) => this.migrateLegacyMcpServersImpl(scope),
+    });
+    this.turnExecutionManager = new TurnExecutionManager({
+      sendUserMessage: (text, clientMessageId, displayText) =>
+        this.sendUserMessageImpl(text, clientMessageId, displayText),
+      handleAskResponse: (requestId, answer) => this.handleAskResponseImpl(requestId, answer),
+      handleApprovalResponse: (requestId, approved) => this.handleApprovalResponseImpl(requestId, approved),
+      cancel: () => this.cancelImpl(),
+    });
     const now = new Date().toISOString();
     this.sessionInfo = hydrated?.sessionInfo ?? {
       title: DEFAULT_SESSION_TITLE,
@@ -488,7 +528,7 @@ export class AgentSession {
     };
   }
 
-  private refreshRuntimeMessagesFromHistory() {
+  private refreshRuntimeMessagesFromHistoryImpl() {
     if (this.allMessages.length <= MAX_MESSAGE_HISTORY) {
       this.messages = [...this.allMessages];
       return;
@@ -497,7 +537,7 @@ export class AgentSession {
     this.messages = [first, ...this.allMessages.slice(-(MAX_MESSAGE_HISTORY - 1))];
   }
 
-  private appendMessagesToHistory(messages: ModelMessage[]) {
+  private appendMessagesToHistoryImpl(messages: ModelMessage[]) {
     if (messages.length === 0) return;
     this.allMessages.push(...messages);
     this.messages.push(...messages);
@@ -507,42 +547,16 @@ export class AgentSession {
     }
   }
 
-  private queuePersistSessionSnapshot(reason: string) {
-    const run = async () => {
-      const startedAt = Date.now();
-      const updatedAt = new Date().toISOString();
-      if (this.sessionDb) {
-        this.sessionDb.persistSessionMutation({
-          sessionId: this.id,
-          eventType: reason,
-          eventTs: updatedAt,
-          direction: "system",
-          payload: { reason },
-          snapshot: this.buildCanonicalSnapshot(updatedAt),
-        });
-      } else {
-        const snapshot = this.buildPersistedSnapshotAt(updatedAt);
-        await this.writePersistedSessionSnapshotImpl({
-          paths: this.getCoworkPaths(),
-          snapshot,
-        });
-      }
-      this.emitTelemetry("session.snapshot.persist", "ok", { sessionId: this.id, reason }, Date.now() - startedAt);
-    };
+  private refreshRuntimeMessagesFromHistory() {
+    this.historyManager.refreshRuntimeMessagesFromHistory();
+  }
 
-    this.sessionSnapshotQueue = this.sessionSnapshotQueue
-      .catch(() => {
-        // keep queue alive after prior failures
-      })
-      .then(run)
-      .catch((err) => {
-        this.emitTelemetry(
-          "session.snapshot.persist",
-          "error",
-          { sessionId: this.id, reason, error: this.formatErrorMessage(err) }
-        );
-        this.emitError("internal_error", "session", `Failed to persist session state: ${this.formatErrorMessage(err)}`);
-      });
+  private appendMessagesToHistory(messages: ModelMessage[]) {
+    this.historyManager.appendMessagesToHistory(messages);
+  }
+
+  private queuePersistSessionSnapshot(reason: string) {
+    this.persistenceManager.queuePersistSessionSnapshot(reason);
   }
 
   private maybeGenerateTitleFromQuery(query: string) {
@@ -921,7 +935,7 @@ export class AgentSession {
     }
   }
 
-  async setEnableMcp(enableMcp: boolean) {
+  private async setEnableMcpImpl(enableMcp: boolean) {
     if (this.running) {
       this.emitError("busy", "session", "Agent is busy");
       return;
@@ -947,7 +961,7 @@ export class AgentSession {
     this.queuePersistSessionSnapshot("session.enable_mcp");
   }
 
-  async emitMcpServers() {
+  private async emitMcpServersImpl() {
     try {
       const payload = await readMCPServersSnapshot(this.config);
       this.emit({
@@ -961,6 +975,14 @@ export class AgentSession {
     } catch (err) {
       this.emitError("internal_error", "session", `Failed to read MCP servers: ${String(err)}`);
     }
+  }
+
+  async setEnableMcp(enableMcp: boolean) {
+    await this.mcpManager.setEnableMcp(enableMcp);
+  }
+
+  async emitMcpServers() {
+    await this.mcpManager.emitMcpServers();
   }
 
   private async getMcpServerByName(nameRaw: string): Promise<MCPRegistryServer | null> {
@@ -979,7 +1001,7 @@ export class AgentSession {
     return server;
   }
 
-  async upsertMcpServer(server: MCPServerConfig, previousName?: string) {
+  private async upsertMcpServerImpl(server: MCPServerConfig, previousName?: string) {
     if (!this.guardBusy()) return;
     try {
       await upsertWorkspaceMCPServer(this.config, server, previousName);
@@ -992,11 +1014,11 @@ export class AgentSession {
       this.emitError("internal_error", "session", `Failed to upsert MCP server: ${message}`);
       return;
     }
-    await this.emitMcpServers();
-    void this.validateMcpServer(server.name);
+    await this.emitMcpServersImpl();
+    void this.validateMcpServerImpl(server.name);
   }
 
-  async deleteMcpServer(nameRaw: string) {
+  private async deleteMcpServerImpl(nameRaw: string) {
     if (!this.guardBusy()) return;
     try {
       await deleteWorkspaceMCPServer(this.config, nameRaw);
@@ -1009,10 +1031,10 @@ export class AgentSession {
       this.emitError("internal_error", "session", `Failed to delete MCP server: ${message}`);
       return;
     }
-    await this.emitMcpServers();
+    await this.emitMcpServersImpl();
   }
 
-  async validateMcpServer(nameRaw: string) {
+  private async validateMcpServerImpl(nameRaw: string) {
     const name = nameRaw.trim();
     if (!name) {
       this.emitError("validation_failed", "session", "MCP server name is required");
@@ -1123,7 +1145,7 @@ export class AgentSession {
     }
   }
 
-  async authorizeMcpServerAuth(nameRaw: string) {
+  private async authorizeMcpServerAuthImpl(nameRaw: string) {
     if (!this.guardBusy()) return;
 
     const server = await this.getMcpServerByName(nameRaw);
@@ -1171,7 +1193,7 @@ export class AgentSession {
         name: server.name,
         challenge: result.challenge,
       });
-      await this.emitMcpServers();
+      await this.emitMcpServersImpl();
     } catch (err) {
       this.emit({
         type: "mcp_server_auth_result",
@@ -1186,7 +1208,7 @@ export class AgentSession {
     }
   }
 
-  async callbackMcpServerAuth(nameRaw: string, codeRaw?: string) {
+  private async callbackMcpServerAuthImpl(nameRaw: string, codeRaw?: string) {
     if (!this.guardBusy()) return;
 
     const server = await this.getMcpServerByName(nameRaw);
@@ -1263,7 +1285,7 @@ export class AgentSession {
         mode: "oauth",
         message: exchange.message,
       });
-      await this.emitMcpServers();
+      await this.emitMcpServersImpl();
       validateName = server.name;
     } catch (err) {
       this.emit({
@@ -1277,12 +1299,12 @@ export class AgentSession {
     } finally {
       this.connecting = false;
       if (validateName) {
-        void this.validateMcpServer(validateName);
+        void this.validateMcpServerImpl(validateName);
       }
     }
   }
 
-  async setMcpServerApiKey(nameRaw: string, apiKeyRaw: string) {
+  private async setMcpServerApiKeyImpl(nameRaw: string, apiKeyRaw: string) {
     if (!this.guardBusy()) return;
 
     const server = await this.getMcpServerByName(nameRaw);
@@ -1317,7 +1339,7 @@ export class AgentSession {
         mode: "api_key",
         message: `API key saved (${result.maskedApiKey}) to ${result.scope} auth store.`,
       });
-      await this.emitMcpServers();
+      await this.emitMcpServersImpl();
       validateName = server.name;
     } catch (err) {
       this.emit({
@@ -1331,12 +1353,12 @@ export class AgentSession {
     } finally {
       this.connecting = false;
       if (validateName) {
-        void this.validateMcpServer(validateName);
+        void this.validateMcpServerImpl(validateName);
       }
     }
   }
 
-  async migrateLegacyMcpServers(scope: "workspace" | "user") {
+  private async migrateLegacyMcpServersImpl(scope: "workspace" | "user") {
     if (!this.guardBusy()) return;
     try {
       const result = await migrateLegacyMCPServers(this.config, scope);
@@ -1352,7 +1374,35 @@ export class AgentSession {
       this.emitError("internal_error", "session", `Failed to migrate legacy MCP servers: ${String(err)}`);
       return;
     }
-    await this.emitMcpServers();
+    await this.emitMcpServersImpl();
+  }
+
+  async upsertMcpServer(server: MCPServerConfig, previousName?: string) {
+    await this.mcpManager.upsert(server, previousName);
+  }
+
+  async deleteMcpServer(nameRaw: string) {
+    await this.mcpManager.delete(nameRaw);
+  }
+
+  async validateMcpServer(nameRaw: string) {
+    await this.mcpManager.validate(nameRaw);
+  }
+
+  async authorizeMcpServerAuth(nameRaw: string) {
+    await this.mcpManager.authorize(nameRaw);
+  }
+
+  async callbackMcpServerAuth(nameRaw: string, codeRaw?: string) {
+    await this.mcpManager.callback(nameRaw, codeRaw);
+  }
+
+  async setMcpServerApiKey(nameRaw: string, apiKeyRaw: string) {
+    await this.mcpManager.setApiKey(nameRaw, apiKeyRaw);
+  }
+
+  async migrateLegacyMcpServers(scope: "workspace" | "user") {
+    await this.mcpManager.migrate(scope);
   }
 
   getHarnessContext() {
@@ -1691,7 +1741,7 @@ export class AgentSession {
     }
   }
 
-  handleAskResponse(requestId: string, answer: string) {
+  private handleAskResponseImpl(requestId: string, answer: string) {
     const d = this.pendingAsk.get(requestId);
     if (!d) {
       this.log(`[warn] ask_response for unknown requestId: ${requestId}`);
@@ -1717,7 +1767,7 @@ export class AgentSession {
     d.resolve(answer);
   }
 
-  handleApprovalResponse(requestId: string, approved: boolean) {
+  private handleApprovalResponseImpl(requestId: string, approved: boolean) {
     const d = this.pendingApproval.get(requestId);
     if (!d) {
       this.log(`[warn] approval_response for unknown requestId: ${requestId}`);
@@ -1730,7 +1780,7 @@ export class AgentSession {
   }
 
   /** Cancel the currently running agent turn. */
-  cancel() {
+  private cancelImpl() {
     if (!this.running) return;
     if (this.abortController) {
       this.abortController.abort();
@@ -1748,10 +1798,22 @@ export class AgentSession {
     }
   }
 
+  handleAskResponse(requestId: string, answer: string) {
+    this.turnExecutionManager.handleAskResponse(requestId, answer);
+  }
+
+  handleApprovalResponse(requestId: string, approved: boolean) {
+    this.turnExecutionManager.handleApprovalResponse(requestId, approved);
+  }
+
+  cancel() {
+    this.turnExecutionManager.cancel();
+  }
+
   async closeForHistory(): Promise<void> {
     this.persistenceStatus = "closed";
     this.queuePersistSessionSnapshot("session.closed");
-    await this.sessionSnapshotQueue.catch(() => {});
+    await this.persistenceManager.waitForIdle();
   }
 
   dispose(reason: string) {
@@ -2096,7 +2158,7 @@ export class AgentSession {
     }
   }
 
-  async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
+  private async sendUserMessageImpl(text: string, clientMessageId?: string, displayText?: string) {
     if (this.running) {
       this.emitError("busy", "session", "Agent is busy");
       return;
@@ -2251,6 +2313,10 @@ export class AgentSession {
         // takeAutomaticSessionCheckpoint already emits backup errors/telemetry.
       });
     }
+  }
+
+  async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
+    await this.turnExecutionManager.sendUserMessage(text, clientMessageId, displayText);
   }
 
   private emitSessionBackupState(

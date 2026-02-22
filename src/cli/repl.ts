@@ -2,6 +2,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 
+import {
+  normalizeProviderAuthMethods,
+  parseReplInput,
+  resolveProviderAuthMethodSelection,
+  type ParsedCommand,
+  type ProviderAuthMethod,
+} from "./parser";
+import { normalizeApprovalAnswer, resolveAskAnswer } from "./prompts";
+import { renderTodosToLines, renderToolsToLines } from "./render";
+import { CliStreamState } from "./streamState";
 import { AgentSocket } from "../client/agentSocket";
 import { getAiCoworkerPaths } from "../connect";
 import { defaultModelForProvider } from "../config";
@@ -10,6 +20,11 @@ import { startAgentServer } from "../server/startServer";
 import type { ClientMessage, ServerEvent } from "../server/protocol";
 import { isProviderName, PROVIDER_NAMES } from "../types";
 import type { AgentConfig, ApprovalRiskCode, TodoItem } from "../types";
+
+export { parseReplInput, normalizeProviderAuthMethods, resolveProviderAuthMethodSelection };
+export type { ParsedCommand };
+export { normalizeApprovalAnswer, resolveAskAnswer };
+export { renderTodosToLines, renderToolsToLines };
 
 // Keep CLI output clean by default.
 (globalThis as any).AI_SDK_LOG_WARNINGS = false;
@@ -21,24 +36,8 @@ type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory">
 
 type AskPrompt = { requestId: string; question: string; options?: string[] };
 type ApprovalPrompt = { requestId: string; command: string; dangerous: boolean; reasonCode: ApprovalRiskCode };
-type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
 type ProviderStatus = Extract<ServerEvent, { type: "provider_status" }>["providers"][number];
 type ModelStreamChunkEvent = Extract<ServerEvent, { type: "model_stream_chunk" }>;
-const DEFAULT_API_AUTH_METHOD: ProviderAuthMethod = { id: "api_key", type: "api", label: "API key" };
-
-export function renderTodosToLines(todos: TodoItem[]): string[] {
-  if (todos.length === 0) return [];
-
-  const lines = ["\n--- Progress ---"];
-  for (const todo of todos) {
-    const icon = todo.status === "completed" ? "x" : todo.status === "in_progress" ? ">" : "-";
-    lines.push(`  ${icon} ${todo.content}`);
-  }
-  const active = todos.find((t) => t.status === "in_progress");
-  if (active) lines.push(`\n  ${active.activeForm}...`);
-  lines.push("");
-  return lines;
-}
 
 function renderTodos(todos: TodoItem[]) {
   for (const line of renderTodosToLines(todos)) {
@@ -52,11 +51,11 @@ function asString(value: unknown): string | null {
 
 function previewStructured(value: unknown, max = 160): string {
   if (value === undefined) return "";
-  if (typeof value === "string") return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+  if (typeof value === "string") return value.length <= max ? value : `${value.slice(0, max - 3)}...`;
   try {
     const raw = JSON.stringify(value);
     if (!raw) return "";
-    return raw.length <= max ? raw : `${raw.slice(0, max - 1)}…`;
+    return raw.length <= max ? raw : `${raw.slice(0, max - 3)}...`;
   } catch {
     return String(value);
   }
@@ -72,91 +71,6 @@ export async function resolveAndValidateDir(dirArg: string): Promise<string> {
   }
   if (!st || !st.isDirectory()) throw new Error(`--dir is not a directory: ${resolved}`);
   return resolved;
-}
-
-function resolveAskAnswer(raw: string, options?: string[]) {
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  const asNum = Number(trimmed);
-  if (options && options.length > 0 && Number.isInteger(asNum) && asNum >= 1 && asNum <= options.length) {
-    return options[asNum - 1];
-  }
-  return trimmed;
-}
-
-function normalizeApprovalAnswer(raw: string): boolean {
-  const trimmed = raw.trim().toLowerCase();
-  if (!trimmed) return false;
-  if (["y", "yes", "approve", "approved"].includes(trimmed)) return true;
-  if (["n", "no", "deny", "denied"].includes(trimmed)) return false;
-  return false;
-}
-
-type ToolListEntry = Extract<ServerEvent, { type: "tools" }>["tools"][number] | string;
-
-export function renderToolsToLines(tools: ToolListEntry[]): string[] {
-  return tools.map((tool) => {
-    if (typeof tool === "string") return `  - ${tool}`;
-    const name = typeof tool?.name === "string" ? tool.name : "unknown";
-    const description = typeof tool?.description === "string" ? tool.description.trim() : "";
-    if (!description || description === name) return `  - ${name}`;
-    return `  - ${name}: ${description}`;
-  });
-}
-
-export type ParsedCommand =
-  | { type: "help" | "exit" | "new" | "restart" | "tools" | "sessions" }
-  | { type: "model" | "provider" | "connect" | "cwd" | "resume"; arg: string }
-  | { type: "unknown"; name: string; arg: string }
-  | { type: "message"; arg: string };
-
-export function parseReplInput(input: string): ParsedCommand {
-  const line = input.trim();
-  if (!line) return { type: "message", arg: "" };
-  if (!line.startsWith("/")) return { type: "message", arg: line };
-
-  const [cmd = "", ...rest] = line.slice(1).split(/\s+/);
-  const arg = rest.join(" ").trim();
-  switch (cmd) {
-    case "help":
-    case "exit":
-    case "new":
-    case "restart":
-    case "tools":
-    case "sessions":
-      return { type: cmd };
-    case "model":
-    case "provider":
-    case "connect":
-    case "cwd":
-    case "resume":
-      return { type: cmd, arg };
-    default:
-      return { type: "unknown", name: cmd, arg };
-  }
-}
-
-export function normalizeProviderAuthMethods(methods: ProviderAuthMethod[] | undefined): ProviderAuthMethod[] {
-  if (methods && methods.length > 0) return methods;
-  return [DEFAULT_API_AUTH_METHOD];
-}
-
-export function resolveProviderAuthMethodSelection(
-  methods: ProviderAuthMethod[],
-  rawSelection: string
-): ProviderAuthMethod | null {
-  if (methods.length === 0) return null;
-
-  const trimmed = rawSelection.trim();
-  if (!trimmed) return methods[0] ?? null;
-
-  const asNumber = Number(trimmed);
-  if (Number.isInteger(asNumber) && asNumber >= 1 && asNumber <= methods.length) {
-    return methods[asNumber - 1] ?? null;
-  }
-
-  const byId = methods.find((method) => method.id.toLowerCase() === trimmed.toLowerCase());
-  return byId ?? null;
 }
 
 export const __internal = {
@@ -302,18 +216,12 @@ export async function runCliRepl(
   let providerStatuses: ProviderStatus[] = [];
   let lastStreamedAssistantTurnId: string | null = null;
   let lastStreamedReasoningTurnId: string | null = null;
-  const streamedAssistantTextByTurn = new Map<string, string>();
-  const streamedAssistantOpenTurns = new Set<string>();
-  const streamedReasoningTurns = new Set<string>();
-  const streamedToolInputByKey = new Map<string, string>();
+  const streamState = new CliStreamState();
 
   const resetModelStreamState = () => {
     lastStreamedAssistantTurnId = null;
     lastStreamedReasoningTurnId = null;
-    streamedAssistantTextByTurn.clear();
-    streamedAssistantOpenTurns.clear();
-    streamedReasoningTurns.clear();
-    streamedToolInputByKey.clear();
+    streamState.reset();
   };
 
   const modelStreamToolKey = (evt: ModelStreamChunkEvent): string => {
@@ -489,7 +397,7 @@ export async function runCliRepl(
         if (evt.busy) {
           resetModelStreamState();
         } else {
-          if (lastStreamedAssistantTurnId && streamedAssistantOpenTurns.delete(lastStreamedAssistantTurnId)) {
+          if (lastStreamedAssistantTurnId && streamState.closeAssistantTurn(lastStreamedAssistantTurnId)) {
             process.stdout.write("\n");
           }
           resetModelStreamState();
@@ -511,19 +419,17 @@ export async function runCliRepl(
         if (evt.partType === "text_delta") {
           const text = asString(part.text);
           if (!text) break;
-          const next = `${streamedAssistantTextByTurn.get(evt.turnId) ?? ""}${text}`;
-          streamedAssistantTextByTurn.set(evt.turnId, next);
+          const next = streamState.appendAssistantDelta(evt.turnId, text);
           lastStreamedAssistantTurnId = evt.turnId;
-          if (!streamedAssistantOpenTurns.has(evt.turnId)) {
+          if (streamState.openAssistantTurn(evt.turnId)) {
             process.stdout.write("\n");
-            streamedAssistantOpenTurns.add(evt.turnId);
           }
           process.stdout.write(text);
           break;
         }
 
         if (evt.partType === "finish") {
-          if (streamedAssistantOpenTurns.delete(evt.turnId)) process.stdout.write("\n");
+          if (streamState.closeAssistantTurn(evt.turnId)) process.stdout.write("\n");
           break;
         }
 
@@ -532,7 +438,7 @@ export async function runCliRepl(
           if (!text) break;
           const mode = part.mode === "summary" ? "summary" : "reasoning";
           lastStreamedReasoningTurnId = evt.turnId;
-          streamedReasoningTurns.add(evt.turnId);
+          streamState.markReasoningTurn(evt.turnId);
           console.log(`\n[${mode}+] ${text}`);
           break;
         }
@@ -546,14 +452,15 @@ export async function runCliRepl(
         if (evt.partType === "tool_input_delta") {
           const key = modelStreamToolKey(evt);
           const delta = asString(part.delta);
-          if (delta) streamedToolInputByKey.set(key, `${streamedToolInputByKey.get(key) ?? ""}${delta}`);
+          if (delta) streamState.appendToolInputForKey(key, delta);
           break;
         }
 
         if (evt.partType === "tool_call") {
           const key = modelStreamToolKey(evt);
           const name = modelStreamToolName(evt);
-          const input = part.input ?? (streamedToolInputByKey.get(key) ? { input: streamedToolInputByKey.get(key) } : undefined);
+          const streamedInput = streamState.getToolInputForKey(key);
+          const input = part.input ?? (streamedInput ? { input: streamedInput } : undefined);
           const preview = previewStructured(input);
           console.log(preview ? `\n[tool:call] ${name} ${preview}` : `\n[tool:call] ${name}`);
           break;
@@ -589,9 +496,9 @@ export async function runCliRepl(
         const out = evt.text.trim();
         if (!out) break;
         if (lastStreamedAssistantTurnId) {
-          const streamed = (streamedAssistantTextByTurn.get(lastStreamedAssistantTurnId) ?? "").trim();
+          const streamed = streamState.getAssistantText(lastStreamedAssistantTurnId).trim();
           if (streamed && streamed === out) {
-            if (streamedAssistantOpenTurns.delete(lastStreamedAssistantTurnId)) {
+            if (streamState.closeAssistantTurn(lastStreamedAssistantTurnId)) {
               process.stdout.write("\n");
             }
             break;
@@ -601,7 +508,7 @@ export async function runCliRepl(
         break;
       }
       case "reasoning":
-        if (lastStreamedReasoningTurnId && streamedReasoningTurns.has(lastStreamedReasoningTurnId)) {
+        if (lastStreamedReasoningTurnId && streamState.hasReasoningTurn(lastStreamedReasoningTurnId)) {
           break;
         }
         console.log(`\n[${evt.kind}] ${evt.text}\n`);

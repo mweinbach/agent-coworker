@@ -146,7 +146,7 @@ export function parseMCPServersDocument(rawJson: string): { servers: MCPServerCo
     throw new Error(`mcp-servers.json: ${formatZodError(result.error)}`);
   }
 
-  return { servers: result.data.servers as MCPServerConfig[] };
+  return { servers: result.data.servers };
 }
 
 export function parseMCPServerConfig(raw: unknown): MCPServerConfig {
@@ -154,7 +154,7 @@ export function parseMCPServerConfig(raw: unknown): MCPServerConfig {
   if (!result.success) {
     throw new Error(`mcp-servers.json: ${formatZodError(result.error)}`);
   }
-  return result.data as MCPServerConfig;
+  return result.data;
 }
 
 // ---------------------------------------------------------------------------

@@ -111,6 +111,20 @@ const commandConfigSchema = z.record(z.string().trim().min(1), commandTemplateSc
   }
   return commands;
 });
+const observabilityLayerSchema = z.object({
+  baseUrl: nonEmptyTrimmedStringSchema.optional(),
+  publicKey: nonEmptyTrimmedStringSchema.optional(),
+  secretKey: nonEmptyTrimmedStringSchema.optional(),
+  tracingEnvironment: nonEmptyTrimmedStringSchema.optional(),
+  release: nonEmptyTrimmedStringSchema.optional(),
+}).passthrough();
+const harnessLayerSchema = z.object({
+  reportOnly: booleanLikeSchema.optional(),
+  strictMode: booleanLikeSchema.optional(),
+}).passthrough();
+const modelSettingsLayerSchema = z.object({
+  maxRetries: nonNegativeIntegerLikeSchema.optional(),
+}).passthrough();
 
 function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
   if (raw === undefined) return undefined;
@@ -127,6 +141,11 @@ function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
 function resolveBuiltInDir(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "..");
+}
+
+function parseLayer<T>(schema: z.ZodType<T>, raw: unknown, fallback: T): T {
+  const parsed = schema.safeParse(raw);
+  return parsed.success ? parsed.data : fallback;
 }
 
 function asProviderName(v: unknown): ProviderName | null {
@@ -268,7 +287,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.enableMcp) ??
     true;
 
-  const mergedObservability = isPlainObject(merged.observability) ? merged.observability : {};
+  const mergedObservability = parseLayer(observabilityLayerSchema, merged.observability, {});
   const observabilityEnabled =
     asBoolean(env.AGENT_OBSERVABILITY_ENABLED) ??
     asBoolean(projectConfig.observabilityEnabled) ??
@@ -277,14 +296,14 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     true;
   const langfuseBaseUrl = (
     env.LANGFUSE_BASE_URL ||
-    asNonEmptyString(mergedObservability["baseUrl"]) ||
+    mergedObservability.baseUrl ||
     "https://cloud.langfuse.com"
   ).replace(/\/+$/, "");
-  const langfusePublicKey = env.LANGFUSE_PUBLIC_KEY || asNonEmptyString(mergedObservability["publicKey"]);
-  const langfuseSecretKey = env.LANGFUSE_SECRET_KEY || asNonEmptyString(mergedObservability["secretKey"]);
+  const langfusePublicKey = env.LANGFUSE_PUBLIC_KEY || mergedObservability.publicKey;
+  const langfuseSecretKey = env.LANGFUSE_SECRET_KEY || mergedObservability.secretKey;
   const langfuseTracingEnvironment =
-    env.LANGFUSE_TRACING_ENVIRONMENT || asNonEmptyString(mergedObservability["tracingEnvironment"]);
-  const langfuseRelease = env.LANGFUSE_RELEASE || asNonEmptyString(mergedObservability["release"]);
+    env.LANGFUSE_TRACING_ENVIRONMENT || mergedObservability.tracingEnvironment;
+  const langfuseRelease = env.LANGFUSE_RELEASE || mergedObservability.release;
 
   const observability: AgentConfig["observability"] = {
     provider: "langfuse",
@@ -296,15 +315,15 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     ...(langfuseRelease ? { release: langfuseRelease } : {}),
   };
 
-  const mergedHarness = isPlainObject(merged.harness) ? merged.harness : {};
+  const mergedHarness = parseLayer(harnessLayerSchema, merged.harness, {});
   const harness = {
     reportOnly:
       asBoolean(env.AGENT_HARNESS_REPORT_ONLY) ??
-      asBoolean(mergedHarness["reportOnly"]) ??
+      mergedHarness.reportOnly ??
       true,
     strictMode:
       asBoolean(env.AGENT_HARNESS_STRICT_MODE) ??
-      asBoolean(mergedHarness["strictMode"]) ??
+      mergedHarness.strictMode ??
       false,
   };
 
@@ -313,23 +332,10 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     ? (deepMerge({}, (merged as Record<string, unknown>).providerOptions as Record<string, unknown>) as Record<string, any>)
     : undefined;
 
-  const mergedModelSettings = isPlainObject((merged as Record<string, unknown>).modelSettings)
-    ? ((merged as Record<string, unknown>).modelSettings as Record<string, unknown>)
-    : {};
-
-  const modelSettings: AgentConfig["modelSettings"] = {
-    ...(normalizeNonNegativeInt(env.AGENT_MODEL_MAX_RETRIES) !== undefined
-      ? { maxRetries: normalizeNonNegativeInt(env.AGENT_MODEL_MAX_RETRIES) }
-      : normalizeNonNegativeInt(mergedModelSettings.maxRetries) !== undefined
-        ? { maxRetries: normalizeNonNegativeInt(mergedModelSettings.maxRetries) }
-        : {}),
-  };
+  const mergedModelSettings = parseLayer(modelSettingsLayerSchema, (merged as Record<string, unknown>).modelSettings, {});
+  const maxRetries = normalizeNonNegativeInt(env.AGENT_MODEL_MAX_RETRIES) ?? mergedModelSettings.maxRetries;
   const normalizedModelSettings: AgentConfig["modelSettings"] =
-    typeof modelSettings.maxRetries === "number"
-      ? {
-          ...(typeof modelSettings.maxRetries === "number" ? { maxRetries: modelSettings.maxRetries } : {}),
-        }
-      : undefined;
+    typeof maxRetries === "number" ? { maxRetries } : undefined;
 
   return {
     provider,

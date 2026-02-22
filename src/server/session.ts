@@ -45,7 +45,6 @@ import type {
 } from "../types";
 import { runTurn } from "../agent";
 import { createTools } from "../tools";
-import { classifyCommandDetailed } from "../utils/approval";
 import { HarnessContextStore } from "../harness/contextStore";
 import { emitObservabilityEvent } from "../observability/otel";
 import { getObservabilityHealth } from "../observability/runtime";
@@ -60,7 +59,7 @@ import {
   deletePersistedSessionSnapshot,
 } from "./sessionStore";
 
-import { ASK_SKIP_TOKEN, type ServerEvent } from "./protocol";
+import type { ServerEvent } from "./protocol";
 import {
   SessionBackupManager,
   type SessionBackupHandle,
@@ -68,6 +67,7 @@ import {
   type SessionBackupPublicState,
 } from "./sessionBackup";
 import { HistoryManager } from "./session/HistoryManager";
+import { InteractionManager } from "./session/InteractionManager";
 import { McpManager } from "./session/McpManager";
 import { PersistenceManager } from "./session/PersistenceManager";
 import { TurnExecutionManager } from "./session/TurnExecutionManager";
@@ -160,15 +160,11 @@ export class AgentSession {
   private refreshingProviderStatus = false;
   private abortController: AbortController | null = null;
 
-  private readonly pendingAsk = new Map<string, PromiseWithResolvers<string>>();
-  private readonly pendingApproval = new Map<string, PromiseWithResolvers<boolean>>();
-  private readonly pendingAskEvents = new Map<string, ServerEvent>();
-  private readonly pendingApprovalEvents = new Map<string, ServerEvent>();
-
   private currentTurnId: string | null = null;
   private currentTurnOutcome: "completed" | "cancelled" | "error" = "completed";
   private maxSteps = 100;
   private readonly historyManager: HistoryManager;
+  private readonly interactionManager: InteractionManager;
   private readonly mcpManager: McpManager;
   private readonly turnExecutionManager: TurnExecutionManager;
 
@@ -249,6 +245,16 @@ export class AgentSession {
       callbackMcpServerAuth: (nameRaw, codeRaw) => this.callbackMcpServerAuthImpl(nameRaw, codeRaw),
       setMcpServerApiKey: (nameRaw, apiKeyRaw) => this.setMcpServerApiKeyImpl(nameRaw, apiKeyRaw),
       migrateLegacyMcpServers: (scope) => this.migrateLegacyMcpServersImpl(scope),
+    });
+    this.interactionManager = new InteractionManager({
+      sessionId: this.id,
+      emit: (evt) => this.emit(evt),
+      emitError: (code, source, message) => this.emitError(code, source, message),
+      log: (line) => this.log(line),
+      queuePersistSessionSnapshot: (reason) => this.queuePersistSessionSnapshot(reason),
+      getConfig: () => this.config,
+      isYolo: () => this.yolo,
+      waitForPromptResponse: (requestId, bucket) => this.waitForPromptResponse(requestId, bucket),
     });
     this.turnExecutionManager = new TurnExecutionManager({
       sendUserMessage: (text, clientMessageId, displayText) =>
@@ -379,11 +385,19 @@ export class AgentSession {
   }
 
   get hasPendingAsk(): boolean {
-    return this.pendingAsk.size > 0;
+    return this.interactionManager.hasPendingAsk;
   }
 
   get hasPendingApproval(): boolean {
-    return this.pendingApproval.size > 0;
+    return this.interactionManager.hasPendingApproval;
+  }
+
+  private get pendingAskEvents() {
+    return this.interactionManager.pendingAskEventsForReplay;
+  }
+
+  private get pendingApprovalEvents() {
+    return this.interactionManager.pendingApprovalEventsForReplay;
   }
 
   getEnableMcp() {
@@ -437,12 +451,7 @@ export class AgentSession {
 
   /** Re-emit pending ask/approval events for reconnecting clients. */
   replayPendingPrompts() {
-    for (const evt of this.pendingAskEvents.values()) {
-      this.emit(evt);
-    }
-    for (const evt of this.pendingApprovalEvents.values()) {
-      this.emit(evt);
-    }
+    this.interactionManager.replayPendingPrompts();
   }
 
   private updateSessionInfo(
@@ -1742,41 +1751,11 @@ export class AgentSession {
   }
 
   private handleAskResponseImpl(requestId: string, answer: string) {
-    const d = this.pendingAsk.get(requestId);
-    if (!d) {
-      this.log(`[warn] ask_response for unknown requestId: ${requestId}`);
-      return;
-    }
-
-    if (answer.trim().length === 0) {
-      this.emitError(
-        "validation_failed",
-        "session",
-        `Ask response cannot be empty. Reply with text or ${ASK_SKIP_TOKEN} to skip.`
-      );
-      const pendingEvt = this.pendingAskEvents.get(requestId);
-      if (pendingEvt) {
-        this.emit(pendingEvt);
-      }
-      return;
-    }
-
-    this.pendingAsk.delete(requestId);
-    this.pendingAskEvents.delete(requestId);
-    this.queuePersistSessionSnapshot("session.ask_resolved");
-    d.resolve(answer);
+    this.interactionManager.handleAskResponse(requestId, answer);
   }
 
   private handleApprovalResponseImpl(requestId: string, approved: boolean) {
-    const d = this.pendingApproval.get(requestId);
-    if (!d) {
-      this.log(`[warn] approval_response for unknown requestId: ${requestId}`);
-      return;
-    }
-    this.pendingApproval.delete(requestId);
-    this.pendingApprovalEvents.delete(requestId);
-    this.queuePersistSessionSnapshot("session.approval_resolved");
-    d.resolve(approved);
+    this.interactionManager.handleApprovalResponse(requestId, approved);
   }
 
   /** Cancel the currently running agent turn. */
@@ -1786,16 +1765,7 @@ export class AgentSession {
       this.abortController.abort();
     }
     // Reject any pending ask/approval so the turn unblocks.
-    for (const [id, d] of this.pendingAsk) {
-      d.reject(new Error("Cancelled by user"));
-      this.pendingAsk.delete(id);
-      this.pendingAskEvents.delete(id);
-    }
-    for (const [id, d] of this.pendingApproval) {
-      d.reject(new Error("Cancelled by user"));
-      this.pendingApproval.delete(id);
-      this.pendingApprovalEvents.delete(id);
-    }
+    this.interactionManager.rejectAllPending("Cancelled by user");
   }
 
   handleAskResponse(requestId: string, answer: string) {
@@ -1818,16 +1788,7 @@ export class AgentSession {
 
   dispose(reason: string) {
     this.abortController?.abort();
-    for (const [id, d] of this.pendingAsk) {
-      d.reject(new Error(`Session disposed (${reason})`));
-      this.pendingAsk.delete(id);
-      this.pendingAskEvents.delete(id);
-    }
-    for (const [id, d] of this.pendingApproval) {
-      d.reject(new Error(`Session disposed (${reason})`));
-      this.pendingApproval.delete(id);
-      this.pendingApprovalEvents.delete(id);
-    }
+    this.interactionManager.rejectAllPending(`Session disposed (${reason})`);
     this.harnessContextStore.clear(this.id);
 
     void this.closeSessionBackup();
@@ -1869,51 +1830,11 @@ export class AgentSession {
   }
 
   private async askUser(question: string, options?: string[]) {
-    const requestId = makeId();
-    const d = Promise.withResolvers<string>();
-    this.pendingAsk.set(requestId, d);
-
-    const evt: ServerEvent = { type: "ask", sessionId: this.id, requestId, question, options };
-    this.pendingAskEvents.set(requestId, evt);
-    this.emit(evt);
-    this.queuePersistSessionSnapshot("session.ask_pending");
-    return await this.waitForPromptResponse(requestId, this.pendingAsk).finally(() => {
-      this.pendingAskEvents.delete(requestId);
-    });
+    return await this.interactionManager.askUser(question, options);
   }
 
   private async approveCommand(command: string) {
-    if (this.yolo) return true;
-
-    const classification = classifyCommandDetailed(command, {
-      allowedRoots: [
-        path.dirname(this.config.projectAgentDir),
-        this.config.workingDirectory,
-        ...(this.config.outputDirectory ? [this.config.outputDirectory] : []),
-      ],
-      workingDirectory: this.config.workingDirectory,
-    });
-    if (classification.kind === "auto") return true;
-
-    const requestId = makeId();
-    const d = Promise.withResolvers<boolean>();
-    this.pendingApproval.set(requestId, d);
-
-    const evt: ServerEvent = {
-      type: "approval",
-      sessionId: this.id,
-      requestId,
-      command,
-      dangerous: classification.dangerous,
-      reasonCode: classification.riskCode,
-    };
-    this.pendingApprovalEvents.set(requestId, evt);
-    this.emit(evt);
-    this.queuePersistSessionSnapshot("session.approval_pending");
-
-    return await this.waitForPromptResponse(requestId, this.pendingApproval).finally(() => {
-      this.pendingApprovalEvents.delete(requestId);
-    });
+    return await this.interactionManager.approveCommand(command);
   }
 
   private updateTodos = (todos: TodoItem[]) => {

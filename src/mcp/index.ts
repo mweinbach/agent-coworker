@@ -4,6 +4,7 @@ import path from "node:path";
 import { createMCPClient } from "@ai-sdk/mcp";
 import type { OAuthClientProvider } from "@ai-sdk/mcp";
 import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
+import { z } from "zod";
 
 import type { AgentConfig, MCPServerConfig } from "../types";
 import {
@@ -50,6 +51,27 @@ export interface MCPServersSnapshot {
   warnings: string[];
 }
 
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const oauthProviderTokensSchema = z.object({
+  access_token: nonEmptyTrimmedStringSchema,
+  token_type: nonEmptyTrimmedStringSchema.optional(),
+  refresh_token: nonEmptyTrimmedStringSchema.optional(),
+  expires_in: z.preprocess((value) => {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return undefined;
+  }, z.number().finite().optional()),
+  scope: nonEmptyTrimmedStringSchema.optional(),
+}).passthrough();
+const oauthClientInformationSchema = z.object({
+  client_id: nonEmptyTrimmedStringSchema,
+  client_secret: nonEmptyTrimmedStringSchema.optional(),
+}).passthrough();
+const retryCountSchema = z.number().finite().transform((value) => Math.max(0, Math.floor(value)));
+
 function toOAuthTokensForSdk(tokens: MCPServerOAuthTokens): {
   access_token: string;
   token_type: string;
@@ -74,13 +96,7 @@ function toOAuthTokensForSdk(tokens: MCPServerOAuthTokens): {
   };
 }
 
-function toStoredOAuthTokens(tokens: {
-  access_token: string;
-  token_type?: string;
-  refresh_token?: string;
-  expires_in?: number;
-  scope?: string;
-}): Omit<MCPServerOAuthTokens, "updatedAt"> {
+function toStoredOAuthTokens(tokens: z.infer<typeof oauthProviderTokensSchema>): Omit<MCPServerOAuthTokens, "updatedAt"> {
   const expiresAt = (() => {
     if (typeof tokens.expires_in !== "number" || !Number.isFinite(tokens.expires_in)) return undefined;
     return new Date(Date.now() + tokens.expires_in * 1000).toISOString();
@@ -116,15 +132,19 @@ function createRuntimeOAuthProvider(opts: {
       return toOAuthTokensForSdk(latestTokens);
     },
     saveTokens: async (tokens) => {
+      const parsedTokens = oauthProviderTokensSchema.safeParse(tokens);
+      if (!parsedTokens.success) return;
+
+      const storedTokens = toStoredOAuthTokens(parsedTokens.data);
       latestTokens = {
-        ...toStoredOAuthTokens(tokens as any),
+        ...storedTokens,
         updatedAt: new Date().toISOString(),
       };
       try {
         await completeMCPServerOAuth({
           config: opts.config,
           server: opts.server,
-          tokens: toStoredOAuthTokens(tokens as any),
+          tokens: storedTokens,
           clearPending: false,
         });
       } catch {
@@ -161,19 +181,21 @@ function createRuntimeOAuthProvider(opts: {
       };
     },
     saveClientInformation: async (info) => {
-      const clientId = typeof info === "object" && info ? (info as Record<string, unknown>).client_id : undefined;
-      if (typeof clientId !== "string" || !clientId) return;
-      const clientSecret = typeof info === "object" && info ? (info as Record<string, unknown>).client_secret : undefined;
+      const parsedInfo = oauthClientInformationSchema.safeParse(info);
+      if (!parsedInfo.success) return;
+
+      const clientId = parsedInfo.data.client_id;
+      const clientSecret = parsedInfo.data.client_secret;
       latestClientInfo = {
         clientId,
-        ...(typeof clientSecret === "string" && clientSecret ? { clientSecret } : {}),
+        ...(clientSecret ? { clientSecret } : {}),
         updatedAt: new Date().toISOString(),
       };
       try {
         await setMCPServerOAuthClientInformation({
           config: opts.config,
           server: opts.server,
-          clientInformation: { clientId, ...(typeof clientSecret === "string" && clientSecret ? { clientSecret } : {}) },
+          clientInformation: { clientId, ...(clientSecret ? { clientSecret } : {}) },
         });
       } catch {
         // best effort persistence only
@@ -305,8 +327,8 @@ export async function loadMCPTools(
   let closed = false;
 
   const retriesFor = (value: unknown): number => {
-    if (typeof value !== "number" || !Number.isFinite(value)) return 3;
-    return Math.max(0, Math.floor(value));
+    const parsed = retryCountSchema.safeParse(value);
+    return parsed.success ? parsed.data : 3;
   };
 
   const close = async () => {

@@ -19,8 +19,38 @@ export interface LoadConfigOptions {
   env?: Record<string, string | undefined>;
 }
 
+const jsonObjectSchema = z.record(z.string(), z.unknown());
+const stringSchema = z.string();
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const finiteNumberSchema = z.number().finite();
+const booleanLikeSchema = z.union([
+  z.boolean(),
+  z.string().trim().transform((raw, ctx) => {
+    const normalized = raw.toLowerCase();
+    if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "y" || normalized === "on") {
+      return true;
+    }
+    if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "n" || normalized === "off") {
+      return false;
+    }
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "invalid_boolean" });
+    return z.NEVER;
+  }),
+]);
+const numberLikeSchema = z.union([
+  finiteNumberSchema,
+  z.string().trim().min(1).transform((raw, ctx) => {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "invalid_number" });
+      return z.NEVER;
+    }
+    return parsed;
+  }),
+]);
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+  return jsonObjectSchema.safeParse(v).success;
 }
 
 function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
@@ -45,7 +75,7 @@ async function loadJsonSafe(filePath: string): Promise<Record<string, unknown>> 
       throw new Error(`Invalid JSON in config file ${filePath}: ${String(error)}`);
     }
 
-    const result = z.record(z.string(), z.unknown()).safeParse(parsed);
+    const result = jsonObjectSchema.safeParse(parsed);
     if (!result.success) {
       throw new Error(`Config file must contain a JSON object: ${filePath}`);
     }
@@ -107,31 +137,31 @@ function asProviderName(v: unknown): ProviderName | null {
   return resolveProviderName(v);
 }
 
+function asString(v: unknown): string | undefined {
+  const parsed = stringSchema.safeParse(v);
+  return parsed.success ? parsed.data : undefined;
+}
+
 function asBoolean(v: unknown): boolean | null {
-  if (typeof v === "boolean") return v;
-  if (typeof v !== "string") return null;
-  const s = v.trim().toLowerCase();
-  if (s === "1" || s === "true" || s === "yes" || s === "y" || s === "on") return true;
-  if (s === "0" || s === "false" || s === "no" || s === "n" || s === "off") return false;
-  return null;
+  const parsed = booleanLikeSchema.safeParse(v);
+  return parsed.success ? parsed.data : null;
 }
 
 function asNumber(v: unknown): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v !== "string" || !v.trim()) return null;
-  const parsed = Number(v);
-  if (!Number.isFinite(parsed)) return null;
-  return parsed;
+  const parsed = numberLikeSchema.safeParse(v);
+  return parsed.success ? parsed.data : null;
 }
 
 function asNonEmptyString(v: unknown): string | undefined {
-  return typeof v === "string" && v.trim() ? v.trim() : undefined;
+  const parsed = nonEmptyTrimmedStringSchema.safeParse(v);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function resolveDir(maybeRelative: unknown, baseDir: string): string {
-  if (typeof maybeRelative !== "string" || !maybeRelative) return baseDir;
-  if (path.isAbsolute(maybeRelative)) return maybeRelative;
-  return path.join(baseDir, maybeRelative);
+  const parsed = stringSchema.safeParse(maybeRelative);
+  if (!parsed.success || !parsed.data) return baseDir;
+  if (path.isAbsolute(parsed.data)) return parsed.data;
+  return path.join(baseDir, parsed.data);
 }
 
 function normalizePositiveInt(v: unknown): number | undefined {
@@ -231,19 +261,16 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const workingDirectory = env.AGENT_WORKING_DIR || cwd;
 
   const model =
-    env.AGENT_MODEL ||
-    (typeof projectConfig.model === "string" && projectConfig.model) ||
-    (typeof userConfig.model === "string" && userConfig.model) ||
-    (typeof builtInDefaults.model === "string" &&
-      builtInDefaults.model &&
-      asProviderName(builtInDefaults.provider) === provider &&
-      builtInDefaults.model) ||
+    asNonEmptyString(env.AGENT_MODEL) ||
+    asNonEmptyString(projectConfig.model) ||
+    asNonEmptyString(userConfig.model) ||
+    (asProviderName(builtInDefaults.provider) === provider && asNonEmptyString(builtInDefaults.model)) ||
     defaultModelForProvider(provider);
 
   const subAgentModel =
-    (typeof projectConfig.subAgentModel === "string" && projectConfig.subAgentModel) ||
-    (typeof userConfig.subAgentModel === "string" && userConfig.subAgentModel) ||
-    (typeof builtInDefaults.subAgentModel === "string" && builtInDefaults.subAgentModel) ||
+    asNonEmptyString(projectConfig.subAgentModel) ||
+    asNonEmptyString(userConfig.subAgentModel) ||
+    asNonEmptyString(builtInDefaults.subAgentModel) ||
     model;
 
   // Persistent, user-visible directories should be relative to the project (cwd) by default,
@@ -265,14 +292,15 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const uploadsDirectory = uploadsDirRaw ? resolveDir(uploadsDirRaw, cwd) : undefined;
 
   const userName =
-    env.AGENT_USER_NAME ||
-    (typeof projectConfig.userName === "string" && projectConfig.userName) ||
-    (typeof userConfig.userName === "string" && userConfig.userName) ||
-    (typeof builtInDefaults.userName === "string" ? builtInDefaults.userName : "");
+    asNonEmptyString(env.AGENT_USER_NAME) ||
+    asNonEmptyString(projectConfig.userName) ||
+    asNonEmptyString(userConfig.userName) ||
+    asString(builtInDefaults.userName) ||
+    "";
   const knowledgeCutoff =
-    (typeof projectConfig.knowledgeCutoff === "string" && projectConfig.knowledgeCutoff) ||
-    (typeof userConfig.knowledgeCutoff === "string" && userConfig.knowledgeCutoff) ||
-    (typeof builtInDefaults.knowledgeCutoff === "string" && builtInDefaults.knowledgeCutoff) ||
+    asNonEmptyString(projectConfig.knowledgeCutoff) ||
+    asNonEmptyString(userConfig.knowledgeCutoff) ||
+    asNonEmptyString(builtInDefaults.knowledgeCutoff) ||
     "unknown";
 
   const enableMcp =

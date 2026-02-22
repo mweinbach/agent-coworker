@@ -19,11 +19,9 @@ type ParsedSkillDocument = {
   body: string;
 };
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
+const unknownRecordSchema = z.record(z.string(), z.unknown());
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const triggerValueSchema = z.union([z.string(), z.array(z.unknown())]);
 const metadataSchema = z.record(z.string(), z.string());
 const skillFrontMatterSchema = z.object({
   name: z.string().trim().min(1).max(64).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
@@ -56,7 +54,7 @@ function splitFrontMatter(raw: string): { frontMatterRaw: string | null; body: s
 function parseYamlFrontMatter(frontMatterRaw: string): Record<string, unknown> | null {
   try {
     const parsed = Bun.YAML.parse(frontMatterRaw);
-    const validated = z.record(z.string(), z.unknown()).safeParse(parsed);
+    const validated = unknownRecordSchema.safeParse(parsed);
     if (!validated.success) return null;
     return validated.data;
   } catch {
@@ -92,19 +90,20 @@ function parseSkillFrontMatter(raw: string, skillDirName: string): ParsedSkillDo
 }
 
 function parseTriggerValue(value: unknown): string[] {
-  if (typeof value === "string") {
-    return value
+  const parsed = triggerValueSchema.safeParse(value);
+  if (!parsed.success) return [];
+
+  if (typeof parsed.data === "string") {
+    return parsed.data
       .split(",")
       .map((v) => v.trim())
       .filter(Boolean);
   }
-  if (Array.isArray(value)) {
-    return value
-      .filter((v): v is string => typeof v === "string")
-      .map((v) => v.trim())
-      .filter(Boolean);
-  }
-  return [];
+
+  return parsed.data
+    .filter((v): v is string => nonEmptyTrimmedStringSchema.safeParse(v).success)
+    .map((v) => v.trim())
+    .filter(Boolean);
 }
 
 function mimeTypeForPath(p: string): string {
@@ -236,8 +235,9 @@ export function extractTriggers(name: string, frontMatter?: Record<string, unkno
     const direct = parseTriggerValue(frontMatter.triggers);
     if (direct.length > 0) return direct;
 
-    if (isPlainRecord(frontMatter.metadata)) {
-      const metadataTriggers = parseTriggerValue(frontMatter.metadata.triggers);
+    const metadata = unknownRecordSchema.safeParse(frontMatter.metadata);
+    if (metadata.success) {
+      const metadataTriggers = parseTriggerValue(metadata.data.triggers);
       if (metadataTriggers.length > 0) return metadataTriggers;
     }
   }

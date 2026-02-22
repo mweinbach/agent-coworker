@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { normalizeModelStreamPart, reasoningModeForProvider } from "../modelStream";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";
@@ -5,23 +6,26 @@ import type { SessionBackupController } from "./SessionBackupController";
 import type { SessionContext } from "./SessionContext";
 import type { SessionMetadataManager } from "./SessionMetadataManager";
 
+const assistantMessageContentArraySchema = z.array(z.unknown());
+const assistantMessageContentPartSchema = z.object({
+  type: z.enum(["text", "output_text"]),
+  text: z.string(),
+}).passthrough();
+
 function makeId(): string {
   return crypto.randomUUID();
 }
 
 function extractAssistantTextFromMessageContent(content: unknown): string {
   if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
+  const parsedContent = assistantMessageContentArraySchema.safeParse(content);
+  if (!parsedContent.success) return "";
 
   const chunks: string[] = [];
-  for (const part of content) {
-    if (!part || typeof part !== "object" || Array.isArray(part)) continue;
-    const partType = typeof (part as { type?: unknown }).type === "string" ? (part as { type: string }).type : "";
-    if (partType !== "text" && partType !== "output_text") continue;
-    const text = (part as { text?: unknown }).text;
-    if (typeof text === "string" && text.length > 0) {
-      chunks.push(text);
-    }
+  for (const part of parsedContent.data) {
+    const parsedPart = assistantMessageContentPartSchema.safeParse(part);
+    if (!parsedPart.success) continue;
+    if (parsedPart.data.text.length > 0) chunks.push(parsedPart.data.text);
   }
   return chunks.join("");
 }

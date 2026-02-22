@@ -1,9 +1,19 @@
+import { z } from "zod";
+
 import type { ServerEvent } from "../../server/protocol";
 
 type ModelStreamChunkEvent = Extract<ServerEvent, { type: "model_stream_chunk" }>;
+const partRecordSchema = z.record(z.string(), z.unknown());
+const stringSchema = z.string();
 
 export function asString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
+  const parsed = stringSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function asPartRecord(value: unknown): Record<string, unknown> {
+  const parsed = partRecordSchema.safeParse(value);
+  return parsed.success ? parsed.data : {};
 }
 
 export function previewStructured(value: unknown, max = 160): string {
@@ -19,7 +29,7 @@ export function previewStructured(value: unknown, max = 160): string {
 }
 
 export function modelStreamToolKey(evt: ModelStreamChunkEvent): string {
-  const part = evt.part as Record<string, unknown>;
+  const part = asPartRecord(evt.part);
   return (
     asString(part.toolCallId) ??
     asString(part.id) ??
@@ -29,6 +39,6 @@ export function modelStreamToolKey(evt: ModelStreamChunkEvent): string {
 }
 
 export function modelStreamToolName(evt: ModelStreamChunkEvent): string {
-  const part = evt.part as Record<string, unknown>;
+  const part = asPartRecord(evt.part);
   return asString(part.toolName) ?? "tool";
 }

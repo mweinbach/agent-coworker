@@ -1,4 +1,10 @@
+import { z } from "zod";
+
 import type { ServerEvent } from "../server/protocol";
+
+const stringSchema = z.string();
+const finiteNumberSchema = z.number().finite();
+const partRecordSchema = z.record(z.string(), z.unknown());
 
 export type ModelStreamChunkEvent = Extract<ServerEvent, { type: "model_stream_chunk" }>;
 
@@ -44,18 +50,18 @@ export type ModelStreamUpdate =
   | { kind: "unknown"; turnId: string; partType: string; payload: unknown };
 
 function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+  const parsed = stringSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function asFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  const parsed = finiteNumberSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function asPartRecord(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return {};
+  const parsed = partRecordSchema.safeParse(value);
+  return parsed.success ? parsed.data : {};
 }
 
 function asReasoningMode(value: unknown): "reasoning" | "summary" {

@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { z } from "zod";
 
 type GoogleProviderKey = "google" | "vertex";
 
@@ -7,8 +8,10 @@ type GooglePrepareStepPayload = {
   messages: ModelMessage[];
 };
 
+const recordSchema = z.record(z.string(), z.unknown());
+
 function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
+  return recordSchema.safeParse(v).success;
 }
 
 function getGoogleProviderKey(providerOptions: Record<string, unknown>): GoogleProviderKey | undefined {

@@ -6,12 +6,29 @@ import { isProviderName } from "../types";
 
 import type { ClientMessage } from "./protocol";
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+const recordSchema = z.record(z.string(), z.unknown());
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const harnessContextSchema = z.object({
+  runId: nonEmptyTrimmedStringSchema,
+  objective: nonEmptyTrimmedStringSchema,
+  acceptanceCriteria: z.array(z.string()),
+  constraints: z.array(z.string()),
+  taskId: z.string().optional(),
+  metadata: z.record(z.string(), z.string()).optional(),
+}).passthrough();
+const setConfigPayloadSchema = z.object({
+  yolo: z.boolean().optional(),
+  observabilityEnabled: z.boolean().optional(),
+  subAgentModel: nonEmptyTrimmedStringSchema.optional(),
+  maxSteps: z.number().min(1).max(1000).optional(),
+}).passthrough();
+
+function isRecordObject(v: unknown): v is Record<string, unknown> {
+  return recordSchema.safeParse(v).success;
 }
 
 function isNonEmptyString(v: unknown): v is string {
-  return typeof v === "string" && v.trim().length > 0;
+  return nonEmptyTrimmedStringSchema.safeParse(v).success;
 }
 
 const MAX_MCP_API_KEY_SIZE = 100_000;
@@ -75,7 +92,7 @@ function makeSchema(
 }
 
 function validateMcpServerPayload(value: unknown): string | null {
-  if (!isPlainObject(value)) return "mcp_server_upsert missing/invalid server";
+  if (!isRecordObject(value)) return "mcp_server_upsert missing/invalid server";
   try {
     parseMCPServersDocument(JSON.stringify({ servers: [value] }));
     return null;
@@ -248,27 +265,25 @@ clientMessageSchemas.set("mcp_servers_migrate_legacy", makeSchema("mcp_servers_m
 clientMessageSchemas.set("harness_context_set", makeSchema("harness_context_set", (obj) => {
   const sessionError = requireSessionError("harness_context_set", obj);
   if (sessionError) return sessionError;
-  if (!isPlainObject(obj.context)) return "harness_context_set missing/invalid context";
+  if (!isRecordObject(obj.context)) return "harness_context_set missing/invalid context";
 
-  const ctx = obj.context;
-  if (!isNonEmptyString(ctx.runId)) return "harness_context_set invalid context.runId";
-  if (!isNonEmptyString(ctx.objective)) return "harness_context_set invalid context.objective";
-  if (!Array.isArray(ctx.acceptanceCriteria) || !ctx.acceptanceCriteria.every((x: unknown) => typeof x === "string")) {
-    return "harness_context_set invalid context.acceptanceCriteria";
-  }
-  if (!Array.isArray(ctx.constraints) || !ctx.constraints.every((x: unknown) => typeof x === "string")) {
-    return "harness_context_set invalid context.constraints";
-  }
-  if (ctx.taskId !== undefined && typeof ctx.taskId !== "string") {
-    return "harness_context_set invalid context.taskId";
-  }
-  if (ctx.metadata !== undefined) {
-    if (!isPlainObject(ctx.metadata)) return "harness_context_set invalid context.metadata";
-    for (const value of Object.values(ctx.metadata)) {
-      if (typeof value !== "string") return "harness_context_set invalid context.metadata values";
+  const parsed = harnessContextSchema.safeParse(obj.context);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const path = issue?.path ?? [];
+    const root = String(path[0] ?? "");
+    if (root === "runId") return "harness_context_set invalid context.runId";
+    if (root === "objective") return "harness_context_set invalid context.objective";
+    if (root === "acceptanceCriteria") return "harness_context_set invalid context.acceptanceCriteria";
+    if (root === "constraints") return "harness_context_set invalid context.constraints";
+    if (root === "taskId") return "harness_context_set invalid context.taskId";
+    if (root === "metadata") {
+      return path.length > 1
+        ? "harness_context_set invalid context.metadata values"
+        : "harness_context_set invalid context.metadata";
     }
+    return "harness_context_set missing/invalid context";
   }
-
   return null;
 }));
 
@@ -311,18 +326,17 @@ clientMessageSchemas.set("delete_session", makeSchema("delete_session", (obj) =>
 clientMessageSchemas.set("set_config", makeSchema("set_config", (obj) => {
   const sessionError = requireSessionError("set_config", obj);
   if (sessionError) return sessionError;
-  if (!isPlainObject(obj.config)) return "set_config missing/invalid config";
+  if (!isRecordObject(obj.config)) return "set_config missing/invalid config";
 
-  const cfg = obj.config as Record<string, unknown>;
-  if (cfg.yolo !== undefined && typeof cfg.yolo !== "boolean") return "set_config config.yolo must be boolean";
-  if (cfg.observabilityEnabled !== undefined && typeof cfg.observabilityEnabled !== "boolean") {
-    return "set_config config.observabilityEnabled must be boolean";
-  }
-  if (cfg.subAgentModel !== undefined && !isNonEmptyString(cfg.subAgentModel)) {
-    return "set_config config.subAgentModel must be non-empty string";
-  }
-  if (cfg.maxSteps !== undefined && (typeof cfg.maxSteps !== "number" || cfg.maxSteps < 1 || cfg.maxSteps > 1000)) {
-    return "set_config config.maxSteps must be number 1-1000";
+  const parsed = setConfigPayloadSchema.safeParse(obj.config);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const field = String(issue?.path?.[0] ?? "");
+    if (field === "yolo") return "set_config config.yolo must be boolean";
+    if (field === "observabilityEnabled") return "set_config config.observabilityEnabled must be boolean";
+    if (field === "subAgentModel") return "set_config config.subAgentModel must be non-empty string";
+    if (field === "maxSteps") return "set_config config.maxSteps must be number 1-1000";
+    return "set_config missing/invalid config";
   }
   return null;
 }));
@@ -343,8 +357,9 @@ export function safeParseClientMessage(raw: string): ParseResult {
     return err("Invalid JSON");
   }
 
-  if (!isPlainObject(parsed)) return err("Expected object");
-  const obj = parsed as Record<string, unknown>;
+  const parsedObject = recordSchema.safeParse(parsed);
+  if (!parsedObject.success) return err("Expected object");
+  const obj = parsedObject.data;
   if (typeof obj.type !== "string") return err("Missing type");
 
   const schema = clientMessageSchemas.get(obj.type);

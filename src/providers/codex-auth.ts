@@ -35,6 +35,25 @@ export type CodexAuthMaterial = {
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 const isoTimestampSchema = z.string().datetime({ offset: true });
+const recordSchema = z.record(z.string(), z.unknown());
+const organizationsSchema = z.array(z.object({
+  id: nonEmptyStringSchema.optional(),
+}).passthrough());
+const finiteNumberFromUnknownSchema = z.preprocess((value) => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}, z.number().finite());
+const codexOAuthTokenResponseSchema = z.object({
+  access_token: nonEmptyStringSchema,
+  refresh_token: nonEmptyStringSchema.optional(),
+  id_token: nonEmptyStringSchema.optional(),
+  expires_in: finiteNumberFromUnknownSchema.optional(),
+}).passthrough();
+
 const codexAuthDocumentSchema = z.object({
   version: z.literal(1),
   auth_mode: z.literal("chatgpt"),
@@ -55,17 +74,19 @@ const codexAuthDocumentSchema = z.object({
   last_refresh: isoTimestampSchema.optional(),
 }).strict();
 
-function isObjectLike(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function asRecord(value: unknown): Record<string, unknown> | null {
+  const parsed = recordSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 function toNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return undefined;
+  const parsed = finiteNumberFromUnknownSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function toNonEmptyString(value: unknown): string | undefined {
+  const parsed = nonEmptyStringSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function toEpochMs(value: unknown): number | undefined {
@@ -92,7 +113,7 @@ export function decodeJwtPayload(token: string): Record<string, unknown> | null 
   if (!payloadRaw) return null;
   try {
     const parsed = JSON.parse(payloadRaw);
-    return isObjectLike(parsed) ? parsed : null;
+    return asRecord(parsed);
   } catch {
     return null;
   }
@@ -106,51 +127,42 @@ export function extractJwtExpiryMs(token: string): number | undefined {
 }
 
 export function extractAccountIdFromClaims(claims: Record<string, unknown>): string | undefined {
-  const direct = typeof claims.chatgpt_account_id === "string" ? claims.chatgpt_account_id : undefined;
+  const direct = toNonEmptyString(claims.chatgpt_account_id);
   if (direct) return direct;
 
-  const nestedAuth = isObjectLike(claims["https://api.openai.com/auth"])
-    ? (claims["https://api.openai.com/auth"] as Record<string, unknown>)
-    : null;
-  const nested = nestedAuth && typeof nestedAuth.chatgpt_account_id === "string" ? nestedAuth.chatgpt_account_id : undefined;
+  const nestedAuth = asRecord(claims["https://api.openai.com/auth"]);
+  const nested = nestedAuth ? toNonEmptyString(nestedAuth.chatgpt_account_id) : undefined;
   if (nested) return nested;
 
-  if (Array.isArray(claims.organizations)) {
-    for (const item of claims.organizations) {
-      if (!isObjectLike(item)) continue;
-      if (typeof item.id === "string" && item.id.trim()) return item.id;
+  const organizations = organizationsSchema.safeParse(claims.organizations);
+  if (organizations.success) {
+    for (const organization of organizations.data) {
+      if (organization.id) return organization.id;
     }
   }
 
-  const orgId = typeof claims.organization_id === "string" ? claims.organization_id : undefined;
+  const orgId = toNonEmptyString(claims.organization_id);
   if (orgId) return orgId;
 
-  const account = typeof claims.account_id === "string" ? claims.account_id : undefined;
+  const account = toNonEmptyString(claims.account_id);
   if (account) return account;
 
   return undefined;
 }
 
 export function extractEmailFromClaims(claims: Record<string, unknown>): string | undefined {
-  if (typeof claims.email === "string" && claims.email.trim()) return claims.email;
-  const profile = isObjectLike(claims["https://api.openai.com/profile"])
-    ? (claims["https://api.openai.com/profile"] as Record<string, unknown>)
-    : null;
-  if (profile && typeof profile.email === "string" && profile.email.trim()) return profile.email;
+  const direct = toNonEmptyString(claims.email);
+  if (direct) return direct;
+  const profile = asRecord(claims["https://api.openai.com/profile"]);
+  const nested = profile ? toNonEmptyString(profile.email) : undefined;
+  if (nested) return nested;
   return undefined;
 }
 
 export function extractPlanTypeFromClaims(claims: Record<string, unknown>): string | undefined {
-  const nestedAuth = isObjectLike(claims["https://api.openai.com/auth"])
-    ? (claims["https://api.openai.com/auth"] as Record<string, unknown>)
-    : null;
-  if (nestedAuth && typeof nestedAuth.chatgpt_plan_type === "string" && nestedAuth.chatgpt_plan_type.trim()) {
-    return nestedAuth.chatgpt_plan_type;
-  }
-  if (typeof claims.chatgpt_plan_type === "string" && claims.chatgpt_plan_type.trim()) {
-    return claims.chatgpt_plan_type;
-  }
-  return undefined;
+  const nestedAuth = asRecord(claims["https://api.openai.com/auth"]);
+  const nested = nestedAuth ? toNonEmptyString(nestedAuth.chatgpt_plan_type) : undefined;
+  return nested ?? toNonEmptyString(claims.chatgpt_plan_type);
 }
 
 export function codexAuthFilePath(paths: Pick<CodexAuthPaths, "authDir">): string {
@@ -308,12 +320,12 @@ export function codexMaterialFromTokenResponse(
     fallbackPlanType?: string;
   } = {}
 ): CodexAuthMaterial {
-  const accessToken = typeof payload.access_token === "string" ? payload.access_token : "";
-  if (!accessToken.trim()) throw new Error("Token response missing access_token.");
+  const parsedPayload = codexOAuthTokenResponseSchema.safeParse(payload);
+  if (!parsedPayload.success) throw new Error("Token response missing access_token.");
 
-  const refreshToken =
-    (typeof payload.refresh_token === "string" ? payload.refresh_token : undefined) ?? opts.fallbackRefreshToken;
-  const idToken = (typeof payload.id_token === "string" ? payload.id_token : undefined) ?? opts.fallbackIdToken;
+  const accessToken = parsedPayload.data.access_token;
+  const refreshToken = parsedPayload.data.refresh_token ?? opts.fallbackRefreshToken;
+  const idToken = parsedPayload.data.id_token ?? opts.fallbackIdToken;
 
   const accessClaims = decodeJwtPayload(accessToken);
   const idClaims = idToken ? decodeJwtPayload(idToken) : null;

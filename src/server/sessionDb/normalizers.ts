@@ -8,18 +8,19 @@ export const providerNameSchema = z.enum(PROVIDER_NAMES);
 export const sessionTitleSourceSchema = z.enum(["default", "model", "heuristic", "manual"]);
 export const sqliteBooleanIntSchema = z.union([z.literal(0), z.literal(1)]);
 export const nonNegativeIntegerSchema = z.number().int().min(0);
+const stringSchema = z.string();
 
 export function parseJsonStringWithSchema<T>(
   raw: unknown,
   schema: z.ZodType<T>,
   fieldName: string,
 ): T {
-  if (typeof raw !== "string") {
-    throw new Error(`Invalid ${fieldName}: expected JSON string`);
-  }
+  const parsedRaw = stringSchema.safeParse(raw);
+  if (!parsedRaw.success) throw new Error(`Invalid ${fieldName}: expected JSON string`);
+
   let parsedJson: unknown;
   try {
-    parsedJson = JSON.parse(raw);
+    parsedJson = JSON.parse(parsedRaw.data);
   } catch (error) {
     throw new Error(`Invalid JSON in ${fieldName}: ${String(error)}`);
   }

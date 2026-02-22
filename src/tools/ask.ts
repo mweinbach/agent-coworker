@@ -38,8 +38,8 @@ export const askInputSchema = z
     questions: askUserQuestionInputSchema.shape.questions.optional(),
   })
   .superRefine((input, ctx) => {
-    const hasLegacy = typeof input.question === "string";
-    const hasStructured = Array.isArray(input.questions);
+    const hasLegacy = input.question !== undefined;
+    const hasStructured = input.questions !== undefined;
 
     if (!hasLegacy && !hasStructured) {
       ctx.addIssue({
@@ -71,7 +71,7 @@ export function createAskTool(ctx: ToolContext) {
       "Ask the user a clarifying question. Provide options when possible. Returns the user's answer.",
     inputSchema: askInputSchema,
     execute: async (input) => {
-      if (Array.isArray(input.questions)) {
+      if (input.questions !== undefined) {
         ctx.log(`tool> ask ${JSON.stringify({ questions: input.questions })}`);
         const answers: Record<string, string> = {};
         for (const q of input.questions) {
@@ -84,7 +84,7 @@ export function createAskTool(ctx: ToolContext) {
         return result;
       }
 
-      if (typeof input.question !== "string" || input.question.length === 0) {
+      if (input.question === undefined) {
         throw new Error("ask: missing `question` for single-question mode");
       }
       const question = input.question;

@@ -20,8 +20,10 @@ import {
   type ServerEvent,
 } from "./protocol";
 
+const jsonObjectSchema = z.record(z.string(), z.unknown());
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+  return jsonObjectSchema.safeParse(v).success;
 }
 
 function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
@@ -35,8 +37,6 @@ function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
   }
   return out as T;
 }
-
-const jsonObjectSchema = z.record(z.string(), z.unknown());
 
 async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unknown>> {
   try {

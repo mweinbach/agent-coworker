@@ -1,5 +1,6 @@
 import { stepCountIs, streamText } from "ai";
 import type { ModelMessage } from "ai";
+import { z } from "zod";
 
 import { getModel } from "./config";
 import { buildAiSdkTelemetrySettings } from "./observability/runtime";
@@ -10,6 +11,26 @@ import { createTools } from "./tools";
 
 const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
 const MAX_STREAM_SETTLE_TICKS = 64;
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const messageRecordSchema = z.object({
+  role: z.string(),
+  content: z.unknown(),
+}).passthrough();
+const messageContentPartSchema = z.union([
+  z.string(),
+  z.object({
+    text: z.string().optional(),
+    inputText: z.string().optional(),
+  }).passthrough(),
+]);
+const messageContentSchema = z.array(messageContentPartSchema);
+const usageSchema = z.object({
+  promptTokens: z.number(),
+  completionTokens: z.number(),
+  totalTokens: z.number(),
+}).strict();
+const responseMessagesSchema = z.array(z.unknown());
+const stringSchema = z.string();
 
 export interface RunTurnParams {
   config: AgentConfig;
@@ -87,33 +108,32 @@ function mergeToolSets(
 
 function extractTurnUserPrompt(messages: ModelMessage[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const raw = messages[i] as any;
-    if (raw?.role !== "user") continue;
+    const raw = messageRecordSchema.safeParse(messages[i]);
+    if (!raw.success || raw.data.role !== "user") continue;
 
-    const content = raw.content;
-    if (typeof content === "string") {
-      const trimmed = content.trim();
-      if (trimmed) return trimmed;
-      continue;
+    const content = raw.data.content;
+    const directContent = nonEmptyTrimmedStringSchema.safeParse(content);
+    if (directContent.success) {
+      return directContent.data;
     }
 
-    if (!Array.isArray(content)) continue;
+    const parsedContent = messageContentSchema.safeParse(content);
+    if (!parsedContent.success) continue;
+
     const parts: string[] = [];
-    for (const part of content) {
+    for (const part of parsedContent.data) {
       if (typeof part === "string") {
-        if (part.trim()) parts.push(part.trim());
+        const text = nonEmptyTrimmedStringSchema.safeParse(part);
+        if (text.success) parts.push(text.data);
         continue;
       }
-      if (!part || typeof part !== "object") continue;
-
-      const text = typeof (part as any).text === "string" ? (part as any).text.trim() : "";
-      if (text) {
-        parts.push(text);
+      const text = nonEmptyTrimmedStringSchema.safeParse(part.text);
+      if (text.success) {
+        parts.push(text.data);
         continue;
       }
-
-      const inputText = typeof (part as any).inputText === "string" ? (part as any).inputText.trim() : "";
-      if (inputText) parts.push(inputText);
+      const inputText = nonEmptyTrimmedStringSchema.safeParse(part.inputText);
+      if (inputText.success) parts.push(inputText.data);
     }
 
     if (parts.length > 0) return parts.join("\n");
@@ -279,22 +299,15 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
       }
     })();
 
-    const responseMessages = (result.response?.messages || []) as ModelMessage[];
+    const parsedResponseMessages = responseMessagesSchema.safeParse(result.response?.messages);
+    const responseMessages = (parsedResponseMessages.success ? parsedResponseMessages.data : []) as ModelMessage[];
     const rawUsage = result.response?.usage;
-    const usage =
-      rawUsage &&
-      typeof rawUsage.promptTokens === "number" &&
-      typeof rawUsage.completionTokens === "number" &&
-      typeof rawUsage.totalTokens === "number"
-        ? {
-            promptTokens: rawUsage.promptTokens,
-            completionTokens: rawUsage.completionTokens,
-            totalTokens: rawUsage.totalTokens,
-          }
-        : undefined;
+    const parsedUsage = usageSchema.safeParse(rawUsage);
+    const usage = parsedUsage.success ? parsedUsage.data : undefined;
+    const parsedReasoningText = stringSchema.safeParse(result.reasoningText);
     return {
       text: String(result.text ?? ""),
-      reasoningText: typeof result.reasoningText === "string" ? result.reasoningText : undefined,
+      reasoningText: parsedReasoningText.success ? parsedReasoningText.data : undefined,
       responseMessages,
       usage,
     };

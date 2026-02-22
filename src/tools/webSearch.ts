@@ -12,11 +12,33 @@ interface CustomWebSearchToolOptions {
   exaOnly?: boolean;
 }
 
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const stringSchema = z.string();
+const recordSchema = z.record(z.string(), z.unknown());
+const exaSnippetTextSchema = z.object({ text: stringSchema }).passthrough();
+const braveResultSchema = z.object({
+  title: stringSchema.optional(),
+  url: stringSchema.optional(),
+  description: stringSchema.optional(),
+}).passthrough();
+const braveResponseSchema = z.object({
+  web: z.object({
+    results: z.array(braveResultSchema).optional(),
+  }).passthrough().optional(),
+}).passthrough();
+const exaResultSchema = z.object({
+  title: stringSchema.optional(),
+  url: stringSchema.optional(),
+  text: z.unknown().optional(),
+}).passthrough();
+const exaResponseSchema = z.object({
+  results: z.array(exaResultSchema).optional(),
+}).passthrough();
+
 function firstNonEmptyString(...values: unknown[]): string | undefined {
   for (const value of values) {
-    if (typeof value !== "string") continue;
-    const trimmed = value.trim();
-    if (trimmed) return trimmed;
+    const parsed = nonEmptyTrimmedStringSchema.safeParse(value);
+    if (parsed.success) return parsed.data;
   }
   return undefined;
 }
@@ -42,30 +64,24 @@ function sanitizeQuery(raw: string): string {
   return query;
 }
 
-function resolveSearchQuery(
-  input: {
-    query?: string;
-    q?: string;
-    searchQuery?: string;
-    text?: string;
-    prompt?: string;
-  },
-  ctx: ToolContext
-): string | undefined {
-  return firstNonEmptyString(input.query, input.q, input.searchQuery, input.text, input.prompt, ctx.turnUserPrompt);
-}
-
 function getExaSnippet(result: unknown): string {
-  const text = (result as any)?.text;
-  if (typeof text === "string") return text;
-  if (text && typeof text === "object" && typeof text.text === "string") return text.text;
+  const parsed = recordSchema.safeParse(result);
+  if (!parsed.success) return "";
+
+  const text = parsed.data.text;
+  const directText = stringSchema.safeParse(text);
+  if (directText.success) return directText.data;
+
+  const nestedText = exaSnippetTextSchema.safeParse(text);
+  if (nestedText.success) return nestedText.data.text;
+
   return "";
 }
 
 function resolveHomeDirFromToolContext(ctx: ToolContext): string | undefined {
-  const userAgentDir = ctx.config.userAgentDir;
-  if (typeof userAgentDir !== "string" || !userAgentDir) return undefined;
-  return path.dirname(userAgentDir);
+  const parsed = nonEmptyTrimmedStringSchema.safeParse(ctx.config.userAgentDir);
+  if (!parsed.success) return undefined;
+  return path.dirname(parsed.data);
 }
 
 async function resolveExaApiKey(ctx: ToolContext): Promise<string | undefined> {
@@ -83,26 +99,19 @@ async function resolveExaApiKey(ctx: ToolContext): Promise<string | undefined> {
 
 function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToolOptions = {}) {
   const exaOnly = options.exaOnly ?? false;
+  const webSearchInputSchema = z.object({
+    query: z.string().min(1).describe("Search query"),
+    maxResults: z.number().int().min(1).max(20).optional().default(10),
+  }).strict();
 
   return tool({
     description: exaOnly
       ? "Search the web for current information using Exa. Requires EXA_API_KEY. Returns titles, URLs, and snippets."
       : "Search the web for current information. Requires BRAVE_API_KEY or EXA_API_KEY. Returns titles, URLs, and snippets.",
-    inputSchema: z
-      .object({
-        query: z.string().optional().describe("Search query"),
-        q: z.string().optional().describe("Alias for query"),
-        searchQuery: z.string().optional().describe("Alias for query"),
-        text: z.string().optional().describe("Compatibility alias for query"),
-        prompt: z.string().optional().describe("Compatibility alias for query"),
-        maxResults: z.number().int().min(1).max(20).optional().default(10),
-        mode: z.string().optional().describe("Compatibility field for provider-native Google search calls"),
-        dynamicThreshold: z.number().optional().describe("Compatibility field for provider-native Google search calls"),
-      })
-      .passthrough(),
+    inputSchema: webSearchInputSchema,
     execute: async (input) => {
-      const query = resolveSearchQuery(input, ctx);
-      if (!query) {
+      const parsedInput = webSearchInputSchema.safeParse(input);
+      if (!parsedInput.success) {
         const out = 'webSearch requires a query. Call webSearch with {"query":"..."}';
         ctx.log(`tool< webSearch ${JSON.stringify({ ok: false, reason: "missing_query" })}`);
         return out;
@@ -110,14 +119,14 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
 
       let safeQuery: string;
       try {
-        safeQuery = sanitizeQuery(query);
+        safeQuery = sanitizeQuery(parsedInput.data.query);
       } catch (error) {
         const out = `webSearch invalid query: ${error instanceof Error ? error.message : String(error)}`;
         ctx.log(`tool< webSearch ${JSON.stringify({ ok: false, reason: "invalid_query" })}`);
         return out;
       }
 
-      const maxResults = input.maxResults ?? 10;
+      const maxResults = parsedInput.data.maxResults ?? 10;
       ctx.log(`tool> webSearch ${JSON.stringify({ query: safeQuery, maxResults })}`);
 
       if (!exaOnly && process.env.BRAVE_API_KEY) {
@@ -138,8 +147,10 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
           return msg;
         }
 
-        const data = (await res.json()) as any;
-        const results = (data?.web?.results || []).map((r: any) => ({
+        const data = await res.json();
+        const parsedData = braveResponseSchema.safeParse(data);
+        const braveResults = parsedData.success ? (parsedData.data.web?.results ?? []) : [];
+        const results = braveResults.map((r) => ({
           title: r.title,
           url: r.url,
           description: r.description,
@@ -171,10 +182,12 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
             return msg;
           }
 
-          const data = (await res.json()) as any;
-          const results = (data?.results || []).map((r: any) => ({
-            title: r.title || undefined,
-            url: r.url || "",
+          const data = await res.json();
+          const parsedData = exaResponseSchema.safeParse(data);
+          const exaResults = parsedData.success ? (parsedData.data.results ?? []) : [];
+          const results = exaResults.map((r) => ({
+            title: firstNonEmptyString(r.title),
+            url: firstNonEmptyString(r.url) ?? "",
             description: getExaSnippet(r),
           }));
 

@@ -1258,32 +1258,18 @@ describe("webSearch tool", () => {
     const dir = await tmpDir();
     const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
     const out: string = await t.execute({ query: "   ", maxResults: 1 });
-    expect(out).toContain("requires a query");
+    expect(out).toContain("non-empty query");
   });
 
-  test("uses turnUserPrompt as fallback query for provider-native-style google inputs", async () => {
+  test("does not fall back to turnUserPrompt when query is missing", async () => {
     const dir = await tmpDir();
 
     const oldExa = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "test-exa-key";
 
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async (_url: any, init: any) => {
-      const body = JSON.parse(String(init?.body ?? "{}"));
-      expect(body.query).toBe("latest Apple earnings guidance");
-      expect(body.numResults).toBe(2);
-      return new Response(
-        JSON.stringify({
-          results: [
-            {
-              title: "Exa Result",
-              url: "https://exa.com",
-              text: { text: "Exa content" },
-            },
-          ],
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      );
+    globalThis.fetch = mock(async () => {
+      throw new Error("fetch should not be called when query is missing");
     }) as any;
 
     try {
@@ -1299,12 +1285,10 @@ describe("webSearch tool", () => {
       );
 
       const out: string = await t.execute({
-        mode: "MODE_UNSPECIFIED",
-        dynamicThreshold: 1,
         maxResults: 2,
       });
-      expect(out).toContain("Exa Result");
-      expect(out).toContain("Exa content");
+      expect(out).toContain("requires a query");
+      expect((globalThis.fetch as any).mock.calls.length).toBe(0);
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;

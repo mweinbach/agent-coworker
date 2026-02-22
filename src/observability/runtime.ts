@@ -2,6 +2,7 @@ import { LangfuseSpanProcessor } from "@langfuse/otel";
 import type { AttributeValue } from "@opentelemetry/api";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import type { TelemetrySettings } from "ai";
+import { z } from "zod";
 
 import type { AgentConfig, ObservabilityConfig, ObservabilityHealth } from "../types";
 import { nowIso } from "../utils/typeGuards";
@@ -9,6 +10,7 @@ import { nowIso } from "../utils/typeGuards";
 const DEFAULT_LANGFUSE_BASE_URL = "https://cloud.langfuse.com";
 const WARN_ONCE_KEYS = new Set<string>();
 const MAX_METADATA_STRING_LENGTH = 2048;
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 
 type ResolvedRuntime =
   | { kind: "disabled"; reason: string; message: string }
@@ -59,7 +61,8 @@ function normalizeBaseUrl(input: string): string {
 }
 
 function asNonEmptyString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  const parsed = nonEmptyTrimmedStringSchema.safeParse(value);
+  return parsed.success ? parsed.data : "";
 }
 
 function resolveRuntime(config: AgentConfig): ResolvedRuntime {

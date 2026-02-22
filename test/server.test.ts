@@ -679,6 +679,8 @@ describe("WebSocket Lifecycle", () => {
       );
       expect(responses[0].type).toBe("error");
       expect(responses[0].message).toContain("Missing type");
+      expect(responses[0].code).toBe("missing_type");
+      expect(responses[0].source).toBe("protocol");
     } finally {
       server.stop();
     }
@@ -695,6 +697,8 @@ describe("WebSocket Lifecycle", () => {
       );
       expect(responses[0].type).toBe("error");
       expect(responses[0].message).toContain("Unknown type");
+      expect(responses[0].code).toBe("unknown_type");
+      expect(responses[0].source).toBe("protocol");
     } finally {
       server.stop();
     }
@@ -1132,6 +1136,8 @@ describe("WebSocket Lifecycle", () => {
 
       expect(result.type).toBe("error");
       expect(result.message).toContain("Expected object");
+      expect(result.code).toBe("invalid_payload");
+      expect(result.source).toBe("protocol");
     } finally {
       server.stop();
     }
@@ -1165,6 +1171,8 @@ describe("WebSocket Lifecycle", () => {
 
       expect(result.type).toBe("error");
       expect(result.message).toContain("Expected object");
+      expect(result.code).toBe("invalid_payload");
+      expect(result.source).toBe("protocol");
     } finally {
       server.stop();
     }
@@ -1197,6 +1205,9 @@ describe("WebSocket Lifecycle", () => {
       });
 
       expect(result.type).toBe("error");
+      expect(result.message).toContain("Expected object");
+      expect(result.code).toBe("invalid_payload");
+      expect(result.source).toBe("protocol");
     } finally {
       server.stop();
     }

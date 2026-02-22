@@ -5,41 +5,22 @@ const structuredInputSchema = z.union([
   z.array(z.unknown()),
 ]);
 
-function parseCandidate(value: string): Record<string, unknown> | unknown[] | undefined {
+const structuredInputTextSchema = z.string().transform((value, ctx) => {
   try {
-    const parsed = JSON.parse(value);
-    const validated = structuredInputSchema.safeParse(parsed);
-    if (!validated.success) {
-      return undefined;
-    }
-    return validated.data;
+    return JSON.parse(value);
   } catch {
-    return undefined;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Invalid JSON",
+    });
+    return z.NEVER;
   }
-}
+}).pipe(structuredInputSchema);
 
 export function parseStructuredToolInput(value: string): Record<string, unknown> | unknown[] | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
 
-  const direct = parseCandidate(trimmed);
-  if (direct !== undefined) return direct;
-
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    const objectSlice = trimmed.slice(firstBrace, lastBrace + 1);
-    const parsedObject = parseCandidate(objectSlice);
-    if (parsedObject !== undefined) return parsedObject;
-  }
-
-  const firstBracket = trimmed.indexOf("[");
-  const lastBracket = trimmed.lastIndexOf("]");
-  if (firstBracket >= 0 && lastBracket > firstBracket) {
-    const arraySlice = trimmed.slice(firstBracket, lastBracket + 1);
-    const parsedArray = parseCandidate(arraySlice);
-    if (parsedArray !== undefined) return parsedArray;
-  }
-
-  return undefined;
+  const parsed = structuredInputTextSchema.safeParse(trimmed);
+  return parsed.success ? parsed.data : undefined;
 }

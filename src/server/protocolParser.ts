@@ -7,29 +7,67 @@ import { isProviderName } from "../types";
 import type { ClientMessage } from "./protocol";
 
 const recordSchema = z.record(z.string(), z.unknown());
-const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+
+function hasNonEmptyTrimmedString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isRecordObject(value: unknown): value is Record<string, unknown> {
+  return recordSchema.safeParse(value).success;
+}
+
+function requiredString(message: string): z.ZodType<string> {
+  return z.custom<string>((value): value is string => typeof value === "string", { message });
+}
+
+function optionalString(message: string): z.ZodOptional<z.ZodType<string>> {
+  return z.custom<string>((value): value is string => typeof value === "string", { message }).optional();
+}
+
+function requiredNonEmptyTrimmedString(message: string): z.ZodType<string> {
+  return z.custom<string>(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+    { message },
+  );
+}
+
+function optionalNonEmptyTrimmedString(message: string): z.ZodOptional<z.ZodType<string>> {
+  return z.custom<string>(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+    { message },
+  ).optional();
+}
+
+function requiredBoolean(message: string): z.ZodType<boolean> {
+  return z.custom<boolean>((value): value is boolean => typeof value === "boolean", { message });
+}
+
+function optionalNumberAtLeast(message: string, min: number): z.ZodOptional<z.ZodType<number>> {
+  return z.custom<number>(
+    (value): value is number => typeof value === "number" && Number.isFinite(value) && value >= min,
+    { message },
+  ).optional();
+}
+
+function requiredSessionId(type: string): z.ZodType<string> {
+  return requiredNonEmptyTrimmedString(`${type} missing sessionId`);
+}
+
 const harnessContextSchema = z.object({
-  runId: nonEmptyTrimmedStringSchema,
-  objective: nonEmptyTrimmedStringSchema,
+  runId: z.string().trim().min(1),
+  objective: z.string().trim().min(1),
   acceptanceCriteria: z.array(z.string()),
   constraints: z.array(z.string()),
   taskId: z.string().optional(),
   metadata: z.record(z.string(), z.string()).optional(),
 }).passthrough();
+
 const setConfigPayloadSchema = z.object({
   yolo: z.boolean().optional(),
   observabilityEnabled: z.boolean().optional(),
-  subAgentModel: nonEmptyTrimmedStringSchema.optional(),
+  subAgentModel: z.string().trim().min(1).optional(),
   maxSteps: z.number().min(1).max(1000).optional(),
 }).passthrough();
-
-function isRecordObject(v: unknown): v is Record<string, unknown> {
-  return recordSchema.safeParse(v).success;
-}
-
-function isNonEmptyString(v: unknown): v is string {
-  return nonEmptyTrimmedStringSchema.safeParse(v).success;
-}
 
 const MAX_MCP_API_KEY_SIZE = 100_000;
 
@@ -45,54 +83,42 @@ function firstIssueMessage(error: z.ZodError): string {
   return issue?.message || "validation_failed";
 }
 
-function requireSessionError(type: string, obj: Record<string, unknown>): string | null {
-  if (!isNonEmptyString(obj.sessionId)) return `${type} missing sessionId`;
-  return null;
-}
-
-function requireSessionAndFieldError(
-  type: string,
-  obj: Record<string, unknown>,
-  field: string,
-  label?: string,
-): string | null {
-  const sessionError = requireSessionError(type, obj);
-  if (sessionError) return sessionError;
-  if (!isNonEmptyString(obj[field])) return `${type} missing/invalid ${label ?? field}`;
-  return null;
-}
-
-function requireProviderAuthError(type: string, obj: Record<string, unknown>): string | null {
-  const sessionError = requireSessionError(type, obj);
-  if (sessionError) return sessionError;
-  if (!isProviderName(obj.provider)) return `${type} missing/invalid provider`;
-  if (!isNonEmptyString(obj.methodId)) return `${type} missing/invalid methodId`;
-  if (!resolveProviderAuthMethod(obj.provider, obj.methodId)) return `${type} unknown methodId`;
-  return null;
-}
-
-function makeSchema(
-  type: string,
-  validate: (obj: Record<string, unknown>) => string | null,
-): z.ZodTypeAny {
-  return z.object({ type: z.literal(type) }).passthrough().superRefine((value, ctx) => {
-    const validationError = validate(value as Record<string, unknown>);
-    if (!validationError) return;
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: validationError,
-    });
-  });
-}
-
 function validateMcpServerPayload(value: unknown): string | null {
   if (!isRecordObject(value)) return "mcp_server_upsert missing/invalid server";
   try {
     parseMCPServersDocument(JSON.stringify({ servers: [value] }));
     return null;
-  } catch (error) {
-    return `mcp_server_upsert invalid server: ${String(error)}`;
+  } catch (parseError) {
+    return `mcp_server_upsert invalid server: ${String(parseError)}`;
   }
+}
+
+function schemaWithType<TType extends string>(
+  type: TType,
+  shape: z.ZodRawShape,
+): z.ZodObject<{ type: z.ZodLiteral<TType> } & z.ZodRawShape, "passthrough"> {
+  return z.object({
+    type: z.literal(type),
+    ...shape,
+  }).passthrough();
+}
+
+function sessionOnlySchema<TType extends string>(type: TType): z.ZodObject<{ type: z.ZodLiteral<TType> } & z.ZodRawShape, "passthrough"> {
+  return schemaWithType(type, {
+    sessionId: requiredSessionId(type),
+  });
+}
+
+function sessionAndFieldSchema<TType extends string>(
+  type: TType,
+  field: string,
+  label?: string,
+): z.ZodObject<{ type: z.ZodLiteral<TType> } & z.ZodRawShape, "passthrough"> {
+  const shape: z.ZodRawShape = {
+    sessionId: requiredSessionId(type),
+  };
+  shape[field] = requiredNonEmptyTrimmedString(`${type} missing/invalid ${label ?? field}`);
+  return schemaWithType(type, shape);
 }
 
 const sessionOnlyTypes = [
@@ -126,281 +152,363 @@ const sessionAndNameTypes = [
   "mcp_server_auth_authorize",
 ] as const;
 
-const sessionOnlySchemas = sessionOnlyTypes.map((type) =>
-  makeSchema(type, (obj) => requireSessionError(type, obj)),
-);
+const sessionOnlySchemas = Object.fromEntries(
+  sessionOnlyTypes.map((type) => [type, sessionOnlySchema(type)]),
+) as Record<(typeof sessionOnlyTypes)[number], z.ZodTypeAny>;
 
-const sessionAndSkillNameSchemas = sessionAndSkillNameTypes.map((type) =>
-  makeSchema(type, (obj) => requireSessionAndFieldError(type, obj, "skillName")),
-);
+const sessionAndSkillNameSchemas = Object.fromEntries(
+  sessionAndSkillNameTypes.map((type) => [type, sessionAndFieldSchema(type, "skillName")]),
+) as Record<(typeof sessionAndSkillNameTypes)[number], z.ZodTypeAny>;
 
-const sessionAndNameSchemas = sessionAndNameTypes.map((type) =>
-  makeSchema(type, (obj) => requireSessionAndFieldError(type, obj, "name")),
-);
+const sessionAndNameSchemas = Object.fromEntries(
+  sessionAndNameTypes.map((type) => [type, sessionAndFieldSchema(type, "name")]),
+) as Record<(typeof sessionAndNameTypes)[number], z.ZodTypeAny>;
 
-const clientHelloSchema = makeSchema("client_hello", (obj) => {
-  if (!isNonEmptyString(obj.client)) return "client_hello missing/invalid client";
-  if (obj.version !== undefined && typeof obj.version !== "string") return "client_hello invalid version";
-  return null;
+const clientHelloSchema = schemaWithType("client_hello", {
+  client: requiredNonEmptyTrimmedString("client_hello missing/invalid client"),
+  version: optionalString("client_hello invalid version"),
 });
 
-const userMessageSchema = makeSchema("user_message", (obj) => {
-  const sessionError = requireSessionError("user_message", obj);
-  if (sessionError) return sessionError;
-  if (typeof obj.text !== "string") return "user_message missing text";
-  if (obj.clientMessageId !== undefined && typeof obj.clientMessageId !== "string") {
-    return "user_message invalid clientMessageId";
+const userMessageSchema = schemaWithType("user_message", {
+  sessionId: requiredSessionId("user_message"),
+  text: requiredString("user_message missing text"),
+  clientMessageId: optionalString("user_message invalid clientMessageId"),
+});
+
+const askResponseSchema = schemaWithType("ask_response", {
+  sessionId: requiredSessionId("ask_response"),
+  requestId: requiredNonEmptyTrimmedString("ask_response missing requestId"),
+  answer: requiredString("ask_response missing answer"),
+});
+
+const approvalResponseSchema = schemaWithType("approval_response", {
+  sessionId: requiredSessionId("approval_response"),
+  requestId: requiredNonEmptyTrimmedString("approval_response missing requestId"),
+  approved: requiredBoolean("approval_response missing/invalid approved"),
+});
+
+const executeCommandSchema = schemaWithType("execute_command", {
+  sessionId: requiredSessionId("execute_command"),
+  name: requiredNonEmptyTrimmedString("execute_command missing/invalid name"),
+  arguments: optionalString("execute_command invalid arguments"),
+  clientMessageId: optionalString("execute_command invalid clientMessageId"),
+});
+
+const setModelSchema = schemaWithType("set_model", {
+  sessionId: requiredSessionId("set_model"),
+  model: requiredNonEmptyTrimmedString("set_model missing/invalid model"),
+  provider: z.unknown().optional(),
+}).superRefine((value, ctx) => {
+  if (value.provider !== undefined && !isProviderName(value.provider)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["provider"],
+      message: `set_model invalid provider: ${String(value.provider)}`,
+    });
   }
-  return null;
 });
 
-const askResponseSchema = makeSchema("ask_response", (obj) => {
-  const sessionError = requireSessionError("ask_response", obj);
-  if (sessionError) return sessionError;
-  if (!isNonEmptyString(obj.requestId)) return "ask_response missing requestId";
-  if (typeof obj.answer !== "string") return "ask_response missing answer";
-  return null;
-});
-
-const approvalResponseSchema = makeSchema("approval_response", (obj) => {
-  const sessionError = requireSessionError("approval_response", obj);
-  if (sessionError) return sessionError;
-  if (!isNonEmptyString(obj.requestId)) return "approval_response missing requestId";
-  if (typeof obj.approved !== "boolean") return "approval_response missing/invalid approved";
-  return null;
-});
-
-const executeCommandSchema = makeSchema("execute_command", (obj) => {
-  const sessionError = requireSessionError("execute_command", obj);
-  if (sessionError) return sessionError;
-  if (!isNonEmptyString(obj.name)) return "execute_command missing/invalid name";
-  if (obj.arguments !== undefined && typeof obj.arguments !== "string") return "execute_command invalid arguments";
-  if (obj.clientMessageId !== undefined && typeof obj.clientMessageId !== "string") {
-    return "execute_command invalid clientMessageId";
+const providerAuthAuthorizeSchema = schemaWithType("provider_auth_authorize", {
+  sessionId: requiredSessionId("provider_auth_authorize"),
+  provider: z.unknown(),
+  methodId: z.unknown(),
+}).superRefine((value, ctx) => {
+  if (!isProviderName(value.provider)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["provider"],
+      message: "provider_auth_authorize missing/invalid provider",
+    });
+    return;
   }
-  return null;
-});
 
-const setModelSchema = makeSchema("set_model", (obj) => {
-  const sessionError = requireSessionError("set_model", obj);
-  if (sessionError) return sessionError;
-  if (!isNonEmptyString(obj.model)) return "set_model missing/invalid model";
-  if (obj.provider !== undefined && !isProviderName(obj.provider)) {
-    return `set_model invalid provider: ${String(obj.provider)}`;
+  if (!hasNonEmptyTrimmedString(value.methodId)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["methodId"],
+      message: "provider_auth_authorize missing/invalid methodId",
+    });
+    return;
   }
-  return null;
-});
 
-const providerAuthAuthorizeSchema = makeSchema("provider_auth_authorize", (obj) => {
-  return requireProviderAuthError("provider_auth_authorize", obj);
-});
-
-const providerAuthCallbackSchema = makeSchema("provider_auth_callback", (obj) => {
-  const authError = requireProviderAuthError("provider_auth_callback", obj);
-  if (authError) return authError;
-  if (obj.code !== undefined && typeof obj.code !== "string") return "provider_auth_callback invalid code";
-  return null;
-});
-
-const providerAuthSetApiKeySchema = makeSchema("provider_auth_set_api_key", (obj) => {
-  const authError = requireProviderAuthError("provider_auth_set_api_key", obj);
-  if (authError) return authError;
-  if (!isNonEmptyString(obj.apiKey)) return "provider_auth_set_api_key missing/invalid apiKey";
-  return null;
-});
-
-const setEnableMcpSchema = makeSchema("set_enable_mcp", (obj) => {
-  const sessionError = requireSessionError("set_enable_mcp", obj);
-  if (sessionError) return sessionError;
-  if (typeof obj.enableMcp !== "boolean") return "set_enable_mcp missing/invalid enableMcp";
-  return null;
-});
-
-const mcpServerUpsertSchema = makeSchema("mcp_server_upsert", (obj) => {
-  const sessionError = requireSessionError("mcp_server_upsert", obj);
-  if (sessionError) return sessionError;
-  const validationError = validateMcpServerPayload(obj.server);
-  if (validationError) return validationError;
-  if (obj.previousName !== undefined && !isNonEmptyString(obj.previousName)) {
-    return "mcp_server_upsert invalid previousName";
+  if (!resolveProviderAuthMethod(value.provider, value.methodId)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["methodId"],
+      message: "provider_auth_authorize unknown methodId",
+    });
   }
-  return null;
 });
 
-const mcpServerAuthCallbackSchema = makeSchema("mcp_server_auth_callback", (obj) => {
-  const fieldError = requireSessionAndFieldError("mcp_server_auth_callback", obj, "name");
-  if (fieldError) return fieldError;
-  if (obj.code !== undefined && typeof obj.code !== "string") return "mcp_server_auth_callback invalid code";
-  return null;
-});
-
-const mcpServerAuthSetApiKeySchema = makeSchema("mcp_server_auth_set_api_key", (obj) => {
-  const sessionError = requireSessionError("mcp_server_auth_set_api_key", obj);
-  if (sessionError) return sessionError;
-  if (!isNonEmptyString(obj.name)) return "mcp_server_auth_set_api_key missing/invalid name";
-  if (!isNonEmptyString(obj.apiKey)) return "mcp_server_auth_set_api_key missing/invalid apiKey";
-  if (typeof obj.apiKey === "string" && obj.apiKey.length > MAX_MCP_API_KEY_SIZE) {
-    return "mcp_server_auth_set_api_key apiKey exceeds max size 100000";
+const providerAuthCallbackSchema = schemaWithType("provider_auth_callback", {
+  sessionId: requiredSessionId("provider_auth_callback"),
+  provider: z.unknown(),
+  methodId: z.unknown(),
+  code: z.unknown().optional(),
+}).superRefine((value, ctx) => {
+  if (!isProviderName(value.provider)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["provider"],
+      message: "provider_auth_callback missing/invalid provider",
+    });
+    return;
   }
-  return null;
-});
 
-const mcpServersMigrateLegacySchema = makeSchema("mcp_servers_migrate_legacy", (obj) => {
-  const sessionError = requireSessionError("mcp_servers_migrate_legacy", obj);
-  if (sessionError) return sessionError;
-  if (obj.scope !== "workspace" && obj.scope !== "user") {
-    return "mcp_servers_migrate_legacy missing/invalid scope";
+  if (!hasNonEmptyTrimmedString(value.methodId)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["methodId"],
+      message: "provider_auth_callback missing/invalid methodId",
+    });
+    return;
   }
-  return null;
-});
 
-const harnessContextSetSchema = makeSchema("harness_context_set", (obj) => {
-  const sessionError = requireSessionError("harness_context_set", obj);
-  if (sessionError) return sessionError;
-  if (!isRecordObject(obj.context)) return "harness_context_set missing/invalid context";
-
-  const parsed = harnessContextSchema.safeParse(obj.context);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    const path = issue?.path ?? [];
-    const root = String(path[0] ?? "");
-    if (root === "runId") return "harness_context_set invalid context.runId";
-    if (root === "objective") return "harness_context_set invalid context.objective";
-    if (root === "acceptanceCriteria") return "harness_context_set invalid context.acceptanceCriteria";
-    if (root === "constraints") return "harness_context_set invalid context.constraints";
-    if (root === "taskId") return "harness_context_set invalid context.taskId";
-    if (root === "metadata") {
-      return path.length > 1
-        ? "harness_context_set invalid context.metadata values"
-        : "harness_context_set invalid context.metadata";
-    }
-    return "harness_context_set missing/invalid context";
+  if (!resolveProviderAuthMethod(value.provider, value.methodId)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["methodId"],
+      message: "provider_auth_callback unknown methodId",
+    });
+    return;
   }
-  return null;
-});
 
-const sessionBackupRestoreSchema = makeSchema("session_backup_restore", (obj) => {
-  const sessionError = requireSessionError("session_backup_restore", obj);
-  if (sessionError) return sessionError;
-  if (obj.checkpointId !== undefined && !isNonEmptyString(obj.checkpointId)) {
-    return "session_backup_restore invalid checkpointId";
+  if (value.code !== undefined && typeof value.code !== "string") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["code"],
+      message: "provider_auth_callback invalid code",
+    });
   }
-  return null;
 });
 
-const sessionBackupDeleteCheckpointSchema = makeSchema("session_backup_delete_checkpoint", (obj) => {
-  const sessionError = requireSessionError("session_backup_delete_checkpoint", obj);
-  if (sessionError) return sessionError;
-  if (!isNonEmptyString(obj.checkpointId)) return "session_backup_delete_checkpoint missing checkpointId";
-  return null;
-});
-
-const getMessagesSchema = makeSchema("get_messages", (obj) => {
-  const sessionError = requireSessionError("get_messages", obj);
-  if (sessionError) return sessionError;
-  if (obj.offset !== undefined && (typeof obj.offset !== "number" || obj.offset < 0)) {
-    return "get_messages invalid offset";
+const providerAuthSetApiKeySchema = schemaWithType("provider_auth_set_api_key", {
+  sessionId: requiredSessionId("provider_auth_set_api_key"),
+  provider: z.unknown(),
+  methodId: z.unknown(),
+  apiKey: z.unknown(),
+}).superRefine((value, ctx) => {
+  if (!isProviderName(value.provider)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["provider"],
+      message: "provider_auth_set_api_key missing/invalid provider",
+    });
+    return;
   }
-  if (obj.limit !== undefined && (typeof obj.limit !== "number" || obj.limit < 1)) {
-    return "get_messages invalid limit";
+
+  if (!hasNonEmptyTrimmedString(value.methodId)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["methodId"],
+      message: "provider_auth_set_api_key missing/invalid methodId",
+    });
+    return;
   }
-  return null;
-});
 
-const setSessionTitleSchema = makeSchema("set_session_title", (obj) => {
-  return requireSessionAndFieldError("set_session_title", obj, "title");
-});
-
-const deleteSessionSchema = makeSchema("delete_session", (obj) => {
-  return requireSessionAndFieldError("delete_session", obj, "targetSessionId");
-});
-
-const setConfigSchema = makeSchema("set_config", (obj) => {
-  const sessionError = requireSessionError("set_config", obj);
-  if (sessionError) return sessionError;
-  if (!isRecordObject(obj.config)) return "set_config missing/invalid config";
-
-  const parsed = setConfigPayloadSchema.safeParse(obj.config);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    const field = String(issue?.path?.[0] ?? "");
-    if (field === "yolo") return "set_config config.yolo must be boolean";
-    if (field === "observabilityEnabled") return "set_config config.observabilityEnabled must be boolean";
-    if (field === "subAgentModel") return "set_config config.subAgentModel must be non-empty string";
-    if (field === "maxSteps") return "set_config config.maxSteps must be number 1-1000";
-    return "set_config missing/invalid config";
+  if (!resolveProviderAuthMethod(value.provider, value.methodId)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["methodId"],
+      message: "provider_auth_set_api_key unknown methodId",
+    });
+    return;
   }
-  return null;
+
+  if (!hasNonEmptyTrimmedString(value.apiKey)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["apiKey"],
+      message: "provider_auth_set_api_key missing/invalid apiKey",
+    });
+  }
 });
 
-const uploadFileSchema = makeSchema("upload_file", (obj) => {
-  const sessionError = requireSessionError("upload_file", obj);
-  if (sessionError) return sessionError;
-  if (!isNonEmptyString(obj.filename)) return "upload_file missing/invalid filename";
-  if (typeof obj.contentBase64 !== "string") return "upload_file missing/invalid contentBase64";
-  return null;
+const setEnableMcpSchema = schemaWithType("set_enable_mcp", {
+  sessionId: requiredSessionId("set_enable_mcp"),
+  enableMcp: requiredBoolean("set_enable_mcp missing/invalid enableMcp"),
 });
 
-const knownClientMessageTypes = new Set<string>([
-  ...sessionOnlyTypes,
-  ...sessionAndSkillNameTypes,
-  ...sessionAndNameTypes,
-  "client_hello",
-  "user_message",
-  "ask_response",
-  "approval_response",
-  "execute_command",
-  "set_model",
-  "provider_auth_authorize",
-  "provider_auth_callback",
-  "provider_auth_set_api_key",
-  "set_enable_mcp",
-  "mcp_server_upsert",
-  "mcp_server_auth_callback",
-  "mcp_server_auth_set_api_key",
-  "mcp_servers_migrate_legacy",
-  "harness_context_set",
-  "session_backup_restore",
-  "session_backup_delete_checkpoint",
-  "get_messages",
-  "set_session_title",
-  "delete_session",
-  "set_config",
-  "upload_file",
-]);
+const mcpServerUpsertSchema = schemaWithType("mcp_server_upsert", {
+  sessionId: requiredSessionId("mcp_server_upsert"),
+  server: z.unknown(),
+  previousName: z.unknown().optional(),
+}).superRefine((value, ctx) => {
+  const serverError = validateMcpServerPayload(value.server);
+  if (serverError) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["server"],
+      message: serverError,
+    });
+    return;
+  }
 
-const clientMessageSchemaOptions = [
+  if (value.previousName !== undefined && !hasNonEmptyTrimmedString(value.previousName)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["previousName"],
+      message: "mcp_server_upsert invalid previousName",
+    });
+  }
+});
+
+const mcpServerAuthCallbackSchema = schemaWithType("mcp_server_auth_callback", {
+  sessionId: requiredSessionId("mcp_server_auth_callback"),
+  name: requiredNonEmptyTrimmedString("mcp_server_auth_callback missing/invalid name"),
+  code: optionalString("mcp_server_auth_callback invalid code"),
+});
+
+const mcpServerAuthSetApiKeySchema = schemaWithType("mcp_server_auth_set_api_key", {
+  sessionId: requiredSessionId("mcp_server_auth_set_api_key"),
+  name: requiredNonEmptyTrimmedString("mcp_server_auth_set_api_key missing/invalid name"),
+  apiKey: requiredNonEmptyTrimmedString("mcp_server_auth_set_api_key missing/invalid apiKey"),
+}).superRefine((value, ctx) => {
+  if (value.apiKey.length > MAX_MCP_API_KEY_SIZE) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["apiKey"],
+      message: "mcp_server_auth_set_api_key apiKey exceeds max size 100000",
+    });
+  }
+});
+
+const mcpServersMigrateLegacySchema = schemaWithType("mcp_servers_migrate_legacy", {
+  sessionId: requiredSessionId("mcp_servers_migrate_legacy"),
+  scope: z.custom<"workspace" | "user">(
+    (value): value is "workspace" | "user" => value === "workspace" || value === "user",
+    { message: "mcp_servers_migrate_legacy missing/invalid scope" },
+  ),
+});
+
+const harnessContextSetSchema = schemaWithType("harness_context_set", {
+  sessionId: requiredSessionId("harness_context_set"),
+  context: z.unknown().optional(),
+}).superRefine((value, ctx) => {
+  if (!isRecordObject(value.context)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["context"],
+      message: "harness_context_set missing/invalid context",
+    });
+    return;
+  }
+
+  const parsedContext = harnessContextSchema.safeParse(value.context);
+  if (parsedContext.success) return;
+
+  const issue = parsedContext.error.issues[0];
+  const path = issue?.path ?? [];
+  const root = String(path[0] ?? "");
+  let message = "harness_context_set missing/invalid context";
+  if (root === "runId") message = "harness_context_set invalid context.runId";
+  if (root === "objective") message = "harness_context_set invalid context.objective";
+  if (root === "acceptanceCriteria") message = "harness_context_set invalid context.acceptanceCriteria";
+  if (root === "constraints") message = "harness_context_set invalid context.constraints";
+  if (root === "taskId") message = "harness_context_set invalid context.taskId";
+  if (root === "metadata") {
+    message = path.length > 1
+      ? "harness_context_set invalid context.metadata values"
+      : "harness_context_set invalid context.metadata";
+  }
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["context"],
+    message,
+  });
+});
+
+const sessionBackupRestoreSchema = schemaWithType("session_backup_restore", {
+  sessionId: requiredSessionId("session_backup_restore"),
+  checkpointId: optionalNonEmptyTrimmedString("session_backup_restore invalid checkpointId"),
+});
+
+const sessionBackupDeleteCheckpointSchema = schemaWithType("session_backup_delete_checkpoint", {
+  sessionId: requiredSessionId("session_backup_delete_checkpoint"),
+  checkpointId: requiredNonEmptyTrimmedString("session_backup_delete_checkpoint missing checkpointId"),
+});
+
+const getMessagesSchema = schemaWithType("get_messages", {
+  sessionId: requiredSessionId("get_messages"),
+  offset: optionalNumberAtLeast("get_messages invalid offset", 0),
+  limit: optionalNumberAtLeast("get_messages invalid limit", 1),
+});
+
+const setSessionTitleSchema = schemaWithType("set_session_title", {
+  sessionId: requiredSessionId("set_session_title"),
+  title: requiredNonEmptyTrimmedString("set_session_title missing/invalid title"),
+});
+
+const deleteSessionSchema = schemaWithType("delete_session", {
+  sessionId: requiredSessionId("delete_session"),
+  targetSessionId: requiredNonEmptyTrimmedString("delete_session missing/invalid targetSessionId"),
+});
+
+const setConfigSchema = schemaWithType("set_config", {
+  sessionId: requiredSessionId("set_config"),
+  config: z.unknown().optional(),
+}).superRefine((value, ctx) => {
+  if (!isRecordObject(value.config)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["config"],
+      message: "set_config missing/invalid config",
+    });
+    return;
+  }
+
+  const parsedConfig = setConfigPayloadSchema.safeParse(value.config);
+  if (parsedConfig.success) return;
+
+  const issue = parsedConfig.error.issues[0];
+  const field = String(issue?.path?.[0] ?? "");
+  let message = "set_config missing/invalid config";
+  if (field === "yolo") message = "set_config config.yolo must be boolean";
+  if (field === "observabilityEnabled") message = "set_config config.observabilityEnabled must be boolean";
+  if (field === "subAgentModel") message = "set_config config.subAgentModel must be non-empty string";
+  if (field === "maxSteps") message = "set_config config.maxSteps must be number 1-1000";
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["config"],
+    message,
+  });
+});
+
+const uploadFileSchema = schemaWithType("upload_file", {
+  sessionId: requiredSessionId("upload_file"),
+  filename: requiredNonEmptyTrimmedString("upload_file missing/invalid filename"),
+  contentBase64: requiredString("upload_file missing/invalid contentBase64"),
+});
+
+const clientMessageSchemas = {
   ...sessionOnlySchemas,
   ...sessionAndSkillNameSchemas,
   ...sessionAndNameSchemas,
-  clientHelloSchema,
-  userMessageSchema,
-  askResponseSchema,
-  approvalResponseSchema,
-  executeCommandSchema,
-  setModelSchema,
-  providerAuthAuthorizeSchema,
-  providerAuthCallbackSchema,
-  providerAuthSetApiKeySchema,
-  setEnableMcpSchema,
-  mcpServerUpsertSchema,
-  mcpServerAuthCallbackSchema,
-  mcpServerAuthSetApiKeySchema,
-  mcpServersMigrateLegacySchema,
-  harnessContextSetSchema,
-  sessionBackupRestoreSchema,
-  sessionBackupDeleteCheckpointSchema,
-  getMessagesSchema,
-  setSessionTitleSchema,
-  deleteSessionSchema,
-  setConfigSchema,
-  uploadFileSchema,
-] as unknown as [
-  z.ZodDiscriminatedUnionOption<"type">,
-  ...z.ZodDiscriminatedUnionOption<"type">[],
-];
-
-const clientMessageSchema = z.discriminatedUnion("type", clientMessageSchemaOptions);
+  client_hello: clientHelloSchema,
+  user_message: userMessageSchema,
+  ask_response: askResponseSchema,
+  approval_response: approvalResponseSchema,
+  execute_command: executeCommandSchema,
+  set_model: setModelSchema,
+  provider_auth_authorize: providerAuthAuthorizeSchema,
+  provider_auth_callback: providerAuthCallbackSchema,
+  provider_auth_set_api_key: providerAuthSetApiKeySchema,
+  set_enable_mcp: setEnableMcpSchema,
+  mcp_server_upsert: mcpServerUpsertSchema,
+  mcp_server_auth_callback: mcpServerAuthCallbackSchema,
+  mcp_server_auth_set_api_key: mcpServerAuthSetApiKeySchema,
+  mcp_servers_migrate_legacy: mcpServersMigrateLegacySchema,
+  harness_context_set: harnessContextSetSchema,
+  session_backup_restore: sessionBackupRestoreSchema,
+  session_backup_delete_checkpoint: sessionBackupDeleteCheckpointSchema,
+  get_messages: getMessagesSchema,
+  set_session_title: setSessionTitleSchema,
+  delete_session: deleteSessionSchema,
+  set_config: setConfigSchema,
+  upload_file: uploadFileSchema,
+} as Record<string, z.ZodTypeAny>;
 
 export function safeParseClientMessage(raw: string): ParseResult {
   let parsed: unknown;
@@ -415,9 +523,11 @@ export function safeParseClientMessage(raw: string): ParseResult {
 
   const obj = parsedObject.data;
   if (typeof obj.type !== "string") return err("Missing type");
-  if (!knownClientMessageTypes.has(obj.type)) return err(`Unknown type: ${String(obj.type)}`);
 
-  const parsedMessage = clientMessageSchema.safeParse(obj);
+  const schema = clientMessageSchemas[obj.type];
+  if (!schema) return err(`Unknown type: ${String(obj.type)}`);
+
+  const parsedMessage = schema.safeParse(obj);
   if (!parsedMessage.success) return err(firstIssueMessage(parsedMessage.error));
   return ok(parsedMessage.data as ClientMessage);
 }

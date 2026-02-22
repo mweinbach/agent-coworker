@@ -22,7 +22,7 @@ const mockGenerateSessionTitle = mock(async () => ({
 
 const mockWritePersistedSessionSnapshot = mock(async () => "/tmp/mock.json");
 
-const { AgentSession } = await import("../src/server/session");
+const { AgentSession } = await import("../src/server/session/AgentSession");
 
 function makeConfig(dir: string): AgentConfig {
   return {

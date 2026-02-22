@@ -60,7 +60,7 @@ const mockGenerateSessionTitle = mock(async () => ({
 const mockWritePersistedSessionSnapshot = mock(async () => "/tmp/mock-home/.cowork/sessions/mock.json");
 
 // Import AgentSession AFTER the runTurn mock is registered so it picks up the mock.
-const { AgentSession } = await import("../src/server/session");
+const { AgentSession } = await import("../src/server/session/AgentSession");
 
 // ---------------------------------------------------------------------------
 // Helpers

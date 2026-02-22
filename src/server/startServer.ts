@@ -10,7 +10,7 @@ import { loadConfig } from "../config";
 import { loadSystemPromptWithSkills } from "../prompt";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 
-import { AgentSession } from "./session";
+import { AgentSession } from "./session/AgentSession";
 import { SessionDb } from "./sessionDb";
 import {
   WEBSOCKET_PROTOCOL_VERSION,

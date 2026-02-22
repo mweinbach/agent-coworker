@@ -23,16 +23,9 @@ import {
   type MCPRegistryServer,
 } from "../mcp/configRegistry";
 import { authorizeMCPServerOAuth, consumeCapturedOAuthCode, exchangeMCPServerOAuthCode } from "../mcp/oauthProvider";
-import {
-  authorizeProviderAuth,
-  callbackProviderAuth as callbackProviderAuthMethod,
-  resolveProviderAuthMethod,
-  setProviderApiKey as setProviderApiKeyMethod,
-} from "../providers/authRegistry";
 import { getProviderCatalog } from "../providers/connectionCatalog";
 import { getProviderStatuses } from "../providerStatus";
 import { discoverSkills, stripSkillFrontMatter } from "../skills";
-import { isProviderName } from "../types";
 import type {
   AgentConfig,
   HarnessContextState,
@@ -69,6 +62,7 @@ import { HistoryManager } from "./session/HistoryManager";
 import { InteractionManager } from "./session/InteractionManager";
 import { McpManager } from "./session/McpManager";
 import { PersistenceManager } from "./session/PersistenceManager";
+import { ProviderAuthManager } from "./session/ProviderAuthManager";
 import { ProviderCatalogManager } from "./session/ProviderCatalogManager";
 import { TurnExecutionManager } from "./session/TurnExecutionManager";
 
@@ -165,6 +159,7 @@ export class AgentSession {
   private readonly historyManager: HistoryManager;
   private readonly interactionManager: InteractionManager;
   private readonly mcpManager: McpManager;
+  private readonly providerAuthManager: ProviderAuthManager;
   private readonly providerCatalogManager: ProviderCatalogManager;
   private readonly turnExecutionManager: TurnExecutionManager;
 
@@ -266,6 +261,31 @@ export class AgentSession {
       emitError: (code, source, message) => this.emitError(code, source, message),
       emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
       formatError: (err) => this.formatErrorMessage(err),
+    });
+    this.providerAuthManager = new ProviderAuthManager({
+      sessionId: this.id,
+      getConfig: () => this.config,
+      setConfig: (next) => {
+        this.config = next;
+      },
+      isRunning: () => this.running,
+      guardBusy: () => this.guardBusy(),
+      setConnecting: (connecting) => {
+        this.connecting = connecting;
+      },
+      emit: (evt) => this.emit(evt),
+      emitError: (code, source, message) => this.emitError(code, source, message),
+      emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
+      formatError: (err) => this.formatErrorMessage(err),
+      log: (line) => this.log(line),
+      persistModelSelection: this.persistModelSelectionImpl,
+      updateSessionInfo: (patch) => this.updateSessionInfo(patch),
+      queuePersistSessionSnapshot: (reason) => this.queuePersistSessionSnapshot(reason),
+      emitConfigUpdated: () => this.emitConfigUpdated(),
+      emitProviderCatalog: async () => await this.emitProviderCatalog(),
+      refreshProviderStatus: async () => await this.refreshProviderStatus(),
+      getCoworkPaths: () => this.getCoworkPaths(),
+      runProviderConnect: async (opts) => await this.runProviderConnect(opts),
     });
     this.turnExecutionManager = new TurnExecutionManager({
       sendUserMessage: (text, clientMessageId, displayText) =>
@@ -385,6 +405,14 @@ export class AgentSession {
       workingDirectory: this.config.workingDirectory,
       ...(this.config.outputDirectory ? { outputDirectory: this.config.outputDirectory } : {}),
     };
+  }
+
+  private emitConfigUpdated() {
+    this.emit({
+      type: "config_updated",
+      sessionId: this.id,
+      config: this.getPublicConfig(),
+    });
   }
 
   get isBusy(): boolean {
@@ -625,21 +653,13 @@ export class AgentSession {
     return this.getAiCoworkerPathsImpl({ homedir: this.getUserHomeDir() });
   }
 
-  private async runProviderConnect(opts: {
-    provider: AgentConfig["provider"];
-    methodId?: string;
-    apiKey?: string;
-    onOauthLine?: (line: string) => void;
-  }): Promise<ConnectProviderResult> {
-    const paths = this.getCoworkPaths();
+  private async runProviderConnect(opts: Parameters<typeof connectModelProvider>[0]): Promise<ConnectProviderResult> {
+    const paths = opts.paths ?? this.getCoworkPaths();
     return await this.connectProviderImpl({
-      provider: opts.provider,
-      methodId: opts.methodId,
-      apiKey: opts.apiKey,
-      cwd: this.config.workingDirectory,
+      ...opts,
+      cwd: opts.cwd ?? this.config.workingDirectory,
       paths,
-      oauthStdioMode: "pipe",
-      onOauthLine: opts.onOauthLine,
+      oauthStdioMode: opts.oauthStdioMode ?? "pipe",
     });
   }
 
@@ -1457,64 +1477,7 @@ export class AgentSession {
   }
 
   async setModel(modelIdRaw: string, providerRaw?: AgentConfig["provider"]) {
-    const modelId = modelIdRaw.trim();
-    if (!modelId) {
-      this.emitError("validation_failed", "session", "Model id is required");
-      return;
-    }
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-
-    if (providerRaw !== undefined && !isProviderName(providerRaw)) {
-      this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
-      return;
-    }
-
-    const nextProvider = providerRaw ?? this.config.provider;
-    const nextSubAgentModel = this.config.subAgentModel === this.config.model
-      ? modelId
-      : this.config.subAgentModel;
-
-    this.config = {
-      ...this.config,
-      provider: nextProvider,
-      model: modelId,
-      subAgentModel: nextSubAgentModel,
-    };
-    let persistDefaultsError: string | null = null;
-    if (this.persistModelSelectionImpl) {
-      try {
-        await this.persistModelSelectionImpl({
-          provider: nextProvider,
-          model: modelId,
-          subAgentModel: nextSubAgentModel,
-        });
-      } catch (err) {
-        persistDefaultsError = String(err);
-      }
-    }
-
-    this.emit({
-      type: "config_updated",
-      sessionId: this.id,
-      config: this.getPublicConfig(),
-    });
-    this.updateSessionInfo({
-      provider: nextProvider,
-      model: modelId,
-    });
-    if (persistDefaultsError) {
-      this.emitError(
-        "internal_error",
-        "session",
-        `Model updated for this session, but persisting defaults failed: ${persistDefaultsError}`
-      );
-    }
-
-    this.queuePersistSessionSnapshot("session.model_updated");
-    await this.emitProviderCatalog();
+    await this.providerAuthManager.setModel(modelIdRaw, providerRaw);
   }
 
   async emitProviderCatalog() {
@@ -1526,192 +1489,15 @@ export class AgentSession {
   }
 
   async authorizeProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (!isProviderName(providerRaw)) {
-      this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
-      return;
-    }
-    const methodId = methodIdRaw.trim();
-    if (!methodId) {
-      this.emitError("validation_failed", "provider", "Auth method id is required");
-      return;
-    }
-    if (!resolveProviderAuthMethod(providerRaw, methodId)) {
-      this.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
-      return;
-    }
-
-    const result = authorizeProviderAuth({ provider: providerRaw, methodId });
-    if (!result.ok) {
-      this.emitError("provider_error", "provider", result.message);
-      this.emitTelemetry("provider.auth.authorize", "error", {
-        sessionId: this.id,
-        provider: providerRaw,
-        methodId,
-        error: result.message,
-      });
-      return;
-    }
-    this.emit({
-      type: "provider_auth_challenge",
-      sessionId: this.id,
-      provider: providerRaw,
-      methodId,
-      challenge: result.challenge,
-    });
-    this.emitTelemetry("provider.auth.authorize", "ok", {
-      sessionId: this.id,
-      provider: providerRaw,
-      methodId,
-    });
+    await this.providerAuthManager.authorizeProviderAuth(providerRaw, methodIdRaw);
   }
 
   async callbackProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string, codeRaw?: string) {
-    if (!this.guardBusy()) return;
-    if (!isProviderName(providerRaw)) {
-      this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
-      return;
-    }
-    const methodId = methodIdRaw.trim();
-    if (!methodId) {
-      this.emitError("validation_failed", "provider", "Auth method id is required");
-      return;
-    }
-    if (!resolveProviderAuthMethod(providerRaw, methodId)) {
-      this.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
-      return;
-    }
-
-    this.connecting = true;
-    const startedAt = Date.now();
-    try {
-      const code = codeRaw?.trim() ? codeRaw.trim() : undefined;
-      const result = await callbackProviderAuthMethod({
-        provider: providerRaw,
-        methodId,
-        code,
-        cwd: this.config.workingDirectory,
-        paths: this.getCoworkPaths(),
-        connect: async (opts) => await this.runProviderConnect(opts),
-        oauthStdioMode: "pipe",
-        onOauthLine: (line) => this.log(`[connect ${providerRaw}] ${line}`),
-      });
-
-      this.emit({
-        type: "provider_auth_result",
-        sessionId: this.id,
-        provider: providerRaw,
-        methodId,
-        ok: result.ok,
-        mode: result.ok ? result.mode : undefined,
-        message: result.message,
-      });
-
-      if (result.ok) {
-        await this.refreshProviderStatus();
-        await this.emitProviderCatalog();
-      }
-      this.emitTelemetry(
-        "provider.auth.callback",
-        result.ok ? "ok" : "error",
-        {
-          sessionId: this.id,
-          provider: providerRaw,
-          methodId,
-          mode: result.mode ?? "unknown",
-        },
-        Date.now() - startedAt
-      );
-    } catch (err) {
-      this.emitError("provider_error", "provider", `Provider auth callback failed: ${String(err)}`);
-      this.emitTelemetry(
-        "provider.auth.callback",
-        "error",
-        {
-          sessionId: this.id,
-          provider: providerRaw,
-          methodId,
-          error: this.formatErrorMessage(err),
-        },
-        Date.now() - startedAt
-      );
-    } finally {
-      this.connecting = false;
-    }
+    await this.providerAuthManager.callbackProviderAuth(providerRaw, methodIdRaw, codeRaw);
   }
 
   async setProviderApiKey(providerRaw: AgentConfig["provider"], methodIdRaw: string, apiKeyRaw: string) {
-    if (!this.guardBusy()) return;
-    if (!isProviderName(providerRaw)) {
-      this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
-      return;
-    }
-    const methodId = methodIdRaw.trim();
-    if (!methodId) {
-      this.emitError("validation_failed", "provider", "Auth method id is required");
-      return;
-    }
-    if (!resolveProviderAuthMethod(providerRaw, methodId)) {
-      this.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
-      return;
-    }
-
-    this.connecting = true;
-    const startedAt = Date.now();
-    try {
-      const result = await setProviderApiKeyMethod({
-        provider: providerRaw,
-        methodId,
-        apiKey: apiKeyRaw,
-        cwd: this.config.workingDirectory,
-        paths: this.getCoworkPaths(),
-        connect: async (opts) => await this.runProviderConnect(opts),
-      });
-
-      this.emit({
-        type: "provider_auth_result",
-        sessionId: this.id,
-        provider: providerRaw,
-        methodId,
-        ok: result.ok,
-        mode: result.ok ? result.mode : undefined,
-        message: result.message,
-      });
-
-      if (result.ok) {
-        await this.refreshProviderStatus();
-        await this.emitProviderCatalog();
-      }
-      this.emitTelemetry(
-        "provider.auth.api_key",
-        result.ok ? "ok" : "error",
-        {
-          sessionId: this.id,
-          provider: providerRaw,
-          methodId,
-          mode: result.mode ?? "unknown",
-        },
-        Date.now() - startedAt
-      );
-    } catch (err) {
-      this.emitError("provider_error", "provider", `Setting provider API key failed: ${String(err)}`);
-      this.emitTelemetry(
-        "provider.auth.api_key",
-        "error",
-        {
-          sessionId: this.id,
-          provider: providerRaw,
-          methodId,
-          error: this.formatErrorMessage(err),
-        },
-        Date.now() - startedAt
-      );
-    } finally {
-      this.connecting = false;
-    }
+    await this.providerAuthManager.setProviderApiKey(providerRaw, methodIdRaw, apiKeyRaw);
   }
 
   async refreshProviderStatus() {

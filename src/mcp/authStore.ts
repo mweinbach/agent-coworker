@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { maskApiKey } from "../connect";
 import type { AgentConfig, MCPServerAuthConfig } from "../types";
+import { isRecord, nowIso } from "../utils/typeGuards";
 import type { MCPRegistryServer, MCPServerSource } from "./configRegistry";
 import { resolveMcpConfigPaths } from "./configRegistry";
 
@@ -78,10 +80,6 @@ const DEFAULT_DOC: MCPServerCredentialsDocument = {
   servers: {},
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function asNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -95,14 +93,6 @@ function asIsoDate(value: unknown): string | undefined {
   return new Date(timestamp).toISOString();
 }
 
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function maskApiKey(value: string): string {
-  if (value.length <= 8) return "*".repeat(Math.max(4, value.length));
-  return `${value.slice(0, 4)}...${value.slice(-4)}`;
-}
 
 function ensureScopeDir(filePath: string): Promise<void> {
   const dir = path.dirname(filePath);
@@ -300,10 +290,6 @@ function resolveApiKeyHeader(auth: Extract<MCPServerAuthConfig, { type: "api_key
   return {
     [headerName]: joinAuthHeader(prefix, apiKey),
   };
-}
-
-export function resolveMCPCredentialScope(source: MCPServerSource): MCPAuthScope {
-  return resolvePrimaryScope(source);
 }
 
 export async function readMCPAuthFiles(config: AgentConfig): Promise<{ workspace: MCPAuthFileState; user: MCPAuthFileState }> {
@@ -661,21 +647,3 @@ export async function setMCPServerOAuthClientInformation(opts: {
   return { storageFile: filePath, scope };
 }
 
-export async function clearMCPServerOAuthPending(opts: {
-  config: AgentConfig;
-  server: MCPRegistryServer;
-}): Promise<{ storageFile: string; scope: MCPAuthScope }> {
-  const scope = resolvePrimaryScope(opts.server.source);
-  const filePath = await mutateScopeDoc(opts.config, scope, (doc) => {
-    const name = normalizeServerName(opts.server.name);
-    const existing = doc.servers[name] ?? {};
-    if (!existing.oauth?.pending) return;
-    const nextOauth = { ...(existing.oauth ?? {}) };
-    delete nextOauth.pending;
-    doc.servers[name] = {
-      ...existing,
-      ...(Object.keys(nextOauth).length > 0 ? { oauth: nextOauth } : {}),
-    };
-  });
-  return { storageFile: filePath, scope };
-}

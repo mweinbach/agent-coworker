@@ -6,6 +6,7 @@ import type { AgentConfig, ObservabilityHealth } from "../types";
 import {
   ensureObservabilityRuntime,
   forceFlushObservabilityRuntime,
+  formatErrorMessage,
   getObservabilityHealth,
   noteObservabilityFailure,
   noteObservabilitySuccess,
@@ -50,11 +51,6 @@ const SECRET_ATTRIBUTE_TOKENS = [
   "privatekey",
   "secretkey",
 ];
-
-function formatErrorMessage(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  return String(err);
-}
 
 function isSecretLikeKey(key: string): boolean {
   const lowered = key.toLowerCase();

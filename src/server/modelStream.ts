@@ -159,15 +159,6 @@ export function reasoningModeForProvider(provider: ProviderName): ModelStreamRea
   return provider === "openai" || provider === "codex-cli" ? "summary" : "reasoning";
 }
 
-function withRaw(
-  payload: Omit<NormalizedModelStreamPart, "rawPart">,
-  includeRawPart: boolean,
-  rawPart: unknown
-): NormalizedModelStreamPart {
-  if (!includeRawPart) return payload;
-  return { ...payload, rawPart };
-}
-
 export function normalizeModelStreamPart(
   raw: unknown,
   opts: NormalizeModelStreamPartOptions
@@ -176,331 +167,74 @@ export function normalizeModelStreamPart(
   const rawPart = sanitizeUnknown(raw);
   const mode = reasoningModeForProvider(opts.provider);
 
+  /** Emit a normalized part, compacting undefined fields from the record. */
+  const emit = (partType: ModelStreamPartType, part: Record<string, unknown>): NormalizedModelStreamPart => {
+    const payload: NormalizedModelStreamPart = { partType, part: compactRecord(part) };
+    if (includeRawPart) payload.rawPart = rawPart;
+    return payload;
+  };
+
   if (!isPlainObject(raw) || typeof raw.type !== "string") {
-    return withRaw(
-      {
-        partType: "unknown",
-        part: compactRecord({
-          sdkType: typeof raw === "object" && raw !== null ? "invalid" : typeof raw,
-          raw: rawPart,
-        }),
-      },
-      includeRawPart,
-      rawPart
-    );
+    return emit("unknown", { sdkType: typeof raw === "object" && raw !== null ? "invalid" : typeof raw, raw: rawPart });
   }
 
   const type = raw.type;
   const providerMetadata = sanitizeRecord(raw.providerMetadata);
 
+  // Shorthand extractors used across multiple branches.
+  const id = () => asString(raw.id) ?? "";
+  const toolCallId = () => asString(raw.toolCallId) ?? id();
+  const toolName = () => asString(raw.toolName) ?? "tool";
+  const san = sanitizeUnknown;
+
   switch (type) {
     case "start":
-      return withRaw({ partType: "start", part: {} }, includeRawPart, rawPart);
+      return emit("start", {});
     case "finish":
-      const finishReason = sanitizeUnknown(raw.finishReason) ?? "unknown";
-      return withRaw(
-        {
-          partType: "finish",
-          part: compactRecord({
-            finishReason,
-            rawFinishReason: sanitizeUnknown(raw.rawFinishReason),
-            totalUsage: sanitizeUnknown(raw.totalUsage),
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("finish", { finishReason: san(raw.finishReason) ?? "unknown", rawFinishReason: san(raw.rawFinishReason), totalUsage: san(raw.totalUsage) });
     case "abort":
-      return withRaw(
-        {
-          partType: "abort",
-          part: compactRecord({
-            reason: sanitizeUnknown(raw.reason),
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("abort", { reason: san(raw.reason) });
     case "error":
-      return withRaw(
-        {
-          partType: "error",
-          part: { error: sanitizeUnknown(raw.error) },
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("error", { error: san(raw.error) });
     case "start-step":
-      return withRaw(
-        {
-          partType: "start_step",
-          part: compactRecord({
-            stepNumber: asFiniteNumber(raw.stepNumber) ?? asFiniteNumber(raw.step),
-            request: sanitizeUnknown(raw.request),
-            warnings: sanitizeUnknown(raw.warnings),
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("start_step", { stepNumber: asFiniteNumber(raw.stepNumber) ?? asFiniteNumber(raw.step), request: san(raw.request), warnings: san(raw.warnings) });
     case "finish-step":
-      const stepFinishReason = sanitizeUnknown(raw.finishReason) ?? "unknown";
-      return withRaw(
-        {
-          partType: "finish_step",
-          part: compactRecord({
-            stepNumber: asFiniteNumber(raw.stepNumber) ?? asFiniteNumber(raw.step),
-            response: sanitizeUnknown(raw.response),
-            usage: sanitizeUnknown(raw.usage),
-            finishReason: stepFinishReason,
-            rawFinishReason: sanitizeUnknown(raw.rawFinishReason),
-            providerMetadata: sanitizeUnknown(raw.providerMetadata),
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("finish_step", { stepNumber: asFiniteNumber(raw.stepNumber) ?? asFiniteNumber(raw.step), response: san(raw.response), usage: san(raw.usage), finishReason: san(raw.finishReason) ?? "unknown", rawFinishReason: san(raw.rawFinishReason), providerMetadata: san(raw.providerMetadata) });
     case "text-start":
-      return withRaw(
-        {
-          partType: "text_start",
-          part: compactRecord({
-            id: asString(raw.id) ?? "",
-            providerMetadata,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("text_start", { id: id(), providerMetadata });
     case "text-delta":
-      return withRaw(
-        {
-          partType: "text_delta",
-          part: compactRecord({
-            id: asString(raw.id) ?? "",
-            text: asSafeString(raw.text),
-            providerMetadata,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("text_delta", { id: id(), text: asSafeString(raw.text), providerMetadata });
     case "text-end":
-      return withRaw(
-        {
-          partType: "text_end",
-          part: compactRecord({
-            id: asString(raw.id) ?? "",
-            providerMetadata,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("text_end", { id: id(), providerMetadata });
     case "reasoning-start":
-      return withRaw(
-        {
-          partType: "reasoning_start",
-          part: compactRecord({
-            id: asString(raw.id) ?? "",
-            mode,
-            providerMetadata,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("reasoning_start", { id: id(), mode, providerMetadata });
     case "reasoning-delta":
-      return withRaw(
-        {
-          partType: "reasoning_delta",
-          part: compactRecord({
-            id: asString(raw.id) ?? "",
-            mode,
-            text: asSafeString(raw.text),
-            providerMetadata,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("reasoning_delta", { id: id(), mode, text: asSafeString(raw.text), providerMetadata });
     case "reasoning-end":
-      return withRaw(
-        {
-          partType: "reasoning_end",
-          part: compactRecord({
-            id: asString(raw.id) ?? "",
-            mode,
-            providerMetadata,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("reasoning_end", { id: id(), mode, providerMetadata });
     case "tool-input-start":
-      return withRaw(
-        {
-          partType: "tool_input_start",
-          part: compactRecord({
-            id: asString(raw.id) ?? "",
-            toolName: asString(raw.toolName) ?? "tool",
-            providerExecuted: asBoolean(raw.providerExecuted),
-            dynamic: asBoolean(raw.dynamic),
-            title: asString(raw.title),
-            providerMetadata,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("tool_input_start", { id: id(), toolName: toolName(), providerExecuted: asBoolean(raw.providerExecuted), dynamic: asBoolean(raw.dynamic), title: asString(raw.title), providerMetadata });
     case "tool-input-delta":
-      return withRaw(
-        {
-          partType: "tool_input_delta",
-          part: compactRecord({
-            id: asString(raw.id) ?? "",
-            delta: asSafeString(raw.delta),
-            providerMetadata,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("tool_input_delta", { id: id(), delta: asSafeString(raw.delta), providerMetadata });
     case "tool-input-end":
-      return withRaw(
-        {
-          partType: "tool_input_end",
-          part: compactRecord({
-            id: asString(raw.id) ?? "",
-            providerMetadata,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("tool_input_end", { id: id(), providerMetadata });
     case "tool-call":
-      return withRaw(
-        {
-          partType: "tool_call",
-          part: compactRecord({
-            toolCallId: asString(raw.toolCallId) ?? asString(raw.id) ?? "",
-            toolName: asString(raw.toolName) ?? "tool",
-            input: sanitizeUnknown(raw.input) ?? {},
-            dynamic: asBoolean(raw.dynamic),
-            invalid: asBoolean(raw.invalid),
-            error: sanitizeUnknown(raw.error),
-            providerMetadata,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("tool_call", { toolCallId: toolCallId(), toolName: toolName(), input: san(raw.input) ?? {}, dynamic: asBoolean(raw.dynamic), invalid: asBoolean(raw.invalid), error: san(raw.error), providerMetadata });
     case "tool-result":
-      return withRaw(
-        {
-          partType: "tool_result",
-          part: compactRecord({
-            toolCallId: asString(raw.toolCallId) ?? asString(raw.id) ?? "",
-            toolName: asString(raw.toolName) ?? "tool",
-            output: sanitizeUnknown(raw.output) ?? null,
-            dynamic: asBoolean(raw.dynamic),
-            providerMetadata,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("tool_result", { toolCallId: toolCallId(), toolName: toolName(), output: san(raw.output) ?? null, dynamic: asBoolean(raw.dynamic), providerMetadata });
     case "tool-error":
-      return withRaw(
-        {
-          partType: "tool_error",
-          part: compactRecord({
-            toolCallId: asString(raw.toolCallId) ?? asString(raw.id) ?? "",
-            toolName: asString(raw.toolName) ?? "tool",
-            error: sanitizeUnknown(raw.error) ?? "unknown_error",
-            dynamic: asBoolean(raw.dynamic),
-            providerMetadata,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("tool_error", { toolCallId: toolCallId(), toolName: toolName(), error: san(raw.error) ?? "unknown_error", dynamic: asBoolean(raw.dynamic), providerMetadata });
     case "tool-output-denied":
-      return withRaw(
-        {
-          partType: "tool_output_denied",
-          part: compactRecord({
-            toolCallId: asString(raw.toolCallId) ?? asString(raw.id) ?? "",
-            toolName: asString(raw.toolName) ?? "tool",
-            reason: sanitizeUnknown(raw.reason),
-            providerMetadata,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("tool_output_denied", { toolCallId: toolCallId(), toolName: toolName(), reason: san(raw.reason), providerMetadata });
     case "tool-approval-request":
-      return withRaw(
-        {
-          partType: "tool_approval_request",
-          part: compactRecord({
-            approvalId: asString(raw.approvalId) ?? "",
-            toolCall: sanitizeUnknown(raw.toolCall) ?? {},
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("tool_approval_request", { approvalId: asString(raw.approvalId) ?? "", toolCall: san(raw.toolCall) ?? {} });
     case "source":
-      const sourcePayload = sanitizeUnknown(
-        compactRecord({
-          ...raw,
-          type: undefined,
-        })
-      ) ?? {};
-      return withRaw(
-        {
-          partType: "source",
-          part: {
-            source: sourcePayload,
-          },
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("source", { source: san(compactRecord({ ...raw, type: undefined })) ?? {} });
     case "file":
-      const filePayload = sanitizeUnknown(raw.file) ?? null;
-      return withRaw(
-        {
-          partType: "file",
-          part: { file: filePayload },
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("file", { file: san(raw.file) ?? null });
     case "raw":
-      const rawValue = sanitizeUnknown(
-        "rawValue" in raw ? raw.rawValue : raw.raw
-      ) ?? null;
-      return withRaw(
-        {
-          partType: "raw",
-          part: { raw: rawValue },
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("raw", { raw: san("rawValue" in raw ? raw.rawValue : raw.raw) ?? null });
     default:
-      return withRaw(
-        {
-          partType: "unknown",
-          part: compactRecord({
-            sdkType: type,
-            raw: rawPart,
-          }),
-        },
-        includeRawPart,
-        rawPart
-      );
+      return emit("unknown", { sdkType: type, raw: rawPart });
   }
 }

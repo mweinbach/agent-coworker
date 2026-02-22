@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { gunzipSync, gzipSync } from "node:zlib";
 
 import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../connect";
 
@@ -29,25 +29,6 @@ export type SessionBackupPublicState = {
   failureReason?: string;
 };
 
-type SessionBackupMetadataCheckpoint = SessionBackupPublicCheckpoint & {
-  patchKind?: "git_patch" | "manifest";
-  patchFile?: string;
-  manifestFile?: string;
-  blobsDir?: string;
-};
-
-type SessionBackupMetadata = {
-  version: 1;
-  sessionId: string;
-  workingDirectory: string;
-  createdAt: string;
-  state: "active" | "closed";
-  closedAt?: string;
-  compactedAt?: string;
-  originalSnapshot: { kind: "directory" | "tar_gz"; path: string };
-  checkpoints: SessionBackupMetadataCheckpoint[];
-};
-
 export type SessionBackupInitOptions = {
   sessionId: string;
   workingDirectory: string;
@@ -63,12 +44,46 @@ export interface SessionBackupHandle {
   close(): Promise<void>;
 }
 
+// ---------------------------------------------------------------------------
+// Internal types
+// ---------------------------------------------------------------------------
+
+type SessionBackupMetadataCheckpoint = SessionBackupPublicCheckpoint & {
+  fingerprint: string;
+  snapshot: {
+    kind: "directory" | "tar_gz";
+    path: string;
+  };
+};
+
+type SessionBackupMetadata = {
+  version: 1;
+  sessionId: string;
+  workingDirectory: string;
+  createdAt: string;
+  state: "active" | "closed";
+  closedAt?: string;
+  originalSnapshot: {
+    kind: "directory" | "tar_gz";
+    path: string;
+  };
+  checkpoints: SessionBackupMetadataCheckpoint[];
+};
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
 const METADATA_FILE = "metadata.json";
 const ORIGINAL_DIR = "original";
 const ORIGINAL_ARCHIVE = "original.tar.gz";
 const CHECKPOINTS_DIR = "checkpoints";
 const DEFAULT_MAX_CLOSED_SESSIONS = 20;
 const DEFAULT_MAX_CLOSED_AGE_DAYS = 7;
+
+// ---------------------------------------------------------------------------
+// Utility functions
+// ---------------------------------------------------------------------------
 
 function makeCheckpointId(index: number): string {
   return `cp-${String(index).padStart(4, "0")}`;
@@ -81,218 +96,12 @@ function isPathWithin(parent: string, candidate: string): boolean {
   return !path.isAbsolute(relative);
 }
 
-function toPatchPrefix(absPath: string): string {
-  const resolved = path.resolve(absPath).replace(/\\/g, "/").replace(/^\/+/, "");
-  return resolved.endsWith("/") ? resolved : `${resolved}/`;
-}
-
-function normalizeDiffPatchPaths(diffPatch: string, originalDir: string, workingDir: string): string {
-  if (!diffPatch.trim()) return "";
-
-  const originalPrefix = toPatchPrefix(originalDir);
-  const workingPrefix = toPatchPrefix(workingDir);
-
-  const replacePrefix = (line: string, prefix: string) =>
-    line.replace(`a/${prefix}`, "a/").replace(`b/${prefix}`, "b/");
-  const normalizePathSlashes = (line: string) => line.replace(/\\/g, "/").replace(/\/+/g, "/");
-
-  return diffPatch
-    .split("\n")
-    .map((line) => {
-      if (!line.startsWith("diff --git ") && !line.startsWith("--- ") && !line.startsWith("+++ ")) {
-        return line;
-      }
-      const normalizedLine = normalizePathSlashes(line);
-      return replacePrefix(replacePrefix(normalizedLine, originalPrefix), workingPrefix);
-    })
-    .join("\n");
-}
-
-type ManifestCheckpointV1 = {
-  version: 1;
-  createdAt: string;
-  deletes: string[]; // posix-style, relative to working dir
-  writes: Array<{ path: string; blob: string }>; // posix-style path + blob filename within blobsDir
-};
-
-function toPosixRelPath(p: string): string {
-  return p.replace(/\\/g, "/");
-}
-
-function splitPosixRelPath(p: string): string[] {
-  if (!p) throw new Error("Invalid manifest path: empty");
-  if (p.includes("\\")) throw new Error(`Invalid manifest path (backslash): ${p}`);
-  if (p.startsWith("/")) throw new Error(`Invalid manifest path (absolute): ${p}`);
-  if (p.includes("\0")) throw new Error(`Invalid manifest path (NUL): ${p}`);
-  const parts = p.split("/").filter(Boolean);
-  if (parts.length === 0) throw new Error(`Invalid manifest path: ${p}`);
-  if (parts.some((seg) => seg === "." || seg === "..")) throw new Error(`Invalid manifest path (traversal): ${p}`);
-  return parts;
-}
-
-async function listFilesRecursive(rootDir: string): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-
-  async function walk(dirAbs: string) {
-    const entries = await fs.readdir(dirAbs, { withFileTypes: true });
-    for (const entry of entries) {
-      const abs = path.join(dirAbs, entry.name);
-      if (entry.isDirectory()) {
-        await walk(abs);
-        continue;
-      }
-      if (entry.isFile()) {
-        const rel = toPosixRelPath(path.relative(rootDir, abs));
-        out.set(rel, abs);
-        continue;
-      }
-      // Ignore symlinks and special files for now (best-effort snapshots).
-    }
-  }
-
-  await walk(rootDir);
-  return out;
-}
-
-function blobNameForPath(relPosixPath: string): string {
-  return `${createHash("sha256").update(relPosixPath).digest("hex")}.gz`;
-}
-
-async function writeManifestCheckpoint(opts: {
-  originalDir: string;
-  workingDir: string;
-  sessionDir: string;
-  checkpointId: string;
-}): Promise<{ changed: boolean; patchBytes: number; manifestFile?: string; blobsDir?: string }> {
-  const { originalDir, workingDir, sessionDir, checkpointId } = opts;
-
-  const [origFiles, workFiles] = await Promise.all([
-    listFilesRecursive(originalDir),
-    listFilesRecursive(workingDir),
-  ]);
-
-  const deletes: string[] = [];
-  for (const rel of origFiles.keys()) {
-    if (!workFiles.has(rel)) deletes.push(rel);
-  }
-
-  const writes: Array<{ path: string; blob: string }> = [];
-  const blobsDirRel = path.join(CHECKPOINTS_DIR, `${checkpointId}.blobs`);
-  const blobsDirAbs = path.join(sessionDir, blobsDirRel);
-
-  let patchBytes = 0;
-
-  for (const [rel, workAbs] of workFiles.entries()) {
-    const origAbs = origFiles.get(rel);
-
-    let changed = false;
-    if (!origAbs) {
-      changed = true;
-    } else {
-      const [stWork, stOrig] = await Promise.all([fs.stat(workAbs), fs.stat(origAbs)]);
-      if (stWork.size !== stOrig.size) {
-        changed = true;
-      } else {
-        const [bufWork, bufOrig] = await Promise.all([fs.readFile(workAbs), fs.readFile(origAbs)]);
-        changed = !bufWork.equals(bufOrig);
-      }
-    }
-
-    if (!changed) continue;
-
-    const buf = await fs.readFile(workAbs);
-    const compressed = gzipSync(buf);
-    const blob = blobNameForPath(rel);
-    const blobAbs = path.join(blobsDirAbs, blob);
-
-    await ensureSecureDirectory(blobsDirAbs);
-    await fs.writeFile(blobAbs, compressed, { mode: 0o600 });
-    try {
-      await fs.chmod(blobAbs, 0o600);
-    } catch {
-      // best effort only
-    }
-
-    patchBytes += compressed.byteLength;
-    writes.push({ path: rel, blob });
-  }
-
-  const changed = deletes.length > 0 || writes.length > 0;
-  if (!changed) return { changed: false, patchBytes: 0 };
-
-  const manifest: ManifestCheckpointV1 = {
-    version: 1,
-    createdAt: new Date().toISOString(),
-    deletes,
-    writes,
-  };
-
-  const manifestRel = path.join(CHECKPOINTS_DIR, `${checkpointId}.manifest.json`);
-  const manifestAbs = path.join(sessionDir, manifestRel);
-  const raw = `${JSON.stringify(manifest, null, 2)}\n`;
-  patchBytes += Buffer.byteLength(raw, "utf-8");
-
-  await fs.writeFile(manifestAbs, raw, { encoding: "utf-8", mode: 0o600 });
-  try {
-    await fs.chmod(manifestAbs, 0o600);
-  } catch {
-    // best effort only
-  }
-
-  return { changed: true, patchBytes, manifestFile: manifestRel, blobsDir: blobsDirRel };
-}
-
-async function applyManifestCheckpoint(opts: {
-  workingDir: string;
-  sessionDir: string;
-  manifestFile: string;
-  blobsDir: string;
-}): Promise<void> {
-  const manifestAbs = path.join(opts.sessionDir, opts.manifestFile);
-  const blobsAbs = path.join(opts.sessionDir, opts.blobsDir);
-
-  const raw = await fs.readFile(manifestAbs, "utf-8");
-  const parsed = JSON.parse(raw) as ManifestCheckpointV1;
-  if (!parsed || parsed.version !== 1) throw new Error("Unsupported manifest checkpoint format");
-
-  for (const rel of parsed.deletes ?? []) {
-    const relPosix = toPosixRelPath(String(rel));
-    const parts = splitPosixRelPath(relPosix);
-    const abs = path.join(opts.workingDir, ...parts);
-    if (!isPathWithin(opts.workingDir, abs)) {
-      throw new Error(`Refusing to delete outside working dir: ${relPosix}`);
-    }
-    await fs.rm(abs, { force: true, recursive: false });
-  }
-
-  for (const entry of parsed.writes ?? []) {
-    const relPosix = toPosixRelPath(String(entry.path ?? ""));
-    const parts = splitPosixRelPath(relPosix);
-    const abs = path.join(opts.workingDir, ...parts);
-    if (!isPathWithin(opts.workingDir, abs)) {
-      throw new Error(`Refusing to write outside working dir: ${relPosix}`);
-    }
-
-    const blobName = String(entry.blob ?? "");
-    if (!blobName || blobName.includes("/") || blobName.includes("\\") || blobName.includes("..")) {
-      throw new Error(`Invalid blob reference for ${relPosix}`);
-    }
-
-    const blobAbs = path.join(blobsAbs, blobName);
-    const compressed = await fs.readFile(blobAbs);
-    const content = gunzipSync(compressed);
-
-    await fs.mkdir(path.dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content);
-  }
-}
-
 type CommandResult = { exitCode: number | null; stdout: string; stderr: string };
 
 async function runCommand(
   command: string,
   args: string[],
-  opts: { cwd?: string; stdin?: string } = {}
+  opts: { cwd?: string } = {}
 ): Promise<CommandResult> {
   let child: ReturnType<typeof spawn>;
   try {
@@ -322,15 +131,11 @@ async function runCommand(
   const closePromise = new Promise<number | null>((resolve) => {
     child.once("error", (err) => {
       spawnErr = err;
-      // Match common shell behavior for "command not found".
       resolve(127);
     });
     child.once("close", (exitCode) => resolve(exitCode));
   });
 
-  if (opts.stdin !== undefined && child.stdin) {
-    child.stdin.write(opts.stdin);
-  }
   child.stdin?.end();
 
   const [exitCode] = await Promise.all([closePromise, stdoutPromise, stderrPromise]);
@@ -340,19 +145,6 @@ async function runCommand(
   const stderr = spawnErr ? `${stderrBase}\n${String((spawnErr as any)?.message ?? spawnErr)}`.trim() : stderrBase;
 
   return { exitCode, stdout, stderr };
-}
-
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await fs.stat(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function ensureDirectory(p: string): Promise<void> {
-  await fs.mkdir(p, { recursive: true });
 }
 
 async function ensureSecureDirectory(p: string): Promise<void> {
@@ -373,16 +165,20 @@ async function ensureWorkingDirectory(workingDirectory: string): Promise<void> {
   }
 }
 
-async function copyDirectory(sourceDir: string, destinationDir: string): Promise<void> {
-  await fs.rm(destinationDir, { recursive: true, force: true });
-  await fs.cp(sourceDir, destinationDir, { recursive: true, force: true, errorOnExist: false });
-}
-
 async function emptyDirectory(dir: string): Promise<void> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     await fs.rm(path.join(dir, entry.name), { recursive: true, force: true });
   }
+}
+
+async function ensureDirectory(dir: string): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+}
+
+async function copyDirectory(sourceDir: string, destinationDir: string): Promise<void> {
+  await fs.rm(destinationDir, { recursive: true, force: true });
+  await fs.cp(sourceDir, destinationDir, { recursive: true, force: true, errorOnExist: false });
 }
 
 async function copyDirectoryContents(sourceDir: string, destinationDir: string): Promise<void> {
@@ -393,6 +189,110 @@ async function copyDirectoryContents(sourceDir: string, destinationDir: string):
     const destinationPath = path.join(destinationDir, entry.name);
     await fs.cp(sourcePath, destinationPath, { recursive: true, force: true, errorOnExist: false });
   }
+}
+
+async function directoryByteSize(rootDir: string): Promise<number> {
+  let total = 0;
+  const entries = await fs.readdir(rootDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(rootDir, entry.name);
+    if (entry.isDirectory()) {
+      total += await directoryByteSize(entryPath);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const stat = await fs.stat(entryPath);
+    total += stat.size;
+  }
+  return total;
+}
+
+async function updateHashWithFileContent(hash: ReturnType<typeof createHash>, filePath: string): Promise<void> {
+  const stream = createReadStream(filePath);
+  for await (const chunk of stream) {
+    hash.update(chunk);
+  }
+}
+
+async function updateHashWithDirectory(
+  hash: ReturnType<typeof createHash>,
+  rootDir: string,
+  currentDir: string
+): Promise<void> {
+  const entries = await fs.readdir(currentDir, { withFileTypes: true });
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+
+  for (const entry of entries) {
+    const absolutePath = path.join(currentDir, entry.name);
+    const relativePath = path.relative(rootDir, absolutePath).split(path.sep).join("/");
+    if (entry.isDirectory()) {
+      hash.update(`D:${relativePath}\n`);
+      await updateHashWithDirectory(hash, rootDir, absolutePath);
+      continue;
+    }
+    if (entry.isFile()) {
+      hash.update(`F:${relativePath}\n`);
+      await updateHashWithFileContent(hash, absolutePath);
+      hash.update("\n");
+      continue;
+    }
+    if (entry.isSymbolicLink()) {
+      const target = await fs.readlink(absolutePath).catch(() => "<unreadable>");
+      hash.update(`L:${relativePath}->${target}\n`);
+      continue;
+    }
+    const stat = await fs.lstat(absolutePath);
+    hash.update(`O:${relativePath}:${stat.mode}:${stat.size}\n`);
+  }
+}
+
+async function workspaceFingerprint(rootDir: string): Promise<string> {
+  const hash = createHash("sha256");
+  hash.update("session-backup-workspace-v1\n");
+  await updateHashWithDirectory(hash, rootDir, rootDir);
+  return hash.digest("hex");
+}
+
+async function createSnapshotWithTarFallback(opts: {
+  sourceDir: string;
+  sessionDir: string;
+  tarPath: string;
+  directoryPath: string;
+}): Promise<{ kind: "directory" | "tar_gz"; path: string }> {
+  const archivePath = path.join(opts.sessionDir, opts.tarPath);
+  try {
+    await createTarGz(opts.sourceDir, archivePath);
+    return { kind: "tar_gz", path: opts.tarPath };
+  } catch {
+    const directoryPath = path.join(opts.sessionDir, opts.directoryPath);
+    await copyDirectory(opts.sourceDir, directoryPath);
+    return { kind: "directory", path: opts.directoryPath };
+  }
+}
+
+async function snapshotByteSize(
+  sessionDir: string,
+  snapshot: { kind: "directory" | "tar_gz"; path: string }
+): Promise<number> {
+  const absolutePath = path.join(sessionDir, snapshot.path);
+  if (snapshot.kind === "tar_gz") {
+    const stat = await fs.stat(absolutePath);
+    return stat.size;
+  }
+  return directoryByteSize(absolutePath);
+}
+
+async function restoreSnapshot(opts: {
+  sessionDir: string;
+  targetDir: string;
+  snapshot: { kind: "directory" | "tar_gz"; path: string };
+}): Promise<void> {
+  const absolutePath = path.join(opts.sessionDir, opts.snapshot.path);
+  if (opts.snapshot.kind === "tar_gz") {
+    await extractTarGz(absolutePath, opts.targetDir);
+    return;
+  }
+  await copyDirectoryContents(absolutePath, opts.targetDir);
 }
 
 async function writeJson(filePath: string, value: unknown): Promise<void> {
@@ -410,16 +310,18 @@ async function readMetadata(filePath: string): Promise<SessionBackupMetadata | n
     const parsed = JSON.parse(raw) as SessionBackupMetadata;
     if (parsed && parsed.version === 1 && typeof parsed.sessionId === "string") return parsed;
   } catch {
-    // ignore malformed files; compaction should continue best-effort
+    // ignore malformed files
   }
   return null;
 }
 
-async function createTarGzFromDirectory(sourceDir: string, targetArchive: string): Promise<void> {
+// ---------------------------------------------------------------------------
+// Tar operations
+// ---------------------------------------------------------------------------
+
+async function createTarGz(sourceDir: string, targetArchive: string): Promise<void> {
   await ensureSecureDirectory(path.dirname(targetArchive));
-  const parentDir = path.dirname(sourceDir);
-  const dirName = path.basename(sourceDir);
-  const res = await runCommand("tar", ["-czf", targetArchive, "-C", parentDir, dirName]);
+  const res = await runCommand("tar", ["-czf", targetArchive, "-C", sourceDir, "."]);
   if (res.exitCode !== 0) {
     throw new Error(`tar create failed: ${res.stderr || res.stdout || `exit=${String(res.exitCode)}`}`);
   }
@@ -430,7 +332,7 @@ async function createTarGzFromDirectory(sourceDir: string, targetArchive: string
   }
 }
 
-async function extractTarGzIntoDirectory(archivePath: string, targetDir: string): Promise<void> {
+async function extractTarGz(archivePath: string, targetDir: string): Promise<void> {
   await ensureSecureDirectory(targetDir);
   const res = await runCommand("tar", ["-xzf", archivePath, "-C", targetDir]);
   if (res.exitCode !== 0) {
@@ -438,56 +340,11 @@ async function extractTarGzIntoDirectory(archivePath: string, targetDir: string)
   }
 }
 
-async function createDiffPatch(originalDir: string, workingDir: string): Promise<string> {
-  const res = await runCommand("git", ["diff", "--no-index", "--binary", originalDir, workingDir]);
-  if (res.exitCode === 0) return "";
-  if (res.exitCode === 1) return normalizeDiffPatchPaths(res.stdout, originalDir, workingDir);
-  throw new Error(res.stderr || res.stdout || `git diff failed (exit=${String(res.exitCode)})`);
-}
-
-async function applyDiffPatch(workingDir: string, patchText: string): Promise<void> {
-  if (!patchText.trim()) return;
-  const res = await runCommand("git", ["apply", "--binary", "--whitespace=nowarn"], {
-    cwd: workingDir,
-    stdin: patchText,
-  });
-  if (res.exitCode !== 0) {
-    throw new Error(res.stderr || res.stdout || `git apply failed (exit=${String(res.exitCode)})`);
-  }
-}
+// ---------------------------------------------------------------------------
+// SessionBackupManager
+// ---------------------------------------------------------------------------
 
 export class SessionBackupManager implements SessionBackupHandle {
-  static async compactClosedSessions(backupsRootDir: string, skipSessionId?: string): Promise<void> {
-    await ensureSecureDirectory(backupsRootDir);
-    const entries = await fs.readdir(backupsRootDir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (skipSessionId && entry.name === skipSessionId) continue;
-
-      const sessionDir = path.join(backupsRootDir, entry.name);
-      const metadataPath = path.join(sessionDir, METADATA_FILE);
-      const metadata = await readMetadata(metadataPath);
-      if (!metadata) continue;
-      if (metadata.state !== "closed") continue;
-      if (metadata.originalSnapshot.kind !== "directory") continue;
-
-      const originalDir = path.join(sessionDir, metadata.originalSnapshot.path);
-      if (!(await pathExists(originalDir))) continue;
-
-      try {
-        const archivePath = path.join(sessionDir, ORIGINAL_ARCHIVE);
-        await createTarGzFromDirectory(originalDir, archivePath);
-        await fs.rm(originalDir, { recursive: true, force: true });
-        metadata.originalSnapshot = { kind: "tar_gz", path: ORIGINAL_ARCHIVE };
-        metadata.compactedAt = new Date().toISOString();
-        await writeJson(metadataPath, metadata);
-      } catch {
-        // best-effort compaction; leave uncompressed if tar is unavailable/fails
-      }
-    }
-  }
-
   static async pruneClosedSessions(
     backupsRootDir: string,
     opts?: { maxClosedSessions?: number; maxClosedAgeDays?: number; skipSessionId?: string }
@@ -531,31 +388,29 @@ export class SessionBackupManager implements SessionBackupHandle {
     const paths = getAiCoworkerPaths({ homedir: opts.homedir });
     const defaultBackupsRootDir = path.join(paths.rootDir, "session-backups");
 
-    // Ensure ~/.cowork exists and isn't world-readable before adding backups beneath it.
     await ensureAiCoworkerHome(paths);
 
-    // If the default backup directory would be created inside the working directory (e.g. when
-    // the working directory is the user's home), fall back to a temp location to avoid self-copies
-    // and restore routines deleting their own backup source.
     const backupsRootDir = isPathWithin(workingDirectory, defaultBackupsRootDir)
       ? path.join(os.tmpdir(), "cowork-session-backups")
       : defaultBackupsRootDir;
     const sessionDir = path.join(backupsRootDir, opts.sessionId);
-    const originalDir = path.join(sessionDir, ORIGINAL_DIR);
-    const metadataPath = path.join(sessionDir, METADATA_FILE);
 
     if (isPathWithin(workingDirectory, sessionDir)) {
-      // If the working directory is "/" (or similar), there is no safe backup location; refuse.
       throw new Error(`Refusing to create session backup inside working directory: ${workingDirectory}`);
     }
 
     await ensureSecureDirectory(backupsRootDir);
-    await SessionBackupManager.compactClosedSessions(backupsRootDir, opts.sessionId);
-
     await ensureSecureDirectory(sessionDir);
     await ensureSecureDirectory(path.join(sessionDir, CHECKPOINTS_DIR));
     await ensureWorkingDirectory(workingDirectory);
-    await copyDirectory(workingDirectory, originalDir);
+    const originalFingerprint = await workspaceFingerprint(workingDirectory);
+
+    const originalSnapshot = await createSnapshotWithTarFallback({
+      sourceDir: workingDirectory,
+      sessionDir,
+      tarPath: ORIGINAL_ARCHIVE,
+      directoryPath: ORIGINAL_DIR,
+    });
 
     const metadata: SessionBackupMetadata = {
       version: 1,
@@ -563,28 +418,28 @@ export class SessionBackupManager implements SessionBackupHandle {
       workingDirectory,
       createdAt: new Date().toISOString(),
       state: "active",
-      originalSnapshot: { kind: "directory", path: ORIGINAL_DIR },
+      originalSnapshot,
       checkpoints: [],
     };
+    const metadataPath = path.join(sessionDir, METADATA_FILE);
     await writeJson(metadataPath, metadata);
 
-    return new SessionBackupManager({
-      metadata,
-      sessionDir,
-      metadataPath,
-    });
+    return new SessionBackupManager({ metadata, originalFingerprint, sessionDir, metadataPath });
   }
 
   private metadata: SessionBackupMetadata;
+  private readonly originalFingerprint: string;
   private readonly sessionDir: string;
   private readonly metadataPath: string;
 
   private constructor(opts: {
     metadata: SessionBackupMetadata;
+    originalFingerprint: string;
     sessionDir: string;
     metadataPath: string;
   }) {
     this.metadata = opts.metadata;
+    this.originalFingerprint = opts.originalFingerprint;
     this.sessionDir = opts.sessionDir;
     this.metadataPath = opts.metadataPath;
   }
@@ -609,54 +464,30 @@ export class SessionBackupManager implements SessionBackupHandle {
   }
 
   async createCheckpoint(trigger: SessionBackupCheckpointTrigger): Promise<SessionBackupPublicCheckpoint> {
-    const originalDir = await this.ensureOriginalDirectory();
+    await ensureWorkingDirectory(this.metadata.workingDirectory);
     const index = this.metadata.checkpoints.length + 1;
     const id = makeCheckpointId(index);
     const createdAt = new Date().toISOString();
+    const previousCheckpoint = this.metadata.checkpoints[this.metadata.checkpoints.length - 1];
+    const currentFingerprint = await workspaceFingerprint(this.metadata.workingDirectory);
+    const previousFingerprint = previousCheckpoint?.fingerprint ?? this.originalFingerprint;
+    const changed = currentFingerprint !== previousFingerprint;
 
-    let changed = false;
     let patchBytes = 0;
-    let patchKind: SessionBackupMetadataCheckpoint["patchKind"];
-    let patchFile: string | undefined;
-    let manifestFile: string | undefined;
-    let blobsDir: string | undefined;
-
-    try {
-      if (process.platform === "win32") {
-        throw new Error("prefer manifest checkpoints on Windows");
-      }
-      const diffPatch = await createDiffPatch(originalDir, this.metadata.workingDirectory);
-      changed = diffPatch.trim().length > 0;
-
-      if (changed) {
-        const patchAbsPath = path.join(this.sessionDir, CHECKPOINTS_DIR, `${id}.patch.gz`);
-        const compressed = gzipSync(Buffer.from(diffPatch, "utf-8"));
-        patchBytes = compressed.byteLength;
-        await fs.writeFile(patchAbsPath, compressed, { mode: 0o600 });
-        try {
-          await fs.chmod(patchAbsPath, 0o600);
-        } catch {
-          // best effort only
-        }
-        patchKind = "git_patch";
-        patchFile = path.join(CHECKPOINTS_DIR, `${id}.patch.gz`);
-      }
-    } catch {
-      // `git` may be unavailable (especially on Windows). Fall back to a manifest-based checkpoint that does
-      // not depend on external binaries.
-      const manifest = await writeManifestCheckpoint({
-        originalDir,
-        workingDir: this.metadata.workingDirectory,
+    let snapshot: SessionBackupMetadataCheckpoint["snapshot"];
+    if (changed) {
+      const tarPath = path.join(CHECKPOINTS_DIR, `${id}.tar.gz`);
+      const directoryPath = path.join(CHECKPOINTS_DIR, id);
+      snapshot = await createSnapshotWithTarFallback({
+        sourceDir: this.metadata.workingDirectory,
         sessionDir: this.sessionDir,
-        checkpointId: id,
+        tarPath,
+        directoryPath,
       });
-      changed = manifest.changed;
-      patchBytes = manifest.patchBytes;
-      if (changed) {
-        patchKind = "manifest";
-        manifestFile = manifest.manifestFile;
-        blobsDir = manifest.blobsDir;
-      }
+      patchBytes = await snapshotByteSize(this.sessionDir, snapshot);
+    } else {
+      const previousSnapshot = previousCheckpoint?.snapshot ?? this.metadata.originalSnapshot;
+      snapshot = { kind: previousSnapshot.kind, path: previousSnapshot.path };
     }
 
     const checkpoint: SessionBackupMetadataCheckpoint = {
@@ -666,70 +497,31 @@ export class SessionBackupManager implements SessionBackupHandle {
       trigger,
       changed,
       patchBytes,
-      patchKind,
-      patchFile,
-      manifestFile,
-      blobsDir,
+      fingerprint: currentFingerprint,
+      snapshot,
     };
 
     this.metadata.checkpoints.push(checkpoint);
     await this.persistMetadata();
 
-    return {
-      id: checkpoint.id,
-      index: checkpoint.index,
-      createdAt: checkpoint.createdAt,
-      trigger: checkpoint.trigger,
-      changed: checkpoint.changed,
-      patchBytes: checkpoint.patchBytes,
-    };
+    return { id, index, createdAt, trigger, changed, patchBytes };
   }
 
   async restoreOriginal(): Promise<void> {
-    // Restoring is inherently destructive. Refuse if the backup dir lives inside the working directory
-    // (e.g. misconfigured workingDirectory="/"), as we'd be deleting our own restore source.
     if (isPathWithin(this.metadata.workingDirectory, this.sessionDir)) {
       throw new Error("Refusing to restore: backup directory is inside the working directory");
     }
-
-    const originalDir = await this.ensureOriginalDirectory();
-    await ensureWorkingDirectory(this.metadata.workingDirectory);
-    await emptyDirectory(this.metadata.workingDirectory);
-    await copyDirectoryContents(originalDir, this.metadata.workingDirectory);
+    await this.restoreSnapshotSafely(this.metadata.originalSnapshot);
   }
 
   async restoreCheckpoint(checkpointId: string): Promise<void> {
     const checkpoint = this.metadata.checkpoints.find((cp) => cp.id === checkpointId);
     if (!checkpoint) throw new Error(`Unknown checkpoint: ${checkpointId}`);
 
-    await this.restoreOriginal();
-    if (!checkpoint.changed) return;
-
-    const kind =
-      checkpoint.patchKind ??
-      (checkpoint.manifestFile && checkpoint.blobsDir ? "manifest" : checkpoint.patchFile ? "git_patch" : undefined);
-
-    if (kind === "manifest") {
-      if (!checkpoint.manifestFile || !checkpoint.blobsDir) {
-        throw new Error(`Checkpoint ${checkpointId} is manifest-based but missing files`);
-      }
-      await applyManifestCheckpoint({
-        workingDir: this.metadata.workingDirectory,
-        sessionDir: this.sessionDir,
-        manifestFile: checkpoint.manifestFile,
-        blobsDir: checkpoint.blobsDir,
-      });
-      return;
+    if (isPathWithin(this.metadata.workingDirectory, this.sessionDir)) {
+      throw new Error("Refusing to restore: backup directory is inside the working directory");
     }
-
-    if (!checkpoint.patchFile) {
-      throw new Error(`Checkpoint ${checkpointId} is marked changed but has no patch file`);
-    }
-
-    const patchAbsPath = path.join(this.sessionDir, checkpoint.patchFile);
-    const compressed = await fs.readFile(patchAbsPath);
-    const patchText = gunzipSync(compressed).toString("utf-8");
-    await applyDiffPatch(this.metadata.workingDirectory, patchText);
+    await this.restoreSnapshotSafely(checkpoint.snapshot);
   }
 
   async deleteCheckpoint(checkpointId: string): Promise<boolean> {
@@ -738,22 +530,15 @@ export class SessionBackupManager implements SessionBackupHandle {
 
     const checkpoint = this.metadata.checkpoints[idx];
     this.metadata.checkpoints.splice(idx, 1);
-
-    if (checkpoint.patchFile) {
-      const patchAbsPath = path.join(this.sessionDir, checkpoint.patchFile);
-      await fs.rm(patchAbsPath, { force: true });
+    const snapshotStillReferenced =
+      this.metadata.checkpoints.some(
+        (cp) => cp.snapshot.kind === checkpoint.snapshot.kind && cp.snapshot.path === checkpoint.snapshot.path
+      ) ||
+      (this.metadata.originalSnapshot.kind === checkpoint.snapshot.kind &&
+        this.metadata.originalSnapshot.path === checkpoint.snapshot.path);
+    if (!snapshotStillReferenced) {
+      await fs.rm(path.join(this.sessionDir, checkpoint.snapshot.path), { recursive: true, force: true });
     }
-
-    if (checkpoint.manifestFile) {
-      const manifestAbsPath = path.join(this.sessionDir, checkpoint.manifestFile);
-      await fs.rm(manifestAbsPath, { force: true });
-    }
-
-    if (checkpoint.blobsDir) {
-      const blobsAbsPath = path.join(this.sessionDir, checkpoint.blobsDir);
-      await fs.rm(blobsAbsPath, { recursive: true, force: true });
-    }
-
     await this.persistMetadata();
     return true;
   }
@@ -764,9 +549,7 @@ export class SessionBackupManager implements SessionBackupHandle {
     this.metadata.closedAt = new Date().toISOString();
     await this.persistMetadata();
     try {
-      const backupsRootDir = path.dirname(this.sessionDir);
-      await SessionBackupManager.compactClosedSessions(backupsRootDir);
-      await SessionBackupManager.pruneClosedSessions(backupsRootDir, {
+      await SessionBackupManager.pruneClosedSessions(path.dirname(this.sessionDir), {
         skipSessionId: this.metadata.sessionId,
       });
     } catch {
@@ -774,28 +557,26 @@ export class SessionBackupManager implements SessionBackupHandle {
     }
   }
 
-  private async ensureOriginalDirectory(): Promise<string> {
-    if (this.metadata.originalSnapshot.kind === "directory") {
-      const originalDir = path.join(this.sessionDir, this.metadata.originalSnapshot.path);
-      if (await pathExists(originalDir)) return originalDir;
-    }
-
-    if (this.metadata.originalSnapshot.kind === "tar_gz") {
-      const archivePath = path.join(this.sessionDir, this.metadata.originalSnapshot.path);
-      await extractTarGzIntoDirectory(archivePath, this.sessionDir);
-      this.metadata.originalSnapshot = { kind: "directory", path: ORIGINAL_DIR };
-      await this.persistMetadata();
-      return path.join(this.sessionDir, ORIGINAL_DIR);
-    }
-
-    const originalDir = path.join(this.sessionDir, ORIGINAL_DIR);
-    if (!(await pathExists(originalDir))) {
-      throw new Error("Original backup snapshot is unavailable");
-    }
-    return originalDir;
-  }
-
   private async persistMetadata(): Promise<void> {
     await writeJson(this.metadataPath, this.metadata);
+  }
+
+  private async restoreSnapshotSafely(snapshot: {
+    kind: "directory" | "tar_gz";
+    path: string;
+  }): Promise<void> {
+    await ensureWorkingDirectory(this.metadata.workingDirectory);
+    const restoreStageDir = await fs.mkdtemp(path.join(this.sessionDir, ".restore-stage-"));
+    try {
+      await restoreSnapshot({
+        sessionDir: this.sessionDir,
+        targetDir: restoreStageDir,
+        snapshot,
+      });
+      await emptyDirectory(this.metadata.workingDirectory);
+      await copyDirectoryContents(restoreStageDir, this.metadata.workingDirectory);
+    } finally {
+      await fs.rm(restoreStageDir, { recursive: true, force: true });
+    }
   }
 }

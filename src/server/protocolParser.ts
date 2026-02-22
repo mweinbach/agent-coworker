@@ -37,18 +37,12 @@ type ParseOk = { ok: true; msg: ClientMessage };
 type ParseErr = { ok: false; error: string };
 export type ParseResult = ParseOk | ParseErr;
 
-const ok = (obj: Record<string, unknown>): ParseOk => ({ ok: true, msg: obj as ClientMessage });
+const ok = (msg: ClientMessage): ParseOk => ({ ok: true, msg });
 const err = (error: string): ParseErr => ({ ok: false, error });
 
 function firstIssueMessage(error: z.ZodError): string {
   const issue = error.issues[0];
   return issue?.message || "validation_failed";
-}
-
-function validateWithSchema(schema: z.ZodTypeAny, obj: Record<string, unknown>): ParseResult {
-  const parsed = schema.safeParse(obj);
-  if (!parsed.success) return err(firstIssueMessage(parsed.error));
-  return ok(obj);
 }
 
 function requireSessionError(type: string, obj: Record<string, unknown>): string | null {
@@ -132,27 +126,25 @@ const sessionAndNameTypes = [
   "mcp_server_auth_authorize",
 ] as const;
 
-const clientMessageSchemas = new Map<string, z.ZodTypeAny>();
+const sessionOnlySchemas = sessionOnlyTypes.map((type) =>
+  makeSchema(type, (obj) => requireSessionError(type, obj)),
+);
 
-for (const type of sessionOnlyTypes) {
-  clientMessageSchemas.set(type, makeSchema(type, (obj) => requireSessionError(type, obj)));
-}
+const sessionAndSkillNameSchemas = sessionAndSkillNameTypes.map((type) =>
+  makeSchema(type, (obj) => requireSessionAndFieldError(type, obj, "skillName")),
+);
 
-for (const type of sessionAndSkillNameTypes) {
-  clientMessageSchemas.set(type, makeSchema(type, (obj) => requireSessionAndFieldError(type, obj, "skillName")));
-}
+const sessionAndNameSchemas = sessionAndNameTypes.map((type) =>
+  makeSchema(type, (obj) => requireSessionAndFieldError(type, obj, "name")),
+);
 
-for (const type of sessionAndNameTypes) {
-  clientMessageSchemas.set(type, makeSchema(type, (obj) => requireSessionAndFieldError(type, obj, "name")));
-}
-
-clientMessageSchemas.set("client_hello", makeSchema("client_hello", (obj) => {
+const clientHelloSchema = makeSchema("client_hello", (obj) => {
   if (!isNonEmptyString(obj.client)) return "client_hello missing/invalid client";
   if (obj.version !== undefined && typeof obj.version !== "string") return "client_hello invalid version";
   return null;
-}));
+});
 
-clientMessageSchemas.set("user_message", makeSchema("user_message", (obj) => {
+const userMessageSchema = makeSchema("user_message", (obj) => {
   const sessionError = requireSessionError("user_message", obj);
   if (sessionError) return sessionError;
   if (typeof obj.text !== "string") return "user_message missing text";
@@ -160,25 +152,25 @@ clientMessageSchemas.set("user_message", makeSchema("user_message", (obj) => {
     return "user_message invalid clientMessageId";
   }
   return null;
-}));
+});
 
-clientMessageSchemas.set("ask_response", makeSchema("ask_response", (obj) => {
+const askResponseSchema = makeSchema("ask_response", (obj) => {
   const sessionError = requireSessionError("ask_response", obj);
   if (sessionError) return sessionError;
   if (!isNonEmptyString(obj.requestId)) return "ask_response missing requestId";
   if (typeof obj.answer !== "string") return "ask_response missing answer";
   return null;
-}));
+});
 
-clientMessageSchemas.set("approval_response", makeSchema("approval_response", (obj) => {
+const approvalResponseSchema = makeSchema("approval_response", (obj) => {
   const sessionError = requireSessionError("approval_response", obj);
   if (sessionError) return sessionError;
   if (!isNonEmptyString(obj.requestId)) return "approval_response missing requestId";
   if (typeof obj.approved !== "boolean") return "approval_response missing/invalid approved";
   return null;
-}));
+});
 
-clientMessageSchemas.set("execute_command", makeSchema("execute_command", (obj) => {
+const executeCommandSchema = makeSchema("execute_command", (obj) => {
   const sessionError = requireSessionError("execute_command", obj);
   if (sessionError) return sessionError;
   if (!isNonEmptyString(obj.name)) return "execute_command missing/invalid name";
@@ -187,9 +179,9 @@ clientMessageSchemas.set("execute_command", makeSchema("execute_command", (obj) 
     return "execute_command invalid clientMessageId";
   }
   return null;
-}));
+});
 
-clientMessageSchemas.set("set_model", makeSchema("set_model", (obj) => {
+const setModelSchema = makeSchema("set_model", (obj) => {
   const sessionError = requireSessionError("set_model", obj);
   if (sessionError) return sessionError;
   if (!isNonEmptyString(obj.model)) return "set_model missing/invalid model";
@@ -197,34 +189,34 @@ clientMessageSchemas.set("set_model", makeSchema("set_model", (obj) => {
     return `set_model invalid provider: ${String(obj.provider)}`;
   }
   return null;
-}));
+});
 
-clientMessageSchemas.set("provider_auth_authorize", makeSchema("provider_auth_authorize", (obj) => {
+const providerAuthAuthorizeSchema = makeSchema("provider_auth_authorize", (obj) => {
   return requireProviderAuthError("provider_auth_authorize", obj);
-}));
+});
 
-clientMessageSchemas.set("provider_auth_callback", makeSchema("provider_auth_callback", (obj) => {
+const providerAuthCallbackSchema = makeSchema("provider_auth_callback", (obj) => {
   const authError = requireProviderAuthError("provider_auth_callback", obj);
   if (authError) return authError;
   if (obj.code !== undefined && typeof obj.code !== "string") return "provider_auth_callback invalid code";
   return null;
-}));
+});
 
-clientMessageSchemas.set("provider_auth_set_api_key", makeSchema("provider_auth_set_api_key", (obj) => {
+const providerAuthSetApiKeySchema = makeSchema("provider_auth_set_api_key", (obj) => {
   const authError = requireProviderAuthError("provider_auth_set_api_key", obj);
   if (authError) return authError;
   if (!isNonEmptyString(obj.apiKey)) return "provider_auth_set_api_key missing/invalid apiKey";
   return null;
-}));
+});
 
-clientMessageSchemas.set("set_enable_mcp", makeSchema("set_enable_mcp", (obj) => {
+const setEnableMcpSchema = makeSchema("set_enable_mcp", (obj) => {
   const sessionError = requireSessionError("set_enable_mcp", obj);
   if (sessionError) return sessionError;
   if (typeof obj.enableMcp !== "boolean") return "set_enable_mcp missing/invalid enableMcp";
   return null;
-}));
+});
 
-clientMessageSchemas.set("mcp_server_upsert", makeSchema("mcp_server_upsert", (obj) => {
+const mcpServerUpsertSchema = makeSchema("mcp_server_upsert", (obj) => {
   const sessionError = requireSessionError("mcp_server_upsert", obj);
   if (sessionError) return sessionError;
   const validationError = validateMcpServerPayload(obj.server);
@@ -233,16 +225,16 @@ clientMessageSchemas.set("mcp_server_upsert", makeSchema("mcp_server_upsert", (o
     return "mcp_server_upsert invalid previousName";
   }
   return null;
-}));
+});
 
-clientMessageSchemas.set("mcp_server_auth_callback", makeSchema("mcp_server_auth_callback", (obj) => {
+const mcpServerAuthCallbackSchema = makeSchema("mcp_server_auth_callback", (obj) => {
   const fieldError = requireSessionAndFieldError("mcp_server_auth_callback", obj, "name");
   if (fieldError) return fieldError;
   if (obj.code !== undefined && typeof obj.code !== "string") return "mcp_server_auth_callback invalid code";
   return null;
-}));
+});
 
-clientMessageSchemas.set("mcp_server_auth_set_api_key", makeSchema("mcp_server_auth_set_api_key", (obj) => {
+const mcpServerAuthSetApiKeySchema = makeSchema("mcp_server_auth_set_api_key", (obj) => {
   const sessionError = requireSessionError("mcp_server_auth_set_api_key", obj);
   if (sessionError) return sessionError;
   if (!isNonEmptyString(obj.name)) return "mcp_server_auth_set_api_key missing/invalid name";
@@ -251,18 +243,18 @@ clientMessageSchemas.set("mcp_server_auth_set_api_key", makeSchema("mcp_server_a
     return "mcp_server_auth_set_api_key apiKey exceeds max size 100000";
   }
   return null;
-}));
+});
 
-clientMessageSchemas.set("mcp_servers_migrate_legacy", makeSchema("mcp_servers_migrate_legacy", (obj) => {
+const mcpServersMigrateLegacySchema = makeSchema("mcp_servers_migrate_legacy", (obj) => {
   const sessionError = requireSessionError("mcp_servers_migrate_legacy", obj);
   if (sessionError) return sessionError;
   if (obj.scope !== "workspace" && obj.scope !== "user") {
     return "mcp_servers_migrate_legacy missing/invalid scope";
   }
   return null;
-}));
+});
 
-clientMessageSchemas.set("harness_context_set", makeSchema("harness_context_set", (obj) => {
+const harnessContextSetSchema = makeSchema("harness_context_set", (obj) => {
   const sessionError = requireSessionError("harness_context_set", obj);
   if (sessionError) return sessionError;
   if (!isRecordObject(obj.context)) return "harness_context_set missing/invalid context";
@@ -285,25 +277,25 @@ clientMessageSchemas.set("harness_context_set", makeSchema("harness_context_set"
     return "harness_context_set missing/invalid context";
   }
   return null;
-}));
+});
 
-clientMessageSchemas.set("session_backup_restore", makeSchema("session_backup_restore", (obj) => {
+const sessionBackupRestoreSchema = makeSchema("session_backup_restore", (obj) => {
   const sessionError = requireSessionError("session_backup_restore", obj);
   if (sessionError) return sessionError;
   if (obj.checkpointId !== undefined && !isNonEmptyString(obj.checkpointId)) {
     return "session_backup_restore invalid checkpointId";
   }
   return null;
-}));
+});
 
-clientMessageSchemas.set("session_backup_delete_checkpoint", makeSchema("session_backup_delete_checkpoint", (obj) => {
+const sessionBackupDeleteCheckpointSchema = makeSchema("session_backup_delete_checkpoint", (obj) => {
   const sessionError = requireSessionError("session_backup_delete_checkpoint", obj);
   if (sessionError) return sessionError;
   if (!isNonEmptyString(obj.checkpointId)) return "session_backup_delete_checkpoint missing checkpointId";
   return null;
-}));
+});
 
-clientMessageSchemas.set("get_messages", makeSchema("get_messages", (obj) => {
+const getMessagesSchema = makeSchema("get_messages", (obj) => {
   const sessionError = requireSessionError("get_messages", obj);
   if (sessionError) return sessionError;
   if (obj.offset !== undefined && (typeof obj.offset !== "number" || obj.offset < 0)) {
@@ -313,17 +305,17 @@ clientMessageSchemas.set("get_messages", makeSchema("get_messages", (obj) => {
     return "get_messages invalid limit";
   }
   return null;
-}));
+});
 
-clientMessageSchemas.set("set_session_title", makeSchema("set_session_title", (obj) => {
+const setSessionTitleSchema = makeSchema("set_session_title", (obj) => {
   return requireSessionAndFieldError("set_session_title", obj, "title");
-}));
+});
 
-clientMessageSchemas.set("delete_session", makeSchema("delete_session", (obj) => {
+const deleteSessionSchema = makeSchema("delete_session", (obj) => {
   return requireSessionAndFieldError("delete_session", obj, "targetSessionId");
-}));
+});
 
-clientMessageSchemas.set("set_config", makeSchema("set_config", (obj) => {
+const setConfigSchema = makeSchema("set_config", (obj) => {
   const sessionError = requireSessionError("set_config", obj);
   if (sessionError) return sessionError;
   if (!isRecordObject(obj.config)) return "set_config missing/invalid config";
@@ -339,15 +331,76 @@ clientMessageSchemas.set("set_config", makeSchema("set_config", (obj) => {
     return "set_config missing/invalid config";
   }
   return null;
-}));
+});
 
-clientMessageSchemas.set("upload_file", makeSchema("upload_file", (obj) => {
+const uploadFileSchema = makeSchema("upload_file", (obj) => {
   const sessionError = requireSessionError("upload_file", obj);
   if (sessionError) return sessionError;
   if (!isNonEmptyString(obj.filename)) return "upload_file missing/invalid filename";
   if (typeof obj.contentBase64 !== "string") return "upload_file missing/invalid contentBase64";
   return null;
-}));
+});
+
+const knownClientMessageTypes = new Set<string>([
+  ...sessionOnlyTypes,
+  ...sessionAndSkillNameTypes,
+  ...sessionAndNameTypes,
+  "client_hello",
+  "user_message",
+  "ask_response",
+  "approval_response",
+  "execute_command",
+  "set_model",
+  "provider_auth_authorize",
+  "provider_auth_callback",
+  "provider_auth_set_api_key",
+  "set_enable_mcp",
+  "mcp_server_upsert",
+  "mcp_server_auth_callback",
+  "mcp_server_auth_set_api_key",
+  "mcp_servers_migrate_legacy",
+  "harness_context_set",
+  "session_backup_restore",
+  "session_backup_delete_checkpoint",
+  "get_messages",
+  "set_session_title",
+  "delete_session",
+  "set_config",
+  "upload_file",
+]);
+
+const clientMessageSchemaOptions = [
+  ...sessionOnlySchemas,
+  ...sessionAndSkillNameSchemas,
+  ...sessionAndNameSchemas,
+  clientHelloSchema,
+  userMessageSchema,
+  askResponseSchema,
+  approvalResponseSchema,
+  executeCommandSchema,
+  setModelSchema,
+  providerAuthAuthorizeSchema,
+  providerAuthCallbackSchema,
+  providerAuthSetApiKeySchema,
+  setEnableMcpSchema,
+  mcpServerUpsertSchema,
+  mcpServerAuthCallbackSchema,
+  mcpServerAuthSetApiKeySchema,
+  mcpServersMigrateLegacySchema,
+  harnessContextSetSchema,
+  sessionBackupRestoreSchema,
+  sessionBackupDeleteCheckpointSchema,
+  getMessagesSchema,
+  setSessionTitleSchema,
+  deleteSessionSchema,
+  setConfigSchema,
+  uploadFileSchema,
+] as unknown as [
+  z.ZodDiscriminatedUnionOption<"type">,
+  ...z.ZodDiscriminatedUnionOption<"type">[],
+];
+
+const clientMessageSchema = z.discriminatedUnion("type", clientMessageSchemaOptions);
 
 export function safeParseClientMessage(raw: string): ParseResult {
   let parsed: unknown;
@@ -359,10 +412,12 @@ export function safeParseClientMessage(raw: string): ParseResult {
 
   const parsedObject = recordSchema.safeParse(parsed);
   if (!parsedObject.success) return err("Expected object");
+
   const obj = parsedObject.data;
   if (typeof obj.type !== "string") return err("Missing type");
+  if (!knownClientMessageTypes.has(obj.type)) return err(`Unknown type: ${String(obj.type)}`);
 
-  const schema = clientMessageSchemas.get(obj.type);
-  if (!schema) return err(`Unknown type: ${String(obj.type)}`);
-  return validateWithSchema(schema, obj);
+  const parsedMessage = clientMessageSchema.safeParse(obj);
+  if (!parsedMessage.success) return err(firstIssueMessage(parsedMessage.error));
+  return ok(parsedMessage.data as ClientMessage);
 }

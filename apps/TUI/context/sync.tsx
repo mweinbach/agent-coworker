@@ -1,6 +1,7 @@
 import { createContext, useContext, createEffect, onCleanup, type JSX, type Accessor } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { AgentSocket } from "../../../src/client/agentSocket";
+import { parseStructuredToolInput } from "../../../src/shared/structuredInput";
 import { WEBSOCKET_PROTOCOL_VERSION, type ServerEvent } from "../../../src/server/protocol";
 import type {
   ApprovalRiskCode,
@@ -256,40 +257,6 @@ function normalizeToolsPayload(value: unknown): ToolDescriptor[] {
     if (tool) normalized.push(tool);
   }
   return normalized;
-}
-
-function parseJsonCandidate(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function parseStructuredToolInput(value: string): unknown {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-
-  const direct = parseJsonCandidate(trimmed);
-  if (direct !== undefined) return direct;
-
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    const objectSlice = trimmed.slice(firstBrace, lastBrace + 1);
-    const parsedObject = parseJsonCandidate(objectSlice);
-    if (parsedObject !== undefined) return parsedObject;
-  }
-
-  const firstBracket = trimmed.indexOf("[");
-  const lastBracket = trimmed.lastIndexOf("]");
-  if (firstBracket >= 0 && lastBracket > firstBracket) {
-    const arraySlice = trimmed.slice(firstBracket, lastBracket + 1);
-    const parsedArray = parseJsonCandidate(arraySlice);
-    if (parsedArray !== undefined) return parsedArray;
-  }
-
-  return undefined;
 }
 
 function normalizeToolArgsFromInput(inputText: string, existingArgs?: unknown): unknown {

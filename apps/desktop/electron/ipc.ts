@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, nativeTheme, shell, clipboard, type IpcMainInvokeEvent } from "electron";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 import {
   DESKTOP_IPC_CHANNELS,
@@ -22,6 +23,25 @@ import {
   type TrashPathInput,
 } from "../src/lib/desktopApi";
 import type { PersistedState } from "../src/app/types";
+import {
+  confirmActionInputSchema,
+  copyPathInputSchema,
+  createDirectoryInputSchema,
+  deleteTranscriptInputSchema,
+  desktopNotificationInputSchema,
+  listDirectoryInputSchema,
+  openPathInputSchema,
+  persistedStateInputSchema,
+  readTranscriptInputSchema,
+  renamePathInputSchema,
+  revealPathInputSchema,
+  setWindowAppearanceInputSchema,
+  showContextMenuInputSchema,
+  startWorkspaceServerInputSchema,
+  stopWorkspaceServerInputSchema,
+  transcriptBatchInputSchema,
+  trashPathInputSchema,
+} from "../src/lib/desktopSchemas";
 
 import { isTrustedDesktopSenderUrl, resolveAllowedDirectoryPath, resolveAllowedPath } from "./services/ipcSecurity";
 import { applyWindowAppearance, getSystemAppearanceSnapshot } from "./services/appearance";
@@ -65,71 +85,30 @@ function assertTrustedSender(event: IpcMainInvokeEvent): void {
   }
 }
 
-function assertListDirectoryPath(args: ListDirectoryInput): string {
-  if (!args || typeof args.path !== "string") {
-    throw new Error("path must be a string");
+function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
+  const parsed = schema.safeParse(value);
+  if (parsed.success) {
+    return parsed.data;
   }
-  return args.path;
+  const issue = parsed.error.issues[0];
+  const detail = issue?.message ?? "is invalid";
+  throw new Error(`${label} ${detail}`);
+}
+
+function assertListDirectoryPath(args: ListDirectoryInput): string {
+  return parseWithSchema(listDirectoryInputSchema, args, "listDirectory options").path;
 }
 
 function assertConfirmActionInput(args: ConfirmActionInput): ConfirmActionInput {
-  if (!args || typeof args !== "object") {
-    throw new Error("confirmAction options must be an object");
-  }
-  if (typeof args.title !== "string" || !args.title.trim()) {
-    throw new Error("confirmAction title must be a non-empty string");
-  }
-  if (typeof args.message !== "string" || !args.message.trim()) {
-    throw new Error("confirmAction message must be a non-empty string");
-  }
-  if (args.kind !== undefined && !["none", "info", "warning", "error"].includes(args.kind)) {
-    throw new Error("confirmAction kind is invalid");
-  }
-  if (args.defaultAction !== undefined && !["confirm", "cancel"].includes(args.defaultAction)) {
-    throw new Error("confirmAction defaultAction is invalid");
-  }
-  if (args.confirmLabel !== undefined && (typeof args.confirmLabel !== "string" || !args.confirmLabel.trim())) {
-    throw new Error("confirmAction confirmLabel must be a non-empty string when provided");
-  }
-  if (args.cancelLabel !== undefined && (typeof args.cancelLabel !== "string" || !args.cancelLabel.trim())) {
-    throw new Error("confirmAction cancelLabel must be a non-empty string when provided");
-  }
-  if (args.detail !== undefined && typeof args.detail !== "string") {
-    throw new Error("confirmAction detail must be a string when provided");
-  }
-  return args;
+  return parseWithSchema(confirmActionInputSchema, args, "confirmAction options");
 }
 
 function assertDesktopNotificationInput(args: DesktopNotificationInput): DesktopNotificationInput {
-  if (!args || typeof args !== "object") {
-    throw new Error("showNotification options must be an object");
-  }
-  if (typeof args.title !== "string" || !args.title.trim()) {
-    throw new Error("showNotification title must be a non-empty string");
-  }
-  if (args.body !== undefined && typeof args.body !== "string") {
-    throw new Error("showNotification body must be a string when provided");
-  }
-  if (args.silent !== undefined && typeof args.silent !== "boolean") {
-    throw new Error("showNotification silent must be a boolean when provided");
-  }
-  return args;
+  return parseWithSchema(desktopNotificationInputSchema, args, "showNotification options");
 }
 
 function assertSetWindowAppearanceInput(args: SetWindowAppearanceInput): SetWindowAppearanceInput {
-  if (!args || typeof args !== "object") {
-    throw new Error("setWindowAppearance options must be an object");
-  }
-  if (args.themeSource !== undefined && !["system", "light", "dark"].includes(args.themeSource)) {
-    throw new Error("setWindowAppearance themeSource is invalid");
-  }
-  if (
-    args.backgroundMaterial !== undefined &&
-    !["auto", "none", "mica", "acrylic", "tabbed"].includes(args.backgroundMaterial)
-  ) {
-    throw new Error("setWindowAppearance backgroundMaterial is invalid");
-  }
-  return args;
+  return parseWithSchema(setWindowAppearanceInputSchema, args, "setWindowAppearance options");
 }
 
 async function normalizeWorkspacePath(workspacePath: string): Promise<string> {
@@ -200,16 +179,18 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
   handleDesktopInvoke(
     DESKTOP_IPC_CHANNELS.startWorkspaceServer,
     async (_event, args: StartWorkspaceServerInput) => {
-      const workspacePath = await assertApprovedWorkspacePath(args.workspacePath);
+      const input = parseWithSchema(startWorkspaceServerInputSchema, args, "startWorkspaceServer options");
+      const workspacePath = await assertApprovedWorkspacePath(input.workspacePath);
       return await deps.serverManager.startWorkspaceServer({
-        ...args,
+        ...input,
         workspacePath,
       });
     }
   );
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.stopWorkspaceServer, async (_event, args: StopWorkspaceServerInput) => {
-    await deps.serverManager.stopWorkspaceServer(args.workspaceId);
+    const input = parseWithSchema(stopWorkspaceServerInputSchema, args, "stopWorkspaceServer options");
+    await deps.serverManager.stopWorkspaceServer(input.workspaceId);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.loadState, async () => {
@@ -227,14 +208,15 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.saveState, async (_event, state: PersistedState) => {
+    const input = parseWithSchema(persistedStateInputSchema, state, "state");
     const workspaces = await Promise.all(
-      state.workspaces.map(async (workspace) => ({
+      input.workspaces.map(async (workspace) => ({
         ...workspace,
         path: await assertApprovedWorkspacePath(workspace.path),
       }))
     );
     const nextState: PersistedState = {
-      ...state,
+      ...input,
       workspaces,
     };
     await deps.persistence.saveState(nextState);
@@ -242,27 +224,34 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.readTranscript, async (_event, args: ReadTranscriptInput) => {
-    return await deps.persistence.readTranscript(args.threadId);
+    const input = parseWithSchema(readTranscriptInputSchema, args, "readTranscript options");
+    return await deps.persistence.readTranscript(input.threadId);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.appendTranscriptEvent, async (_event, args: TranscriptBatchInput) => {
-    await deps.persistence.appendTranscriptEvent(args);
+    const input = parseWithSchema(transcriptBatchInputSchema, args, "transcript event");
+    await deps.persistence.appendTranscriptEvent(input);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.appendTranscriptBatch, async (_event, args: TranscriptBatchInput[]) => {
-    await deps.persistence.appendTranscriptBatch(args);
+    const input = parseWithSchema(z.array(transcriptBatchInputSchema), args, "transcript batch");
+    await deps.persistence.appendTranscriptBatch(input);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.deleteTranscript, async (_event, args: DeleteTranscriptInput) => {
-    await deps.persistence.deleteTranscript(args.threadId);
+    const input = parseWithSchema(deleteTranscriptInputSchema, args, "deleteTranscript options");
+    await deps.persistence.deleteTranscript(input.threadId);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.pickWorkspaceDirectory, async (event) => {
     const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined;
-    const result = await dialog.showOpenDialog(ownerWindow, {
+    const dialogOptions = {
       title: "Select a workspace directory",
-      properties: ["openDirectory"],
-    });
+      properties: ["openDirectory"] as const,
+    };
+    const result = ownerWindow
+      ? await dialog.showOpenDialog(ownerWindow, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
 
     if (result.canceled) {
       return null;
@@ -279,9 +268,10 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
     return normalized;
   });
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.showContextMenu, async (event, args: ShowContextMenuInput) => {
+    const input = parseWithSchema(showContextMenuInputSchema, args, "showContextMenu options");
     return new Promise<string | null>((resolve) => {
       const menu = Menu.buildFromTemplate(
-        args.items.map((item) => ({
+        input.items.map((item) => ({
           id: item.id,
           label: item.label,
           enabled: item.enabled !== false,
@@ -369,42 +359,48 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openPath, async (_event, args: OpenPathInput) => {
+    const input = parseWithSchema(openPathInputSchema, args, "openPath options");
     await ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), args.path);
+    const safePath = resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), input.path);
     const errString = await shell.openPath(safePath);
     if (errString) throw new Error(errString);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.revealPath, async (_event, args: RevealPathInput) => {
+    const input = parseWithSchema(revealPathInputSchema, args, "revealPath options");
     await ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), args.path);
+    const safePath = resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), input.path);
     shell.showItemInFolder(safePath);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.copyPath, async (_event, args: CopyPathInput) => {
-    clipboard.writeText(args.path);
+    const input = parseWithSchema(copyPathInputSchema, args, "copyPath options");
+    clipboard.writeText(input.path);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.createDirectory, async (_event, args: CreateDirectoryInput) => {
+    const input = parseWithSchema(createDirectoryInputSchema, args, "createDirectory options");
     await ensureApprovedWorkspaceRoots();
-    const safeParent = resolveAllowedDirectoryPath(Array.from(approvedWorkspaceRoots.values()), args.parentPath);
-    const targetPath = path.join(safeParent, args.name);
+    const safeParent = resolveAllowedDirectoryPath(Array.from(approvedWorkspaceRoots.values()), input.parentPath);
+    const targetPath = path.join(safeParent, input.name);
     // ensure the new path is also within roots
     resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), targetPath);
     await fs.mkdir(targetPath);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.renamePath, async (_event, args: RenamePathInput) => {
+    const input = parseWithSchema(renamePathInputSchema, args, "renamePath options");
     await ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), args.path);
-    const targetPath = path.join(path.dirname(safePath), args.newName);
+    const safePath = resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), input.path);
+    const targetPath = path.join(path.dirname(safePath), input.newName);
     resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), targetPath);
     await fs.rename(safePath, targetPath);
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.trashPath, async (_event, args: TrashPathInput) => {
+    const input = parseWithSchema(trashPathInputSchema, args, "trashPath options");
     await ensureApprovedWorkspaceRoots();
-    const safePath = resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), args.path);
+    const safePath = resolveAllowedPath(Array.from(approvedWorkspaceRoots.values()), input.path);
     try {
       await shell.trashItem(safePath);
       return;

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { z } from "zod";
 
 /**
  * Frecency scoring: frequency × recency weighting.
@@ -19,6 +20,12 @@ type FrecencyEntry = {
   lastOpen: number;
 };
 
+const frecencyEntrySchema: z.ZodType<FrecencyEntry> = z.object({
+  path: z.string(),
+  frequency: z.number(),
+  lastOpen: z.number(),
+});
+
 function calculateFrecency(entry?: FrecencyEntry): number {
   if (!entry) return 0;
   const daysSince = (Date.now() - entry.lastOpen) / MS_PER_DAY;
@@ -33,7 +40,11 @@ function loadEntries(): Map<string, FrecencyEntry> {
     if (!raw) return map;
     for (const line of raw.split("\n")) {
       try {
-        const entry = JSON.parse(line) as FrecencyEntry;
+        const parsed = frecencyEntrySchema.safeParse(JSON.parse(line));
+        if (!parsed.success) {
+          continue;
+        }
+        const entry = parsed.data;
         map.set(entry.path, entry);
       } catch {
         // skip invalid lines

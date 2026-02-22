@@ -1,5 +1,6 @@
 import { AgentSocket } from "../lib/agentSocket";
 import { UI_DISABLED_PROVIDERS } from "../lib/modelChoices";
+import { z } from "zod";
 import {
   appendTranscriptBatch,
   saveState,
@@ -7,12 +8,12 @@ import {
 } from "../lib/desktopCommands";
 import type { ClientMessage, MCPServerConfig, ProviderName, ServerEvent, TodoItem } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
+import { parseStructuredToolInput } from "../../../../src/shared/structuredInput";
 
 import type {
   ApprovalPrompt,
   AskPrompt,
   FeedItem,
-  FileEntry,
   Notification,
   PersistedState,
   PromptModalState,
@@ -301,40 +302,6 @@ function previewValue(value: unknown, maxChars = 160): string {
   }
 }
 
-function parseJsonCandidate(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function parseStructuredToolInput(value: string): unknown {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-
-  const direct = parseJsonCandidate(trimmed);
-  if (direct !== undefined) return direct;
-
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    const objectSlice = trimmed.slice(firstBrace, lastBrace + 1);
-    const parsedObject = parseJsonCandidate(objectSlice);
-    if (parsedObject !== undefined) return parsedObject;
-  }
-
-  const firstBracket = trimmed.indexOf("[");
-  const lastBracket = trimmed.lastIndexOf("]");
-  if (firstBracket >= 0 && lastBracket > firstBracket) {
-    const arraySlice = trimmed.slice(firstBracket, lastBracket + 1);
-    const parsedArray = parseJsonCandidate(arraySlice);
-    if (parsedArray !== undefined) return parsedArray;
-  }
-
-  return undefined;
-}
-
 function normalizeToolArgsFromInput(inputText: string, existingArgs?: unknown): unknown {
   const parsed = parseStructuredToolInput(inputText);
   const base = isRecord(existingArgs) ? existingArgs : {};
@@ -589,19 +556,76 @@ function appendModelStreamUpdateToFeed(
   }
 }
 
+const transcriptPayloadEnvelopeSchema = z.object({
+  type: z.string(),
+}).passthrough();
+
+const transcriptUserMessagePayloadSchema = z.object({
+  type: z.literal("user_message"),
+  text: z.unknown().optional(),
+  clientMessageId: z.string().optional(),
+}).passthrough();
+
+const transcriptModelStreamPayloadSchema = z.object({
+  type: z.literal("model_stream_chunk"),
+}).passthrough();
+
+const transcriptAssistantMessagePayloadSchema = z.object({
+  type: z.literal("assistant_message"),
+  text: z.unknown().optional(),
+}).passthrough();
+
+const transcriptReasoningPayloadSchema = z.object({
+  type: z.literal("reasoning"),
+  kind: z.enum(["reasoning", "summary"]).optional(),
+  text: z.unknown().optional(),
+}).passthrough();
+
+const transcriptReasoningSummaryPayloadSchema = z.object({
+  type: z.enum(["reasoning_summary", "assistant_reasoning"]),
+  text: z.unknown().optional(),
+  summary: z.unknown().optional(),
+}).passthrough();
+
+const transcriptTodosPayloadSchema = z.object({
+  type: z.literal("todos"),
+  todos: z.unknown().optional(),
+}).passthrough();
+
+const transcriptLogPayloadSchema = z.object({
+  type: z.literal("log"),
+  line: z.unknown().optional(),
+}).passthrough();
+
+const transcriptErrorPayloadSchema = z.object({
+  type: z.literal("error"),
+  message: z.unknown().optional(),
+  code: z.unknown().optional(),
+  source: z.unknown().optional(),
+}).passthrough();
+
+const transcriptSessionBusyPayloadSchema = z.object({
+  type: z.literal("session_busy"),
+  busy: z.boolean().optional(),
+}).passthrough();
+
 function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
   const out: FeedItem[] = [];
   const seenUser = new Set<string>();
   const stream = createThreadModelStreamRuntime();
 
   for (const evt of events) {
-    const payload: any = evt.payload;
-    if (!payload || typeof payload.type !== "string") continue;
-    const type = payload.type as string;
+    const parsedEnvelope = transcriptPayloadEnvelopeSchema.safeParse(evt.payload);
+    if (!parsedEnvelope.success) continue;
+    const payload = parsedEnvelope.data;
+    const type = payload.type;
 
     if (type === "user_message") {
+      const parsedPayload = transcriptUserMessagePayloadSchema.safeParse(payload);
+      if (!parsedPayload.success) continue;
+      const userPayload = parsedPayload.data;
       clearThreadModelStreamRuntime(stream);
-      const cmid = typeof payload.clientMessageId === "string" ? payload.clientMessageId : "";
+      const cmid = userPayload.clientMessageId ?? "";
       if (cmid && seenUser.has(cmid)) continue;
       if (cmid) seenUser.add(cmid);
       out.push({
@@ -609,19 +633,23 @@ function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
         kind: "message",
         role: "user",
         ts: evt.ts,
-        text: String(payload.text ?? ""),
+        text: String(userPayload.text ?? ""),
       });
       continue;
     }
 
     if (type === "model_stream_chunk") {
-      const mapped = mapModelStreamChunk(payload as ModelStreamChunkEvent);
+      const parsedPayload = transcriptModelStreamPayloadSchema.safeParse(payload);
+      if (!parsedPayload.success) continue;
+      const mapped = mapModelStreamChunk(parsedPayload.data as ModelStreamChunkEvent);
       if (mapped) appendModelStreamUpdateToFeed(out, evt.ts, stream, mapped);
       continue;
     }
 
     if (type === "assistant_message") {
-      const text = String(payload.text ?? "");
+      const parsedPayload = transcriptAssistantMessagePayloadSchema.safeParse(payload);
+      if (!parsedPayload.success) continue;
+      const text = String(parsedPayload.data.text ?? "");
       if (stream.lastAssistantTurnId) {
         const streamed = (stream.assistantTextByTurn.get(stream.lastAssistantTurnId) ?? "").trim();
         if (streamed && streamed === text.trim()) continue;
@@ -637,60 +665,73 @@ function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     }
 
     if (type === "reasoning") {
+      const parsedPayload = transcriptReasoningPayloadSchema.safeParse(payload);
+      if (!parsedPayload.success) continue;
       if (stream.lastReasoningTurnId && stream.reasoningTurns.has(stream.lastReasoningTurnId)) continue;
       out.push({
         id: makeId(),
         kind: "reasoning",
-        mode: payload.kind === "summary" ? "summary" : "reasoning",
+        mode: parsedPayload.data.kind === "summary" ? "summary" : "reasoning",
         ts: evt.ts,
-        text: String(payload.text ?? ""),
+        text: String(parsedPayload.data.text ?? ""),
       });
       continue;
     }
 
     if (type === "reasoning_summary" || type === "assistant_reasoning") {
+      const parsedPayload = transcriptReasoningSummaryPayloadSchema.safeParse(payload);
+      if (!parsedPayload.success) continue;
       if (stream.lastReasoningTurnId && stream.reasoningTurns.has(stream.lastReasoningTurnId)) continue;
       out.push({
         id: makeId(),
         kind: "reasoning",
         mode: "summary",
         ts: evt.ts,
-        text: String(payload.text ?? payload.summary ?? ""),
+        text: String(parsedPayload.data.text ?? parsedPayload.data.summary ?? ""),
       });
       continue;
     }
 
     if (type === "todos") {
+      const parsedPayload = transcriptTodosPayloadSchema.safeParse(payload);
+      if (!parsedPayload.success) continue;
       out.push({
         id: makeId(),
         kind: "todos",
         ts: evt.ts,
-        todos: Array.isArray(payload.todos) ? payload.todos : [],
+        todos: Array.isArray(parsedPayload.data.todos) ? parsedPayload.data.todos : [],
       });
       continue;
     }
 
     if (type === "log") {
-      const line = String(payload.line ?? "");
+      const parsedPayload = transcriptLogPayloadSchema.safeParse(payload);
+      if (!parsedPayload.success) continue;
+      const line = String(parsedPayload.data.line ?? "");
       if (shouldSuppressRawDebugLogLine(line)) continue;
       out.push({ id: makeId(), kind: "log", ts: evt.ts, line });
       continue;
     }
 
     if (type === "error") {
+      const parsedPayload = transcriptErrorPayloadSchema.safeParse(payload);
+      if (!parsedPayload.success) continue;
       out.push({
         id: makeId(),
         kind: "error",
         ts: evt.ts,
-        message: String(payload.message ?? ""),
-        code: String(payload.code ?? "internal_error") as any,
-        source: String(payload.source ?? "session") as any,
+        message: String(parsedPayload.data.message ?? ""),
+        code: String(parsedPayload.data.code ?? "internal_error") as any,
+        source: String(parsedPayload.data.source ?? "session") as any,
       });
       continue;
     }
 
-    if (type === "session_busy" && payload.busy === false) {
-      clearThreadModelStreamRuntime(stream);
+    if (type === "session_busy") {
+      const parsedPayload = transcriptSessionBusyPayloadSchema.safeParse(payload);
+      if (parsedPayload.success && parsedPayload.data.busy === false) {
+        clearThreadModelStreamRuntime(stream);
+      }
     }
 
     out.push({

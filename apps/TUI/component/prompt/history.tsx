@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { z } from "zod";
 
 /**
  * Persistent prompt history stored as JSONL.
@@ -17,6 +18,12 @@ export type PromptHistoryEntry = {
   timestamp: number;
 };
 
+const promptHistoryEntrySchema: z.ZodType<PromptHistoryEntry> = z.object({
+  input: z.string(),
+  mode: z.enum(["normal", "shell"]).optional(),
+  timestamp: z.number(),
+});
+
 function loadHistory(): PromptHistoryEntry[] {
   try {
     const raw = fs.readFileSync(HISTORY_FILE, "utf-8").trim();
@@ -25,7 +32,11 @@ function loadHistory(): PromptHistoryEntry[] {
       .split("\n")
       .map((line) => {
         try {
-          return JSON.parse(line) as PromptHistoryEntry;
+          const parsed = promptHistoryEntrySchema.safeParse(JSON.parse(line));
+          if (!parsed.success) {
+            return null;
+          }
+          return parsed.data;
         } catch {
           return null;
         }

@@ -1,40 +1,20 @@
 import { z } from "zod";
 
-import { SERVER_EVENT_TYPES, type ClientMessage, type ServerEvent } from "../server/protocol";
+import {
+  safeParseServerEvent as safeParseServerEventFromProtocol,
+  safeParseServerEventJson,
+  type ClientMessage,
+  type ServerEvent,
+} from "../server/protocol";
 
-const serverEventEnvelopeSchema = z.object({
-  type: z.enum(SERVER_EVENT_TYPES),
-  sessionId: z.preprocess((value) => {
-    if (typeof value !== "string") return undefined;
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }, z.string()),
-}).passthrough();
-
-const jsonObjectSchema = z.record(z.string(), z.unknown());
-const jsonStringSchema = z.string();
 const webSocketImplSchema = z.custom<typeof WebSocket>((value) => typeof value === "function");
 
 export function safeJsonParse(raw: unknown): unknown | null {
-  const parsedRaw = jsonStringSchema.safeParse(raw);
-  if (!parsedRaw.success) return null;
-  try {
-    return JSON.parse(parsedRaw.data);
-  } catch {
-    return null;
-  }
+  return safeParseServerEventJson(raw);
 }
 
 export function safeParseServerEvent(raw: unknown): ServerEvent | null {
-  const parsedJson = safeJsonParse(raw);
-  const parsedObject = jsonObjectSchema.safeParse(parsedJson);
-  if (!parsedObject.success) {
-    return null;
-  }
-
-  const envelope = serverEventEnvelopeSchema.safeParse(parsedObject.data);
-  if (!envelope.success) return null;
-  return parsedObject.data as ServerEvent;
+  return safeParseServerEventFromProtocol(raw);
 }
 
 export type AgentSocketOpts = {

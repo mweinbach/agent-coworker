@@ -48,7 +48,7 @@ describe("connect helpers", () => {
 });
 
 describe("connectProvider", () => {
-  test("readConnectionStore falls back to legacy path and migrates", async () => {
+  test("readConnectionStore ignores legacy path and only uses cowork auth store", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
     const legacyPath = path.join(home, ".ai-coworker", "config", "connections.json");
@@ -69,10 +69,9 @@ describe("connectProvider", () => {
     await fs.writeFile(legacyPath, JSON.stringify(legacyStore, null, 2), "utf-8");
 
     const store = await readConnectionStore(paths);
-    expect(store.services.openai?.apiKey).toBe("sk-legacy-openai");
+    expect(store.services.openai?.apiKey).toBeUndefined();
 
-    const migrated = JSON.parse(await fs.readFile(paths.connectionsFile, "utf-8")) as any;
-    expect(migrated?.services?.openai?.apiKey).toBe("sk-legacy-openai");
+    await expect(fs.readFile(paths.connectionsFile, "utf-8")).rejects.toThrow();
   });
 
   test("stores api key mode when key is provided", async () => {
@@ -277,6 +276,8 @@ describe("connectProvider", () => {
       authFile,
       JSON.stringify(
         {
+          version: 1,
+          auth_mode: "chatgpt",
           issuer: "https://auth.openai.com",
           client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
           tokens: {

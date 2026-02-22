@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 
 import { getAiCoworkerPaths } from "./connect";
 import { defaultModelForProvider, getModelForProvider, getProviderKeyCandidates } from "./providers";
@@ -37,10 +38,64 @@ function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
 async function loadJsonSafe(filePath: string): Promise<Record<string, unknown>> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return {};
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`Invalid JSON in config file ${filePath}: ${String(error)}`);
+    }
+
+    const result = z.record(z.string(), z.unknown()).safeParse(parsed);
+    if (!result.success) {
+      throw new Error(`Config file must contain a JSON object: ${filePath}`);
+    }
+    return result.data;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return {};
+    if (error instanceof Error) throw error;
+    throw new Error(`Failed to load config file ${filePath}: ${String(error)}`);
   }
+}
+
+const commandTemplateSchema = z.object({
+  template: z.string().trim().min(1),
+  description: z.string().optional(),
+  source: z.enum(["command", "mcp", "skill"]),
+}).strict();
+
+const commandConfigSchema = z.record(z.string().trim().min(1), commandTemplateSchema);
+const isoTimestampSchema = z.string().datetime({ offset: true });
+const savedConnectionSchema = z.object({
+  service: z.string().trim().min(1),
+  mode: z.enum(["api_key", "oauth", "oauth_pending"]),
+  apiKey: z.string().trim().min(1).optional(),
+  updatedAt: isoTimestampSchema,
+}).strict();
+const savedConnectionStoreSchema = z.object({
+  version: z.literal(1),
+  updatedAt: isoTimestampSchema,
+  services: z.record(z.string().trim().min(1), savedConnectionSchema),
+}).strict();
+
+function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
+  if (raw === undefined) return undefined;
+
+  const parsedRaw = commandConfigSchema.safeParse(raw);
+  if (!parsedRaw.success) {
+    throw new Error(`Invalid command config: ${parsedRaw.error.issues[0]?.message ?? "validation_failed"}`);
+  }
+
+  const commands: Record<string, CommandTemplateConfig> = {};
+  for (const [name, command] of Object.entries(parsedRaw.data)) {
+    commands[name.trim()] = {
+      template: command.template,
+      source: command.source,
+      ...(command.description !== undefined ? { description: command.description } : {}),
+    };
+  }
+  if (Object.keys(commands).length === 0) return undefined;
+  return commands;
 }
 
 function resolveBuiltInDir(): string {
@@ -79,34 +134,6 @@ function resolveDir(maybeRelative: unknown, baseDir: string): string {
   return path.join(baseDir, maybeRelative);
 }
 
-function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
-  if (!isPlainObject(raw)) return undefined;
-  const commands: Record<string, CommandTemplateConfig> = {};
-
-  for (const [nameRaw, value] of Object.entries(raw)) {
-    const name = nameRaw.trim();
-    if (!name || !isPlainObject(value)) continue;
-
-    const template = typeof value.template === "string" ? value.template : "";
-    if (!template.trim()) continue;
-
-    const description = typeof value.description === "string" ? value.description : undefined;
-    const source =
-      value.source === "command" || value.source === "mcp" || value.source === "skill"
-        ? value.source
-        : "command";
-
-    commands[name] = {
-      description,
-      source,
-      template,
-    };
-  }
-
-  if (Object.keys(commands).length === 0) return undefined;
-  return commands;
-}
-
 function normalizePositiveInt(v: unknown): number | undefined {
   const n = asNumber(v);
   if (n === null) return undefined;
@@ -133,31 +160,45 @@ function resolveUserHomeFromConfig(config: AgentConfig): string {
 function readSavedApiKey(config: AgentConfig, provider: ProviderName): string | undefined {
   const home = resolveUserHomeFromConfig(config);
   const paths = getAiCoworkerPaths({ homedir: home });
-  const legacyConnectionsPath = path.join(home, ".ai-coworker", "config", "connections.json");
-
   const keyCandidates = getProviderKeyCandidates(provider);
 
-  const connectionFiles = [paths.connectionsFile, legacyConnectionsPath];
-  for (const connectionsPath of connectionFiles) {
-    try {
-      const raw = fsSync.readFileSync(connectionsPath, "utf-8");
-      const parsed = JSON.parse(raw) as any;
+  let raw: string;
+  try {
+    raw = fsSync.readFileSync(paths.connectionsFile, "utf-8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return undefined;
+    throw new Error(`Failed to read connection store at ${paths.connectionsFile}: ${String(error)}`);
+  }
 
-      for (const candidate of keyCandidates) {
-        const direct = parsed?.services?.[candidate];
-        const directKey =
-          typeof direct?.apiKey === "string" && direct.apiKey.trim() ? direct.apiKey.trim() : "";
-        if (directKey) return directKey;
-      }
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Invalid JSON in connection store ${paths.connectionsFile}: ${String(error)}`);
+  }
 
-      // Backward-compatible fallback for any simpler shape like { apiKeys: { openai: "..." } }.
-      for (const candidate of keyCandidates) {
-        const legacy = parsed?.apiKeys?.[candidate];
-        if (typeof legacy === "string" && legacy.trim()) return legacy.trim();
-      }
-    } catch {
-      // continue to fallback file (or default to env below)
+  const parsedStore = savedConnectionStoreSchema.safeParse(parsedJson);
+  if (!parsedStore.success) {
+    throw new Error(
+      `Invalid connection store schema at ${paths.connectionsFile}: ${parsedStore.error.issues[0]?.message ?? "validation_failed"}`
+    );
+  }
+
+  for (const [serviceNameRaw, connection] of Object.entries(parsedStore.data.services)) {
+    const serviceName = resolveProviderName(serviceNameRaw);
+    if (!serviceName) {
+      throw new Error(`Invalid service key in connection store: ${serviceNameRaw}`);
     }
+    const declaredService = resolveProviderName(connection.service);
+    if (declaredService !== serviceName) {
+      throw new Error(`Connection service mismatch for key ${serviceNameRaw}`);
+    }
+  }
+
+  for (const candidate of keyCandidates) {
+    const direct = parsedStore.data.services[candidate];
+    if (direct?.mode === "api_key" && direct.apiKey) return direct.apiKey;
   }
 
   return undefined;

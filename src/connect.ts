@@ -112,7 +112,6 @@ export async function connectProvider(opts: {
   const methodId = (opts.methodId ?? "oauth_cli").trim() || "oauth_cli";
 
   let existing = await readCodexAuthMaterial(paths, {
-    migrateLegacy: true,
     onLine: opts.onOauthLine,
   });
   if (existing?.accessToken && isTokenExpiring(existing)) {

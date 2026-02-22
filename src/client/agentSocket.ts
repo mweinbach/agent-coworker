@@ -1,4 +1,15 @@
-import type { ClientMessage, ServerEvent } from "../server/protocol";
+import { z } from "zod";
+
+import { SERVER_EVENT_TYPES, type ClientMessage, type ServerEvent } from "../server/protocol";
+
+const serverEventEnvelopeSchema = z.object({
+  type: z.enum(SERVER_EVENT_TYPES),
+  sessionId: z.preprocess((value) => {
+    if (typeof value !== "string") return undefined;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }, z.string()),
+}).passthrough();
 
 export function safeJsonParse(raw: unknown): any | null {
   if (typeof raw !== "string") return null;
@@ -7,6 +18,17 @@ export function safeJsonParse(raw: unknown): any | null {
   } catch {
     return null;
   }
+}
+
+export function safeParseServerEvent(raw: unknown): ServerEvent | null {
+  const parsedJson = safeJsonParse(raw);
+  if (!parsedJson || typeof parsedJson !== "object" || Array.isArray(parsedJson)) {
+    return null;
+  }
+
+  const envelope = serverEventEnvelopeSchema.safeParse(parsedJson);
+  if (!envelope.success) return null;
+  return parsedJson as ServerEvent;
 }
 
 export type AgentSocketOpts = {
@@ -126,12 +148,10 @@ export class AgentSocket {
     };
 
     ws.onmessage = (ev) => {
-      const msg = safeJsonParse(String((ev as any).data));
-      if (!msg || typeof msg.type !== "string") return;
+      const evt = safeParseServerEvent(String((ev as any).data));
+      if (!evt) return;
 
-      const evt = msg as ServerEvent;
-
-      // Pong is an internal keepalive — don't surface to consumer.
+      // Pong is an internal keepalive and should not be surfaced to consumers.
       if (evt.type === "pong") return;
 
       if (evt.type === "server_hello") {

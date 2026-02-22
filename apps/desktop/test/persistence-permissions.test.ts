@@ -33,7 +33,7 @@ describe("desktop persistence permissions", () => {
   test("writes state file with private permissions", async () => {
     const persistence = new PersistenceService();
     await persistence.saveState({
-      version: 1,
+      version: 2,
       workspaces: [],
       threads: [],
       developerMode: false,

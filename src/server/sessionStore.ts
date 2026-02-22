@@ -4,19 +4,12 @@ import path from "node:path";
 import { z } from "zod";
 
 import type { AiCoworkerPaths } from "../connect";
-import { isProviderName } from "../types";
+import { PROVIDER_NAMES } from "../types";
 import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
-import { isRecord } from "../utils/typeGuards";
 import type { SessionTitleSource } from "./sessionTitleService";
 
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
-
-function asNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
 
 function sanitizeSessionId(sessionId: string): string {
   return sessionId.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -67,42 +60,36 @@ export type PersistedSessionSummary = {
 };
 
 const sessionTitleSourceSchema = z.enum(["default", "model", "heuristic", "manual"]);
+const providerNameSchema = z.enum(PROVIDER_NAMES);
+const isoTimestampSchema = z.string().datetime({ offset: true });
 
 const persistedSessionSnapshotSchema = z.object({
   version: z.literal(1),
-  sessionId: z.preprocess((value) => asNonEmptyString(value), z.string()),
-  createdAt: z.preprocess((value) => asNonEmptyString(value), z.string()),
-  updatedAt: z.preprocess((value) => asNonEmptyString(value), z.string()),
+  sessionId: z.string().trim().min(1),
+  createdAt: isoTimestampSchema,
+  updatedAt: isoTimestampSchema,
   session: z.object({
-    title: z.preprocess((value) => asNonEmptyString(value) ?? undefined, z.string().default("New session")),
-    titleSource: z.preprocess((value) => {
-      const raw = asNonEmptyString(value);
-      if (raw === "model" || raw === "heuristic" || raw === "manual") return raw;
-      return "default";
-    }, sessionTitleSourceSchema),
-    titleModel: z.preprocess((value) => (typeof value === "string" ? value : null), z.string().nullable()),
-  }).passthrough(),
+    title: z.string().trim().min(1),
+    titleSource: sessionTitleSourceSchema,
+    titleModel: z.string().trim().min(1).nullable(),
+    provider: providerNameSchema,
+    model: z.string().trim().min(1),
+  }).strict(),
   config: z.object({
-    provider: z.preprocess((value) => {
-      const raw = asNonEmptyString(value);
-      return raw && isProviderName(raw) ? raw : undefined;
-    }, z.string()),
-    model: z.preprocess((value) => asNonEmptyString(value), z.string()),
-    enableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
-    workingDirectory: z.preprocess((value) => asNonEmptyString(value), z.string()),
-    outputDirectory: z.preprocess((value) => asNonEmptyString(value) ?? undefined, z.string().optional()),
-    uploadsDirectory: z.preprocess((value) => asNonEmptyString(value) ?? undefined, z.string().optional()),
-  }).passthrough(),
+    provider: providerNameSchema,
+    model: z.string().trim().min(1),
+    enableMcp: z.boolean(),
+    workingDirectory: z.string().trim().min(1),
+    outputDirectory: z.string().trim().min(1).optional(),
+    uploadsDirectory: z.string().trim().min(1).optional(),
+  }).strict(),
   context: z.object({
-    system: z.preprocess((value) => asNonEmptyString(value) ?? "", z.string()),
-    messages: z.preprocess((value) => (Array.isArray(value) ? value : []), z.array(z.unknown())),
-    todos: z.preprocess((value) => (Array.isArray(value) ? value : []), z.array(z.unknown())),
-    harnessContext: z.preprocess(
-      (value) => (isRecord(value) ? value : null),
-      z.record(z.string(), z.unknown()).nullable(),
-    ),
-  }).passthrough(),
-}).passthrough();
+    system: z.string(),
+    messages: z.array(z.unknown()),
+    todos: z.array(z.unknown()),
+    harnessContext: z.record(z.string(), z.unknown()).nullable(),
+  }).strict(),
+}).strict();
 
 export function getPersistedSessionFilePath(paths: Pick<AiCoworkerPaths, "sessionsDir">, sessionId: string): string {
   return path.join(paths.sessionsDir, `${sanitizeSessionId(sessionId)}.json`);
@@ -117,19 +104,17 @@ async function ensureSecureSessionsDir(sessionsDir: string): Promise<void> {
   }
 }
 
-export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSnapshot | null {
+export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSnapshot {
   const parsed = persistedSessionSnapshotSchema.safeParse(raw);
-  if (!parsed.success) return null;
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid persisted session snapshot: ${parsed.error.issues[0]?.message ?? "validation_failed"}`
+    );
+  }
+
   const snapshot = parsed.data;
   const provider = snapshot.config.provider as AgentConfig["provider"];
   const model = snapshot.config.model;
-  const workingDirectory = snapshot.config.workingDirectory;
-  const titleSource = snapshot.session.titleSource as SessionTitleSource;
-  const titleModel = snapshot.session.titleModel;
-  const messages = snapshot.context.messages as ModelMessage[];
-  const todos = snapshot.context.todos as TodoItem[];
-  const harnessContext = snapshot.context.harnessContext as HarnessContextState | null;
-
   return {
     version: 1,
     sessionId: snapshot.sessionId,
@@ -137,24 +122,24 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
     updatedAt: snapshot.updatedAt,
     session: {
       title: snapshot.session.title,
-      titleSource,
-      titleModel,
-      provider,
-      model,
+      titleSource: snapshot.session.titleSource as SessionTitleSource,
+      titleModel: snapshot.session.titleModel,
+      provider: snapshot.session.provider as AgentConfig["provider"],
+      model: snapshot.session.model,
     },
     config: {
       provider,
       model,
       enableMcp: snapshot.config.enableMcp,
-      workingDirectory,
+      workingDirectory: snapshot.config.workingDirectory,
       outputDirectory: snapshot.config.outputDirectory,
       uploadsDirectory: snapshot.config.uploadsDirectory,
     },
     context: {
       system: snapshot.context.system,
-      messages,
-      todos,
-      harnessContext,
+      messages: snapshot.context.messages as ModelMessage[],
+      todos: snapshot.context.todos as TodoItem[],
+      harnessContext: snapshot.context.harnessContext as HarnessContextState | null,
     },
   };
 }
@@ -166,10 +151,18 @@ export async function readPersistedSessionSnapshot(opts: {
   const filePath = getPersistedSessionFilePath(opts.paths, opts.sessionId);
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(raw);
-    return parsePersistedSessionSnapshot(parsed);
-  } catch {
-    return null;
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`Invalid JSON in persisted session snapshot ${filePath}: ${String(error)}`);
+    }
+    return parsePersistedSessionSnapshot(parsedJson);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return null;
+    if (error instanceof Error) throw error;
+    throw new Error(`Failed to read persisted session snapshot ${filePath}: ${String(error)}`);
   }
 }
 
@@ -219,22 +212,24 @@ export async function listPersistedSessionSnapshots(
   const summaries: PersistedSessionSummary[] = [];
   for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
+    const filePath = path.join(paths.sessionsDir, entry);
+    const raw = await fs.readFile(filePath, "utf-8");
+    let parsedJson: unknown;
     try {
-      const raw = await fs.readFile(path.join(paths.sessionsDir, entry), "utf-8");
-      const parsed = parsePersistedSessionSnapshot(JSON.parse(raw));
-      if (!parsed) continue;
-      summaries.push({
-        sessionId: parsed.sessionId,
-        title: parsed.session.title,
-        provider: parsed.session.provider,
-        model: parsed.session.model,
-        createdAt: parsed.createdAt,
-        updatedAt: parsed.updatedAt,
-        messageCount: parsed.context.messages.length,
-      });
-    } catch {
-      // skip unreadable files
+      parsedJson = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`Invalid JSON in persisted session snapshot ${filePath}: ${String(error)}`);
     }
+    const parsed = parsePersistedSessionSnapshot(parsedJson);
+    summaries.push({
+      sessionId: parsed.sessionId,
+      title: parsed.session.title,
+      provider: parsed.session.provider,
+      model: parsed.session.model,
+      createdAt: parsed.createdAt,
+      updatedAt: parsed.updatedAt,
+      messageCount: parsed.context.messages.length,
+    });
   }
 
   summaries.sort((a, b) => (b.updatedAt > a.updatedAt ? 1 : b.updatedAt < a.updatedAt ? -1 : 0));

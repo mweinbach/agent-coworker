@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 export const CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 export const CODEX_OAUTH_ISSUER = "https://auth.openai.com";
@@ -32,6 +33,28 @@ export type CodexAuthMaterial = {
   updatedAt?: string;
 };
 
+const nonEmptyStringSchema = z.string().trim().min(1);
+const isoTimestampSchema = z.string().datetime({ offset: true });
+const codexAuthDocumentSchema = z.object({
+  version: z.literal(1),
+  auth_mode: z.literal("chatgpt"),
+  issuer: nonEmptyStringSchema.optional(),
+  client_id: nonEmptyStringSchema.optional(),
+  tokens: z.object({
+    access_token: nonEmptyStringSchema,
+    refresh_token: nonEmptyStringSchema.optional(),
+    id_token: nonEmptyStringSchema.optional(),
+    expires_at: z.union([z.number().finite(), nonEmptyStringSchema]).optional(),
+  }).strict(),
+  account: z.object({
+    account_id: nonEmptyStringSchema.optional(),
+    email: nonEmptyStringSchema.optional(),
+    plan_type: nonEmptyStringSchema.optional(),
+  }).strict().optional(),
+  updated_at: isoTimestampSchema.optional(),
+  last_refresh: isoTimestampSchema.optional(),
+}).strict();
+
 function isObjectLike(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -50,26 +73,6 @@ function toEpochMs(value: unknown): number | undefined {
   if (parsed === undefined) return undefined;
   if (parsed <= 0) return undefined;
   return parsed < 1e12 ? Math.floor(parsed * 1000) : Math.floor(parsed);
-}
-
-function readStringAt(root: unknown, keys: string[]): string | undefined {
-  let cur: unknown = root;
-  for (const key of keys) {
-    if (!isObjectLike(cur)) return undefined;
-    cur = cur[key];
-  }
-  if (typeof cur !== "string") return undefined;
-  const trimmed = cur.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function readNumberAt(root: unknown, keys: string[]): number | undefined {
-  let cur: unknown = root;
-  for (const key of keys) {
-    if (!isObjectLike(cur)) return undefined;
-    cur = cur[key];
-  }
-  return toNumber(cur);
 }
 
 function base64UrlDecodeToString(value: string): string | null {
@@ -153,80 +156,55 @@ export function extractPlanTypeFromClaims(claims: Record<string, unknown>): stri
 export function codexAuthFilePath(paths: Pick<CodexAuthPaths, "authDir">): string {
   return path.join(paths.authDir, "codex-cli", "auth.json");
 }
-
-export function legacyCodexAuthFilePath(paths: Pick<CodexAuthPaths, "rootDir">): string {
-  const homeDir = path.dirname(paths.rootDir);
-  return path.join(homeDir, ".codex", "auth.json");
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const st = await fs.stat(filePath);
-    return st.isFile();
-  } catch {
-    return false;
-  }
-}
-
 async function readJsonFile(filePath: string): Promise<unknown | null> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return null;
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch (error) {
+      throw new Error(`Invalid JSON in Codex auth file ${filePath}: ${String(error)}`);
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return null;
+    throw error;
   }
 }
 
-function parseCodexAuthJson(file: string, json: unknown): CodexAuthMaterial | null {
-  if (!isObjectLike(json)) return null;
+function parseCodexAuthJson(file: string, json: unknown): CodexAuthMaterial {
+  const parsed = codexAuthDocumentSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new Error(`Invalid Codex auth schema at ${file}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+  }
 
-  const accessToken =
-    readStringAt(json, ["tokens", "access_token"]) ??
-    readStringAt(json, ["access_token"]) ??
-    readStringAt(json, ["auth", "access_token"]);
-  if (!accessToken) return null;
-
-  const refreshToken =
-    readStringAt(json, ["tokens", "refresh_token"]) ??
-    readStringAt(json, ["refresh_token"]) ??
-    readStringAt(json, ["auth", "refresh_token"]);
-  const idToken =
-    readStringAt(json, ["tokens", "id_token"]) ??
-    readStringAt(json, ["id_token"]) ??
-    readStringAt(json, ["auth", "id_token"]);
-
-  const expiresAtMs =
-    toEpochMs(readNumberAt(json, ["tokens", "expires_at"])) ??
-    toEpochMs(readNumberAt(json, ["expires_at"])) ??
-    extractJwtExpiryMs(accessToken);
+  const doc = parsed.data;
+  const accessToken = doc.tokens.access_token;
+  const refreshToken = doc.tokens.refresh_token;
+  const idToken = doc.tokens.id_token;
+  const expiresAtMs = toEpochMs(doc.tokens.expires_at) ?? extractJwtExpiryMs(accessToken);
 
   const idClaims = idToken ? decodeJwtPayload(idToken) : null;
   const accessClaims = decodeJwtPayload(accessToken);
 
   const accountId =
-    readStringAt(json, ["account", "account_id"]) ??
-    readStringAt(json, ["chatgpt_account_id"]) ??
+    doc.account?.account_id ??
     (idClaims ? extractAccountIdFromClaims(idClaims) : undefined) ??
     (accessClaims ? extractAccountIdFromClaims(accessClaims) : undefined);
 
   const email =
-    readStringAt(json, ["account", "email"]) ??
+    doc.account?.email ??
     (idClaims ? extractEmailFromClaims(idClaims) : undefined) ??
     (accessClaims ? extractEmailFromClaims(accessClaims) : undefined);
 
   const planType =
-    readStringAt(json, ["account", "plan_type"]) ??
+    doc.account?.plan_type ??
     (idClaims ? extractPlanTypeFromClaims(idClaims) : undefined) ??
     (accessClaims ? extractPlanTypeFromClaims(accessClaims) : undefined);
 
-  const issuer = readStringAt(json, ["issuer"]) ?? CODEX_OAUTH_ISSUER;
-  const clientId = readStringAt(json, ["client_id"]) ?? CODEX_OAUTH_CLIENT_ID;
-  const updatedAt = readStringAt(json, ["updated_at"]) ?? readStringAt(json, ["last_refresh"]);
-
   return {
     file,
-    issuer,
-    clientId,
+    issuer: doc.issuer ?? CODEX_OAUTH_ISSUER,
+    clientId: doc.client_id ?? CODEX_OAUTH_CLIENT_ID,
     accessToken,
     refreshToken,
     idToken,
@@ -234,7 +212,7 @@ function parseCodexAuthJson(file: string, json: unknown): CodexAuthMaterial | nu
     accountId,
     email,
     planType,
-    updatedAt,
+    updatedAt: doc.updated_at ?? doc.last_refresh,
   };
 }
 
@@ -303,28 +281,12 @@ export async function writeCodexAuthMaterial(
 
 export async function readCodexAuthMaterial(
   paths: CodexAuthPaths,
-  opts: { migrateLegacy?: boolean; onLine?: (line: string) => void } = {}
+  _opts: { onLine?: (line: string) => void } = {}
 ): Promise<CodexAuthMaterial | null> {
   const coworkFile = codexAuthFilePath(paths);
   const coworkJson = await readJsonFile(coworkFile);
-  const coworkParsed = parseCodexAuthJson(coworkFile, coworkJson);
-  if (coworkParsed) return coworkParsed;
-
-  if (!opts.migrateLegacy) return null;
-
-  const legacyFile = legacyCodexAuthFilePath(paths);
-  if (!(await fileExists(legacyFile))) return null;
-
-  const legacyJson = await readJsonFile(legacyFile);
-  const legacyParsed = parseCodexAuthJson(legacyFile, legacyJson);
-  if (!legacyParsed) return null;
-
-  const migrated = await writeCodexAuthMaterial(paths, {
-    ...legacyParsed,
-    file: coworkFile,
-  });
-  opts.onLine?.(`[auth] migrated legacy Codex credentials from ${legacyFile}`);
-  return migrated;
+  if (!coworkJson) return null;
+  return parseCodexAuthJson(coworkFile, coworkJson);
 }
 
 function expiresInMsFromResponse(payload: CodexOAuthTokenResponse): number | undefined {

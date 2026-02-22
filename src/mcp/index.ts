@@ -263,7 +263,6 @@ export async function readProjectMCPServersDocument(config: AgentConfig): Promis
   rawJson: string;
   projectServers: MCPServerConfig[];
   effectiveServers: MCPServerConfig[];
-  parseError?: string;
 }> {
   const workspaceDoc = await readWorkspaceMCPServersDocument(config);
   const effectiveServers = await loadMCPServers(config);
@@ -272,7 +271,6 @@ export async function readProjectMCPServersDocument(config: AgentConfig): Promis
     rawJson: workspaceDoc.rawJson,
     projectServers: workspaceDoc.workspaceServers,
     effectiveServers,
-    ...(workspaceDoc.parseError ? { parseError: workspaceDoc.parseError } : {}),
   };
 }
 

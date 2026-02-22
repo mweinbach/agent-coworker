@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 import { maskApiKey } from "../connect";
 import type { AgentConfig, MCPServerAuthConfig } from "../types";
-import { isRecord, nowIso } from "../utils/typeGuards";
+import { nowIso } from "../utils/typeGuards";
 import type { MCPRegistryServer, MCPServerSource } from "./configRegistry";
 import { resolveMcpConfigPaths } from "./configRegistry";
 
@@ -80,18 +81,57 @@ const DEFAULT_DOC: MCPServerCredentialsDocument = {
   servers: {},
 };
 
-function asNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
+const nonEmptyStringSchema = z.string().trim().min(1);
+const isoTimestampSchema = z.string().datetime({ offset: true });
 
-function asIsoDate(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return undefined;
-  return new Date(timestamp).toISOString();
-}
+const oauthPendingSchema = z.object({
+  challengeId: nonEmptyStringSchema,
+  state: nonEmptyStringSchema,
+  codeVerifier: nonEmptyStringSchema,
+  redirectUri: nonEmptyStringSchema,
+  createdAt: isoTimestampSchema,
+  expiresAt: isoTimestampSchema,
+  authorizationServerUrl: nonEmptyStringSchema.optional(),
+});
+
+const oauthTokensSchema = z.object({
+  accessToken: nonEmptyStringSchema,
+  tokenType: nonEmptyStringSchema.optional(),
+  refreshToken: nonEmptyStringSchema.optional(),
+  expiresAt: isoTimestampSchema.optional(),
+  scope: nonEmptyStringSchema.optional(),
+  resource: nonEmptyStringSchema.optional(),
+  updatedAt: isoTimestampSchema,
+});
+
+const oauthClientInfoSchema = z.object({
+  clientId: nonEmptyStringSchema,
+  clientSecret: nonEmptyStringSchema.optional(),
+  updatedAt: isoTimestampSchema,
+});
+
+const apiKeyCredentialSchema = z.object({
+  value: nonEmptyStringSchema,
+  keyId: nonEmptyStringSchema.optional(),
+  updatedAt: isoTimestampSchema,
+});
+
+const oauthCredentialSchema = z.object({
+  pending: oauthPendingSchema.optional(),
+  tokens: oauthTokensSchema.optional(),
+  clientInformation: oauthClientInfoSchema.optional(),
+}).strict();
+
+const credentialRecordSchema = z.object({
+  apiKey: apiKeyCredentialSchema.optional(),
+  oauth: oauthCredentialSchema.optional(),
+}).strict();
+
+const credentialsDocSchema = z.object({
+  version: z.literal(1),
+  updatedAt: isoTimestampSchema,
+  servers: z.record(z.string().min(1), credentialRecordSchema),
+}).strict();
 
 
 function ensureScopeDir(filePath: string): Promise<void> {
@@ -125,116 +165,12 @@ async function atomicWrite(filePath: string, payload: string): Promise<void> {
   }
 }
 
-function normalizeCredentialRecord(input: unknown): MCPServerCredentialRecord {
-  if (!isRecord(input)) return {};
-
-  const apiRaw = input.apiKey;
-  let apiKey: MCPServerCredentialRecord["apiKey"];
-  if (isRecord(apiRaw)) {
-    const value = asNonEmptyString(apiRaw.value);
-    if (value) {
-      apiKey = {
-        value,
-        updatedAt: asIsoDate(apiRaw.updatedAt) ?? nowIso(),
-        ...(asNonEmptyString(apiRaw.keyId) ? { keyId: asNonEmptyString(apiRaw.keyId) } : {}),
-      };
-    }
-  }
-
-  const oauthRaw = input.oauth;
-  let oauth: MCPServerCredentialRecord["oauth"];
-  if (isRecord(oauthRaw)) {
-    let pending: MCPServerOAuthPending | undefined;
-    if (isRecord(oauthRaw.pending)) {
-      const challengeId = asNonEmptyString(oauthRaw.pending.challengeId);
-      const state = asNonEmptyString(oauthRaw.pending.state);
-      const codeVerifier = asNonEmptyString(oauthRaw.pending.codeVerifier);
-      const redirectUri = asNonEmptyString(oauthRaw.pending.redirectUri);
-      const createdAt = asIsoDate(oauthRaw.pending.createdAt);
-      const expiresAt = asIsoDate(oauthRaw.pending.expiresAt);
-      if (challengeId && state && codeVerifier && redirectUri && createdAt && expiresAt) {
-        pending = {
-          challengeId,
-          state,
-          codeVerifier,
-          redirectUri,
-          createdAt,
-          expiresAt,
-          ...(asNonEmptyString(oauthRaw.pending.authorizationServerUrl)
-            ? { authorizationServerUrl: asNonEmptyString(oauthRaw.pending.authorizationServerUrl) }
-            : {}),
-        };
-      }
-    }
-
-    let tokens: MCPServerOAuthTokens | undefined;
-    if (isRecord(oauthRaw.tokens)) {
-      const accessToken = asNonEmptyString(oauthRaw.tokens.accessToken);
-      if (accessToken) {
-        tokens = {
-          accessToken,
-          updatedAt: asIsoDate(oauthRaw.tokens.updatedAt) ?? nowIso(),
-          ...(asNonEmptyString(oauthRaw.tokens.tokenType) ? { tokenType: asNonEmptyString(oauthRaw.tokens.tokenType) } : {}),
-          ...(asNonEmptyString(oauthRaw.tokens.refreshToken)
-            ? { refreshToken: asNonEmptyString(oauthRaw.tokens.refreshToken) }
-            : {}),
-          ...(asIsoDate(oauthRaw.tokens.expiresAt) ? { expiresAt: asIsoDate(oauthRaw.tokens.expiresAt) } : {}),
-          ...(asNonEmptyString(oauthRaw.tokens.scope) ? { scope: asNonEmptyString(oauthRaw.tokens.scope) } : {}),
-          ...(asNonEmptyString(oauthRaw.tokens.resource)
-            ? { resource: asNonEmptyString(oauthRaw.tokens.resource) }
-            : {}),
-        };
-      }
-    }
-
-    let clientInformation: MCPServerOAuthClientInfo | undefined;
-    if (isRecord(oauthRaw.clientInformation)) {
-      const clientId = asNonEmptyString(oauthRaw.clientInformation.clientId);
-      if (clientId) {
-        clientInformation = {
-          clientId,
-          updatedAt: asIsoDate(oauthRaw.clientInformation.updatedAt) ?? nowIso(),
-          ...(asNonEmptyString(oauthRaw.clientInformation.clientSecret)
-            ? { clientSecret: asNonEmptyString(oauthRaw.clientInformation.clientSecret) }
-            : {}),
-        };
-      }
-    }
-
-    if (pending || tokens || clientInformation) {
-      oauth = {
-        ...(pending ? { pending } : {}),
-        ...(tokens ? { tokens } : {}),
-        ...(clientInformation ? { clientInformation } : {}),
-      };
-    }
-  }
-
-  return {
-    ...(apiKey ? { apiKey } : {}),
-    ...(oauth ? { oauth } : {}),
-  };
-}
-
 function normalizeCredentialsDoc(raw: unknown): MCPServerCredentialsDocument {
-  if (!isRecord(raw)) return { ...DEFAULT_DOC, updatedAt: nowIso(), servers: {} };
-
-  const serversRaw = isRecord(raw.servers) ? raw.servers : {};
-  const servers: Record<string, MCPServerCredentialRecord> = {};
-
-  for (const [nameRaw, value] of Object.entries(serversRaw)) {
-    const name = asNonEmptyString(nameRaw);
-    if (!name) continue;
-    const normalized = normalizeCredentialRecord(value);
-    if (!normalized.apiKey && !normalized.oauth) continue;
-    servers[name] = normalized;
+  const parsed = credentialsDocSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(`Invalid credential store schema: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
   }
-
-  return {
-    version: 1,
-    updatedAt: asIsoDate(raw.updatedAt) ?? nowIso(),
-    servers,
-  };
+  return parsed.data;
 }
 
 async function readDoc(filePath: string): Promise<MCPServerCredentialsDocument> {

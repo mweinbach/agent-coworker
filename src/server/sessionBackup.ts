@@ -4,6 +4,7 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { z } from "zod";
 
 import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../connect";
 
@@ -69,6 +70,33 @@ type SessionBackupMetadata = {
   };
   checkpoints: SessionBackupMetadataCheckpoint[];
 };
+
+const snapshotRefSchema = z.object({
+  kind: z.enum(["directory", "tar_gz"]),
+  path: z.string().min(1),
+});
+
+const sessionBackupMetadataCheckpointSchema = z.object({
+  id: z.string().min(1),
+  index: z.number(),
+  createdAt: z.string().min(1),
+  trigger: z.enum(["auto", "manual"]),
+  changed: z.boolean(),
+  patchBytes: z.number(),
+  fingerprint: z.string().min(1),
+  snapshot: snapshotRefSchema,
+}).passthrough();
+
+const sessionBackupMetadataSchema = z.object({
+  version: z.literal(1),
+  sessionId: z.string().min(1),
+  workingDirectory: z.string().min(1),
+  createdAt: z.string().min(1),
+  state: z.enum(["active", "closed"]),
+  closedAt: z.string().optional(),
+  originalSnapshot: snapshotRefSchema,
+  checkpoints: z.array(sessionBackupMetadataCheckpointSchema),
+}).passthrough();
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -307,12 +335,22 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
 async function readMetadata(filePath: string): Promise<SessionBackupMetadata | null> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as SessionBackupMetadata;
-    if (parsed && parsed.version === 1 && typeof parsed.sessionId === "string") return parsed;
-  } catch {
-    // ignore malformed files
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`Invalid backup metadata JSON at ${filePath}: ${String(error)}`);
+    }
+    const parsed = sessionBackupMetadataSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(`Invalid backup metadata schema at ${filePath}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+    }
+    return parsed.data;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return null;
+    throw error;
   }
-  return null;
 }
 
 // ---------------------------------------------------------------------------

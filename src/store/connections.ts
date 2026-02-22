@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { z } from "zod";
 
-import type { ProviderName } from "../types";
+import { PROVIDER_NAMES, resolveProviderName, type ProviderName } from "../types";
 
 export type ConnectService = ProviderName;
 export const TOOL_API_KEY_NAMES = ["exa"] as const;
@@ -33,26 +34,25 @@ export type AiCoworkerPaths = {
   connectionsFile: string;
 };
 
-function isObjectLike(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
+const isoTimestampSchema = z.string().datetime({ offset: true });
 
-function isToolApiKeyName(value: string): value is ToolApiKeyName {
-  return (TOOL_API_KEY_NAMES as readonly string[]).includes(value);
-}
+const storedConnectionSchema = z.object({
+  service: z.enum(PROVIDER_NAMES),
+  mode: z.enum(["api_key", "oauth", "oauth_pending"]),
+  apiKey: z.string().trim().min(1).optional(),
+  updatedAt: isoTimestampSchema,
+}).strict();
 
-function normalizeToolApiKeys(value: unknown): Partial<Record<ToolApiKeyName, string>> | undefined {
-  if (!isObjectLike(value)) return undefined;
-  const out: Partial<Record<ToolApiKeyName, string>> = {};
-  for (const [rawKey, rawValue] of Object.entries(value)) {
-    if (!isToolApiKeyName(rawKey)) continue;
-    if (typeof rawValue !== "string") continue;
-    const trimmed = rawValue.trim();
-    if (!trimmed) continue;
-    out[rawKey] = trimmed;
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
+const toolApiKeysSchema = z.object({
+  exa: z.string().trim().min(1).optional(),
+}).strict();
+
+const connectionStoreSchema = z.object({
+  version: z.literal(1),
+  updatedAt: isoTimestampSchema,
+  services: z.record(z.string(), storedConnectionSchema),
+  toolApiKeys: toolApiKeysSchema.optional(),
+}).strict();
 
 export function getAiCoworkerPaths(opts: { homedir?: string } = {}): AiCoworkerPaths {
   const home = opts.homedir ?? os.homedir();
@@ -89,43 +89,39 @@ export async function readConnectionStore(paths: AiCoworkerPaths): Promise<Conne
     try {
       const raw = await fs.readFile(filePath, "utf-8");
       const parsed = JSON.parse(raw);
-      if (
-        isObjectLike(parsed) &&
-        parsed.version === 1 &&
-        isObjectLike(parsed.services) &&
-        (typeof parsed.updatedAt === "string" || parsed.updatedAt === undefined)
-      ) {
-        const toolApiKeys = normalizeToolApiKeys(parsed.toolApiKeys);
-        return {
-          version: 1,
-          updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
-          services: parsed.services as ConnectionStore["services"],
-          ...(toolApiKeys ? { toolApiKeys } : {}),
-        };
+      const storeParsed = connectionStoreSchema.safeParse(parsed);
+      if (!storeParsed.success) {
+        throw new Error(`Invalid connection store schema: ${storeParsed.error.issues[0]?.message ?? "validation_failed"}`);
       }
-    } catch {
-      // ignore
+
+      const services: ConnectionStore["services"] = {};
+      for (const [serviceNameRaw, connectionRaw] of Object.entries(storeParsed.data.services)) {
+        const serviceName = resolveProviderName(serviceNameRaw);
+        if (!serviceName) {
+          throw new Error(`Invalid service key in connection store: ${serviceNameRaw}`);
+        }
+        if (connectionRaw.service !== serviceName) {
+          throw new Error(`Connection service mismatch for key ${serviceNameRaw}`);
+        }
+        services[serviceName] = connectionRaw;
+      }
+
+      return {
+        version: 1,
+        updatedAt: storeParsed.data.updatedAt,
+        services,
+        ...(storeParsed.data.toolApiKeys ? { toolApiKeys: storeParsed.data.toolApiKeys } : {}),
+      };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT") return null;
+      throw new Error(`Failed to read connection store at ${filePath}: ${String(error)}`);
     }
-    return null;
   };
 
   // Primary location: ~/.cowork/auth/connections.json
   const primary = await loadFrom(paths.connectionsFile);
   if (primary) return primary;
-
-  // Backward-compatible fallback: ~/.ai-coworker/config/connections.json
-  const homeDir = path.dirname(paths.rootDir);
-  const legacyFile = path.join(homeDir, ".ai-coworker", "config", "connections.json");
-  const legacy = await loadFrom(legacyFile);
-  if (legacy) {
-    // Best-effort migration to the new location.
-    try {
-      await writeConnectionStore(paths, legacy);
-    } catch {
-      // ignore migration failures; still return legacy view
-    }
-    return legacy;
-  }
 
   return { version: 1, updatedAt: new Date().toISOString(), services: {} };
 }

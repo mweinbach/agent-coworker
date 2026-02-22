@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 import { app } from "electron";
 
 import type {
   PersistedState,
   ThreadRecord,
-  ThreadStatus,
-  ThreadTitleSource,
   TranscriptEvent,
   WorkspaceRecord,
 } from "../../src/app/types";
@@ -48,10 +47,6 @@ function defaultState(): PersistedState {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function asNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -86,26 +81,55 @@ function asOptionalString(value: unknown): string | undefined {
   return candidate ?? undefined;
 }
 
-function asThreadStatus(value: unknown): ThreadStatus {
-  return value === "active" || value === "disconnected" ? value : "disconnected";
-}
-
-function isPlaceholderThreadTitle(title: string): boolean {
-  const normalized = title.trim().toLowerCase();
-  return normalized === "new thread" || normalized === "new session" || normalized === "new conversation";
-}
-
-function asThreadTitleSource(value: unknown, fallbackTitle: string): ThreadTitleSource {
-  if (value === "default" || value === "model" || value === "heuristic" || value === "manual") {
-    return value;
-  }
-  return isPlaceholderThreadTitle(fallbackTitle) ? "default" : "manual";
-}
-
 function asNonNegativeInteger(value: unknown, fallback = 0): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return Math.max(0, Math.floor(value));
 }
+
+const safeIdSchema = z.preprocess((value) => asSafeId(value), z.string());
+const timestampSchema = z.preprocess((value) => asTimestamp(value), z.string());
+const nonEmptyStringSchema = z.preprocess((value) => asNonEmptyString(value), z.string());
+const optionalStringSchema = z.preprocess((value) => asOptionalString(value), z.string().optional());
+
+const workspaceRecordInputSchema = z.object({
+  id: safeIdSchema,
+  name: nonEmptyStringSchema,
+  path: nonEmptyStringSchema,
+  createdAt: timestampSchema,
+  lastOpenedAt: timestampSchema,
+  defaultProvider: optionalStringSchema,
+  defaultModel: optionalStringSchema,
+  defaultSubAgentModel: optionalStringSchema,
+  defaultEnableMcp: z.boolean(),
+  yolo: z.boolean(),
+}).strict();
+
+const threadRecordInputSchema = z.object({
+  id: safeIdSchema,
+  workspaceId: safeIdSchema,
+  title: nonEmptyStringSchema,
+  titleSource: z.enum(["default", "model", "heuristic", "manual"]),
+  createdAt: timestampSchema,
+  lastMessageAt: timestampSchema,
+  status: z.enum(["active", "disconnected"]),
+  sessionId: z.preprocess((value) => asNonEmptyString(value) ?? null, z.string().nullable()),
+  lastEventSeq: z.preprocess((value) => asNonNegativeInteger(value, -1), z.number().int().min(0)),
+}).strict();
+
+const persistedStateInputSchema = z.object({
+  version: z.number().int().min(2),
+  workspaces: z.array(z.unknown()),
+  threads: z.array(z.unknown()),
+  developerMode: z.boolean(),
+  showHiddenFiles: z.boolean(),
+}).strict();
+
+const transcriptEventSchema = z.object({
+  ts: z.string().trim().min(1),
+  threadId: z.string().trim().min(1),
+  direction: z.enum(["server", "client"]),
+  payload: z.unknown(),
+}).strict();
 
 async function resolveWorkspacePath(value: unknown): Promise<string | null> {
   const candidate = asNonEmptyString(value);
@@ -126,103 +150,89 @@ async function resolveWorkspacePath(value: unknown): Promise<string | null> {
 }
 
 async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
-  if (!Array.isArray(value)) {
-    return [];
+  const parsedWorkspaces = z.array(workspaceRecordInputSchema).safeParse(value);
+  if (!parsedWorkspaces.success) {
+    throw new Error(`Invalid workspace state: ${parsedWorkspaces.error.issues[0]?.message ?? "validation_failed"}`);
   }
 
   const workspaces: WorkspaceRecord[] = [];
   const seenWorkspaceIds = new Set<string>();
-  for (const item of value) {
-    if (!isRecord(item)) {
-      continue;
+  for (const workspace of parsedWorkspaces.data) {
+    const workspacePath = await resolveWorkspacePath(workspace.path);
+    if (!workspacePath) {
+      throw new Error(`Workspace path is missing or invalid: ${workspace.path}`);
     }
-
-    const id = asSafeId(item.id);
-    const name = asNonEmptyString(item.name);
-    const createdAt = asTimestamp(item.createdAt);
-    const lastOpenedAt = asTimestamp(item.lastOpenedAt);
-    const workspacePath = await resolveWorkspacePath(item.path);
-    if (!id || !name || !createdAt || !lastOpenedAt || !workspacePath || seenWorkspaceIds.has(id)) {
-      continue;
+    if (seenWorkspaceIds.has(workspace.id)) {
+      throw new Error(`Duplicate workspace id in persisted state: ${workspace.id}`);
     }
 
     workspaces.push({
-      id,
-      name,
+      id: workspace.id,
+      name: workspace.name,
       path: workspacePath,
-      createdAt,
-      lastOpenedAt,
-      defaultProvider: asOptionalString(item.defaultProvider) as WorkspaceRecord["defaultProvider"],
-      defaultModel: asOptionalString(item.defaultModel),
-      defaultSubAgentModel: asOptionalString(item.defaultSubAgentModel),
-      defaultEnableMcp: typeof item.defaultEnableMcp === "boolean" ? item.defaultEnableMcp : true,
-      yolo: typeof item.yolo === "boolean" ? item.yolo : false,
+      createdAt: workspace.createdAt,
+      lastOpenedAt: workspace.lastOpenedAt,
+      defaultProvider: workspace.defaultProvider as WorkspaceRecord["defaultProvider"],
+      defaultModel: workspace.defaultModel,
+      defaultSubAgentModel: workspace.defaultSubAgentModel,
+      defaultEnableMcp: workspace.defaultEnableMcp,
+      yolo: workspace.yolo,
     });
-    seenWorkspaceIds.add(id);
+    seenWorkspaceIds.add(workspace.id);
   }
 
   return workspaces;
 }
 
 function sanitizeThreads(value: unknown, workspaceIds: Set<string>): ThreadRecord[] {
-  if (!Array.isArray(value)) {
-    return [];
+  const parsedThreads = z.array(threadRecordInputSchema).safeParse(value);
+  if (!parsedThreads.success) {
+    throw new Error(`Invalid thread state: ${parsedThreads.error.issues[0]?.message ?? "validation_failed"}`);
   }
 
   const threads: ThreadRecord[] = [];
   const seenThreadIds = new Set<string>();
-  for (const item of value) {
-    if (!isRecord(item)) {
-      continue;
+  for (const thread of parsedThreads.data) {
+    if (seenThreadIds.has(thread.id)) {
+      throw new Error(`Duplicate thread id in persisted state: ${thread.id}`);
     }
-
-    const id = asSafeId(item.id);
-    const workspaceId = asSafeId(item.workspaceId);
-    const title = asNonEmptyString(item.title);
-    const createdAt = asTimestamp(item.createdAt);
-    const lastMessageAt = asTimestamp(item.lastMessageAt);
-    if (!id || !workspaceId || !title || !createdAt || !lastMessageAt || seenThreadIds.has(id)) {
-      continue;
-    }
-    if (!workspaceIds.has(workspaceId)) {
-      continue;
+    if (!workspaceIds.has(thread.workspaceId)) {
+      throw new Error(`Thread references unknown workspace: ${thread.workspaceId}`);
     }
 
     threads.push({
-      id,
-      workspaceId,
-      title,
-      titleSource: asThreadTitleSource(item.titleSource, title),
-      createdAt,
-      lastMessageAt,
-      status: asThreadStatus(item.status),
-      sessionId: asNonEmptyString(item.sessionId) ?? null,
-      lastEventSeq: asNonNegativeInteger(item.lastEventSeq, 0),
+      id: thread.id,
+      workspaceId: thread.workspaceId,
+      title: thread.title,
+      titleSource: thread.titleSource,
+      createdAt: thread.createdAt,
+      lastMessageAt: thread.lastMessageAt,
+      status: thread.status,
+      sessionId: thread.sessionId,
+      lastEventSeq: thread.lastEventSeq,
     });
-    seenThreadIds.add(id);
+    seenThreadIds.add(thread.id);
   }
 
   return threads;
 }
 
 async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
-  if (!isRecord(value)) {
-    return defaultState();
+  const parsedState = persistedStateInputSchema.safeParse(value);
+  if (!parsedState.success) {
+    throw new Error(`Invalid persisted state schema: ${parsedState.error.issues[0]?.message ?? "validation_failed"}`);
   }
 
-  const workspaces = await sanitizeWorkspaces(value.workspaces);
+  const workspaces = await sanitizeWorkspaces(parsedState.data.workspaces);
   const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
-  const threads = sanitizeThreads(value.threads, workspaceIds);
-  const parsedVersion =
-    typeof value.version === "number" && Number.isFinite(value.version)
-      ? Math.max(0, Math.floor(value.version))
-      : 0;
+  const threads = sanitizeThreads(parsedState.data.threads, workspaceIds);
+  const parsedVersion = parsedState.data.version;
   return {
     version: parsedVersion >= 2 ? parsedVersion : 2,
     workspaces,
     threads,
-    developerMode: typeof value.developerMode === "boolean" ? value.developerMode : false,
-    showHiddenFiles: typeof (value as any).showHiddenFiles === "boolean" ? (value as any).showHiddenFiles : false,
+    developerMode: parsedState.data.developerMode,
+    showHiddenFiles: parsedState.data.showHiddenFiles,
   };
 }
 
@@ -301,7 +311,8 @@ export class PersistenceService {
       }
 
       try {
-        events.push(JSON.parse(trimmed) as TranscriptEvent);
+        const parsedLine = transcriptEventSchema.parse(JSON.parse(trimmed));
+        events.push(parsedLine as TranscriptEvent);
       } catch (error) {
         throw new Error(`Failed to parse transcript line ${idx + 1}: ${String(error)}`);
       }

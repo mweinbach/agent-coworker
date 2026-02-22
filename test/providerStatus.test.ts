@@ -77,10 +77,11 @@ describe("getProviderStatuses", () => {
     const accessToken = "access-token";
 
     const codexAuth = {
+      version: 1,
       auth_mode: "chatgpt",
       tokens: { id_token: idToken, access_token: accessToken },
     };
-    const codexAuthPath = path.join(home, ".codex", "auth.json");
+    const codexAuthPath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
     await fs.mkdir(path.dirname(codexAuthPath), { recursive: true });
     await fs.writeFile(codexAuthPath, JSON.stringify(codexAuth), "utf-8");
 
@@ -118,11 +119,11 @@ describe("getProviderStatuses", () => {
     const iss = "https://auth.example.com";
     const idToken = makeJwt({ iss, email: "jwt@example.com" });
     const accessToken = "access-token";
-    const codexAuthPath = path.join(home, ".codex", "auth.json");
+    const codexAuthPath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
     await fs.mkdir(path.dirname(codexAuthPath), { recursive: true });
     await fs.writeFile(
       codexAuthPath,
-      JSON.stringify({ auth_mode: "chatgpt", tokens: { id_token: idToken, access_token: accessToken } }),
+      JSON.stringify({ version: 1, auth_mode: "chatgpt", tokens: { id_token: idToken, access_token: accessToken } }),
       "utf-8"
     );
 

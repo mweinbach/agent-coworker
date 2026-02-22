@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 import { getAiCoworkerPaths } from "../../connect";
 
@@ -7,6 +8,11 @@ type CliState = {
   version: 1;
   lastSessionByCwd: Record<string, string>;
 };
+
+const cliStateSchema = z.object({
+  version: z.literal(1),
+  lastSessionByCwd: z.record(z.string().trim().min(1), z.string().trim().min(1)),
+}).strict();
 
 function getCliStateFilePath(): string {
   const paths = getAiCoworkerPaths();
@@ -17,22 +23,24 @@ async function readCliState(): Promise<CliState> {
   const filePath = getCliStateFilePath();
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const map = typeof parsed.lastSessionByCwd === "object" && parsed.lastSessionByCwd
-      ? parsed.lastSessionByCwd as Record<string, unknown>
-      : {};
+    const parsedRaw = JSON.parse(raw);
+    const parsedState = cliStateSchema.safeParse(parsedRaw);
+    if (!parsedState.success) {
+      throw new Error(`Invalid CLI state schema: ${parsedState.error.issues[0]?.message ?? "validation_failed"}`);
+    }
+
     const normalized: Record<string, string> = {};
-    for (const [cwd, sessionId] of Object.entries(map)) {
-      if (typeof cwd !== "string" || !cwd.trim()) continue;
-      if (typeof sessionId !== "string" || !sessionId.trim()) continue;
-      normalized[path.resolve(cwd)] = sessionId.trim();
+    for (const [cwd, sessionId] of Object.entries(parsedState.data.lastSessionByCwd)) {
+      normalized[path.resolve(cwd)] = sessionId;
     }
     return {
       version: 1,
       lastSessionByCwd: normalized,
     };
-  } catch {
-    return { version: 1, lastSessionByCwd: {} };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return { version: 1, lastSessionByCwd: {} };
+    throw new Error(`Failed to read CLI state: ${String(error)}`);
   }
 }
 

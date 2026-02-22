@@ -2,6 +2,7 @@ import type { ModelMessage } from "ai";
 import { Database } from "bun:sqlite";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 import type { AiCoworkerPaths } from "../connect";
 import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
@@ -13,12 +14,11 @@ import {
 import type { SessionTitleSource } from "./sessionTitleService";
 import { mapPersistedSessionRecordRow, mapPersistedSessionSummaryRow } from "./sessionDb/mappers";
 import {
-  asIntegerFlag,
-  asIsoTimestamp,
-  asNonEmptyString,
-  asPositiveInteger,
   isCorruptionError,
-  parseJsonSafe,
+  parseBooleanInteger,
+  parseJsonStringWithSchema,
+  parseNonNegativeInteger,
+  parseRequiredIsoTimestamp,
   toJsonString,
 } from "./sessionDb/normalizers";
 
@@ -29,6 +29,7 @@ const PRIVATE_DIR_MODE = 0o700;
 const BASE_SCHEMA_MIGRATION = 1;
 const LEGACY_IMPORT_MIGRATION = 2;
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
+const messagesJsonSchema = z.array(z.unknown());
 
 export type SessionPersistenceStatus = "active" | "closed";
 
@@ -173,7 +174,7 @@ export class SessionDb {
       )
       .all() as Array<Record<string, unknown>>;
 
-    return rows.map(mapPersistedSessionSummaryRow).filter((entry): entry is PersistedSessionSummary => entry !== null);
+    return rows.map(mapPersistedSessionSummaryRow);
   }
 
   deleteSession(sessionId: string): void {
@@ -185,7 +186,7 @@ export class SessionDb {
       .query("SELECT messages_json FROM session_state WHERE session_id = ?")
       .get(sessionId) as Record<string, unknown> | null;
     if (!row) return { messages: [], total: 0 };
-    const all = parseJsonSafe<ModelMessage[]>(row.messages_json, []);
+    const all = parseJsonStringWithSchema(row.messages_json, messagesJsonSchema, "messages_json") as ModelMessage[];
     const safeOffset = Math.max(0, Math.floor(offset));
     const safeLimit = Math.max(1, Math.floor(limit));
     const total = all.length;
@@ -235,12 +236,14 @@ export class SessionDb {
         .query("SELECT last_event_seq FROM sessions WHERE session_id = ?")
         .get(input.sessionId) as Record<string, unknown> | null;
 
-      const currentSeq = existing ? asPositiveInteger(existing.last_event_seq) : 0;
+      const currentSeq = existing ? parseNonNegativeInteger(existing.last_event_seq, "sessions.last_event_seq") : 0;
       const nextSeq = currentSeq + 1;
       const snapshot = input.snapshot;
       const outputDirectory = snapshot.outputDirectory ?? null;
       const uploadsDirectory = snapshot.uploadsDirectory ?? null;
-      const ts = asIsoTimestamp(input.eventTs ?? snapshot.updatedAt);
+      const createdAt = parseRequiredIsoTimestamp(snapshot.createdAt, "snapshot.createdAt");
+      const updatedAt = parseRequiredIsoTimestamp(snapshot.updatedAt, "snapshot.updatedAt");
+      const ts = parseRequiredIsoTimestamp(input.eventTs ?? updatedAt, "event timestamp");
       const direction = input.direction ?? "system";
       const payloadJson = toJsonString(input.payload ?? {});
 
@@ -293,8 +296,8 @@ export class SessionDb {
           outputDirectory,
           uploadsDirectory,
           snapshot.enableMcp ? 1 : 0,
-          snapshot.createdAt,
-          snapshot.updatedAt,
+          createdAt,
+          updatedAt,
           snapshot.status,
           snapshot.hasPendingAsk ? 1 : 0,
           snapshot.hasPendingApproval ? 1 : 0,
@@ -441,14 +444,14 @@ export class SessionDb {
     for (const entry of entries) {
       if (!entry.endsWith(".json")) continue;
       const filePath = path.join(this.sessionsDir, entry);
-      let snapshot: PersistedSessionSnapshot | null = null;
+      const raw = await fs.readFile(filePath, "utf-8");
+      let parsedJson: unknown;
       try {
-        const raw = await fs.readFile(filePath, "utf-8");
-        snapshot = parsePersistedSessionSnapshot(JSON.parse(raw));
-      } catch {
-        snapshot = null;
+        parsedJson = JSON.parse(raw);
+      } catch (error) {
+        throw new Error(`Invalid JSON in legacy session snapshot ${filePath}: ${String(error)}`);
       }
-      if (!snapshot) continue;
+      const snapshot = parsePersistedSessionSnapshot(parsedJson);
       this.importLegacySnapshot(snapshot);
     }
   }
@@ -459,11 +462,21 @@ export class SessionDb {
         .query("SELECT status, has_pending_ask, has_pending_approval, last_event_seq FROM sessions WHERE session_id = ?")
         .get(legacy.sessionId) as Record<string, unknown> | null;
 
-      const existingLastEventSeq = existing ? asPositiveInteger(existing.last_event_seq) : 0;
+      const existingLastEventSeq = existing
+        ? parseNonNegativeInteger(existing.last_event_seq, "sessions.last_event_seq")
+        : 0;
       const lastEventSeq = Math.max(existingLastEventSeq, 1);
-      const status = existing?.status === "closed" ? "closed" : "active";
-      const hasPendingAsk = existing ? asIntegerFlag(existing.has_pending_ask) : 0;
-      const hasPendingApproval = existing ? asIntegerFlag(existing.has_pending_approval) : 0;
+      const existingStatus = existing?.status;
+      if (existingStatus !== undefined && existingStatus !== "active" && existingStatus !== "closed") {
+        throw new Error(`Invalid existing session status for ${legacy.sessionId}: ${String(existingStatus)}`);
+      }
+      const status = existingStatus ?? "active";
+      const hasPendingAsk = existing ? parseBooleanInteger(existing.has_pending_ask, "sessions.has_pending_ask") : 0;
+      const hasPendingApproval = existing
+        ? parseBooleanInteger(existing.has_pending_approval, "sessions.has_pending_approval")
+        : 0;
+      const createdAt = parseRequiredIsoTimestamp(legacy.createdAt, "legacy.createdAt");
+      const updatedAt = parseRequiredIsoTimestamp(legacy.updatedAt, "legacy.updatedAt");
 
       this.db
         .query(
@@ -515,8 +528,8 @@ export class SessionDb {
           legacy.config.outputDirectory ?? null,
           legacy.config.uploadsDirectory ?? null,
           legacy.config.enableMcp ? 1 : 0,
-          asIsoTimestamp(legacy.createdAt),
-          asIsoTimestamp(legacy.updatedAt),
+          createdAt,
+          updatedAt,
           status,
           hasPendingAsk,
           hasPendingApproval,
@@ -561,7 +574,7 @@ export class SessionDb {
         .run(
           legacy.sessionId,
           1,
-          asIsoTimestamp(legacy.updatedAt),
+          updatedAt,
           "server",
           "legacy_import_snapshot",
           toJsonString({ version: legacy.version })

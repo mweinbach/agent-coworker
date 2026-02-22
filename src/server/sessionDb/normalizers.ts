@@ -1,55 +1,61 @@
-import { isProviderName } from "../../types";
-import type { AgentConfig } from "../../types";
-import type { SessionTitleSource } from "../sessionTitleService";
+import { z } from "zod";
 
-export function asNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
+import { PROVIDER_NAMES } from "../../types";
 
-export function asIsoTimestamp(value: unknown, fallback = new Date().toISOString()): string {
-  const text = asNonEmptyString(value);
-  if (!text) return fallback;
-  return Number.isNaN(Date.parse(text)) ? fallback : text;
-}
+export const nonEmptyStringSchema = z.string().trim().min(1);
+export const isoTimestampSchema = z.string().datetime({ offset: true });
+export const providerNameSchema = z.enum(PROVIDER_NAMES);
+export const sessionTitleSourceSchema = z.enum(["default", "model", "heuristic", "manual"]);
+export const sqliteBooleanIntSchema = z.union([z.literal(0), z.literal(1)]);
+export const nonNegativeIntegerSchema = z.number().int().min(0);
 
-export function asSessionTitleSource(value: unknown): SessionTitleSource {
-  const raw = asNonEmptyString(value);
-  return raw === "default" || raw === "model" || raw === "heuristic" || raw === "manual"
-    ? raw
-    : "default";
-}
-
-export function asProvider(
-  value: unknown,
-  fallback: AgentConfig["provider"] = "google",
-): AgentConfig["provider"] {
-  const raw = asNonEmptyString(value);
-  if (!raw || !isProviderName(raw)) return fallback;
-  return raw;
-}
-
-export function parseJsonSafe<T>(raw: unknown, fallback: T): T {
-  if (typeof raw !== "string") return fallback;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
+export function parseJsonStringWithSchema<T>(
+  raw: unknown,
+  schema: z.ZodType<T>,
+  fieldName: string,
+): T {
+  if (typeof raw !== "string") {
+    throw new Error(`Invalid ${fieldName}: expected JSON string`);
   }
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Invalid JSON in ${fieldName}: ${String(error)}`);
+  }
+  const parsed = schema.safeParse(parsedJson);
+  if (!parsed.success) {
+    throw new Error(`Invalid ${fieldName}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+  }
+  return parsed.data;
+}
+
+export function parseRequiredIsoTimestamp(value: unknown, fieldName: string): string {
+  const parsed = isoTimestampSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(`Invalid ${fieldName}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+  }
+  return parsed.data;
+}
+
+export function parseNonNegativeInteger(value: unknown, fieldName: string): number {
+  const parsed = nonNegativeIntegerSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(`Invalid ${fieldName}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+  }
+  return parsed.data;
+}
+
+export function parseBooleanInteger(value: unknown, fieldName: string): 0 | 1 {
+  const parsed = sqliteBooleanIntSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(`Invalid ${fieldName}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+  }
+  return parsed.data;
 }
 
 export function toJsonString(value: unknown): string {
   return JSON.stringify(value ?? null);
-}
-
-export function asIntegerFlag(value: unknown): 0 | 1 {
-  return value === 1 ? 1 : 0;
-}
-
-export function asPositiveInteger(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
-  return Math.max(0, Math.floor(value));
 }
 
 export function isCorruptionError(error: unknown): boolean {

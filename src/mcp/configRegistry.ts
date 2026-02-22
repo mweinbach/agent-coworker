@@ -214,15 +214,7 @@ async function readLayer(opts: {
     }
   }
 
-  let servers: MCPServerConfig[] = [];
-  let parseError: string | undefined;
-  if (exists) {
-    try {
-      servers = parseMCPServersDocument(rawJson).servers;
-    } catch (error) {
-      parseError = String(error);
-    }
-  }
+  const servers = exists ? parseMCPServersDocument(rawJson).servers : [];
 
   return {
     source: opts.source,
@@ -232,7 +224,6 @@ async function readLayer(opts: {
       exists,
       editable: opts.editable,
       legacy: opts.legacy,
-      ...(parseError ? { parseError } : {}),
       serverCount: servers.length,
     },
     servers,
@@ -244,7 +235,7 @@ async function readLayer(opts: {
 // ---------------------------------------------------------------------------
 
 function mergeLayers(layers: MCPConfigLayer[]): MCPRegistryServer[] {
-  const precedence: MCPServerSource[] = ["system", "user_legacy", "user", "workspace_legacy", "workspace"];
+  const precedence: MCPServerSource[] = ["system", "user", "workspace"];
   const bySource = new Map(layers.map((layer) => [layer.source, layer]));
   const mergedByName = new Map<string, MCPRegistryServer>();
 
@@ -263,6 +254,17 @@ function mergeLayers(layers: MCPConfigLayer[]): MCPRegistryServer[] {
   return [...mergedByName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 export async function loadMCPConfigRegistry(config: AgentConfig): Promise<MCPConfigRegistrySnapshot> {
   const paths = resolveMcpConfigPaths(config);
 
@@ -270,20 +272,34 @@ export async function loadMCPConfigRegistry(config: AgentConfig): Promise<MCPCon
     readLayer({ source: "workspace", filePath: paths.workspaceConfigFile, editable: true, legacy: false }),
     readLayer({ source: "user", filePath: paths.userConfigFile, editable: false, legacy: false }),
     readLayer({ source: "system", filePath: paths.systemConfigFile, editable: false, legacy: false }),
-    readLayer({ source: "workspace_legacy", filePath: paths.workspaceLegacyFile, editable: false, legacy: true }),
-    readLayer({ source: "user_legacy", filePath: paths.userLegacyFile, editable: false, legacy: true }),
+  ]);
+  const [workspaceLegacyExists, userLegacyExists] = await Promise.all([
+    fileExists(paths.workspaceLegacyFile),
+    fileExists(paths.userLegacyFile),
   ]);
 
-  const warnings = layers
-    .filter((layer) => typeof layer.file.parseError === "string")
-    .map((layer) => `${layer.source}: ${layer.file.parseError}`);
+  const warnings: string[] = [];
 
   const files = [
     layers.find((layer) => layer.source === "workspace")?.file,
     layers.find((layer) => layer.source === "user")?.file,
     layers.find((layer) => layer.source === "system")?.file,
-    layers.find((layer) => layer.source === "workspace_legacy")?.file,
-    layers.find((layer) => layer.source === "user_legacy")?.file,
+    {
+      source: "workspace_legacy" as const,
+      path: paths.workspaceLegacyFile,
+      exists: workspaceLegacyExists,
+      editable: false,
+      legacy: true,
+      serverCount: 0,
+    },
+    {
+      source: "user_legacy" as const,
+      path: paths.userLegacyFile,
+      exists: userLegacyExists,
+      editable: false,
+      legacy: true,
+      serverCount: 0,
+    },
   ].filter((file): file is MCPRegistryFileState => Boolean(file));
 
   return {
@@ -292,11 +308,11 @@ export async function loadMCPConfigRegistry(config: AgentConfig): Promise<MCPCon
     legacy: {
       workspace: {
         path: paths.workspaceLegacyFile,
-        exists: layers.find((layer) => layer.source === "workspace_legacy")?.file.exists ?? false,
+        exists: workspaceLegacyExists,
       },
       user: {
         path: paths.userLegacyFile,
-        exists: layers.find((layer) => layer.source === "user_legacy")?.file.exists ?? false,
+        exists: userLegacyExists,
       },
     },
     warnings,
@@ -311,7 +327,6 @@ export async function readWorkspaceMCPServersDocument(config: AgentConfig): Prom
   path: string;
   rawJson: string;
   workspaceServers: MCPServerConfig[];
-  parseError?: string;
 }> {
   const paths = resolveMcpConfigPaths(config);
   let rawJson = DEFAULT_MCP_SERVERS_DOCUMENT;
@@ -322,20 +337,12 @@ export async function readWorkspaceMCPServersDocument(config: AgentConfig): Prom
       throw error;
     }
   }
-
-  let workspaceServers: MCPServerConfig[] = [];
-  let parseError: string | undefined;
-  try {
-    workspaceServers = parseMCPServersDocument(rawJson).servers;
-  } catch (error) {
-    parseError = String(error);
-  }
+  const workspaceServers = parseMCPServersDocument(rawJson).servers;
 
   return {
     path: paths.workspaceConfigFile,
     rawJson,
     workspaceServers,
-    ...(parseError ? { parseError } : {}),
   };
 }
 

@@ -422,7 +422,46 @@ describe("loadConfig", () => {
     expect(cfg.provider).toBe("anthropic");
   });
 
-  test("reads saved API key from legacy .ai-coworker connections file", async () => {
+  test("reads saved API key only from canonical cowork connections file", async () => {
+    const { cwd, home } = await makeTmpDirs();
+    await writeJson(path.join(home, ".ai-coworker", "config", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        openai: {
+          service: "openai",
+          mode: "api_key",
+          apiKey: "legacy-service-key",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        openai: {
+          service: "openai",
+          mode: "api_key",
+          apiKey: "canonical-service-key",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: { AGENT_PROVIDER: "openai" },
+    });
+
+    const model = getModel(cfg) as any;
+    const headers = await model.config.headers();
+    expect(headers.authorization).toBe("Bearer canonical-service-key");
+  });
+
+  test("throws when canonical connection store uses legacy apiKeys shape", async () => {
     const { cwd, home } = await makeTmpDirs();
     await writeJson(path.join(home, ".ai-coworker", "config", "connections.json"), {
       version: 1,
@@ -444,29 +483,13 @@ describe("loadConfig", () => {
       env: { AGENT_PROVIDER: "openai" },
     });
 
-    const model = getModel(cfg) as any;
-    const headers = await model.config.headers();
-    expect(headers.authorization).toBe("Bearer legacy-service-key");
-  });
-
-  test("reads saved API key from legacy apiKeys shape", async () => {
-    const { cwd, home } = await makeTmpDirs();
     await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
       apiKeys: {
         openai: "legacy-shape-key",
       },
     });
 
-    const cfg = await loadConfig({
-      cwd,
-      homedir: home,
-      builtInDir: repoRoot(),
-      env: { AGENT_PROVIDER: "openai" },
-    });
-
-    const model = getModel(cfg) as any;
-    const headers = await model.config.headers();
-    expect(headers.authorization).toBe("Bearer legacy-shape-key");
+    expect(() => getModel(cfg)).toThrow("Invalid connection store schema");
   });
 
   test("loads command template config from merged config", async () => {
@@ -495,7 +518,7 @@ describe("loadConfig", () => {
     expect(cfg.command?.triage?.template).toBe("Triage these issues: $ARGUMENTS");
   });
 
-  test("ignores invalid command template entries", async () => {
+  test("throws on invalid command template entries", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
@@ -505,14 +528,14 @@ describe("loadConfig", () => {
       },
     });
 
-    const cfg = await loadConfig({
-      cwd,
-      homedir: home,
-      builtInDir: repoRoot(),
-      env: {},
-    });
-
-    expect(cfg.command).toBeUndefined();
+    await expect(
+      loadConfig({
+        cwd,
+        homedir: home,
+        builtInDir: repoRoot(),
+        env: {},
+      }),
+    ).rejects.toThrow("Invalid command config");
   });
 
   test("merges providerOptions from built-in, user, and project config", async () => {
@@ -995,22 +1018,21 @@ describe("loadJsonSafe (tested indirectly)", () => {
     expect(cfg.provider).toBe("google");
   });
 
-  test("returns {} for invalid JSON (config loads without error)", async () => {
+  test("throws for invalid JSON config files", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const configPath = path.join(cwd, ".agent", "config.json");
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(configPath, "NOT VALID JSON {{{", "utf-8");
 
-    const cfg = await loadConfig({
-      cwd,
-      homedir: home,
-      builtInDir: repoRoot(),
-      env: {},
-    });
-
-    expect(cfg).toBeDefined();
-    expect(cfg.provider).toBe("google");
+    await expect(
+      loadConfig({
+        cwd,
+        homedir: home,
+        builtInDir: repoRoot(),
+        env: {},
+      }),
+    ).rejects.toThrow("Invalid JSON in config file");
   });
 
   test("parses valid JSON correctly", async () => {

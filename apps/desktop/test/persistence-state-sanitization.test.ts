@@ -15,7 +15,7 @@ const { PersistenceService } = await import("../electron/services/persistence");
 
 const TS = "2024-01-01T00:00:00.000Z";
 
-describe("desktop persistence state sanitization", () => {
+describe("desktop persistence state validation", () => {
   beforeEach(async () => {
     userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-state-"));
   });
@@ -28,66 +28,67 @@ describe("desktop persistence state sanitization", () => {
     userDataDir = "";
   });
 
-  test("drops workspaces with invalid paths and orphaned threads", async () => {
+  test("rejects states with invalid workspace paths", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-valid");
     const missingWorkspace = path.join(userDataDir, "workspace-missing");
     await fs.mkdir(validWorkspace, { recursive: true });
 
-    await persistence.saveState({
-      version: 1,
-      workspaces: [
-        {
-          id: "ws_valid",
-          name: "Valid workspace",
-          path: validWorkspace,
-          createdAt: TS,
-          lastOpenedAt: TS,
-          defaultSubAgentModel: "gpt-5.2-mini",
-          defaultEnableMcp: true,
-          yolo: false,
-        },
-        {
-          id: "ws_missing",
-          name: "Missing workspace",
-          path: missingWorkspace,
-          createdAt: TS,
-          lastOpenedAt: TS,
-          defaultEnableMcp: false,
-          yolo: true,
-        },
-      ],
-      threads: [
-        {
-          id: "thread_valid",
-          workspaceId: "ws_valid",
-          title: "Valid thread",
-          createdAt: TS,
-          lastMessageAt: TS,
-          status: "active",
-        },
-        {
-          id: "thread_orphan",
-          workspaceId: "ws_missing",
-          title: "Orphan thread",
-          createdAt: TS,
-          lastMessageAt: TS,
-          status: "active",
-        },
-      ],
-      developerMode: true,
-      showHiddenFiles: true,
-    });
-
-    const state = await persistence.loadState();
-    expect(state.workspaces.length).toBe(1);
-    expect(state.workspaces[0]?.id).toBe("ws_valid");
-    expect(state.workspaces[0]?.path).toBe(await fs.realpath(validWorkspace));
-    expect(state.workspaces[0]?.defaultSubAgentModel).toBe("gpt-5.2-mini");
-    expect(state.threads.map((thread) => thread.id)).toEqual(["thread_valid"]);
+    await expect(
+      persistence.saveState({
+        version: 2,
+        workspaces: [
+          {
+            id: "ws_valid",
+            name: "Valid workspace",
+            path: validWorkspace,
+            createdAt: TS,
+            lastOpenedAt: TS,
+            defaultSubAgentModel: "gpt-5.2-mini",
+            defaultEnableMcp: true,
+            yolo: false,
+          },
+          {
+            id: "ws_missing",
+            name: "Missing workspace",
+            path: missingWorkspace,
+            createdAt: TS,
+            lastOpenedAt: TS,
+            defaultEnableMcp: false,
+            yolo: true,
+          },
+        ],
+        threads: [
+          {
+            id: "thread_valid",
+            workspaceId: "ws_valid",
+            title: "Valid thread",
+            titleSource: "manual",
+            createdAt: TS,
+            lastMessageAt: TS,
+            status: "active",
+            sessionId: null,
+            lastEventSeq: 0,
+          },
+          {
+            id: "thread_orphan",
+            workspaceId: "ws_missing",
+            title: "Orphan thread",
+            titleSource: "manual",
+            createdAt: TS,
+            lastMessageAt: TS,
+            status: "active",
+            sessionId: null,
+            lastEventSeq: 0,
+          },
+        ],
+        developerMode: true,
+        showHiddenFiles: true,
+      }),
+    ).rejects.toThrow("Workspace path is missing or invalid");
   });
 
-  test("normalizes malformed on-disk state payloads", async () => {
+  test("rejects malformed on-disk state payloads", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-from-disk");
     await fs.mkdir(validWorkspace, { recursive: true });
@@ -129,14 +130,6 @@ describe("desktop persistence state sanitization", () => {
       "utf8"
     );
 
-    const state = await persistence.loadState();
-    expect(state.version).toBe(2);
-    expect(state.developerMode).toBe(false);
-    expect(state.showHiddenFiles).toBe(false);
-    expect(state.workspaces[0]?.defaultEnableMcp).toBe(true);
-    expect(state.workspaces[0]?.defaultSubAgentModel).toBeUndefined();
-    expect(state.workspaces[0]?.yolo).toBe(false);
-    expect(state.threads[0]?.status).toBe("disconnected");
-    expect(state.threads[0]?.titleSource).toBe("manual");
+    await expect(persistence.loadState()).rejects.toThrow("Failed to load state");
   });
 });

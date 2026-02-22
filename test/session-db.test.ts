@@ -113,4 +113,11 @@ describe("sessionDb", () => {
       db.close();
     }
   });
+
+  test("fails to create database when legacy snapshot JSON is malformed", async () => {
+    const paths = await makeTmpCoworkHome();
+    await fs.writeFile(path.join(paths.sessionsDir, "legacy-bad.json"), "not valid json {{{", "utf-8");
+
+    await expect(SessionDb.create({ paths })).rejects.toThrow("Invalid JSON in legacy session snapshot");
+  });
 });

@@ -71,25 +71,27 @@ describe("sessionStore", () => {
     expect(loaded).toEqual(snapshot);
   });
 
-  test("readPersistedSessionSnapshot returns null for malformed files", async () => {
+  test("readPersistedSessionSnapshot throws for malformed files", async () => {
     const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-store-test-"));
     const sessionId = "sess-bad";
     const filePath = getPersistedSessionFilePath({ sessionsDir }, sessionId);
 
     await fs.writeFile(filePath, "not valid json {{{", "utf-8");
 
-    const loaded = await readPersistedSessionSnapshot({ paths: { sessionsDir }, sessionId });
-    expect(loaded).toBeNull();
+    await expect(
+      readPersistedSessionSnapshot({ paths: { sessionsDir }, sessionId }),
+    ).rejects.toThrow("Invalid JSON in persisted session snapshot");
   });
 
   test("parsePersistedSessionSnapshot rejects invalid shape", () => {
-    const parsed = parsePersistedSessionSnapshot({
-      version: 1,
-      sessionId: "sess-1",
-      createdAt: "2026-02-19T00:00:00.000Z",
-      updatedAt: "2026-02-19T00:00:01.000Z",
-      session: { title: "x" },
-    });
-    expect(parsed).toBeNull();
+    expect(() =>
+      parsePersistedSessionSnapshot({
+        version: 1,
+        sessionId: "sess-1",
+        createdAt: "2026-02-19T00:00:00.000Z",
+        updatedAt: "2026-02-19T00:00:01.000Z",
+        session: { title: "x" },
+      }),
+    ).toThrow("Invalid persisted session snapshot");
   });
 });

@@ -33,7 +33,7 @@ async function writeJson(filePath: string, value: unknown) {
 }
 
 describe("mcp config registry", () => {
-  test("workspace/user/system precedence with legacy fallback", async () => {
+  test("workspace/user/system precedence ignores legacy layers", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-home-"));
     const builtInDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-builtin-"));
@@ -57,7 +57,8 @@ describe("mcp config registry", () => {
       const snapshot = await loadMCPConfigRegistry(config);
       const shared = snapshot.servers.find((server) => server.name === "shared");
       expect(shared?.source).toBe("workspace");
-      expect(snapshot.servers.some((server) => server.name === "legacy-ws")).toBe(true);
+      expect(snapshot.servers.some((server) => server.name === "legacy-ws")).toBe(false);
+      expect(snapshot.legacy.workspace.exists).toBe(true);
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
@@ -65,7 +66,7 @@ describe("mcp config registry", () => {
     }
   });
 
-  test("invalid json does not throw and surfaces warnings", async () => {
+  test("invalid json throws", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-invalid-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-invalid-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-invalid-builtin-"));
@@ -74,9 +75,7 @@ describe("mcp config registry", () => {
     try {
       await fs.mkdir(path.join(workspace, ".cowork"), { recursive: true });
       await fs.writeFile(path.join(workspace, ".cowork", "mcp-servers.json"), "{ bad json", "utf-8");
-      const snapshot = await loadMCPConfigRegistry(config);
-      expect(snapshot.warnings.length).toBeGreaterThan(0);
-      expect(snapshot.files.find((file) => file.source === "workspace")?.parseError).toBeDefined();
+      await expect(loadMCPConfigRegistry(config)).rejects.toThrow("invalid JSON");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

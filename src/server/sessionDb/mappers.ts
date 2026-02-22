@@ -14,6 +14,17 @@ import {
   sqliteBooleanIntSchema,
 } from "./normalizers";
 
+const modelMessageSchema = z.custom<ModelMessage>(
+  (value) => typeof value === "object" && value !== null,
+  "Invalid model message entry",
+);
+const todoItemSchema = z.object({
+  content: z.string(),
+  status: z.enum(["pending", "in_progress", "completed"]),
+  activeForm: z.string(),
+}).strict();
+const harnessContextSchema = z.record(z.string(), z.unknown());
+
 const summaryRowSchema = z.object({
   session_id: nonEmptyStringSchema,
   title: nonEmptyStringSchema,
@@ -72,13 +83,13 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
   }
 
   const values = parsed.data;
-  const messages = parseJsonStringWithSchema(values.messages_json, z.array(z.unknown()), "messages_json");
-  const todos = parseJsonStringWithSchema(values.todos_json, z.array(z.unknown()), "todos_json");
+  const messages = parseJsonStringWithSchema(values.messages_json, z.array(modelMessageSchema), "messages_json");
+  const todos = parseJsonStringWithSchema(values.todos_json, z.array(todoItemSchema), "todos_json");
   const harnessContext = values.harness_context_json === null
     ? null
     : parseJsonStringWithSchema(
         values.harness_context_json,
-        z.record(z.string(), z.unknown()).nullable(),
+        harnessContextSchema.nullable(),
         "harness_context_json",
       );
 
@@ -101,8 +112,8 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
     messageCount: values.message_count,
     lastEventSeq: values.last_event_seq,
     systemPrompt: values.system_prompt,
-    messages: messages as ModelMessage[],
-    todos: todos as TodoItem[],
+    messages,
+    todos,
     harnessContext: harnessContext as HarnessContextState | null,
   };
 }

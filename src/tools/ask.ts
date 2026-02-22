@@ -3,12 +3,12 @@ import { z } from "zod";
 
 import type { ToolContext } from "./context";
 
-const legacyAskInputSchema = z.object({
+const askSingleInputSchema = z.object({
   question: z.string().describe("The question to ask"),
   options: z.array(z.string()).optional().describe("Multiple-choice options"),
-});
+}).strict();
 
-const askUserQuestionInputSchema = z.object({
+const askStructuredInputSchema = z.object({
   questions: z
     .array(
       z.object({
@@ -29,19 +29,20 @@ const askUserQuestionInputSchema = z.object({
     .min(1)
     .max(4)
     .describe("Questions to ask the user"),
-});
+}).strict();
 
 export const askInputSchema = z
   .object({
-    question: legacyAskInputSchema.shape.question.optional(),
-    options: legacyAskInputSchema.shape.options.optional(),
-    questions: askUserQuestionInputSchema.shape.questions.optional(),
+    question: askSingleInputSchema.shape.question.optional(),
+    options: askSingleInputSchema.shape.options.optional(),
+    questions: askStructuredInputSchema.shape.questions.optional(),
   })
+  .strict()
   .superRefine((input, ctx) => {
-    const hasLegacy = input.question !== undefined;
-    const hasStructured = input.questions !== undefined;
+    const hasSingleAsk = input.question !== undefined;
+    const hasStructuredAsk = input.questions !== undefined;
 
-    if (!hasLegacy && !hasStructured) {
+    if (!hasSingleAsk && !hasStructuredAsk) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Provide either `question` (single ask) or `questions` (structured ask).",
@@ -49,14 +50,14 @@ export const askInputSchema = z
       return;
     }
 
-    if (hasLegacy && hasStructured) {
+    if (hasSingleAsk && hasStructuredAsk) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Use either `question` or `questions`, not both.",
       });
     }
 
-    if (!hasLegacy && input.options !== undefined) {
+    if (!hasSingleAsk && input.options !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["options"],

@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { AiCoworkerPaths } from "../connect";
-import { isProviderName } from "../types";
 import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
 import {
   parsePersistedSessionSnapshot,
@@ -12,7 +11,16 @@ import {
   type PersistedSessionSummary,
 } from "./sessionStore";
 import type { SessionTitleSource } from "./sessionTitleService";
-import { isRecord } from "../utils/typeGuards";
+import { mapPersistedSessionRecordRow, mapPersistedSessionSummaryRow } from "./sessionDb/mappers";
+import {
+  asIntegerFlag,
+  asIsoTimestamp,
+  asNonEmptyString,
+  asPositiveInteger,
+  isCorruptionError,
+  parseJsonSafe,
+  toJsonString,
+} from "./sessionDb/normalizers";
 
 export type { PersistedSessionSummary } from "./sessionStore";
 
@@ -21,60 +29,6 @@ const PRIVATE_DIR_MODE = 0o700;
 const BASE_SCHEMA_MIGRATION = 1;
 const LEGACY_IMPORT_MIGRATION = 2;
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
-
-function asNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-function asIsoTimestamp(value: unknown, fallback = new Date().toISOString()): string {
-  const text = asNonEmptyString(value);
-  if (!text) return fallback;
-  return Number.isNaN(Date.parse(text)) ? fallback : text;
-}
-
-function asSessionTitleSource(value: unknown): SessionTitleSource {
-  const raw = asNonEmptyString(value);
-  return raw === "default" || raw === "model" || raw === "heuristic" || raw === "manual"
-    ? raw
-    : "default";
-}
-
-function asProvider(value: unknown, fallback: AgentConfig["provider"] = "google"): AgentConfig["provider"] {
-  const raw = asNonEmptyString(value);
-  if (!raw || !isProviderName(raw)) return fallback;
-  return raw;
-}
-
-function parseJsonSafe<T>(raw: unknown, fallback: T): T {
-  if (typeof raw !== "string") return fallback;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function toJsonString(value: unknown): string {
-  return JSON.stringify(value ?? null);
-}
-
-function asIntegerFlag(value: unknown): 0 | 1 {
-  return value === 1 ? 1 : 0;
-}
-
-function asPositiveInteger(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
-  return Math.max(0, Math.floor(value));
-}
-
-function isCorruptionError(error: unknown): boolean {
-  const msg = String(error).toLowerCase();
-  return msg.includes("database disk image is malformed")
-    || msg.includes("file is not a database")
-    || msg.includes("database corruption");
-}
 
 export type SessionPersistenceStatus = "active" | "closed";
 
@@ -219,27 +173,7 @@ export class SessionDb {
       )
       .all() as Array<Record<string, unknown>>;
 
-    return rows
-      .map((row) => {
-        const sessionId = asNonEmptyString(row.session_id);
-        const title = asNonEmptyString(row.title);
-        const provider = asProvider(row.provider, "google");
-        const model = asNonEmptyString(row.model);
-        const createdAt = asIsoTimestamp(row.created_at);
-        const updatedAt = asIsoTimestamp(row.updated_at);
-        const messageCount = asPositiveInteger(row.message_count);
-        if (!sessionId || !title || !model) return null;
-        return {
-          sessionId,
-          title,
-          provider,
-          model,
-          createdAt,
-          updatedAt,
-          messageCount,
-        } satisfies PersistedSessionSummary;
-      })
-      .filter((entry): entry is PersistedSessionSummary => entry !== null);
+    return rows.map(mapPersistedSessionSummaryRow).filter((entry): entry is PersistedSessionSummary => entry !== null);
   }
 
   deleteSession(sessionId: string): void {
@@ -292,57 +226,7 @@ export class SessionDb {
       .get(sessionId) as Record<string, unknown> | null;
 
     if (!row) return null;
-
-    const persistedId = asNonEmptyString(row.session_id);
-    const title = asNonEmptyString(row.title);
-    const provider = asProvider(row.provider, "google");
-    const model = asNonEmptyString(row.model);
-    const workingDirectory = asNonEmptyString(row.working_directory);
-    const systemPrompt = typeof row.system_prompt === "string" ? row.system_prompt : "";
-    if (!persistedId || !title || !model || !workingDirectory) {
-      return null;
-    }
-
-    const createdAt = asIsoTimestamp(row.created_at);
-    const updatedAt = asIsoTimestamp(row.updated_at);
-    const outputDirectory = asNonEmptyString(row.output_directory) ?? undefined;
-    const uploadsDirectory = asNonEmptyString(row.uploads_directory) ?? undefined;
-    const enableMcp = asIntegerFlag(row.enable_mcp) === 1;
-    const hasPendingAsk = asIntegerFlag(row.has_pending_ask) === 1;
-    const hasPendingApproval = asIntegerFlag(row.has_pending_approval) === 1;
-    const messageCount = asPositiveInteger(row.message_count);
-    const lastEventSeq = asPositiveInteger(row.last_event_seq);
-    const status = row.status === "closed" ? "closed" : "active";
-    const titleSource = asSessionTitleSource(row.title_source);
-    const titleModel = asNonEmptyString(row.title_model);
-    const messages = parseJsonSafe<ModelMessage[]>(row.messages_json, []);
-    const todos = parseJsonSafe<TodoItem[]>(row.todos_json, []);
-    const harnessContextRaw = parseJsonSafe<unknown>(row.harness_context_json, null);
-    const harnessContext = isRecord(harnessContextRaw) ? (harnessContextRaw as HarnessContextState) : null;
-
-    return {
-      sessionId: persistedId,
-      title,
-      titleSource,
-      titleModel,
-      provider,
-      model,
-      workingDirectory,
-      outputDirectory,
-      uploadsDirectory,
-      enableMcp,
-      createdAt,
-      updatedAt,
-      status,
-      hasPendingAsk,
-      hasPendingApproval,
-      messageCount,
-      lastEventSeq,
-      systemPrompt,
-      messages,
-      todos,
-      harnessContext,
-    };
+    return mapPersistedSessionRecordRow(row);
   }
 
   persistSessionMutation(opts: PersistedSessionMutation): number {

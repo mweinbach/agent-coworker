@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 
+import { promptForApiKey, promptForProviderMethod } from "./repl/authPrompts";
 import {
   normalizeProviderAuthMethods,
   parseReplInput,
@@ -11,9 +12,10 @@ import {
 } from "./parser";
 import { normalizeApprovalAnswer, resolveAskAnswer } from "./prompts";
 import { renderTodosToLines, renderToolsToLines } from "./render";
+import { getStoredSessionForCwd, setStoredSessionForCwd } from "./repl/stateStore";
+import { asString, modelStreamToolKey, modelStreamToolName, previewStructured } from "./repl/streamFormatting";
 import { CliStreamState } from "./streamState";
 import { AgentSocket } from "../client/agentSocket";
-import { getAiCoworkerPaths } from "../connect";
 import { defaultModelForProvider } from "../config";
 import { ASK_SKIP_TOKEN } from "../server/protocol";
 import { startAgentServer } from "../server/startServer";
@@ -37,27 +39,10 @@ type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory">
 type AskPrompt = { requestId: string; question: string; options?: string[] };
 type ApprovalPrompt = { requestId: string; command: string; dangerous: boolean; reasonCode: ApprovalRiskCode };
 type ProviderStatus = Extract<ServerEvent, { type: "provider_status" }>["providers"][number];
-type ModelStreamChunkEvent = Extract<ServerEvent, { type: "model_stream_chunk" }>;
 
 function renderTodos(todos: TodoItem[]) {
   for (const line of renderTodosToLines(todos)) {
     console.log(line);
-  }
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function previewStructured(value: unknown, max = 160): string {
-  if (value === undefined) return "";
-  if (typeof value === "string") return value.length <= max ? value : `${value.slice(0, max - 3)}...`;
-  try {
-    const raw = JSON.stringify(value);
-    if (!raw) return "";
-    return raw.length <= max ? raw : `${raw.slice(0, max - 3)}...`;
-  } catch {
-    return String(value);
   }
 }
 
@@ -83,64 +68,6 @@ export const __internal = {
   normalizeProviderAuthMethods,
   resolveProviderAuthMethodSelection,
 };
-
-type CliState = {
-  version: 1;
-  lastSessionByCwd: Record<string, string>;
-};
-
-function getCliStateFilePath(): string {
-  const paths = getAiCoworkerPaths();
-  return path.join(paths.rootDir, "state", "cli-state.json");
-}
-
-async function readCliState(): Promise<CliState> {
-  const filePath = getCliStateFilePath();
-  try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const map = typeof parsed.lastSessionByCwd === "object" && parsed.lastSessionByCwd
-      ? parsed.lastSessionByCwd as Record<string, unknown>
-      : {};
-    const normalized: Record<string, string> = {};
-    for (const [cwd, sessionId] of Object.entries(map)) {
-      if (typeof cwd !== "string" || !cwd.trim()) continue;
-      if (typeof sessionId !== "string" || !sessionId.trim()) continue;
-      normalized[path.resolve(cwd)] = sessionId.trim();
-    }
-    return {
-      version: 1,
-      lastSessionByCwd: normalized,
-    };
-  } catch {
-    return { version: 1, lastSessionByCwd: {} };
-  }
-}
-
-async function persistCliState(state: CliState): Promise<void> {
-  const filePath = getCliStateFilePath();
-  const dirPath = path.dirname(filePath);
-  await fs.mkdir(dirPath, { recursive: true, mode: 0o700 });
-  const payload = `${JSON.stringify(state, null, 2)}\n`;
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, payload, { encoding: "utf-8", mode: 0o600 });
-  await fs.rename(tempPath, filePath);
-}
-
-async function getStoredSessionForCwd(cwd: string): Promise<string | null> {
-  const state = await readCliState();
-  const key = path.resolve(cwd);
-  const sessionId = state.lastSessionByCwd[key];
-  return typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : null;
-}
-
-async function setStoredSessionForCwd(cwd: string, sessionId: string): Promise<void> {
-  const sid = sessionId.trim();
-  if (!sid) return;
-  const state = await readCliState();
-  state.lastSessionByCwd[path.resolve(cwd)] = sid;
-  await persistCliState(state);
-}
 
 export async function runCliRepl(
   opts: {
@@ -224,21 +151,6 @@ export async function runCliRepl(
     streamState.reset();
   };
 
-  const modelStreamToolKey = (evt: ModelStreamChunkEvent): string => {
-    const part = evt.part as Record<string, unknown>;
-    return (
-      asString(part.toolCallId) ??
-      asString(part.id) ??
-      asString(part.toolName) ??
-      `${evt.turnId}:${evt.index}`
-    );
-  };
-
-  const modelStreamToolName = (evt: ModelStreamChunkEvent): string => {
-    const part = evt.part as Record<string, unknown>;
-    return asString(part.toolName) ?? "tool";
-  };
-
   const send = (msg: ClientMessage) => {
     return socket?.send(msg) ?? false;
   };
@@ -274,35 +186,6 @@ export async function runCliRepl(
       console.log(`    methods: ${methods.map((method) => method.id).join(", ")}`);
     }
     console.log("");
-  };
-
-  const askLine = async (rl: readline.Interface, prompt: string): Promise<string> => {
-    return await new Promise((resolve) => {
-      rl.question(prompt, (answer) => resolve(answer));
-    });
-  };
-
-  const promptForProviderMethod = async (
-    rl: readline.Interface,
-    provider: string,
-    methods: ProviderAuthMethod[]
-  ): Promise<ProviderAuthMethod | null> => {
-    if (methods.length <= 1) return methods[0] ?? null;
-
-    console.log(`Auth methods for ${provider}:`);
-    for (let i = 0; i < methods.length; i++) {
-      const method = methods[i]!;
-      const mode = method.type === "oauth" ? `oauth${method.oauthMode ? ` (${method.oauthMode})` : ""}` : "api key";
-      console.log(`  ${i + 1}. ${method.label} [${method.id}] - ${mode}`);
-    }
-
-    while (true) {
-      const answer = (await askLine(rl, `Select method [1-${methods.length}] (or "cancel"): `)).trim();
-      if (["cancel", "c", "q", "quit"].includes(answer.toLowerCase())) return null;
-      const selected = resolveProviderAuthMethodSelection(methods, answer);
-      if (selected) return selected;
-      console.log("Invalid selection. Enter a number or method id.");
-    }
   };
 
   const activateNextPrompt = (rl: readline.Interface) => {
@@ -868,7 +751,7 @@ export async function runCliRepl(
           }
 
           if (method.type === "api") {
-            const promptedKey = (await askLine(rl, `${serviceToken} API key: `)).trim();
+            const promptedKey = await promptForApiKey(rl, serviceToken);
             if (!promptedKey) {
               console.log(`API key is required for ${serviceToken}.`);
               activateNextPrompt(rl);

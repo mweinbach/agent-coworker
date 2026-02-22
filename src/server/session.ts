@@ -26,7 +26,6 @@ import { authorizeMCPServerOAuth, consumeCapturedOAuthCode, exchangeMCPServerOAu
 import {
   authorizeProviderAuth,
   callbackProviderAuth as callbackProviderAuthMethod,
-  listProviderAuthMethods,
   resolveProviderAuthMethod,
   setProviderApiKey as setProviderApiKeyMethod,
 } from "../providers/authRegistry";
@@ -70,6 +69,7 @@ import { HistoryManager } from "./session/HistoryManager";
 import { InteractionManager } from "./session/InteractionManager";
 import { McpManager } from "./session/McpManager";
 import { PersistenceManager } from "./session/PersistenceManager";
+import { ProviderCatalogManager } from "./session/ProviderCatalogManager";
 import { TurnExecutionManager } from "./session/TurnExecutionManager";
 
 function makeId(): string {
@@ -157,7 +157,6 @@ export class AgentSession {
   private allMessages: ModelMessage[] = [];
   private running = false;
   private connecting = false;
-  private refreshingProviderStatus = false;
   private abortController: AbortController | null = null;
 
   private currentTurnId: string | null = null;
@@ -166,6 +165,7 @@ export class AgentSession {
   private readonly historyManager: HistoryManager;
   private readonly interactionManager: InteractionManager;
   private readonly mcpManager: McpManager;
+  private readonly providerCatalogManager: ProviderCatalogManager;
   private readonly turnExecutionManager: TurnExecutionManager;
 
   private todos: TodoItem[] = [];
@@ -255,6 +255,17 @@ export class AgentSession {
       getConfig: () => this.config,
       isYolo: () => this.yolo,
       waitForPromptResponse: (requestId, bucket) => this.waitForPromptResponse(requestId, bucket),
+    });
+    this.providerCatalogManager = new ProviderCatalogManager({
+      sessionId: this.id,
+      getConfig: () => this.config,
+      getCoworkPaths: () => this.getCoworkPaths(),
+      getProviderCatalog: this.getProviderCatalogImpl,
+      getProviderStatuses: this.getProviderStatusesImpl,
+      emit: (evt) => this.emit(evt),
+      emitError: (code, source, message) => this.emitError(code, source, message),
+      emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
+      formatError: (err) => this.formatErrorMessage(err),
     });
     this.turnExecutionManager = new TurnExecutionManager({
       sendUserMessage: (text, clientMessageId, displayText) =>
@@ -1507,31 +1518,11 @@ export class AgentSession {
   }
 
   async emitProviderCatalog() {
-    try {
-      const payload = await this.getProviderCatalogImpl({ paths: this.getCoworkPaths() });
-      const defaults = { ...payload.default, [this.config.provider]: this.config.model };
-      this.emit({
-        type: "provider_catalog",
-        sessionId: this.id,
-        all: payload.all,
-        default: defaults,
-        connected: payload.connected,
-      });
-    } catch (err) {
-      this.emitError("provider_error", "provider", `Failed to load provider catalog: ${String(err)}`);
-    }
+    await this.providerCatalogManager.emitProviderCatalog();
   }
 
   emitProviderAuthMethods() {
-    try {
-      this.emit({
-        type: "provider_auth_methods",
-        sessionId: this.id,
-        methods: listProviderAuthMethods(),
-      });
-    } catch (err) {
-      this.emitError("provider_error", "provider", `Failed to load provider auth methods: ${String(err)}`);
-    }
+    this.providerCatalogManager.emitProviderAuthMethods();
   }
 
   async authorizeProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string) {
@@ -1724,30 +1715,7 @@ export class AgentSession {
   }
 
   async refreshProviderStatus() {
-    if (this.refreshingProviderStatus) return;
-    this.refreshingProviderStatus = true;
-    const startedAt = Date.now();
-    try {
-      const paths = this.getCoworkPaths();
-      const providers = await this.getProviderStatusesImpl({ paths });
-      this.emit({ type: "provider_status", sessionId: this.id, providers });
-      this.emitTelemetry(
-        "provider.status.refresh",
-        "ok",
-        { sessionId: this.id, providers: providers.length },
-        Date.now() - startedAt
-      );
-    } catch (err) {
-      this.emitError("provider_error", "provider", `Failed to refresh provider status: ${String(err)}`);
-      this.emitTelemetry(
-        "provider.status.refresh",
-        "error",
-        { sessionId: this.id, error: this.formatErrorMessage(err) },
-        Date.now() - startedAt
-      );
-    } finally {
-      this.refreshingProviderStatus = false;
-    }
+    await this.providerCatalogManager.refreshProviderStatus();
   }
 
   private handleAskResponseImpl(requestId: string, answer: string) {

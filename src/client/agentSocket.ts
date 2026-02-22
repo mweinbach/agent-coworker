@@ -1,21 +1,5 @@
 import type { ClientMessage, ServerEvent } from "../server/protocol";
 
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (v: T) => void;
-  reject: (err: unknown) => void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (v: T) => void;
-  let reject!: (err: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 export function safeJsonParse(raw: unknown): any | null {
   if (typeof raw !== "string") return null;
   try {
@@ -61,7 +45,7 @@ export class AgentSocket {
   private readonly pingIntervalMs: number;
 
   private ws: WebSocket | null = null;
-  private ready = deferred<string>();
+  private ready = Promise.withResolvers<string>();
   private _sessionId: string | null = null;
   private resumeSessionId: string | null = null;
 
@@ -229,8 +213,8 @@ export class AgentSocket {
     );
     this.reconnectAttempt++;
 
-    // Reset the ready deferred so consumers can await the new session.
-    this.ready = deferred<string>();
+    // Reset the ready promise so consumers can await the new session.
+    this.ready = Promise.withResolvers<string>();
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

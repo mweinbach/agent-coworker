@@ -47,44 +47,8 @@ function pathKeyFor(opts: EnsureRipgrepOptions): string {
   return home;
 }
 
-function getPathVar(env: NodeJS.ProcessEnv): string {
-  // Windows commonly uses "Path" instead of "PATH".
-  return env.PATH || (env as any).Path || "";
-}
-
-function pathExtCandidates(env: NodeJS.ProcessEnv): string[] {
-  if (process.platform !== "win32") return [""];
-  const raw = (env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";");
-  const exts = raw
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => (s.startsWith(".") ? s.toLowerCase() : `.${s.toLowerCase()}`));
-  // Also allow direct invocation (already has an extension).
-  return ["", ...exts];
-}
-
-async function which(cmd: string, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
-  // If cmd already looks like a path, check it directly.
-  if (cmd.includes("/") || cmd.includes("\\") || path.isAbsolute(cmd)) {
-    const p = path.isAbsolute(cmd) ? cmd : path.resolve(cmd);
-    return (await isFile(p)) ? p : null;
-  }
-
-  const pathVar = getPathVar(env);
-  if (!pathVar.trim()) return null;
-
-  const sep = process.platform === "win32" ? ";" : ":";
-  const dirs = pathVar.split(sep).map((s) => s.trim()).filter(Boolean);
-  const exts = pathExtCandidates(env);
-
-  for (const dir of dirs) {
-    for (const ext of exts) {
-      const candidate = path.join(dir, ext ? `${cmd}${ext}` : cmd);
-      if (await isFile(candidate)) return candidate;
-    }
-  }
-
-  return null;
+function which(cmd: string): string | null {
+  return Bun.which(cmd) ?? null;
 }
 
 function resolveRipgrepAssets(): RipgrepAsset[] {
@@ -305,7 +269,7 @@ export async function ensureRipgrep(opts: EnsureRipgrepOptions = {}): Promise<st
       return envPathOverride;
     }
 
-    const fromPath = await which("rg");
+    const fromPath = which("rg");
     if (fromPath) return fromPath;
 
     const homedir = opts.homedir ?? os.homedir();

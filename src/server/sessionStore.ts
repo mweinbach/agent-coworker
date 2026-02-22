@@ -5,14 +5,11 @@ import path from "node:path";
 import type { AiCoworkerPaths } from "../connect";
 import { isProviderName } from "../types";
 import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
+import { isRecord } from "../utils/typeGuards";
 import type { SessionTitleSource } from "./sessionTitleService";
 
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function asNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;

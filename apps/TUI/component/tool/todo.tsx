@@ -1,4 +1,4 @@
-import { Show, For } from "solid-js";
+import { Show } from "solid-js";
 import { useTheme } from "../../context/theme";
 import { Spinner } from "../spinner";
 import { TodoItem } from "../todo-item";

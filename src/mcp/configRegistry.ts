@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { z } from "zod";
 
-import type { AgentConfig, MCPServerAuthConfig, MCPServerConfig } from "../types";
+import type { AgentConfig, MCPServerConfig } from "../types";
 
 export const MCP_SERVERS_FILE_NAME = "mcp-servers.json";
 const LEGACY_ARCHIVE_FILE_NAME = "mcp-servers.legacy-migrated.json";
@@ -74,116 +75,61 @@ type MCPConfigLayer = {
   servers: MCPServerConfig[];
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+// ---------------------------------------------------------------------------
+// Zod schemas for MCP server configuration parsing
+// ---------------------------------------------------------------------------
 
-function asNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
+const stringMap = z.record(z.string(), z.string());
 
-function parseStringMap(value: unknown, fieldName: string): Record<string, string> | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value)) {
-    throw new Error(`mcp-servers.json: ${fieldName} must be an object`);
-  }
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(value)) {
-    if (typeof v !== "string") {
-      throw new Error(`mcp-servers.json: ${fieldName}.${k} must be a string`);
-    }
-    out[k] = v;
-  }
-  return out;
-}
+const stdioTransport = z.object({
+  type: z.literal("stdio"),
+  command: z.string().trim().min(1),
+  args: z.array(z.string()).optional(),
+  env: stringMap.optional(),
+  cwd: z.string().trim().min(1).optional(),
+});
 
-function parseAuth(value: unknown, index: number): MCPServerAuthConfig | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value)) {
-    throw new Error(`mcp-servers.json: servers[${index}].auth must be an object`);
-  }
+const httpTransport = z.object({
+  type: z.enum(["http", "sse"]),
+  url: z.string().trim().min(1),
+  headers: stringMap.optional(),
+});
 
-  const authType = asNonEmptyString(value.type);
-  if (!authType) {
-    throw new Error(`mcp-servers.json: servers[${index}].auth.type is required`);
-  }
+const transportSchema = z.discriminatedUnion("type", [stdioTransport, httpTransport]);
 
-  if (authType === "none") {
-    return { type: "none" };
-  }
+const authSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("none") }),
+  z.object({
+    type: z.literal("api_key"),
+    headerName: z.string().trim().min(1).optional(),
+    prefix: z.string().trim().min(1).optional(),
+    keyId: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    type: z.literal("oauth"),
+    scope: z.string().trim().min(1).optional(),
+    resource: z.string().trim().min(1).optional(),
+    oauthMode: z.enum(["auto", "code"]).optional(),
+  }),
+]);
 
-  if (authType === "api_key") {
-    const headerName = asNonEmptyString(value.headerName) ?? undefined;
-    const prefix = asNonEmptyString(value.prefix) ?? undefined;
-    const keyId = asNonEmptyString(value.keyId) ?? undefined;
-    return {
-      type: "api_key",
-      ...(headerName ? { headerName } : {}),
-      ...(prefix ? { prefix } : {}),
-      ...(keyId ? { keyId } : {}),
-    };
-  }
+const mcpServerSchema = z.object({
+  name: z.string().trim().min(1),
+  transport: transportSchema,
+  required: z.boolean().optional(),
+  retries: z.number().finite().optional(),
+  auth: authSchema.optional(),
+});
 
-  if (authType === "oauth") {
-    const oauthMode = asNonEmptyString(value.oauthMode);
-    if (oauthMode && oauthMode !== "auto" && oauthMode !== "code") {
-      throw new Error(`mcp-servers.json: servers[${index}].auth.oauthMode must be auto or code`);
-    }
-    const scope = asNonEmptyString(value.scope) ?? undefined;
-    const resource = asNonEmptyString(value.resource) ?? undefined;
-    return {
-      type: "oauth",
-      ...(scope ? { scope } : {}),
-      ...(resource ? { resource } : {}),
-      ...(oauthMode ? { oauthMode } : {}),
-    };
-  }
+const mcpServersDocumentSchema = z.object({
+  servers: z.array(mcpServerSchema).default([]),
+});
 
-  throw new Error(`mcp-servers.json: servers[${index}].auth.type \"${authType}\" is not supported`);
-}
-
-function parseTransport(value: unknown, index: number): MCPServerConfig["transport"] {
-  if (!isRecord(value)) {
-    throw new Error(`mcp-servers.json: servers[${index}].transport must be an object`);
-  }
-  const type = asNonEmptyString(value.type);
-  if (!type) {
-    throw new Error(`mcp-servers.json: servers[${index}].transport.type is required`);
-  }
-  if (type === "stdio") {
-    const command = asNonEmptyString(value.command);
-    if (!command) {
-      throw new Error(`mcp-servers.json: servers[${index}].transport.command is required for stdio`);
-    }
-    const argsRaw = value.args;
-    if (argsRaw !== undefined && (!Array.isArray(argsRaw) || !argsRaw.every((arg) => typeof arg === "string"))) {
-      throw new Error(`mcp-servers.json: servers[${index}].transport.args must be a string[]`);
-    }
-    const env = parseStringMap(value.env, `servers[${index}].transport.env`);
-    const cwd = asNonEmptyString(value.cwd) ?? undefined;
-    return {
-      type: "stdio",
-      command,
-      ...(argsRaw !== undefined ? { args: argsRaw } : {}),
-      ...(env ? { env } : {}),
-      ...(cwd ? { cwd } : {}),
-    };
-  }
-  if (type === "http" || type === "sse") {
-    const url = asNonEmptyString(value.url);
-    if (!url) {
-      throw new Error(`mcp-servers.json: servers[${index}].transport.url is required for ${type}`);
-    }
-    const headers = parseStringMap(value.headers, `servers[${index}].transport.headers`);
-    return {
-      type,
-      url,
-      ...(headers ? { headers } : {}),
-    };
-  }
-  throw new Error(`mcp-servers.json: servers[${index}].transport.type \"${type}\" is not supported`);
+function formatZodError(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "validation failed";
+  const path = issue.path.length > 0 ? issue.path.join(".") : "root";
+  return `${path}: ${issue.message}`;
 }
 
 export function parseMCPServersDocument(rawJson: string): { servers: MCPServerConfig[] } {
@@ -194,51 +140,17 @@ export function parseMCPServersDocument(rawJson: string): { servers: MCPServerCo
     throw new Error(`mcp-servers.json: invalid JSON: ${String(error)}`);
   }
 
-  if (!isRecord(parsed)) {
-    throw new Error("mcp-servers.json: root must be an object");
+  const result = mcpServersDocumentSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(`mcp-servers.json: ${formatZodError(result.error)}`);
   }
 
-  const serversRaw = parsed.servers;
-  if (serversRaw === undefined) {
-    return { servers: [] };
-  }
-  if (!Array.isArray(serversRaw)) {
-    throw new Error("mcp-servers.json: servers must be an array");
-  }
-
-  const servers: MCPServerConfig[] = [];
-  for (let i = 0; i < serversRaw.length; i++) {
-    const item = serversRaw[i];
-    if (!isRecord(item)) {
-      throw new Error(`mcp-servers.json: servers[${i}] must be an object`);
-    }
-    const name = asNonEmptyString(item.name);
-    if (!name) {
-      throw new Error(`mcp-servers.json: servers[${i}].name is required`);
-    }
-    const transport = parseTransport(item.transport, i);
-    if (item.required !== undefined && typeof item.required !== "boolean") {
-      throw new Error(`mcp-servers.json: servers[${i}].required must be a boolean`);
-    }
-    if (
-      item.retries !== undefined &&
-      (typeof item.retries !== "number" || !Number.isFinite(item.retries))
-    ) {
-      throw new Error(`mcp-servers.json: servers[${i}].retries must be a number`);
-    }
-    const auth = parseAuth(item.auth, i);
-
-    servers.push({
-      name,
-      transport,
-      ...(item.required !== undefined ? { required: item.required } : {}),
-      ...(item.retries !== undefined ? { retries: item.retries } : {}),
-      ...(auth ? { auth } : {}),
-    });
-  }
-
-  return { servers };
+  return { servers: result.data.servers as MCPServerConfig[] };
 }
+
+// ---------------------------------------------------------------------------
+// Path resolution
+// ---------------------------------------------------------------------------
 
 export function resolveMcpConfigPaths(config: AgentConfig): MCPConfigPaths {
   const workspaceRoot = path.dirname(config.projectAgentDir);
@@ -261,6 +173,10 @@ export function resolveMcpConfigPaths(config: AgentConfig): MCPConfigPaths {
     userAuthFile: path.join(userCoworkDir, "auth", "mcp-credentials.json"),
   };
 }
+
+// ---------------------------------------------------------------------------
+// File I/O helpers
+// ---------------------------------------------------------------------------
 
 function sortServersByName(servers: MCPServerConfig[]): MCPServerConfig[] {
   return [...servers].sort((a, b) => a.name.localeCompare(b.name));
@@ -323,8 +239,11 @@ async function readLayer(opts: {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Registry loading and layer merging
+// ---------------------------------------------------------------------------
+
 function mergeLayers(layers: MCPConfigLayer[]): MCPRegistryServer[] {
-  // Merge in low->high precedence so later layers overwrite earlier names.
   const precedence: MCPServerSource[] = ["system", "user_legacy", "user", "workspace_legacy", "workspace"];
   const bySource = new Map(layers.map((layer) => [layer.source, layer]));
   const mergedByName = new Map<string, MCPRegistryServer>();
@@ -383,6 +302,10 @@ export async function loadMCPConfigRegistry(config: AgentConfig): Promise<MCPCon
     warnings,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Workspace server CRUD
+// ---------------------------------------------------------------------------
 
 export async function readWorkspaceMCPServersDocument(config: AgentConfig): Promise<{
   path: string;
@@ -484,14 +407,14 @@ export async function deleteWorkspaceMCPServer(config: AgentConfig, nameRaw: str
   await writeWorkspaceServers(config, nextServers);
 }
 
-async function readServersFromFile(filePath: string): Promise<MCPServerConfig[]> {
-  const rawJson = await fs.readFile(filePath, "utf-8");
-  return parseMCPServersDocument(rawJson).servers;
-}
+// ---------------------------------------------------------------------------
+// Legacy migration
+// ---------------------------------------------------------------------------
 
 async function readServersOrEmpty(filePath: string): Promise<MCPServerConfig[]> {
   try {
-    return await readServersFromFile(filePath);
+    const rawJson = await fs.readFile(filePath, "utf-8");
+    return parseMCPServersDocument(rawJson).servers;
   } catch (error) {
     if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
       return [];

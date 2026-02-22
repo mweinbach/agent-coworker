@@ -2,6 +2,8 @@ import type { ModelMessage } from "ai";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { isRecord } from "../utils/typeGuards";
+
 import { connectProvider as connectModelProvider, getAiCoworkerPaths, type ConnectProviderResult } from "../connect";
 import { loadMCPServers, loadMCPTools, readMCPServersSnapshot } from "../mcp";
 import {
@@ -72,12 +74,6 @@ function makeId(): string {
 
 type SessionBackupFactory = (opts: SessionBackupInitOptions) => Promise<SessionBackupHandle>;
 
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (v: T) => void;
-  reject: (err: unknown) => void;
-};
-
 type PersistedModelSelection = {
   provider: AgentConfig["provider"];
   model: string;
@@ -99,20 +95,6 @@ type HydratedSessionState = {
   todos: TodoItem[];
   harnessContext: HarnessContextState | null;
 };
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (v: T) => void;
-  let reject!: (err: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function extractAssistantTextFromMessageContent(content: unknown): string {
   if (typeof content === "string") return content;
@@ -174,8 +156,8 @@ export class AgentSession {
   private refreshingProviderStatus = false;
   private abortController: AbortController | null = null;
 
-  private readonly pendingAsk = new Map<string, Deferred<string>>();
-  private readonly pendingApproval = new Map<string, Deferred<boolean>>();
+  private readonly pendingAsk = new Map<string, PromiseWithResolvers<string>>();
+  private readonly pendingApproval = new Map<string, PromiseWithResolvers<boolean>>();
   private readonly pendingAskEvents = new Map<string, ServerEvent>();
   private readonly pendingApprovalEvents = new Map<string, ServerEvent>();
 
@@ -998,14 +980,7 @@ export class AgentSession {
   }
 
   async upsertMcpServer(server: MCPServerConfig, previousName?: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
     try {
       await upsertWorkspaceMCPServer(this.config, server, previousName);
     } catch (err) {
@@ -1022,14 +997,7 @@ export class AgentSession {
   }
 
   async deleteMcpServer(nameRaw: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
     try {
       await deleteWorkspaceMCPServer(this.config, nameRaw);
     } catch (err) {
@@ -1050,14 +1018,7 @@ export class AgentSession {
       this.emitError("validation_failed", "session", "MCP server name is required");
       return;
     }
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
 
     this.connecting = true;
     try {
@@ -1163,14 +1124,7 @@ export class AgentSession {
   }
 
   async authorizeMcpServerAuth(nameRaw: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
 
     const server = await this.getMcpServerByName(nameRaw);
     if (!server) return;
@@ -1233,14 +1187,7 @@ export class AgentSession {
   }
 
   async callbackMcpServerAuth(nameRaw: string, codeRaw?: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
 
     const server = await this.getMcpServerByName(nameRaw);
     if (!server) return;
@@ -1336,14 +1283,7 @@ export class AgentSession {
   }
 
   async setMcpServerApiKey(nameRaw: string, apiKeyRaw: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
 
     const server = await this.getMcpServerByName(nameRaw);
     if (!server) return;
@@ -1397,14 +1337,7 @@ export class AgentSession {
   }
 
   async migrateLegacyMcpServers(scope: "workspace" | "user") {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
     try {
       const result = await migrateLegacyMCPServers(this.config, scope);
       this.emit({
@@ -1439,6 +1372,13 @@ export class AgentSession {
       objectiveLength: context.objective.length,
     });
     this.queuePersistSessionSnapshot("session.harness_context");
+  }
+
+  /** Returns true when the session is free to start a new blocking operation. */
+  private guardBusy(): boolean {
+    if (this.running) { this.emitError("busy", "session", "Agent is busy"); return false; }
+    if (this.connecting) { this.emitError("busy", "session", "Connection flow already running"); return false; }
+    return true;
   }
 
   private formatErrorMessage(err: unknown): string {
@@ -1580,14 +1520,7 @@ export class AgentSession {
   }
 
   async callbackProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string, codeRaw?: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
     if (!isProviderName(providerRaw)) {
       this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
       return;
@@ -1661,14 +1594,7 @@ export class AgentSession {
   }
 
   async setProviderApiKey(providerRaw: AgentConfig["provider"], methodIdRaw: string, apiKeyRaw: string) {
-    if (this.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return;
-    }
-    if (this.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return;
-    }
+    if (!this.guardBusy()) return;
     if (!isProviderName(providerRaw)) {
       this.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
       return;
@@ -1851,11 +1777,11 @@ export class AgentSession {
 
   private waitForPromptResponse<T>(
     requestId: string,
-    bucket: Map<string, Deferred<T>>,
+    bucket: Map<string, PromiseWithResolvers<T>>,
   ): Promise<T> {
-    const deferredValue = bucket.get(requestId);
-    if (!deferredValue) return Promise.reject(new Error(`Unknown prompt request: ${requestId}`));
-    return deferredValue.promise;
+    const entry = bucket.get(requestId);
+    if (!entry) return Promise.reject(new Error(`Unknown prompt request: ${requestId}`));
+    return entry.promise;
   }
 
   private async runInBackupQueue<T>(op: () => Promise<T>): Promise<T> {
@@ -1882,7 +1808,7 @@ export class AgentSession {
 
   private async askUser(question: string, options?: string[]) {
     const requestId = makeId();
-    const d = deferred<string>();
+    const d = Promise.withResolvers<string>();
     this.pendingAsk.set(requestId, d);
 
     const evt: ServerEvent = { type: "ask", sessionId: this.id, requestId, question, options };
@@ -1908,7 +1834,7 @@ export class AgentSession {
     if (classification.kind === "auto") return true;
 
     const requestId = makeId();
-    const d = deferred<boolean>();
+    const d = Promise.withResolvers<boolean>();
     this.pendingApproval.set(requestId, d);
 
     const evt: ServerEvent = {

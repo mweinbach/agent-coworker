@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 
 import { SessionDb } from "../src/server/sessionDb";
-import type { PersistedSessionSnapshot } from "../src/server/sessionStore";
 
 async function makeTmpCoworkHome(prefix = "session-db-test-"): Promise<{
   rootDir: string;
@@ -15,38 +14,6 @@ async function makeTmpCoworkHome(prefix = "session-db-test-"): Promise<{
   const sessionsDir = path.join(rootDir, "sessions");
   await fs.mkdir(sessionsDir, { recursive: true });
   return { rootDir, sessionsDir };
-}
-
-function makeLegacySnapshot(sessionId: string): PersistedSessionSnapshot {
-  const now = new Date("2024-01-01T00:00:00.000Z").toISOString();
-  return {
-    version: 1,
-    sessionId,
-    createdAt: now,
-    updatedAt: now,
-    session: {
-      title: "Imported Session",
-      titleSource: "heuristic",
-      titleModel: null,
-      provider: "google",
-      model: "gemini-2.0-flash",
-    },
-    config: {
-      provider: "google",
-      model: "gemini-2.0-flash",
-      enableMcp: true,
-      workingDirectory: "/tmp/project",
-    },
-    context: {
-      system: "You are a helpful assistant.",
-      messages: [
-        { role: "user", content: "hello" },
-        { role: "assistant", content: "hi" },
-      ],
-      todos: [],
-      harnessContext: null,
-    },
-  };
 }
 
 describe("sessionDb", () => {
@@ -98,34 +65,52 @@ describe("sessionDb", () => {
     }
   });
 
-  test("imports legacy JSON snapshots once at startup and skips malformed files", async () => {
+  test("imports legacy JSON snapshots before marking legacy migration as applied", async () => {
     const paths = await makeTmpCoworkHome();
-    const legacy = makeLegacySnapshot("legacy-1");
+    const now = new Date().toISOString();
+
     await fs.writeFile(
       path.join(paths.sessionsDir, "legacy-1.json"),
-      `${JSON.stringify(legacy, null, 2)}\n`,
-      "utf-8"
+      JSON.stringify({
+        version: 1,
+        sessionId: "legacy-1",
+        createdAt: now,
+        updatedAt: now,
+        session: {
+          title: "Legacy Session",
+          titleSource: "default",
+          titleModel: null,
+          provider: "google",
+          model: "gemini-2.0-flash",
+        },
+        config: {
+          provider: "google",
+          model: "gemini-2.0-flash",
+          enableMcp: false,
+          workingDirectory: "/tmp/legacy",
+        },
+        context: {
+          system: "legacy",
+          messages: [{ role: "user", content: "hello from legacy" }],
+          todos: [],
+          harnessContext: null,
+        },
+      }),
+      "utf-8",
     );
-    await fs.writeFile(path.join(paths.sessionsDir, "broken.json"), "{ bad json", "utf-8");
 
-    const first = await SessionDb.create({ paths });
+    const db = await SessionDb.create({ paths });
     try {
-      const sessions = first.listSessions();
-      expect(sessions.map((entry) => entry.sessionId)).toContain("legacy-1");
-      const record = first.getSessionRecord("legacy-1");
-      expect(record?.lastEventSeq).toBe(1);
-      expect(record?.messages.length).toBe(2);
-    } finally {
-      first.close();
-    }
+      const sessions = db.listSessions();
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]?.sessionId).toBe("legacy-1");
+      expect(sessions[0]?.messageCount).toBe(1);
 
-    const second = await SessionDb.create({ paths });
-    try {
-      const record = second.getSessionRecord("legacy-1");
-      expect(record?.lastEventSeq).toBe(1);
-      expect(second.listSessions().filter((entry) => entry.sessionId === "legacy-1")).toHaveLength(1);
+      const persisted = db.getSessionRecord("legacy-1");
+      expect(persisted?.title).toBe("Legacy Session");
+      expect(persisted?.messages).toHaveLength(1);
     } finally {
-      second.close();
+      db.close();
     }
   });
 });

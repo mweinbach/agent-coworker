@@ -16,6 +16,7 @@ import type { AuthorizationServerMetadata } from "@modelcontextprotocol/sdk/clie
 
 import type { MCPRegistryServer } from "./configRegistry";
 import type { MCPServerOAuthClientInfo, MCPServerOAuthPending, MCPServerOAuthTokens } from "./authStore";
+import { nowIso } from "../utils/typeGuards";
 
 /** Default client_id used when no dynamic registration endpoint is available. */
 const FALLBACK_CLIENT_ID = "agent-coworker-desktop";
@@ -46,10 +47,6 @@ type CallbackCapture = {
 };
 
 const callbackCaptures = new Map<string, CallbackCapture>();
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
 
 function addMinutesIso(minutes: number): string {
   return new Date(Date.now() + minutes * 60_000).toISOString();

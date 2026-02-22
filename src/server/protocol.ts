@@ -397,6 +397,35 @@ function isNonEmptyString(v: unknown): v is string {
 
 const MAX_MCP_API_KEY_SIZE = 100_000;
 
+type ParseOk = { ok: true; msg: ClientMessage };
+type ParseErr = { ok: false; error: string };
+type ParseResult = ParseOk | ParseErr;
+
+const ok = (obj: Record<string, unknown>): ParseOk => ({ ok: true, msg: obj as ClientMessage });
+const err = (error: string): ParseErr => ({ ok: false, error });
+
+/** Validates sessionId only — used by 15+ message types that carry no extra fields. */
+function requireSession(obj: Record<string, unknown>): ParseResult {
+  if (!isNonEmptyString(obj.sessionId)) return err(`${obj.type} missing sessionId`);
+  return ok(obj);
+}
+
+/** Validates sessionId + a required non-empty string field. */
+function requireSessionAndField(obj: Record<string, unknown>, field: string, label?: string): ParseResult {
+  if (!isNonEmptyString(obj.sessionId)) return err(`${obj.type} missing sessionId`);
+  if (!isNonEmptyString(obj[field])) return err(`${obj.type} missing/invalid ${label ?? field}`);
+  return ok(obj);
+}
+
+/** Validates sessionId + provider + methodId (with auth method resolution). */
+function requireProviderAuth(obj: Record<string, unknown>): ParseErr | null {
+  if (!isNonEmptyString(obj.sessionId)) return err(`${obj.type} missing sessionId`);
+  if (!isProviderName(obj.provider)) return err(`${obj.type} missing/invalid provider`);
+  if (!isNonEmptyString(obj.methodId)) return err(`${obj.type} missing/invalid methodId`);
+  if (!resolveProviderAuthMethod(obj.provider, obj.methodId)) return err(`${obj.type} unknown methodId`);
+  return null;
+}
+
 function validateMcpServerPayload(value: unknown): string | null {
   if (!isPlainObject(value)) return "mcp_server_upsert missing/invalid server";
   try {
@@ -407,362 +436,192 @@ function validateMcpServerPayload(value: unknown): string | null {
   }
 }
 
-export function safeParseClientMessage(raw: string): { ok: true; msg: ClientMessage } | { ok: false; error: string } {
+export function safeParseClientMessage(raw: string): ParseResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return { ok: false, error: "Invalid JSON" };
+    return err("Invalid JSON");
   }
 
-  if (!isPlainObject(parsed)) return { ok: false, error: "Expected object" };
+  if (!isPlainObject(parsed)) return err("Expected object");
   const obj = parsed as Record<string, unknown>;
-  if (typeof obj.type !== "string") return { ok: false, error: "Missing type" };
+  if (typeof obj.type !== "string") return err("Missing type");
 
   switch (obj.type) {
     case "client_hello": {
-      if (!isNonEmptyString(obj.client)) return { ok: false, error: "client_hello missing/invalid client" };
-      if (obj.version !== undefined && typeof obj.version !== "string") {
-        return { ok: false, error: "client_hello invalid version" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
+      if (!isNonEmptyString(obj.client)) return err("client_hello missing/invalid client");
+      if (obj.version !== undefined && typeof obj.version !== "string") return err("client_hello invalid version");
+      return ok(obj);
     }
-    case "ping": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "ping missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
+
+    // Session-only types (no extra fields beyond sessionId)
+    case "ping":
+    case "cancel":
+    case "session_close":
+    case "reset":
+    case "list_tools":
+    case "list_commands":
+    case "list_skills":
+    case "list_sessions":
+    case "refresh_provider_status":
+    case "provider_catalog_get":
+    case "provider_auth_methods_get":
+    case "mcp_servers_get":
+    case "harness_context_get":
+    case "session_backup_get":
+    case "session_backup_checkpoint":
+      return requireSession(obj);
+
+    // Session + skillName types
+    case "read_skill":
+    case "disable_skill":
+    case "enable_skill":
+    case "delete_skill":
+      return requireSessionAndField(obj, "skillName");
+
+    // Session + name types (MCP server name)
+    case "mcp_server_delete":
+    case "mcp_server_validate":
+    case "mcp_server_auth_authorize":
+      return requireSessionAndField(obj, "name");
+
     case "user_message": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "user_message missing sessionId" };
-      if (typeof obj.text !== "string") return { ok: false, error: "user_message missing text" };
-      if (obj.clientMessageId !== undefined && typeof obj.clientMessageId !== "string") {
-        return { ok: false, error: "user_message invalid clientMessageId" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
+      if (!isNonEmptyString(obj.sessionId)) return err("user_message missing sessionId");
+      if (typeof obj.text !== "string") return err("user_message missing text");
+      if (obj.clientMessageId !== undefined && typeof obj.clientMessageId !== "string") return err("user_message invalid clientMessageId");
+      return ok(obj);
     }
     case "ask_response": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "ask_response missing sessionId" };
-      if (!isNonEmptyString(obj.requestId)) return { ok: false, error: "ask_response missing requestId" };
-      if (typeof obj.answer !== "string") return { ok: false, error: "ask_response missing answer" };
-      return { ok: true, msg: obj as ClientMessage };
+      if (!isNonEmptyString(obj.sessionId)) return err("ask_response missing sessionId");
+      if (!isNonEmptyString(obj.requestId)) return err("ask_response missing requestId");
+      if (typeof obj.answer !== "string") return err("ask_response missing answer");
+      return ok(obj);
     }
     case "approval_response": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "approval_response missing sessionId" };
-      if (!isNonEmptyString(obj.requestId)) return { ok: false, error: "approval_response missing requestId" };
-      if (typeof obj.approved !== "boolean") return { ok: false, error: "approval_response missing/invalid approved" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "list_tools": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "list_tools missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "list_commands": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "list_commands missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
+      if (!isNonEmptyString(obj.sessionId)) return err("approval_response missing sessionId");
+      if (!isNonEmptyString(obj.requestId)) return err("approval_response missing requestId");
+      if (typeof obj.approved !== "boolean") return err("approval_response missing/invalid approved");
+      return ok(obj);
     }
     case "execute_command": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "execute_command missing sessionId" };
-      if (!isNonEmptyString(obj.name)) return { ok: false, error: "execute_command missing/invalid name" };
-      if (obj.arguments !== undefined && typeof obj.arguments !== "string") {
-        return { ok: false, error: "execute_command invalid arguments" };
-      }
-      if (obj.clientMessageId !== undefined && typeof obj.clientMessageId !== "string") {
-        return { ok: false, error: "execute_command invalid clientMessageId" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "cancel": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "cancel missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "session_close": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "session_close missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "reset": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "reset missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "refresh_provider_status": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "refresh_provider_status missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "provider_catalog_get": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "provider_catalog_get missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "provider_auth_methods_get": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "provider_auth_methods_get missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "provider_auth_authorize": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "provider_auth_authorize missing sessionId" };
-      if (!isProviderName(obj.provider)) {
-        return { ok: false, error: "provider_auth_authorize missing/invalid provider" };
-      }
-      if (!isNonEmptyString(obj.methodId)) {
-        return { ok: false, error: "provider_auth_authorize missing/invalid methodId" };
-      }
-      if (!resolveProviderAuthMethod(obj.provider, obj.methodId)) {
-        return { ok: false, error: "provider_auth_authorize unknown methodId" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "provider_auth_callback": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "provider_auth_callback missing sessionId" };
-      if (!isProviderName(obj.provider)) {
-        return { ok: false, error: "provider_auth_callback missing/invalid provider" };
-      }
-      if (!isNonEmptyString(obj.methodId)) {
-        return { ok: false, error: "provider_auth_callback missing/invalid methodId" };
-      }
-      if (!resolveProviderAuthMethod(obj.provider, obj.methodId)) {
-        return { ok: false, error: "provider_auth_callback unknown methodId" };
-      }
-      if (obj.code !== undefined && typeof obj.code !== "string") {
-        return { ok: false, error: "provider_auth_callback invalid code" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "provider_auth_set_api_key": {
-      if (!isNonEmptyString(obj.sessionId)) {
-        return { ok: false, error: "provider_auth_set_api_key missing sessionId" };
-      }
-      if (!isProviderName(obj.provider)) {
-        return { ok: false, error: "provider_auth_set_api_key missing/invalid provider" };
-      }
-      if (!isNonEmptyString(obj.methodId)) {
-        return { ok: false, error: "provider_auth_set_api_key missing/invalid methodId" };
-      }
-      if (!resolveProviderAuthMethod(obj.provider, obj.methodId)) {
-        return { ok: false, error: "provider_auth_set_api_key unknown methodId" };
-      }
-      if (!isNonEmptyString(obj.apiKey)) {
-        return { ok: false, error: "provider_auth_set_api_key missing/invalid apiKey" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "list_skills": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "list_skills missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "read_skill": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "read_skill missing sessionId" };
-      if (!isNonEmptyString(obj.skillName)) return { ok: false, error: "read_skill missing/invalid skillName" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "disable_skill": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "disable_skill missing sessionId" };
-      if (!isNonEmptyString(obj.skillName)) return { ok: false, error: "disable_skill missing/invalid skillName" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "enable_skill": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "enable_skill missing sessionId" };
-      if (!isNonEmptyString(obj.skillName)) return { ok: false, error: "enable_skill missing/invalid skillName" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "delete_skill": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "delete_skill missing sessionId" };
-      if (!isNonEmptyString(obj.skillName)) return { ok: false, error: "delete_skill missing/invalid skillName" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "set_enable_mcp": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "set_enable_mcp missing sessionId" };
-      if (typeof obj.enableMcp !== "boolean") {
-        return { ok: false, error: "set_enable_mcp missing/invalid enableMcp" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "mcp_servers_get": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "mcp_servers_get missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "mcp_server_upsert": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "mcp_server_upsert missing sessionId" };
-      const validationError = validateMcpServerPayload(obj.server);
-      if (validationError) return { ok: false, error: validationError };
-      if (obj.previousName !== undefined && !isNonEmptyString(obj.previousName)) {
-        return { ok: false, error: "mcp_server_upsert invalid previousName" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "mcp_server_delete": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "mcp_server_delete missing sessionId" };
-      if (!isNonEmptyString(obj.name)) return { ok: false, error: "mcp_server_delete missing/invalid name" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "mcp_server_validate": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "mcp_server_validate missing sessionId" };
-      if (!isNonEmptyString(obj.name)) return { ok: false, error: "mcp_server_validate missing/invalid name" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "mcp_server_auth_authorize": {
-      if (!isNonEmptyString(obj.sessionId)) {
-        return { ok: false, error: "mcp_server_auth_authorize missing sessionId" };
-      }
-      if (!isNonEmptyString(obj.name)) {
-        return { ok: false, error: "mcp_server_auth_authorize missing/invalid name" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "mcp_server_auth_callback": {
-      if (!isNonEmptyString(obj.sessionId)) {
-        return { ok: false, error: "mcp_server_auth_callback missing sessionId" };
-      }
-      if (!isNonEmptyString(obj.name)) {
-        return { ok: false, error: "mcp_server_auth_callback missing/invalid name" };
-      }
-      if (obj.code !== undefined && typeof obj.code !== "string") {
-        return { ok: false, error: "mcp_server_auth_callback invalid code" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "mcp_server_auth_set_api_key": {
-      if (!isNonEmptyString(obj.sessionId)) {
-        return { ok: false, error: "mcp_server_auth_set_api_key missing sessionId" };
-      }
-      if (!isNonEmptyString(obj.name)) {
-        return { ok: false, error: "mcp_server_auth_set_api_key missing/invalid name" };
-      }
-      if (!isNonEmptyString(obj.apiKey)) {
-        return { ok: false, error: "mcp_server_auth_set_api_key missing/invalid apiKey" };
-      }
-      if (obj.apiKey.length > MAX_MCP_API_KEY_SIZE) {
-        return { ok: false, error: "mcp_server_auth_set_api_key apiKey exceeds max size 100000" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "mcp_servers_migrate_legacy": {
-      if (!isNonEmptyString(obj.sessionId)) {
-        return { ok: false, error: "mcp_servers_migrate_legacy missing sessionId" };
-      }
-      if (obj.scope !== "workspace" && obj.scope !== "user") {
-        return { ok: false, error: "mcp_servers_migrate_legacy missing/invalid scope" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "harness_context_get": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "harness_context_get missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "harness_context_set": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "harness_context_set missing sessionId" };
-      if (!isPlainObject(obj.context)) return { ok: false, error: "harness_context_set missing/invalid context" };
-      if (!isNonEmptyString(obj.context.runId)) {
-        return { ok: false, error: "harness_context_set invalid context.runId" };
-      }
-      if (!isNonEmptyString(obj.context.objective)) {
-        return { ok: false, error: "harness_context_set invalid context.objective" };
-      }
-      if (!Array.isArray(obj.context.acceptanceCriteria) || !obj.context.acceptanceCriteria.every((x: unknown) => typeof x === "string")) {
-        return { ok: false, error: "harness_context_set invalid context.acceptanceCriteria" };
-      }
-      if (!Array.isArray(obj.context.constraints) || !obj.context.constraints.every((x: unknown) => typeof x === "string")) {
-        return { ok: false, error: "harness_context_set invalid context.constraints" };
-      }
-      if (obj.context.taskId !== undefined && typeof obj.context.taskId !== "string") {
-        return { ok: false, error: "harness_context_set invalid context.taskId" };
-      }
-      if (obj.context.metadata !== undefined) {
-        if (!isPlainObject(obj.context.metadata)) {
-          return { ok: false, error: "harness_context_set invalid context.metadata" };
-        }
-        for (const v of Object.values(obj.context.metadata)) {
-          if (typeof v !== "string") {
-            return { ok: false, error: "harness_context_set invalid context.metadata values" };
-          }
-        }
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "session_backup_get": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "session_backup_get missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "session_backup_checkpoint": {
-      if (!isNonEmptyString(obj.sessionId)) {
-        return { ok: false, error: "session_backup_checkpoint missing sessionId" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "session_backup_restore": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "session_backup_restore missing sessionId" };
-      if (obj.checkpointId !== undefined && !isNonEmptyString(obj.checkpointId)) {
-        return { ok: false, error: "session_backup_restore invalid checkpointId" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
-    }
-    case "session_backup_delete_checkpoint": {
-      if (!isNonEmptyString(obj.sessionId)) {
-        return { ok: false, error: "session_backup_delete_checkpoint missing sessionId" };
-      }
-      if (!isNonEmptyString(obj.checkpointId)) {
-        return { ok: false, error: "session_backup_delete_checkpoint missing checkpointId" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
+      if (!isNonEmptyString(obj.sessionId)) return err("execute_command missing sessionId");
+      if (!isNonEmptyString(obj.name)) return err("execute_command missing/invalid name");
+      if (obj.arguments !== undefined && typeof obj.arguments !== "string") return err("execute_command invalid arguments");
+      if (obj.clientMessageId !== undefined && typeof obj.clientMessageId !== "string") return err("execute_command invalid clientMessageId");
+      return ok(obj);
     }
     case "set_model": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "set_model missing sessionId" };
-      if (!isNonEmptyString(obj.model)) return { ok: false, error: "set_model missing/invalid model" };
-      if (obj.provider !== undefined && !isProviderName(obj.provider)) {
-        return { ok: false, error: `set_model invalid provider: ${String(obj.provider)}` };
-      }
-      return { ok: true, msg: obj as ClientMessage };
+      if (!isNonEmptyString(obj.sessionId)) return err("set_model missing sessionId");
+      if (!isNonEmptyString(obj.model)) return err("set_model missing/invalid model");
+      if (obj.provider !== undefined && !isProviderName(obj.provider)) return err(`set_model invalid provider: ${String(obj.provider)}`);
+      return ok(obj);
     }
-    case "get_messages": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "get_messages missing sessionId" };
-      if (obj.offset !== undefined && (typeof obj.offset !== "number" || obj.offset < 0)) {
-        return { ok: false, error: "get_messages invalid offset" };
-      }
-      if (obj.limit !== undefined && (typeof obj.limit !== "number" || obj.limit < 1)) {
-        return { ok: false, error: "get_messages invalid limit" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
+
+    case "provider_auth_authorize": {
+      const authErr = requireProviderAuth(obj);
+      if (authErr) return authErr;
+      return ok(obj);
     }
-    case "set_session_title": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "set_session_title missing sessionId" };
-      if (!isNonEmptyString(obj.title)) return { ok: false, error: "set_session_title missing/invalid title" };
-      return { ok: true, msg: obj as ClientMessage };
+    case "provider_auth_callback": {
+      const authErr = requireProviderAuth(obj);
+      if (authErr) return authErr;
+      if (obj.code !== undefined && typeof obj.code !== "string") return err("provider_auth_callback invalid code");
+      return ok(obj);
     }
-    case "list_sessions": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "list_sessions missing sessionId" };
-      return { ok: true, msg: obj as ClientMessage };
+    case "provider_auth_set_api_key": {
+      const authErr = requireProviderAuth(obj);
+      if (authErr) return authErr;
+      if (!isNonEmptyString(obj.apiKey)) return err("provider_auth_set_api_key missing/invalid apiKey");
+      return ok(obj);
     }
-    case "delete_session": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "delete_session missing sessionId" };
-      if (!isNonEmptyString(obj.targetSessionId)) {
-        return { ok: false, error: "delete_session missing/invalid targetSessionId" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
+
+    case "set_enable_mcp": {
+      if (!isNonEmptyString(obj.sessionId)) return err("set_enable_mcp missing sessionId");
+      if (typeof obj.enableMcp !== "boolean") return err("set_enable_mcp missing/invalid enableMcp");
+      return ok(obj);
     }
-    case "set_config": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "set_config missing sessionId" };
-      if (!isPlainObject(obj.config)) return { ok: false, error: "set_config missing/invalid config" };
-      const cfg = obj.config as Record<string, unknown>;
-      if (cfg.yolo !== undefined && typeof cfg.yolo !== "boolean") {
-        return { ok: false, error: "set_config config.yolo must be boolean" };
-      }
-      if (cfg.observabilityEnabled !== undefined && typeof cfg.observabilityEnabled !== "boolean") {
-        return { ok: false, error: "set_config config.observabilityEnabled must be boolean" };
-      }
-      if (cfg.subAgentModel !== undefined && !isNonEmptyString(cfg.subAgentModel)) {
-        return { ok: false, error: "set_config config.subAgentModel must be non-empty string" };
-      }
-      if (cfg.maxSteps !== undefined) {
-        if (typeof cfg.maxSteps !== "number" || cfg.maxSteps < 1 || cfg.maxSteps > 1000) {
-          return { ok: false, error: "set_config config.maxSteps must be number 1-1000" };
+    case "mcp_server_upsert": {
+      if (!isNonEmptyString(obj.sessionId)) return err("mcp_server_upsert missing sessionId");
+      const validationError = validateMcpServerPayload(obj.server);
+      if (validationError) return err(validationError);
+      if (obj.previousName !== undefined && !isNonEmptyString(obj.previousName)) return err("mcp_server_upsert invalid previousName");
+      return ok(obj);
+    }
+    case "mcp_server_auth_callback": {
+      if (!isNonEmptyString(obj.sessionId)) return err("mcp_server_auth_callback missing sessionId");
+      if (!isNonEmptyString(obj.name)) return err("mcp_server_auth_callback missing/invalid name");
+      if (obj.code !== undefined && typeof obj.code !== "string") return err("mcp_server_auth_callback invalid code");
+      return ok(obj);
+    }
+    case "mcp_server_auth_set_api_key": {
+      if (!isNonEmptyString(obj.sessionId)) return err("mcp_server_auth_set_api_key missing sessionId");
+      if (!isNonEmptyString(obj.name)) return err("mcp_server_auth_set_api_key missing/invalid name");
+      if (!isNonEmptyString(obj.apiKey)) return err("mcp_server_auth_set_api_key missing/invalid apiKey");
+      if (typeof obj.apiKey === "string" && obj.apiKey.length > MAX_MCP_API_KEY_SIZE) return err("mcp_server_auth_set_api_key apiKey exceeds max size 100000");
+      return ok(obj);
+    }
+    case "mcp_servers_migrate_legacy": {
+      if (!isNonEmptyString(obj.sessionId)) return err("mcp_servers_migrate_legacy missing sessionId");
+      if (obj.scope !== "workspace" && obj.scope !== "user") return err("mcp_servers_migrate_legacy missing/invalid scope");
+      return ok(obj);
+    }
+    case "harness_context_set": {
+      if (!isNonEmptyString(obj.sessionId)) return err("harness_context_set missing sessionId");
+      if (!isPlainObject(obj.context)) return err("harness_context_set missing/invalid context");
+      const ctx = obj.context;
+      if (!isNonEmptyString(ctx.runId)) return err("harness_context_set invalid context.runId");
+      if (!isNonEmptyString(ctx.objective)) return err("harness_context_set invalid context.objective");
+      if (!Array.isArray(ctx.acceptanceCriteria) || !ctx.acceptanceCriteria.every((x: unknown) => typeof x === "string"))
+        return err("harness_context_set invalid context.acceptanceCriteria");
+      if (!Array.isArray(ctx.constraints) || !ctx.constraints.every((x: unknown) => typeof x === "string"))
+        return err("harness_context_set invalid context.constraints");
+      if (ctx.taskId !== undefined && typeof ctx.taskId !== "string") return err("harness_context_set invalid context.taskId");
+      if (ctx.metadata !== undefined) {
+        if (!isPlainObject(ctx.metadata)) return err("harness_context_set invalid context.metadata");
+        for (const v of Object.values(ctx.metadata)) {
+          if (typeof v !== "string") return err("harness_context_set invalid context.metadata values");
         }
       }
-      return { ok: true, msg: obj as ClientMessage };
+      return ok(obj);
+    }
+    case "session_backup_restore": {
+      if (!isNonEmptyString(obj.sessionId)) return err("session_backup_restore missing sessionId");
+      if (obj.checkpointId !== undefined && !isNonEmptyString(obj.checkpointId)) return err("session_backup_restore invalid checkpointId");
+      return ok(obj);
+    }
+    case "session_backup_delete_checkpoint": {
+      if (!isNonEmptyString(obj.sessionId)) return err("session_backup_delete_checkpoint missing sessionId");
+      if (!isNonEmptyString(obj.checkpointId)) return err("session_backup_delete_checkpoint missing checkpointId");
+      return ok(obj);
+    }
+    case "get_messages": {
+      if (!isNonEmptyString(obj.sessionId)) return err("get_messages missing sessionId");
+      if (obj.offset !== undefined && (typeof obj.offset !== "number" || obj.offset < 0)) return err("get_messages invalid offset");
+      if (obj.limit !== undefined && (typeof obj.limit !== "number" || obj.limit < 1)) return err("get_messages invalid limit");
+      return ok(obj);
+    }
+    case "set_session_title":
+      return requireSessionAndField(obj, "title");
+    case "delete_session":
+      return requireSessionAndField(obj, "targetSessionId");
+    case "set_config": {
+      if (!isNonEmptyString(obj.sessionId)) return err("set_config missing sessionId");
+      if (!isPlainObject(obj.config)) return err("set_config missing/invalid config");
+      const cfg = obj.config as Record<string, unknown>;
+      if (cfg.yolo !== undefined && typeof cfg.yolo !== "boolean") return err("set_config config.yolo must be boolean");
+      if (cfg.observabilityEnabled !== undefined && typeof cfg.observabilityEnabled !== "boolean") return err("set_config config.observabilityEnabled must be boolean");
+      if (cfg.subAgentModel !== undefined && !isNonEmptyString(cfg.subAgentModel)) return err("set_config config.subAgentModel must be non-empty string");
+      if (cfg.maxSteps !== undefined && (typeof cfg.maxSteps !== "number" || cfg.maxSteps < 1 || cfg.maxSteps > 1000)) return err("set_config config.maxSteps must be number 1-1000");
+      return ok(obj);
     }
     case "upload_file": {
-      if (!isNonEmptyString(obj.sessionId)) return { ok: false, error: "upload_file missing sessionId" };
-      if (!isNonEmptyString(obj.filename)) return { ok: false, error: "upload_file missing/invalid filename" };
-      if (typeof obj.contentBase64 !== "string") {
-        return { ok: false, error: "upload_file missing/invalid contentBase64" };
-      }
-      return { ok: true, msg: obj as ClientMessage };
+      if (!isNonEmptyString(obj.sessionId)) return err("upload_file missing sessionId");
+      if (!isNonEmptyString(obj.filename)) return err("upload_file missing/invalid filename");
+      if (typeof obj.contentBase64 !== "string") return err("upload_file missing/invalid contentBase64");
+      return ok(obj);
     }
     default:
-      return { ok: false, error: `Unknown type: ${String(obj.type)}` };
+      return err(`Unknown type: ${String(obj.type)}`);
   }
 }

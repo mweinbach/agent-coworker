@@ -46,72 +46,7 @@ export type AiCoworkerPaths = {
 
 export type OauthStdioMode = "pipe" | "inherit";
 
-export type OauthCommandRunner = (opts: {
-  command: string;
-  args: string[];
-  cwd?: string;
-  stdioMode: OauthStdioMode;
-  onLine?: (line: string) => void;
-}) => Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>;
-
 export type UrlOpener = (url: string) => Promise<boolean>;
-
-function appendChunkedLines(
-  source: AsyncIterable<Uint8Array> | null | undefined,
-  onLine: (line: string) => void
-): Promise<void> {
-  if (!source) return Promise.resolve();
-  return (async () => {
-    let buf = "";
-    for await (const chunk of source) {
-      buf += Buffer.from(chunk).toString("utf-8");
-      while (true) {
-        const idx = buf.indexOf("\n");
-        if (idx < 0) break;
-        const line = buf.slice(0, idx).replace(/\r$/, "");
-        buf = buf.slice(idx + 1);
-        if (line.trim()) onLine(line);
-      }
-    }
-    const tail = buf.trim();
-    if (tail) onLine(tail);
-  })();
-}
-
-const defaultOauthRunner: OauthCommandRunner = async ({ command, args, cwd, stdioMode, onLine }) => {
-  if (stdioMode === "inherit") {
-    return await new Promise((resolve, reject) => {
-      const child = spawn(command, args, {
-        cwd,
-        env: process.env,
-        stdio: "inherit",
-      });
-      child.once("error", reject);
-      child.once("close", (exitCode, signal) => resolve({ exitCode, signal }));
-    });
-  }
-
-  return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    child.once("error", reject);
-
-    const stdoutPromise = appendChunkedLines(child.stdout, (line) => onLine?.(line));
-    const stderrPromise = appendChunkedLines(child.stderr, (line) => onLine?.(line));
-
-    child.once("close", async (exitCode, signal) => {
-      try {
-        await Promise.all([stdoutPromise, stderrPromise]);
-      } catch {
-        // ignore stream processing failures and still report process exit
-      }
-      resolve({ exitCode, signal });
-    });
-  });
-};
 
 function isObjectLike(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -269,101 +204,6 @@ export function maskApiKey(value: string): string {
 
 export function isOauthCliProvider(service: ConnectService): service is "codex-cli" {
   return service === "codex-cli";
-}
-
-function oauthCredentialCandidates(service: ConnectService, paths: AiCoworkerPaths): readonly string[] {
-  const homeDir = path.dirname(paths.rootDir);
-  switch (service) {
-    case "codex-cli":
-      return [path.join(paths.authDir, "codex-cli", "auth.json")];
-    default:
-      return [];
-  }
-}
-
-async function hasExistingOauthCredentials(service: ConnectService, paths: AiCoworkerPaths): Promise<boolean> {
-  const files = oauthCredentialCandidates(service, paths);
-  for (const file of files) {
-    try {
-      const st = await fs.stat(file);
-      if (st.isFile()) return true;
-    } catch {
-      // continue
-    }
-  }
-  return false;
-}
-
-function oauthCredentialSourceCandidates(service: ConnectService, paths: AiCoworkerPaths): readonly string[] {
-  // Prefer the upstream CLI's canonical location as the source of truth.
-  const homeDir = path.dirname(paths.rootDir);
-  switch (service) {
-    case "codex-cli":
-      return [];
-    default:
-      return [];
-  }
-}
-
-async function fileExists(p: string): Promise<boolean> {
-  try {
-    const st = await fs.stat(p);
-    return st.isFile();
-  } catch {
-    return false;
-  }
-}
-
-async function persistOauthCredentials(service: ConnectService, paths: AiCoworkerPaths): Promise<string | null> {
-  if (!isOauthCliProvider(service)) return null;
-
-  // Try to copy from the canonical upstream location into ~/.cowork/auth/{provider}/...
-  const sources = oauthCredentialSourceCandidates(service, paths);
-  let sourcePath: string | null = null;
-  for (const candidate of sources) {
-    if (await fileExists(candidate)) {
-      sourcePath = candidate;
-      break;
-    }
-  }
-
-  const destDir = path.join(paths.authDir, service);
-  const destFileFrom = (src: string) => path.join(destDir, path.basename(src));
-
-  // If we can't find an upstream source file, return the existing persisted copy (if any).
-  if (!sourcePath) {
-    for (const candidate of oauthCredentialCandidates(service, paths)) {
-      if (!candidate.startsWith(destDir + path.sep)) continue;
-      if (await fileExists(candidate)) return candidate;
-    }
-    return null;
-  }
-
-  await fs.mkdir(destDir, { recursive: true, mode: 0o700 });
-  try {
-    await fs.chmod(destDir, 0o700);
-  } catch {
-    // best effort only
-  }
-
-  const destPath = destFileFrom(sourcePath);
-  const raw = await fs.readFile(sourcePath);
-  await fs.writeFile(destPath, raw, { mode: 0o600 });
-  try {
-    await fs.chmod(destPath, 0o600);
-  } catch {
-    // best effort only
-  }
-  return destPath;
-}
-
-function oauthCommandCandidates(
-  service: ConnectService
-): readonly { command: string; args: string[]; display: string }[] {
-  switch (service) {
-    default:
-      return [];
-  }
 }
 
 function wait(ms: number): Promise<void> {
@@ -721,7 +561,6 @@ export async function connectProvider(opts: {
   paths?: AiCoworkerPaths;
   oauthStdioMode?: OauthStdioMode;
   onOauthLine?: (line: string) => void;
-  oauthRunner?: OauthCommandRunner;
   fetchImpl?: typeof fetch;
   openUrl?: UrlOpener;
 }): Promise<ConnectProviderResult> {
@@ -851,80 +690,4 @@ export async function connectProvider(opts: {
       };
     }
   }
-
-  const runner = opts.oauthRunner ?? defaultOauthRunner;
-  const stdioMode = opts.oauthStdioMode ?? "pipe";
-  const hasOauthCreds = await hasExistingOauthCredentials(provider, paths);
-  if (hasOauthCreds) {
-    store.services[provider] = {
-      service: provider,
-      mode: "oauth",
-      updatedAt: now,
-    };
-    store.updatedAt = now;
-    await writeConnectionStore(paths, store);
-    const oauthCredentialsFile = await persistOauthCredentials(provider, paths);
-    return {
-      ok: true,
-      provider,
-      mode: "oauth",
-      storageFile: paths.connectionsFile,
-      message: "Existing OAuth credentials detected.",
-      oauthCredentialsFile: oauthCredentialsFile ?? undefined,
-    };
-  }
-
-  const candidates = oauthCommandCandidates(provider);
-  let lastError = "OAuth command failed";
-
-  for (let i = 0; i < candidates.length; i++) {
-    const attempt = candidates[i];
-    try {
-      opts.onOauthLine?.(`[auth] running: ${attempt.display}`);
-      const result = await runner({
-        command: attempt.command,
-        args: attempt.args,
-        cwd: opts.cwd,
-        stdioMode,
-        onLine: opts.onOauthLine,
-      });
-      if (result.exitCode === 0) {
-        store.services[provider] = {
-          service: provider,
-          mode: "oauth",
-          updatedAt: now,
-        };
-        store.updatedAt = now;
-        await writeConnectionStore(paths, store);
-        const oauthCredentialsFile = await persistOauthCredentials(provider, paths);
-        return {
-          ok: true,
-          provider,
-          mode: "oauth",
-          storageFile: paths.connectionsFile,
-          message: "OAuth sign-in completed.",
-          oauthCommand: attempt.display,
-          oauthCredentialsFile: oauthCredentialsFile ?? undefined,
-        };
-      }
-      lastError =
-        result.signal !== null
-          ? `OAuth command terminated by signal ${String(result.signal)}`
-          : `OAuth command exited with code ${String(result.exitCode)}`;
-      opts.onOauthLine?.(`[auth] ${lastError}`);
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-      opts.onOauthLine?.(`[auth] ${lastError}`);
-    }
-
-    if (i < candidates.length - 1) {
-      opts.onOauthLine?.("[auth] trying fallback command...");
-    }
-  }
-
-  return {
-    ok: false,
-    provider,
-    message: `OAuth sign-in failed: ${lastError}`,
-  };
 }

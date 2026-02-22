@@ -8,6 +8,8 @@ import { resolveMaybeRelative, truncateText } from "../utils/paths";
 import { ensureRipgrep } from "../utils/ripgrep";
 import { assertReadPathAllowed } from "../utils/permissions";
 
+const errorCodeSchema = z.object({ code: z.union([z.string(), z.number()]) }).passthrough();
+
 export function createGrepTool(
   ctx: ToolContext,
   opts: { execFileImpl?: typeof execFile; ensureRipgrepImpl?: typeof ensureRipgrep } = {}
@@ -57,9 +59,10 @@ export function createGrepTool(
       const output = await new Promise<string>((resolve) => {
         execFileImpl(rgPath, args, { maxBuffer: 1024 * 1024 * 10 }, (err, stdout) => {
           // ripgrep returns exit code 1 when there are no matches.
-          const code = (err as any)?.code;
+          const parsedErrorCode = errorCodeSchema.safeParse(err);
+          const code = parsedErrorCode.success ? parsedErrorCode.data.code : undefined;
           if (code === 1) return resolve("No matches found.");
-          if ((err as any)?.code === "ENOENT") {
+          if (code === "ENOENT") {
             return resolve("ripgrep (rg) not found.");
           }
           if (err) {

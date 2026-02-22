@@ -21,6 +21,14 @@ import {
 } from "./protocol";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
+const errorWithCodeSchema = z.object({
+  code: z.string().optional(),
+}).passthrough();
+const websocketMessageRawSchema = z.union([
+  z.string(),
+  z.instanceof(Uint8Array),
+  z.instanceof(ArrayBuffer),
+]);
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return jsonObjectSchema.safeParse(v).success;
@@ -53,7 +61,8 @@ async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unkn
     }
     return parsedObject.data;
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
     if (code === "ENOENT") return {};
     if (error instanceof Error) throw error;
     throw new Error(`Failed to load config file ${filePath}: ${String(error)}`);
@@ -91,7 +100,7 @@ export interface StartAgentServerOptions {
 }
 
 type SessionBinding = {
-  session: AgentSession;
+  session: AgentSession | null;
   socket: Bun.ServerWebSocket<{ session?: AgentSession; resumeSessionId?: string }> | null;
 };
 
@@ -228,14 +237,14 @@ export async function startAgentServer(
           let isResume = false;
           let resumedFromStorage = false;
 
-          if (resumable && resumable.socket === null) {
+          if (resumable && resumable.socket === null && resumable.session) {
             binding = resumable;
             binding.socket = ws;
             session = binding.session;
             isResume = true;
           } else {
             binding = {
-              session: undefined as unknown as AgentSession,
+              session: null,
               socket: ws,
             };
             const built = buildSession(binding, resumeSessionId);
@@ -296,7 +305,23 @@ export async function startAgentServer(
           const session = ws.data.session;
           if (!session) return;
 
-          const text = typeof raw === "string" ? raw : Buffer.from(raw as any).toString("utf-8");
+          const parsedRaw = websocketMessageRawSchema.safeParse(raw);
+          if (!parsedRaw.success) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                sessionId: session.id,
+                message: "Invalid JSON",
+                code: "invalid_json",
+                source: "protocol",
+              } satisfies ServerEvent)
+            );
+            return;
+          }
+          const text =
+            typeof parsedRaw.data === "string"
+              ? parsedRaw.data
+              : Buffer.from(parsedRaw.data).toString("utf-8");
           const parsed = safeParseClientMessage(text);
           if (!parsed.ok) {
             ws.send(
@@ -396,8 +421,8 @@ export async function startAgentServer(
   }
 
   function isAddrInUse(err: unknown): boolean {
-    const code = (err as any)?.code;
-    return code === "EADDRINUSE";
+    const parsed = errorWithCodeSchema.safeParse(err);
+    return parsed.success && parsed.data.code === "EADDRINUSE";
   }
 
   const requestedPort = opts.port ?? 7337;
@@ -433,11 +458,16 @@ export async function startAgentServer(
   const server = serveWithPortFallback(requestedPort);
   const originalStop = server.stop.bind(server);
   let serverStopped = false;
-  (server as any).stop = () => {
+  const stoppableServer = server as typeof server & { stop: () => void };
+  stoppableServer.stop = () => {
     if (serverStopped) return;
     serverStopped = true;
     // Dispose all active sessions to abort running turns and close MCP child processes.
     for (const [id, binding] of sessionBindings) {
+      if (!binding.session) {
+        sessionBindings.delete(id);
+        continue;
+      }
       try {
         binding.session.dispose("server stopping");
       } catch {

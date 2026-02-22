@@ -12,11 +12,14 @@ const serverEventEnvelopeSchema = z.object({
 }).passthrough();
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
+const jsonStringSchema = z.string();
+const webSocketImplSchema = z.custom<typeof WebSocket>((value) => typeof value === "function");
 
 export function safeJsonParse(raw: unknown): unknown | null {
-  if (typeof raw !== "string") return null;
+  const parsedRaw = jsonStringSchema.safeParse(raw);
+  if (!parsedRaw.success) return null;
   try {
-    return JSON.parse(raw);
+    return JSON.parse(parsedRaw.data);
   } catch {
     return null;
   }
@@ -97,11 +100,12 @@ export class AgentSocket {
     this.maxReconnectAttempts = opts.maxReconnectAttempts ?? 10;
     this.pingIntervalMs = opts.pingIntervalMs ?? 30_000;
 
-    const impl = opts.WebSocketImpl ?? (globalThis as any).WebSocket;
-    if (!impl) {
+    const impl = opts.WebSocketImpl ?? (globalThis as { WebSocket?: unknown }).WebSocket;
+    const parsedImpl = webSocketImplSchema.safeParse(impl);
+    if (!parsedImpl.success) {
       throw new Error("WebSocket is not available in this environment.");
     }
-    this.WebSocketImpl = impl as typeof WebSocket;
+    this.WebSocketImpl = parsedImpl.data;
   }
 
   get sessionId() {
@@ -151,7 +155,8 @@ export class AgentSocket {
     };
 
     ws.onmessage = (ev) => {
-      const evt = safeParseServerEvent(String((ev as any).data));
+      const rawData = (ev as { data?: unknown }).data;
+      const evt = safeParseServerEvent(typeof rawData === "string" ? rawData : String(rawData ?? ""));
       if (!evt) return;
 
       // Pong is an internal keepalive and should not be surfaced to consumers.

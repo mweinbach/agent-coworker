@@ -62,6 +62,7 @@ export type PersistedSessionSummary = {
 const sessionTitleSourceSchema = z.enum(["default", "model", "heuristic", "manual"]);
 const providerNameSchema = z.enum(PROVIDER_NAMES);
 const isoTimestampSchema = z.string().datetime({ offset: true });
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 const persistedSessionSnapshotSchema = z.object({
   version: z.literal(1),
@@ -159,7 +160,8 @@ export async function readPersistedSessionSnapshot(opts: {
     }
     return parsePersistedSessionSnapshot(parsedJson);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
     if (code === "ENOENT") return null;
     if (error instanceof Error) throw error;
     throw new Error(`Failed to read persisted session snapshot ${filePath}: ${String(error)}`);

@@ -14,7 +14,8 @@ async function loadModernRunTui() {
 }
 
 // Keep output clean by default.
-(globalThis as any).AI_SDK_LOG_WARNINGS = false;
+const globalSettings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
+globalSettings.AI_SDK_LOG_WARNINGS = false;
 
 function printUsage() {
   console.log("Usage: cowork [--dir <directory_path>] [--cli] [--yolo] [--no-mouse]");

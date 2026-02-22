@@ -71,6 +71,16 @@ const oauthClientInformationSchema = z.object({
   client_secret: nonEmptyTrimmedStringSchema.optional(),
 }).passthrough();
 const retryCountSchema = z.number().finite().transform((value) => Math.max(0, Math.floor(value)));
+const mcpToolRecordSchema = z.record(z.string(), z.unknown());
+type RuntimeMcpClient = {
+  tools: () => Promise<Record<string, unknown>>;
+  close: () => Promise<void>;
+};
+const runtimeMcpClientSchema = z.custom<RuntimeMcpClient>((value) => {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) return false;
+  const maybeClient = value as { tools?: unknown; close?: unknown };
+  return typeof maybeClient.tools === "function" && typeof maybeClient.close === "function";
+});
 
 function toOAuthTokensForSdk(tokens: MCPServerOAuthTokens): {
   access_token: string;
@@ -234,9 +244,9 @@ async function hydrateServerForRuntime(config: AgentConfig, server: MCPRegistryS
       });
       if (provider) {
         runtimeServer.transport = {
-          ...(runtimeServer.transport as any),
+          ...runtimeServer.transport,
           authProvider: provider,
-        } as any;
+        } as MCPServerConfig["transport"];
       }
     }
 
@@ -318,10 +328,10 @@ export async function loadMCPTools(
     createClient?: typeof createMCPClient;
     sleep?: (ms: number) => Promise<void>;
   } = {},
-): Promise<{ tools: Record<string, any>; errors: string[]; close: () => Promise<void> }> {
+): Promise<{ tools: Record<string, unknown>; errors: string[]; close: () => Promise<void> }> {
   const createClient = opts.createClient ?? createMCPClient;
   const sleep = opts.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const tools: Record<string, any> = {};
+  const tools: Record<string, unknown> = {};
   const errors: string[] = [];
   const clients: Array<{ name: string; close: () => Promise<void> }> = [];
   let closed = false;
@@ -347,7 +357,7 @@ export async function loadMCPTools(
     const retries = retriesFor(server.retries);
 
     for (let attempt = 0; attempt <= retries; attempt++) {
-      let client: any | null = null;
+      let client: RuntimeMcpClient | null = null;
       try {
         const transport =
           server.transport.type === "stdio"
@@ -357,14 +367,24 @@ export async function loadMCPTools(
                 env: server.transport.env,
                 cwd: server.transport.cwd,
               })
-            : (server.transport as any);
+            : server.transport;
 
-        client = await createClient({
+        const rawClient = await createClient({
           name: server.name,
           transport,
         });
+        const parsedClient = runtimeMcpClientSchema.safeParse(rawClient);
+        if (!parsedClient.success) {
+          throw new Error(`MCP client for ${server.name} has an invalid runtime shape.`);
+        }
+        client = parsedClient.data;
 
-        const discovered = await client.tools();
+        const discoveredRaw = await client.tools();
+        const discoveredParsed = mcpToolRecordSchema.safeParse(discoveredRaw);
+        if (!discoveredParsed.success) {
+          throw new Error(`MCP client for ${server.name} returned invalid tool definitions.`);
+        }
+        const discovered = discoveredParsed.data;
 
         for (const [name, toolDef] of Object.entries(discovered)) {
           tools[`mcp__${server.name}__${name}`] = toolDef;

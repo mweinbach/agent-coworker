@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 import type { AgentConfig } from "../types";
 import { isPathInside } from "./paths";
+
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 function isPathAllowed(filePath: string, config: AgentConfig): boolean {
   const resolved = path.resolve(filePath);
@@ -35,7 +38,8 @@ async function canonicalizeExistingPrefix(targetPath: string): Promise<string> {
       const canonical = await fs.realpath(cursor);
       return tail.length > 0 ? path.join(canonical, ...tail.reverse()) : canonical;
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      const parsedCode = errorWithCodeSchema.safeParse(err);
+      const code = parsedCode.success ? parsedCode.data.code : undefined;
       if (code !== "ENOENT") throw err;
       const parent = path.dirname(cursor);
       if (parent === cursor) return resolved;
@@ -50,7 +54,8 @@ async function canonicalizeRoot(rootPath: string): Promise<string> {
   try {
     return await fs.realpath(resolved);
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    const parsedCode = errorWithCodeSchema.safeParse(err);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
     if (code !== "ENOENT") throw err;
     return resolved;
   }

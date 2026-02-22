@@ -53,6 +53,8 @@ const codexOAuthTokenResponseSchema = z.object({
   id_token: nonEmptyStringSchema.optional(),
   expires_in: finiteNumberFromUnknownSchema.optional(),
 }).passthrough();
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
+const jsonStringSchema = z.string();
 
 const codexAuthDocumentSchema = z.object({
   version: z.literal(1),
@@ -171,13 +173,18 @@ export function codexAuthFilePath(paths: Pick<CodexAuthPaths, "authDir">): strin
 async function readJsonFile(filePath: string): Promise<unknown | null> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
+    const parsedRaw = jsonStringSchema.safeParse(raw);
+    if (!parsedRaw.success) {
+      throw new Error(`Invalid JSON in Codex auth file ${filePath}: failed to read UTF-8 text`);
+    }
     try {
-      return JSON.parse(raw) as unknown;
+      return JSON.parse(parsedRaw.data);
     } catch (error) {
       throw new Error(`Invalid JSON in Codex auth file ${filePath}: ${String(error)}`);
     }
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
     if (code === "ENOENT") return null;
     throw error;
   }
@@ -313,34 +320,26 @@ export function codexMaterialFromTokenResponse(
   opts: {
     issuer?: string;
     clientId?: string;
-    fallbackRefreshToken?: string;
-    fallbackIdToken?: string;
-    fallbackAccountId?: string;
-    fallbackEmail?: string;
-    fallbackPlanType?: string;
   } = {}
 ): CodexAuthMaterial {
   const parsedPayload = codexOAuthTokenResponseSchema.safeParse(payload);
   if (!parsedPayload.success) throw new Error("Token response missing access_token.");
 
   const accessToken = parsedPayload.data.access_token;
-  const refreshToken = parsedPayload.data.refresh_token ?? opts.fallbackRefreshToken;
-  const idToken = parsedPayload.data.id_token ?? opts.fallbackIdToken;
+  const refreshToken = parsedPayload.data.refresh_token;
+  const idToken = parsedPayload.data.id_token;
 
   const accessClaims = decodeJwtPayload(accessToken);
   const idClaims = idToken ? decodeJwtPayload(idToken) : null;
   const accountId =
     (idClaims ? extractAccountIdFromClaims(idClaims) : undefined) ??
-    (accessClaims ? extractAccountIdFromClaims(accessClaims) : undefined) ??
-    opts.fallbackAccountId;
+    (accessClaims ? extractAccountIdFromClaims(accessClaims) : undefined);
   const email =
     (idClaims ? extractEmailFromClaims(idClaims) : undefined) ??
-    (accessClaims ? extractEmailFromClaims(accessClaims) : undefined) ??
-    opts.fallbackEmail;
+    (accessClaims ? extractEmailFromClaims(accessClaims) : undefined);
   const planType =
     (idClaims ? extractPlanTypeFromClaims(idClaims) : undefined) ??
-    (accessClaims ? extractPlanTypeFromClaims(accessClaims) : undefined) ??
-    opts.fallbackPlanType;
+    (accessClaims ? extractPlanTypeFromClaims(accessClaims) : undefined);
 
   const expiresAtMs =
     (() => {
@@ -370,11 +369,6 @@ export async function persistCodexAuthFromTokenResponse(
   opts: {
     issuer?: string;
     clientId?: string;
-    fallbackRefreshToken?: string;
-    fallbackIdToken?: string;
-    fallbackAccountId?: string;
-    fallbackEmail?: string;
-    fallbackPlanType?: string;
   } = {}
 ): Promise<CodexAuthMaterial> {
   const file = codexAuthFilePath(paths);
@@ -414,11 +408,6 @@ export async function refreshCodexAuthMaterial(opts: {
   return await persistCodexAuthFromTokenResponse(opts.paths, payload, {
     issuer: opts.material.issuer,
     clientId: opts.material.clientId,
-    fallbackRefreshToken: opts.material.refreshToken,
-    fallbackIdToken: opts.material.idToken,
-    fallbackAccountId: opts.material.accountId,
-    fallbackEmail: opts.material.email,
-    fallbackPlanType: opts.material.planType,
   });
 }
 

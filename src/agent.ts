@@ -31,6 +31,14 @@ const usageSchema = z.object({
 }).strict();
 const responseMessagesSchema = z.array(z.unknown());
 const stringSchema = z.string();
+const asyncIterableSchema = z.custom<AsyncIterable<unknown>>((value) => {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) return false;
+  const iterable = value as { [Symbol.asyncIterator]?: unknown };
+  return typeof iterable[Symbol.asyncIterator] === "function";
+});
+const streamResultWithFullStreamSchema = z.object({
+  fullStream: asyncIterableSchema.optional(),
+}).passthrough();
 
 export interface RunTurnParams {
   config: AgentConfig;
@@ -204,7 +212,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
         ? buildGooglePrepareStep(turnProviderOptions, log)
         : undefined;
 
-    const result = await (async () => {
+    const result = await (async (): Promise<{ text: unknown; reasoningText: unknown; response: unknown }> => {
       try {
         const telemetry = await buildAiSdkTelemetrySettings(config, {
           functionId: params.telemetryContext?.functionId ?? "agent.runTurn",
@@ -213,7 +221,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           },
         });
 
-        const streamResult = await deps.streamText({
+        const streamTextInput = {
           model: deps.getModel(config),
           system: turnSystem,
           messages,
@@ -235,16 +243,18 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
             await params.onModelAbort?.();
           },
           includeRawChunks: params.includeRawChunks ?? true,
-        } as any);
+        } as Parameters<typeof deps.streamText>[0];
+        const streamResult = await deps.streamText(streamTextInput);
 
         let streamConsumptionSettled = false;
         let streamPartCount = 0;
         const streamConsumption = (async () => {
           if (!params.onModelStreamPart) return;
-          const fullStream = (streamResult as any).fullStream;
-          if (!fullStream || typeof fullStream[Symbol.asyncIterator] !== "function") return;
+          const parsedStream = streamResultWithFullStreamSchema.safeParse(streamResult);
+          const fullStream = parsedStream.success ? parsedStream.data.fullStream : undefined;
+          if (!fullStream) return;
 
-          const streamIterator = (fullStream as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+          const streamIterator = fullStream[Symbol.asyncIterator]();
           while (true) {
             const next = await streamIterator.next();
             if (next.done) break;
@@ -289,7 +299,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           }
         }
 
-        return { text, reasoningText, response } as any;
+        return { text, reasoningText, response };
       } finally {
         try {
           await closeMcp?.();

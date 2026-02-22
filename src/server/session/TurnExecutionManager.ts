@@ -11,6 +11,7 @@ const assistantMessageContentPartSchema = z.object({
   type: z.enum(["text", "output_text"]),
   text: z.string(),
 }).passthrough();
+const errorWithCodeSchema = z.object({ code: z.unknown() }).passthrough();
 
 function makeId(): string {
   return crypto.randomUUID();
@@ -271,7 +272,8 @@ export class TurnExecutionManager {
     if (this.context.state.abortController?.signal.aborted) return true;
     if (err instanceof DOMException && err.name === "AbortError") return true;
 
-    const code = typeof err === "object" && err ? (err as { code?: unknown }).code : undefined;
+    const parsedCode = errorWithCodeSchema.safeParse(err);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
     if (code === "ABORT_ERR") return true;
 
     const msg = this.context.formatError(err).toLowerCase();

@@ -124,6 +124,7 @@ const mcpServerSchema = z.object({
 const mcpServersDocumentSchema = z.object({
   servers: z.array(mcpServerSchema).default([]),
 });
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 function formatZodError(error: z.ZodError): string {
   const issue = error.issues[0];
@@ -209,7 +210,8 @@ async function readLayer(opts: {
     rawJson = await fs.readFile(opts.filePath, "utf-8");
     exists = true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    if (!parsedCode.success || parsedCode.data.code !== "ENOENT") {
       throw error;
     }
   }
@@ -259,7 +261,8 @@ async function fileExists(filePath: string): Promise<boolean> {
     await fs.access(filePath);
     return true;
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
     if (code === "ENOENT") return false;
     throw error;
   }
@@ -333,7 +336,8 @@ export async function readWorkspaceMCPServersDocument(config: AgentConfig): Prom
   try {
     rawJson = await fs.readFile(paths.workspaceConfigFile, "utf-8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    if (!parsedCode.success || parsedCode.data.code !== "ENOENT") {
       throw error;
     }
   }
@@ -423,7 +427,8 @@ async function readServersOrEmpty(filePath: string): Promise<MCPServerConfig[]> 
     const rawJson = await fs.readFile(filePath, "utf-8");
     return parseMCPServersDocument(rawJson).servers;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    if (parsedCode.success && parsedCode.data.code === "ENOENT") {
       return [];
     }
     throw error;
@@ -434,7 +439,8 @@ async function archiveLegacyFile(legacyPath: string): Promise<string | null> {
   try {
     await fs.access(legacyPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    if (parsedCode.success && parsedCode.data.code === "ENOENT") {
       return null;
     }
     throw error;

@@ -9,6 +9,9 @@ const todoSchema = z.object({
   status: z.enum(["pending", "in_progress", "completed"]),
   activeForm: z.string().min(1).describe("Present continuous form"),
 });
+const todoWriteInputSchema = z.object({
+  todos: z.array(todoSchema).describe("The complete, updated todo list"),
+});
 
 export let currentTodos: TodoItem[] = [];
 
@@ -27,9 +30,7 @@ Rules:
 - Exactly one item should be in_progress.
 - Mark tasks completed immediately when done.
 - Include a final verification step for non-trivial work.`,
-  inputSchema: z.object({
-    todos: z.array(todoSchema).describe("The complete, updated todo list"),
-  }),
+  inputSchema: todoWriteInputSchema,
   execute: async ({ todos }) => {
     currentTodos = todos;
     for (const fn of listeners) fn(todos);
@@ -42,7 +43,7 @@ Rules:
 export function createTodoWriteTool(ctx: ToolContext) {
   return tool({
     description: todoWrite.description,
-    inputSchema: todoWrite.inputSchema as any,
+    inputSchema: todoWriteInputSchema,
     execute: async ({ todos }) => {
       ctx.log(`tool> todoWrite ${JSON.stringify({ count: todos.length })}`);
       ctx.updateTodos?.(todos);

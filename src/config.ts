@@ -48,6 +48,7 @@ const numberLikeSchema = z.union([
     return parsed;
   }),
 ]);
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return jsonObjectSchema.safeParse(v).success;
@@ -81,7 +82,8 @@ async function loadJsonSafe(filePath: string): Promise<Record<string, unknown>> 
     }
     return result.data;
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
     if (code === "ENOENT") return {};
     if (error instanceof Error) throw error;
     throw new Error(`Failed to load config file ${filePath}: ${String(error)}`);
@@ -196,7 +198,8 @@ function readSavedApiKey(config: AgentConfig, provider: ProviderName): string | 
   try {
     raw = fsSync.readFileSync(paths.connectionsFile, "utf-8");
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
     if (code === "ENOENT") return undefined;
     throw new Error(`Failed to read connection store at ${paths.connectionsFile}: ${String(error)}`);
   }

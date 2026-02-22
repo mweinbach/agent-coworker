@@ -132,6 +132,7 @@ const credentialsDocSchema = z.object({
   updatedAt: isoTimestampSchema,
   servers: z.record(z.string().min(1), credentialRecordSchema),
 }).strict();
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 
 function ensureScopeDir(filePath: string): Promise<void> {
@@ -176,9 +177,16 @@ function normalizeCredentialsDoc(raw: unknown): MCPServerCredentialsDocument {
 async function readDoc(filePath: string): Promise<MCPServerCredentialsDocument> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    return normalizeCredentialsDoc(JSON.parse(raw));
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`Invalid JSON in MCP credential store at ${filePath}: ${String(error)}`);
+    }
+    return normalizeCredentialsDoc(parsedJson);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
     if (code === "ENOENT") return { ...DEFAULT_DOC, updatedAt: nowIso(), servers: {} };
     throw new Error(`Failed to read MCP credential store at ${filePath}: ${String(error)}`);
   }

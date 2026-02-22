@@ -53,6 +53,7 @@ const connectionStoreSchema = z.object({
   services: z.record(z.string(), storedConnectionSchema),
   toolApiKeys: toolApiKeysSchema.optional(),
 }).strict();
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 export function getAiCoworkerPaths(opts: { homedir?: string } = {}): AiCoworkerPaths {
   const home = opts.homedir ?? os.homedir();
@@ -88,7 +89,12 @@ export async function readConnectionStore(paths: AiCoworkerPaths): Promise<Conne
   const loadFrom = async (filePath: string): Promise<ConnectionStore | null> => {
     try {
       const raw = await fs.readFile(filePath, "utf-8");
-      const parsed = JSON.parse(raw);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (error) {
+        throw new Error(`Invalid JSON in connection store at ${filePath}: ${String(error)}`);
+      }
       const storeParsed = connectionStoreSchema.safeParse(parsed);
       if (!storeParsed.success) {
         throw new Error(`Invalid connection store schema: ${storeParsed.error.issues[0]?.message ?? "validation_failed"}`);
@@ -113,7 +119,8 @@ export async function readConnectionStore(paths: AiCoworkerPaths): Promise<Conne
         ...(storeParsed.data.toolApiKeys ? { toolApiKeys: storeParsed.data.toolApiKeys } : {}),
       };
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      const parsedCode = errorWithCodeSchema.safeParse(error);
+      const code = parsedCode.success ? parsedCode.data.code : undefined;
       if (code === "ENOENT") return null;
       throw new Error(`Failed to read connection store at ${filePath}: ${String(error)}`);
     }

@@ -154,8 +154,9 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
     const candidates = modelCandidatesForProvider(opts.config.provider, deps.defaultModelForProvider);
     for (const modelId of candidates) {
       try {
+        const model = deps.getModel(opts.config, modelId) as Parameters<typeof deps.generateText>[0]["model"];
         const { output } = await deps.generateText({
-          model: deps.getModel(opts.config, modelId) as any,
+          model,
           output: Output.object({ schema: TITLE_SCHEMA }),
           prompt: buildTitlePrompt(query),
           maxOutputTokens: TITLE_MAX_TOKENS,

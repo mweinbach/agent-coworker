@@ -29,7 +29,8 @@ export { normalizeApprovalAnswer, resolveAskAnswer };
 export { renderTodosToLines, renderToolsToLines };
 
 // Keep CLI output clean by default.
-(globalThis as any).AI_SDK_LOG_WARNINGS = false;
+const globalSettings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
+globalSettings.AI_SDK_LOG_WARNINGS = false;
 
 const UI_PROVIDER_NAMES = PROVIDER_NAMES;
 const NOT_CONNECTED_MSG = "unable to send (not connected)";

@@ -9,9 +9,11 @@ type CliState = {
   lastSessionByCwd: Record<string, string>;
 };
 
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 const cliStateSchema = z.object({
   version: z.literal(1),
-  lastSessionByCwd: z.record(z.string().trim().min(1), z.string().trim().min(1)),
+  lastSessionByCwd: z.record(nonEmptyTrimmedStringSchema, nonEmptyTrimmedStringSchema),
 }).strict();
 
 function getCliStateFilePath(): string {
@@ -23,7 +25,12 @@ async function readCliState(): Promise<CliState> {
   const filePath = getCliStateFilePath();
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    const parsedRaw = JSON.parse(raw);
+    let parsedRaw: unknown;
+    try {
+      parsedRaw = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`Invalid JSON in CLI state at ${filePath}: ${String(error)}`);
+    }
     const parsedState = cliStateSchema.safeParse(parsedRaw);
     if (!parsedState.success) {
       throw new Error(`Invalid CLI state schema: ${parsedState.error.issues[0]?.message ?? "validation_failed"}`);
@@ -38,7 +45,8 @@ async function readCliState(): Promise<CliState> {
       lastSessionByCwd: normalized,
     };
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
     if (code === "ENOENT") return { version: 1, lastSessionByCwd: {} };
     throw new Error(`Failed to read CLI state: ${String(error)}`);
   }
@@ -57,14 +65,14 @@ async function persistCliState(state: CliState): Promise<void> {
 export async function getStoredSessionForCwd(cwd: string): Promise<string | null> {
   const state = await readCliState();
   const key = path.resolve(cwd);
-  const sessionId = state.lastSessionByCwd[key];
-  return typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : null;
+  const sessionId = nonEmptyTrimmedStringSchema.safeParse(state.lastSessionByCwd[key]);
+  return sessionId.success ? sessionId.data : null;
 }
 
 export async function setStoredSessionForCwd(cwd: string, sessionId: string): Promise<void> {
-  const sid = sessionId.trim();
-  if (!sid) return;
+  const sid = nonEmptyTrimmedStringSchema.safeParse(sessionId);
+  if (!sid.success) return;
   const state = await readCliState();
-  state.lastSessionByCwd[path.resolve(cwd)] = sid;
+  state.lastSessionByCwd[path.resolve(cwd)] = sid.data;
   await persistCliState(state);
 }

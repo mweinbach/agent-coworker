@@ -97,6 +97,8 @@ const sessionBackupMetadataSchema = z.object({
   originalSnapshot: snapshotRefSchema,
   checkpoints: z.array(sessionBackupMetadataCheckpointSchema),
 }).passthrough();
+const errorMessageSchema = z.object({ message: z.string() }).passthrough();
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -170,7 +172,9 @@ async function runCommand(
 
   const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
   const stderrBase = Buffer.concat(stderrChunks).toString("utf-8");
-  const stderr = spawnErr ? `${stderrBase}\n${String((spawnErr as any)?.message ?? spawnErr)}`.trim() : stderrBase;
+  const parsedErrorMessage = errorMessageSchema.safeParse(spawnErr);
+  const spawnErrorMessage = parsedErrorMessage.success ? parsedErrorMessage.data.message : spawnErr;
+  const stderr = spawnErr ? `${stderrBase}\n${String(spawnErrorMessage)}`.trim() : stderrBase;
 
   return { exitCode, stdout, stderr };
 }
@@ -347,7 +351,8 @@ async function readMetadata(filePath: string): Promise<SessionBackupMetadata | n
     }
     return parsed.data;
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
     if (code === "ENOENT") return null;
     throw error;
   }

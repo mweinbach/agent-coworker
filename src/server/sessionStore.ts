@@ -63,6 +63,25 @@ const sessionTitleSourceSchema = z.enum(["default", "model", "heuristic", "manua
 const providerNameSchema = z.enum(PROVIDER_NAMES);
 const isoTimestampSchema = z.string().datetime({ offset: true });
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
+const modelMessageSchema = z.custom<ModelMessage>(
+  (value) => typeof value === "object" && value !== null,
+  "Invalid model message entry",
+);
+const todoItemSchema = z.object({
+  content: z.string(),
+  status: z.enum(["pending", "in_progress", "completed"]),
+  activeForm: z.string(),
+}).strict();
+const harnessContextMetadataSchema = z.record(z.string(), z.string());
+const harnessContextStateSchema = z.object({
+  runId: z.string(),
+  taskId: z.string().optional(),
+  objective: z.string(),
+  acceptanceCriteria: z.array(z.string()),
+  constraints: z.array(z.string()),
+  metadata: harnessContextMetadataSchema.optional(),
+  updatedAt: isoTimestampSchema,
+}).strict();
 
 const persistedSessionSnapshotSchema = z.object({
   version: z.literal(1),
@@ -86,9 +105,9 @@ const persistedSessionSnapshotSchema = z.object({
   }).strict(),
   context: z.object({
     system: z.string(),
-    messages: z.array(z.unknown()),
-    todos: z.array(z.unknown()),
-    harnessContext: z.record(z.string(), z.unknown()).nullable(),
+    messages: z.array(modelMessageSchema),
+    todos: z.array(todoItemSchema),
+    harnessContext: harnessContextStateSchema.nullable(),
   }).strict(),
 }).strict();
 
@@ -114,8 +133,6 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
   }
 
   const snapshot = parsed.data;
-  const provider = snapshot.config.provider as AgentConfig["provider"];
-  const model = snapshot.config.model;
   return {
     version: 1,
     sessionId: snapshot.sessionId,
@@ -123,14 +140,14 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
     updatedAt: snapshot.updatedAt,
     session: {
       title: snapshot.session.title,
-      titleSource: snapshot.session.titleSource as SessionTitleSource,
+      titleSource: snapshot.session.titleSource,
       titleModel: snapshot.session.titleModel,
-      provider: snapshot.session.provider as AgentConfig["provider"],
+      provider: snapshot.session.provider,
       model: snapshot.session.model,
     },
     config: {
-      provider,
-      model,
+      provider: snapshot.config.provider,
+      model: snapshot.config.model,
       enableMcp: snapshot.config.enableMcp,
       workingDirectory: snapshot.config.workingDirectory,
       outputDirectory: snapshot.config.outputDirectory,
@@ -138,9 +155,9 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
     },
     context: {
       system: snapshot.context.system,
-      messages: snapshot.context.messages as ModelMessage[],
-      todos: snapshot.context.todos as TodoItem[],
-      harnessContext: snapshot.context.harnessContext as HarnessContextState | null,
+      messages: snapshot.context.messages,
+      todos: snapshot.context.todos,
+      harnessContext: snapshot.context.harnessContext,
     },
   };
 }

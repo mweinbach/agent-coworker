@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 import { getAiCoworkerPaths } from "./connect";
+import { parseConnectionStoreJson } from "./store/connections";
 import { defaultModelForProvider, getModelForProvider, getProviderKeyCandidates } from "./providers";
 import { resolveProviderName } from "./types";
 import type { AgentConfig, CommandTemplateConfig, ProviderName } from "./types";
@@ -48,6 +49,9 @@ const numberLikeSchema = z.union([
     return parsed;
   }),
 ]);
+const nonNegativeIntegerLikeSchema = numberLikeSchema
+  .transform((value) => Math.floor(value))
+  .refine((value) => value >= 0, { message: "invalid_non_negative_integer" });
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -96,19 +100,17 @@ const commandTemplateSchema = z.object({
   source: z.enum(["command", "mcp", "skill"]),
 }).strict();
 
-const commandConfigSchema = z.record(z.string().trim().min(1), commandTemplateSchema);
-const isoTimestampSchema = z.string().datetime({ offset: true });
-const savedConnectionSchema = z.object({
-  service: z.string().trim().min(1),
-  mode: z.enum(["api_key", "oauth", "oauth_pending"]),
-  apiKey: z.string().trim().min(1).optional(),
-  updatedAt: isoTimestampSchema,
-}).strict();
-const savedConnectionStoreSchema = z.object({
-  version: z.literal(1),
-  updatedAt: isoTimestampSchema,
-  services: z.record(z.string().trim().min(1), savedConnectionSchema),
-}).strict();
+const commandConfigSchema = z.record(z.string().trim().min(1), commandTemplateSchema).transform((rawCommands) => {
+  const commands: Record<string, CommandTemplateConfig> = {};
+  for (const [name, command] of Object.entries(rawCommands)) {
+    commands[name.trim()] = {
+      template: command.template,
+      source: command.source,
+      ...(command.description !== undefined ? { description: command.description } : {}),
+    };
+  }
+  return commands;
+});
 
 function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
   if (raw === undefined) return undefined;
@@ -118,16 +120,8 @@ function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
     throw new Error(`Invalid command config: ${parsedRaw.error.issues[0]?.message ?? "validation_failed"}`);
   }
 
-  const commands: Record<string, CommandTemplateConfig> = {};
-  for (const [name, command] of Object.entries(parsedRaw.data)) {
-    commands[name.trim()] = {
-      template: command.template,
-      source: command.source,
-      ...(command.description !== undefined ? { description: command.description } : {}),
-    };
-  }
-  if (Object.keys(commands).length === 0) return undefined;
-  return commands;
+  if (Object.keys(parsedRaw.data).length === 0) return undefined;
+  return parsedRaw.data;
 }
 
 function resolveBuiltInDir(): string {
@@ -149,11 +143,6 @@ function asBoolean(v: unknown): boolean | null {
   return parsed.success ? parsed.data : null;
 }
 
-function asNumber(v: unknown): number | null {
-  const parsed = numberLikeSchema.safeParse(v);
-  return parsed.success ? parsed.data : null;
-}
-
 function asNonEmptyString(v: unknown): string | undefined {
   const parsed = nonEmptyTrimmedStringSchema.safeParse(v);
   return parsed.success ? parsed.data : undefined;
@@ -166,20 +155,9 @@ function resolveDir(maybeRelative: unknown, baseDir: string): string {
   return path.join(baseDir, parsed.data);
 }
 
-function normalizePositiveInt(v: unknown): number | undefined {
-  const n = asNumber(v);
-  if (n === null) return undefined;
-  const i = Math.floor(n);
-  if (!Number.isFinite(i) || i <= 0) return undefined;
-  return i;
-}
-
 function normalizeNonNegativeInt(v: unknown): number | undefined {
-  const n = asNumber(v);
-  if (n === null) return undefined;
-  const i = Math.floor(n);
-  if (!Number.isFinite(i) || i < 0) return undefined;
-  return i;
+  const parsed = nonNegativeIntegerLikeSchema.safeParse(v);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function resolveUserHomeFromConfig(config: AgentConfig): string {
@@ -204,33 +182,10 @@ function readSavedApiKey(config: AgentConfig, provider: ProviderName): string | 
     throw new Error(`Failed to read connection store at ${paths.connectionsFile}: ${String(error)}`);
   }
 
-  let parsedJson: unknown;
-  try {
-    parsedJson = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`Invalid JSON in connection store ${paths.connectionsFile}: ${String(error)}`);
-  }
-
-  const parsedStore = savedConnectionStoreSchema.safeParse(parsedJson);
-  if (!parsedStore.success) {
-    throw new Error(
-      `Invalid connection store schema at ${paths.connectionsFile}: ${parsedStore.error.issues[0]?.message ?? "validation_failed"}`
-    );
-  }
-
-  for (const [serviceNameRaw, connection] of Object.entries(parsedStore.data.services)) {
-    const serviceName = resolveProviderName(serviceNameRaw);
-    if (!serviceName) {
-      throw new Error(`Invalid service key in connection store: ${serviceNameRaw}`);
-    }
-    const declaredService = resolveProviderName(connection.service);
-    if (declaredService !== serviceName) {
-      throw new Error(`Connection service mismatch for key ${serviceNameRaw}`);
-    }
-  }
+  const parsedStore = parseConnectionStoreJson(raw, paths.connectionsFile);
 
   for (const candidate of keyCandidates) {
-    const direct = parsedStore.data.services[candidate];
+    const direct = parsedStore.services[candidate];
     if (direct?.mode === "api_key" && direct.apiKey) return direct.apiKey;
   }
 

@@ -13,7 +13,13 @@ const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 const cliStateSchema = z.object({
   version: z.literal(1),
-  lastSessionByCwd: z.record(nonEmptyTrimmedStringSchema, nonEmptyTrimmedStringSchema),
+  lastSessionByCwd: z.record(nonEmptyTrimmedStringSchema, nonEmptyTrimmedStringSchema).transform((raw) => {
+    const normalized: Record<string, string> = {};
+    for (const [cwd, sessionId] of Object.entries(raw)) {
+      normalized[path.resolve(cwd)] = sessionId;
+    }
+    return normalized;
+  }),
 }).strict();
 
 function getCliStateFilePath(): string {
@@ -35,15 +41,7 @@ async function readCliState(): Promise<CliState> {
     if (!parsedState.success) {
       throw new Error(`Invalid CLI state schema: ${parsedState.error.issues[0]?.message ?? "validation_failed"}`);
     }
-
-    const normalized: Record<string, string> = {};
-    for (const [cwd, sessionId] of Object.entries(parsedState.data.lastSessionByCwd)) {
-      normalized[path.resolve(cwd)] = sessionId;
-    }
-    return {
-      version: 1,
-      lastSessionByCwd: normalized,
-    };
+    return parsedState.data;
   } catch (error) {
     const parsedCode = errorWithCodeSchema.safeParse(error);
     const code = parsedCode.success ? parsedCode.data.code : undefined;

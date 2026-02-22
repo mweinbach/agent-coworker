@@ -149,6 +149,14 @@ export function parseMCPServersDocument(rawJson: string): { servers: MCPServerCo
   return { servers: result.data.servers as MCPServerConfig[] };
 }
 
+export function parseMCPServerConfig(raw: unknown): MCPServerConfig {
+  const result = mcpServerSchema.safeParse(raw);
+  if (!result.success) {
+    throw new Error(`mcp-servers.json: ${formatZodError(result.error)}`);
+  }
+  return result.data as MCPServerConfig;
+}
+
 // ---------------------------------------------------------------------------
 // Path resolution
 // ---------------------------------------------------------------------------
@@ -375,7 +383,7 @@ export async function upsertWorkspaceMCPServer(
   server: MCPServerConfig,
   previousName?: string,
 ): Promise<void> {
-  const validated = parseMCPServersDocument(JSON.stringify({ servers: [server] })).servers[0];
+  const validated = parseMCPServerConfig(server);
   const workspaceServers = await readEditableWorkspaceServers(config);
 
   const trimmedPrevious = previousName?.trim();

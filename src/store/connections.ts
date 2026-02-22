@@ -50,10 +50,69 @@ const toolApiKeysSchema = z.object({
 const connectionStoreSchema = z.object({
   version: z.literal(1),
   updatedAt: isoTimestampSchema,
-  services: z.record(z.string(), storedConnectionSchema),
+  services: z.record(z.string().trim().min(1), storedConnectionSchema).transform((rawServices, ctx) => {
+    const normalized: ConnectionStore["services"] = {};
+    let hasMismatch = false;
+
+    for (const [serviceRaw, connection] of Object.entries(rawServices) as Array<[string, StoredConnection]>) {
+      const service = resolveProviderName(serviceRaw);
+      if (!service) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["services", serviceRaw],
+          message: `Invalid service key in connection store: ${serviceRaw}`,
+        });
+        hasMismatch = true;
+        continue;
+      }
+      if (connection.service !== service) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["services", serviceRaw, "service"],
+          message: `Connection service mismatch for key ${serviceRaw}`,
+        });
+        hasMismatch = true;
+        continue;
+      }
+      normalized[service] = connection;
+    }
+
+    if (hasMismatch) return z.NEVER;
+    return normalized;
+  }),
   toolApiKeys: toolApiKeysSchema.optional(),
 }).strict();
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
+
+function formatZodError(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "validation_failed";
+  return issue.message;
+}
+
+export function parseConnectionStore(raw: unknown): ConnectionStore {
+  const storeParsed = connectionStoreSchema.safeParse(raw);
+  if (!storeParsed.success) {
+    throw new Error(`Invalid connection store schema: ${formatZodError(storeParsed.error)}`);
+  }
+
+  return {
+    version: 1,
+    updatedAt: storeParsed.data.updatedAt,
+    services: storeParsed.data.services,
+    ...(storeParsed.data.toolApiKeys ? { toolApiKeys: storeParsed.data.toolApiKeys } : {}),
+  };
+}
+
+export function parseConnectionStoreJson(raw: string, filePath: string): ConnectionStore {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Invalid JSON in connection store at ${filePath}: ${String(error)}`);
+  }
+  return parseConnectionStore(parsed);
+}
 
 export function getAiCoworkerPaths(opts: { homedir?: string } = {}): AiCoworkerPaths {
   const home = opts.homedir ?? os.homedir();
@@ -89,35 +148,7 @@ export async function readConnectionStore(paths: AiCoworkerPaths): Promise<Conne
   const loadFrom = async (filePath: string): Promise<ConnectionStore | null> => {
     try {
       const raw = await fs.readFile(filePath, "utf-8");
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(raw);
-      } catch (error) {
-        throw new Error(`Invalid JSON in connection store at ${filePath}: ${String(error)}`);
-      }
-      const storeParsed = connectionStoreSchema.safeParse(parsed);
-      if (!storeParsed.success) {
-        throw new Error(`Invalid connection store schema: ${storeParsed.error.issues[0]?.message ?? "validation_failed"}`);
-      }
-
-      const services: ConnectionStore["services"] = {};
-      for (const [serviceNameRaw, connectionRaw] of Object.entries(storeParsed.data.services)) {
-        const serviceName = resolveProviderName(serviceNameRaw);
-        if (!serviceName) {
-          throw new Error(`Invalid service key in connection store: ${serviceNameRaw}`);
-        }
-        if (connectionRaw.service !== serviceName) {
-          throw new Error(`Connection service mismatch for key ${serviceNameRaw}`);
-        }
-        services[serviceName] = connectionRaw;
-      }
-
-      return {
-        version: 1,
-        updatedAt: storeParsed.data.updatedAt,
-        services,
-        ...(storeParsed.data.toolApiKeys ? { toolApiKeys: storeParsed.data.toolApiKeys } : {}),
-      };
+      return parseConnectionStoreJson(raw, filePath);
     } catch (error) {
       const parsedCode = errorWithCodeSchema.safeParse(error);
       const code = parsedCode.success ? parsedCode.data.code : undefined;

@@ -1,6 +1,7 @@
 import type { ModelMessage } from "ai";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 import type { AiCoworkerPaths } from "../connect";
 import { isProviderName } from "../types";
@@ -65,6 +66,44 @@ export type PersistedSessionSummary = {
   messageCount: number;
 };
 
+const sessionTitleSourceSchema = z.enum(["default", "model", "heuristic", "manual"]);
+
+const persistedSessionSnapshotSchema = z.object({
+  version: z.literal(1),
+  sessionId: z.preprocess((value) => asNonEmptyString(value), z.string()),
+  createdAt: z.preprocess((value) => asNonEmptyString(value), z.string()),
+  updatedAt: z.preprocess((value) => asNonEmptyString(value), z.string()),
+  session: z.object({
+    title: z.preprocess((value) => asNonEmptyString(value) ?? undefined, z.string().default("New session")),
+    titleSource: z.preprocess((value) => {
+      const raw = asNonEmptyString(value);
+      if (raw === "model" || raw === "heuristic" || raw === "manual") return raw;
+      return "default";
+    }, sessionTitleSourceSchema),
+    titleModel: z.preprocess((value) => (typeof value === "string" ? value : null), z.string().nullable()),
+  }).passthrough(),
+  config: z.object({
+    provider: z.preprocess((value) => {
+      const raw = asNonEmptyString(value);
+      return raw && isProviderName(raw) ? raw : undefined;
+    }, z.string()),
+    model: z.preprocess((value) => asNonEmptyString(value), z.string()),
+    enableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+    workingDirectory: z.preprocess((value) => asNonEmptyString(value), z.string()),
+    outputDirectory: z.preprocess((value) => asNonEmptyString(value) ?? undefined, z.string().optional()),
+    uploadsDirectory: z.preprocess((value) => asNonEmptyString(value) ?? undefined, z.string().optional()),
+  }).passthrough(),
+  context: z.object({
+    system: z.preprocess((value) => asNonEmptyString(value) ?? "", z.string()),
+    messages: z.preprocess((value) => (Array.isArray(value) ? value : []), z.array(z.unknown())),
+    todos: z.preprocess((value) => (Array.isArray(value) ? value : []), z.array(z.unknown())),
+    harnessContext: z.preprocess(
+      (value) => (isRecord(value) ? value : null),
+      z.record(z.string(), z.unknown()).nullable(),
+    ),
+  }).passthrough(),
+}).passthrough();
+
 export function getPersistedSessionFilePath(paths: Pick<AiCoworkerPaths, "sessionsDir">, sessionId: string): string {
   return path.join(paths.sessionsDir, `${sanitizeSessionId(sessionId)}.json`);
 }
@@ -79,48 +118,25 @@ async function ensureSecureSessionsDir(sessionsDir: string): Promise<void> {
 }
 
 export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSnapshot | null {
-  if (!isRecord(raw)) return null;
-  if (raw.version !== 1) return null;
-
-  const sessionId = asNonEmptyString(raw.sessionId);
-  const createdAt = asNonEmptyString(raw.createdAt);
-  const updatedAt = asNonEmptyString(raw.updatedAt);
-  if (!sessionId || !createdAt || !updatedAt) return null;
-
-  const sessionRaw = isRecord(raw.session) ? raw.session : null;
-  const configRaw = isRecord(raw.config) ? raw.config : null;
-  const contextRaw = isRecord(raw.context) ? raw.context : null;
-  if (!sessionRaw || !configRaw || !contextRaw) return null;
-
-  const title = asNonEmptyString(sessionRaw.title) ?? "New session";
-  const titleSourceRaw = asNonEmptyString(sessionRaw.titleSource) ?? "default";
-  const titleSource: SessionTitleSource =
-    titleSourceRaw === "model" || titleSourceRaw === "heuristic" || titleSourceRaw === "manual" ? titleSourceRaw : "default";
-  const titleModel = typeof sessionRaw.titleModel === "string" ? sessionRaw.titleModel : null;
-
-  const providerRaw = asNonEmptyString(configRaw.provider);
-  const provider = providerRaw && isProviderName(providerRaw) ? providerRaw : null;
-  const model = asNonEmptyString(configRaw.model);
-  const workingDirectory = asNonEmptyString(configRaw.workingDirectory);
-  const outputDirectory = asNonEmptyString(configRaw.outputDirectory) ?? undefined;
-  const uploadsDirectory = asNonEmptyString(configRaw.uploadsDirectory) ?? undefined;
-  if (!provider || !model || !workingDirectory) return null;
-
-  const enableMcp = typeof configRaw.enableMcp === "boolean" ? configRaw.enableMcp : false;
-  const system = asNonEmptyString(contextRaw.system) ?? "";
-  const messages = Array.isArray(contextRaw.messages) ? (contextRaw.messages as ModelMessage[]) : [];
-  const todos = Array.isArray(contextRaw.todos) ? (contextRaw.todos as TodoItem[]) : [];
-  const harnessContext = isRecord(contextRaw.harnessContext)
-    ? (contextRaw.harnessContext as HarnessContextState)
-    : null;
+  const parsed = persistedSessionSnapshotSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const snapshot = parsed.data;
+  const provider = snapshot.config.provider as AgentConfig["provider"];
+  const model = snapshot.config.model;
+  const workingDirectory = snapshot.config.workingDirectory;
+  const titleSource = snapshot.session.titleSource as SessionTitleSource;
+  const titleModel = snapshot.session.titleModel;
+  const messages = snapshot.context.messages as ModelMessage[];
+  const todos = snapshot.context.todos as TodoItem[];
+  const harnessContext = snapshot.context.harnessContext as HarnessContextState | null;
 
   return {
     version: 1,
-    sessionId,
-    createdAt,
-    updatedAt,
+    sessionId: snapshot.sessionId,
+    createdAt: snapshot.createdAt,
+    updatedAt: snapshot.updatedAt,
     session: {
-      title,
+      title: snapshot.session.title,
       titleSource,
       titleModel,
       provider,
@@ -129,13 +145,13 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
     config: {
       provider,
       model,
-      enableMcp,
+      enableMcp: snapshot.config.enableMcp,
       workingDirectory,
-      outputDirectory,
-      uploadsDirectory,
+      outputDirectory: snapshot.config.outputDirectory,
+      uploadsDirectory: snapshot.config.uploadsDirectory,
     },
     context: {
-      system,
+      system: snapshot.context.system,
       messages,
       todos,
       harnessContext,

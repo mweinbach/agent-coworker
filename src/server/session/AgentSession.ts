@@ -1,10 +1,7 @@
-import path from "node:path";
-
 import { connectProvider as connectModelProvider, getAiCoworkerPaths, type ConnectProviderResult } from "../../connect";
 import { runTurn } from "../../agent";
 import { HarnessContextStore } from "../../harness/contextStore";
-import { loadMCPConfigRegistry, type MCPRegistryServer } from "../../mcp/configRegistry";
-import { emitObservabilityEvent } from "../../observability/otel";
+import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import { getProviderCatalog } from "../../providers/connectionCatalog";
 import { getProviderStatuses } from "../../providerStatus";
 import type {
@@ -48,6 +45,8 @@ import type {
   SessionRuntimeState,
 } from "./SessionContext";
 import { SessionMetadataManager } from "./SessionMetadataManager";
+import { SessionRuntimeSupport } from "./SessionRuntimeSupport";
+import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
 import { SkillManager } from "./SkillManager";
 import { TurnExecutionManager } from "./TurnExecutionManager";
 
@@ -61,6 +60,8 @@ export class AgentSession {
   private readonly state: SessionRuntimeState;
   private readonly deps: SessionDependencies;
   private readonly context: SessionContext;
+  private readonly runtimeSupport: SessionRuntimeSupport;
+  private readonly snapshotBuilder: SessionSnapshotBuilder;
 
   private readonly persistenceManager: PersistenceManager;
   private readonly historyManager: HistoryManager;
@@ -159,6 +160,18 @@ export class AgentSession {
       this.deps.harnessContextStore.set(this.id, hydrated.harnessContext);
     }
 
+    let metadataManagerForTelemetry: SessionMetadataManager | null = null;
+    this.runtimeSupport = new SessionRuntimeSupport({
+      sessionId: this.id,
+      state: this.state,
+      deps: this.deps,
+      emit: (evt) => opts.emit(evt),
+      emitObservabilityStatusChanged: () => {
+        if (!metadataManagerForTelemetry) return;
+        opts.emit(metadataManagerForTelemetry.getObservabilityStatusEvent());
+      },
+    });
+
     this.context = {
       id: this.id,
       state: this.state,
@@ -190,6 +203,15 @@ export class AgentSession {
       waitForPromptResponse: (requestId, bucket) => this.waitForPromptResponse(requestId, bucket),
     });
     this.metadataManager = new SessionMetadataManager(this.context);
+    metadataManagerForTelemetry = this.metadataManager;
+    this.snapshotBuilder = new SessionSnapshotBuilder({
+      sessionId: this.id,
+      state: this.state,
+      harnessContextStore: this.deps.harnessContextStore,
+      getEnableMcp: () => this.getEnableMcp(),
+      hasPendingAsk: () => this.hasPendingAsk,
+      hasPendingApproval: () => this.hasPendingApproval,
+    });
     this.persistenceManager = new PersistenceManager({
       sessionId: this.id,
       sessionDb: this.deps.sessionDb,
@@ -559,148 +581,50 @@ export class AgentSession {
   }
 
   private buildPersistedSnapshotAt(updatedAt: string): PersistedSessionSnapshot {
-    return {
-      version: 1,
-      sessionId: this.id,
-      createdAt: this.state.sessionInfo.createdAt,
-      updatedAt,
-      session: {
-        title: this.state.sessionInfo.title,
-        titleSource: this.state.sessionInfo.titleSource,
-        titleModel: this.state.sessionInfo.titleModel,
-        provider: this.state.sessionInfo.provider,
-        model: this.state.sessionInfo.model,
-      },
-      config: {
-        provider: this.state.config.provider,
-        model: this.state.config.model,
-        enableMcp: this.getEnableMcp(),
-        workingDirectory: this.state.config.workingDirectory,
-        ...(this.state.config.outputDirectory ? { outputDirectory: this.state.config.outputDirectory } : {}),
-        ...(this.state.config.uploadsDirectory ? { uploadsDirectory: this.state.config.uploadsDirectory } : {}),
-      },
-      context: {
-        system: this.state.system,
-        messages: this.state.allMessages,
-        todos: this.state.todos,
-        harnessContext: this.deps.harnessContextStore.get(this.id),
-      },
-    };
+    return this.snapshotBuilder.buildPersistedSnapshotAt(updatedAt);
   }
 
   private buildCanonicalSnapshot(updatedAt: string): PersistedSessionMutation["snapshot"] {
-    return {
-      title: this.state.sessionInfo.title,
-      titleSource: this.state.sessionInfo.titleSource,
-      titleModel: this.state.sessionInfo.titleModel,
-      provider: this.state.config.provider,
-      model: this.state.config.model,
-      workingDirectory: this.state.config.workingDirectory,
-      ...(this.state.config.outputDirectory ? { outputDirectory: this.state.config.outputDirectory } : {}),
-      ...(this.state.config.uploadsDirectory ? { uploadsDirectory: this.state.config.uploadsDirectory } : {}),
-      enableMcp: this.getEnableMcp(),
-      createdAt: this.state.sessionInfo.createdAt,
-      updatedAt,
-      status: this.state.persistenceStatus,
-      hasPendingAsk: this.hasPendingAsk,
-      hasPendingApproval: this.hasPendingApproval,
-      systemPrompt: this.state.system,
-      messages: this.state.allMessages,
-      todos: this.state.todos,
-      harnessContext: this.deps.harnessContextStore.get(this.id),
-    };
+    return this.snapshotBuilder.buildCanonicalSnapshot(updatedAt);
   }
 
   private queuePersistSessionSnapshot(reason: string) {
     this.persistenceManager.queuePersistSessionSnapshot(reason);
   }
 
-  private getUserHomeDir(): string | undefined {
-    return this.state.config.userAgentDir ? path.dirname(this.state.config.userAgentDir) : undefined;
-  }
-
   private getCoworkPaths() {
-    return this.deps.getAiCoworkerPathsImpl({ homedir: this.getUserHomeDir() });
+    return this.runtimeSupport.getCoworkPaths();
   }
 
   private async runProviderConnect(opts: Parameters<typeof connectModelProvider>[0]): Promise<ConnectProviderResult> {
-    const paths = opts.paths ?? this.getCoworkPaths();
-    return await this.deps.connectProviderImpl({
-      ...opts,
-      cwd: opts.cwd ?? this.state.config.workingDirectory,
-      paths,
-      oauthStdioMode: opts.oauthStdioMode ?? "pipe",
-    });
+    return await this.runtimeSupport.runProviderConnect(opts);
   }
 
   private async getMcpServerByName(nameRaw: string): Promise<MCPRegistryServer | null> {
-    const name = nameRaw.trim();
-    if (!name) {
-      this.emitError("validation_failed", "session", "MCP server name is required");
-      return null;
-    }
-
-    const registry = await loadMCPConfigRegistry(this.state.config);
-    const server = registry.servers.find((entry) => entry.name === name) ?? null;
-    if (!server) {
-      this.emitError("validation_failed", "session", `MCP server \"${name}\" not found.`);
-      return null;
-    }
-    return server;
+    return await this.runtimeSupport.getMcpServerByName(nameRaw);
   }
 
   private waitForPromptResponse<T>(requestId: string, bucket: Map<string, PromiseWithResolvers<T>>): Promise<T> {
-    const entry = bucket.get(requestId);
-    if (!entry) return Promise.reject(new Error(`Unknown prompt request: ${requestId}`));
-    return entry.promise;
+    return this.runtimeSupport.waitForPromptResponse(requestId, bucket);
   }
 
   private emitError(code: ServerErrorCode, source: ServerErrorSource, message: string) {
-    this.context.emit({
-      type: "error",
-      sessionId: this.id,
-      message,
-      code,
-      source,
-    });
+    this.runtimeSupport.emitError(code, source, message);
   }
 
   private guardBusy(): boolean {
-    if (this.state.running) {
-      this.emitError("busy", "session", "Agent is busy");
-      return false;
-    }
-    if (this.state.connecting) {
-      this.emitError("busy", "session", "Connection flow already running");
-      return false;
-    }
-    return true;
+    return this.runtimeSupport.guardBusy();
   }
 
   private formatErrorMessage(err: unknown): string {
-    if (err instanceof Error && err.message) return err.message;
-    return String(err);
+    return this.runtimeSupport.formatError(err);
   }
 
   private log(line: string) {
-    this.context.emit({ type: "log", sessionId: this.id, line });
+    this.runtimeSupport.log(line);
   }
 
   private emitTelemetry(name: string, status: "ok" | "error", attributes?: Record<string, string | number | boolean>, durationMs?: number) {
-    void (async () => {
-      const result = await emitObservabilityEvent(this.state.config, {
-        name,
-        at: new Date().toISOString(),
-        status,
-        ...(durationMs !== undefined ? { durationMs } : {}),
-        attributes,
-      });
-
-      if (result.healthChanged) {
-        this.context.emit(this.metadataManager.getObservabilityStatusEvent());
-      }
-    })().catch(() => {
-      // observability is best-effort; never fail core session flow
-    });
+    this.runtimeSupport.emitTelemetry(name, status, attributes, durationMs);
   }
 }

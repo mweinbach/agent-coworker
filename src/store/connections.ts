@@ -84,6 +84,13 @@ const connectionStoreSchema = z.object({
 }).strict();
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
+class ConnectionStoreParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConnectionStoreParseError";
+  }
+}
+
 function formatZodError(error: z.ZodError): string {
   const issue = error.issues[0];
   if (!issue) return "validation_failed";
@@ -93,7 +100,7 @@ function formatZodError(error: z.ZodError): string {
 export function parseConnectionStore(raw: unknown): ConnectionStore {
   const storeParsed = connectionStoreSchema.safeParse(raw);
   if (!storeParsed.success) {
-    throw new Error(`Invalid connection store schema: ${formatZodError(storeParsed.error)}`);
+    throw new ConnectionStoreParseError(`Invalid connection store schema: ${formatZodError(storeParsed.error)}`);
   }
 
   return {
@@ -109,7 +116,7 @@ export function parseConnectionStoreJson(raw: string, filePath: string): Connect
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    throw new Error(`Invalid JSON in connection store at ${filePath}: ${String(error)}`);
+    throw new ConnectionStoreParseError(`Invalid JSON in connection store at ${filePath}: ${String(error)}`);
   }
   return parseConnectionStore(parsed);
 }
@@ -153,6 +160,7 @@ export async function readConnectionStore(paths: AiCoworkerPaths): Promise<Conne
       const parsedCode = errorWithCodeSchema.safeParse(error);
       const code = parsedCode.success ? parsedCode.data.code : undefined;
       if (code === "ENOENT") return null;
+      if (error instanceof ConnectionStoreParseError) return null;
       throw new Error(`Failed to read connection store at ${filePath}: ${String(error)}`);
     }
   };

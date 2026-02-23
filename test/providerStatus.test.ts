@@ -21,6 +21,35 @@ async function makeTmpHome(): Promise<string> {
 }
 
 describe("getProviderStatuses", () => {
+  test("treats legacy-shaped connection store as empty instead of throwing", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
+    await fs.writeFile(
+      paths.connectionsFile,
+      JSON.stringify(
+        {
+          updatedAt: new Date().toISOString(),
+          connections: {
+            openai: {
+              mode: "api_key",
+              apiKey: "legacy-key",
+            },
+          },
+        },
+        null,
+        2
+      ),
+      "utf-8"
+    );
+
+    const statuses = await getProviderStatuses({ paths });
+    const openai = statuses.find((s) => s.provider === "openai");
+    expect(openai).toBeDefined();
+    expect(openai?.authorized).toBe(false);
+    expect(openai?.mode).toBe("missing");
+  });
+
   test("includes masked provider/tool API keys in google status", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });

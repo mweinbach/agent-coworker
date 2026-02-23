@@ -74,6 +74,27 @@ describe("connectProvider", () => {
     await expect(fs.readFile(paths.connectionsFile, "utf-8")).rejects.toThrow();
   });
 
+  test("recovers from malformed connection store JSON when saving a provider key", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
+    await fs.writeFile(paths.connectionsFile, "{not-valid-json", "utf-8");
+
+    const result = await connectProvider({
+      provider: "openai",
+      apiKey: "sk-openai-test-5678",
+      paths,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.mode).toBe("api_key");
+
+    const store = await readConnectionStore(paths);
+    expect(store.services.openai?.mode).toBe("api_key");
+    expect(store.services.openai?.apiKey).toBe("sk-openai-test-5678");
+  });
+
   test("stores api key mode when key is provided", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });

@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 
-import { promptForApiKey, promptForProviderMethod } from "./repl/authPrompts";
+import { handleSlashCommand } from "./repl/commandRouter";
+import { activateNextPrompt, type ReplPromptStateAdapter } from "./repl/promptController";
 import {
   createServerEventHandler,
   type ApprovalPrompt,
@@ -23,11 +24,10 @@ import { renderTodosToLines, renderToolsToLines } from "./render";
 import { getStoredSessionForCwd, setStoredSessionForCwd } from "./repl/stateStore";
 import { CliStreamState } from "./streamState";
 import { AgentSocket } from "../client/agentSocket";
-import { defaultModelForProvider } from "../config";
 import { ASK_SKIP_TOKEN } from "../server/protocol";
 import { startAgentServer } from "../server/startServer";
 import type { ClientMessage } from "../server/protocol";
-import { isProviderName, PROVIDER_NAMES } from "../types";
+import { PROVIDER_NAMES } from "../types";
 
 export { parseReplInput, normalizeProviderAuthMethods, resolveProviderAuthMethodSelection };
 export type { ParsedCommand };
@@ -183,43 +183,41 @@ export async function runCliRepl(
     console.log("");
   };
 
-  const activateNextPrompt = (rl: readline.Interface) => {
-      if (pendingApproval.length > 0) {
-      activeApproval = pendingApproval.shift() ?? null;
-      activeAsk = null;
-      promptMode = "approval";
-      if (activeApproval) {
-        console.log(`\nApproval requested: ${activeApproval.command}`);
-        console.log(activeApproval.dangerous ? "Dangerous command." : "Standard command.");
-        console.log(`Risk: ${activeApproval.reasonCode}`);
-      }
-      rl.setPrompt("approve (y/n)> ");
-      rl.prompt();
-      return;
-    }
+  const promptState: ReplPromptStateAdapter = {
+    get pendingAsk() {
+      return pendingAsk;
+    },
+    set pendingAsk(value) {
+      pendingAsk = value;
+    },
+    get pendingApproval() {
+      return pendingApproval;
+    },
+    set pendingApproval(value) {
+      pendingApproval = value;
+    },
+    get promptMode() {
+      return promptMode;
+    },
+    set promptMode(value) {
+      promptMode = value;
+    },
+    get activeAsk() {
+      return activeAsk;
+    },
+    set activeAsk(value) {
+      activeAsk = value;
+    },
+    get activeApproval() {
+      return activeApproval;
+    },
+    set activeApproval(value) {
+      activeApproval = value;
+    },
+  };
 
-    if (pendingAsk.length > 0) {
-      activeAsk = pendingAsk.shift() ?? null;
-      activeApproval = null;
-      promptMode = "ask";
-      if (activeAsk) {
-        console.log(`\n${activeAsk.question}`);
-        if (activeAsk.options && activeAsk.options.length > 0) {
-          for (let i = 0; i < activeAsk.options.length; i++) {
-            console.log(`  ${i + 1}. ${activeAsk.options[i]}`);
-          }
-        }
-      }
-      rl.setPrompt("answer> ");
-      rl.prompt();
-      return;
-    }
-
-    activeAsk = null;
-    activeApproval = null;
-    promptMode = "user";
-    rl.setPrompt("you> ");
-    rl.prompt();
+  const activatePrompt = (rl: readline.Interface) => {
+    activateNextPrompt(promptState, rl);
   };
 
   const handleDisconnect = (rl: readline.Interface, reason: string) => {
@@ -245,7 +243,7 @@ export async function runCliRepl(
         disconnectNotified = true;
         console.log(`disconnected: ${reason}. Use /restart to reconnect.`);
       }
-      activateNextPrompt(rl);
+      activatePrompt(rl);
     }
   };
 
@@ -345,7 +343,7 @@ export async function runCliRepl(
   const handleServerEvent = createServerEventHandler({
     state: eventState,
     streamState,
-    activateNextPrompt,
+    activateNextPrompt: activatePrompt,
     resetModelStreamState,
     send,
     storeSessionForCurrentCwd: (nextSessionId) => {
@@ -414,7 +412,7 @@ export async function runCliRepl(
       await connectToServer(serverUrl, rl, resumeCandidate ?? undefined);
       pendingAsk = [];
       pendingApproval = [];
-      activateNextPrompt(rl);
+      activatePrompt(rl);
     } finally {
       serverStopping = false;
     }
@@ -438,7 +436,7 @@ export async function runCliRepl(
   if (opts.yolo) console.log("YOLO mode enabled: command approvals are bypassed.");
   console.log("Type /help for commands. Use /connect to store keys or run OAuth.\n");
 
-  activateNextPrompt(rl);
+  activatePrompt(rl);
 
   rl.on("line", async (input) => {
     try {
@@ -446,7 +444,7 @@ export async function runCliRepl(
 
       if (promptMode === "ask") {
         if (!activeAsk || !sessionId) {
-          activateNextPrompt(rl);
+          activatePrompt(rl);
           return;
         }
         const answer = resolveAskAnswer(line, activeAsk.options);
@@ -460,13 +458,13 @@ export async function runCliRepl(
           handleDisconnect(rl, NOT_CONNECTED_MSG);
           return;
         }
-        activateNextPrompt(rl);
+        activatePrompt(rl);
         return;
       }
 
       if (promptMode === "approval") {
         if (!activeApproval || !sessionId) {
-          activateNextPrompt(rl);
+          activatePrompt(rl);
           return;
         }
         const approved = normalizeApprovalAnswer(line);
@@ -475,261 +473,57 @@ export async function runCliRepl(
           handleDisconnect(rl, NOT_CONNECTED_MSG);
           return;
         }
-        activateNextPrompt(rl);
+        activatePrompt(rl);
         return;
       }
 
       if (!line) {
-        activateNextPrompt(rl);
+        activatePrompt(rl);
         return;
       }
 
       if (line.startsWith("/")) {
-        const [cmd, ...rest] = line.slice(1).split(/\s+/);
-
-        if (cmd === "help") {
-          printHelp();
-          activateNextPrompt(rl);
-          return;
-        }
-
-        if (cmd === "exit") {
-          rl.close();
-          return;
-        }
-
-        if (cmd === "restart") {
-          console.log("restarting server...");
-          await restartServer(process.cwd(), rl);
-          return;
-        }
-
-        if (cmd === "new") {
-          if (busy) {
-            console.log("Agent is busy; cannot /new until the current turn finishes.\n");
-            activateNextPrompt(rl);
-            return;
-          }
-          if (sessionId) {
-            const ok = send({ type: "reset", sessionId });
+        const handled = await handleSlashCommand(line, {
+          rl,
+          getSessionId: () => sessionId,
+          getBusy: () => busy,
+          getProviderList: () => providerList,
+          getProviderAuthMethods: () => providerAuthMethods,
+          trySend: (msg) => {
+            const ok = send(msg);
             if (!ok) {
               handleDisconnect(rl, NOT_CONNECTED_MSG);
-              return;
+              return false;
             }
-          }
-          activateNextPrompt(rl);
-          return;
+            return true;
+          },
+          activateNextPrompt: () => activatePrompt(rl),
+          printHelp,
+          showConnectStatus,
+          restartServer: async (cwd) => await restartServer(cwd, rl),
+          resolveAndValidateDir,
+          setCwd: (cwd) => process.chdir(cwd),
+          resumeSession: async (targetSessionId) => {
+            await connectToServer(serverUrl, rl, targetSessionId);
+          },
+        });
+        if (!handled) {
+          const cmd = line.slice(1).split(/\s+/)[0] ?? "";
+          console.log(`unknown command: /${cmd}`);
+          activatePrompt(rl);
         }
-
-        if (cmd === "model") {
-          const id = rest.join(" ").trim();
-          if (!id) {
-            console.log("usage: /model <id>");
-            activateNextPrompt(rl);
-            return;
-          }
-          if (sessionId) {
-            const ok = send({ type: "set_model", sessionId, model: id });
-            if (!ok) {
-              handleDisconnect(rl, NOT_CONNECTED_MSG);
-              return;
-            }
-          }
-          activateNextPrompt(rl);
-          return;
-        }
-
-        if (cmd === "provider") {
-          const name = (rest[0] ?? "").trim();
-          if (!isProviderName(name)) {
-            console.log(`usage: /provider <${UI_PROVIDER_NAMES.join("|")}>`);
-            activateNextPrompt(rl);
-            return;
-          }
-          const nextModel = defaultModelForProvider(name);
-          if (sessionId) {
-            const ok = send({ type: "set_model", sessionId, provider: name, model: nextModel });
-            if (!ok) {
-              handleDisconnect(rl, NOT_CONNECTED_MSG);
-              return;
-            }
-          }
-          activateNextPrompt(rl);
-          return;
-        }
-
-        if (cmd === "cwd") {
-          const p = rest.join(" ").trim();
-          if (!p) {
-            console.log("usage: /cwd <path>");
-            activateNextPrompt(rl);
-            return;
-          }
-          const next = await resolveAndValidateDir(p);
-          process.chdir(next);
-          await restartServer(next, rl);
-          console.log(`cwd set to ${next}`);
-          return;
-        }
-
-        if (cmd === "connect") {
-          const serviceToken = (rest[0] ?? "").trim().toLowerCase();
-          const apiKeyArg = rest.slice(1).join(" ").trim();
-
-          if (!serviceToken || serviceToken === "help" || serviceToken === "list") {
-            showConnectStatus();
-            activateNextPrompt(rl);
-            return;
-          }
-
-          const allowedProviders = providerList.length > 0 ? providerList : [...UI_PROVIDER_NAMES];
-          if (!isProviderName(serviceToken) || !allowedProviders.includes(serviceToken)) {
-            console.log(`usage: /connect <${allowedProviders.join("|")}> [api_key]`);
-            activateNextPrompt(rl);
-            return;
-          }
-
-          if (!sessionId) {
-            console.log("not connected: cannot run /connect yet");
-            activateNextPrompt(rl);
-            return;
-          }
-
-          const methods = normalizeProviderAuthMethods(providerAuthMethods[serviceToken]);
-          const apiMethod = methods.find((method) => method.type === "api") ?? null;
-
-          if (apiKeyArg) {
-            if (!apiMethod) {
-              console.log(`Provider ${serviceToken} does not support API key authentication.`);
-              activateNextPrompt(rl);
-              return;
-            }
-            const ok = send({
-              type: "provider_auth_set_api_key",
-              sessionId,
-              provider: serviceToken,
-              methodId: apiMethod.id,
-              apiKey: apiKeyArg,
-            });
-            if (!ok) {
-              handleDisconnect(rl, NOT_CONNECTED_MSG);
-              return;
-            }
-            console.log(`saving key for ${serviceToken}...`);
-            activateNextPrompt(rl);
-            return;
-          }
-
-          const method = await promptForProviderMethod(rl, serviceToken, methods);
-          if (!method) {
-            console.log("connect cancelled.");
-            activateNextPrompt(rl);
-            return;
-          }
-
-          if (method.type === "api") {
-            const promptedKey = await promptForApiKey(rl, serviceToken);
-            if (!promptedKey) {
-              console.log(`API key is required for ${serviceToken}.`);
-              activateNextPrompt(rl);
-              return;
-            }
-            const ok = send({
-              type: "provider_auth_set_api_key",
-              sessionId,
-              provider: serviceToken,
-              methodId: method.id,
-              apiKey: promptedKey,
-            });
-            if (!ok) {
-              handleDisconnect(rl, NOT_CONNECTED_MSG);
-              return;
-            }
-            console.log(`saving key for ${serviceToken}...`);
-            activateNextPrompt(rl);
-            return;
-          }
-
-          const ok = send({
-            type: "provider_auth_authorize",
-            sessionId,
-            provider: serviceToken,
-            methodId: method.id,
-          });
-          if (!ok) {
-            handleDisconnect(rl, NOT_CONNECTED_MSG);
-            return;
-          }
-          if (method.oauthMode === "auto") {
-            send({
-              type: "provider_auth_callback",
-              sessionId,
-              provider: serviceToken,
-              methodId: method.id,
-            });
-          }
-          console.log(`starting OAuth sign-in for ${serviceToken}...`);
-          activateNextPrompt(rl);
-          return;
-        }
-
-        if (cmd === "tools") {
-          if (!sessionId) {
-            console.log("not connected: cannot list tools yet");
-            activateNextPrompt(rl);
-            return;
-          }
-          const ok = send({ type: "list_tools", sessionId });
-          if (!ok) {
-            handleDisconnect(rl, NOT_CONNECTED_MSG);
-            return;
-          }
-          activateNextPrompt(rl);
-          return;
-        }
-
-        if (cmd === "sessions") {
-          if (!sessionId) {
-            console.log("not connected: cannot list sessions yet");
-            activateNextPrompt(rl);
-            return;
-          }
-          const ok = send({ type: "list_sessions", sessionId });
-          if (!ok) {
-            handleDisconnect(rl, NOT_CONNECTED_MSG);
-            return;
-          }
-          activateNextPrompt(rl);
-          return;
-        }
-
-        if (cmd === "resume") {
-          const targetSessionId = rest.join(" ").trim();
-          if (!targetSessionId) {
-            console.log("usage: /resume <sessionId>");
-            activateNextPrompt(rl);
-            return;
-          }
-          console.log(`resuming session ${targetSessionId}...`);
-          await connectToServer(serverUrl, rl, targetSessionId);
-          activateNextPrompt(rl);
-          return;
-        }
-
-        console.log(`unknown command: /${cmd}`);
-        activateNextPrompt(rl);
         return;
       }
 
       if (!sessionId) {
         console.log("not connected: cannot send messages yet");
-        activateNextPrompt(rl);
+        activatePrompt(rl);
         return;
       }
 
       if (busy) {
         console.log("Agent is busy; cannot send a message until the current turn finishes.\n");
-        activateNextPrompt(rl);
+        activatePrompt(rl);
         return;
       }
 
@@ -739,10 +533,10 @@ export async function runCliRepl(
         handleDisconnect(rl, NOT_CONNECTED_MSG);
         return;
       }
-      activateNextPrompt(rl);
+      activatePrompt(rl);
     } catch (err) {
       console.error(`Error: ${String(err)}`);
-      activateNextPrompt(rl);
+      activatePrompt(rl);
     }
   });
 

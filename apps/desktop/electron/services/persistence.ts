@@ -111,7 +111,7 @@ const transcriptEventSchema = z.object({
   threadId: z.string().trim().min(1),
   direction: z.enum(["server", "client"]),
   payload: z.unknown(),
-}).strict();
+}).passthrough();
 
 async function resolveWorkspacePath(value: unknown): Promise<string | null> {
   const candidate = asNonEmptyString(value);

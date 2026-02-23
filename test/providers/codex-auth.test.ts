@@ -12,6 +12,7 @@ import {
   extractEmailFromClaims,
   extractJwtExpiryMs,
   extractPlanTypeFromClaims,
+  readCodexAuthMaterial,
   refreshCodexAuthMaterial,
 } from "../../src/providers/codex-auth";
 
@@ -189,5 +190,74 @@ describe("codex auth token response parsing", () => {
     expect(persisted.account.account_id).toBe("acct-existing");
     expect(persisted.account.email).toBe("existing@example.com");
     expect(persisted.account.plan_type).toBe("enterprise");
+  });
+});
+
+describe("readCodexAuthMaterial fallback behavior", () => {
+  function makePaths(home: string): { authDir: string; rootDir: string } {
+    return {
+      authDir: path.join(home, ".cowork", "auth"),
+      rootDir: path.join(home, ".cowork"),
+    };
+  }
+
+  test("invalid cowork JSON is treated as missing when legacy migration is disabled", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-auth-read-invalid-json-"));
+    const paths = makePaths(home);
+    const coworkPath = path.join(paths.authDir, "codex-cli", "auth.json");
+    await fs.mkdir(path.dirname(coworkPath), { recursive: true });
+    await fs.writeFile(coworkPath, "{not-valid-json", "utf-8");
+
+    await expect(readCodexAuthMaterial(paths, { migrateLegacy: false })).resolves.toBeNull();
+  });
+
+  test("schema-invalid cowork auth falls back to legacy auth migration", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-auth-read-legacy-fallback-"));
+    const paths = makePaths(home);
+    const coworkPath = path.join(paths.authDir, "codex-cli", "auth.json");
+    await fs.mkdir(path.dirname(coworkPath), { recursive: true });
+    await fs.writeFile(
+      coworkPath,
+      JSON.stringify(
+        {
+          version: 0,
+          auth_mode: "chatgpt",
+          tokens: { refresh_token: "cowork-refresh-only" },
+        },
+        null,
+        2
+      ),
+      "utf-8"
+    );
+
+    const legacyAccessToken = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, email: "legacy@example.com" });
+    const legacyPath = path.join(home, ".codex", "auth.json");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify(
+        {
+          auth_mode: "chatgpt",
+          tokens: {
+            access_token: legacyAccessToken,
+            refresh_token: "legacy-refresh-token",
+          },
+        },
+        null,
+        2
+      ),
+      "utf-8"
+    );
+
+    const material = await readCodexAuthMaterial(paths, { migrateLegacy: true });
+    expect(material).toBeTruthy();
+    expect(material?.file).toBe(coworkPath);
+    expect(material?.accessToken).toBe(legacyAccessToken);
+    expect(material?.refreshToken).toBe("legacy-refresh-token");
+
+    const migrated = JSON.parse(await fs.readFile(coworkPath, "utf-8")) as Record<string, any>;
+    expect(migrated.version).toBe(1);
+    expect(migrated.tokens?.access_token).toBe(legacyAccessToken);
+    expect(migrated.tokens?.refresh_token).toBe("legacy-refresh-token");
   });
 });

@@ -217,6 +217,10 @@ async function readJsonFile(filePath: string): Promise<unknown | null> {
   }
 }
 
+function isInvalidCodexAuthJsonError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("Invalid JSON in Codex auth file ");
+}
+
 function parseCodexAuthJson(file: string, json: unknown): CodexAuthMaterial {
   const parsed = codexAuthDocumentSchema.safeParse(json);
   if (!parsed.success) {
@@ -385,8 +389,20 @@ export async function readCodexAuthMaterial(
   opts: { migrateLegacy?: boolean; onLine?: (line: string) => void } = {}
 ): Promise<CodexAuthMaterial | null> {
   const coworkFile = codexAuthFilePath(paths);
-  const coworkJson = await readJsonFile(coworkFile);
-  if (coworkJson) return parseCodexAuthJson(coworkFile, coworkJson);
+  let coworkJson: unknown | null = null;
+  try {
+    coworkJson = await readJsonFile(coworkFile);
+  } catch (error) {
+    if (!isInvalidCodexAuthJsonError(error)) throw error;
+  }
+  if (coworkJson) {
+    try {
+      return parseCodexAuthJson(coworkFile, coworkJson);
+    } catch {
+      const legacyCowork = parseLegacyCodexAuthJson(coworkFile, coworkJson);
+      if (legacyCowork) return legacyCowork;
+    }
+  }
 
   if (!opts.migrateLegacy) return null;
 

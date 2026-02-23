@@ -28,6 +28,7 @@ async function readLayer(opts: {
 }): Promise<MCPConfigLayer> {
   let exists = false;
   let rawJson = "";
+  let parseError: string | undefined;
   try {
     rawJson = await fs.readFile(opts.filePath, "utf-8");
     exists = true;
@@ -38,7 +39,14 @@ async function readLayer(opts: {
     }
   }
 
-  const servers = exists ? parseMCPServersDocument(rawJson).servers : [];
+  let servers: MCPServerConfig[] = [];
+  if (exists) {
+    try {
+      servers = parseMCPServersDocument(rawJson).servers;
+    } catch (error) {
+      parseError = String(error);
+    }
+  }
 
   return {
     source: opts.source,
@@ -48,6 +56,7 @@ async function readLayer(opts: {
       exists,
       editable: opts.editable,
       legacy: opts.legacy,
+      ...(parseError ? { parseError } : {}),
       serverCount: servers.length,
     },
     servers,
@@ -99,7 +108,9 @@ export async function loadMCPConfigRegistry(config: AgentConfig): Promise<MCPCon
     fileExists(paths.userLegacyFile),
   ]);
 
-  const warnings: string[] = [];
+  const warnings = layers
+    .filter((layer) => Boolean(layer.file.parseError))
+    .map((layer) => `[MCP] Ignoring malformed ${layer.source} config at ${layer.file.path}: ${layer.file.parseError}`);
 
   const files = [
     layers.find((layer) => layer.source === "workspace")?.file,

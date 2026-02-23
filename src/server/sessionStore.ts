@@ -232,14 +232,31 @@ export async function listPersistedSessionSnapshots(
   for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
     const filePath = path.join(paths.sessionsDir, entry);
-    const raw = await fs.readFile(filePath, "utf-8");
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(filePath, "utf-8");
+    } catch (error) {
+      const parsedCode = errorWithCodeSchema.safeParse(error);
+      const code = parsedCode.success ? parsedCode.data.code : undefined;
+      if (code === "ENOENT") continue;
+      throw error;
+    }
+
     let parsedJson: unknown;
     try {
       parsedJson = JSON.parse(raw);
-    } catch (error) {
-      throw new Error(`Invalid JSON in persisted session snapshot ${filePath}: ${String(error)}`);
+    } catch {
+      continue;
     }
-    const parsed = parsePersistedSessionSnapshot(parsedJson);
+
+    let parsed: PersistedSessionSnapshot;
+    try {
+      parsed = parsePersistedSessionSnapshot(parsedJson);
+    } catch {
+      continue;
+    }
+
     summaries.push({
       sessionId: parsed.sessionId,
       title: parsed.session.title,

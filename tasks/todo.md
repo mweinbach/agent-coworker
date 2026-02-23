@@ -40,3 +40,25 @@
   - `bun test test/connect.test.ts`
   - `bun test test/providerStatus.test.ts`
   - `bun test`
+
+---
+
+# Task: Keep MCP/session loading resilient to malformed JSON
+
+## Plan
+- [x] Make `loadMCPConfigRegistry()` best-effort by turning per-layer parse failures into file-level parse warnings.
+- [x] Ensure malformed MCP layers do not block resolution of valid layers in snapshot/runtime paths.
+- [x] Make `listPersistedSessionSnapshots()` skip malformed/invalid snapshot files instead of throwing.
+- [x] Add regression coverage in `test/mcp.config-registry.test.ts` and `test/session-store.test.ts`.
+- [x] Run verification (`bun test test/mcp.config-registry.test.ts`, `bun test test/session-store.test.ts`, `bun test`).
+
+## Review
+- `readLayer()` in `/Users/mweinbach/Projects/agent-coworker/src/mcp/configRegistry/layers.ts` now catches parse/schema failures per file, records `file.parseError`, and keeps loading remaining layers.
+- `loadMCPConfigRegistry()` now emits warning entries for malformed layer files while continuing to merge valid system/user/workspace servers.
+- Added regression coverage in `/Users/mweinbach/Projects/agent-coworker/test/mcp.config-registry.test.ts` proving malformed workspace JSON no longer aborts registry loading and warnings/parse metadata are populated.
+- `listPersistedSessionSnapshots()` in `/Users/mweinbach/Projects/agent-coworker/src/server/sessionStore.ts` now skips malformed JSON and invalid snapshot shapes per file instead of failing the entire list operation.
+- Added regression coverage in `/Users/mweinbach/Projects/agent-coworker/test/session-store.test.ts` proving corrupt session files are skipped while valid snapshots remain listable/sorted.
+- Verification:
+  - `bun test test/mcp.config-registry.test.ts`
+  - `bun test test/session-store.test.ts`
+  - `bun test`

@@ -66,16 +66,28 @@ describe("mcp config registry", () => {
     }
   });
 
-  test("invalid json throws", async () => {
+  test("invalid workspace json records warning and still loads other layers", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-invalid-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-invalid-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-invalid-builtin-"));
     const config = makeConfig(workspace, home, builtInConfigDir);
 
     try {
+      await writeJson(path.join(home, ".cowork", "config", "mcp-servers.json"), {
+        servers: [{ name: "from-user", transport: { type: "stdio", command: "user" } }],
+      });
       await fs.mkdir(path.join(workspace, ".cowork"), { recursive: true });
       await fs.writeFile(path.join(workspace, ".cowork", "mcp-servers.json"), "{ bad json", "utf-8");
-      await expect(loadMCPConfigRegistry(config)).rejects.toThrow("invalid JSON");
+      const snapshot = await loadMCPConfigRegistry(config);
+
+      expect(snapshot.servers.find((server) => server.name === "from-user")?.source).toBe("user");
+      const workspaceFile = snapshot.files.find((file) => file.source === "workspace");
+      expect(workspaceFile?.exists).toBe(true);
+      expect(workspaceFile?.serverCount).toBe(0);
+      expect(workspaceFile?.parseError).toContain("invalid JSON");
+      expect(snapshot.warnings).toHaveLength(1);
+      expect(snapshot.warnings[0]).toContain("workspace");
+      expect(snapshot.warnings[0]).toContain(path.join(workspace, ".cowork", "mcp-servers.json"));
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   getPersistedSessionFilePath,
+  listPersistedSessionSnapshots,
   parsePersistedSessionSnapshot,
   readPersistedSessionSnapshot,
   writePersistedSessionSnapshot,
@@ -93,5 +94,31 @@ describe("sessionStore", () => {
         session: { title: "x" },
       }),
     ).toThrow("Invalid persisted session snapshot");
+  });
+
+  test("listPersistedSessionSnapshots skips malformed files", async () => {
+    const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-store-list-test-"));
+    const snapshotA = makeSnapshot("sess-a");
+    const snapshotB = {
+      ...makeSnapshot("sess-b"),
+      updatedAt: "2026-02-19T00:00:02.000Z",
+    };
+
+    await writePersistedSessionSnapshot({
+      paths: { sessionsDir },
+      snapshot: snapshotA,
+    });
+    await writePersistedSessionSnapshot({
+      paths: { sessionsDir },
+      snapshot: snapshotB,
+    });
+
+    await fs.writeFile(path.join(sessionsDir, "broken.json"), "{ invalid", "utf-8");
+    await fs.writeFile(path.join(sessionsDir, "invalid-shape.json"), JSON.stringify({ version: 1 }), "utf-8");
+
+    const summaries = await listPersistedSessionSnapshots({ sessionsDir });
+
+    expect(summaries.map((summary) => summary.sessionId)).toEqual(["sess-b", "sess-a"]);
+    expect(summaries).toHaveLength(2);
   });
 });

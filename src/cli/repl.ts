@@ -4,6 +4,14 @@ import readline from "node:readline";
 
 import { promptForApiKey, promptForProviderMethod } from "./repl/authPrompts";
 import {
+  createServerEventHandler,
+  type ApprovalPrompt,
+  type AskPrompt,
+  type ProviderStatus,
+  type PublicConfig,
+  type ReplServerEventState,
+} from "./repl/serverEventHandler";
+import {
   normalizeProviderAuthMethods,
   parseReplInput,
   resolveProviderAuthMethodSelection,
@@ -13,15 +21,13 @@ import {
 import { normalizeApprovalAnswer, resolveAskAnswer } from "./prompts";
 import { renderTodosToLines, renderToolsToLines } from "./render";
 import { getStoredSessionForCwd, setStoredSessionForCwd } from "./repl/stateStore";
-import { asString, modelStreamToolKey, modelStreamToolName, previewStructured } from "./repl/streamFormatting";
 import { CliStreamState } from "./streamState";
 import { AgentSocket } from "../client/agentSocket";
 import { defaultModelForProvider } from "../config";
 import { ASK_SKIP_TOKEN } from "../server/protocol";
 import { startAgentServer } from "../server/startServer";
-import type { ClientMessage, ServerEvent } from "../server/protocol";
+import type { ClientMessage } from "../server/protocol";
 import { isProviderName, PROVIDER_NAMES } from "../types";
-import type { AgentConfig, ApprovalRiskCode, TodoItem } from "../types";
 
 export { parseReplInput, normalizeProviderAuthMethods, resolveProviderAuthMethodSelection };
 export type { ParsedCommand };
@@ -34,18 +40,6 @@ globalSettings.AI_SDK_LOG_WARNINGS = false;
 
 const UI_PROVIDER_NAMES = PROVIDER_NAMES;
 const NOT_CONNECTED_MSG = "unable to send (not connected)";
-
-type PublicConfig = Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & { outputDirectory?: string };
-
-type AskPrompt = { requestId: string; question: string; options?: string[] };
-type ApprovalPrompt = { requestId: string; command: string; dangerous: boolean; reasonCode: ApprovalRiskCode };
-type ProviderStatus = Extract<ServerEvent, { type: "provider_status" }>["providers"][number];
-
-function renderTodos(todos: TodoItem[]) {
-  for (const line of renderTodosToLines(todos)) {
-    console.log(line);
-  }
-}
 
 export async function resolveAndValidateDir(dirArg: string): Promise<string> {
   const resolved = path.resolve(dirArg);
@@ -255,227 +249,109 @@ export async function runCliRepl(
     }
   };
 
-  const handleServerEvent = (evt: ServerEvent, rl: readline.Interface) => {
-    if (evt.type === "server_hello") {
-      sessionId = evt.sessionId;
-      lastKnownSessionId = evt.sessionId;
-      config = evt.config;
-      busy = false;
-      disconnectNotified = false;
-      resetModelStreamState();
-      console.log(`connected: ${evt.sessionId}`);
-      console.log(`provider=${evt.config.provider} model=${evt.config.model}`);
-      console.log(`cwd=${evt.config.workingDirectory}`);
-      void setStoredSessionForCwd(process.cwd(), evt.sessionId);
-      send({ type: "provider_catalog_get", sessionId: evt.sessionId });
-      send({ type: "provider_auth_methods_get", sessionId: evt.sessionId });
-      send({ type: "refresh_provider_status", sessionId: evt.sessionId });
-      return;
-    }
-
-    if (!sessionId || evt.sessionId !== sessionId) return;
-
-    switch (evt.type) {
-      case "session_busy":
-        busy = evt.busy;
-        if (evt.busy) {
-          resetModelStreamState();
-        } else {
-          if (lastStreamedAssistantTurnId && streamState.closeAssistantTurn(lastStreamedAssistantTurnId)) {
-            process.stdout.write("\n");
-          }
-          resetModelStreamState();
-        }
-        break;
-      case "reset_done":
-        resetModelStreamState();
-        console.log("(cleared)\n");
-        pendingAsk = [];
-        pendingApproval = [];
-        activeAsk = null;
-        activeApproval = null;
-        promptMode = "user";
-        rl.setPrompt("you> ");
-        rl.prompt();
-        break;
-      case "model_stream_chunk": {
-        const part = evt.part as Record<string, unknown>;
-        if (evt.partType === "text_delta") {
-          const text = asString(part.text);
-          if (!text) break;
-          const next = streamState.appendAssistantDelta(evt.turnId, text);
-          lastStreamedAssistantTurnId = evt.turnId;
-          if (streamState.openAssistantTurn(evt.turnId)) {
-            process.stdout.write("\n");
-          }
-          process.stdout.write(text);
-          break;
-        }
-
-        if (evt.partType === "finish") {
-          if (streamState.closeAssistantTurn(evt.turnId)) process.stdout.write("\n");
-          break;
-        }
-
-        if (evt.partType === "reasoning_delta") {
-          const text = asString(part.text);
-          if (!text) break;
-          const mode = part.mode === "summary" ? "summary" : "reasoning";
-          lastStreamedReasoningTurnId = evt.turnId;
-          streamState.markReasoningTurn(evt.turnId);
-          console.log(`\n[${mode}+] ${text}`);
-          break;
-        }
-
-        if (evt.partType === "tool_input_start") {
-          const name = modelStreamToolName(evt);
-          console.log(`\n[tool:start] ${name}`);
-          break;
-        }
-
-        if (evt.partType === "tool_input_delta") {
-          const key = modelStreamToolKey(evt);
-          const delta = asString(part.delta);
-          if (delta) streamState.appendToolInputForKey(key, delta);
-          break;
-        }
-
-        if (evt.partType === "tool_call") {
-          const key = modelStreamToolKey(evt);
-          const name = modelStreamToolName(evt);
-          const streamedInput = streamState.getToolInputForKey(key);
-          const input = part.input ?? (streamedInput ? { input: streamedInput } : undefined);
-          const preview = previewStructured(input);
-          console.log(preview ? `\n[tool:call] ${name} ${preview}` : `\n[tool:call] ${name}`);
-          break;
-        }
-
-        if (evt.partType === "tool_result") {
-          const name = modelStreamToolName(evt);
-          const preview = previewStructured(part.output);
-          console.log(preview ? `\n[tool:done] ${name} ${preview}` : `\n[tool:done] ${name}`);
-          break;
-        }
-
-        if (evt.partType === "tool_error") {
-          const name = modelStreamToolName(evt);
-          const preview = previewStructured(part.error);
-          console.log(preview ? `\n[tool:error] ${name} ${preview}` : `\n[tool:error] ${name}`);
-          break;
-        }
-
-        if (evt.partType === "tool_output_denied") {
-          const name = modelStreamToolName(evt);
-          const preview = previewStructured(part.reason);
-          console.log(preview ? `\n[tool:denied] ${name} ${preview}` : `\n[tool:denied] ${name}`);
-          break;
-        }
-
-        if (evt.partType === "tool_approval_request") {
-          console.log("\n[tool:approval] provider requested approval");
-        }
-        break;
-      }
-      case "assistant_message": {
-        const out = evt.text.trim();
-        if (!out) break;
-        if (lastStreamedAssistantTurnId) {
-          const streamed = streamState.getAssistantText(lastStreamedAssistantTurnId).trim();
-          if (streamed && streamed === out) {
-            if (streamState.closeAssistantTurn(lastStreamedAssistantTurnId)) {
-              process.stdout.write("\n");
-            }
-            break;
-          }
-        }
-        console.log(`\n${out}\n`);
-        break;
-      }
-      case "reasoning":
-        if (lastStreamedReasoningTurnId && streamState.hasReasoningTurn(lastStreamedReasoningTurnId)) {
-          break;
-        }
-        console.log(`\n[${evt.kind}] ${evt.text}\n`);
-        break;
-      case "log":
-        console.log(`[log] ${evt.line}`);
-        break;
-      case "todos":
-        renderTodos(evt.todos);
-        break;
-      case "ask":
-        pendingAsk.push({ requestId: evt.requestId, question: evt.question, options: evt.options });
-        activateNextPrompt(rl);
-        break;
-      case "approval":
-        pendingApproval.push({
-          requestId: evt.requestId,
-          command: evt.command,
-          dangerous: evt.dangerous,
-          reasonCode: evt.reasonCode,
-        });
-        activateNextPrompt(rl);
-        break;
-      case "config_updated":
-        config = evt.config;
-        console.log(`config updated: ${evt.config.provider}/${evt.config.model}`);
-        break;
-      case "provider_catalog":
-        providerList = evt.all.map((entry) => entry.id);
-        break;
-      case "provider_auth_methods":
-        providerAuthMethods = evt.methods;
-        break;
-      case "provider_status":
-        providerStatuses = evt.providers;
-        break;
-      case "observability_status": {
-        const configured = evt.config?.configured ? "yes" : "no";
-        const healthReason = evt.health.message
-          ? `${evt.health.reason}: ${evt.health.message}`
-          : evt.health.reason;
-        console.log(
-          `\n[observability] enabled=${evt.enabled} configured=${configured} health=${evt.health.status} (${healthReason})`
-        );
-        break;
-      }
-      case "provider_auth_challenge":
-        console.log(`\nAuth challenge [${evt.provider}/${evt.methodId}] ${evt.challenge.instructions}`);
-        if (evt.challenge.command) console.log(`command: ${evt.challenge.command}`);
-        if (evt.challenge.url) console.log(`url: ${evt.challenge.url}`);
-        break;
-      case "provider_auth_result":
-        if (evt.ok) {
-          console.log(`\nProvider auth ok: ${evt.provider}/${evt.methodId} (${evt.mode ?? "ok"})`);
-        } else {
-          console.error(`\nProvider auth failed: ${evt.message}`);
-        }
-        break;
-      case "tools":
-        console.log(`\nTools:\n${renderToolsToLines(evt.tools).join("\n")}\n`);
-        break;
-      case "sessions": {
-        if (evt.sessions.length === 0) {
-          console.log("\nNo sessions found.\n");
-          break;
-        }
-        console.log("\nSessions:");
-        for (const session of evt.sessions) {
-          const marker = sessionId === session.sessionId ? "*" : " ";
-          console.log(
-            `${marker} ${session.sessionId}  ${session.provider}/${session.model}  ${session.title}  (${session.updatedAt})`
-          );
-        }
-        console.log("");
-        break;
-      }
-      case "error":
-        console.error(`\nError [${evt.source}/${evt.code}]: ${evt.message}\n`);
-        break;
-      default:
-        break;
-    }
+  const eventState: ReplServerEventState = {
+    get sessionId() {
+      return sessionId;
+    },
+    set sessionId(value) {
+      sessionId = value;
+    },
+    get lastKnownSessionId() {
+      return lastKnownSessionId;
+    },
+    set lastKnownSessionId(value) {
+      lastKnownSessionId = value;
+    },
+    get config() {
+      return config;
+    },
+    set config(value) {
+      config = value;
+    },
+    get busy() {
+      return busy;
+    },
+    set busy(value) {
+      busy = value;
+    },
+    get providerList() {
+      return providerList;
+    },
+    set providerList(value) {
+      providerList = value;
+    },
+    get providerAuthMethods() {
+      return providerAuthMethods;
+    },
+    set providerAuthMethods(value) {
+      providerAuthMethods = value;
+    },
+    get providerStatuses() {
+      return providerStatuses;
+    },
+    set providerStatuses(value) {
+      providerStatuses = value;
+    },
+    get pendingAsk() {
+      return pendingAsk;
+    },
+    set pendingAsk(value) {
+      pendingAsk = value;
+    },
+    get pendingApproval() {
+      return pendingApproval;
+    },
+    set pendingApproval(value) {
+      pendingApproval = value;
+    },
+    get promptMode() {
+      return promptMode;
+    },
+    set promptMode(value) {
+      promptMode = value;
+    },
+    get activeAsk() {
+      return activeAsk;
+    },
+    set activeAsk(value) {
+      activeAsk = value;
+    },
+    get activeApproval() {
+      return activeApproval;
+    },
+    set activeApproval(value) {
+      activeApproval = value;
+    },
+    get disconnectNotified() {
+      return disconnectNotified;
+    },
+    set disconnectNotified(value) {
+      disconnectNotified = value;
+    },
+    get lastStreamedAssistantTurnId() {
+      return lastStreamedAssistantTurnId;
+    },
+    set lastStreamedAssistantTurnId(value) {
+      lastStreamedAssistantTurnId = value;
+    },
+    get lastStreamedReasoningTurnId() {
+      return lastStreamedReasoningTurnId;
+    },
+    set lastStreamedReasoningTurnId(value) {
+      lastStreamedReasoningTurnId = value;
+    },
   };
+
+  const handleServerEvent = createServerEventHandler({
+    state: eventState,
+    streamState,
+    activateNextPrompt,
+    resetModelStreamState,
+    send,
+    storeSessionForCurrentCwd: (nextSessionId) => {
+      void setStoredSessionForCwd(process.cwd(), nextSessionId);
+    },
+  });
 
   const connectToServer = async (url: string, rl: readline.Interface, resumeSessionId?: string) => {
     if (socket) {

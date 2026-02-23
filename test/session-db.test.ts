@@ -114,10 +114,56 @@ describe("sessionDb", () => {
     }
   });
 
-  test("fails to create database when legacy snapshot JSON is malformed", async () => {
+  test("skips malformed legacy snapshots and still imports valid ones", async () => {
     const paths = await makeTmpCoworkHome();
-    await fs.writeFile(path.join(paths.sessionsDir, "legacy-bad.json"), "not valid json {{{", "utf-8");
+    const now = new Date().toISOString();
+    await fs.writeFile(
+      path.join(paths.sessionsDir, "legacy-valid.json"),
+      JSON.stringify({
+        version: 1,
+        sessionId: "legacy-valid",
+        createdAt: now,
+        updatedAt: now,
+        session: {
+          title: "Legacy Valid",
+          titleSource: "default",
+          titleModel: null,
+          provider: "google",
+          model: "gemini-2.0-flash",
+        },
+        config: {
+          provider: "google",
+          model: "gemini-2.0-flash",
+          enableMcp: false,
+          workingDirectory: "/tmp/legacy-valid",
+        },
+        context: {
+          system: "legacy-valid",
+          messages: [{ role: "user", content: "hello from valid legacy snapshot" }],
+          todos: [],
+          harnessContext: null,
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(path.join(paths.sessionsDir, "legacy-bad-json.json"), "not valid json {{{", "utf-8");
+    await fs.writeFile(
+      path.join(paths.sessionsDir, "legacy-bad-structure.json"),
+      JSON.stringify({ version: 1, sessionId: "missing-fields" }),
+      "utf-8",
+    );
 
-    await expect(SessionDb.create({ paths })).rejects.toThrow("Invalid JSON in legacy session snapshot");
+    const db = await SessionDb.create({ paths });
+    try {
+      const sessions = db.listSessions();
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]?.sessionId).toBe("legacy-valid");
+
+      const persisted = db.getSessionRecord("legacy-valid");
+      expect(persisted?.title).toBe("Legacy Valid");
+      expect(persisted?.messages).toHaveLength(1);
+    } finally {
+      db.close();
+    }
   });
 });

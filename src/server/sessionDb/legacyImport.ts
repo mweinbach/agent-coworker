@@ -20,13 +20,14 @@ export async function importLegacySnapshots(opts: ImportLegacySnapshotsOptions):
     if (!entry.endsWith(".json")) continue;
     const filePath = path.join(opts.sessionsDir, entry);
     const raw = await fs.readFile(filePath, "utf-8");
-    let parsedJson: unknown;
+    let snapshot: PersistedSessionSnapshot;
     try {
-      parsedJson = JSON.parse(raw);
-    } catch (error) {
-      throw new Error(`Invalid JSON in legacy session snapshot ${filePath}: ${String(error)}`);
+      const parsedJson = JSON.parse(raw);
+      snapshot = parsePersistedSessionSnapshot(parsedJson);
+    } catch {
+      continue;
     }
-    const snapshot = parsePersistedSessionSnapshot(parsedJson);
+
     opts.importSnapshot(snapshot);
   }
 }

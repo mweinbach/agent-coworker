@@ -1261,15 +1261,30 @@ describe("webSearch tool", () => {
     expect(out).toContain("non-empty query");
   });
 
-  test("does not fall back to turnUserPrompt when query is missing", async () => {
+  test("falls back to turnUserPrompt when query is missing", async () => {
     const dir = await tmpDir();
 
     const oldExa = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "test-exa-key";
 
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async () => {
-      throw new Error("fetch should not be called when query is missing");
+    globalThis.fetch = mock(async (url: any, init: any) => {
+      expect(String(url)).toContain("api.exa.ai/search");
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      expect(body.query).toBe("latest Apple earnings guidance");
+      expect(body.numResults).toBe(2);
+      return new Response(
+        JSON.stringify({
+          results: [
+            {
+              title: "Fallback Result",
+              url: "https://example.com/fallback",
+              text: "Fallback content",
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
     }) as any;
 
     try {
@@ -1287,8 +1302,8 @@ describe("webSearch tool", () => {
       const out: string = await t.execute({
         maxResults: 2,
       });
-      expect(out).toContain("requires a query");
-      expect((globalThis.fetch as any).mock.calls.length).toBe(0);
+      expect(out).toContain("Fallback Result");
+      expect((globalThis.fetch as any).mock.calls.length).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;
@@ -1989,7 +2004,7 @@ describe("todoWrite tool", () => {
 // ---------------------------------------------------------------------------
 
 describe("notebookEdit tool", () => {
-  function makeNotebook(cells: Array<{ cell_type: string; source: string[] }>) {
+  function makeNotebook(cells: Array<{ cell_type: string; source: string[] | string }>) {
     return JSON.stringify(
       {
         nbformat: 4,
@@ -2026,6 +2041,29 @@ describe("notebookEdit tool", () => {
       editMode: "replace",
     });
     expect(res).toContain("replace");
+
+    const nb = JSON.parse(await fs.readFile(p, "utf-8"));
+    expect(nb.cells[0].source).toEqual(["print('new')"]);
+  });
+
+  test("accepts string-form notebook cell sources", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "nb.ipynb");
+    await fs.writeFile(
+      p,
+      makeNotebook([
+        { cell_type: "code", source: "print('old')" },
+        { cell_type: "markdown", source: ["# Title\n"] },
+      ])
+    );
+
+    const t: any = createNotebookEditTool(makeCtx(dir));
+    await t.execute({
+      notebookPath: p,
+      cellIndex: 0,
+      newSource: "print('new')",
+      editMode: "replace",
+    });
 
     const nb = JSON.parse(await fs.readFile(p, "utf-8"));
     expect(nb.cells[0].source).toEqual(["print('new')"]);

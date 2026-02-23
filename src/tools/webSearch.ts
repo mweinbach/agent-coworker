@@ -137,7 +137,7 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
         parsedInput.data.searchQuery,
         parsedInput.data.text,
         parsedInput.data.prompt
-      );
+      ) ?? firstString(ctx.turnUserPrompt);
       if (rawQuery === undefined) {
         const out = 'webSearch requires a query. Call webSearch with {"query":"..."}';
         ctx.log(`tool< webSearch ${JSON.stringify({ ok: false, reason: "missing_query" })}`);

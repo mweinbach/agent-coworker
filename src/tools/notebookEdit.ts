@@ -9,7 +9,9 @@ import { assertWritePathAllowed } from "../utils/permissions";
 
 const notebookCellSchema = z.object({
   cell_type: z.string().trim().min(1),
-  source: z.array(z.string()),
+  source: z.union([z.array(z.string()), z.string()]).transform((source) =>
+    typeof source === "string" ? [source] : source
+  ),
 }).passthrough();
 
 const notebookSchema = z.object({

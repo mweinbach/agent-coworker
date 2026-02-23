@@ -217,4 +217,44 @@ describe("sessionDb", () => {
       await fs.rm(unreadableDir, { recursive: true, force: true });
     }
   });
+
+  test("returns empty messages when messages_json is malformed", async () => {
+    const paths = await makeTmpCoworkHome();
+    const db = await SessionDb.create({ paths });
+    try {
+      const now = new Date().toISOString();
+      db.persistSessionMutation({
+        sessionId: "s-bad-messages",
+        eventType: "session.created",
+        snapshot: {
+          title: "Session with bad messages",
+          titleSource: "default",
+          titleModel: null,
+          provider: "google",
+          model: "gemini-2.0-flash",
+          workingDirectory: "/tmp/project",
+          enableMcp: false,
+          createdAt: now,
+          updatedAt: now,
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }],
+          todos: [],
+          harnessContext: null,
+        },
+      });
+
+      (db as any).db
+        .query("UPDATE session_state SET messages_json = ? WHERE session_id = ?")
+        .run("not-json", "s-bad-messages");
+
+      const paged = db.getMessages("s-bad-messages", 0, 10);
+      expect(paged.total).toBe(0);
+      expect(paged.messages).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
 });

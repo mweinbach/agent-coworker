@@ -43,7 +43,12 @@ export class SessionDbRepository {
       .query("SELECT messages_json FROM session_state WHERE session_id = ?")
       .get(sessionId) as Record<string, unknown> | null;
     if (!row) return { messages: [], total: 0 };
-    const all = parseJsonStringWithSchema(row.messages_json, messagesJsonSchema, "messages_json") as ModelMessage[];
+    let all: ModelMessage[];
+    try {
+      all = parseJsonStringWithSchema(row.messages_json, messagesJsonSchema, "messages_json") as ModelMessage[];
+    } catch {
+      all = [];
+    }
     const safeOffset = Math.max(0, Math.floor(offset));
     const safeLimit = Math.max(1, Math.floor(limit));
     const total = all.length;

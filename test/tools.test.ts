@@ -1296,6 +1296,70 @@ describe("webSearch tool", () => {
     }
   });
 
+  test("accepts compatibility query aliases and provider-native extra keys", async () => {
+    const dir = await tmpDir();
+
+    const oldBrave = process.env.BRAVE_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
+    process.env.BRAVE_API_KEY = "test-brave-key";
+    delete process.env.EXA_API_KEY;
+
+    const seenQueries: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (url: any) => {
+      const query = new URL(String(url)).searchParams.get("q") ?? "";
+      seenQueries.push(query);
+      return new Response(
+        JSON.stringify({
+          web: {
+            results: [
+              {
+                title: `Result for ${query}`,
+                url: "https://example.com",
+                description: "Alias compatibility",
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as any;
+
+    try {
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
+      const aliasInputs = [
+        { q: "q alias query" },
+        { searchQuery: "searchQuery alias query" },
+        { text: "text alias query" },
+        { prompt: "prompt alias query" },
+      ] as const;
+
+      for (const input of aliasInputs) {
+        const query = Object.values(input)[0];
+        const out: string = await t.execute({
+          ...input,
+          mode: "auto",
+          dynamicThreshold: 0.42,
+          maxResults: 1,
+        });
+        expect(out).toContain(`Result for ${query}`);
+      }
+
+      expect(seenQueries).toEqual([
+        "q alias query",
+        "searchQuery alias query",
+        "text alias query",
+        "prompt alias query",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
+      else delete process.env.BRAVE_API_KEY;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+    }
+  });
+
   test("uses BRAVE_API_KEY when available", async () => {
     const dir = await tmpDir();
 

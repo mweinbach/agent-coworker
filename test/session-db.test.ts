@@ -166,4 +166,55 @@ describe("sessionDb", () => {
       db.close();
     }
   });
+
+  test("skips unreadable legacy snapshot entries while importing valid ones", async () => {
+    const paths = await makeTmpCoworkHome();
+    const now = new Date().toISOString();
+    await fs.writeFile(
+      path.join(paths.sessionsDir, "legacy-valid.json"),
+      JSON.stringify({
+        version: 1,
+        sessionId: "legacy-valid",
+        createdAt: now,
+        updatedAt: now,
+        session: {
+          title: "Legacy Valid",
+          titleSource: "default",
+          titleModel: null,
+          provider: "google",
+          model: "gemini-2.0-flash",
+        },
+        config: {
+          provider: "google",
+          model: "gemini-2.0-flash",
+          enableMcp: false,
+          workingDirectory: "/tmp/legacy-valid",
+        },
+        context: {
+          system: "legacy-valid",
+          messages: [{ role: "user", content: "hello from valid legacy snapshot" }],
+          todos: [],
+          harnessContext: null,
+        },
+      }),
+      "utf-8",
+    );
+
+    const unreadableDir = path.join(paths.sessionsDir, "legacy-unreadable.json");
+    await fs.mkdir(unreadableDir);
+
+    const db = await SessionDb.create({ paths });
+    try {
+      const sessions = db.listSessions();
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]?.sessionId).toBe("legacy-valid");
+
+      const persisted = db.getSessionRecord("legacy-valid");
+      expect(persisted?.title).toBe("Legacy Valid");
+      expect(persisted?.messages).toHaveLength(1);
+    } finally {
+      db.close();
+      await fs.rm(unreadableDir, { recursive: true, force: true });
+    }
+  });
 });

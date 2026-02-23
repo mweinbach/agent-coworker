@@ -1,17 +1,20 @@
-# Task: Handle invalid cowork Codex auth before returning from read
+# Task: Preserve webSearch alias compatibility and harden legacy snapshot import
 
 ## Plan
-- [x] Update `readCodexAuthMaterial` to treat malformed cowork auth JSON/schema as recoverable and continue fallback logic.
-- [x] Preserve existing behavior for valid cowork auth and non-recoverable filesystem errors.
-- [x] Add regression tests for malformed cowork JSON and legacy migration fallback behavior.
-- [x] Run tests (`bun test test/providers/codex-auth.test.ts` and `bun test`).
+- [x] Restore compatibility alias support in `src/tools/webSearch.ts` for `q`, `searchQuery`, `text`, and `prompt`.
+- [x] Preserve strict input handling while allowing provider-native compatibility extras (`mode`, `dynamicThreshold`).
+- [x] Add `webSearch` regression coverage for alias-based inputs plus compatibility extras.
+- [x] Make `importLegacySnapshots()` skip unreadable legacy entries instead of aborting migration.
+- [x] Add SessionDb regression coverage proving unreadable `.json` entries are skipped while valid snapshots import.
+- [x] Run verification (`bun test test/tools.test.ts`, `bun test test/session-db.test.ts`, `bun test`).
 
 ## Review
-- `readCodexAuthMaterial` now catches invalid cowork JSON parse errors and treats that file as missing instead of throwing.
-- When cowork auth JSON exists but fails current schema validation, it now attempts legacy parsing and then continues to legacy-file migration fallback.
-- Added regression tests for:
-  - invalid cowork JSON returning `null` when migration is disabled
-  - schema-invalid cowork JSON still allowing legacy `.codex/auth.json` migration
+- `webSearch` input parsing now accepts legacy alias keys and resolves the first provided query field in priority order: `query`, `q`, `searchQuery`, `text`, `prompt`.
+- The schema remains `.strict()` and now explicitly allows compatibility extras `mode` and `dynamicThreshold` so provider-native payloads are not rejected before execution.
+- Added regression test `accepts compatibility query aliases and provider-native extra keys` in `test/tools.test.ts`.
+- `importLegacySnapshots()` now wraps per-file reads in `try/catch` so unreadable files are skipped and migration proceeds.
+- Added regression test `skips unreadable legacy snapshot entries while importing valid ones` in `test/session-db.test.ts`.
 - Verification:
-  - `bun test test/providers/codex-auth.test.ts`
+  - `bun test test/tools.test.ts`
+  - `bun test test/session-db.test.ts`
   - `bun test`

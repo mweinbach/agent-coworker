@@ -19,7 +19,13 @@ export async function importLegacySnapshots(opts: ImportLegacySnapshotsOptions):
   for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
     const filePath = path.join(opts.sessionsDir, entry);
-    const raw = await fs.readFile(filePath, "utf-8");
+    let raw: string;
+    try {
+      raw = await fs.readFile(filePath, "utf-8");
+    } catch {
+      continue;
+    }
+
     let snapshot: PersistedSessionSnapshot;
     try {
       const parsedJson = JSON.parse(raw);

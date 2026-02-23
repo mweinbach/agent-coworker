@@ -43,6 +43,14 @@ function firstNonEmptyString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const parsed = stringSchema.safeParse(value);
+    if (parsed.success) return parsed.data;
+  }
+  return undefined;
+}
+
 function formatResults(results: Array<{ title?: string; url?: string; description?: string }>): string {
   return (
     results
@@ -100,7 +108,13 @@ async function resolveExaApiKey(ctx: ToolContext): Promise<string | undefined> {
 function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToolOptions = {}) {
   const exaOnly = options.exaOnly ?? false;
   const webSearchInputSchema = z.object({
-    query: z.string().min(1).describe("Search query"),
+    query: z.string().min(1).optional().describe("Search query"),
+    q: z.string().min(1).optional(),
+    searchQuery: z.string().min(1).optional(),
+    text: z.string().min(1).optional(),
+    prompt: z.string().min(1).optional(),
+    mode: z.unknown().optional(),
+    dynamicThreshold: z.unknown().optional(),
     maxResults: z.number().int().min(1).max(20).optional().default(10),
   }).strict();
 
@@ -117,9 +131,22 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
         return out;
       }
 
+      const rawQuery = firstString(
+        parsedInput.data.query,
+        parsedInput.data.q,
+        parsedInput.data.searchQuery,
+        parsedInput.data.text,
+        parsedInput.data.prompt
+      );
+      if (rawQuery === undefined) {
+        const out = 'webSearch requires a query. Call webSearch with {"query":"..."}';
+        ctx.log(`tool< webSearch ${JSON.stringify({ ok: false, reason: "missing_query" })}`);
+        return out;
+      }
+
       let safeQuery: string;
       try {
-        safeQuery = sanitizeQuery(parsedInput.data.query);
+        safeQuery = sanitizeQuery(rawQuery);
       } catch (error) {
         const out = `webSearch invalid query: ${error instanceof Error ? error.message : String(error)}`;
         ctx.log(`tool< webSearch ${JSON.stringify({ ok: false, reason: "invalid_query" })}`);

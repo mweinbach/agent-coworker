@@ -7,46 +7,44 @@ import { isProviderName } from "../types";
 import type { ClientMessage } from "./protocol";
 
 const recordSchema = z.record(z.string(), z.unknown());
-
-function hasNonEmptyTrimmedString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function isRecordObject(value: unknown): value is Record<string, unknown> {
-  return recordSchema.safeParse(value).success;
-}
+const nonEmptyTrimmedStringSchema = z.string().refine((value) => value.trim().length > 0);
+const harnessContextRootErrorMessages: Record<string, string> = {
+  runId: "harness_context_set invalid context.runId",
+  objective: "harness_context_set invalid context.objective",
+  acceptanceCriteria: "harness_context_set invalid context.acceptanceCriteria",
+  constraints: "harness_context_set invalid context.constraints",
+  taskId: "harness_context_set invalid context.taskId",
+  metadata: "harness_context_set invalid context.metadata",
+};
+const setConfigFieldErrorMessages: Record<string, string> = {
+  yolo: "set_config config.yolo must be boolean",
+  observabilityEnabled: "set_config config.observabilityEnabled must be boolean",
+  subAgentModel: "set_config config.subAgentModel must be non-empty string",
+  maxSteps: "set_config config.maxSteps must be number 1-1000",
+};
 
 function requiredString(message: string): z.ZodType<string> {
-  return z.custom<string>((value): value is string => typeof value === "string", { message });
+  return z.string({ error: message });
 }
 
 function optionalString(message: string): z.ZodOptional<z.ZodType<string>> {
-  return z.custom<string>((value): value is string => typeof value === "string", { message }).optional();
+  return z.string({ error: message }).optional();
 }
 
 function requiredNonEmptyTrimmedString(message: string): z.ZodType<string> {
-  return z.custom<string>(
-    (value): value is string => typeof value === "string" && value.trim().length > 0,
-    { message },
-  );
+  return z.string({ error: message }).refine((value) => value.trim().length > 0, { error: message });
 }
 
 function optionalNonEmptyTrimmedString(message: string): z.ZodOptional<z.ZodType<string>> {
-  return z.custom<string>(
-    (value): value is string => typeof value === "string" && value.trim().length > 0,
-    { message },
-  ).optional();
+  return z.string({ error: message }).refine((value) => value.trim().length > 0, { error: message }).optional();
 }
 
 function requiredBoolean(message: string): z.ZodType<boolean> {
-  return z.custom<boolean>((value): value is boolean => typeof value === "boolean", { message });
+  return z.boolean({ error: message });
 }
 
 function optionalNumberAtLeast(message: string, min: number): z.ZodOptional<z.ZodType<number>> {
-  return z.custom<number>(
-    (value): value is number => typeof value === "number" && Number.isFinite(value) && value >= min,
-    { message },
-  ).optional();
+  return z.number({ error: message }).finite({ error: message }).min(min, { error: message }).optional();
 }
 
 function requiredSessionId(type: string): z.ZodType<string> {
@@ -92,13 +90,49 @@ function firstIssueMessage(error: z.ZodError, rawType?: string): string {
 }
 
 function validateMcpServerPayload(value: unknown): string | null {
-  if (!isRecordObject(value)) return "mcp_server_upsert missing/invalid server";
+  if (!recordSchema.safeParse(value).success) return "mcp_server_upsert missing/invalid server";
   try {
     parseMCPServersDocument(JSON.stringify({ servers: [value] }));
     return null;
   } catch (parseError) {
     return `mcp_server_upsert invalid server: ${String(parseError)}`;
   }
+}
+
+function validateProviderAuthTarget(
+  ctx: z.RefinementCtx,
+  value: { provider: unknown; methodId: unknown },
+  messagePrefix: "provider_auth_authorize" | "provider_auth_callback" | "provider_auth_set_api_key",
+): boolean {
+  if (!isProviderName(value.provider)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["provider"],
+      message: `${messagePrefix} missing/invalid provider`,
+    });
+    return false;
+  }
+
+  const parsedMethodId = nonEmptyTrimmedStringSchema.safeParse(value.methodId);
+  if (!parsedMethodId.success) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["methodId"],
+      message: `${messagePrefix} missing/invalid methodId`,
+    });
+    return false;
+  }
+
+  if (!resolveProviderAuthMethod(value.provider, parsedMethodId.data)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["methodId"],
+      message: `${messagePrefix} unknown methodId`,
+    });
+    return false;
+  }
+
+  return true;
 }
 
 function schemaWithType<TType extends string>(
@@ -221,31 +255,7 @@ const providerAuthAuthorizeSchema = schemaWithType("provider_auth_authorize", {
   provider: z.unknown(),
   methodId: z.unknown(),
 }).superRefine((value, ctx) => {
-  if (!isProviderName(value.provider)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["provider"],
-      message: "provider_auth_authorize missing/invalid provider",
-    });
-    return;
-  }
-
-  if (!hasNonEmptyTrimmedString(value.methodId)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["methodId"],
-      message: "provider_auth_authorize missing/invalid methodId",
-    });
-    return;
-  }
-
-  if (!resolveProviderAuthMethod(value.provider, value.methodId)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["methodId"],
-      message: "provider_auth_authorize unknown methodId",
-    });
-  }
+  validateProviderAuthTarget(ctx, value, "provider_auth_authorize");
 });
 
 const providerAuthCallbackSchema = schemaWithType("provider_auth_callback", {
@@ -254,32 +264,7 @@ const providerAuthCallbackSchema = schemaWithType("provider_auth_callback", {
   methodId: z.unknown(),
   code: z.unknown().optional(),
 }).superRefine((value, ctx) => {
-  if (!isProviderName(value.provider)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["provider"],
-      message: "provider_auth_callback missing/invalid provider",
-    });
-    return;
-  }
-
-  if (!hasNonEmptyTrimmedString(value.methodId)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["methodId"],
-      message: "provider_auth_callback missing/invalid methodId",
-    });
-    return;
-  }
-
-  if (!resolveProviderAuthMethod(value.provider, value.methodId)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["methodId"],
-      message: "provider_auth_callback unknown methodId",
-    });
-    return;
-  }
+  if (!validateProviderAuthTarget(ctx, value, "provider_auth_callback")) return;
 
   if (value.code !== undefined && typeof value.code !== "string") {
     ctx.addIssue({
@@ -296,34 +281,9 @@ const providerAuthSetApiKeySchema = schemaWithType("provider_auth_set_api_key", 
   methodId: z.unknown(),
   apiKey: z.unknown(),
 }).superRefine((value, ctx) => {
-  if (!isProviderName(value.provider)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["provider"],
-      message: "provider_auth_set_api_key missing/invalid provider",
-    });
-    return;
-  }
+  if (!validateProviderAuthTarget(ctx, value, "provider_auth_set_api_key")) return;
 
-  if (!hasNonEmptyTrimmedString(value.methodId)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["methodId"],
-      message: "provider_auth_set_api_key missing/invalid methodId",
-    });
-    return;
-  }
-
-  if (!resolveProviderAuthMethod(value.provider, value.methodId)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["methodId"],
-      message: "provider_auth_set_api_key unknown methodId",
-    });
-    return;
-  }
-
-  if (!hasNonEmptyTrimmedString(value.apiKey)) {
+  if (!nonEmptyTrimmedStringSchema.safeParse(value.apiKey).success) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["apiKey"],
@@ -352,7 +312,7 @@ const mcpServerUpsertSchema = schemaWithType("mcp_server_upsert", {
     return;
   }
 
-  if (value.previousName !== undefined && !hasNonEmptyTrimmedString(value.previousName)) {
+  if (value.previousName !== undefined && !nonEmptyTrimmedStringSchema.safeParse(value.previousName).success) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["previousName"],
@@ -383,17 +343,14 @@ const mcpServerAuthSetApiKeySchema = schemaWithType("mcp_server_auth_set_api_key
 
 const mcpServersMigrateLegacySchema = schemaWithType("mcp_servers_migrate_legacy", {
   sessionId: requiredSessionId("mcp_servers_migrate_legacy"),
-  scope: z.custom<"workspace" | "user">(
-    (value): value is "workspace" | "user" => value === "workspace" || value === "user",
-    { message: "mcp_servers_migrate_legacy missing/invalid scope" },
-  ),
+  scope: z.enum(["workspace", "user"], { error: "mcp_servers_migrate_legacy missing/invalid scope" }),
 });
 
 const harnessContextSetSchema = schemaWithType("harness_context_set", {
   sessionId: requiredSessionId("harness_context_set"),
   context: z.unknown().optional(),
 }).superRefine((value, ctx) => {
-  if (!isRecordObject(value.context)) {
+  if (!recordSchema.safeParse(value.context).success) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["context"],
@@ -408,17 +365,9 @@ const harnessContextSetSchema = schemaWithType("harness_context_set", {
   const issue = parsedContext.error.issues[0];
   const path = issue?.path ?? [];
   const root = String(path[0] ?? "");
-  let message = "harness_context_set missing/invalid context";
-  if (root === "runId") message = "harness_context_set invalid context.runId";
-  if (root === "objective") message = "harness_context_set invalid context.objective";
-  if (root === "acceptanceCriteria") message = "harness_context_set invalid context.acceptanceCriteria";
-  if (root === "constraints") message = "harness_context_set invalid context.constraints";
-  if (root === "taskId") message = "harness_context_set invalid context.taskId";
-  if (root === "metadata") {
-    message = path.length > 1
-      ? "harness_context_set invalid context.metadata values"
-      : "harness_context_set invalid context.metadata";
-  }
+  const message = root === "metadata" && path.length > 1
+    ? "harness_context_set invalid context.metadata values"
+    : (harnessContextRootErrorMessages[root] ?? "harness_context_set missing/invalid context");
 
   ctx.addIssue({
     code: z.ZodIssueCode.custom,
@@ -457,7 +406,7 @@ const setConfigSchema = schemaWithType("set_config", {
   sessionId: requiredSessionId("set_config"),
   config: z.unknown().optional(),
 }).superRefine((value, ctx) => {
-  if (!isRecordObject(value.config)) {
+  if (!recordSchema.safeParse(value.config).success) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["config"],
@@ -471,11 +420,7 @@ const setConfigSchema = schemaWithType("set_config", {
 
   const issue = parsedConfig.error.issues[0];
   const field = String(issue?.path?.[0] ?? "");
-  let message = "set_config missing/invalid config";
-  if (field === "yolo") message = "set_config config.yolo must be boolean";
-  if (field === "observabilityEnabled") message = "set_config config.observabilityEnabled must be boolean";
-  if (field === "subAgentModel") message = "set_config config.subAgentModel must be non-empty string";
-  if (field === "maxSteps") message = "set_config config.maxSteps must be number 1-1000";
+  const message = setConfigFieldErrorMessages[field] ?? "set_config missing/invalid config";
 
   ctx.addIssue({
     code: z.ZodIssueCode.custom,

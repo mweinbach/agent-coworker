@@ -76,23 +76,31 @@ const codexAuthDocumentSchema = z.object({
   last_refresh: isoTimestampSchema.optional(),
 }).strict();
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  const parsed = recordSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
-}
+const oauthNamespaceClaimsSchema = z.object({
+  chatgpt_account_id: nonEmptyStringSchema.optional(),
+  chatgpt_plan_type: nonEmptyStringSchema.optional(),
+}).passthrough();
 
-function toNumber(value: unknown): number | undefined {
-  const parsed = finiteNumberFromUnknownSchema.safeParse(value);
+const profileNamespaceClaimsSchema = z.object({
+  email: nonEmptyStringSchema.optional(),
+}).passthrough();
+
+function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown): T | undefined {
+  const parsed = schema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }
 
-function toNonEmptyString(value: unknown): string | undefined {
-  const parsed = nonEmptyStringSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+function parseTokenResponse(
+  payload: unknown,
+  errorMessage = "Token response missing access_token."
+): z.infer<typeof codexOAuthTokenResponseSchema> {
+  const parsedPayload = codexOAuthTokenResponseSchema.safeParse(payload);
+  if (!parsedPayload.success) throw new Error(errorMessage);
+  return parsedPayload.data;
 }
 
 function toEpochMs(value: unknown): number | undefined {
-  const parsed = toNumber(value);
+  const parsed = parseWithSchema(finiteNumberFromUnknownSchema, value);
   if (parsed === undefined) return undefined;
   if (parsed <= 0) return undefined;
   return parsed < 1e12 ? Math.floor(parsed * 1000) : Math.floor(parsed);
@@ -115,7 +123,7 @@ export function decodeJwtPayload(token: string): Record<string, unknown> | null 
   if (!payloadRaw) return null;
   try {
     const parsed = JSON.parse(payloadRaw);
-    return asRecord(parsed);
+    return parseWithSchema(recordSchema, parsed) ?? null;
   } catch {
     return null;
   }
@@ -123,48 +131,47 @@ export function decodeJwtPayload(token: string): Record<string, unknown> | null 
 
 export function extractJwtExpiryMs(token: string): number | undefined {
   const payload = decodeJwtPayload(token);
-  const exp = toNumber(payload?.exp);
+  const exp = parseWithSchema(finiteNumberFromUnknownSchema, payload?.exp);
   if (!exp || exp <= 0) return undefined;
   return Math.floor(exp * 1000);
 }
 
 export function extractAccountIdFromClaims(claims: Record<string, unknown>): string | undefined {
-  const direct = toNonEmptyString(claims.chatgpt_account_id);
+  const direct = parseWithSchema(nonEmptyStringSchema, claims.chatgpt_account_id);
   if (direct) return direct;
 
-  const nestedAuth = asRecord(claims["https://api.openai.com/auth"]);
-  const nested = nestedAuth ? toNonEmptyString(nestedAuth.chatgpt_account_id) : undefined;
+  const nestedAuth = parseWithSchema(oauthNamespaceClaimsSchema, claims["https://api.openai.com/auth"]);
+  const nested = nestedAuth?.chatgpt_account_id;
   if (nested) return nested;
 
-  const organizations = organizationsSchema.safeParse(claims.organizations);
-  if (organizations.success) {
-    for (const organization of organizations.data) {
+  const organizations = parseWithSchema(organizationsSchema, claims.organizations);
+  if (organizations) {
+    for (const organization of organizations) {
       if (organization.id) return organization.id;
     }
   }
 
-  const orgId = toNonEmptyString(claims.organization_id);
+  const orgId = parseWithSchema(nonEmptyStringSchema, claims.organization_id);
   if (orgId) return orgId;
 
-  const account = toNonEmptyString(claims.account_id);
+  const account = parseWithSchema(nonEmptyStringSchema, claims.account_id);
   if (account) return account;
 
   return undefined;
 }
 
 export function extractEmailFromClaims(claims: Record<string, unknown>): string | undefined {
-  const direct = toNonEmptyString(claims.email);
+  const direct = parseWithSchema(nonEmptyStringSchema, claims.email);
   if (direct) return direct;
-  const profile = asRecord(claims["https://api.openai.com/profile"]);
-  const nested = profile ? toNonEmptyString(profile.email) : undefined;
+  const profile = parseWithSchema(profileNamespaceClaimsSchema, claims["https://api.openai.com/profile"]);
+  const nested = profile?.email;
   if (nested) return nested;
   return undefined;
 }
 
 export function extractPlanTypeFromClaims(claims: Record<string, unknown>): string | undefined {
-  const nestedAuth = asRecord(claims["https://api.openai.com/auth"]);
-  const nested = nestedAuth ? toNonEmptyString(nestedAuth.chatgpt_plan_type) : undefined;
-  return nested ?? toNonEmptyString(claims.chatgpt_plan_type);
+  const nestedAuth = parseWithSchema(oauthNamespaceClaimsSchema, claims["https://api.openai.com/auth"]);
+  return nestedAuth?.chatgpt_plan_type ?? parseWithSchema(nonEmptyStringSchema, claims.chatgpt_plan_type);
 }
 
 export function codexAuthFilePath(paths: Pick<CodexAuthPaths, "authDir">): string {
@@ -309,7 +316,7 @@ export async function readCodexAuthMaterial(
 }
 
 function expiresInMsFromResponse(payload: CodexOAuthTokenResponse): number | undefined {
-  const expiresIn = toNumber(payload.expires_in);
+  const expiresIn = parseWithSchema(finiteNumberFromUnknownSchema, payload.expires_in);
   if (!expiresIn || expiresIn <= 0) return undefined;
   return Math.floor(expiresIn * 1000);
 }
@@ -322,12 +329,11 @@ export function codexMaterialFromTokenResponse(
     clientId?: string;
   } = {}
 ): CodexAuthMaterial {
-  const parsedPayload = codexOAuthTokenResponseSchema.safeParse(payload);
-  if (!parsedPayload.success) throw new Error("Token response missing access_token.");
+  const parsedPayload = parseTokenResponse(payload);
 
-  const accessToken = parsedPayload.data.access_token;
-  const refreshToken = parsedPayload.data.refresh_token;
-  const idToken = parsedPayload.data.id_token;
+  const accessToken = parsedPayload.access_token;
+  const refreshToken = parsedPayload.refresh_token;
+  const idToken = parsedPayload.id_token;
 
   const accessClaims = decodeJwtPayload(accessToken);
   const idClaims = idToken ? decodeJwtPayload(idToken) : null;
@@ -404,7 +410,10 @@ export async function refreshCodexAuthMaterial(opts: {
     throw new Error(`Codex token refresh failed (${response.status}): ${text.slice(0, 500)}`.trim());
   }
 
-  const payload = (await response.json()) as CodexOAuthTokenResponse;
+  const payload = parseTokenResponse(
+    await response.json(),
+    "Codex token refresh response missing access_token.",
+  );
   return await persistCodexAuthFromTokenResponse(opts.paths, payload, {
     issuer: opts.material.issuer,
     clientId: opts.material.clientId,

@@ -50,6 +50,135 @@ const typedRawPartSchema = z.object({ type: z.string() }).passthrough();
 const stringSchema = z.string();
 const booleanSchema = z.boolean();
 const finiteNumberSchema = z.number().finite();
+type ParsedRawPart = z.infer<typeof typedRawPartSchema>;
+type EmitPart = (partType: ModelStreamPartType, part: Record<string, unknown>) => NormalizedModelStreamPart;
+type PartNormalizerContext = {
+  emit: EmitPart;
+  parsedRaw: ParsedRawPart;
+  providerMetadata?: Record<string, unknown>;
+  mode: ModelStreamReasoningMode;
+  id: () => string;
+  toolCallId: () => string;
+  toolName: () => string;
+  san: typeof sanitizeUnknown;
+};
+
+const streamPartNormalizers: Record<string, (ctx: PartNormalizerContext) => NormalizedModelStreamPart> = {
+  start: ({ emit }) => emit("start", {}),
+  finish: ({ emit, parsedRaw, san }) =>
+    emit("finish", {
+      finishReason: san(parsedRaw.finishReason) ?? "unknown",
+      rawFinishReason: san(parsedRaw.rawFinishReason),
+      totalUsage: san(parsedRaw.totalUsage),
+    }),
+  abort: ({ emit, parsedRaw, san }) => emit("abort", { reason: san(parsedRaw.reason) }),
+  error: ({ emit, parsedRaw, san }) => emit("error", { error: san(parsedRaw.error) }),
+  "start-step": ({ emit, parsedRaw, san }) =>
+    emit("start_step", {
+      stepNumber: asFiniteNumber(parsedRaw.stepNumber) ?? asFiniteNumber(parsedRaw.step),
+      request: san(parsedRaw.request),
+      warnings: san(parsedRaw.warnings),
+    }),
+  "finish-step": ({ emit, parsedRaw, san }) =>
+    emit("finish_step", {
+      stepNumber: asFiniteNumber(parsedRaw.stepNumber) ?? asFiniteNumber(parsedRaw.step),
+      response: san(parsedRaw.response),
+      usage: san(parsedRaw.usage),
+      finishReason: san(parsedRaw.finishReason) ?? "unknown",
+      rawFinishReason: san(parsedRaw.rawFinishReason),
+      providerMetadata: san(parsedRaw.providerMetadata),
+    }),
+  "text-start": ({ emit, id, providerMetadata }) => emit("text_start", { id: id(), providerMetadata }),
+  "text-delta": ({ emit, parsedRaw, id, providerMetadata }) =>
+    emit("text_delta", {
+      id: id(),
+      text: asSafeString(parsedRaw.text),
+      providerMetadata,
+    }),
+  "text-end": ({ emit, id, providerMetadata }) => emit("text_end", { id: id(), providerMetadata }),
+  "reasoning-start": ({ emit, id, mode, providerMetadata }) =>
+    emit("reasoning_start", {
+      id: id(),
+      mode,
+      providerMetadata,
+    }),
+  "reasoning-delta": ({ emit, parsedRaw, id, mode, providerMetadata }) =>
+    emit("reasoning_delta", {
+      id: id(),
+      mode,
+      text: asSafeString(parsedRaw.text),
+      providerMetadata,
+    }),
+  "reasoning-end": ({ emit, id, mode, providerMetadata }) =>
+    emit("reasoning_end", {
+      id: id(),
+      mode,
+      providerMetadata,
+    }),
+  "tool-input-start": ({ emit, parsedRaw, id, toolName, providerMetadata }) =>
+    emit("tool_input_start", {
+      id: id(),
+      toolName: toolName(),
+      providerExecuted: asBoolean(parsedRaw.providerExecuted),
+      dynamic: asBoolean(parsedRaw.dynamic),
+      title: asString(parsedRaw.title),
+      providerMetadata,
+    }),
+  "tool-input-delta": ({ emit, parsedRaw, id, providerMetadata }) =>
+    emit("tool_input_delta", {
+      id: id(),
+      delta: asSafeString(parsedRaw.delta),
+      providerMetadata,
+    }),
+  "tool-input-end": ({ emit, id, providerMetadata }) => emit("tool_input_end", { id: id(), providerMetadata }),
+  "tool-call": ({ emit, parsedRaw, toolCallId, toolName, san, providerMetadata }) =>
+    emit("tool_call", {
+      toolCallId: toolCallId(),
+      toolName: toolName(),
+      input: san(parsedRaw.input) ?? {},
+      dynamic: asBoolean(parsedRaw.dynamic),
+      invalid: asBoolean(parsedRaw.invalid),
+      error: san(parsedRaw.error),
+      providerMetadata,
+    }),
+  "tool-result": ({ emit, parsedRaw, toolCallId, toolName, san, providerMetadata }) =>
+    emit("tool_result", {
+      toolCallId: toolCallId(),
+      toolName: toolName(),
+      output: san(parsedRaw.output) ?? null,
+      dynamic: asBoolean(parsedRaw.dynamic),
+      providerMetadata,
+    }),
+  "tool-error": ({ emit, parsedRaw, toolCallId, toolName, san, providerMetadata }) =>
+    emit("tool_error", {
+      toolCallId: toolCallId(),
+      toolName: toolName(),
+      error: san(parsedRaw.error) ?? "unknown_error",
+      dynamic: asBoolean(parsedRaw.dynamic),
+      providerMetadata,
+    }),
+  "tool-output-denied": ({ emit, parsedRaw, toolCallId, toolName, san, providerMetadata }) =>
+    emit("tool_output_denied", {
+      toolCallId: toolCallId(),
+      toolName: toolName(),
+      reason: san(parsedRaw.reason),
+      providerMetadata,
+    }),
+  "tool-approval-request": ({ emit, parsedRaw, san }) =>
+    emit("tool_approval_request", {
+      approvalId: asString(parsedRaw.approvalId) ?? "",
+      toolCall: san(parsedRaw.toolCall) ?? {},
+    }),
+  source: ({ emit, parsedRaw, san }) =>
+    emit("source", {
+      source: san(compactRecord({ ...parsedRaw, type: undefined })) ?? {},
+    }),
+  file: ({ emit, parsedRaw, san }) => emit("file", { file: san(parsedRaw.file) ?? null }),
+  raw: ({ emit, parsedRaw, san }) =>
+    emit("raw", {
+      raw: san("rawValue" in parsedRaw ? parsedRaw.rawValue : parsedRaw.raw) ?? null,
+    }),
+};
 
 function asString(value: unknown): string | undefined {
   const parsed = stringSchema.safeParse(value);
@@ -196,55 +325,19 @@ export function normalizeModelStreamPart(
   const toolCallId = () => asString(parsedRaw.toolCallId) ?? id();
   const toolName = () => asString(parsedRaw.toolName) ?? "tool";
   const san = sanitizeUnknown;
-
-  switch (type) {
-    case "start":
-      return emit("start", {});
-    case "finish":
-      return emit("finish", { finishReason: san(parsedRaw.finishReason) ?? "unknown", rawFinishReason: san(parsedRaw.rawFinishReason), totalUsage: san(parsedRaw.totalUsage) });
-    case "abort":
-      return emit("abort", { reason: san(parsedRaw.reason) });
-    case "error":
-      return emit("error", { error: san(parsedRaw.error) });
-    case "start-step":
-      return emit("start_step", { stepNumber: asFiniteNumber(parsedRaw.stepNumber) ?? asFiniteNumber(parsedRaw.step), request: san(parsedRaw.request), warnings: san(parsedRaw.warnings) });
-    case "finish-step":
-      return emit("finish_step", { stepNumber: asFiniteNumber(parsedRaw.stepNumber) ?? asFiniteNumber(parsedRaw.step), response: san(parsedRaw.response), usage: san(parsedRaw.usage), finishReason: san(parsedRaw.finishReason) ?? "unknown", rawFinishReason: san(parsedRaw.rawFinishReason), providerMetadata: san(parsedRaw.providerMetadata) });
-    case "text-start":
-      return emit("text_start", { id: id(), providerMetadata });
-    case "text-delta":
-      return emit("text_delta", { id: id(), text: asSafeString(parsedRaw.text), providerMetadata });
-    case "text-end":
-      return emit("text_end", { id: id(), providerMetadata });
-    case "reasoning-start":
-      return emit("reasoning_start", { id: id(), mode, providerMetadata });
-    case "reasoning-delta":
-      return emit("reasoning_delta", { id: id(), mode, text: asSafeString(parsedRaw.text), providerMetadata });
-    case "reasoning-end":
-      return emit("reasoning_end", { id: id(), mode, providerMetadata });
-    case "tool-input-start":
-      return emit("tool_input_start", { id: id(), toolName: toolName(), providerExecuted: asBoolean(parsedRaw.providerExecuted), dynamic: asBoolean(parsedRaw.dynamic), title: asString(parsedRaw.title), providerMetadata });
-    case "tool-input-delta":
-      return emit("tool_input_delta", { id: id(), delta: asSafeString(parsedRaw.delta), providerMetadata });
-    case "tool-input-end":
-      return emit("tool_input_end", { id: id(), providerMetadata });
-    case "tool-call":
-      return emit("tool_call", { toolCallId: toolCallId(), toolName: toolName(), input: san(parsedRaw.input) ?? {}, dynamic: asBoolean(parsedRaw.dynamic), invalid: asBoolean(parsedRaw.invalid), error: san(parsedRaw.error), providerMetadata });
-    case "tool-result":
-      return emit("tool_result", { toolCallId: toolCallId(), toolName: toolName(), output: san(parsedRaw.output) ?? null, dynamic: asBoolean(parsedRaw.dynamic), providerMetadata });
-    case "tool-error":
-      return emit("tool_error", { toolCallId: toolCallId(), toolName: toolName(), error: san(parsedRaw.error) ?? "unknown_error", dynamic: asBoolean(parsedRaw.dynamic), providerMetadata });
-    case "tool-output-denied":
-      return emit("tool_output_denied", { toolCallId: toolCallId(), toolName: toolName(), reason: san(parsedRaw.reason), providerMetadata });
-    case "tool-approval-request":
-      return emit("tool_approval_request", { approvalId: asString(parsedRaw.approvalId) ?? "", toolCall: san(parsedRaw.toolCall) ?? {} });
-    case "source":
-      return emit("source", { source: san(compactRecord({ ...parsedRaw, type: undefined })) ?? {} });
-    case "file":
-      return emit("file", { file: san(parsedRaw.file) ?? null });
-    case "raw":
-      return emit("raw", { raw: san("rawValue" in parsedRaw ? parsedRaw.rawValue : parsedRaw.raw) ?? null });
-    default:
-      return emit("unknown", { sdkType: type, raw: rawPart });
+  const normalizer = streamPartNormalizers[type];
+  if (normalizer) {
+    return normalizer({
+      emit,
+      parsedRaw,
+      providerMetadata,
+      mode,
+      id,
+      toolCallId,
+      toolName,
+      san,
+    });
   }
+
+  return emit("unknown", { sdkType: type, raw: rawPart });
 }

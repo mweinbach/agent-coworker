@@ -248,15 +248,30 @@ describe("connectProvider", () => {
         const u = String(url);
         if (u.endsWith("/api/accounts/deviceauth/usercode")) {
           expect(init?.method).toBe("POST");
-          return new Response(JSON.stringify({ device_auth_id: "dev_123", user_code: "ABCD-EFGH", interval: 1 }), {
-            status: 200,
-          });
+          return new Response(
+            JSON.stringify({
+              device_auth_id: "dev_123",
+              user_code: "ABCD-EFGH",
+              interval: 1,
+              expires_in: 600,
+            }),
+            {
+              status: 200,
+            },
+          );
         }
         if (u.endsWith("/api/accounts/deviceauth/token")) {
           expect(init?.method).toBe("POST");
-          return new Response(JSON.stringify({ authorization_code: "auth_code_123", code_verifier: "verifier_123" }), {
-            status: 200,
-          });
+          return new Response(
+            JSON.stringify({
+              authorization_code: "auth_code_123",
+              code_verifier: "verifier_123",
+              issued_at: "2026-02-23T00:00:00.000Z",
+            }),
+            {
+              status: 200,
+            },
+          );
         }
         if (u === "https://auth.openai.com/oauth/token") {
           return new Response(
@@ -373,14 +388,29 @@ describe("connectProvider", () => {
       fetchImpl: async (url) => {
         const u = String(url);
         if (u.endsWith("/api/accounts/deviceauth/usercode")) {
-          return new Response(JSON.stringify({ device_auth_id: "dev_stale", user_code: "WXYZ-1234", interval: 1 }), {
-            status: 200,
-          });
+          return new Response(
+            JSON.stringify({
+              device_auth_id: "dev_stale",
+              user_code: "WXYZ-1234",
+              interval: 1,
+              expires_in: 600,
+            }),
+            {
+              status: 200,
+            },
+          );
         }
         if (u.endsWith("/api/accounts/deviceauth/token")) {
-          return new Response(JSON.stringify({ authorization_code: "fresh_code_1", code_verifier: "fresh_verifier_1" }), {
-            status: 200,
-          });
+          return new Response(
+            JSON.stringify({
+              authorization_code: "fresh_code_1",
+              code_verifier: "fresh_verifier_1",
+              issued_at: "2026-02-23T00:00:00.000Z",
+            }),
+            {
+              status: 200,
+            },
+          );
         }
         if (u === "https://auth.openai.com/oauth/token") {
           return new Response(

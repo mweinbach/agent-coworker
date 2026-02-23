@@ -428,7 +428,7 @@ describe("AgentSession", () => {
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({ enableMcp: false });
     });
 
-    test("setEnableMcp persistence failures do not update runtime state", async () => {
+    test("setEnableMcp persistence failures still apply runtime state and emit a non-fatal error", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {
         throw new Error("write failed");
       });
@@ -436,13 +436,13 @@ describe("AgentSession", () => {
 
       await session.setEnableMcp(false);
 
-      expect(session.getEnableMcp()).toBe(true);
-      expect(events.some((evt) => evt.type === "session_settings")).toBe(false);
+      expect(session.getEnableMcp()).toBe(false);
+      expect(events.some((evt) => evt.type === "session_settings")).toBe(true);
       const errEvt = events.find((evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error");
       expect(errEvt).toBeDefined();
       if (errEvt) {
         expect(errEvt.code).toBe("internal_error");
-        expect(errEvt.message).toContain("Failed to persist MCP defaults");
+        expect(errEvt.message).toContain("MCP setting updated for this session");
       }
     });
 
@@ -934,21 +934,20 @@ describe("AgentSession", () => {
       });
     });
 
-    test("persistence-hook failures block model updates", async () => {
+    test("persistence-hook failures keep model updates and emit a non-fatal error", async () => {
       const persistModelSelectionImpl = mock(async () => {
         throw new Error("disk write failed");
       });
       const { session, events } = makeSession({ persistModelSelectionImpl });
-      const before = session.getPublicConfig();
 
       await session.setModel("gpt-5.2");
 
-      const updated = events.find((e) => e.type === "config_updated");
-      expect(updated).toBeUndefined();
-      expect(session.getPublicConfig()).toEqual(before);
+      const updated = events.find((e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated");
+      expect(updated).toBeDefined();
+      expect(session.getPublicConfig().model).toBe("gpt-5.2");
       const err = events.find(
         (e): e is Extract<ServerEvent, { type: "error" }> =>
-          e.type === "error" && e.message.includes("Failed to persist model defaults")
+          e.type === "error" && e.message.includes("Model updated for this session")
       );
       expect(err).toBeDefined();
       if (err) {

@@ -22,12 +22,12 @@ const deviceAuthStartResponseSchema = z.object({
   device_auth_id: z.string().trim().min(1),
   user_code: z.string().trim().min(1),
   interval: finiteNumberFromUnknownSchema.optional(),
-}).strict();
+}).passthrough();
 
 const deviceAuthTokenPollResponseSchema = z.object({
   authorization_code: z.string().trim().min(1),
   code_verifier: z.string().trim().min(1),
-}).strict();
+}).passthrough();
 
 export function isOauthCliProvider(service: ConnectService): service is "codex-cli" {
   return service === "codex-cli";

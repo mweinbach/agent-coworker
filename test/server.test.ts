@@ -1925,7 +1925,7 @@ describe("Protocol Doc Parity", () => {
     }
   });
 
-  test("set_model surfaces project config parse errors", async () => {
+  test("set_model applies runtime updates even when project config parse fails", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));
     try {
@@ -1934,11 +1934,25 @@ describe("Protocol Doc Parity", () => {
       const result = await sendAndCollect(
         url,
         (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.2" }),
-        1,
+        2,
       );
 
-      expect(result.responses[0].type).toBe("error");
-      expect(result.responses[0].message).toContain("Invalid JSON in config file");
+      expect(result.responses[0].type).toBe("config_updated");
+      if (result.responses[0].type === "config_updated") {
+        expect(result.responses[0].config.provider).toBe("openai");
+        expect(result.responses[0].config.model).toBe("gpt-5.2");
+      }
+
+      expect(result.responses[1].type).toBe("error");
+      if (result.responses[1].type === "error") {
+        expect(result.responses[1].code).toBe("internal_error");
+        expect(result.responses[1].message).toContain("Invalid JSON in config file");
+      }
+
+      const nextSessionHello = (await collectMessages(url, 1))[0];
+      expect(nextSessionHello.type).toBe("server_hello");
+      // Persistence failed, so newly created sessions keep project defaults.
+      expect(nextSessionHello.config.provider).toBe("google");
     } finally {
       server.stop();
     }

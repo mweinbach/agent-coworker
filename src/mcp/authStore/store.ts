@@ -49,19 +49,30 @@ async function atomicWrite(filePath: string, payload: string): Promise<void> {
 }
 
 async function readDoc(filePath: string): Promise<MCPServerCredentialsDocument> {
+  const emptyDoc = (): MCPServerCredentialsDocument => ({
+    ...DEFAULT_MCP_CREDENTIALS_DOCUMENT,
+    updatedAt: nowIso(),
+    servers: {},
+  });
+
   try {
     const raw = await fs.readFile(filePath, "utf-8");
     let parsedJson: unknown;
     try {
       parsedJson = JSON.parse(raw);
-    } catch (error) {
-      throw new Error(`Invalid JSON in MCP credential store at ${filePath}: ${String(error)}`);
+    } catch {
+      return emptyDoc();
     }
-    return normalizeCredentialsDoc(parsedJson);
+
+    try {
+      return normalizeCredentialsDoc(parsedJson);
+    } catch {
+      return emptyDoc();
+    }
   } catch (error) {
     const parsedCode = errorWithCodeSchema.safeParse(error);
     const code = parsedCode.success ? parsedCode.data.code : undefined;
-    if (code === "ENOENT") return { ...DEFAULT_MCP_CREDENTIALS_DOCUMENT, updatedAt: nowIso(), servers: {} };
+    if (code === "ENOENT") return emptyDoc();
     throw new Error(`Failed to read MCP credential store at ${filePath}: ${String(error)}`);
   }
 }

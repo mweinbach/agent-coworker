@@ -28,67 +28,71 @@ describe("desktop persistence state validation", () => {
     userDataDir = "";
   });
 
-  test("rejects states with invalid workspace paths", async () => {
+  test("saveState skips invalid workspaces and orphan threads instead of failing", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-valid");
     const missingWorkspace = path.join(userDataDir, "workspace-missing");
     await fs.mkdir(validWorkspace, { recursive: true });
 
-    await expect(
-      persistence.saveState({
-        version: 2,
-        workspaces: [
-          {
-            id: "ws_valid",
-            name: "Valid workspace",
-            path: validWorkspace,
-            createdAt: TS,
-            lastOpenedAt: TS,
-            defaultSubAgentModel: "gpt-5.2-mini",
-            defaultEnableMcp: true,
-            yolo: false,
-          },
-          {
-            id: "ws_missing",
-            name: "Missing workspace",
-            path: missingWorkspace,
-            createdAt: TS,
-            lastOpenedAt: TS,
-            defaultEnableMcp: false,
-            yolo: true,
-          },
-        ],
-        threads: [
-          {
-            id: "thread_valid",
-            workspaceId: "ws_valid",
-            title: "Valid thread",
-            titleSource: "manual",
-            createdAt: TS,
-            lastMessageAt: TS,
-            status: "active",
-            sessionId: null,
-            lastEventSeq: 0,
-          },
-          {
-            id: "thread_orphan",
-            workspaceId: "ws_missing",
-            title: "Orphan thread",
-            titleSource: "manual",
-            createdAt: TS,
-            lastMessageAt: TS,
-            status: "active",
-            sessionId: null,
-            lastEventSeq: 0,
-          },
-        ],
-        developerMode: true,
-        showHiddenFiles: true,
-      }),
-    ).rejects.toThrow("Workspace path is missing or invalid");
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_valid",
+          name: "Valid workspace",
+          path: validWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultSubAgentModel: "gpt-5.2-mini",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+        {
+          id: "ws_missing",
+          name: "Missing workspace",
+          path: missingWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: false,
+          yolo: true,
+        },
+      ],
+      threads: [
+        {
+          id: "thread_valid",
+          workspaceId: "ws_valid",
+          title: "Valid thread",
+          titleSource: "manual",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: null,
+          lastEventSeq: 0,
+        },
+        {
+          id: "thread_orphan",
+          workspaceId: "ws_missing",
+          title: "Orphan thread",
+          titleSource: "manual",
+          createdAt: TS,
+          lastMessageAt: TS,
+          status: "active",
+          sessionId: null,
+          lastEventSeq: 0,
+        },
+      ],
+      developerMode: true,
+      showHiddenFiles: true,
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.workspaces).toHaveLength(1);
+    expect(loaded.workspaces[0]?.id).toBe("ws_valid");
+    expect(loaded.threads).toHaveLength(1);
+    expect(loaded.threads[0]?.id).toBe("thread_valid");
   });
 
-  test("rejects malformed on-disk state payloads", async () => {
+  test("loadState sanitizes malformed on-disk payloads instead of failing", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-from-disk");
     await fs.mkdir(validWorkspace, { recursive: true });
@@ -101,14 +105,11 @@ describe("desktop persistence state validation", () => {
           version: "bad",
           workspaces: [
             {
-              id: "ws_disk",
-              name: "Disk workspace",
+              id: "",
+              name: 123,
               path: validWorkspace,
-              createdAt: TS,
+              createdAt: "not-a-date",
               lastOpenedAt: TS,
-              defaultSubAgentModel: 123,
-              defaultEnableMcp: "yes",
-              yolo: "no",
             },
           ],
           threads: [
@@ -125,11 +126,50 @@ describe("desktop persistence state validation", () => {
           showHiddenFiles: "always",
         },
         null,
-        2
+        2,
       ),
-      "utf8"
+      "utf8",
     );
 
-    await expect(persistence.loadState()).rejects.toThrow("Failed to load state");
+    const loaded = await persistence.loadState();
+    expect(loaded.version).toBe(2);
+    expect(loaded.workspaces).toEqual([]);
+    expect(loaded.threads).toEqual([]);
+    expect(loaded.developerMode).toBe(false);
+    expect(loaded.showHiddenFiles).toBe(false);
+  });
+
+  test("loadState recovers from invalid JSON", async () => {
+    const persistence = new PersistenceService();
+
+    const statePath = path.join(userDataDir, "state.json");
+    await fs.writeFile(statePath, "{not-json", "utf8");
+
+    const loaded = await persistence.loadState();
+    expect(loaded).toEqual({
+      version: 2,
+      workspaces: [],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+    });
+  });
+
+  test("readTranscript skips malformed lines", async () => {
+    const persistence = new PersistenceService();
+    const transcriptDir = path.join(userDataDir, "transcripts");
+    await fs.mkdir(transcriptDir, { recursive: true });
+    const transcriptPath = path.join(transcriptDir, "thread_1.jsonl");
+
+    const validEventA = JSON.stringify({ ts: TS, threadId: "thread_1", direction: "server", payload: { type: "log", line: "a" } });
+    const invalidJson = "{not-json";
+    const invalidShape = JSON.stringify({ ts: TS, threadId: "thread_1", direction: "sideways", payload: {} });
+    const validEventB = JSON.stringify({ ts: TS, threadId: "thread_1", direction: "client", payload: { type: "ping" } });
+    await fs.writeFile(transcriptPath, `${validEventA}\n${invalidJson}\n${invalidShape}\n${validEventB}\n`, "utf8");
+
+    const transcript = await persistence.readTranscript("thread_1");
+    expect(transcript).toHaveLength(2);
+    expect(transcript[0]?.direction).toBe("server");
+    expect(transcript[1]?.direction).toBe("client");
   });
 });

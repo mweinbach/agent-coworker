@@ -226,14 +226,27 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       const rt = get().threadRuntimeById[threadId];
       const alreadyLoaded = rt?.feed && rt.feed.length > 0;
       if (!alreadyLoaded) {
-        const transcript = await readTranscript({ threadId });
-        const feed = mapTranscriptToFeed(transcript);
-        set((s) => ({
-          threadRuntimeById: {
-            ...s.threadRuntimeById,
-            [threadId]: { ...s.threadRuntimeById[threadId], feed, transcriptOnly: false },
-          },
-        }));
+        try {
+          const transcript = await readTranscript({ threadId });
+          const feed = mapTranscriptToFeed(transcript);
+          set((s) => ({
+            threadRuntimeById: {
+              ...s.threadRuntimeById,
+              [threadId]: { ...s.threadRuntimeById[threadId], feed, transcriptOnly: false },
+            },
+          }));
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          set((s) => ({
+            notifications: pushNotification(s.notifications, {
+              id: makeId(),
+              ts: nowIso(),
+              kind: "error",
+              title: "Transcript load failed",
+              detail,
+            }),
+          }));
+        }
       }
   
       set((s) => ({

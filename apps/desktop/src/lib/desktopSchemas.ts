@@ -95,12 +95,43 @@ export const renamePathInputSchema: z.ZodType<RenamePathInput> = z.object({
   newName: validatedSegmentSchema,
 });
 
+const persistedWorkspaceSchema = z.object({
+  id: safeIdSchema,
+  name: nonEmptyStringSchema,
+  path: nonEmptyStringSchema,
+  createdAt: nonEmptyStringSchema,
+  lastOpenedAt: nonEmptyStringSchema,
+  defaultProvider: optionalNonEmptyStringSchema,
+  defaultModel: optionalNonEmptyStringSchema,
+  defaultSubAgentModel: optionalNonEmptyStringSchema,
+  defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
+  yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+}).passthrough();
+
+const persistedThreadSchema = z.object({
+  id: safeIdSchema,
+  workspaceId: safeIdSchema,
+  title: nonEmptyStringSchema,
+  titleSource: z.enum(["default", "model", "heuristic", "manual"]).optional(),
+  createdAt: nonEmptyStringSchema,
+  lastMessageAt: nonEmptyStringSchema,
+  status: z.enum(["active", "disconnected"]),
+  sessionId: z.preprocess((value) => (typeof value === "string" && value.trim() ? value : null), z.string().nullable()),
+  lastEventSeq: z.preprocess(
+    (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0),
+    z.number().int().nonnegative(),
+  ),
+}).passthrough();
+
 export const persistedStateInputSchema: z.ZodType<PersistedState> = z.object({
-  workspaces: z.array(z.unknown()),
-  threads: z.array(z.unknown()),
-  developerMode: z.boolean().optional(),
-  showHiddenFiles: z.boolean().optional(),
-  version: z.number().optional(),
+  workspaces: z.array(persistedWorkspaceSchema),
+  threads: z.array(persistedThreadSchema),
+  developerMode: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+  showHiddenFiles: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+  version: z.preprocess(
+    (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 2),
+    z.number().int().nonnegative(),
+  ),
 }).passthrough() as z.ZodType<PersistedState>;
 
 export const confirmActionInputSchema: z.ZodType<ConfirmActionInput> = z.object({

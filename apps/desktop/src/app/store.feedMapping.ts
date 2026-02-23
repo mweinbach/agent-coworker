@@ -372,6 +372,16 @@ const transcriptReasoningPayloadSchema = z.object({
   text: z.unknown().optional(),
 }).passthrough();
 
+const transcriptAssistantReasoningPayloadSchema = z.object({
+  type: z.literal("assistant_reasoning"),
+  text: z.unknown().optional(),
+}).passthrough();
+
+const transcriptReasoningSummaryPayloadSchema = z.object({
+  type: z.literal("reasoning_summary"),
+  text: z.unknown().optional(),
+}).passthrough();
+
 const transcriptTodosPayloadSchema = z.object({
   type: z.literal("todos"),
   todos: z.unknown().optional(),
@@ -399,6 +409,8 @@ const transcriptFeedPayloadSchema = z.discriminatedUnion("type", [
   transcriptModelStreamPayloadSchema,
   transcriptAssistantMessagePayloadSchema,
   transcriptReasoningPayloadSchema,
+  transcriptAssistantReasoningPayloadSchema,
+  transcriptReasoningSummaryPayloadSchema,
   transcriptTodosPayloadSchema,
   transcriptLogPayloadSchema,
   transcriptErrorPayloadSchema,
@@ -464,12 +476,18 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
       continue;
     }
 
-    if (payload.type === "reasoning") {
+    if (payload.type === "reasoning" || payload.type === "assistant_reasoning" || payload.type === "reasoning_summary") {
       if (stream.lastReasoningTurnId && stream.reasoningTurns.has(stream.lastReasoningTurnId)) continue;
+      const mode =
+        payload.type === "reasoning_summary"
+          ? "summary"
+          : payload.type === "reasoning"
+            ? (payload.kind === "summary" ? "summary" : "reasoning")
+            : "reasoning";
       out.push({
         id: makeId(),
         kind: "reasoning",
-        mode: payload.kind === "summary" ? "summary" : "reasoning",
+        mode,
         ts: evt.ts,
         text: String(payload.text ?? ""),
       });

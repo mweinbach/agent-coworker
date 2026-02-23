@@ -116,6 +116,8 @@ All client messages are validated by `safeParseClientMessage()` before dispatch:
 
 Any validation failure produces an `error` server event (see [error](#error)).
 
+Server events can also be validated client-side via `safeParseServerEvent()`. If a received event fails envelope validation (unknown type, missing required fields, invalid JSON), clients should ignore/drop that event rather than treating it as a protocol-level fatal error.
+
 ## Shared Types
 
 Types referenced across multiple messages.
@@ -504,7 +506,7 @@ Update session model and optionally provider. On success, server emits `config_u
 | `provider` | `ProviderName` | No | If omitted, keeps current provider. Must be a valid `ProviderName` if present |
 
 **Response:** `config_updated`, `session_info`, `provider_catalog`
-**Error:** `busy` if a turn is running. `validation_failed` if provider is invalid.
+**Error:** `busy` if a turn is running. `validation_failed` if provider is invalid. `internal_error` may be emitted if persisting project defaults fails after the in-session update is already applied.
 
 ---
 
@@ -781,7 +783,7 @@ Toggle MCP (Model Context Protocol) tool loading for the session.
 | `enableMcp` | `boolean` | Yes | `true` to enable, `false` to disable. Must be a boolean |
 
 **Response:** `session_settings`
-**Error:** `busy` if a turn is running.
+**Error:** `busy` if a turn is running. `internal_error` may be emitted if persisting project defaults fails after the in-session update is already applied.
 
 ---
 
@@ -1261,7 +1263,7 @@ Initial handshake event sent immediately on WebSocket connection.
 {
   "type": "server_hello",
   "sessionId": "abc-123-def",
-  "protocolVersion": "6.0",
+  "protocolVersion": "7.0",
   "capabilities": {
     "modelStreamChunk": "v1"
   },
@@ -1283,7 +1285,7 @@ Initial handshake event sent immediately on WebSocket connection.
 |-------|------|-------------|
 | `type` | `"server_hello"` | — |
 | `sessionId` | `string` | The session identifier. Use this for all subsequent messages |
-| `protocolVersion` | `string?` | Protocol version (currently `"6.0"`) |
+| `protocolVersion` | `string?` | Protocol version (currently `"7.0"`) |
 | `capabilities` | `object?` | Optional capabilities object. Currently: `{ modelStreamChunk: "v1" }` |
 | `config` | `PublicConfig` | Session config: `provider`, `model`, `workingDirectory`, and optionally `outputDirectory` |
 | `isResume` | `boolean?` | Present and `true` only when resuming a disconnected session |

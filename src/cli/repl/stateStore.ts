@@ -23,7 +23,8 @@ const cliStateSchema = z.object({
 }).strict();
 
 function getCliStateFilePath(): string {
-  const paths = getAiCoworkerPaths();
+  const home = process.env.HOME?.trim();
+  const paths = home ? getAiCoworkerPaths({ homedir: home }) : getAiCoworkerPaths();
   return path.join(paths.rootDir, "state", "cli-state.json");
 }
 
@@ -34,12 +35,13 @@ async function readCliState(): Promise<CliState> {
     let parsedRaw: unknown;
     try {
       parsedRaw = JSON.parse(raw);
-    } catch (error) {
-      throw new Error(`Invalid JSON in CLI state at ${filePath}: ${String(error)}`);
+    } catch {
+      return { version: 1, lastSessionByCwd: {} };
     }
+
     const parsedState = cliStateSchema.safeParse(parsedRaw);
     if (!parsedState.success) {
-      throw new Error(`Invalid CLI state schema: ${parsedState.error.issues[0]?.message ?? "validation_failed"}`);
+      return { version: 1, lastSessionByCwd: {} };
     }
     return parsedState.data;
   } catch (error) {

@@ -1,3 +1,32 @@
+# Task: Fix PR review regressions (desktop persistence, auth resilience, protocol coverage)
+
+## Plan
+- [x] Restore desktop persisted-state backward compatibility on load while keeping save-time safety.
+- [x] Make desktop transcript hydration resilient to malformed lines and avoid thread selection hard-failures.
+- [x] Restore legacy transcript reasoning aliases (`assistant_reasoning`, `reasoning_summary`) in feed mapping.
+- [x] Align desktop persisted-state IPC validation with runtime expectations.
+- [x] Relax Codex device OAuth response parsing to accept forward-compatible extra fields.
+- [x] Make MCP auth-store reads recover from malformed/invalid credential files instead of failing closed.
+- [x] Make CLI state loading recover from malformed/invalid JSON schema drift.
+- [x] Change `set_model` / `set_enable_mcp` persistence failures to fail-open runtime updates with surfaced non-fatal errors.
+- [x] Expand parser/decode regression coverage (server-event fixture parsing + binary websocket decode path).
+- [x] Update websocket protocol docs for strict server-event parsing behavior and persistence-failure semantics.
+- [x] Run targeted and full verification (`bun test ...`, `bun test`).
+
+## Review
+- Desktop persistence now sanitizes malformed state, recovers from invalid `state.json` JSON, and skips malformed transcript lines.
+- Thread selection no longer hard-fails on transcript read errors, and legacy reasoning aliases are mapped correctly.
+- Desktop persisted-state schemas now default workspace/session booleans (`defaultEnableMcp`, `yolo`, `developerMode`, `showHiddenFiles`) for stronger IPC/runtime alignment.
+- `set_model` / `set_enable_mcp` now apply runtime updates even when persistence fails and surface non-fatal `internal_error` events.
+- MCP auth-store and CLI state-store reads now recover from malformed files instead of failing closed.
+- Added/updated regression coverage including binary decode parsing, server-event fixtures, desktop state/transcript recovery, and desktop schema defaults.
+- Documentation updated for server-event parsing behavior and `server_hello.protocolVersion` (`7.0`).
+- Verification:
+  - targeted suites for affected areas
+  - full suite: `bun test` → **1656 pass, 2 skip, 0 fail**
+
+---
+
 # Task: Preserve webSearch alias compatibility and harden legacy snapshot import
 
 ## Plan

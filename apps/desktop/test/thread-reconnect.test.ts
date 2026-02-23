@@ -32,6 +32,7 @@ class MockAgentSocket {
 
 const MOCK_SOCKETS: MockAgentSocket[] = [];
 let mockedTranscript: any[] = [];
+let mockedTranscriptError: Error | null = null;
 
 mock.module("../src/lib/desktopCommands", () => ({
   appendTranscriptBatch: async () => {},
@@ -40,7 +41,12 @@ mock.module("../src/lib/desktopCommands", () => ({
   listDirectory: async () => [],
   loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
   pickWorkspaceDirectory: async () => null,
-  readTranscript: async () => mockedTranscript,
+  readTranscript: async () => {
+    if (mockedTranscriptError) {
+      throw mockedTranscriptError;
+    }
+    return mockedTranscript;
+  },
   saveState: async () => {},
   startWorkspaceServer: async () => ({ url: "ws://mock" }),
   stopWorkspaceServer: async () => {},
@@ -87,6 +93,7 @@ describe("thread reconnect", () => {
     threadId = `t-${crypto.randomUUID()}`;
     MOCK_SOCKETS.length = 0;
     mockedTranscript = [];
+    mockedTranscriptError = null;
 
     useAppStore.setState({
       ready: true,
@@ -156,7 +163,7 @@ describe("thread reconnect", () => {
     expect(state.threads.find((t) => t.id === threadId)?.status).toBe("active");
   });
 
-  test("selectThread transcript hydration ignores legacy reasoning aliases", async () => {
+  test("selectThread transcript hydration maps legacy reasoning aliases", async () => {
     mockedTranscript = [
       {
         ts: "2024-01-01T00:00:00.000Z",
@@ -182,13 +189,24 @@ describe("thread reconnect", () => {
 
     const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
     const reasoning = feed.filter((item) => item.kind === "reasoning");
-    const systemLines = feed
-      .filter((item) => item.kind === "system")
-      .map((item) => (item.kind === "system" ? item.line : ""));
 
-    expect(reasoning).toHaveLength(1);
-    expect(reasoning[0]?.text).toBe("current summary");
-    expect(systemLines).toContain("[assistant_reasoning]");
-    expect(systemLines).toContain("[reasoning_summary]");
+    expect(reasoning).toHaveLength(3);
+    expect(reasoning[0]?.text).toBe("legacy alias");
+    expect(reasoning[1]?.text).toBe("legacy summary");
+    expect(reasoning[2]?.text).toBe("current summary");
+    expect(reasoning.map((item) => (item.kind === "reasoning" ? item.mode : ""))).toEqual([
+      "reasoning",
+      "summary",
+      "summary",
+    ]);
+  });
+
+  test("selectThread handles transcript read failures without crashing", async () => {
+    mockedTranscriptError = new Error("boom");
+
+    await expect(useAppStore.getState().selectThread(threadId)).resolves.toBeUndefined();
+
+    const state = useAppStore.getState();
+    expect(state.notifications.some((item) => item.title === "Transcript load failed")).toBe(true);
   });
 });

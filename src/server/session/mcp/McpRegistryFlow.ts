@@ -16,18 +16,27 @@ export class McpRegistryFlow {
       return;
     }
 
+    this.context.state.config = { ...this.context.state.config, enableMcp };
+
+    let persistError: unknown = null;
     if (this.context.deps.persistProjectConfigPatchImpl) {
       try {
         await this.context.deps.persistProjectConfigPatchImpl({ enableMcp });
       } catch (err) {
-        this.context.emitError("internal_error", "session", `Failed to persist MCP defaults: ${String(err)}`);
-        return;
+        persistError = err;
       }
     }
 
-    this.context.state.config = { ...this.context.state.config, enableMcp };
     this.context.emit({ type: "session_settings", sessionId: this.context.id, enableMcp });
     this.context.queuePersistSessionSnapshot("session.enable_mcp");
+
+    if (persistError) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `MCP setting updated for this session, but failed to persist defaults: ${String(persistError)}`,
+      );
+    }
   }
 
   async emitMcpServers() {

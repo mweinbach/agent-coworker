@@ -40,7 +40,7 @@ async function loadCodexAuthForRequest(opts: {
   fetchImpl: typeof fetch;
   forceRefresh?: boolean;
 }): Promise<CodexAuthMaterial> {
-  const material = await readCodexAuthMaterial(opts.paths);
+  const material = await readCodexAuthMaterial(opts.paths, { migrateLegacy: true });
   if (!material?.accessToken) {
     throw new Error("Codex auth is missing. Run /connect codex-cli to authenticate.");
   }

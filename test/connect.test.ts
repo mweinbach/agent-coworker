@@ -267,6 +267,56 @@ describe("connectProvider", () => {
     expect(persisted?.tokens?.access_token).toBe("codex-device-access-token");
   });
 
+  test("codex-cli reuses and migrates legacy .codex credentials", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const accessToken = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3_600 });
+    const legacyPath = path.join(home, ".codex", "auth.json");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify(
+        {
+          auth_mode: "chatgpt",
+          issuer: "https://auth.openai.com",
+          client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+          tokens: {
+            access_token: accessToken,
+            refresh_token: "legacy-refresh-token",
+            id_token: makeJwt({
+              iss: "https://auth.openai.com",
+              email: "legacy@example.com",
+              "https://api.openai.com/auth": { chatgpt_account_id: "acc_legacy" },
+            }),
+          },
+        },
+        null,
+        2
+      ),
+      "utf-8"
+    );
+
+    const result = await connectProvider({
+      provider: "codex-cli",
+      paths,
+      fetchImpl: async () => {
+        throw new Error("Unexpected network call when legacy Codex credentials exist.");
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.mode).toBe("oauth");
+    expect(result.message).toContain("Existing Codex OAuth credentials detected.");
+    expect(result.oauthCredentialsFile).toBe(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"));
+
+    const migrated = JSON.parse(
+      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")
+    ) as any;
+    expect(migrated?.tokens?.access_token).toBe(accessToken);
+    expect(migrated?.tokens?.refresh_token).toBe("legacy-refresh-token");
+  });
+
   test("codex-cli stale credentials trigger new oauth flow", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });

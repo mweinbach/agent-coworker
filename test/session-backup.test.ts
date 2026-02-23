@@ -97,7 +97,9 @@ describe("SessionBackupManager", () => {
 
     const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
     const previousPath = process.env[pathKey];
-    process.env[pathKey] = "";
+    // Bun's child_process lookup may still resolve commands when PATH is empty,
+    // so force a definitely-missing directory to make tar unavailable.
+    process.env[pathKey] = path.join(workspace, ".missing-bin");
 
     try {
       const manager = await SessionBackupManager.create({

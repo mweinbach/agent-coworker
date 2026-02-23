@@ -414,9 +414,17 @@ export async function refreshCodexAuthMaterial(opts: {
     await response.json(),
     "Codex token refresh response missing access_token.",
   );
-  return await persistCodexAuthFromTokenResponse(opts.paths, payload, {
+  const refreshed = codexMaterialFromTokenResponse(codexAuthFilePath(opts.paths), payload, {
     issuer: opts.material.issuer,
     clientId: opts.material.clientId,
+  });
+  return await writeCodexAuthMaterial(opts.paths, {
+    ...refreshed,
+    refreshToken: refreshed.refreshToken ?? opts.material.refreshToken,
+    idToken: refreshed.idToken ?? opts.material.idToken,
+    accountId: refreshed.accountId ?? opts.material.accountId,
+    email: refreshed.email ?? opts.material.email,
+    planType: refreshed.planType ?? opts.material.planType,
   });
 }
 

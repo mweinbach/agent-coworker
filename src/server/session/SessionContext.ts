@@ -98,7 +98,7 @@ export type SessionContext = {
   guardBusy: () => boolean;
   getCoworkPaths: () => ReturnType<typeof getAiCoworkerPaths>;
   runProviderConnect: (opts: Parameters<typeof connectModelProvider>[0]) => Promise<ConnectProviderResult>;
-  getMcpServerByName?: (nameRaw: string) => Promise<MCPRegistryServer | null>;
+  getMcpServerByName: (nameRaw: string) => Promise<MCPRegistryServer | null>;
   queuePersistSessionSnapshot: (reason: string) => void;
   updateSessionInfo: (
     patch: Partial<{

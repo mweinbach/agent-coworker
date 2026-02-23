@@ -143,4 +143,51 @@ describe("codex auth token response parsing", () => {
       }),
     ).rejects.toThrow("Codex token refresh response missing access_token.");
   });
+
+  test("refreshCodexAuthMaterial preserves existing refresh/id tokens when omitted by refresh response", async () => {
+    const authDir = await makeTmpAuthDir();
+    const material = {
+      file: path.join(authDir, "codex-cli", "auth.json"),
+      issuer: CODEX_OAUTH_ISSUER,
+      clientId: CODEX_OAUTH_CLIENT_ID,
+      accessToken: makeJwt({ exp: 1_750_000_000 }),
+      refreshToken: "refresh-token-existing",
+      idToken: makeJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-existing",
+          chatgpt_plan_type: "enterprise",
+        },
+        "https://api.openai.com/profile": {
+          email: "existing@example.com",
+        },
+      }),
+      accountId: "acct-existing",
+      email: "existing@example.com",
+      planType: "enterprise",
+    };
+
+    const refreshed = await refreshCodexAuthMaterial({
+      paths: { authDir },
+      material,
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ access_token: makeJwt({ exp: 1_760_000_000 }), expires_in: 60 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+
+    expect(refreshed.refreshToken).toBe("refresh-token-existing");
+    expect(refreshed.idToken).toBe(material.idToken);
+    expect(refreshed.accountId).toBe("acct-existing");
+    expect(refreshed.email).toBe("existing@example.com");
+    expect(refreshed.planType).toBe("enterprise");
+
+    const persistedRaw = await fs.readFile(path.join(authDir, "codex-cli", "auth.json"), "utf-8");
+    const persisted = JSON.parse(persistedRaw);
+    expect(persisted.tokens.refresh_token).toBe("refresh-token-existing");
+    expect(persisted.tokens.id_token).toBe(material.idToken);
+    expect(persisted.account.account_id).toBe("acct-existing");
+    expect(persisted.account.email).toBe("existing@example.com");
+    expect(persisted.account.plan_type).toBe("enterprise");
+  });
 });

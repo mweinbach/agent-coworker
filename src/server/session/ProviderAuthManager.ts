@@ -97,10 +97,7 @@ export class ProviderAuthManager {
   }
 
   async authorizeProviderAuth(providerRaw: AgentConfig["provider"], methodIdRaw: string) {
-    if (this.opts.isRunning()) {
-      this.opts.emitError("busy", "session", "Agent is busy");
-      return;
-    }
+    if (!this.opts.guardBusy()) return;
     if (!isProviderName(providerRaw)) {
       this.opts.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
       return;

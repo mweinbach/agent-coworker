@@ -160,15 +160,13 @@ export class AgentSession {
       this.deps.harnessContextStore.set(this.id, hydrated.harnessContext);
     }
 
-    let metadataManagerForTelemetry: SessionMetadataManager | null = null;
     this.runtimeSupport = new SessionRuntimeSupport({
       sessionId: this.id,
       state: this.state,
       deps: this.deps,
       emit: (evt) => opts.emit(evt),
       emitObservabilityStatusChanged: () => {
-        if (!metadataManagerForTelemetry) return;
-        opts.emit(metadataManagerForTelemetry.getObservabilityStatusEvent());
+        opts.emit(this.metadataManager.getObservabilityStatusEvent());
       },
     });
 
@@ -203,7 +201,6 @@ export class AgentSession {
       waitForPromptResponse: (requestId, bucket) => this.waitForPromptResponse(requestId, bucket),
     });
     this.metadataManager = new SessionMetadataManager(this.context);
-    metadataManagerForTelemetry = this.metadataManager;
     this.snapshotBuilder = new SessionSnapshotBuilder({
       sessionId: this.id,
       state: this.state,

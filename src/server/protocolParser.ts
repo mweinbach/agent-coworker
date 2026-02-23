@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { parseMCPServersDocument } from "../mcp/configRegistry";
+import { parseMCPServerConfig, parseMCPServersDocument } from "../mcp/configRegistry";
 import { resolveProviderAuthMethod } from "../providers/authRegistry";
 import { isProviderName } from "../types";
 
@@ -463,6 +463,110 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   uploadFileSchema,
 ] as [z.ZodObject<any>, ...z.ZodObject<any>[]]);
 
+type ParsedClientMessage = z.infer<typeof clientMessageSchema>;
+
+function normalizeClientMessage(parsed: ParsedClientMessage): ClientMessage {
+  switch (parsed.type) {
+    case "set_model": {
+      const { provider } = parsed;
+      if (provider !== undefined && !isProviderName(provider)) {
+        throw new Error(`set_model invalid provider: ${String(provider)}`);
+      }
+      return {
+        type: "set_model",
+        sessionId: parsed.sessionId,
+        model: parsed.model,
+        ...(provider !== undefined ? { provider } : {}),
+      };
+    }
+    case "provider_auth_authorize": {
+      if (!isProviderName(parsed.provider)) {
+        throw new Error("provider_auth_authorize missing/invalid provider");
+      }
+      if (!nonEmptyTrimmedStringSchema.safeParse(parsed.methodId).success) {
+        throw new Error("provider_auth_authorize missing/invalid methodId");
+      }
+      return {
+        type: "provider_auth_authorize",
+        sessionId: parsed.sessionId,
+        provider: parsed.provider,
+        methodId: parsed.methodId,
+      };
+    }
+    case "provider_auth_callback": {
+      if (!isProviderName(parsed.provider)) {
+        throw new Error("provider_auth_callback missing/invalid provider");
+      }
+      if (!nonEmptyTrimmedStringSchema.safeParse(parsed.methodId).success) {
+        throw new Error("provider_auth_callback missing/invalid methodId");
+      }
+      if (parsed.code !== undefined && typeof parsed.code !== "string") {
+        throw new Error("provider_auth_callback invalid code");
+      }
+      return {
+        type: "provider_auth_callback",
+        sessionId: parsed.sessionId,
+        provider: parsed.provider,
+        methodId: parsed.methodId,
+        ...(parsed.code !== undefined ? { code: parsed.code } : {}),
+      };
+    }
+    case "provider_auth_set_api_key": {
+      if (!isProviderName(parsed.provider)) {
+        throw new Error("provider_auth_set_api_key missing/invalid provider");
+      }
+      if (!nonEmptyTrimmedStringSchema.safeParse(parsed.methodId).success) {
+        throw new Error("provider_auth_set_api_key missing/invalid methodId");
+      }
+      if (!nonEmptyTrimmedStringSchema.safeParse(parsed.apiKey).success) {
+        throw new Error("provider_auth_set_api_key missing/invalid apiKey");
+      }
+      return {
+        type: "provider_auth_set_api_key",
+        sessionId: parsed.sessionId,
+        provider: parsed.provider,
+        methodId: parsed.methodId,
+        apiKey: parsed.apiKey,
+      };
+    }
+    case "mcp_server_upsert": {
+      if (parsed.previousName !== undefined && !nonEmptyTrimmedStringSchema.safeParse(parsed.previousName).success) {
+        throw new Error("mcp_server_upsert invalid previousName");
+      }
+      return {
+        type: "mcp_server_upsert",
+        sessionId: parsed.sessionId,
+        server: parseMCPServerConfig(parsed.server),
+        ...(parsed.previousName !== undefined ? { previousName: parsed.previousName } : {}),
+      };
+    }
+    case "harness_context_set": {
+      const parsedContext = harnessContextSchema.safeParse(parsed.context);
+      if (!parsedContext.success) {
+        throw new Error("harness_context_set missing/invalid context");
+      }
+      return {
+        type: "harness_context_set",
+        sessionId: parsed.sessionId,
+        context: parsedContext.data,
+      };
+    }
+    case "set_config": {
+      const parsedConfig = setConfigPayloadSchema.safeParse(parsed.config);
+      if (!parsedConfig.success) {
+        throw new Error("set_config missing/invalid config");
+      }
+      return {
+        type: "set_config",
+        sessionId: parsed.sessionId,
+        config: parsedConfig.data,
+      };
+    }
+    default:
+      return parsed;
+  }
+}
+
 export function safeParseClientMessage(raw: string): ParseResult {
   let parsed: unknown;
   try {
@@ -479,5 +583,10 @@ export function safeParseClientMessage(raw: string): ParseResult {
 
   const parsedMessage = clientMessageSchema.safeParse(obj);
   if (!parsedMessage.success) return err(firstIssueMessage(parsedMessage.error, obj.type));
-  return ok(parsedMessage.data as ClientMessage);
+  try {
+    return ok(normalizeClientMessage(parsedMessage.data));
+  } catch (normalizeError) {
+    const message = normalizeError instanceof Error ? normalizeError.message : "validation_failed";
+    return err(message || "validation_failed");
+  }
 }

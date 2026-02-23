@@ -2909,6 +2909,38 @@ describe("AgentSession", () => {
       }
     });
 
+    test("structured error code/source is routed without message matching", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw { code: "provider_error", source: "provider", message: "Token exchange failed" };
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("provider_error");
+        expect(errorEvt.source).toBe("provider");
+      }
+    });
+
+    test("structured error code without source falls back to default source mapping", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw { code: "permission_denied", message: "Denied" };
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("permission_denied");
+        expect(errorEvt.source).toBe("permissions");
+      }
+    });
+
     test("unclassified error maps to internal_error / session", async () => {
       mockRunTurn.mockImplementation(async () => {
         throw new Error("Something completely unexpected happened");

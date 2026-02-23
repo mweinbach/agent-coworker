@@ -1,5 +1,11 @@
 import { z } from "zod";
 import { normalizeModelStreamPart, reasoningModeForProvider } from "../modelStream";
+import {
+  SERVER_ERROR_CODES,
+  SERVER_ERROR_SOURCES,
+  type ServerErrorCode,
+  type ServerErrorSource,
+} from "../../types";
 import type { HistoryManager } from "./HistoryManager";
 import type { InteractionManager } from "./InteractionManager";
 import type { SessionBackupController } from "./SessionBackupController";
@@ -12,6 +18,47 @@ const assistantMessageContentPartSchema = z.object({
   text: z.string(),
 }).passthrough();
 const errorWithCodeSchema = z.object({ code: z.unknown() }).passthrough();
+const errorWithCodeAndSourceSchema = z.object({
+  code: z.string(),
+  source: z.string().optional(),
+}).passthrough();
+const serverErrorCodeSet = new Set<string>(SERVER_ERROR_CODES);
+const serverErrorSourceSet = new Set<string>(SERVER_ERROR_SOURCES);
+const defaultSourceByErrorCode: Partial<Record<ServerErrorCode, ServerErrorSource>> = {
+  busy: "session",
+  validation_failed: "session",
+  permission_denied: "permissions",
+  provider_error: "provider",
+  backup_error: "backup",
+  observability_error: "observability",
+  internal_error: "session",
+};
+
+type ClassifiedTurnError = { code: ServerErrorCode; source: ServerErrorSource };
+
+function isServerErrorCode(value: string): value is ServerErrorCode {
+  return serverErrorCodeSet.has(value);
+}
+
+function isServerErrorSource(value: string): value is ServerErrorSource {
+  return serverErrorSourceSet.has(value);
+}
+
+function classifyStructuredTurnError(err: unknown): ClassifiedTurnError | null {
+  const parsed = errorWithCodeAndSourceSchema.safeParse(err);
+  if (!parsed.success) return null;
+
+  const { code, source } = parsed.data;
+  if (!isServerErrorCode(code)) return null;
+  if (source && isServerErrorSource(source)) {
+    return { code, source };
+  }
+
+  return {
+    code,
+    source: defaultSourceByErrorCode[code] ?? "session",
+  };
+}
 
 function makeId(): string {
   return crypto.randomUUID();
@@ -225,7 +272,10 @@ export class TurnExecutionManager {
     this.deps.interactionManager.rejectAllPending("Cancelled by user");
   }
 
-  private classifyTurnError(err: unknown): { code: import("../../types").ServerErrorCode; source: import("../../types").ServerErrorSource } {
+  private classifyTurnError(err: unknown): ClassifiedTurnError {
+    const structured = classifyStructuredTurnError(err);
+    if (structured) return structured;
+
     const message = this.context.formatError(err);
     const m = message.toLowerCase();
     const includesAny = (...needles: string[]) => needles.some((needle) => m.includes(needle));

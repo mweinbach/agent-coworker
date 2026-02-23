@@ -85,6 +85,7 @@ function makeBaseContext(): SessionContext {
     guardBusy: () => true,
     getCoworkPaths: () => ({ sessionsDir: "/tmp/sessions" } as any),
     runProviderConnect: async () => ({ ok: true, provider: "google", mode: "api_key", message: "ok" } as any),
+    getMcpServerByName: async () => null,
     queuePersistSessionSnapshot: () => {},
     updateSessionInfo: () => {},
     emitConfigUpdated: () => {},

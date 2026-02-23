@@ -22,7 +22,8 @@
     "build:desktop-resources": "bun scripts/build_desktop_resources.ts",
     "docs:check": "bun scripts/check_docs.ts",
     "harness:run": "bun scripts/run_raw_agent_loops.ts --report-only",
-    "test": "bun test"
+    "test": "bun test",
+    "test:stable": "bun scripts/run_tests_stable.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.46",

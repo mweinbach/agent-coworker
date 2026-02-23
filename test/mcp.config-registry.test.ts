@@ -33,7 +33,7 @@ async function writeJson(filePath: string, value: unknown) {
 }
 
 describe("mcp config registry", () => {
-  test("workspace/user/system precedence ignores legacy layers", async () => {
+  test("workspace/user/system precedence includes legacy layers at lower priority", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-home-"));
     const builtInDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-builtin-"));
@@ -55,10 +55,22 @@ describe("mcp config registry", () => {
       });
 
       const snapshot = await loadMCPConfigRegistry(config);
+
+      // workspace still wins for "shared" due to higher precedence
       const shared = snapshot.servers.find((server) => server.name === "shared");
       expect(shared?.source).toBe("workspace");
-      expect(snapshot.servers.some((server) => server.name === "legacy-ws")).toBe(false);
+
+      // legacy-ws is now included from workspace_legacy
+      const legacyWs = snapshot.servers.find((server) => server.name === "legacy-ws");
+      expect(legacyWs).toBeTruthy();
+      expect(legacyWs?.source).toBe("workspace_legacy");
+      expect(legacyWs?.inherited).toBe(false);
+
+      // legacy file metadata is accurate
       expect(snapshot.legacy.workspace.exists).toBe(true);
+      const legacyFile = snapshot.files.find((f) => f.source === "workspace_legacy");
+      expect(legacyFile?.exists).toBe(true);
+      expect(legacyFile?.serverCount).toBe(1);
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });
@@ -172,6 +184,58 @@ describe("mcp config registry", () => {
       expect(names).toContain("server-a");
       expect(names).toContain("server-b");
       expect(names.filter((n) => n === "server-b")).toHaveLength(1);
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("new-format config overrides legacy for same server name", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-override-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-override-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-override-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      await writeJson(path.join(workspace, ".agent", "mcp-servers.json"), {
+        servers: [{ name: "my-server", transport: { type: "stdio", command: "legacy-cmd" } }],
+      });
+      await writeJson(path.join(workspace, ".cowork", "mcp-servers.json"), {
+        servers: [{ name: "my-server", transport: { type: "stdio", command: "new-cmd" } }],
+      });
+
+      const snapshot = await loadMCPConfigRegistry(config);
+      const server = snapshot.servers.find((s) => s.name === "my-server");
+      expect(server?.source).toBe("workspace");
+      expect((server?.transport as { command: string }).command).toBe("new-cmd");
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(builtInConfigDir, { recursive: true, force: true });
+    }
+  });
+
+  test("user legacy servers are included when no user new-format equivalent exists", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-user-legacy-"));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-user-legacy-home-"));
+    const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-registry-user-legacy-builtin-"));
+    const config = makeConfig(workspace, home, builtInConfigDir);
+
+    try {
+      await writeJson(path.join(home, ".agent", "mcp-servers.json"), {
+        servers: [{ name: "user-legacy-server", transport: { type: "stdio", command: "user-legacy-cmd" } }],
+      });
+
+      const snapshot = await loadMCPConfigRegistry(config);
+      const server = snapshot.servers.find((s) => s.name === "user-legacy-server");
+      expect(server).toBeTruthy();
+      expect(server?.source).toBe("user_legacy");
+      expect(server?.inherited).toBe(true);
+
+      const legacyFile = snapshot.files.find((f) => f.source === "user_legacy");
+      expect(legacyFile?.exists).toBe(true);
+      expect(legacyFile?.serverCount).toBe(1);
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

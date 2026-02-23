@@ -64,7 +64,7 @@ async function readLayer(opts: {
 }
 
 function mergeLayers(layers: MCPConfigLayer[]): MCPRegistryServer[] {
-  const precedence: MCPServerSource[] = ["system", "user", "workspace"];
+  const precedence: MCPServerSource[] = ["system", "user_legacy", "user", "workspace_legacy", "workspace"];
   const bySource = new Map(layers.map((layer) => [layer.source, layer]));
   const mergedByName = new Map<string, MCPRegistryServer>();
 
@@ -75,24 +75,12 @@ function mergeLayers(layers: MCPConfigLayer[]): MCPRegistryServer[] {
       mergedByName.set(server.name, {
         ...server,
         source,
-        inherited: source !== "workspace",
+        inherited: source !== "workspace" && source !== "workspace_legacy",
       });
     }
   }
 
   return [...mergedByName.values()].sort((a, b) => a.name.localeCompare(b.name));
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch (error) {
-    const parsedCode = errorWithCodeSchema.safeParse(error);
-    const code = parsedCode.success ? parsedCode.data.code : undefined;
-    if (code === "ENOENT") return false;
-    throw error;
-  }
 }
 
 export async function loadMCPConfigRegistry(config: AgentConfig): Promise<MCPConfigRegistrySnapshot> {
@@ -102,49 +90,33 @@ export async function loadMCPConfigRegistry(config: AgentConfig): Promise<MCPCon
     readLayer({ source: "workspace", filePath: paths.workspaceConfigFile, editable: true, legacy: false }),
     readLayer({ source: "user", filePath: paths.userConfigFile, editable: false, legacy: false }),
     readLayer({ source: "system", filePath: paths.systemConfigFile, editable: false, legacy: false }),
-  ]);
-  const [workspaceLegacyExists, userLegacyExists] = await Promise.all([
-    fileExists(paths.workspaceLegacyFile),
-    fileExists(paths.userLegacyFile),
+    readLayer({ source: "workspace_legacy", filePath: paths.workspaceLegacyFile, editable: false, legacy: true }),
+    readLayer({ source: "user_legacy", filePath: paths.userLegacyFile, editable: false, legacy: true }),
   ]);
 
   const warnings = layers
     .filter((layer) => Boolean(layer.file.parseError))
     .map((layer) => `[MCP] Ignoring malformed ${layer.source} config at ${layer.file.path}: ${layer.file.parseError}`);
 
-  const files = [
-    layers.find((layer) => layer.source === "workspace")?.file,
-    layers.find((layer) => layer.source === "user")?.file,
-    layers.find((layer) => layer.source === "system")?.file,
-    {
-      source: "workspace_legacy" as const,
-      path: paths.workspaceLegacyFile,
-      exists: workspaceLegacyExists,
-      editable: false,
-      legacy: true,
-      serverCount: 0,
-    },
-    {
-      source: "user_legacy" as const,
-      path: paths.userLegacyFile,
-      exists: userLegacyExists,
-      editable: false,
-      legacy: true,
-      serverCount: 0,
-    },
-  ].filter((file): file is MCPRegistryFileState => Boolean(file));
+  const fileForSource = (source: MCPServerSource) => layers.find((layer) => layer.source === source)!.file;
 
   return {
     servers: mergeLayers(layers),
-    files,
+    files: [
+      fileForSource("workspace"),
+      fileForSource("user"),
+      fileForSource("system"),
+      fileForSource("workspace_legacy"),
+      fileForSource("user_legacy"),
+    ],
     legacy: {
       workspace: {
         path: paths.workspaceLegacyFile,
-        exists: workspaceLegacyExists,
+        exists: fileForSource("workspace_legacy").exists,
       },
       user: {
         path: paths.userLegacyFile,
-        exists: userLegacyExists,
+        exists: fileForSource("user_legacy").exists,
       },
     },
     warnings,

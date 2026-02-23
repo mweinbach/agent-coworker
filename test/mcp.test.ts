@@ -145,7 +145,7 @@ describe("workspace mcp document", () => {
 });
 
 describe("mcp layered snapshot", () => {
-  test("readMCPServersSnapshot merges workspace/user/system and ignores legacy layers", async () => {
+  test("readMCPServersSnapshot merges all layers including legacy at lower priority", async () => {
     const tmpWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-snapshot-workspace-"));
     const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-snapshot-home-"));
     const builtInDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-snapshot-builtin-"));
@@ -171,10 +171,14 @@ describe("mcp layered snapshot", () => {
       const names = snapshot.servers.map((server) => server.name);
       expect(names).toContain("shared");
       expect(names).toContain("workspace");
-      expect(names).not.toContain("legacy-ws");
+      expect(names).toContain("legacy-ws");
 
       const shared = snapshot.servers.find((server) => server.name === "shared");
       expect(shared?.source).toBe("workspace");
+
+      const legacyWs = snapshot.servers.find((server) => server.name === "legacy-ws");
+      expect(legacyWs?.source).toBe("workspace_legacy");
+
       expect(snapshot.legacy.workspace.exists).toBe(true);
     } finally {
       await fs.rm(tmpWorkspace, { recursive: true, force: true });

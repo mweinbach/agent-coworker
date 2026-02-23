@@ -1,5 +1,6 @@
 import { createContext, useContext, createEffect, onCleanup, type JSX, type Accessor } from "solid-js";
 import { createStore, produce } from "solid-js/store";
+import { z } from "zod";
 import { AgentSocket } from "../../../src/client/agentSocket";
 import { parseStructuredToolInput } from "../../../src/shared/structuredInput";
 import { WEBSOCKET_PROTOCOL_VERSION, type ServerEvent } from "../../../src/server/protocol";
@@ -142,33 +143,68 @@ type ServerHelloEvent = Extract<ServerEvent, { type: "server_hello" }>;
 
 // ── Tool log parser ──────────────────────────────────────────────────────────
 
-type ParsedToolLog = { sub?: string; dir: ">" | "<"; name: string; payload: any };
+type ParsedToolLog = { sub?: string; dir: ">" | "<"; name: string; payload: Record<string, unknown> };
+
+const recordSchema = z.record(z.string(), z.unknown());
+const unknownArraySchema = z.array(z.unknown());
+const finiteNumberSchema = z.number().finite();
+const toolLogLineRegex = /^(?:\[(?<sub>sub:[^\]]+)\]\s+)?tool(?<dir>[><])\s+(?<name>[A-Za-z0-9_.:-]+)\s+(?<payload>\{.*\})$/;
+const toolLogMatchSchema = z.object({
+  sub: z.string().optional(),
+  dir: z.enum([">", "<"]),
+  name: z.string().trim().min(1).regex(/^[A-Za-z0-9_.:-]+$/),
+  payload: z.string().trim().min(2),
+}).strict();
+const jsonObjectTextSchema = z.string().transform((value, ctx) => {
+  try {
+    return JSON.parse(value);
+  } catch {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Invalid JSON object text",
+    });
+    return z.NEVER;
+  }
+}).pipe(recordSchema);
+const usageValueSchema = z.number().finite().nullable().optional();
+const usageSnapshotInputSchema = z.object({
+  inputTokens: usageValueSchema,
+  promptTokens: usageValueSchema,
+  outputTokens: usageValueSchema,
+  completionTokens: usageValueSchema,
+  totalTokens: usageValueSchema,
+}).passthrough();
+const toolDescriptorSchema = z.object({
+  name: z.string().trim().min(1),
+  description: z.string().trim().min(1),
+}).strict();
 
 function parseToolLogLine(line: string): ParsedToolLog | null {
-  const m = line.match(
-    /^(?:\[(?<sub>sub:[^\]]+)\]\s+)?tool(?<dir>[><])\s+(?<name>\w+)\s+(?<json>\{.*\})$/
-  );
-  if (!m?.groups) return null;
+  const match = toolLogLineRegex.exec(line);
+  if (!match?.groups) return null;
 
-  const sub = m.groups.sub;
-  const dir = m.groups.dir as ">" | "<";
-  const name = m.groups.name!;
-  const rawJson = m.groups.json!;
+  const parsedMatch = toolLogMatchSchema.safeParse({
+    sub: match.groups.sub,
+    dir: match.groups.dir,
+    name: match.groups.name,
+    payload: match.groups.payload,
+  });
+  if (!parsedMatch.success) return null;
 
-  let payload: any = rawJson;
-  try {
-    payload = JSON.parse(rawJson);
-  } catch {
-    // keep as string
-  }
-  return { sub, dir, name, payload };
+  const parsedPayload = jsonObjectTextSchema.safeParse(parsedMatch.data.payload);
+  if (!parsedPayload.success) return null;
+
+  return {
+    sub: parsedMatch.data.sub,
+    dir: parsedMatch.data.dir,
+    name: parsedMatch.data.name,
+    payload: parsedPayload.data,
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return null;
+  const parsed = recordSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 function previewValue(value: unknown, maxChars = 160): string {
@@ -186,42 +222,21 @@ function previewValue(value: unknown, maxChars = 160): string {
   }
 }
 
-function toFiniteNumber(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return value;
-}
-
-function pickUsageNumber(record: Record<string, unknown>, keys: readonly string[]): number | null {
-  for (const key of keys) {
-    const parsed = toFiniteNumber(record[key]);
-    if (parsed !== null) return parsed;
+function firstFiniteNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = finiteNumberSchema.safeParse(value);
+    if (parsed.success) return parsed.data;
   }
   return null;
 }
 
 function extractUsageSnapshot(value: unknown): ContextUsageSnapshot | null {
-  const usage = asRecord(value);
-  if (!usage) return null;
+  const usage = usageSnapshotInputSchema.safeParse(value);
+  if (!usage.success) return null;
 
-  const inputTokens = pickUsageNumber(usage, [
-    "inputTokens",
-    "promptTokens",
-    "requestTokens",
-    "input",
-    "prompt",
-  ]);
-  const outputTokens = pickUsageNumber(usage, [
-    "outputTokens",
-    "completionTokens",
-    "responseTokens",
-    "output",
-    "completion",
-  ]);
-  let totalTokens = pickUsageNumber(usage, [
-    "totalTokens",
-    "tokenCount",
-    "total",
-  ]);
+  const inputTokens = firstFiniteNumber(usage.data.inputTokens, usage.data.promptTokens);
+  const outputTokens = firstFiniteNumber(usage.data.outputTokens, usage.data.completionTokens);
+  let totalTokens = firstFiniteNumber(usage.data.totalTokens);
 
   if (totalTokens === null && inputTokens !== null && outputTokens !== null) {
     totalTokens = inputTokens + outputTokens;
@@ -235,24 +250,16 @@ function extractUsageSnapshot(value: unknown): ContextUsageSnapshot | null {
 }
 
 function normalizeToolDescriptor(value: unknown): ToolDescriptor | null {
-  if (typeof value === "string") {
-    const name = value.trim();
-    if (!name) return null;
-    return { name, description: name };
-  }
-
-  const raw = asRecord(value);
-  if (!raw) return null;
-  const name = typeof raw.name === "string" ? raw.name.trim() : "";
-  if (!name) return null;
-  const descriptionRaw = typeof raw.description === "string" ? raw.description.trim() : "";
-  return { name, description: descriptionRaw || name };
+  const parsed = toolDescriptorSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 function normalizeToolsPayload(value: unknown): ToolDescriptor[] {
-  if (!Array.isArray(value)) return [];
+  const parsed = unknownArraySchema.safeParse(value);
+  if (!parsed.success) return [];
+
   const normalized: ToolDescriptor[] = [];
-  for (const entry of value) {
+  for (const entry of parsed.data) {
     const tool = normalizeToolDescriptor(entry);
     if (tool) normalized.push(tool);
   }
@@ -260,12 +267,13 @@ function normalizeToolsPayload(value: unknown): ToolDescriptor[] {
 }
 
 function normalizeToolArgsFromInput(inputText: string, existingArgs?: unknown): unknown {
-  const parsed = parseStructuredToolInput(inputText);
+  const parsedInput = parseStructuredToolInput(inputText);
   const base = asRecord(existingArgs) ?? {};
   const { input: _discardInput, ...rest } = base;
 
-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-    return { ...rest, ...(parsed as Record<string, unknown>) };
+  const structuredInput = asRecord(parsedInput);
+  if (structuredInput) {
+    return { ...rest, ...structuredInput };
   }
 
   if (Object.keys(rest).length > 0) {

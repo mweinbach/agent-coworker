@@ -78,8 +78,16 @@ export type ParseResult = ParseOk | ParseErr;
 const ok = (msg: ClientMessage): ParseOk => ({ ok: true, msg });
 const err = (error: string): ParseErr => ({ ok: false, error });
 
-function firstIssueMessage(error: z.ZodError): string {
+function firstIssueMessage(error: z.ZodError, rawType?: string): string {
   const issue = error.issues[0];
+  if (
+    issue?.code === "invalid_union"
+    && issue.path.length === 1
+    && issue.path[0] === "type"
+    && typeof rawType === "string"
+  ) {
+    return `Unknown type: ${rawType}`;
+  }
   return issue?.message || "validation_failed";
 }
 
@@ -482,33 +490,33 @@ const uploadFileSchema = schemaWithType("upload_file", {
   contentBase64: requiredString("upload_file missing/invalid contentBase64"),
 });
 
-const clientMessageSchemas = {
-  ...sessionOnlySchemas,
-  ...sessionAndSkillNameSchemas,
-  ...sessionAndNameSchemas,
-  client_hello: clientHelloSchema,
-  user_message: userMessageSchema,
-  ask_response: askResponseSchema,
-  approval_response: approvalResponseSchema,
-  execute_command: executeCommandSchema,
-  set_model: setModelSchema,
-  provider_auth_authorize: providerAuthAuthorizeSchema,
-  provider_auth_callback: providerAuthCallbackSchema,
-  provider_auth_set_api_key: providerAuthSetApiKeySchema,
-  set_enable_mcp: setEnableMcpSchema,
-  mcp_server_upsert: mcpServerUpsertSchema,
-  mcp_server_auth_callback: mcpServerAuthCallbackSchema,
-  mcp_server_auth_set_api_key: mcpServerAuthSetApiKeySchema,
-  mcp_servers_migrate_legacy: mcpServersMigrateLegacySchema,
-  harness_context_set: harnessContextSetSchema,
-  session_backup_restore: sessionBackupRestoreSchema,
-  session_backup_delete_checkpoint: sessionBackupDeleteCheckpointSchema,
-  get_messages: getMessagesSchema,
-  set_session_title: setSessionTitleSchema,
-  delete_session: deleteSessionSchema,
-  set_config: setConfigSchema,
-  upload_file: uploadFileSchema,
-} as Record<string, z.ZodTypeAny>;
+const clientMessageSchema = z.discriminatedUnion("type", [
+  ...Object.values(sessionOnlySchemas),
+  ...Object.values(sessionAndSkillNameSchemas),
+  ...Object.values(sessionAndNameSchemas),
+  clientHelloSchema,
+  userMessageSchema,
+  askResponseSchema,
+  approvalResponseSchema,
+  executeCommandSchema,
+  setModelSchema,
+  providerAuthAuthorizeSchema,
+  providerAuthCallbackSchema,
+  providerAuthSetApiKeySchema,
+  setEnableMcpSchema,
+  mcpServerUpsertSchema,
+  mcpServerAuthCallbackSchema,
+  mcpServerAuthSetApiKeySchema,
+  mcpServersMigrateLegacySchema,
+  harnessContextSetSchema,
+  sessionBackupRestoreSchema,
+  sessionBackupDeleteCheckpointSchema,
+  getMessagesSchema,
+  setSessionTitleSchema,
+  deleteSessionSchema,
+  setConfigSchema,
+  uploadFileSchema,
+] as [z.ZodObject<any>, ...z.ZodObject<any>[]]);
 
 export function safeParseClientMessage(raw: string): ParseResult {
   let parsed: unknown;
@@ -524,10 +532,7 @@ export function safeParseClientMessage(raw: string): ParseResult {
   const obj = parsedObject.data;
   if (typeof obj.type !== "string") return err("Missing type");
 
-  const schema = clientMessageSchemas[obj.type];
-  if (!schema) return err(`Unknown type: ${String(obj.type)}`);
-
-  const parsedMessage = schema.safeParse(obj);
-  if (!parsedMessage.success) return err(firstIssueMessage(parsedMessage.error));
+  const parsedMessage = clientMessageSchema.safeParse(obj);
+  if (!parsedMessage.success) return err(firstIssueMessage(parsedMessage.error, obj.type));
   return ok(parsedMessage.data as ClientMessage);
 }

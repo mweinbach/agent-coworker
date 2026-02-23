@@ -1,12 +1,23 @@
-import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { z } from "zod";
 
 import { ensureAiCoworkerHome, getAiCoworkerPaths } from "../connect";
+import { workspaceFingerprint } from "./sessionBackup/fingerprint";
+import {
+  copyDirectoryContents,
+  emptyDirectory,
+  ensureSecureDirectory,
+  ensureWorkingDirectory,
+  isPathWithin,
+} from "./sessionBackup/fileSystem";
+import {
+  readMetadata,
+  type SessionBackupMetadata,
+  type SessionBackupMetadataCheckpoint,
+  writeJson,
+} from "./sessionBackup/metadata";
+import { createSnapshotWithTarFallback, restoreSnapshot, snapshotByteSize } from "./sessionBackup/snapshot";
 
 export type SessionBackupCheckpointTrigger = "auto" | "manual";
 
@@ -46,61 +57,6 @@ export interface SessionBackupHandle {
 }
 
 // ---------------------------------------------------------------------------
-// Internal types
-// ---------------------------------------------------------------------------
-
-type SessionBackupMetadataCheckpoint = SessionBackupPublicCheckpoint & {
-  fingerprint: string;
-  snapshot: {
-    kind: "directory" | "tar_gz";
-    path: string;
-  };
-};
-
-type SessionBackupMetadata = {
-  version: 1;
-  sessionId: string;
-  workingDirectory: string;
-  createdAt: string;
-  state: "active" | "closed";
-  closedAt?: string;
-  originalSnapshot: {
-    kind: "directory" | "tar_gz";
-    path: string;
-  };
-  checkpoints: SessionBackupMetadataCheckpoint[];
-};
-
-const snapshotRefSchema = z.object({
-  kind: z.enum(["directory", "tar_gz"]),
-  path: z.string().min(1),
-});
-
-const sessionBackupMetadataCheckpointSchema = z.object({
-  id: z.string().min(1),
-  index: z.number(),
-  createdAt: z.string().min(1),
-  trigger: z.enum(["auto", "manual"]),
-  changed: z.boolean(),
-  patchBytes: z.number(),
-  fingerprint: z.string().min(1),
-  snapshot: snapshotRefSchema,
-}).passthrough();
-
-const sessionBackupMetadataSchema = z.object({
-  version: z.literal(1),
-  sessionId: z.string().min(1),
-  workingDirectory: z.string().min(1),
-  createdAt: z.string().min(1),
-  state: z.enum(["active", "closed"]),
-  closedAt: z.string().optional(),
-  originalSnapshot: snapshotRefSchema,
-  checkpoints: z.array(sessionBackupMetadataCheckpointSchema),
-}).passthrough();
-const errorMessageSchema = z.object({ message: z.string() }).passthrough();
-const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
-
-// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -117,270 +73,6 @@ const DEFAULT_MAX_CLOSED_AGE_DAYS = 7;
 
 function makeCheckpointId(index: number): string {
   return `cp-${String(index).padStart(4, "0")}`;
-}
-
-function isPathWithin(parent: string, candidate: string): boolean {
-  const relative = path.relative(parent, candidate);
-  if (!relative) return true;
-  if (relative.startsWith("..")) return false;
-  return !path.isAbsolute(relative);
-}
-
-type CommandResult = { exitCode: number | null; stdout: string; stderr: string };
-
-async function runCommand(
-  command: string,
-  args: string[],
-  opts: { cwd?: string } = {}
-): Promise<CommandResult> {
-  let child: ReturnType<typeof spawn>;
-  try {
-    child = spawn(command, args, {
-      cwd: opts.cwd,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-  } catch (err) {
-    return { exitCode: 127, stdout: "", stderr: String(err) };
-  }
-
-  const stdoutChunks: Uint8Array[] = [];
-  const stderrChunks: Uint8Array[] = [];
-
-  const stdoutPromise = (async () => {
-    if (!child.stdout) return;
-    for await (const chunk of child.stdout) stdoutChunks.push(chunk);
-  })();
-
-  const stderrPromise = (async () => {
-    if (!child.stderr) return;
-    for await (const chunk of child.stderr) stderrChunks.push(chunk);
-  })();
-
-  let spawnErr: unknown = null;
-  const closePromise = new Promise<number | null>((resolve) => {
-    child.once("error", (err) => {
-      spawnErr = err;
-      resolve(127);
-    });
-    child.once("close", (exitCode) => resolve(exitCode));
-  });
-
-  child.stdin?.end();
-
-  const [exitCode] = await Promise.all([closePromise, stdoutPromise, stderrPromise]);
-
-  const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
-  const stderrBase = Buffer.concat(stderrChunks).toString("utf-8");
-  const parsedErrorMessage = errorMessageSchema.safeParse(spawnErr);
-  const spawnErrorMessage = parsedErrorMessage.success ? parsedErrorMessage.data.message : spawnErr;
-  const stderr = spawnErr ? `${stderrBase}\n${String(spawnErrorMessage)}`.trim() : stderrBase;
-
-  return { exitCode, stdout, stderr };
-}
-
-async function ensureSecureDirectory(p: string): Promise<void> {
-  await fs.mkdir(p, { recursive: true, mode: 0o700 });
-  try {
-    await fs.chmod(p, 0o700);
-  } catch {
-    // best effort only
-  }
-}
-
-async function ensureWorkingDirectory(workingDirectory: string): Promise<void> {
-  try {
-    const st = await fs.stat(workingDirectory);
-    if (!st.isDirectory()) throw new Error(`Working directory is not a directory: ${workingDirectory}`);
-  } catch {
-    await fs.mkdir(workingDirectory, { recursive: true });
-  }
-}
-
-async function emptyDirectory(dir: string): Promise<void> {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    await fs.rm(path.join(dir, entry.name), { recursive: true, force: true });
-  }
-}
-
-async function ensureDirectory(dir: string): Promise<void> {
-  await fs.mkdir(dir, { recursive: true });
-}
-
-async function copyDirectory(sourceDir: string, destinationDir: string): Promise<void> {
-  await fs.rm(destinationDir, { recursive: true, force: true });
-  await fs.cp(sourceDir, destinationDir, { recursive: true, force: true, errorOnExist: false });
-}
-
-async function copyDirectoryContents(sourceDir: string, destinationDir: string): Promise<void> {
-  await ensureDirectory(destinationDir);
-  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
-  for (const entry of entries) {
-    const sourcePath = path.join(sourceDir, entry.name);
-    const destinationPath = path.join(destinationDir, entry.name);
-    await fs.cp(sourcePath, destinationPath, { recursive: true, force: true, errorOnExist: false });
-  }
-}
-
-async function directoryByteSize(rootDir: string): Promise<number> {
-  let total = 0;
-  const entries = await fs.readdir(rootDir, { withFileTypes: true });
-  for (const entry of entries) {
-    const entryPath = path.join(rootDir, entry.name);
-    if (entry.isDirectory()) {
-      total += await directoryByteSize(entryPath);
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    const stat = await fs.stat(entryPath);
-    total += stat.size;
-  }
-  return total;
-}
-
-async function updateHashWithFileContent(hash: ReturnType<typeof createHash>, filePath: string): Promise<void> {
-  const stream = createReadStream(filePath);
-  for await (const chunk of stream) {
-    hash.update(chunk);
-  }
-}
-
-async function updateHashWithDirectory(
-  hash: ReturnType<typeof createHash>,
-  rootDir: string,
-  currentDir: string
-): Promise<void> {
-  const entries = await fs.readdir(currentDir, { withFileTypes: true });
-  entries.sort((a, b) => a.name.localeCompare(b.name));
-
-  for (const entry of entries) {
-    const absolutePath = path.join(currentDir, entry.name);
-    const relativePath = path.relative(rootDir, absolutePath).split(path.sep).join("/");
-    if (entry.isDirectory()) {
-      hash.update(`D:${relativePath}\n`);
-      await updateHashWithDirectory(hash, rootDir, absolutePath);
-      continue;
-    }
-    if (entry.isFile()) {
-      hash.update(`F:${relativePath}\n`);
-      await updateHashWithFileContent(hash, absolutePath);
-      hash.update("\n");
-      continue;
-    }
-    if (entry.isSymbolicLink()) {
-      const target = await fs.readlink(absolutePath).catch(() => "<unreadable>");
-      hash.update(`L:${relativePath}->${target}\n`);
-      continue;
-    }
-    const stat = await fs.lstat(absolutePath);
-    hash.update(`O:${relativePath}:${stat.mode}:${stat.size}\n`);
-  }
-}
-
-async function workspaceFingerprint(rootDir: string): Promise<string> {
-  const hash = createHash("sha256");
-  hash.update("session-backup-workspace-v1\n");
-  await updateHashWithDirectory(hash, rootDir, rootDir);
-  return hash.digest("hex");
-}
-
-async function createSnapshotWithTarFallback(opts: {
-  sourceDir: string;
-  sessionDir: string;
-  tarPath: string;
-  directoryPath: string;
-}): Promise<{ kind: "directory" | "tar_gz"; path: string }> {
-  const archivePath = path.join(opts.sessionDir, opts.tarPath);
-  try {
-    await createTarGz(opts.sourceDir, archivePath);
-    return { kind: "tar_gz", path: opts.tarPath };
-  } catch {
-    const directoryPath = path.join(opts.sessionDir, opts.directoryPath);
-    await copyDirectory(opts.sourceDir, directoryPath);
-    return { kind: "directory", path: opts.directoryPath };
-  }
-}
-
-async function snapshotByteSize(
-  sessionDir: string,
-  snapshot: { kind: "directory" | "tar_gz"; path: string }
-): Promise<number> {
-  const absolutePath = path.join(sessionDir, snapshot.path);
-  if (snapshot.kind === "tar_gz") {
-    const stat = await fs.stat(absolutePath);
-    return stat.size;
-  }
-  return directoryByteSize(absolutePath);
-}
-
-async function restoreSnapshot(opts: {
-  sessionDir: string;
-  targetDir: string;
-  snapshot: { kind: "directory" | "tar_gz"; path: string };
-}): Promise<void> {
-  const absolutePath = path.join(opts.sessionDir, opts.snapshot.path);
-  if (opts.snapshot.kind === "tar_gz") {
-    await extractTarGz(absolutePath, opts.targetDir);
-    return;
-  }
-  await copyDirectoryContents(absolutePath, opts.targetDir);
-}
-
-async function writeJson(filePath: string, value: unknown): Promise<void> {
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
-  try {
-    await fs.chmod(filePath, 0o600);
-  } catch {
-    // best effort only
-  }
-}
-
-async function readMetadata(filePath: string): Promise<SessionBackupMetadata | null> {
-  try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    let payload: unknown;
-    try {
-      payload = JSON.parse(raw);
-    } catch (error) {
-      throw new Error(`Invalid backup metadata JSON at ${filePath}: ${String(error)}`);
-    }
-    const parsed = sessionBackupMetadataSchema.safeParse(payload);
-    if (!parsed.success) {
-      throw new Error(`Invalid backup metadata schema at ${filePath}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
-    }
-    return parsed.data;
-  } catch (error) {
-    const parsedCode = errorWithCodeSchema.safeParse(error);
-    const code = parsedCode.success ? parsedCode.data.code : undefined;
-    if (code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Tar operations
-// ---------------------------------------------------------------------------
-
-async function createTarGz(sourceDir: string, targetArchive: string): Promise<void> {
-  await ensureSecureDirectory(path.dirname(targetArchive));
-  const res = await runCommand("tar", ["-czf", targetArchive, "-C", sourceDir, "."]);
-  if (res.exitCode !== 0) {
-    throw new Error(`tar create failed: ${res.stderr || res.stdout || `exit=${String(res.exitCode)}`}`);
-  }
-  try {
-    await fs.chmod(targetArchive, 0o600);
-  } catch {
-    // best effort only
-  }
-}
-
-async function extractTarGz(archivePath: string, targetDir: string): Promise<void> {
-  await ensureSecureDirectory(targetDir);
-  const res = await runCommand("tar", ["-xzf", archivePath, "-C", targetDir]);
-  if (res.exitCode !== 0) {
-    throw new Error(`tar extract failed: ${res.stderr || res.stdout || `exit=${String(res.exitCode)}`}`);
-  }
 }
 
 // ---------------------------------------------------------------------------

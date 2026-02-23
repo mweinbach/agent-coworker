@@ -6,7 +6,6 @@ import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../connect";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
 import type { runTurn as runTurnFn } from "../agent";
 import type { AgentConfig } from "../types";
-import type { ServerErrorCode } from "../types";
 import { loadConfig } from "../config";
 import { loadSystemPromptWithSkills } from "../prompt";
 import { writeTextFileAtomic } from "../utils/atomicFile";
@@ -15,20 +14,16 @@ import { AgentSession } from "./session/AgentSession";
 import { SessionDb } from "./sessionDb";
 import {
   WEBSOCKET_PROTOCOL_VERSION,
-  safeParseClientMessage,
-  type ClientMessage,
   type ServerEvent,
 } from "./protocol";
+import { decodeClientMessage } from "./startServer/decodeClientMessage";
+import { dispatchClientMessage } from "./startServer/dispatchClientMessage";
+import { type SessionBinding, type StartServerSocketData } from "./startServer/types";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z.object({
   code: z.string().optional(),
 }).passthrough();
-const websocketMessageRawSchema = z.union([
-  z.string(),
-  z.instanceof(Uint8Array),
-  z.instanceof(ArrayBuffer),
-]);
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return jsonObjectSchema.safeParse(v).success;
@@ -99,11 +94,6 @@ export interface StartAgentServerOptions {
   runTurnImpl?: typeof runTurnFn;
 }
 
-type SessionBinding = {
-  session: AgentSession | null;
-  socket: Bun.ServerWebSocket<{ session?: AgentSession; resumeSessionId?: string }> | null;
-};
-
 export async function startAgentServer(
   opts: StartAgentServerOptions
 ): Promise<{
@@ -112,14 +102,6 @@ export async function startAgentServer(
   system: string;
   url: string;
 }> {
-  function protocolErrorCode(error: string): ServerErrorCode {
-    if (error === "Invalid JSON") return "invalid_json";
-    if (error === "Expected object") return "invalid_payload";
-    if (error === "Missing type") return "missing_type";
-    if (error.startsWith("Unknown type:")) return "unknown_type";
-    return "validation_failed";
-  }
-
   const hostname = opts.hostname ?? "127.0.0.1";
   const env = opts.env ?? { ...process.env, AGENT_WORKING_DIR: opts.cwd };
 
@@ -210,7 +192,7 @@ export async function startAgentServer(
   };
 
   function createServer(port: number): ReturnType<typeof Bun.serve> {
-    return Bun.serve<{ session?: AgentSession; resumeSessionId?: string }>({
+    return Bun.serve<StartServerSocketData>({
       hostname,
       port,
       fetch(req, srv) {
@@ -305,106 +287,18 @@ export async function startAgentServer(
           const session = ws.data.session;
           if (!session) return;
 
-          const parsedRaw = websocketMessageRawSchema.safeParse(raw);
-          if (!parsedRaw.success) {
-            ws.send(
-              JSON.stringify({
-                type: "error",
-                sessionId: session.id,
-                message: "Invalid JSON",
-                code: "invalid_json",
-                source: "protocol",
-              } satisfies ServerEvent)
-            );
-            return;
-          }
-          const text =
-            typeof parsedRaw.data === "string"
-              ? parsedRaw.data
-              : Buffer.from(parsedRaw.data).toString("utf-8");
-          const parsed = safeParseClientMessage(text);
-          if (!parsed.ok) {
-            ws.send(
-              JSON.stringify({
-                type: "error",
-                sessionId: session.id,
-                message: parsed.error,
-                code: protocolErrorCode(parsed.error),
-                source: "protocol",
-              } satisfies ServerEvent)
-            );
+          const decoded = decodeClientMessage(raw, session.id);
+          if (!decoded.ok) {
+            ws.send(JSON.stringify(decoded.event));
             return;
           }
 
-          const msg: ClientMessage = parsed.msg;
-          if (msg.type === "client_hello") return;
-
-          if (msg.sessionId !== session.id) {
-            ws.send(
-              JSON.stringify({
-                type: "error",
-                sessionId: session.id,
-                message: `Unknown sessionId: ${msg.sessionId}`,
-                code: "unknown_session",
-                source: "protocol",
-              } satisfies ServerEvent)
-            );
-            return;
-          }
-
-          switch (msg.type) {
-            case "ping":
-              try { ws.send(JSON.stringify({ type: "pong", sessionId: msg.sessionId } satisfies ServerEvent)); } catch {}
-              return;
-            case "user_message": return void session.sendUserMessage(msg.text, msg.clientMessageId);
-            case "ask_response": return session.handleAskResponse(msg.requestId, msg.answer);
-            case "approval_response": return session.handleApprovalResponse(msg.requestId, msg.approved);
-            case "set_model": return void session.setModel(msg.model, msg.provider);
-            case "refresh_provider_status": return void session.refreshProviderStatus();
-            case "provider_catalog_get": return void session.emitProviderCatalog();
-            case "provider_auth_methods_get": return session.emitProviderAuthMethods();
-            case "provider_auth_authorize": return void session.authorizeProviderAuth(msg.provider, msg.methodId);
-            case "provider_auth_callback": return void session.callbackProviderAuth(msg.provider, msg.methodId, msg.code);
-            case "provider_auth_set_api_key": return void session.setProviderApiKey(msg.provider, msg.methodId, msg.apiKey);
-            case "cancel": return session.cancel();
-            case "session_close":
-              return void (async () => {
-                await session.closeForHistory();
-                session.dispose("client requested close");
-                sessionBindings.delete(session.id);
-                try { ws.close(); } catch {}
-              })();
-            case "reset": return session.reset();
-            case "list_tools": return session.listTools();
-            case "list_commands": return void session.listCommands();
-            case "execute_command": return void session.executeCommand(msg.name, msg.arguments ?? "", msg.clientMessageId);
-            case "list_skills": return void session.listSkills();
-            case "read_skill": return void session.readSkill(msg.skillName);
-            case "disable_skill": return void session.disableSkill(msg.skillName);
-            case "enable_skill": return void session.enableSkill(msg.skillName);
-            case "delete_skill": return void session.deleteSkill(msg.skillName);
-            case "set_enable_mcp": return void session.setEnableMcp(msg.enableMcp);
-            case "mcp_servers_get": return void session.emitMcpServers();
-            case "mcp_server_upsert": return void session.upsertMcpServer(msg.server, msg.previousName);
-            case "mcp_server_delete": return void session.deleteMcpServer(msg.name);
-            case "mcp_server_validate": return void session.validateMcpServer(msg.name);
-            case "mcp_server_auth_authorize": return void session.authorizeMcpServerAuth(msg.name);
-            case "mcp_server_auth_callback": return void session.callbackMcpServerAuth(msg.name, msg.code);
-            case "mcp_server_auth_set_api_key": return void session.setMcpServerApiKey(msg.name, msg.apiKey);
-            case "mcp_servers_migrate_legacy": return void session.migrateLegacyMcpServers(msg.scope);
-            case "harness_context_get": return session.getHarnessContext();
-            case "harness_context_set": return session.setHarnessContext(msg.context);
-            case "session_backup_get": return void session.getSessionBackupState();
-            case "session_backup_checkpoint": return void session.createManualSessionCheckpoint();
-            case "session_backup_restore": return void session.restoreSessionBackup(msg.checkpointId);
-            case "session_backup_delete_checkpoint": return void session.deleteSessionCheckpoint(msg.checkpointId);
-            case "get_messages": return session.getMessages(msg.offset, msg.limit);
-            case "set_session_title": return session.setSessionTitle(msg.title);
-            case "list_sessions": return void session.listSessions();
-            case "delete_session": return void session.deleteSession(msg.targetSessionId);
-            case "set_config": return void session.setConfig(msg.config);
-            case "upload_file": return void session.uploadFile(msg.filename, msg.contentBase64);
-          }
+          dispatchClientMessage({
+            ws,
+            session,
+            message: decoded.message,
+            sessionBindings,
+          });
         },
         close(ws) {
           const session = ws.data.session;

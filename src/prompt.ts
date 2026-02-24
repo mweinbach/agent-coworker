@@ -15,13 +15,12 @@ const MODEL_SYSTEM_PROMPT_TEMPLATES: readonly ModelSystemPromptTemplate[] = [
     matches: (modelId) => modelId === "gpt-5.2",
   },
   {
-    fileName: "claude-4-6-opus.md",
-    matches: (modelId) => modelId === "claude-4-6-opus" || modelId.startsWith("claude-opus-4-6-"),
+    fileName: "claude-opus-4-6.md",
+    matches: (modelId) => modelId === "claude-opus-4-6" || modelId.startsWith("claude-opus-4-6-"),
   },
   {
-    fileName: "claude-4-6-sonnet.md",
+    fileName: "claude-sonnet-4-6.md",
     matches: (modelId) =>
-      modelId === "claude-4-6-sonnet" ||
       modelId === "claude-sonnet-4-6" ||
       modelId.startsWith("claude-sonnet-4-6-"),
   },
@@ -38,8 +37,8 @@ const MODEL_SYSTEM_PROMPT_TEMPLATES: readonly ModelSystemPromptTemplate[] = [
     matches: (modelId) => modelId === "gemini-3.1-pro-preview",
   },
   {
-    fileName: "claude-4-5-haiku.md",
-    matches: (modelId) => modelId === "claude-4-5-haiku" || modelId.startsWith("claude-haiku-4-5-"),
+    fileName: "claude-haiku-4-5.md",
+    matches: (modelId) => modelId === "claude-haiku-4-5" || modelId.startsWith("claude-haiku-4-5-"),
   },
 ];
 

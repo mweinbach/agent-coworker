@@ -9,7 +9,7 @@ const TITLE_SCHEMA = z.object({
 });
 
 const TITLE_MODEL_BY_PROVIDER = {
-  anthropic: "claude-4-5-haiku",
+  anthropic: "claude-haiku-4-5",
   "codex-cli": "gpt-5.2-codex",
   google: "gemini-3-flash-preview",
   openai: "gpt-5-mini",

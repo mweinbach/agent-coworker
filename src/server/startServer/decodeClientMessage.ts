@@ -2,7 +2,8 @@ import { z } from "zod";
 
 import type { ServerErrorCode } from "../../types";
 
-import { safeParseClientMessage, type ClientMessage, type ServerEvent } from "../protocol";
+import type { ClientMessage, ServerEvent } from "../protocol";
+import { safeParseClientMessage } from "../protocolParser";
 
 const websocketMessageRawSchema = z.union([
   z.string(),

@@ -3,9 +3,9 @@ import {
   ASK_SKIP_TOKEN,
   CLIENT_MESSAGE_TYPES,
   SERVER_EVENT_TYPES,
-  safeParseClientMessage,
   type ServerEvent,
 } from "../src/server/protocol";
+import { safeParseClientMessage } from "../src/server/protocolParser";
 
 function expectOk(raw: string) {
   const result = safeParseClientMessage(raw);

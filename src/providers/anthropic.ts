@@ -4,7 +4,7 @@ import type { AgentConfig } from "../types";
 
 function normalizeAnthropicModelId(modelId: string): string {
   const normalized = modelId.trim().toLowerCase();
-  if (normalized === "claude-4-6-sonnet") {
+  if (normalized === "claude-sonnet-4-6") {
     return "claude-sonnet-4-6";
   }
   return modelId;

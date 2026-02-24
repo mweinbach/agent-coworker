@@ -16,6 +16,8 @@ export function isProviderName(v: unknown): v is ProviderName {
 }
 
 export function resolveProviderName(v: unknown): ProviderName | null {
+  if (v === "gemini-cli") return "google";
+  if (v === "claude-code") return "anthropic";
   const parsed = providerNameSchema.safeParse(v);
   return parsed.success ? parsed.data : null;
 }

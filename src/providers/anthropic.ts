@@ -15,6 +15,7 @@ export const DEFAULT_ANTHROPIC_PROVIDER_OPTIONS = {
     type: "enabled",
     budgetTokens: 32_000,
   },
+  disableParallelToolUse: true,
 
   // Other Anthropic provider options you can enable/override:
   // sendReasoning: true,

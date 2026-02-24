@@ -37,7 +37,7 @@ export type AiCoworkerPaths = {
 const isoTimestampSchema = z.string().datetime({ offset: true });
 
 const storedConnectionSchema = z.object({
-  service: z.enum(PROVIDER_NAMES),
+  service: z.string().trim().min(1),
   mode: z.enum(["api_key", "oauth", "oauth_pending"]),
   apiKey: z.string().trim().min(1).optional(),
   updatedAt: isoTimestampSchema,
@@ -52,32 +52,25 @@ const connectionStoreSchema = z.object({
   updatedAt: isoTimestampSchema,
   services: z.record(z.string().trim().min(1), storedConnectionSchema).transform((rawServices, ctx) => {
     const normalized: ConnectionStore["services"] = {};
-    let hasMismatch = false;
 
     for (const [serviceRaw, connection] of Object.entries(rawServices) as Array<[string, StoredConnection]>) {
       const service = resolveProviderName(serviceRaw);
       if (!service) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["services", serviceRaw],
-          message: `Invalid service key in connection store: ${serviceRaw}`,
-        });
-        hasMismatch = true;
+        // Skip unknown service keys.
         continue;
       }
-      if (connection.service !== service) {
+      const connectionService = resolveProviderName(connection.service);
+      if (connectionService !== service) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["services", serviceRaw, "service"],
           message: `Connection service mismatch for key ${serviceRaw}`,
         });
-        hasMismatch = true;
         continue;
       }
-      normalized[service] = connection;
+      normalized[service] = { ...connection, service } as StoredConnection;
     }
 
-    if (hasMismatch) return z.NEVER;
     return normalized;
   }),
   toolApiKeys: toolApiKeysSchema.optional(),

@@ -980,7 +980,7 @@ async function main() {
       : cliArgs.scenario === "dcf-model-matrix"
         ? "raw-agent-loop_dcf-model-matrix"
         : "raw-agent-loop_gpt-skill-reliability";
-  const runRoot = path.join(baseConfig.outputDirectory, `${runRootPrefix}_${safeStamp()}`);
+  const runRoot = path.join(baseConfig.outputDirectory || path.join(repoDir, "tmp"), `${runRootPrefix}_${safeStamp()}`);
   await ensureDir(runRoot);
 
   let anthropicModelIds: string[] = [];

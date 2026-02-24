@@ -35,10 +35,6 @@ const jsonObjectTextSchema = z.string().transform((value, ctx) => {
     return z.NEVER;
   }
 }).pipe(recordSchema);
-const toolDescriptorSchema = z.object({
-  name: z.string().trim().min(1),
-  description: z.string().trim().min(1),
-}).strict();
 
 function parseToolLogLine(line: string): ParsedToolLog | null {
   const match = toolLogLineRegex.exec(line);
@@ -81,8 +77,18 @@ function normalizeQuestionPreview(question: string, maxChars = 220): string {
 }
 
 function normalizeToolDescriptor(value: unknown): ToolDescriptor | null {
-  const parsed = toolDescriptorSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+  if (typeof value === "string") {
+    const name = value.trim();
+    if (!name) return null;
+    return { name, description: name };
+  }
+
+  const raw = recordSchema.safeParse(value);
+  if (!raw.success) return null;
+  const name = typeof raw.data.name === "string" ? raw.data.name.trim() : "";
+  if (!name) return null;
+  const descriptionRaw = typeof raw.data.description === "string" ? raw.data.description.trim() : "";
+  return { name, description: descriptionRaw || name };
 }
 
 function normalizeToolsPayload(value: unknown): ToolDescriptor[] {

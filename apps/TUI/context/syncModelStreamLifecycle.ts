@@ -55,9 +55,10 @@ function extractUsageSnapshot(value: unknown): ContextUsageSnapshot | null {
   const usage = usageSnapshotInputSchema.safeParse(value);
   if (!usage.success) return null;
 
-  const inputTokens = firstFiniteNumber(usage.data.inputTokens, usage.data.promptTokens);
-  const outputTokens = firstFiniteNumber(usage.data.outputTokens, usage.data.completionTokens);
-  let totalTokens = firstFiniteNumber(usage.data.totalTokens);
+  const raw = usage.data as Record<string, unknown>;
+  const inputTokens = firstFiniteNumber(raw.inputTokens, raw.promptTokens, raw.requestTokens, raw.input, raw.prompt);
+  const outputTokens = firstFiniteNumber(raw.outputTokens, raw.completionTokens, raw.responseTokens, raw.output, raw.completion);
+  let totalTokens = firstFiniteNumber(raw.totalTokens, raw.tokenCount, raw.total);
 
   if (totalTokens === null && inputTokens !== null && outputTokens !== null) {
     totalTokens = inputTokens + outputTokens;

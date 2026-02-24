@@ -28,7 +28,7 @@ const usageSchema = z.object({
   promptTokens: z.number(),
   completionTokens: z.number(),
   totalTokens: z.number(),
-}).strict();
+});
 const responseMessagesSchema = z.array(z.unknown());
 const stringSchema = z.string();
 const asyncIterableSchema = z.custom<AsyncIterable<unknown>>((value) => {

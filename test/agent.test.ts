@@ -385,6 +385,34 @@ describe("runTurn", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Usage
+  // -------------------------------------------------------------------------
+
+  test("keeps canonical usage counters when providers include extra usage keys", async () => {
+    mockStreamText.mockImplementation(async () => ({
+      text: "ok",
+      reasoningText: undefined,
+      response: {
+        messages: [],
+        usage: {
+          promptTokens: 100,
+          completionTokens: 50,
+          totalTokens: 150,
+          cachedPromptTokens: 20,
+          reasoningTokens: 5,
+        },
+      },
+    }));
+
+    const result = await runTurn(makeParams());
+    expect(result.usage).toEqual({
+      promptTokens: 100,
+      completionTokens: 50,
+      totalTokens: 150,
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // maxSteps
   // -------------------------------------------------------------------------
 

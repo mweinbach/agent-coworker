@@ -116,7 +116,7 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
     mode: z.unknown().optional(),
     dynamicThreshold: z.unknown().optional(),
     maxResults: z.number().int().min(1).max(20).optional().default(10),
-  }).strict();
+  }).passthrough();
 
   return tool({
     description: exaOnly

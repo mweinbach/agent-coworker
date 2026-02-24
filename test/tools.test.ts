@@ -1375,6 +1375,58 @@ describe("webSearch tool", () => {
     }
   });
 
+  test("accepts unknown compatibility fields when query is present", async () => {
+    const dir = await tmpDir();
+
+    const oldBrave = process.env.BRAVE_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
+    process.env.BRAVE_API_KEY = "test-brave-key";
+    delete process.env.EXA_API_KEY;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (url: any) => {
+      const query = new URL(String(url)).searchParams.get("q") ?? "";
+      expect(query).toBe("query with unknown extras");
+      return new Response(
+        JSON.stringify({
+          web: {
+            results: [
+              {
+                title: "Compatibility Result",
+                url: "https://example.com/compat",
+                description: "Unknown key compatibility",
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as any;
+
+    try {
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
+      const out: string = await t.execute({
+        query: "query with unknown extras",
+        search_context_size: "low",
+        user_location: {
+          type: "approximate",
+          city: "Austin",
+        },
+        include_domains: ["example.com"],
+        maxResults: 1,
+      } as any);
+
+      expect(out).toContain("Compatibility Result");
+      expect(out).not.toContain("requires a query");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
+      else delete process.env.BRAVE_API_KEY;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+    }
+  });
+
   test("uses BRAVE_API_KEY when available", async () => {
     const dir = await tmpDir();
 

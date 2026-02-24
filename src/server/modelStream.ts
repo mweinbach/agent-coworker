@@ -134,22 +134,23 @@ const streamPartNormalizers: Record<string, (ctx: PartNormalizerContext) => Norm
       mode,
       providerMetadata,
     }),
-  "tool-input-start": ({ emit, parsedRaw, id, toolName, providerMetadata }) =>
+  "tool-input-start": ({ emit, parsedRaw, toolCallId, toolName, providerMetadata }) =>
     emit("tool_input_start", {
-      id: id(),
+      id: toolCallId(),
       toolName: toolName(),
       providerExecuted: asBoolean(parsedRaw.providerExecuted),
       dynamic: asBoolean(parsedRaw.dynamic),
       title: asString(parsedRaw.title),
       providerMetadata,
     }),
-  "tool-input-delta": ({ emit, parsedRaw, id, providerMetadata }) =>
+  "tool-input-delta": ({ emit, parsedRaw, toolCallId, providerMetadata }) =>
     emit("tool_input_delta", {
-      id: id(),
+      id: toolCallId(),
       delta: asSafeString(parsedRaw.delta),
       providerMetadata,
     }),
-  "tool-input-end": ({ emit, id, providerMetadata }) => emit("tool_input_end", { id: id(), providerMetadata }),
+  "tool-input-end": ({ emit, toolCallId, providerMetadata }) =>
+    emit("tool_input_end", { id: toolCallId(), providerMetadata }),
   "tool-call": ({ emit, parsedRaw, toolCallId, toolName, san, providerMetadata }) =>
     emit("tool_call", {
       toolCallId: toolCallId(),

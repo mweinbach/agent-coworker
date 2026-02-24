@@ -441,7 +441,7 @@ describe("normalizeModelStreamPart branches", () => {
         { type: "tool-input-start" },
         defaultOpts
       );
-      expect(result.part.id).toBe("anon:unseeded:id");
+      expect(result.part.id).toBe("anon:unseeded:tool");
       expect(result.part.toolName).toBe("tool");
     });
 
@@ -499,7 +499,7 @@ describe("normalizeModelStreamPart branches", () => {
         { type: "tool-input-delta", delta: "d" },
         defaultOpts
       );
-      expect(result.part.id).toBe("anon:unseeded:id");
+      expect(result.part.id).toBe("anon:unseeded:tool");
     });
   });
 
@@ -521,7 +521,7 @@ describe("normalizeModelStreamPart branches", () => {
         { type: "tool-input-end" },
         defaultOpts
       );
-      expect(result.part.id).toBe("anon:unseeded:id");
+      expect(result.part.id).toBe("anon:unseeded:tool");
     });
   });
 

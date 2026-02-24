@@ -123,3 +123,26 @@
   - `bun test test/mcp.config-registry.test.ts`
   - `bun test test/session-store.test.ts`
   - `bun test`
+
+---
+
+# Task: Fix review regressions in stream event dispatch and anonymous tool IDs
+
+## Plan
+- [x] Stop classifying consumer `onEvent` exceptions as `invalid_envelope` in `AgentSocket`.
+- [x] Keep anonymous stream fallback IDs stable for a whole turn in `TurnExecutionManager`.
+- [x] Ensure id-less `tool_input_*`, `tool_call`, and `tool_result` chunks share one fallback key path.
+- [x] Add regression coverage for socket callback exception bubbling.
+- [x] Add regression coverage for id-less tool lifecycle key correlation.
+- [x] Run verification (`bun test` targeted suites + full suite).
+
+## Review
+- `src/client/agentSocket.ts` now limits `invalid_envelope` handling to decode/parse failures; valid event dispatch (`this.onEvent(evt)`) is outside that catch so consumer exceptions propagate instead of being suppressed.
+- `src/server/session/TurnExecutionManager.ts` now uses `fallbackIdSeed: turnId` (not per-part index), making anonymous fallback IDs stable for the whole streamed turn.
+- `src/server/modelStream.ts` now uses `toolCallId()` for `tool-input-start`, `tool-input-delta`, and `tool-input-end` IDs so id-less tool input/call/result chunks share one fallback call key.
+- Added runtime regression tests in `test/agentSocket.runtime.test.ts` covering invalid envelope diagnostics and non-swallowed `onEvent` exceptions.
+- Added stream lifecycle regression in `test/session.stream-pipeline.test.ts` proving id-less `tool_input_*`, `tool_call`, and `tool_result` chunks share the same fallback key.
+- Updated `test/server.model-stream.test.ts` expectations for tool-input anonymous ID fallback behavior.
+- Verification:
+  - `bun test test/agentSocket.runtime.test.ts test/server.model-stream.test.ts test/session.stream-pipeline.test.ts`
+  - `bun test` -> **1671 pass, 2 skip, 0 fail**

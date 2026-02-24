@@ -167,7 +167,7 @@ export class TurnExecutionManager {
           const normalized = normalizeModelStreamPart(rawPart, {
             provider: this.context.state.config.provider,
             includeRawPart: true,
-            fallbackIdSeed: `${turnId}:${partIndex}`,
+            fallbackIdSeed: turnId,
             rawPartMode: process.env.COWORK_MODEL_STREAM_RAW_MODE === "full" ? "full" : "sanitized",
           });
           this.context.emit({

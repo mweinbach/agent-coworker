@@ -172,33 +172,9 @@ export class AgentSocket {
 
     ws.onmessage = async (ev) => {
       const rawData = (ev as { data?: unknown }).data;
+      let decoded: unknown;
       try {
-        const decoded = await decodeSocketData(rawData);
-        const parsed = safeParseServerEventDetailed(decoded);
-        if (!parsed.ok) {
-          this.onInvalidEvent?.({
-            reason: parsed.reason,
-            message: parsed.message,
-            eventType: parsed.eventType,
-            raw: decoded,
-          });
-          return;
-        }
-        const evt = parsed.event;
-
-        // Pong is an internal keepalive and should not be surfaced to consumers.
-        if (evt.type === "pong") return;
-
-        if (evt.type === "server_hello") {
-          this._sessionId = evt.sessionId;
-          this.resumeSessionId = evt.sessionId;
-          this.ready.resolve(evt.sessionId);
-
-          // Flush any messages that were queued while disconnected.
-          this.flushSendQueue();
-        }
-
-        this.onEvent(evt);
+        decoded = await decodeSocketData(rawData);
       } catch (error) {
         const message = error instanceof Error ? error.message : "failed_to_decode_socket_payload";
         this.onInvalidEvent?.({
@@ -206,7 +182,36 @@ export class AgentSocket {
           message,
           raw: rawData,
         });
+        return;
       }
+
+      const parsed = safeParseServerEventDetailed(decoded);
+      if (!parsed.ok) {
+        this.onInvalidEvent?.({
+          reason: parsed.reason,
+          message: parsed.message,
+          eventType: parsed.eventType,
+          raw: decoded,
+        });
+        return;
+      }
+
+      const evt = parsed.event;
+
+      // Pong is an internal keepalive and should not be surfaced to consumers.
+      if (evt.type === "pong") return;
+
+      if (evt.type === "server_hello") {
+        this._sessionId = evt.sessionId;
+        this.resumeSessionId = evt.sessionId;
+        this.ready.resolve(evt.sessionId);
+
+        // Flush any messages that were queued while disconnected.
+        this.flushSendQueue();
+      }
+
+      // Surface consumer bugs to callers instead of relabeling them as parse errors.
+      this.onEvent(evt);
     };
 
     ws.onerror = () => {

@@ -253,6 +253,28 @@ describe("AgentSession stream pipeline", () => {
     expect(chunks[0].part.id).toBe("tc-7");
   });
 
+  test("id-less tool lifecycle keeps one fallback key across input and result chunks", async () => {
+    const { session, events } = makeSession();
+    await sendWithStreamParts(session, [
+      { type: "tool-input-start", toolName: "bash" },
+      { type: "tool-input-delta", delta: '{"command":"ls"' },
+      { type: "tool-input-end" },
+      { type: "tool-call", toolName: "bash", input: { command: "ls" } },
+      { type: "tool-result", toolName: "bash", output: "ok" },
+    ]);
+
+    const chunks = getStreamChunks(events);
+    expect(chunks).toHaveLength(5);
+
+    const fallbackKey = chunks[0].part.id;
+    expect(typeof fallbackKey).toBe("string");
+    expect(fallbackKey).toBe(`anon:${chunks[0].turnId}:tool`);
+    expect(chunks[1].part.id).toBe(fallbackKey);
+    expect(chunks[2].part.id).toBe(fallbackKey);
+    expect(chunks[3].part.toolCallId).toBe(fallbackKey);
+    expect(chunks[4].part.toolCallId).toBe(fallbackKey);
+  });
+
   // =========================================================================
   // 8. tool-approval-request
   // =========================================================================

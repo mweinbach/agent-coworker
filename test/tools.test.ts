@@ -1869,6 +1869,32 @@ describe("ask tool", () => {
     expect(res).toBe("42");
   });
 
+  test("rejects empty single-question prompt", async () => {
+    const dir = await tmpDir();
+    const askFn = mock(async (_q: string) => "unused");
+    const ctx = makeCtx(dir);
+    ctx.askUser = askFn;
+
+    const t: any = createAskTool(ctx);
+    await expect(t.execute({ question: "" })).rejects.toThrow();
+    expect(askFn).not.toHaveBeenCalled();
+  });
+
+  test("rejects whitespace-only structured question prompt", async () => {
+    const dir = await tmpDir();
+    const askFn = mock(async (_q: string) => "unused");
+    const ctx = makeCtx(dir);
+    ctx.askUser = askFn;
+
+    const t: any = createAskTool(ctx);
+    await expect(
+      t.execute({
+        questions: [{ question: "   " }],
+      })
+    ).rejects.toThrow();
+    expect(askFn).not.toHaveBeenCalled();
+  });
+
   test("passes options when provided", async () => {
     const dir = await tmpDir();
     const askFn = mock(async (q: string, opts?: string[]) => "option B");

@@ -116,7 +116,7 @@ All client messages are validated by `safeParseClientMessage()` before dispatch:
 
 Any validation failure produces an `error` server event (see [error](#error)).
 
-Server events can also be validated client-side via `safeParseServerEvent()`. If a received event fails envelope validation (unknown type, missing required fields, invalid JSON), clients should ignore/drop that event rather than treating it as a protocol-level fatal error.
+Server events can also be validated client-side via `safeParseServerEvent()` / `safeParseServerEventDetailed()`. If a received event fails envelope validation (unknown type, missing required fields, invalid JSON), clients should ignore/drop that event rather than treating it as a protocol-level fatal error. Clients may optionally surface diagnostics (for example, via `onInvalidEvent`) without changing runtime behavior.
 
 ## Shared Types
 
@@ -1685,13 +1685,13 @@ Incremental model stream chunk. Emitted during a turn for each streaming part fr
 |-------|------|-------------|
 | `type` | `"model_stream_chunk"` | — |
 | `sessionId` | `string` | Session identifier |
-| `turnId` | `string` | Unique turn identifier (groups all chunks for one turn) |
-| `index` | `number` | Sequential chunk index within the turn (starting at 0) |
-| `provider` | `ProviderName` | Provider that generated this chunk |
-| `model` | `string` | Model that generated this chunk |
+| `turnId` | `string` | Unique turn identifier (groups all chunks for one turn). Fallback: `"unknown-turn"` |
+| `index` | `number` | Sequential chunk index within the turn (starting at 0). Fallback: `-1` |
+| `provider` | `ProviderName \| "unknown"` | Provider that generated this chunk. Fallback: `"unknown"` |
+| `model` | `string` | Model that generated this chunk. Fallback: `"unknown"` |
 | `partType` | `ModelStreamPartType` | Part type (see [ModelStreamPartType](#modelstreamparttype)) |
-| `part` | `object` | Normalized part payload. Shape varies by `partType` |
-| `rawPart` | `unknown?` | Optional raw AI SDK part (present when `includeRawChunks` is enabled) |
+| `part` | `object` | Normalized part payload. Shape varies by `partType`. If a non-object part is received, it is normalized to `{ "value": <original> }` |
+| `rawPart` | `unknown?` | Optional raw AI SDK part (present when `includeRawChunks` is enabled). Default mode is sanitized; set `COWORK_MODEL_STREAM_RAW_MODE=full` to increase payload detail |
 
 ---
 

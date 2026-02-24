@@ -3,8 +3,10 @@ import { z } from "zod";
 
 import type { ToolContext } from "./context";
 
+const nonEmptyQuestionSchema = z.string().trim().min(1).describe("The question to ask");
+
 const askSingleInputSchema = z.object({
-  question: z.string().describe("The question to ask"),
+  question: nonEmptyQuestionSchema,
   options: z.array(z.string()).optional().describe("Multiple-choice options"),
 }).strict();
 
@@ -12,7 +14,7 @@ const askStructuredInputSchema = z.object({
   questions: z
     .array(
       z.object({
-        question: z.string().describe("The complete question to ask the user"),
+        question: nonEmptyQuestionSchema.describe("The complete question to ask the user"),
         header: z.string().optional().describe("Short label shown in UX"),
         options: z
           .array(
@@ -72,25 +74,31 @@ export function createAskTool(ctx: ToolContext) {
       "Ask the user a clarifying question. Provide options when possible. Returns the user's answer.",
     inputSchema: askInputSchema,
     execute: async (input) => {
-      if (input.questions !== undefined) {
-        ctx.log(`tool> ask ${JSON.stringify({ questions: input.questions })}`);
+      const parsedInput = askInputSchema.safeParse(input);
+      if (!parsedInput.success) {
+        throw new Error(parsedInput.error.issues[0]?.message ?? "ask: invalid input");
+      }
+      const validated = parsedInput.data;
+
+      if (validated.questions !== undefined) {
+        ctx.log(`tool> ask ${JSON.stringify({ questions: validated.questions })}`);
         const answers: Record<string, string> = {};
-        for (const q of input.questions) {
+        for (const q of validated.questions) {
           const options = q.options?.map((option) => option.label);
           const answer = await ctx.askUser(q.question, options);
           answers[q.question] = answer;
         }
-        const result = { questions: input.questions, answers };
+        const result = { questions: validated.questions, answers };
         ctx.log(`tool< ask ${JSON.stringify(result)}`);
         return result;
       }
 
-      if (input.question === undefined) {
+      if (validated.question === undefined) {
         throw new Error("ask: missing `question` for single-question mode");
       }
-      const question = input.question;
-      ctx.log(`tool> ask ${JSON.stringify({ question, options: input.options })}`);
-      const answer = await ctx.askUser(question, input.options);
+      const question = validated.question;
+      ctx.log(`tool> ask ${JSON.stringify({ question, options: validated.options })}`);
+      const answer = await ctx.askUser(question, validated.options);
       ctx.log(`tool< ask ${JSON.stringify({ answer })}`);
       return answer;
     },

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { safeJsonParse, safeParseServerEvent } from "../src/client/agentSocket";
+import { safeJsonParse, safeParseServerEvent, safeParseServerEventDetailed } from "../src/client/agentSocket";
 
 describe("agent socket parser", () => {
   test("safeJsonParse returns null for invalid JSON", () => {
@@ -88,5 +88,42 @@ describe("agent socket parser", () => {
     });
 
     expect(safeParseServerEvent(raw)).toBeNull();
+  });
+
+  test("safeParseServerEvent tolerates model_stream_chunk partial metadata and non-object part", () => {
+    const raw = JSON.stringify({
+      type: "model_stream_chunk",
+      sessionId: "s-1",
+      partType: "raw",
+      part: "payload",
+    });
+
+    const parsed = safeParseServerEvent(raw);
+    expect(parsed?.type).toBe("model_stream_chunk");
+    if (parsed?.type !== "model_stream_chunk") return;
+    expect(parsed.turnId).toBe("unknown-turn");
+    expect(parsed.index).toBe(-1);
+    expect(parsed.provider).toBe("unknown");
+    expect(parsed.model).toBe("unknown");
+    expect(parsed.part).toEqual({ value: "payload" });
+  });
+
+  test("safeParseServerEventDetailed reports unknown event types", () => {
+    const raw = JSON.stringify({ type: "future_event", sessionId: "s-1" });
+    const parsed = safeParseServerEventDetailed(raw);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.reason).toBe("unknown_type");
+    expect(parsed.eventType).toBe("future_event");
+  });
+
+  test("safeParseServerEventDetailed accepts object input", () => {
+    const parsed = safeParseServerEventDetailed({
+      type: "pong",
+      sessionId: "s-1",
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.event.type).toBe("pong");
   });
 });

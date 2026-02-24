@@ -163,15 +163,18 @@ export class TurnExecutionManager {
           });
         },
         onModelStreamPart: async (rawPart) => {
+          const partIndex = streamPartIndex++;
           const normalized = normalizeModelStreamPart(rawPart, {
             provider: this.context.state.config.provider,
             includeRawPart: true,
+            fallbackIdSeed: `${turnId}:${partIndex}`,
+            rawPartMode: process.env.COWORK_MODEL_STREAM_RAW_MODE === "full" ? "full" : "sanitized",
           });
           this.context.emit({
             type: "model_stream_chunk",
             sessionId: this.context.id,
             turnId,
-            index: streamPartIndex++,
+            index: partIndex,
             provider: this.context.state.config.provider,
             model: this.context.state.config.model,
             partType: normalized.partType,

@@ -13,6 +13,53 @@ const stringArraySchema = z.array(z.string());
 const unknownArraySchema = z.array(z.unknown());
 const recordUnknownSchema = z.record(z.string(), z.unknown());
 
+export type ServerEventParseErrorReason = "invalid_json" | "invalid_envelope" | "unknown_type" | "invalid_event";
+
+export type ServerEventParseResult =
+  | { ok: true; event: ServerEvent }
+  | {
+      ok: false;
+      reason: ServerEventParseErrorReason;
+      message: string;
+      eventType?: string;
+      raw: unknown;
+    };
+
+function normalizeChunkPart(value: unknown): Record<string, unknown> {
+  const parsed = recordUnknownSchema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  return { value };
+}
+
+function normalizeChunkField(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : fallback;
+}
+
+function normalizeChunkIndex(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : -1;
+}
+
+const modelStreamChunkSchema = z.object({
+  type: z.literal("model_stream_chunk"),
+  sessionId: nonEmptyTrimmedStringSchema,
+  turnId: z.unknown().optional(),
+  index: z.unknown().optional(),
+  provider: z.unknown().optional(),
+  model: z.unknown().optional(),
+  partType: z.string(),
+  part: z.unknown(),
+  rawPart: z.unknown().optional(),
+}).passthrough().transform((chunk) => ({
+  ...chunk,
+  turnId: normalizeChunkField(chunk.turnId, "unknown-turn"),
+  index: normalizeChunkIndex(chunk.index),
+  provider: normalizeChunkField(chunk.provider, "unknown"),
+  model: normalizeChunkField(chunk.model, "unknown"),
+  part: normalizeChunkPart(chunk.part),
+}));
+
 const serverEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("server_hello"),
@@ -127,17 +174,7 @@ const serverEventSchema = z.discriminatedUnion("type", [
     text: z.string(),
     clientMessageId: z.string().optional(),
   }).passthrough(),
-  z.object({
-    type: z.literal("model_stream_chunk"),
-    sessionId: nonEmptyTrimmedStringSchema,
-    turnId: z.string(),
-    index: z.number(),
-    provider: z.string(),
-    model: z.string(),
-    partType: z.string(),
-    part: recordUnknownSchema,
-    rawPart: z.unknown().optional(),
-  }).passthrough(),
+  modelStreamChunkSchema,
   z.object({
     type: z.literal("assistant_message"),
     sessionId: nonEmptyTrimmedStringSchema,
@@ -284,6 +321,47 @@ const serverEventSchema = z.discriminatedUnion("type", [
   }).passthrough(),
 ]);
 
+const KNOWN_SERVER_EVENT_TYPES = new Set<string>([
+  "server_hello",
+  "session_settings",
+  "session_info",
+  "mcp_servers",
+  "mcp_server_validation",
+  "mcp_server_auth_challenge",
+  "mcp_server_auth_result",
+  "provider_catalog",
+  "provider_auth_methods",
+  "provider_auth_challenge",
+  "provider_auth_result",
+  "provider_status",
+  "session_busy",
+  "user_message",
+  "model_stream_chunk",
+  "assistant_message",
+  "reasoning",
+  "log",
+  "todos",
+  "reset_done",
+  "ask",
+  "approval",
+  "config_updated",
+  "tools",
+  "commands",
+  "skills_list",
+  "skill_content",
+  "session_backup_state",
+  "observability_status",
+  "harness_context",
+  "turn_usage",
+  "messages",
+  "sessions",
+  "session_deleted",
+  "session_config",
+  "file_uploaded",
+  "error",
+  "pong",
+]);
+
 export function safeJsonParse(raw: unknown): unknown | null {
   if (typeof raw !== "string") return null;
   try {
@@ -293,14 +371,64 @@ export function safeJsonParse(raw: unknown): unknown | null {
   }
 }
 
-export function safeParseServerEvent(raw: unknown): ServerEvent | null {
-  const parsedJson = safeJsonParse(raw);
+function firstIssueMessage(error: z.ZodError<unknown>): string {
+  return error.issues[0]?.message ?? "validation_failed";
+}
+
+export function parseServerEventDetailed(raw: unknown): ServerEventParseResult {
+  const parsedJson = typeof raw === "string" ? safeJsonParse(raw) : raw;
+  if (typeof raw === "string" && parsedJson === null) {
+    return {
+      ok: false,
+      reason: "invalid_json",
+      message: "Invalid JSON",
+      raw,
+    };
+  }
+
   const parsedObject = jsonObjectSchema.safeParse(parsedJson);
   if (!parsedObject.success) {
-    return null;
+    return {
+      ok: false,
+      reason: "invalid_envelope",
+      message: firstIssueMessage(parsedObject.error),
+      raw,
+    };
+  }
+
+  const eventType = typeof parsedObject.data.type === "string" ? parsedObject.data.type : undefined;
+  if (!eventType) {
+    return {
+      ok: false,
+      reason: "invalid_envelope",
+      message: "Missing type",
+      raw,
+    };
+  }
+  if (!KNOWN_SERVER_EVENT_TYPES.has(eventType)) {
+    return {
+      ok: false,
+      reason: "unknown_type",
+      message: `Unknown type: ${eventType}`,
+      eventType,
+      raw,
+    };
   }
 
   const parsedEvent = serverEventSchema.safeParse(parsedObject.data);
-  if (!parsedEvent.success) return null;
-  return parsedEvent.data as ServerEvent;
+  if (!parsedEvent.success) {
+    return {
+      ok: false,
+      reason: "invalid_event",
+      message: firstIssueMessage(parsedEvent.error),
+      eventType,
+      raw,
+    };
+  }
+  return { ok: true, event: parsedEvent.data as ServerEvent };
+}
+
+export function safeParseServerEvent(raw: unknown): ServerEvent | null {
+  const parsed = parseServerEventDetailed(raw);
+  return parsed.ok ? parsed.event : null;
 }

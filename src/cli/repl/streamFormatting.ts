@@ -11,6 +11,20 @@ export function asString(value: unknown): string | null {
   return parsed.success ? parsed.data : null;
 }
 
+function asIdString(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  return null;
+}
+
 function asPartRecord(value: unknown): Record<string, unknown> {
   const parsed = partRecordSchema.safeParse(value);
   return parsed.success ? parsed.data : {};
@@ -31,10 +45,9 @@ export function previewStructured(value: unknown, max = 160): string {
 export function modelStreamToolKey(evt: ModelStreamChunkEvent): string {
   const part = asPartRecord(evt.part);
   return (
-    asString(part.toolCallId) ??
-    asString(part.id) ??
-    asString(part.toolName) ??
-    `${evt.turnId}:${evt.index}`
+    asIdString(part.toolCallId) ??
+    asIdString(part.id) ??
+    `tool:${evt.turnId}:${evt.index}`
   );
 }
 

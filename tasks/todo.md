@@ -1,3 +1,35 @@
+# Task: Loosen strict Zod validation around tool-call stream parsing
+
+## Plan
+- [x] Add tolerant server-event parsing for `model_stream_chunk` (non-object `part`, partial stream metadata defaults).
+- [x] Add detailed parse diagnostics (`parseServerEventDetailed`) while keeping `safeParseServerEvent` compatibility.
+- [x] Wire client socket diagnostics via optional `onInvalidEvent` and robust frame decoding (string/ArrayBuffer/ArrayBufferView/Blob/object).
+- [x] Loosen tool-call ID handling across stream normalizers (numeric IDs + anonymous fallback IDs instead of empty strings).
+- [x] Improve raw provider-event mapping resilience (`evt.rawPart` fallback + loose primitive text coercion).
+- [x] Preserve structured array args in TUI tool-input lifecycle.
+- [x] Keep sanitization defaults but add an explicit fuller mode (`rawPartMode: "full"` + `COWORK_MODEL_STREAM_RAW_MODE=full` hook).
+- [x] Update protocol docs and regression tests for the new behavior.
+- [x] Run targeted verification suites.
+
+## Review
+- Added `parseServerEventDetailed` + `ServerEventParseResult`/`ServerEventParseErrorReason` in `src/server/protocolEventParser.ts`, exported via `src/server/protocol.ts`.
+- `model_stream_chunk` parsing now tolerates missing `turnId/index/provider/model` (defaults: `"unknown-turn"`, `-1`, `"unknown"`, `"unknown"`) and normalizes non-object `part` payloads to `{ value: <raw> }`.
+- `AgentSocket` now supports optional invalid-event diagnostics (`onInvalidEvent`) and decodes binary/blob websocket frames before parsing.
+- Server and client stream normalization now coerce numeric IDs, avoid empty-string tool IDs, and use deterministic anonymous IDs.
+- Client stream mapper now performs looser primitive text coercion and uses `evt.rawPart` as a secondary fallback for provider raw event mapping.
+- TUI tool-arg normalization now preserves parsed array payloads instead of forcing record-only shape.
+- Added/updated regression coverage in:
+  - `test/agentSocket.parse.test.ts`
+  - `test/server.model-stream.test.ts`
+  - `test/tui.model-stream.test.ts`
+- Updated `docs/websocket-protocol.md` validation + `model_stream_chunk` notes for diagnostics/defaults/part normalization/raw mode.
+- Verification:
+  - `bun test test/agentSocket.parse.test.ts test/server.model-stream.test.ts test/tui.model-stream.test.ts test/model-stream.provider-loop.test.ts test/session.stream-pipeline.test.ts`
+  - `bun test test/protocol.test.ts`
+  - `bun test` -> **1666 pass, 2 skip, 0 fail**
+
+---
+
 # Task: Fix PR review regressions (desktop persistence, auth resilience, protocol coverage)
 
 ## Plan

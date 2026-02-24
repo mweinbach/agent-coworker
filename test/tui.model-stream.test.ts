@@ -137,6 +137,22 @@ describe("TUI model stream mapper", () => {
       args: { path: "README.md" },
     });
 
+    expect(mapModelStreamChunk(chunk("tool_call", { toolCallId: 123, toolName: "read", input: {} }, 3))).toEqual({
+      kind: "tool_call",
+      turnId: "t1",
+      key: "123",
+      name: "read",
+      args: {},
+    });
+
+    expect(mapModelStreamChunk(chunk("tool_call", { toolName: "read", input: {} }, 9))).toEqual({
+      kind: "tool_call",
+      turnId: "t1",
+      key: "tool:t1:9",
+      name: "read",
+      args: {},
+    });
+
     expect(mapModelStreamChunk(chunk("tool_result", { toolCallId: "tool_1", toolName: "read", output: { chars: 120 } }, 4))).toEqual({
       kind: "tool_result",
       turnId: "t1",
@@ -195,6 +211,13 @@ describe("TUI model stream mapper", () => {
       delta: "arg",
     });
 
+    expect(mapModelStreamChunk(chunk("raw", { raw: { type: "response.function_call_arguments.delta", item_id: "fc_2", delta: { a: 1 } } }, 3))).toEqual({
+      kind: "tool_input_delta",
+      turnId: "t1",
+      key: "fc_2",
+      delta: '{"a":1}',
+    });
+
     expect(mapModelStreamChunk(chunk("raw", { raw: { type: "response.output_text.delta", item_id: "txt_9", delta: "hello" } }, 3))).toEqual({
       kind: "assistant_delta",
       turnId: "t1",
@@ -229,6 +252,16 @@ describe("TUI model stream mapper", () => {
       turnId: "t1",
       partType: "unknown",
       payload: { sdkType: "mystery" },
+    });
+
+    expect(mapModelStreamChunk({
+      ...chunk("unknown", { sdkType: "response.output_text.delta" }, 7),
+      rawPart: { type: "response.output_text.delta", item_id: "txt-raw", delta: "from-rawpart" },
+    })).toEqual({
+      kind: "assistant_delta",
+      turnId: "t1",
+      streamId: "txt-raw",
+      text: "from-rawpart",
     });
 
     expect(mapModelStreamChunk(chunk("future_part_type", { next: true }, 6) as any)).toEqual({

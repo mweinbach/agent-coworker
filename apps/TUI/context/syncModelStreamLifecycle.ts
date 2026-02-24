@@ -73,14 +73,23 @@ function extractUsageSnapshot(value: unknown): ContextUsageSnapshot | null {
 
 function normalizeToolArgsFromInput(inputText: string, existingArgs?: unknown): unknown {
   const parsedInput = parseStructuredToolInput(inputText);
-  const base = asRecord(existingArgs) ?? {};
-  const { input: _discardInput, ...rest } = base;
+  if (Array.isArray(parsedInput)) {
+    return parsedInput;
+  }
 
   const structuredInput = asRecord(parsedInput);
   if (structuredInput) {
+    const base = asRecord(existingArgs) ?? {};
+    const { input: _discardInput, ...rest } = base;
     return { ...rest, ...structuredInput };
   }
 
+  if (Array.isArray(existingArgs)) {
+    return existingArgs;
+  }
+
+  const base = asRecord(existingArgs) ?? {};
+  const { input: _discardInput, ...rest } = base;
   if (Object.keys(rest).length > 0) {
     return { ...rest, input: inputText };
   }

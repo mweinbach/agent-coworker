@@ -1,10 +1,13 @@
 import { z } from "zod";
 
 import {
+  parseServerEventDetailed as parseServerEventDetailedFromProtocol,
   safeParseServerEvent as safeParseServerEventFromProtocol,
   safeParseServerEventJson,
   type ClientMessage,
   type ServerEvent,
+  type ServerEventParseErrorReason,
+  type ServerEventParseResult,
 } from "../server/protocol";
 
 const webSocketImplSchema = z.custom<typeof WebSocket>((value) => typeof value === "function");
@@ -17,6 +20,36 @@ export function safeParseServerEvent(raw: unknown): ServerEvent | null {
   return safeParseServerEventFromProtocol(raw);
 }
 
+export function safeParseServerEventDetailed(raw: unknown): ServerEventParseResult {
+  return parseServerEventDetailedFromProtocol(raw);
+}
+
+export type InvalidServerEvent = {
+  reason: ServerEventParseErrorReason;
+  message: string;
+  eventType?: string;
+  raw: unknown;
+};
+
+function isBlobLike(value: unknown): value is Blob {
+  return typeof Blob !== "undefined" && value instanceof Blob;
+}
+
+async function decodeSocketData(rawData: unknown): Promise<unknown> {
+  if (typeof rawData === "string") return rawData;
+  if (rawData instanceof ArrayBuffer) {
+    return new TextDecoder().decode(new Uint8Array(rawData));
+  }
+  if (ArrayBuffer.isView(rawData)) {
+    const view = rawData as ArrayBufferView;
+    return new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+  }
+  if (isBlobLike(rawData)) {
+    return await rawData.text();
+  }
+  return rawData;
+}
+
 export type AgentSocketOpts = {
   url: string;
   resumeSessionId?: string;
@@ -25,6 +58,7 @@ export type AgentSocketOpts = {
   onEvent: (evt: ServerEvent) => void;
   onClose?: (reason: string) => void;
   onOpen?: () => void;
+  onInvalidEvent?: (evt: InvalidServerEvent) => void;
   WebSocketImpl?: typeof WebSocket;
 
   /** Enable automatic reconnection on unexpected disconnects. Default: false. */
@@ -45,6 +79,7 @@ export class AgentSocket {
   private readonly onEvent: (evt: ServerEvent) => void;
   private readonly onClose?: (reason: string) => void;
   private readonly onOpen?: () => void;
+  private readonly onInvalidEvent?: (evt: InvalidServerEvent) => void;
   private readonly clientHello: { client: string; version?: string };
   private readonly WebSocketImpl: typeof WebSocket;
 
@@ -74,6 +109,7 @@ export class AgentSocket {
     this.onEvent = opts.onEvent;
     this.onClose = opts.onClose;
     this.onOpen = opts.onOpen;
+    this.onInvalidEvent = opts.onInvalidEvent;
     this.clientHello = { client: opts.client, version: opts.version };
 
     this.autoReconnect = opts.autoReconnect ?? false;
@@ -134,24 +170,43 @@ export class AgentSocket {
       this.onOpen?.();
     };
 
-    ws.onmessage = (ev) => {
+    ws.onmessage = async (ev) => {
       const rawData = (ev as { data?: unknown }).data;
-      const evt = safeParseServerEvent(typeof rawData === "string" ? rawData : String(rawData ?? ""));
-      if (!evt) return;
+      try {
+        const decoded = await decodeSocketData(rawData);
+        const parsed = safeParseServerEventDetailed(decoded);
+        if (!parsed.ok) {
+          this.onInvalidEvent?.({
+            reason: parsed.reason,
+            message: parsed.message,
+            eventType: parsed.eventType,
+            raw: decoded,
+          });
+          return;
+        }
+        const evt = parsed.event;
 
-      // Pong is an internal keepalive and should not be surfaced to consumers.
-      if (evt.type === "pong") return;
+        // Pong is an internal keepalive and should not be surfaced to consumers.
+        if (evt.type === "pong") return;
 
-      if (evt.type === "server_hello") {
-        this._sessionId = evt.sessionId;
-        this.resumeSessionId = evt.sessionId;
-        this.ready.resolve(evt.sessionId);
+        if (evt.type === "server_hello") {
+          this._sessionId = evt.sessionId;
+          this.resumeSessionId = evt.sessionId;
+          this.ready.resolve(evt.sessionId);
 
-        // Flush any messages that were queued while disconnected.
-        this.flushSendQueue();
+          // Flush any messages that were queued while disconnected.
+          this.flushSendQueue();
+        }
+
+        this.onEvent(evt);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "failed_to_decode_socket_payload";
+        this.onInvalidEvent?.({
+          reason: "invalid_envelope",
+          message,
+          raw: rawData,
+        });
       }
-
-      this.onEvent(evt);
     };
 
     ws.onerror = () => {

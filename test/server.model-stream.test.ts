@@ -182,12 +182,12 @@ describe("normalizeModelStreamPart branches", () => {
       });
     });
 
-    test("defaults id to empty string when missing", () => {
+    test("defaults id to anonymous id when missing", () => {
       const result = normalizeModelStreamPart(
         { type: "text-start" },
         defaultOpts
       );
-      expect(result.part.id).toBe("");
+      expect(result.part.id).toBe("anon:unseeded:id");
     });
 
     test("omits providerMetadata when absent", () => {
@@ -221,12 +221,12 @@ describe("normalizeModelStreamPart branches", () => {
       });
     });
 
-    test("defaults id to empty string when missing", () => {
+    test("defaults id to anonymous id when missing", () => {
       const result = normalizeModelStreamPart(
         { type: "text-delta", text: "chunk" },
         defaultOpts
       );
-      expect(result.part.id).toBe("");
+      expect(result.part.id).toBe("anon:unseeded:id");
     });
 
     test("handles empty text", () => {
@@ -283,12 +283,12 @@ describe("normalizeModelStreamPart branches", () => {
       });
     });
 
-    test("defaults id to empty string when missing", () => {
+    test("defaults id to anonymous id when missing", () => {
       const result = normalizeModelStreamPart(
         { type: "text-end" },
         defaultOpts
       );
-      expect(result.part.id).toBe("");
+      expect(result.part.id).toBe("anon:unseeded:id");
     });
   });
 
@@ -329,12 +329,12 @@ describe("normalizeModelStreamPart branches", () => {
       expect(result.part.mode).toBe("summary");
     });
 
-    test("defaults id to empty string", () => {
+    test("defaults id to anonymous id", () => {
       const result = normalizeModelStreamPart(
         { type: "reasoning-start" },
         defaultOpts
       );
-      expect(result.part.id).toBe("");
+      expect(result.part.id).toBe("anon:unseeded:id");
     });
   });
 
@@ -436,12 +436,12 @@ describe("normalizeModelStreamPart branches", () => {
       });
     });
 
-    test("defaults id to empty string and toolName to 'tool'", () => {
+    test("defaults id to anonymous id and toolName to 'tool'", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-input-start" },
         defaultOpts
       );
-      expect(result.part.id).toBe("");
+      expect(result.part.id).toBe("anon:unseeded:id");
       expect(result.part.toolName).toBe("tool");
     });
 
@@ -494,12 +494,12 @@ describe("normalizeModelStreamPart branches", () => {
       expect(result.part.delta).toBe("42");
     });
 
-    test("defaults id to empty string", () => {
+    test("defaults id to anonymous id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-input-delta", delta: "d" },
         defaultOpts
       );
-      expect(result.part.id).toBe("");
+      expect(result.part.id).toBe("anon:unseeded:id");
     });
   });
 
@@ -516,12 +516,12 @@ describe("normalizeModelStreamPart branches", () => {
       });
     });
 
-    test("defaults id to empty string", () => {
+    test("defaults id to anonymous id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-input-end" },
         defaultOpts
       );
-      expect(result.part.id).toBe("");
+      expect(result.part.id).toBe("anon:unseeded:id");
     });
   });
 
@@ -563,12 +563,28 @@ describe("normalizeModelStreamPart branches", () => {
       expect(result.part.toolCallId).toBe("fallback-id");
     });
 
-    test("falls back to empty string when neither toolCallId nor id", () => {
+    test("falls back to anonymous id when neither toolCallId nor id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-call", toolName: "read", input: {} },
         defaultOpts
       );
-      expect(result.part.toolCallId).toBe("");
+      expect(result.part.toolCallId).toBe("anon:unseeded:tool");
+    });
+
+    test("coerces numeric toolCallId values", () => {
+      const result = normalizeModelStreamPart(
+        { type: "tool-call", toolCallId: 42, toolName: "read", input: {} },
+        defaultOpts
+      );
+      expect(result.part.toolCallId).toBe("42");
+    });
+
+    test("uses fallbackIdSeed for anonymous tool ids", () => {
+      const result = normalizeModelStreamPart(
+        { type: "tool-call", toolName: "read", input: {} },
+        { ...defaultOpts, fallbackIdSeed: "turn-1:9" }
+      );
+      expect(result.part.toolCallId).toBe("anon:turn-1:9:tool");
     });
 
     test("defaults toolName to 'tool' when missing", () => {
@@ -647,12 +663,12 @@ describe("normalizeModelStreamPart branches", () => {
       expect(result.part.toolCallId).toBe("id-1");
     });
 
-    test("falls back to empty string when neither toolCallId nor id", () => {
+    test("falls back to anonymous id when neither toolCallId nor id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-result", toolName: "read", output: "ok" },
         defaultOpts
       );
-      expect(result.part.toolCallId).toBe("");
+      expect(result.part.toolCallId).toBe("anon:unseeded:tool");
     });
 
     test("defaults output to null when undefined", () => {
@@ -711,12 +727,12 @@ describe("normalizeModelStreamPart branches", () => {
       expect(result.part.toolCallId).toBe("id-err");
     });
 
-    test("falls back to empty string when neither toolCallId nor id", () => {
+    test("falls back to anonymous id when neither toolCallId nor id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-error", toolName: "bash", error: "fail" },
         defaultOpts
       );
-      expect(result.part.toolCallId).toBe("");
+      expect(result.part.toolCallId).toBe("anon:unseeded:tool");
     });
 
     test('defaults error to "unknown_error" when undefined', () => {
@@ -770,12 +786,12 @@ describe("normalizeModelStreamPart branches", () => {
       expect(result.part.toolCallId).toBe("id-d");
     });
 
-    test("falls back to empty string when neither toolCallId nor id", () => {
+    test("falls back to anonymous id when neither toolCallId nor id", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-output-denied", toolName: "bash" },
         defaultOpts
       );
-      expect(result.part.toolCallId).toBe("");
+      expect(result.part.toolCallId).toBe("anon:unseeded:tool");
     });
 
     test("omits reason when not provided", () => {
@@ -804,12 +820,12 @@ describe("normalizeModelStreamPart branches", () => {
       });
     });
 
-    test("defaults approvalId to empty string when missing", () => {
+    test("defaults approvalId to anonymous id when missing", () => {
       const result = normalizeModelStreamPart(
         { type: "tool-approval-request", toolCall: { name: "test" } },
         defaultOpts
       );
-      expect(result.part.approvalId).toBe("");
+      expect(result.part.approvalId).toBe("anon:unseeded:approval");
     });
 
     test("defaults toolCall to {} when undefined", () => {
@@ -1074,6 +1090,18 @@ describe("sanitizeUnknown via normalizeModelStreamPart", () => {
     expect(data).toContain("[truncated");
   });
 
+  test("rawPartMode=full keeps larger payload strings intact", () => {
+    const longString = "x".repeat(5000);
+    const result = normalizeModelStreamPart(
+      { type: "tool-call", toolCallId: "tc-s1", toolName: "test", input: { data: longString } },
+      { ...defaultOpts, rawPartMode: "full" }
+    );
+    const input = result.part.input as Record<string, unknown>;
+    const data = input.data as string;
+    expect(data.length).toBe(5000);
+    expect(data).not.toContain("[truncated");
+  });
+
   test("handles circular references in input", () => {
     const obj: Record<string, unknown> = { a: 1 };
     obj.self = obj;
@@ -1162,12 +1190,12 @@ describe("toolCallId fallback chain", () => {
         expect(result.part.toolCallId).toBe("only-id");
       });
 
-      test("falls back to empty string when both are absent", () => {
+      test("falls back to anonymous id when both are absent", () => {
         const result = normalizeModelStreamPart(
           { type, toolName: "test", input: {}, output: "ok", error: "err", reason: "r" },
           defaultOpts
         );
-        expect(result.part.toolCallId).toBe("");
+        expect(result.part.toolCallId).toBe("anon:unseeded:tool");
       });
     });
   }

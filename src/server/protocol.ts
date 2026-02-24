@@ -389,5 +389,8 @@ export const SERVER_EVENT_TYPES = [
 export { safeParseClientMessage } from "./protocolParser";
 export {
   safeJsonParse as safeParseServerEventJson,
+  parseServerEventDetailed,
   safeParseServerEvent,
+  type ServerEventParseErrorReason,
+  type ServerEventParseResult,
 } from "./protocolEventParser";

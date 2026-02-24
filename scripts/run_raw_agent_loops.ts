@@ -75,7 +75,7 @@ type AttemptMeta = {
 
 type RawLoopArgs = {
   reportOnly: boolean;
-  scenario: "mixed" | "dcf-model-matrix" | "gpt-skill-reliability";
+  scenario: "mixed" | "dcf-model-matrix" | "gpt-skill-reliability" | "google-customtools-tool-coverage";
   onlyRunIds: string[];
   onlyModels: string[];
 };
@@ -97,7 +97,12 @@ function parseArgs(argv: string[]): RawLoopArgs {
     if (a === "--scenario") {
       const next = argv[i + 1];
       if (!next) throw new Error("Missing value for --scenario");
-      if (next !== "mixed" && next !== "dcf-model-matrix" && next !== "gpt-skill-reliability") {
+      if (
+        next !== "mixed" &&
+        next !== "dcf-model-matrix" &&
+        next !== "gpt-skill-reliability" &&
+        next !== "google-customtools-tool-coverage"
+      ) {
         throw new Error(`Invalid --scenario value: ${next}`);
       }
       args.scenario = next;
@@ -120,7 +125,7 @@ function parseArgs(argv: string[]): RawLoopArgs {
     }
     if (a === "--help" || a === "-h") {
       console.log(
-        "Usage: bun scripts/run_raw_agent_loops.ts [--report-only] [--scenario mixed|dcf-model-matrix|gpt-skill-reliability] [--only-run <run-id>] [--only-model <model>]"
+        "Usage: bun scripts/run_raw_agent_loops.ts [--report-only] [--scenario mixed|dcf-model-matrix|gpt-skill-reliability|google-customtools-tool-coverage] [--only-run <run-id>] [--only-model <model>]"
       );
       process.exit(0);
     }
@@ -322,6 +327,16 @@ function collectTracedToolCallNames(steps: TracedStep[]): string[] {
   const names: string[] = [];
   for (const step of steps) {
     collectToolCallsFromUnknown(step.step, names);
+  }
+  return names;
+}
+
+function collectToolCallNamesFromToolLog(toolLogLines: string[]): string[] {
+  const names: string[] = [];
+  for (const line of toolLogLines) {
+    const match = /^tool>\s+([a-zA-Z0-9_]+)/.exec(line);
+    if (!match?.[1]) continue;
+    names.push(match[1]);
   }
   return names;
 }
@@ -904,6 +919,114 @@ function buildGptSkillReliabilityRuns(): RunSpec[] {
   ];
 }
 
+function buildGoogleCustomtoolsToolCoverageRuns(): RunSpec[] {
+  const model = "gemini-3.1-pro-preview-customtools";
+
+  return [
+    {
+      id: "gct-01-web-core",
+      provider: "google",
+      model,
+      maxSteps: 90,
+      maxAttempts: 4,
+      requiredToolCalls: ["todoWrite", "webSearch", "webFetch", "write", "glob", "read"],
+      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+
+Task: Exercise Google custom-tools web + planning flow.
+
+Steps (must use tools):
+1) Use todoWrite to create 4 items and set exactly one item to in_progress.
+2) Use webSearch with query "HTTP 429 Retry-After header practical guidance" and maxResults=5.
+3) Use webFetch on URL "https://www.rfc-editor.org/rfc/rfc6585.txt" with maxLength=7000.
+4) Use write to create "gct01_web_notes.md" with:
+- A title
+- 3 bullets summarizing findings
+- A "Source URL" line
+5) Use glob with pattern "gct01_web_notes.md".
+6) Use read to read "gct01_web_notes.md" (limit=220, offset=1).
+7) Use todoWrite to mark all items completed.
+
+Final response must be raw JSON:
+{ "notes": "<absolute path>", "end": "<<END_RUN>>" }`,
+    },
+    {
+      id: "gct-02-skill-bash",
+      provider: "google",
+      model,
+      maxSteps: 90,
+      maxAttempts: 4,
+      requiredToolCalls: ["skill", "write", "bash", "glob", "read"],
+      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+
+Task: Exercise skill loading plus shell execution.
+
+Steps (must use tools):
+1) Use skill with skillName="doc".
+2) Use write to create "gct02_skill_bash.txt" containing:
+- A title
+- A line with text "BASH_OUTPUT_TODO"
+3) Use bash to run command: pwd
+4) Use glob with pattern "gct02_skill_bash.txt".
+5) Use read to read "gct02_skill_bash.txt" (limit=180, offset=1).
+
+Final response must be raw JSON:
+{ "file": "<absolute path>", "end": "<<END_RUN>>" }`,
+    },
+    {
+      id: "gct-03-ask-notebook-memory",
+      provider: "google",
+      model,
+      maxSteps: 110,
+      maxAttempts: 4,
+      requiredToolCalls: ["ask", "write", "notebookEdit", "memory", "read"],
+      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+
+Task: Exercise ask, notebookEdit, and memory in one turn.
+
+Steps (must use tools):
+1) Use ask with question "Pick a dataset label" and options ["alpha","beta","gamma"].
+2) Use write to create "gct03.ipynb" as minimal notebook JSON with exactly one markdown cell.
+3) Use notebookEdit with editMode="insert" at cellIndex=1 to add a code cell that prints the selected label.
+4) Use memory with action="write", key="runs/gct03", content="dataset=<label>".
+5) Use memory with action="read", key="runs/gct03".
+6) Use memory with action="search", query="dataset=".
+7) Use read to read "gct03.ipynb" (limit=220, offset=1).
+
+Final response must be exactly two lines:
+label: <selected label>
+<<END_RUN>>`,
+    },
+    {
+      id: "gct-04-gapfill-edit-grep-spawn",
+      provider: "google",
+      model,
+      maxSteps: 110,
+      maxAttempts: 4,
+      requiredToolCalls: ["spawnAgent", "write", "grep", "edit", "read"],
+      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+
+Task: Exercise spawnAgent + grep + edit deterministically.
+
+Steps (must use tools):
+1) Use spawnAgent with agentType="general" and task: "Reply with exactly SUBAGENT_OK".
+2) Use write to create "gct04_source.txt" containing lines:
+- alpha
+- beta
+- gamma
+3) Use grep with pattern "beta", path "gct04_source.txt", caseSensitive=false.
+4) Use write to create "gct04_report.md" with lines:
+- SUBAGENT_PLACEHOLDER
+- GREP_PLACEHOLDER
+5) Use edit to replace exact string "SUBAGENT_PLACEHOLDER" with spawnAgent result.
+6) Use edit to replace exact string "GREP_PLACEHOLDER" with a concise grep summary.
+7) Use read to read "gct04_report.md" (limit=220, offset=1).
+
+Final response must be raw JSON:
+{ "report": "<absolute path>", "end": "<<END_RUN>>" }`,
+    },
+  ];
+}
+
 function computeRetryDelayMs(err: unknown, attempt: number): number {
   const extracted = extractRetryDelayMs(err);
   const backoffBaseMs = 12_000;
@@ -979,7 +1102,9 @@ async function main() {
       ? "raw-agent-loop_mixed"
       : cliArgs.scenario === "dcf-model-matrix"
         ? "raw-agent-loop_dcf-model-matrix"
-        : "raw-agent-loop_gpt-skill-reliability";
+        : cliArgs.scenario === "gpt-skill-reliability"
+          ? "raw-agent-loop_gpt-skill-reliability"
+          : "raw-agent-loop_google-customtools-tool-coverage";
   const runRoot = path.join(baseConfig.outputDirectory || path.join(repoDir, "tmp"), `${runRootPrefix}_${safeStamp()}`);
   await ensureDir(runRoot);
 
@@ -1262,7 +1387,9 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
       ? mixedRuns
       : cliArgs.scenario === "dcf-model-matrix"
         ? buildDcfModelMatrixRuns()
-        : buildGptSkillReliabilityRuns();
+        : cliArgs.scenario === "gpt-skill-reliability"
+          ? buildGptSkillReliabilityRuns()
+          : buildGoogleCustomtoolsToolCoverageRuns();
   const runs = scenarioRuns.filter((run) => {
     if (cliArgs.onlyRunIds.length > 0 && !cliArgs.onlyRunIds.includes(run.id)) {
       return false;
@@ -1488,9 +1615,9 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
 
         if (Array.isArray(run.requiredToolCalls) && run.requiredToolCalls.length > 0) {
           const tracedToolCalls = collectTracedToolCallNames(steps);
+          const loggedToolCalls = collectToolCallNamesFromToolLog(toolLogLines);
           const missing = run.requiredToolCalls.filter((toolName) => {
-            const prefix = `tool> ${toolName} `;
-            if (toolLogLines.some((line) => line.startsWith(prefix))) return false;
+            if (loggedToolCalls.includes(toolName)) return false;
             return !tracedToolCalls.includes(toolName);
           });
           if (missing.length > 0) {
@@ -1499,8 +1626,10 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
         }
 
         if (run.requiredFirstNonTodoToolCall) {
+          const loggedToolCalls = collectToolCallNamesFromToolLog(toolLogLines);
           const tracedToolCalls = collectTracedToolCallNames(steps);
-          const nonTodoCalls = tracedToolCalls.filter((name) => name !== "todoWrite");
+          const observedToolCalls = loggedToolCalls.length > 0 ? loggedToolCalls : tracedToolCalls;
+          const nonTodoCalls = observedToolCalls.filter((name) => name !== "todoWrite");
           const first = nonTodoCalls[0] ?? "";
           if (first !== run.requiredFirstNonTodoToolCall) {
             throw new Error(

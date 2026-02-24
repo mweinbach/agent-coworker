@@ -244,6 +244,7 @@ export function createWebSearchTool(ctx: ToolContext) {
     case "google":
       return createCustomWebSearchTool(ctx, { exaOnly: true });
     case "anthropic":
+      return anthropic.tools.webSearch_20250305({});
     case "codex-cli":
       return createCustomWebSearchTool(ctx);
   }

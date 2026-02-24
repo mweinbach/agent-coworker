@@ -1,3 +1,28 @@
+# Task: Validate real production loop tool coverage for Google gemini-3.1-pro-preview-customtools
+
+## Plan
+- [x] Add a dedicated raw harness scenario/runs for Google `gemini-3.1-pro-preview-customtools` that require all built-in tools at least once across runs.
+- [x] Run the scenario against real provider auth with production loop wiring and capture artifacts.
+- [x] Fix any runtime regressions discovered while running the live loop.
+- [x] Add/adjust regression tests where needed and run targeted suites.
+- [x] Run full verification (`bun test`) and record outcomes.
+
+## Review
+- Added a new harness scenario, `google-customtools-tool-coverage`, in `scripts/run_raw_agent_loops.ts` and updated argument parsing/help + run-root naming to support selecting it.
+- Scenario includes 4 Google runs on `gemini-3.1-pro-preview-customtools` covering all built-in tools: `ask`, `bash`, `edit`, `glob`, `grep`, `memory`, `notebookEdit`, `read`, `skill`, `spawnAgent`, `todoWrite`, `webFetch`, `webSearch`, `write`.
+- Fixed a real harness validation bug discovered during live run: `requiredFirstNonTodoToolCall` was derived only from traced stream payloads, which can miss tool calls for some provider/tool traces. Added ordered `tool-log` extraction and used it as primary source (with traced fallback).
+- Removed unnecessary first-call ordering enforcement from `gct-02-skill-bash`; kept required tool usage assertions.
+- Fixed unrelated pre-existing red suite while validating: `createWebSearchTool()` now returns Anthropic provider-native `anthropic.tools.webSearch_20250305({})` for `provider: "anthropic"`, matching expected runtime/tool id.
+- Live production loop verification (using saved Google auth from `~/.cowork/auth/connections.json`):
+  - `bun scripts/run_raw_agent_loops.ts --scenario google-customtools-tool-coverage --report-only`
+  - latest run root: `tmp/raw-agent-loop_google-customtools-tool-coverage_2026-02-24T17-16-23-673Z`
+  - aggregated tool-log verification: `UNIQUE_TOOL_COUNT=14`
+- Verification:
+  - `bun test test/tools.test.ts test/repl.disconnect-send.test.ts` -> **154 pass, 0 fail**
+  - `bun test` -> **1671 pass, 2 skip, 0 fail**
+
+---
+
 # Task: Loosen strict Zod validation around tool-call stream parsing
 
 ## Plan

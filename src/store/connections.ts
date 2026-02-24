@@ -37,11 +37,11 @@ export type AiCoworkerPaths = {
 const isoTimestampSchema = z.string().datetime({ offset: true });
 
 const storedConnectionSchema = z.object({
-  service: z.enum(PROVIDER_NAMES),
+  service: z.string().trim().min(1),
   mode: z.enum(["api_key", "oauth", "oauth_pending"]),
   apiKey: z.string().trim().min(1).optional(),
   updatedAt: isoTimestampSchema,
-}).strict();
+}).passthrough();
 
 const toolApiKeysSchema = z.object({
   exa: z.string().trim().min(1).optional(),
@@ -50,19 +50,13 @@ const toolApiKeysSchema = z.object({
 const connectionStoreSchema = z.object({
   version: z.literal(1),
   updatedAt: isoTimestampSchema,
-  services: z.record(z.string().trim().min(1), storedConnectionSchema).transform((rawServices, ctx) => {
+  services: z.record(z.string().trim().min(1), storedConnectionSchema.passthrough()).transform((rawServices, ctx) => {
     const normalized: ConnectionStore["services"] = {};
-    let hasMismatch = false;
 
-    for (const [serviceRaw, connection] of Object.entries(rawServices) as Array<[string, StoredConnection]>) {
+    for (const [serviceRaw, connection] of Object.entries(rawServices) as Array<[string, any]>) {
       const service = resolveProviderName(serviceRaw);
       if (!service) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["services", serviceRaw],
-          message: `Invalid service key in connection store: ${serviceRaw}`,
-        });
-        hasMismatch = true;
+        // Skip unknown service keys instead of failing the parse.
         continue;
       }
       if (connection.service !== service) {
@@ -71,13 +65,11 @@ const connectionStoreSchema = z.object({
           path: ["services", serviceRaw, "service"],
           message: `Connection service mismatch for key ${serviceRaw}`,
         });
-        hasMismatch = true;
-        continue;
+        return z.NEVER;
       }
       normalized[service] = connection;
     }
 
-    if (hasMismatch) return z.NEVER;
     return normalized;
   }),
   toolApiKeys: toolApiKeysSchema.optional(),

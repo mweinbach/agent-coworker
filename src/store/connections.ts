@@ -59,15 +59,16 @@ const connectionStoreSchema = z.object({
         // Skip unknown service keys instead of failing the parse.
         continue;
       }
-      if (connection.service !== service) {
+      const connectionService = resolveProviderName(connection.service);
+      if (connectionService !== service) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["services", serviceRaw, "service"],
           message: `Connection service mismatch for key ${serviceRaw}`,
         });
-        return z.NEVER;
+        continue;
       }
-      normalized[service] = connection;
+      normalized[service] = { ...connection, service } as StoredConnection;
     }
 
     return normalized;

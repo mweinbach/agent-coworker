@@ -59,12 +59,20 @@ export function createSkillTool(ctx: ToolContext) {
       skillName: z.string().describe(paramDesc),
     }),
     execute: async ({ skillName }) => {
+      ctx.log(`tool> skill ${JSON.stringify({ skillName })}`);
       const discovered = await discoverSkills(ctx.config.skillsDirs);
       const selected = discovered.find((s) => s.enabled && s.name === skillName);
-      if (!selected) return `Skill "${skillName}" not found.`;
+      if (!selected) {
+        ctx.log(`tool< skill ${JSON.stringify({ ok: false, reason: "not_found" })}`);
+        return `Skill "${skillName}" not found.`;
+      }
 
       const content = await readIfExists(path.resolve(selected.path));
-      if (!content) return `Skill "${skillName}" not found.`;
+      if (!content) {
+        ctx.log(`tool< skill ${JSON.stringify({ ok: false, reason: "read_error" })}`);
+        return `Skill "${skillName}" not found.`;
+      }
+      ctx.log(`tool< skill ${JSON.stringify({ ok: true })}`);
       return stripSkillFrontMatter(content);
     },
   });

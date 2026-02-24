@@ -69,6 +69,8 @@ function shouldAdoptServerTitle(opts: {
   if (opts.incomingSource === "manual") return true;
   if (opts.currentSource === "manual") return false;
   if (opts.currentSource === "default") return true;
+  if (opts.currentSource === "heuristic" && opts.incomingSource === "model") return true;
+  if (opts.currentSource === opts.incomingSource) return true;
   return false;
 }
 

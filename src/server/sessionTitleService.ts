@@ -1,4 +1,4 @@
-import { generateText, Output } from "ai";
+import { generateObject } from "ai";
 import { z } from "zod";
 
 import { defaultModelForProvider, getModel } from "../config";
@@ -29,7 +29,7 @@ export type SessionTitleResult = {
 };
 
 type SessionTitleDeps = {
-  generateText: typeof generateText;
+  generateObject: typeof generateObject;
   getModel: typeof getModel;
   defaultModelForProvider: typeof defaultModelForProvider;
 };
@@ -132,7 +132,7 @@ function buildTitlePrompt(query: string): string {
 
 export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps> = {}) {
   const deps: SessionTitleDeps = {
-    generateText,
+    generateObject,
     getModel,
     defaultModelForProvider,
     ...overrides,
@@ -154,15 +154,15 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
     const candidates = modelCandidatesForProvider(opts.config.provider, deps.defaultModelForProvider);
     for (const modelId of candidates) {
       try {
-        const model = deps.getModel(opts.config, modelId) as Parameters<typeof deps.generateText>[0]["model"];
-        const { output } = await deps.generateText({
+        const model = deps.getModel(opts.config, modelId) as Parameters<typeof deps.generateObject>[0]["model"];
+        const { object } = await deps.generateObject({
           model,
-          output: Output.object({ schema: TITLE_SCHEMA }),
+          schema: TITLE_SCHEMA,
           prompt: buildTitlePrompt(query),
           maxOutputTokens: TITLE_MAX_TOKENS,
         });
 
-        const title = sanitizeModelTitle(output.title);
+        const title = sanitizeModelTitle(object.title);
         if (!title) continue;
 
         return {

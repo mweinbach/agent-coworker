@@ -13,6 +13,8 @@ import {
   type DesktopNotificationInput,
   type ListDirectoryInput,
   type OpenPathInput,
+  type PreviewOSFileInput,
+  type ReadFileInput,
   type ReadTranscriptInput,
   type RenamePathInput,
   type RevealPathInput,
@@ -34,6 +36,8 @@ import {
   desktopNotificationInputSchema,
   listDirectoryInputSchema,
   openPathInputSchema,
+  previewOSFileInputSchema,
+  readFileInputSchema,
   persistedStateInputSchema,
   readTranscriptInputSchema,
   renamePathInputSchema,
@@ -83,6 +87,14 @@ function assertShowContextMenuInput(opts: ShowContextMenuInput): void {
 
 function assertListDirectoryInput(opts: ListDirectoryInput): void {
   parseWithSchema(listDirectoryInputSchema, opts, "listDirectory options");
+}
+
+function assertReadFileInput(opts: ReadFileInput): void {
+  parseWithSchema(readFileInputSchema, opts, "readFile options");
+}
+
+function assertPreviewOSFileInput(opts: PreviewOSFileInput): void {
+  parseWithSchema(previewOSFileInputSchema, opts, "previewOSFile options");
 }
 
 function assertOpenPathInput(opts: OpenPathInput): void {
@@ -189,6 +201,16 @@ const desktopApi = Object.freeze<DesktopApi>({
   listDirectory: (opts: ListDirectoryInput) => {
     assertListDirectoryInput(opts);
     return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.listDirectory, opts);
+  },
+
+  readFile: (opts: ReadFileInput) => {
+    assertReadFileInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.readFile, opts);
+  },
+
+  previewOSFile: (opts: PreviewOSFileInput) => {
+    assertPreviewOSFileInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.previewOSFile, opts);
   },
 
   openPath: (opts: OpenPathInput) => {

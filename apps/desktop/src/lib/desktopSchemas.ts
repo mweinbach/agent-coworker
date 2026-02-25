@@ -10,6 +10,8 @@ import type {
   DesktopNotificationInput,
   ListDirectoryInput,
   OpenPathInput,
+  PreviewOSFileInput,
+  ReadFileInput,
   ReadTranscriptInput,
   RenamePathInput,
   RevealPathInput,
@@ -69,7 +71,7 @@ export const transcriptBatchInputSchema: z.ZodType<TranscriptBatchInput> = z.obj
   threadId: safeIdSchema,
   direction: directionSchema,
   payload: z.unknown(),
-});
+}) as z.ZodType<TranscriptBatchInput>;
 
 export const showContextMenuInputSchema: z.ZodType<ShowContextMenuInput> = z.object({
   items: z.array(contextMenuItemSchema),
@@ -81,6 +83,8 @@ export const listDirectoryInputSchema: z.ZodType<ListDirectoryInput> = z.object(
 });
 
 export const openPathInputSchema: z.ZodType<OpenPathInput> = sharedPathSchema;
+export const previewOSFileInputSchema: z.ZodType<PreviewOSFileInput> = sharedPathSchema;
+export const readFileInputSchema: z.ZodType<ReadFileInput> = sharedPathSchema;
 export const revealPathInputSchema: z.ZodType<RevealPathInput> = sharedPathSchema;
 export const copyPathInputSchema: z.ZodType<CopyPathInput> = sharedPathSchema;
 export const trashPathInputSchema: z.ZodType<TrashPathInput> = sharedPathSchema;

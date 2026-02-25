@@ -3,7 +3,6 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
-  ChevronUpIcon,
   FolderIcon,
   FolderOpenIcon,
   FileIcon,
@@ -14,7 +13,7 @@ import {
 import { useAppStore } from "../../app/store";
 import type { ExplorerEntry } from "../../app/types";
 import { cn } from "../../lib/utils";
-import { listDirectory, showContextMenu, confirmAction, showNotification } from "../../lib/desktopCommands";
+import { listDirectory, showContextMenu, confirmAction, showNotification, previewOSFile } from "../../lib/desktopCommands";
 
 export type WorkspaceFileExplorerProps = {
   workspaceId: string;
@@ -224,16 +223,6 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     [rootPath, expandedPaths, directoryByPath]
   );
 
-  const selectedEntry = useMemo(() => {
-    if (!selectedPath) return null;
-    for (const directory of Object.values(directoryByPath)) {
-      const match = directory.entries.find((entry) => normalizeExplorerPath(entry.path) === selectedPath);
-      if (match) return match;
-    }
-    return null;
-  }, [directoryByPath, selectedPath]);
-
-  const hasExpandedFolders = expandedPaths.size > 1;
   const rootSnapshot = directoryByPath[rootPath];
   const rootLabel = formatPathLabel(rootPath);
 
@@ -398,13 +387,6 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     };
   }, [refreshExpandedDirectories, rootPath]);
 
-  const handleCollapseAll = useCallback(() => {
-    if (!rootPathRef.current) return;
-    const collapsed = new Set<string>([rootPathRef.current]);
-    expandedPathsRef.current = collapsed;
-    setExpandedPaths(collapsed);
-  }, []);
-
   const handleContextMenu = useCallback(
     async (e: React.MouseEvent, entry: ExplorerEntry) => {
       e.preventDefault();
@@ -496,20 +478,18 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
   return (
     <div className={cn("flex h-full flex-col overflow-hidden", className)}>
-      <div className="border-b border-border/50 bg-muted/20">
-        <div className="flex items-center gap-1 p-1">
+      <div className="flex items-center justify-between px-3 pb-2 pt-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="text-xs font-semibold tracking-wide text-muted-foreground/80 shrink-0">FILES</div>
+          <div className="text-muted-foreground/40 text-xs shrink-0 font-light">/</div>
           <button
-            className="p-1.5 rounded hover:bg-muted text-muted-foreground disabled:opacity-50"
-            onClick={handleCollapseAll}
-            disabled={!hasExpandedFolders}
-            title="Collapse all folders"
             type="button"
+            className="truncate text-xs font-semibold text-foreground hover:underline focus:outline-none"
+            onClick={() => void openFile(workspaceId, rootPath, false).catch(() => {})}
+            title="Open in native explorer"
           >
-            <ChevronUpIcon className="h-3.5 w-3.5" />
+            {rootLabel}
           </button>
-        </div>
-        <div className="px-2 pb-1.5">
-          <div className="truncate text-xs font-semibold text-foreground">{rootLabel}</div>
         </div>
       </div>
 
@@ -563,7 +543,12 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                     entry.isHidden && "opacity-70"
                   )}
                   style={{ paddingLeft: `${depth * 0.85 + 0.35}rem` }}
-                  onClick={() => selectFile(workspaceId, entry.path)}
+                  onClick={() => {
+                    selectFile(workspaceId, entry.path);
+                    if (!entry.isDirectory) {
+                      void previewOSFile({ path: entry.path }).catch(() => {});
+                    }
+                  }}
                   onDoubleClick={() => handleOpenEntry(entry)}
                   onContextMenu={(event) => {
                     void handleContextMenu(event, entry);
@@ -632,22 +617,6 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
           </div>
         )}
       </div>
-
-      {selectedPath ? (
-        <div className="border-t border-border/50 bg-muted/15 px-2 py-1.5 text-[10px] text-muted-foreground">
-          <div className="truncate font-medium text-foreground">{selectedEntry?.name ?? formatPathLabel(selectedPath)}</div>
-          <div className="truncate">{selectedPath}</div>
-          {selectedEntry ? (
-            <div className="truncate">
-              {selectedEntry.isDirectory
-                ? selectedEntry.isHidden
-                  ? "Hidden folder"
-                  : "Folder"
-                : `${formatEntrySize(selectedEntry.sizeBytes)} • ${formatModifiedAt(selectedEntry.modifiedAtMs)}`}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
 });

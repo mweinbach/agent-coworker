@@ -15,10 +15,10 @@ export const ContextSidebar = memo(function ContextSidebar() {
   return (
     <aside className="app-context-sidebar flex h-full w-full flex-col gap-3 p-3 overflow-hidden">
       <Card className="border-border/80 bg-card/80">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">Tasks</CardTitle>
+        <CardHeader className="pb-0 pt-3 px-3 flex-none">
+          <CardTitle className="text-xs font-semibold tracking-wide text-muted-foreground/80">TASKS</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2 pt-0">
+        <CardContent className="space-y-2 pt-2 px-3 pb-3">
           {!todos || todos.length === 0 ? (
             <div className="py-3 text-center text-xs text-muted-foreground">No active tasks</div>
           ) : (
@@ -39,14 +39,16 @@ export const ContextSidebar = memo(function ContextSidebar() {
       </Card>
 
       <Card className="min-h-0 flex-1 border-border/80 bg-card/80 flex flex-col">
-        <CardHeader className="pb-2 flex-none">
-          <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">Files</CardTitle>
-        </CardHeader>
         <CardContent className="min-h-0 flex-1 p-0">
           {selectedWorkspaceId ? (
             <WorkspaceFileExplorer workspaceId={selectedWorkspaceId} />
           ) : (
-            <div className="py-3 text-center text-xs text-muted-foreground">No workspace selected</div>
+            <>
+              <div className="px-3 pt-3 pb-0">
+                <span className="text-xs font-semibold tracking-wide text-muted-foreground/80">FILES</span>
+              </div>
+              <div className="py-3 text-center text-xs text-muted-foreground">No workspace selected</div>
+            </>
           )}
         </CardContent>
       </Card>

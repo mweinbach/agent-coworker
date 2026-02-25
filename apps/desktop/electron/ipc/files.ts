@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { clipboard, shell } from "electron";
+import { clipboard, shell, BrowserWindow } from "electron";
 
 import {
   DESKTOP_IPC_CHANNELS,
@@ -9,6 +9,8 @@ import {
   type CreateDirectoryInput,
   type ListDirectoryInput,
   type OpenPathInput,
+  type PreviewOSFileInput,
+  type ReadFileInput,
   type RenamePathInput,
   type RevealPathInput,
   type TrashPathInput,
@@ -18,6 +20,8 @@ import {
   createDirectoryInputSchema,
   listDirectoryInputSchema,
   openPathInputSchema,
+  previewOSFileInputSchema,
+  readFileInputSchema,
   renamePathInputSchema,
   revealPathInputSchema,
   trashPathInputSchema,
@@ -74,6 +78,38 @@ export function registerFilesIpc(context: DesktopIpcModuleContext): void {
         }
         return a.name.localeCompare(b.name);
       });
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.readFile, async (_event, args: ReadFileInput) => {
+    const input = parseWithSchema(readFileInputSchema, args, "readFile options");
+    await workspaceRoots.ensureApprovedWorkspaceRoots();
+    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    
+    let fh;
+    try {
+      fh = await fs.open(safePath, 'r');
+      const buffer = Buffer.alloc(256 * 1024); // max 256KB preview
+      const { bytesRead } = await fh.read(buffer, 0, buffer.length, 0);
+      let content = buffer.subarray(0, bytesRead).toString("utf8");
+      
+      // If it looks like binary or just unprintable, maybe we don't preview or just let it be.
+      // We'll just return the string.
+      return { content };
+    } finally {
+      if (fh) {
+        await fh.close();
+      }
+    }
+  });
+
+  handleDesktopInvoke(DESKTOP_IPC_CHANNELS.previewOSFile, async (event, args: PreviewOSFileInput) => {
+    const input = parseWithSchema(previewOSFileInputSchema, args, "previewOSFile options");
+    await workspaceRoots.ensureApprovedWorkspaceRoots();
+    const safePath = resolveAllowedPath(workspaceRoots.getApprovedWorkspaceRoots(), input.path);
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) {
+      win.previewFile(safePath);
+    }
   });
 
   handleDesktopInvoke(DESKTOP_IPC_CHANNELS.openPath, async (_event, args: OpenPathInput) => {

@@ -98,6 +98,15 @@ export async function listDirectory(opts: { path: string; includeHidden?: boolea
   return await api.listDirectory(opts);
 }
 
+export async function readFile(opts: { path: string }): Promise<string> {
+  const result = await requireDesktopApi().readFile(opts);
+  return result.content;
+}
+
+export async function previewOSFile(opts: { path: string }): Promise<void> {
+  await requireDesktopApi().previewOSFile(opts);
+}
+
 export async function openPath(opts: { path: string }): Promise<void> {
   await requireDesktopApi().openPath(opts);
 }

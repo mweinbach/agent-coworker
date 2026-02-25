@@ -126,6 +126,7 @@ export class TurnExecutionManager {
       this.context.queuePersistSessionSnapshot("session.user_message");
 
       let streamPartIndex = 0;
+      let lastStreamError: unknown = null;
       const res = await this.context.deps.runTurnImpl({
         config: this.context.state.config,
         system: this.context.state.system,
@@ -148,6 +149,7 @@ export class TurnExecutionManager {
         abortSignal: this.context.state.abortController.signal,
         includeRawChunks: true,
         onModelError: async (error) => {
+          lastStreamError = error;
           this.context.emitTelemetry("agent.stream.error", "error", {
             sessionId: this.context.id,
             provider: this.context.state.config.provider,
@@ -170,6 +172,9 @@ export class TurnExecutionManager {
             fallbackIdSeed: turnId,
             rawPartMode: process.env.COWORK_MODEL_STREAM_RAW_MODE === "full" ? "full" : "sanitized",
           });
+          if (normalized.partType === "error") {
+             lastStreamError = normalized.part.error;
+          }
           this.context.emit({
             type: "model_stream_chunk",
             sessionId: this.context.id,
@@ -213,10 +218,15 @@ export class TurnExecutionManager {
         Date.now() - turnStartedAt
       );
     } catch (err) {
-      const msg = this.context.formatError(err);
-      if (!this.isAbortLikeError(err)) {
+      console.error("DEBUG ERR STACK:", err);
+      // If AI SDK threw NoOutputGeneratedError but we saw an error stream chunk, surface that underlying error instead.
+      const actualErr = (lastStreamError && this.context.formatError(err).includes("No output generated")) 
+        ? lastStreamError 
+        : err;
+      const msg = this.context.formatError(actualErr);
+      if (!this.isAbortLikeError(actualErr)) {
         this.context.state.currentTurnOutcome = "error";
-        const classified = this.classifyTurnError(err);
+        const classified = this.classifyTurnError(actualErr);
         this.context.emitError(classified.code, classified.source, msg);
         this.context.emitTelemetry(
           "agent.turn.failed",

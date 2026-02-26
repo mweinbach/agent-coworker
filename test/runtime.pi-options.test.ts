@@ -34,6 +34,7 @@ function makeParams(config: AgentConfig): RuntimeRunTurnParams {
     messages: [{ role: "user", content: "hello" }] as ModelMessage[],
     tools: {},
     maxSteps: 1,
+    providerOptions: config.providerOptions,
   };
 }
 

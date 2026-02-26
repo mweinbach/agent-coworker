@@ -86,7 +86,7 @@ export function registerWorkspaceIpc(context: DesktopIpcModuleContext): void {
     const ownerWindow = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined;
     const dialogOptions = {
       title: "Select a workspace directory",
-      properties: ["openDirectory"] as const,
+      properties: ["openDirectory"] as Array<"openDirectory">,
     };
     const result = ownerWindow
       ? await dialog.showOpenDialog(ownerWindow, dialogOptions)

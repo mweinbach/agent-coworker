@@ -1,7 +1,22 @@
+import { mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { startAgentServer } from "./src/server/startServer";
 
 async function main() {
-  const dir = "/Users/mweinbach/Desktop/Cowork Test";
+  const dir = join(tmpdir(), `cowork-test-ws-${Date.now()}`);
+  mkdirSync(dir, { recursive: true });
+
+  const cleanup = () => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {}
+  };
+  process.on("exit", cleanup);
+  process.on("SIGINT", () => { cleanup(); process.exit(130); });
+  process.on("SIGTERM", () => { cleanup(); process.exit(143); });
+
   const { server, url } = await startAgentServer({
     cwd: dir,
     yolo: true,

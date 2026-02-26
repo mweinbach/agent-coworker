@@ -1,3 +1,7 @@
+import { mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { getModelForProvider, DEFAULT_PROVIDER_OPTIONS } from "./src/providers";
 import { streamText, tool } from "ai";
 import { z } from "zod";
@@ -6,6 +10,18 @@ import * as dotenv from "dotenv";
 dotenv.config();
 
 async function main() {
+  const testDir = join(tmpdir(), `cowork-test-model-${Date.now()}`);
+  mkdirSync(testDir, { recursive: true });
+
+  const cleanup = () => {
+    try {
+      rmSync(testDir, { recursive: true, force: true });
+    } catch {}
+  };
+  process.on("exit", cleanup);
+  process.on("SIGINT", () => { cleanup(); process.exit(130); });
+  process.on("SIGTERM", () => { cleanup(); process.exit(143); });
+
   const model = getModelForProvider(
     {
       provider: "google",

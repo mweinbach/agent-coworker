@@ -1,4 +1,3 @@
-import type { ModelMessage } from "ai";
 import { z } from "zod";
 
 import { getModel } from "./config";
@@ -41,7 +40,7 @@ const messageContentSchema = z.array(messageContentPartSchema);
 export interface RunTurnParams {
   config: AgentConfig;
   system: string;
-  messages: ModelMessage[];
+  messages: Message[];
 
   log: (line: string) => void;
   askUser: (question: string, options?: string[]) => Promise<string>;
@@ -320,7 +319,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
   return async function runTurn(params: RunTurnParams): Promise<{
     text: string;
     reasoningText?: string;
-    responseMessages: ModelMessage[];
+    responseMessages: Message[];
     usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
   }> {
     const { config, system, messages, log, askUser, approveCommand, updateTodos, discoveredSkills, abortSignal } = params;
@@ -480,7 +479,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
       return {
         text: text || "",
         reasoningText: reasoningText || undefined,
-        responseMessages: responseMessages as unknown as ModelMessage[],
+        responseMessages,
         usage: convertPiUsage(totalUsage),
       };
     } finally {
@@ -501,7 +500,7 @@ export async function runTurnWithDeps(
 ): Promise<{
   text: string;
   reasoningText?: string;
-  responseMessages: ModelMessage[];
+  responseMessages: Message[];
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
 }> {
   return await createRunTurn(overrides)(params);

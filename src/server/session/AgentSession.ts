@@ -1,6 +1,7 @@
 import { connectProvider as connectModelProvider, getAiCoworkerPaths, type ConnectProviderResult } from "../../connect";
 import { runTurn } from "../../agent";
 import { HarnessContextStore } from "../../harness/contextStore";
+import { convertLegacyMessages } from "../../pi/messageAdapter";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import { getProviderCatalog } from "../../providers/connectionCatalog";
 import { getProviderStatuses } from "../../providerStatus";
@@ -106,7 +107,7 @@ export class AgentSession {
       discoveredSkills: opts.discoveredSkills ?? [],
       yolo: opts.yolo === true,
       messages: [],
-      allMessages: [...(hydrated?.messages ?? [])],
+      allMessages: convertLegacyMessages(hydrated?.messages ?? []),
       running: false,
       connecting: false,
       abortController: null,

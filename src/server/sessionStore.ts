@@ -1,9 +1,9 @@
-import type { ModelMessage } from "ai";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
 import type { AiCoworkerPaths } from "../connect";
+import type { Message } from "../pi/types";
 import { PROVIDER_NAMES } from "../types";
 import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
 import type { SessionTitleSource } from "./sessionTitleService";
@@ -41,7 +41,7 @@ export type PersistedSessionSnapshotV1 = {
   };
   context: {
     system: string;
-    messages: ModelMessage[];
+    messages: Message[];
     todos: TodoItem[];
     harnessContext: HarnessContextState | null;
   };
@@ -63,9 +63,9 @@ const sessionTitleSourceSchema = z.enum(["default", "model", "heuristic", "manua
 const providerNameSchema = z.enum(PROVIDER_NAMES);
 const isoTimestampSchema = z.string().datetime({ offset: true });
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
-const modelMessageSchema = z.custom<ModelMessage>(
+const messageSchema = z.custom<Message>(
   (value) => typeof value === "object" && value !== null,
-  "Invalid model message entry",
+  "Invalid message entry",
 );
 const todoItemSchema = z.object({
   content: z.string(),
@@ -105,7 +105,7 @@ const persistedSessionSnapshotSchema = z.object({
   }).strict(),
   context: z.object({
     system: z.string(),
-    messages: z.array(modelMessageSchema),
+    messages: z.array(messageSchema),
     todos: z.array(todoItemSchema),
     harnessContext: harnessContextStateSchema.nullable(),
   }).strict(),

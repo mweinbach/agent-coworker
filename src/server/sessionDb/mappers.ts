@@ -1,6 +1,6 @@
-import type { ModelMessage } from "ai";
 import { z } from "zod";
 
+import type { Message } from "../../pi/types";
 import type { HarnessContextState, TodoItem } from "../../types";
 import type { PersistedSessionRecord } from "../sessionDb";
 import type { PersistedSessionSummary } from "../sessionStore";
@@ -14,9 +14,9 @@ import {
   sqliteBooleanIntSchema,
 } from "./normalizers";
 
-const modelMessageSchema = z.custom<ModelMessage>(
+const messageSchema = z.custom<Message>(
   (value) => typeof value === "object" && value !== null,
-  "Invalid model message entry",
+  "Invalid message entry",
 );
 const todoItemSchema = z.object({
   content: z.string(),
@@ -83,7 +83,7 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
   }
 
   const values = parsed.data;
-  const messages = parseJsonStringWithSchema(values.messages_json, z.array(modelMessageSchema), "messages_json");
+  const messages = parseJsonStringWithSchema(values.messages_json, z.array(messageSchema), "messages_json");
   const todos = parseJsonStringWithSchema(values.todos_json, z.array(todoItemSchema), "todos_json");
   const harnessContext = values.harness_context_json === null
     ? null

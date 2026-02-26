@@ -1,5 +1,4 @@
-import type { ModelMessage } from "ai";
-
+import type { Message } from "../../pi/types";
 import type { SessionContext } from "./SessionContext";
 
 const MAX_MESSAGE_HISTORY = 200;
@@ -17,7 +16,7 @@ export class HistoryManager {
     this.context.state.messages = [first, ...this.context.state.allMessages.slice(-(MAX_MESSAGE_HISTORY - 1))];
   }
 
-  appendMessagesToHistory(messages: ModelMessage[]) {
+  appendMessagesToHistory(messages: Message[]) {
     if (messages.length === 0) return;
 
     this.context.state.allMessages.push(...messages);

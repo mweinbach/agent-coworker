@@ -1,4 +1,4 @@
-import type { ModelMessage } from "ai";
+import type { Message } from "./pi/types";
 import { z } from "zod";
 
 export const PROVIDER_NAMES = [
@@ -207,7 +207,7 @@ export interface HarnessContextState extends HarnessContextPayload {
   updatedAt: string;
 }
 
-export type AgentMessages = ModelMessage[];
+export type AgentMessages = Message[];
 
 export type MCPServerTransport =
   | {

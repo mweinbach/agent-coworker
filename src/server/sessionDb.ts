@@ -1,8 +1,8 @@
-import type { ModelMessage } from "ai";
 import { Database } from "bun:sqlite";
 import path from "node:path";
 
 import type { AiCoworkerPaths } from "../connect";
+import type { Message } from "../pi/types";
 import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
 import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionTitleSource } from "./sessionTitleService";
@@ -37,7 +37,7 @@ export type PersistedSessionRecord = {
   messageCount: number;
   lastEventSeq: number;
   systemPrompt: string;
-  messages: ModelMessage[];
+  messages: Message[];
   todos: TodoItem[];
   harnessContext: HarnessContextState | null;
 };
@@ -64,7 +64,7 @@ export type PersistedSessionMutation = {
     hasPendingAsk: boolean;
     hasPendingApproval: boolean;
     systemPrompt: string;
-    messages: ModelMessage[];
+    messages: Message[];
     todos: TodoItem[];
     harnessContext: HarnessContextState | null;
   };
@@ -149,7 +149,7 @@ export class SessionDb {
     this.repository.deleteSession(sessionId);
   }
 
-  getMessages(sessionId: string, offset = 0, limit = 100): { messages: ModelMessage[]; total: number } {
+  getMessages(sessionId: string, offset = 0, limit = 100): { messages: Message[]; total: number } {
     return this.repository.getMessages(sessionId, offset, limit);
   }
 

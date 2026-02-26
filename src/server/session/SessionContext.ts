@@ -1,5 +1,4 @@
-import type { ModelMessage } from "ai";
-
+import type { Message } from "../../pi/types";
 import type { connectProvider as connectModelProvider, ConnectProviderResult, getAiCoworkerPaths } from "../../connect";
 import type { runTurn } from "../../agent";
 import type { HarnessContextStore } from "../../harness/contextStore";
@@ -38,7 +37,7 @@ export type HydratedSessionState = {
   sessionInfo: SessionInfoState;
   status: SessionPersistenceStatus;
   hasGeneratedTitle: boolean;
-  messages: ModelMessage[];
+  messages: Message[];
   todos: TodoItem[];
   harnessContext: HarnessContextState | null;
 };
@@ -48,8 +47,8 @@ export type SessionRuntimeState = {
   system: string;
   discoveredSkills: Array<{ name: string; description: string }>;
   yolo: boolean;
-  messages: ModelMessage[];
-  allMessages: ModelMessage[];
+  messages: Message[];
+  allMessages: Message[];
   running: boolean;
   connecting: boolean;
   abortController: AbortController | null;

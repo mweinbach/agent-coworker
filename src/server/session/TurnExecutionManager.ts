@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createUserMessage } from "../../pi/messageAdapter";
 import { normalizeModelStreamPart, reasoningModeForProvider } from "../modelStream";
 import {
   SERVER_ERROR_CODES,
@@ -113,6 +114,8 @@ export class TurnExecutionManager {
     this.context.state.currentTurnId = turnId;
     this.context.state.currentTurnOutcome = "completed";
     const cause: "user_message" | "command" = displayText?.startsWith("/") ? "command" : "user_message";
+    let streamPartIndex = 0;
+    let lastStreamError: unknown = null;
     try {
       this.context.emit({ type: "user_message", sessionId: this.context.id, text: displayText ?? text, clientMessageId });
       this.context.emit({ type: "session_busy", sessionId: this.context.id, busy: true, turnId, cause });
@@ -121,12 +124,9 @@ export class TurnExecutionManager {
         provider: this.context.state.config.provider,
         model: this.context.state.config.model,
       });
-      this.deps.historyManager.appendMessagesToHistory([{ role: "user", content: text }]);
+      this.deps.historyManager.appendMessagesToHistory([createUserMessage(text)]);
       this.deps.metadataManager.maybeGenerateTitleFromQuery(text);
       this.context.queuePersistSessionSnapshot("session.user_message");
-
-      let streamPartIndex = 0;
-      let lastStreamError: unknown = null;
       const res = await this.context.deps.runTurnImpl({
         config: this.context.state.config,
         system: this.context.state.system,

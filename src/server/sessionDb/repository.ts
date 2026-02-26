@@ -1,6 +1,7 @@
-import type { ModelMessage } from "ai";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
+
+import type { Message } from "../../pi/types";
 
 import type { PersistedSessionMutation, PersistedSessionRecord } from "../sessionDb";
 import type { PersistedSessionSnapshot, PersistedSessionSummary } from "../sessionStore";
@@ -38,14 +39,14 @@ export class SessionDbRepository {
     this.db.query("DELETE FROM sessions WHERE session_id = ?").run(sessionId);
   }
 
-  getMessages(sessionId: string, offset = 0, limit = 100): { messages: ModelMessage[]; total: number } {
+  getMessages(sessionId: string, offset = 0, limit = 100): { messages: Message[]; total: number } {
     const row = this.db
       .query("SELECT messages_json FROM session_state WHERE session_id = ?")
       .get(sessionId) as Record<string, unknown> | null;
     if (!row) return { messages: [], total: 0 };
-    let all: ModelMessage[];
+    let all: Message[];
     try {
-      all = parseJsonStringWithSchema(row.messages_json, messagesJsonSchema, "messages_json") as ModelMessage[];
+      all = parseJsonStringWithSchema(row.messages_json, messagesJsonSchema, "messages_json") as Message[];
     } catch {
       all = [];
     }

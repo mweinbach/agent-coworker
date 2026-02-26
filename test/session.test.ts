@@ -310,7 +310,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("hello");
       const call = mockRunTurn.mock.calls[0][0] as any;
       expect(call.messages).toHaveLength(1);
-      expect(call.messages[0]).toEqual({ role: "user", content: "hello" });
+      expect(call.messages[0]).toMatchObject({ role: "user", content: "hello" });
     });
 
     test("initializes with empty todos (reset emits empty array)", () => {
@@ -1202,9 +1202,9 @@ describe("AgentSession", () => {
       await session.sendUserMessage("second");
       const secondCall = mockRunTurn.mock.calls[1][0] as any;
       expect(secondCall.messages).toHaveLength(3);
-      expect(secondCall.messages[0]).toEqual({ role: "user", content: "first" });
+      expect(secondCall.messages[0]).toMatchObject({ role: "user", content: "first" });
       expect(secondCall.messages[1]).toEqual({ role: "assistant", content: "ok" });
-      expect(secondCall.messages[2]).toEqual({ role: "user", content: "second" });
+      expect(secondCall.messages[2]).toMatchObject({ role: "user", content: "second" });
     });
 
     test("clears todos array", () => {
@@ -1880,7 +1880,7 @@ describe("AgentSession", () => {
       await session.sendUserMessage("test message");
 
       const call = mockRunTurn.mock.calls[0][0] as any;
-      expect(call.messages).toContainEqual({ role: "user", content: "test message" });
+      expect(call.messages).toContainEqual(expect.objectContaining({ role: "user", content: "test message" }));
     });
 
     test("calls runTurn with config, system, messages", async () => {
@@ -1893,7 +1893,8 @@ describe("AgentSession", () => {
       const call = mockRunTurn.mock.calls[0][0] as any;
       expect(call.config).toEqual(config);
       expect(call.system).toBe("Be helpful.");
-      expect(call.messages).toEqual([{ role: "user", content: "question" }]);
+      expect(call.messages).toHaveLength(1);
+      expect(call.messages[0]).toMatchObject({ role: "user", content: "question" });
     });
 
     test("passes maxSteps=100 to runTurn", async () => {
@@ -1942,9 +1943,9 @@ describe("AgentSession", () => {
       // Second call should see [user:first, responseMsg, user:second]
       const secondCall = mockRunTurn.mock.calls[1][0] as any;
       expect(secondCall.messages).toHaveLength(3);
-      expect(secondCall.messages[0]).toEqual({ role: "user", content: "first" });
+      expect(secondCall.messages[0]).toMatchObject({ role: "user", content: "first" });
       expect(secondCall.messages[1]).toEqual(responseMsg);
-      expect(secondCall.messages[2]).toEqual({ role: "user", content: "second" });
+      expect(secondCall.messages[2]).toMatchObject({ role: "user", content: "second" });
     });
 
     test("persists full session context including response history", async () => {
@@ -2498,11 +2499,11 @@ describe("AgentSession", () => {
 
       const thirdCall = mockRunTurn.mock.calls[2][0] as any;
       expect(thirdCall.messages).toHaveLength(5);
-      expect(thirdCall.messages[0]).toEqual({ role: "user", content: "msg1" });
+      expect(thirdCall.messages[0]).toMatchObject({ role: "user", content: "msg1" });
       expect(thirdCall.messages[1]).toEqual(responseMsg1);
-      expect(thirdCall.messages[2]).toEqual({ role: "user", content: "msg2" });
+      expect(thirdCall.messages[2]).toMatchObject({ role: "user", content: "msg2" });
       expect(thirdCall.messages[3]).toEqual(responseMsg2);
-      expect(thirdCall.messages[4]).toEqual({ role: "user", content: "msg3" });
+      expect(thirdCall.messages[4]).toMatchObject({ role: "user", content: "msg3" });
     });
   });
 
@@ -3076,14 +3077,14 @@ describe("AgentSession", () => {
       const lastCall = mockRunTurn.mock.calls.at(-1)?.[0] as any;
 
       // First message in the window should be the very first user message ever sent
-      expect(lastCall.messages[0]).toEqual({ role: "user", content: "msg-0" });
+      expect(lastCall.messages[0]).toMatchObject({ role: "user", content: "msg-0" });
 
       // Last message should be the most recent
-      expect(lastCall.messages[199]).toEqual({ role: "user", content: "msg-204" });
+      expect(lastCall.messages[199]).toMatchObject({ role: "user", content: "msg-204" });
 
       // Second message in the window should be msg-6 (the 7th overall),
       // since first + last 199 = msg-0, msg-6..msg-204
-      expect(lastCall.messages[1]).toEqual({ role: "user", content: "msg-6" });
+      expect(lastCall.messages[1]).toMatchObject({ role: "user", content: "msg-6" });
     });
 
     test("messages at exactly 200 are not truncated", async () => {
@@ -3101,8 +3102,8 @@ describe("AgentSession", () => {
 
       const lastCall = mockRunTurn.mock.calls.at(-1)?.[0] as any;
       expect(lastCall.messages.length).toBe(200);
-      expect(lastCall.messages[0]).toEqual({ role: "user", content: "msg-0" });
-      expect(lastCall.messages[199]).toEqual({ role: "user", content: "msg-199" });
+      expect(lastCall.messages[0]).toMatchObject({ role: "user", content: "msg-0" });
+      expect(lastCall.messages[199]).toMatchObject({ role: "user", content: "msg-199" });
     });
 
     test("persisted snapshot keeps all messages even when runtime is truncated", async () => {
@@ -3157,10 +3158,10 @@ describe("AgentSession", () => {
       expect(capturedMessagesLength).toBe(200);
 
       // First message is preserved
-      expect(capturedFirstMessage).toEqual({ role: "user", content: "msg-0" });
+      expect(capturedFirstMessage).toMatchObject({ role: "user", content: "msg-0" });
 
       // Last message is the user message for the latest call
-      expect(capturedLastMessage).toEqual({ role: "user", content: "msg-109" });
+      expect(capturedLastMessage).toMatchObject({ role: "user", content: "msg-109" });
     });
   });
 

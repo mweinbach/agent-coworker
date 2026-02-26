@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getModel } from "./config";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { convertLegacyMessages } from "./pi/messageAdapter";
-import { toolRecordToArray } from "./pi/toolAdapter";
+import { toolRecordToArray, wrapMcpToolRecord } from "./pi/toolAdapter";
 import {
   agentLoop as piAgentLoop,
   type AgentContext,
@@ -344,7 +344,8 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
       const servers = await deps.loadMCPServers(config);
       if (servers.length > 0) {
         const loaded = await deps.loadMCPTools(servers, { log });
-        mcpTools = loaded.tools;
+        // Wrap AI SDK MCP tools into pi AgentTool format.
+        mcpTools = wrapMcpToolRecord(loaded.tools);
         closeMcp = loaded.close;
       }
     }

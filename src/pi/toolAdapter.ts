@@ -7,7 +7,7 @@
  * Our tools currently return plain values from `execute`. This adapter bridges the gap.
  */
 
-import type { TSchema } from "@sinclair/typebox";
+import { Type, type TSchema } from "@sinclair/typebox";
 import type {
   AgentTool,
   AgentToolResult,
@@ -106,6 +106,52 @@ export function toolArrayToRecord(tools: AgentTool[]): Record<string, AgentTool>
   const record: Record<string, AgentTool> = {};
   for (const tool of tools) {
     record[tool.name] = tool;
+  }
+  return record;
+}
+
+/**
+ * Wraps an AI SDK tool (from @ai-sdk/mcp) into a pi AgentTool.
+ *
+ * AI SDK tools have: { description, parameters (Zod/JSON Schema), execute(args, opts?) }
+ * Pi tools expect:    { name, label, description, parameters (TypeBox), execute(toolCallId, params, signal?, onUpdate?) }
+ *
+ * We use Type.Unsafe() for the parameters schema as a passthrough, since MCP servers
+ * handle their own validation and the parameter schema is only used for LLM guidance.
+ */
+export function wrapAiSdkTool(name: string, tool: Record<string, any>): AgentTool {
+  // Extract the JSON Schema from the AI SDK tool's parameters.
+  // AI SDK tools store schema either as .jsonSchema or via Zod .shape.
+  const jsonSchema = tool.parameters?.jsonSchema ?? tool.parameters ?? {};
+
+  return {
+    name,
+    label: name,
+    description: tool.description ?? "",
+    // Use Type.Unsafe with the raw JSON schema so pi passes it through to the LLM.
+    parameters: Type.Unsafe(jsonSchema),
+    execute: async (
+      _toolCallId: string,
+      params: unknown,
+      signal?: AbortSignal,
+      _onUpdate?: AgentToolUpdateCallback,
+    ): Promise<AgentToolResult<any>> => {
+      // AI SDK tools accept (args, options?) where options may include { abortSignal }.
+      const raw = await tool.execute(params, signal ? { abortSignal: signal } : undefined);
+      return wrapToolResult(raw);
+    },
+  } as AgentTool;
+}
+
+/**
+ * Converts a record of AI SDK MCP tools into a record of pi AgentTools.
+ */
+export function wrapMcpToolRecord(tools: Record<string, unknown>): Record<string, AgentTool> {
+  const record: Record<string, AgentTool> = {};
+  for (const [name, tool] of Object.entries(tools)) {
+    if (typeof tool === "object" && tool !== null && "execute" in tool) {
+      record[name] = wrapAiSdkTool(name, tool as Record<string, any>);
+    }
   }
   return record;
 }

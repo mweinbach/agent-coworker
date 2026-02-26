@@ -254,7 +254,7 @@ describe("runTurn", () => {
   test("adds MCP namespacing guidance only when MCP tools are active", async () => {
     mockLoadMCPServers.mockResolvedValue([{ name: "srv", transport: { type: "stdio", command: "x", args: [] } }]);
     mockLoadMCPTools.mockResolvedValue({
-      tools: { "mcp__srv__doThing": { type: "mcp-tool" } },
+      tools: { "mcp__srv__doThing": { description: "mcp tool", execute: async () => "ok" } },
       errors: [],
     });
 
@@ -517,7 +517,7 @@ describe("runTurn", () => {
     const mcpServers = [{ name: "test-server", transport: { type: "stdio", command: "echo", args: [] } }];
     mockLoadMCPServers.mockResolvedValue(mcpServers);
     mockLoadMCPTools.mockResolvedValue({
-      tools: { "mcp__test-server__foo": { type: "mcp" } },
+      tools: { "mcp__test-server__foo": { description: "mcp foo", execute: async () => "ok" } },
       errors: [],
     });
 
@@ -533,7 +533,7 @@ describe("runTurn", () => {
     mockCreateTools.mockReturnValue({ bash: { name: "bash", type: "builtin-bash" } });
     mockLoadMCPServers.mockResolvedValue([{ name: "s", transport: { type: "stdio", command: "x", args: [] } }]);
     mockLoadMCPTools.mockResolvedValue({
-      tools: { bash: { name: "bash", type: "mcp-bash" } },
+      tools: { bash: { name: "bash", description: "mcp-bash", execute: async () => "ok" } },
       errors: [],
     });
 

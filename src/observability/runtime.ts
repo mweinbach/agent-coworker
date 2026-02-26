@@ -1,7 +1,6 @@
 import { LangfuseSpanProcessor } from "@langfuse/otel";
 import type { AttributeValue } from "@opentelemetry/api";
 import { NodeSDK } from "@opentelemetry/sdk-node";
-import type { TelemetrySettings } from "ai";
 import { z } from "zod";
 
 import type { AgentConfig, ObservabilityConfig, ObservabilityHealth } from "../types";
@@ -328,10 +327,14 @@ function sanitizeTelemetryMetadata(
   return out;
 }
 
+/**
+ * @deprecated No longer used by the pi-based agent loop.
+ * Retained for backward compatibility with scripts and tests.
+ */
 export async function buildAiSdkTelemetrySettings(
   config: AgentConfig,
   context: TelemetryContext
-): Promise<TelemetrySettings | undefined> {
+): Promise<Record<string, unknown> | undefined> {
   const runtime = await ensureObservabilityRuntime(config);
   if (!runtime.ready) return undefined;
 

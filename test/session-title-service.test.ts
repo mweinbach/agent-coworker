@@ -103,6 +103,38 @@ describe("sessionTitleService", () => {
     expect(result.title.length).toBeLessThanOrEqual(53);
   });
 
+  test("uses runtime turn path when runtime is pi", async () => {
+    const runTurn = mock(async (_args: any) => ({
+      text: '"Runtime  Title"',
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({
+      name: "pi",
+      runTurn,
+    }));
+    const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
+
+    const generateSessionTitle = createSessionTitleGenerator({
+      createRuntime: createRuntime as any,
+      defaultModelForProvider: defaultModelForProvider as any,
+    });
+
+    const result = await generateSessionTitle({
+      config: makeConfig("openai"),
+      query: "runtime title path",
+    });
+
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+    expect(runTurn).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      title: "Runtime Title",
+      source: "model",
+      model: "gpt-5-mini",
+    });
+  });
+
   test("returns default title for empty queries", async () => {
     const generateObject = mock(async (_args: any) => ({ object: { title: "unused" } }));
     const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));

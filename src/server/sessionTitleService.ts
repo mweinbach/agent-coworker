@@ -2,6 +2,7 @@ import { generateObject } from "ai";
 import { z } from "zod";
 
 import { defaultModelForProvider, getModel } from "../config";
+import { createRuntime } from "../runtime";
 import type { AgentConfig } from "../types";
 
 const TITLE_SCHEMA = z.object({
@@ -29,6 +30,7 @@ export type SessionTitleResult = {
 };
 
 type SessionTitleDeps = {
+  createRuntime: typeof createRuntime;
   generateObject: typeof generateObject;
   getModel: typeof getModel;
   defaultModelForProvider: typeof defaultModelForProvider;
@@ -132,6 +134,7 @@ function buildTitlePrompt(query: string): string {
 
 export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps> = {}) {
   const deps: SessionTitleDeps = {
+    createRuntime,
     generateObject,
     getModel,
     defaultModelForProvider,
@@ -152,17 +155,42 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
     }
 
     const candidates = modelCandidatesForProvider(opts.config.provider, deps.defaultModelForProvider);
+    const useLegacyAiPath =
+      opts.config.runtime === "ai-sdk" ||
+      deps.generateObject !== generateObject ||
+      deps.getModel !== getModel;
+
     for (const modelId of candidates) {
       try {
-        const model = deps.getModel(opts.config, modelId) as Parameters<typeof deps.generateObject>[0]["model"];
-        const { object } = await deps.generateObject({
-          model,
-          schema: TITLE_SCHEMA,
-          prompt: buildTitlePrompt(query),
-          maxOutputTokens: TITLE_MAX_TOKENS,
-        });
+        let rawTitle = "";
+        if (useLegacyAiPath) {
+          const model = deps.getModel(opts.config, modelId) as Parameters<typeof deps.generateObject>[0]["model"];
+          const { object } = await deps.generateObject({
+            model,
+            schema: TITLE_SCHEMA,
+            prompt: buildTitlePrompt(query),
+            maxOutputTokens: TITLE_MAX_TOKENS,
+          });
+          rawTitle = object.title;
+        } else {
+          const runtimeConfig: AgentConfig = {
+            ...opts.config,
+            model: modelId,
+          };
+          const runtime = deps.createRuntime(runtimeConfig);
+          const result = await runtime.runTurn({
+            config: runtimeConfig,
+            system:
+              "You generate concise session titles. Return title text only, without quotes or extra explanation.",
+            messages: [{ role: "user", content: buildTitlePrompt(query) }],
+            tools: {},
+            maxSteps: 1,
+            providerOptions: runtimeConfig.providerOptions,
+          });
+          rawTitle = result.text;
+        }
 
-        const title = sanitizeModelTitle(object.title);
+        const title = sanitizeModelTitle(rawTitle);
         if (!title) continue;
 
         return {

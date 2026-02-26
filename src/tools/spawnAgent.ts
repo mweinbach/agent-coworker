@@ -6,6 +6,7 @@ import { getModel as realGetModel } from "../config";
 import { buildAiSdkTelemetrySettings } from "../observability/runtime";
 import { buildGooglePrepareStep } from "../providers/googleReplay";
 import { loadSubAgentPrompt as realLoadSubAgentPrompt } from "../prompt";
+import { createRuntime as realCreateRuntime } from "../runtime";
 import { classifyCommandDetailed as realClassifyCommandDetailed } from "../utils/approval";
 
 import type { ToolContext } from "./context";
@@ -26,6 +27,7 @@ const MAX_SUB_AGENT_DEPTH = 2;
 const MAX_SUB_AGENT_TASK_CHARS = 20_000;
 
 export type SpawnAgentDeps = Partial<{
+  createRuntime: typeof realCreateRuntime;
   streamText: typeof realStreamText;
   stepCountIs: typeof realStepCountIs;
   getModel: typeof realGetModel;
@@ -88,11 +90,13 @@ function createSubAgentTools(
 }
 
 export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}) {
+  const createRuntime = deps.createRuntime ?? realCreateRuntime;
   const streamText = deps.streamText ?? realStreamText;
   const stepCountIs = deps.stepCountIs ?? realStepCountIs;
   const getModel = deps.getModel ?? realGetModel;
   const loadSubAgentPrompt = deps.loadSubAgentPrompt ?? realLoadSubAgentPrompt;
   const classifyCommandDetailed = deps.classifyCommandDetailed ?? realClassifyCommandDetailed;
+  const forceAiSdkRuntime = Boolean(deps.streamText || deps.stepCountIs || deps.getModel);
   const safeApprove = (command: string) =>
     classifyCommandDetailed(command, {
       allowedRoots: [
@@ -142,22 +146,44 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
         },
       });
 
-      const streamTextInput = {
-        model: getModel(ctx.config, modelId),
-        system,
-        tools,
-        stopWhen: stepCountIs(50),
-        providerOptions: ctx.config.providerOptions,
-        ...(telemetry ? { experimental_telemetry: telemetry } : {}),
-        ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
-        ...(typeof ctx.config.modelSettings?.maxRetries === "number"
-          ? { maxRetries: ctx.config.modelSettings.maxRetries }
-          : {}),
-        abortSignal: ctx.abortSignal,
-        prompt: normalizedTask,
-      } as Parameters<typeof streamText>[0];
-      const streamResult = await streamText(streamTextInput);
-      const text = await streamResult.text;
+      let text = "";
+      if (forceAiSdkRuntime) {
+        const streamTextInput = {
+          model: getModel(ctx.config, modelId),
+          system,
+          tools,
+          stopWhen: stepCountIs(50),
+          providerOptions: ctx.config.providerOptions,
+          ...(telemetry ? { experimental_telemetry: telemetry } : {}),
+          ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
+          ...(typeof ctx.config.modelSettings?.maxRetries === "number"
+            ? { maxRetries: ctx.config.modelSettings.maxRetries }
+            : {}),
+          abortSignal: ctx.abortSignal,
+          prompt: normalizedTask,
+        } as Parameters<typeof streamText>[0];
+        const streamResult = await streamText(streamTextInput);
+        text = await streamResult.text;
+      } else {
+        const runtimeConfig = {
+          ...ctx.config,
+          model: modelId,
+        };
+        const runtime = createRuntime(runtimeConfig);
+        const runtimeResult = await runtime.runTurn({
+          config: runtimeConfig,
+          system,
+          messages: [{ role: "user", content: normalizedTask }] as any,
+          tools,
+          maxSteps: 50,
+          providerOptions: runtimeConfig.providerOptions,
+          abortSignal: ctx.abortSignal,
+          ...(telemetry ? { telemetry } : {}),
+          ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
+          log: ctx.log,
+        });
+        text = runtimeResult.text;
+      }
 
       ctx.log(`tool< spawnAgent ${JSON.stringify({ chars: text.length })}`);
       return text;

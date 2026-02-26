@@ -1,5 +1,6 @@
 {
   "provider": "google",
+  "runtime": "pi",
   "userName": "",
   "knowledgeCutoff": "End of May 2025",
   "observabilityEnabled": true,

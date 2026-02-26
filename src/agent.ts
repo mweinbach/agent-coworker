@@ -1,16 +1,15 @@
-import { stepCountIs, streamText } from "ai";
 import type { ModelMessage } from "ai";
 import { z } from "zod";
 
-import { getModel } from "./config";
 import { buildAiSdkTelemetrySettings } from "./observability/runtime";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
+import { createRuntime } from "./runtime";
 import type { AgentConfig, TodoItem } from "./types";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
+import type { AiSdkRuntimeDeps } from "./runtime";
 
 const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
-const MAX_STREAM_SETTLE_TICKS = 64;
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const messageRecordSchema = z.object({
   role: z.string(),
@@ -24,21 +23,6 @@ const messageContentPartSchema = z.union([
   }).passthrough(),
 ]);
 const messageContentSchema = z.array(messageContentPartSchema);
-const usageSchema = z.object({
-  promptTokens: z.number(),
-  completionTokens: z.number(),
-  totalTokens: z.number(),
-});
-const responseMessagesSchema = z.array(z.unknown());
-const stringSchema = z.string();
-const asyncIterableSchema = z.custom<AsyncIterable<unknown>>((value) => {
-  if ((typeof value !== "object" && typeof value !== "function") || value === null) return false;
-  const iterable = value as { [Symbol.asyncIterator]?: unknown };
-  return typeof iterable[Symbol.asyncIterator] === "function";
-});
-const streamResultWithFullStreamSchema = z.object({
-  fullStream: asyncIterableSchema.optional(),
-}).passthrough();
 
 export interface RunTurnParams {
   config: AgentConfig;
@@ -151,24 +135,33 @@ function extractTurnUserPrompt(messages: ModelMessage[]): string | undefined {
 }
 
 type RunTurnDeps = {
-  streamText: typeof streamText;
-  stepCountIs: typeof stepCountIs;
-  getModel: typeof getModel;
+  createRuntime: typeof createRuntime;
   createTools: typeof createTools;
   loadMCPServers: typeof loadMCPServers;
   loadMCPTools: typeof loadMCPTools;
 };
 
-export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
+type RunTurnOverrides = Partial<RunTurnDeps> & Partial<AiSdkRuntimeDeps>;
+
+export function createRunTurn(overrides: RunTurnOverrides = {}) {
+  const {
+    streamText: legacyStreamText,
+    stepCountIs: legacyStepCountIs,
+    getModel: legacyGetModel,
+    ...runtimeOverrides
+  } = overrides;
   const deps: RunTurnDeps = {
-    streamText,
-    stepCountIs,
-    getModel,
+    createRuntime,
     createTools,
     loadMCPServers,
     loadMCPTools,
-    ...overrides,
+    ...runtimeOverrides,
   };
+  const aiSdkDeps: Partial<AiSdkRuntimeDeps> = {};
+  if (legacyStreamText) aiSdkDeps.streamText = legacyStreamText;
+  if (legacyStepCountIs) aiSdkDeps.stepCountIs = legacyStepCountIs;
+  if (legacyGetModel) aiSdkDeps.getModel = legacyGetModel;
+  const forceAiSdkRuntime = Object.keys(aiSdkDeps).length > 0;
 
   return async function runTurn(params: RunTurnParams): Promise<{
     text: string;
@@ -212,7 +205,12 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
         ? buildGooglePrepareStep(turnProviderOptions, log)
         : undefined;
 
-    const result = await (async (): Promise<{ text: unknown; reasoningText: unknown; response: unknown }> => {
+    const result = await (async (): Promise<{
+      text: string;
+      reasoningText?: string;
+      responseMessages: ModelMessage[];
+      usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+    }> => {
       try {
         const telemetry = await buildAiSdkTelemetrySettings(config, {
           functionId: params.telemetryContext?.functionId ?? "agent.runTurn",
@@ -220,86 +218,26 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
             ...(params.telemetryContext?.metadata ?? {}),
           },
         });
-
-        const streamTextInput = {
-          model: deps.getModel(config),
+        const runtime = deps.createRuntime(config, {
+          ...(forceAiSdkRuntime ? { forceRuntime: "ai-sdk" as const } : {}),
+          ...(forceAiSdkRuntime ? { aiSdkDeps } : {}),
+        });
+        return await runtime.runTurn({
+          config,
           system: turnSystem,
           messages,
           tools,
+          maxSteps: params.maxSteps ?? 100,
           providerOptions: turnProviderOptions,
-          ...(telemetry ? { experimental_telemetry: telemetry } : {}),
-          stopWhen: deps.stepCountIs(params.maxSteps ?? 100),
-          ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
           abortSignal,
-          ...(typeof config.modelSettings?.maxRetries === "number"
-            ? { maxRetries: config.modelSettings.maxRetries }
-            : {}),
-          onError: async ({ error }: { error: unknown }) => {
-            log(`[model:error] ${String(error)}`);
-            await params.onModelError?.(error);
-          },
-          onAbort: async () => {
-            log("[model:abort]");
-            await params.onModelAbort?.();
-          },
           includeRawChunks: params.includeRawChunks ?? true,
-        } as Parameters<typeof deps.streamText>[0];
-        const streamResult = await deps.streamText(streamTextInput);
-
-        let streamConsumptionSettled = false;
-        let streamPartCount = 0;
-        const streamConsumption = (async () => {
-          if (!params.onModelStreamPart) return;
-          const parsedStream = streamResultWithFullStreamSchema.safeParse(streamResult);
-          const fullStream = parsedStream.success ? parsedStream.data.fullStream : undefined;
-          if (!fullStream) return;
-
-          const streamIterator = fullStream[Symbol.asyncIterator]();
-          while (true) {
-            const next = await streamIterator.next();
-            if (next.done) break;
-            await params.onModelStreamPart(next.value);
-            streamPartCount += 1;
-          }
-        })().finally(() => {
-          streamConsumptionSettled = true;
+          telemetry,
+          ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
+          onModelStreamPart: params.onModelStreamPart,
+          onModelError: params.onModelError,
+          onModelAbort: params.onModelAbort,
+          log,
         });
-
-        const [text, reasoningText, response] = await Promise.all([
-          streamResult.text,
-          streamResult.reasoningText,
-          streamResult.response,
-        ]);
-
-        if (params.onModelStreamPart) {
-          let previousCount = streamPartCount;
-          let stableTicks = 0;
-          let ticks = 0;
-          while (!streamConsumptionSettled && stableTicks < 2 && ticks < MAX_STREAM_SETTLE_TICKS) {
-            await Promise.resolve();
-            ticks += 1;
-            if (streamPartCount === previousCount) {
-              stableTicks += 1;
-            } else {
-              previousCount = streamPartCount;
-              stableTicks = 0;
-            }
-          }
-          if (streamConsumptionSettled) {
-            try {
-              await streamConsumption;
-            } catch (error) {
-              log(`[warn] Model stream ended with error: ${String(error)}`);
-            }
-          } else {
-            log("[warn] Model stream did not drain after response completion; continuing turn.");
-            void streamConsumption.catch((error) => {
-              log(`[warn] Model stream ended with error after response completion: ${String(error)}`);
-            });
-          }
-        }
-
-        return { text, reasoningText, response };
       } finally {
         try {
           await closeMcp?.();
@@ -308,19 +246,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
         }
       }
     })();
-
-    const parsedResponseMessages = responseMessagesSchema.safeParse(result.response?.messages);
-    const responseMessages = (parsedResponseMessages.success ? parsedResponseMessages.data : []) as ModelMessage[];
-    const rawUsage = result.response?.usage;
-    const parsedUsage = usageSchema.safeParse(rawUsage);
-    const usage = parsedUsage.success ? parsedUsage.data : undefined;
-    const parsedReasoningText = stringSchema.safeParse(result.reasoningText);
-    return {
-      text: String(result.text ?? ""),
-      reasoningText: parsedReasoningText.success ? parsedReasoningText.data : undefined,
-      responseMessages,
-      usage,
-    };
+    return result;
   };
 }
 
@@ -328,7 +254,7 @@ export const runTurn = createRunTurn();
 
 export async function runTurnWithDeps(
   params: RunTurnParams,
-  overrides: Partial<RunTurnDeps> = {}
+  overrides: RunTurnOverrides = {}
 ): Promise<{
   text: string;
   reasoningText?: string;

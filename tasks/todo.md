@@ -1,3 +1,20 @@
+# Task: Migrate agent runtime from AI SDK to PI (all phases)
+
+## Plan
+- [ ] Phase 1: Introduce a runtime abstraction (`LLMRuntime`) and route `runTurn` through it while preserving behavior.
+- [ ] Phase 2: Add a PI-backed runtime implementation behind config/runtime selection and keep AI SDK runtime available during transition.
+- [ ] Phase 3: Keep first-class provider behavior by mapping provider/model/auth/options semantics for `google`, `openai`, `anthropic`, and `codex-cli`.
+- [ ] Phase 4: Migrate `spawnAgent` and session title generation to runtime abstraction and PI-backed execution paths.
+- [ ] Phase 5: Preserve websocket/TUI stream compatibility by normalizing PI stream events into existing `model_stream_chunk` part contracts.
+- [ ] Phase 6: Flip default runtime to PI, update docs/config/protocol notes, and clean up direct AI SDK runtime wiring.
+- [ ] Add or update targeted regression tests for runtime selection, provider parity, stream mapping, subagent execution, and title generation.
+- [ ] Run targeted verification suites, then full `bun test`.
+
+## Review
+- Pending
+
+---
+
 # Task: Validate real production loop tool coverage for Google gemini-3.1-pro-preview-customtools
 
 ## Plan

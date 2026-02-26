@@ -8,8 +8,8 @@ import { z } from "zod";
 import { getAiCoworkerPaths } from "./connect";
 import { parseConnectionStoreJson } from "./store/connections";
 import { defaultModelForProvider, getModelForProvider, getProviderKeyCandidates } from "./providers";
-import { resolveProviderName } from "./types";
-import type { AgentConfig, CommandTemplateConfig, ProviderName } from "./types";
+import { resolveProviderName, resolveRuntimeName as resolveRuntimeNameFromValue } from "./types";
+import type { AgentConfig, CommandTemplateConfig, ProviderName, RuntimeName } from "./types";
 
 export { defaultModelForProvider } from "./providers";
 
@@ -152,6 +152,10 @@ function asProviderName(v: unknown): ProviderName | null {
   return resolveProviderName(v);
 }
 
+function asRuntimeName(v: unknown): RuntimeName | null {
+  return resolveRuntimeNameFromValue(v);
+}
+
 function asString(v: unknown): string | undefined {
   const parsed = stringSchema.safeParse(v);
   return parsed.success ? parsed.data : undefined;
@@ -186,7 +190,7 @@ function resolveUserHomeFromConfig(config: AgentConfig): string {
   return os.homedir();
 }
 
-function readSavedApiKey(config: AgentConfig, provider: ProviderName): string | undefined {
+export function getSavedProviderApiKey(config: AgentConfig, provider: ProviderName): string | undefined {
   const home = resolveUserHomeFromConfig(config);
   const paths = getAiCoworkerPaths({ homedir: home });
   const keyCandidates = getProviderKeyCandidates(provider);
@@ -234,6 +238,12 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asProviderName(userConfig.provider) ??
     asProviderName(builtInDefaults.provider) ??
     "google";
+  const runtime =
+    asRuntimeName(env.AGENT_RUNTIME) ??
+    asRuntimeName(projectConfig.runtime) ??
+    asRuntimeName(userConfig.runtime) ??
+    asRuntimeName(builtInDefaults.runtime) ??
+    "pi";
 
   const workingDirectory = env.AGENT_WORKING_DIR || cwd;
 
@@ -339,6 +349,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
   return {
     provider,
+    runtime,
     model,
     subAgentModel,
     workingDirectory,
@@ -374,6 +385,6 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
 export function getModel(config: AgentConfig, id?: string) {
   const modelId = id || config.model;
-  const savedKey = readSavedApiKey(config, config.provider);
+  const savedKey = getSavedProviderApiKey(config, config.provider);
   return getModelForProvider(config, modelId, savedKey);
 }

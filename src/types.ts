@@ -22,6 +22,19 @@ export function resolveProviderName(v: unknown): ProviderName | null {
   return parsed.success ? parsed.data : null;
 }
 
+export const RUNTIME_NAMES = [
+  "pi",
+  "ai-sdk",
+] as const;
+
+export type RuntimeName = (typeof RUNTIME_NAMES)[number];
+const runtimeNameSchema = z.enum(RUNTIME_NAMES);
+
+export function resolveRuntimeName(v: unknown): RuntimeName | null {
+  const parsed = runtimeNameSchema.safeParse(v);
+  return parsed.success ? parsed.data : null;
+}
+
 export type CommandSource = "command" | "mcp" | "skill";
 
 export interface CommandInfo {
@@ -43,6 +56,7 @@ export interface ModelRuntimeSettings {
 
 export interface AgentConfig {
   provider: ProviderName;
+  runtime?: RuntimeName;
   model: string;
   subAgentModel: string;
 

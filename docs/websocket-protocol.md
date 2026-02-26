@@ -1665,7 +1665,7 @@ Echoed/accepted user message. Sent when a `user_message` or `execute_command` cl
 
 ### model_stream_chunk
 
-Incremental model stream chunk. Emitted during a turn for each streaming part from the model.
+Incremental model stream chunk. Emitted during a turn for each streaming part from the active runtime/model pipeline.
 
 ```json
 {
@@ -1691,7 +1691,7 @@ Incremental model stream chunk. Emitted during a turn for each streaming part fr
 | `model` | `string` | Model that generated this chunk. Fallback: `"unknown"` |
 | `partType` | `ModelStreamPartType` | Part type (see [ModelStreamPartType](#modelstreamparttype)) |
 | `part` | `object` | Normalized part payload. Shape varies by `partType`. If a non-object part is received, it is normalized to `{ "value": <original> }` |
-| `rawPart` | `unknown?` | Optional raw AI SDK part (present when `includeRawChunks` is enabled). Default mode is sanitized; set `COWORK_MODEL_STREAM_RAW_MODE=full` to increase payload detail |
+| `rawPart` | `unknown?` | Optional raw provider/runtime part (present when `includeRawChunks` is enabled). Default mode is sanitized; set `COWORK_MODEL_STREAM_RAW_MODE=full` to increase payload detail |
 
 ---
 

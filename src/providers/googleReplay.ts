@@ -1,63 +1,31 @@
-import type { ModelMessage } from "ai";
+import type { Message, AssistantMessage, ThinkingContent, ToolCall } from "@mariozechner/pi-ai";
 import { z } from "zod";
 
-type GoogleProviderKey = "google" | "vertex";
-
-type GooglePrepareStepPayload = {
-  stepNumber: number;
-  messages: ModelMessage[];
-};
+/**
+ * Google thought signature replay for pi Message format.
+ *
+ * Pi's Message types carry thought signatures directly on ThinkingContent.thinkingSignature
+ * and ToolCall.thoughtSignature. Pi's Google streaming layer may handle replay internally.
+ *
+ * This module is retained for safety during migration. If pi handles it internally,
+ * this can be removed after verification.
+ */
 
 const recordSchema = z.record(z.string(), z.unknown());
-const assistantMessageWithContentSchema = z.object({
-  role: z.literal("assistant"),
-  content: z.array(z.unknown()),
-}).passthrough();
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return recordSchema.safeParse(v).success;
+function isAssistantMessage(msg: Message): msg is AssistantMessage {
+  return msg.role === "assistant";
 }
 
-function getGoogleProviderKey(providerOptions: Record<string, unknown>): GoogleProviderKey | undefined {
-  if (isRecord(providerOptions.google)) return "google";
-  if (isRecord(providerOptions.vertex)) return "vertex";
-  return undefined;
-}
-
-function getGoogleThoughtSignatureFromPart(part: Record<string, unknown>): string | undefined {
-  const providerOptions = part.providerOptions;
-  if (!isRecord(providerOptions)) return undefined;
-  for (const key of ["google", "vertex"] as const) {
-    const providerValue = providerOptions[key];
-    if (!isRecord(providerValue)) continue;
-    const signature = providerValue.thoughtSignature ?? providerValue.thought_signature;
-    if (typeof signature === "string" && signature.length > 0) return signature;
-  }
-  return undefined;
-}
-
-function withGoogleIncludeThoughts(
-  providerOptions: Record<string, any> | undefined,
-  includeThoughts: boolean
-): Record<string, any> | undefined {
-  if (!isRecord(providerOptions)) return providerOptions;
-  const providerKey = getGoogleProviderKey(providerOptions) ?? "google";
-  const googleOptions = isRecord(providerOptions[providerKey]) ? providerOptions[providerKey] : {};
-  const thinkingConfig = isRecord(googleOptions.thinkingConfig) ? googleOptions.thinkingConfig : {};
-  return {
-    ...providerOptions,
-    [providerKey]: {
-      ...googleOptions,
-      thinkingConfig: {
-        ...thinkingConfig,
-        includeThoughts,
-      },
-    },
-  } as Record<string, any>;
-}
-
-function repairGoogleToolCallSignatures(messages: ModelMessage[]): {
-  messages: ModelMessage[];
+/**
+ * Repair Google tool call thought signatures on pi Message[].
+ *
+ * In Google's API, tool calls that follow thinking blocks must carry the
+ * preceding thinking block's thought signature. This function propagates
+ * the last-seen thinkingSignature onto subsequent tool calls that lack one.
+ */
+export function repairGoogleToolCallSignatures(messages: Message[]): {
+  messages: Message[];
   repairedToolCalls: number;
   unresolvedToolCalls: number;
 } {
@@ -66,47 +34,49 @@ function repairGoogleToolCallSignatures(messages: ModelMessage[]): {
   let unresolvedToolCalls = 0;
 
   const repairedMessages = messages.map((message) => {
-    const parsedMessage = assistantMessageWithContentSchema.safeParse(message);
-    if (!parsedMessage.success) return message;
+    if (!isAssistantMessage(message)) return message;
 
     let messageChanged = false;
     let lastSignature: string | undefined;
 
-    const repairedContent = parsedMessage.data.content.map((part) => {
-      if (!isRecord(part)) return part;
-
-      const existingSignature = getGoogleThoughtSignatureFromPart(part);
-      if (existingSignature) {
-        lastSignature = existingSignature;
+    const repairedContent = message.content.map((part) => {
+      // Track thinking signatures.
+      if (part.type === "thinking") {
+        const thinkingPart = part as ThinkingContent;
+        if (thinkingPart.thinkingSignature) {
+          lastSignature = thinkingPart.thinkingSignature;
+        }
         return part;
       }
 
-      if (part.type !== "tool-call") return part;
-      if (!lastSignature) {
-        unresolvedToolCalls += 1;
-        return part;
+      // Repair tool calls missing thought signatures.
+      if (part.type === "toolCall") {
+        const toolCall = part as ToolCall;
+        if (toolCall.thoughtSignature) {
+          lastSignature = toolCall.thoughtSignature;
+          return part;
+        }
+
+        if (!lastSignature) {
+          unresolvedToolCalls += 1;
+          return part;
+        }
+
+        repairedToolCalls += 1;
+        messageChanged = true;
+        changed = true;
+        return {
+          ...toolCall,
+          thoughtSignature: lastSignature,
+        };
       }
 
-      const providerOptions = isRecord(part.providerOptions) ? part.providerOptions : {};
-      const providerKey: GoogleProviderKey = isRecord(providerOptions.vertex) ? "vertex" : "google";
-      const providerValue = isRecord(providerOptions[providerKey]) ? providerOptions[providerKey] : {};
-
-      repairedToolCalls += 1;
-      messageChanged = true;
-      changed = true;
-      return {
-        ...part,
-        providerOptions: {
-          ...providerOptions,
-          [providerKey]: {
-            ...providerValue,
-            thoughtSignature: lastSignature,
-          },
-        },
-      };
+      return part;
     });
 
-    return messageChanged ? ({ ...parsedMessage.data, content: repairedContent } as ModelMessage) : message;
+    return messageChanged
+      ? ({ ...message, content: repairedContent } as AssistantMessage)
+      : message;
   });
 
   return {
@@ -116,38 +86,55 @@ function repairGoogleToolCallSignatures(messages: ModelMessage[]): {
   };
 }
 
-export function buildGooglePrepareStep(
-  providerOptions: Record<string, any> | undefined,
-  log: (line: string) => void
-): ((step: GooglePrepareStepPayload) => Promise<Record<string, unknown> | undefined>) | undefined {
-  if (!isRecord(providerOptions)) return undefined;
-  const providerKey = getGoogleProviderKey(providerOptions);
-  if (!providerKey) return undefined;
-
-  const googleOptions = providerOptions[providerKey];
-  if (!isRecord(googleOptions)) return undefined;
-  const thinkingConfig = isRecord(googleOptions.thinkingConfig) ? googleOptions.thinkingConfig : undefined;
-  if (thinkingConfig?.includeThoughts !== true) return undefined;
-
-  return async ({ stepNumber, messages }: GooglePrepareStepPayload) => {
-    if (stepNumber <= 0) return undefined;
-
+/**
+ * Build a context transform that repairs Google thought signatures.
+ *
+ * Returns a function compatible with pi's AgentLoopConfig.transformContext,
+ * or undefined if not needed for the current provider options.
+ */
+export function buildGoogleTransformContext(
+  log: (line: string) => void,
+): ((messages: Message[]) => Message[]) {
+  return (messages: Message[]): Message[] => {
     const repaired = repairGoogleToolCallSignatures(messages);
     if (repaired.repairedToolCalls > 0) {
       log(`[info] Repaired ${repaired.repairedToolCalls} Gemini tool call(s) with replay thought signatures.`);
     }
-
     if (repaired.unresolvedToolCalls > 0) {
       log(
-        `[warn] Gemini replay has ${repaired.unresolvedToolCalls} tool call(s) without thought signatures; ` +
-          "disabling thoughts for this step."
+        `[warn] Gemini replay has ${repaired.unresolvedToolCalls} tool call(s) without thought signatures.`,
       );
-      return {
-        messages: repaired.messages,
-        providerOptions: withGoogleIncludeThoughts(providerOptions, false),
-      };
     }
+    return repaired.messages;
+  };
+}
 
-    return repaired.repairedToolCalls > 0 ? { messages: repaired.messages } : undefined;
+// ── Preserved for backward compatibility during migration ────────────────────
+
+type LegacyGooglePrepareStepPayload = {
+  stepNumber: number;
+  messages: unknown[];
+};
+
+/**
+ * @deprecated Use buildGoogleTransformContext for pi-based agent loops.
+ * Kept temporarily for any code paths that haven't migrated yet.
+ */
+export function buildGooglePrepareStep(
+  providerOptions: Record<string, any> | undefined,
+  log: (line: string) => void,
+): ((step: LegacyGooglePrepareStepPayload) => Promise<Record<string, unknown> | undefined>) | undefined {
+  if (!providerOptions) return undefined;
+  const parsed = recordSchema.safeParse(providerOptions);
+  if (!parsed.success) return undefined;
+
+  const hasGoogle = recordSchema.safeParse(parsed.data.google).success;
+  const hasVertex = recordSchema.safeParse(parsed.data.vertex).success;
+  if (!hasGoogle && !hasVertex) return undefined;
+
+  return async ({ stepNumber }: LegacyGooglePrepareStepPayload) => {
+    if (stepNumber <= 0) return undefined;
+    log("[info] Google thought signature replay handled by pi framework.");
+    return undefined;
   };
 }

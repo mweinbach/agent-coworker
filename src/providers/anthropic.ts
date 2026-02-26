@@ -1,5 +1,6 @@
-import { anthropic, createAnthropic, type AnthropicProviderOptions } from "@ai-sdk/anthropic";
+import type { Model, Api, SimpleStreamOptions } from "@mariozechner/pi-ai";
 
+import { resolvePiModel } from "../pi/providerAdapter";
 import type { AgentConfig } from "../types";
 
 function normalizeAnthropicModelId(modelId: string): string {
@@ -10,45 +11,38 @@ function normalizeAnthropicModelId(modelId: string): string {
   return modelId;
 }
 
+/**
+ * Default stream options for Anthropic models.
+ *
+ * Pi's `streamSimple()` handles thinking/reasoning via the `reasoning` level
+ * and optional `thinkingBudgets`. These replace the AI SDK's
+ * `AnthropicProviderOptions.thinking.budgetTokens`.
+ */
+export const DEFAULT_ANTHROPIC_STREAM_OPTIONS: SimpleStreamOptions = {
+  reasoning: "high",
+  thinkingBudgets: {
+    high: 32_000,
+  },
+};
+
+/**
+ * Legacy shape preserved for config compatibility. The `providerOptions` field
+ * in config.json may still reference these keys; they're mapped to pi stream
+ * options at call time in the agent loop.
+ */
 export const DEFAULT_ANTHROPIC_PROVIDER_OPTIONS = {
   thinking: {
     type: "enabled",
     budgetTokens: 32_000,
   },
   disableParallelToolUse: true,
-
-  // Other Anthropic provider options you can enable/override:
-  // sendReasoning: true,
-  // structuredOutputMode: "auto", // "outputFormat" | "jsonTool" | "auto"
-  // disableParallelToolUse: false,
-  // cacheControl: { type: "ephemeral", ttl: "1h" },
-  // mcpServers: [
-  //   {
-  //     type: "url",
-  //     name: "docs",
-  //     url: "https://mcp.example.com",
-  //     authorizationToken: null,
-  //     toolConfiguration: { enabled: null, allowedTools: null },
-  //   },
-  // ],
-  // container: {
-  //   id: undefined,
-  //   skills: [{ type: "anthropic", skillId: "pdf", version: "1" }],
-  // },
-  // toolStreaming: true,
-  // effort: "high", // "low" | "medium" | "high" | "max"
-  // contextManagement: {
-  //   edits: [
-  //     { type: "clear_thinking_20251015", keep: "all" },
-  //     // { type: "clear_tool_uses_20250919", trigger: { type: "input_tokens", value: 12000 } },
-  //   ],
-  // },
-} as const satisfies AnthropicProviderOptions;
+} as const;
 
 export const anthropicProvider = {
   keyCandidates: ["anthropic"] as const,
-  createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) => {
-    const provider = savedKey ? createAnthropic({ apiKey: savedKey }) : anthropic;
-    return provider(normalizeAnthropicModelId(modelId));
+  createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }): Model<Api> => {
+    return resolvePiModel("anthropic", normalizeAnthropicModelId(modelId), {
+      apiKey: savedKey,
+    });
   },
 };

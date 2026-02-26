@@ -372,7 +372,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   };
 }
 
-export function getModel(config: AgentConfig, id?: string) {
+export function getModel(config: AgentConfig, id?: string): import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api> {
   const modelId = id || config.model;
   const savedKey = readSavedApiKey(config, config.provider);
   return getModelForProvider(config, modelId, savedKey);

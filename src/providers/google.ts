@@ -1,33 +1,33 @@
-import { createGoogleGenerativeAI, google, type GoogleGenerativeAIProviderOptions } from "@ai-sdk/google";
+import type { Model, Api, SimpleStreamOptions } from "@mariozechner/pi-ai";
 
+import { resolvePiModel } from "../pi/providerAdapter";
 import type { AgentConfig } from "../types";
 
+/**
+ * Default stream options for Google models.
+ *
+ * Pi's `streamSimple()` maps `reasoning: "high"` to Google's
+ * `thinkingConfig.thinkingLevel` and `includeThoughts: true` automatically.
+ */
+export const DEFAULT_GOOGLE_STREAM_OPTIONS: SimpleStreamOptions = {
+  reasoning: "high",
+};
+
+/**
+ * Legacy shape preserved for config compatibility.
+ */
 export const DEFAULT_GOOGLE_PROVIDER_OPTIONS = {
   thinkingConfig: {
-    // Gemini maps "thought" parts to AI SDK `reasoning` parts when includeThoughts is enabled.
     includeThoughts: true,
     thinkingLevel: "high",
   },
-
-  // Other Google Generative AI provider options you can enable/override:
-  // responseModalities: ["TEXT"], // ["TEXT","IMAGE"]
-  // cachedContent: "cachedContents/...",
-  // structuredOutputs: true,
-  // safetySettings: [
-  //   { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-  // ],
-  // threshold: "BLOCK_MEDIUM_AND_ABOVE",
-  // audioTimestamp: false,
-  // labels: { team: "core" }, // Vertex AI only
-  // mediaResolution: "MEDIA_RESOLUTION_MEDIUM",
-  // imageConfig: { aspectRatio: "16:9", imageSize: "2K" },
-  // retrievalConfig: { latLng: { latitude: 37.7749, longitude: -122.4194 } },
-} as const satisfies GoogleGenerativeAIProviderOptions;
+} as const;
 
 export const googleProvider = {
   keyCandidates: ["google"] as const,
-  createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) => {
-    const provider = savedKey ? createGoogleGenerativeAI({ apiKey: savedKey }) : google;
-    return provider(modelId);
+  createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }): Model<Api> => {
+    return resolvePiModel("google", modelId, {
+      apiKey: savedKey,
+    });
   },
 };

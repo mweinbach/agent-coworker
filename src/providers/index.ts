@@ -1,3 +1,5 @@
+import type { Model, Api } from "@mariozechner/pi-ai";
+
 import type { AgentConfig, ProviderName } from "../types";
 
 import { anthropicProvider } from "./anthropic";
@@ -5,7 +7,7 @@ import { PROVIDER_MODEL_CATALOG } from "./catalog";
 import { codexCliProvider } from "./codex-cli";
 import { googleProvider } from "./google";
 import { openaiProvider } from "./openai";
-export { DEFAULT_PROVIDER_OPTIONS } from "./providerOptions";
+export { DEFAULT_PROVIDER_OPTIONS, DEFAULT_STREAM_OPTIONS } from "./providerOptions";
 export {
   authorizeProviderAuth,
   callbackProviderAuth,
@@ -27,7 +29,7 @@ export { getProviderCatalog, listProviderCatalogEntries, type ProviderCatalogEnt
 
 export type ProviderRuntimeDefinition = {
   keyCandidates: readonly ProviderName[];
-  createModel: (options: { config: AgentConfig; modelId: string; savedKey?: string }) => unknown;
+  createModel: (options: { config: AgentConfig; modelId: string; savedKey?: string }) => Model<Api>;
 };
 
 export type ProviderDefinition = {
@@ -49,7 +51,7 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   openai: { ...PROVIDER_RUNTIMES.openai, ...PROVIDER_MODEL_CATALOG.openai },
 };
 
-export function getModelForProvider(config: AgentConfig, modelId: string, savedKey?: string) {
+export function getModelForProvider(config: AgentConfig, modelId: string, savedKey?: string): Model<Api> {
   return PROVIDERS[config.provider].createModel({ config, modelId, savedKey });
 }
 

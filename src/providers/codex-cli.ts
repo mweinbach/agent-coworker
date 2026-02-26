@@ -1,8 +1,9 @@
 import path from "node:path";
 
-import { createOpenAI, type OpenAIResponsesProviderOptions } from "@ai-sdk/openai";
+import type { Model, Api, SimpleStreamOptions } from "@mariozechner/pi-ai";
 
 import { getAiCoworkerPaths, type AiCoworkerPaths } from "../connect";
+import { resolvePiModel } from "../pi/providerAdapter";
 import type { AgentConfig } from "../types";
 import {
   CODEX_BACKEND_BASE_URL,
@@ -13,26 +14,27 @@ import {
   type CodexAuthMaterial,
 } from "./codex-auth";
 
+/**
+ * Default stream options for Codex CLI models.
+ */
+export const DEFAULT_CODEX_CLI_STREAM_OPTIONS: SimpleStreamOptions = {
+  reasoning: "high",
+};
+
+/**
+ * Legacy shape preserved for config compatibility.
+ */
 export const DEFAULT_CODEX_CLI_PROVIDER_OPTIONS = {
   reasoningEffort: "high",
   reasoningSummary: "detailed",
   textVerbosity: "high",
-} as const satisfies OpenAIResponsesProviderOptions;
+} as const;
 
 const refreshInflightByAuthFile = new Map<string, Promise<CodexAuthMaterial>>();
 
 function resolveCoworkPaths(config: AgentConfig): AiCoworkerPaths {
   const homedir = config.userAgentDir ? path.dirname(config.userAgentDir) : undefined;
   return getAiCoworkerPaths({ homedir });
-}
-
-function applyCodexAuth(request: Request, material: CodexAuthMaterial): Request {
-  const headers = new Headers(request.headers);
-  headers.set("authorization", `Bearer ${material.accessToken}`);
-  if (material.accountId?.trim()) {
-    headers.set("ChatGPT-Account-ID", material.accountId.trim());
-  }
-  return new Request(request, { headers });
 }
 
 async function loadCodexAuthForRequest(opts: {
@@ -75,43 +77,43 @@ async function loadCodexAuthForRequest(opts: {
   }
 }
 
-function createCodexAuthFetch(paths: AiCoworkerPaths): typeof fetch {
-  return async (input, init) => {
-    const requestTemplate = new Request(input, init);
-    const firstRequest = requestTemplate.clone();
-    const retryRequest = requestTemplate.clone();
+/**
+ * Resolves a fresh Codex CLI API key (OAuth access token).
+ *
+ * Used by the agent loop's `getApiKey` callback to dynamically provide
+ * the token for each LLM call, handling automatic refresh.
+ */
+export async function resolveCodexApiKey(config: AgentConfig): Promise<string> {
+  const paths = resolveCoworkPaths(config);
+  const material = await loadCodexAuthForRequest({ paths, fetchImpl: fetch });
+  return material.accessToken;
+}
 
-    const material = await loadCodexAuthForRequest({ paths, fetchImpl: fetch });
-    const firstResponse = await fetch(applyCodexAuth(firstRequest, material));
-    if (firstResponse.status !== 401 || !material.refreshToken) return firstResponse;
-
-    try {
-      const refreshed = await loadCodexAuthForRequest({
-        paths,
-        fetchImpl: fetch,
-        forceRefresh: true,
-      });
-      return await fetch(applyCodexAuth(retryRequest, refreshed));
-    } catch {
-      return firstResponse;
-    }
-  };
+/**
+ * Resolves additional headers needed for Codex requests (e.g., account ID).
+ */
+export async function resolveCodexHeaders(config: AgentConfig): Promise<Record<string, string>> {
+  const paths = resolveCoworkPaths(config);
+  const material = await readCodexAuthMaterial(paths, { migrateLegacy: true });
+  const headers: Record<string, string> = {};
+  if (material?.accountId?.trim()) {
+    headers["ChatGPT-Account-ID"] = material.accountId.trim();
+  }
+  return headers;
 }
 
 export const codexCliProvider = {
   keyCandidates: ["codex-cli", "openai"] as const,
-  createModel: ({ config, modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) => {
+  createModel: ({ config, modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }): Model<Api> => {
     if (savedKey) {
-      return createOpenAI({ name: "codex-cli", apiKey: savedKey })(modelId);
+      // When using a saved API key directly, treat it as a standard OpenAI model.
+      return resolvePiModel("openai", modelId, { apiKey: savedKey });
     }
 
-    const paths = resolveCoworkPaths(config);
-    const provider = createOpenAI({
-      name: "codex-cli",
-      apiKey: "unused",
-      baseURL: CODEX_BACKEND_BASE_URL,
-      fetch: createCodexAuthFetch(paths),
+    // For OAuth-based codex, return a model with the codex backend URL.
+    // The actual auth token is provided dynamically via getApiKey in the agent loop.
+    return resolvePiModel("codex-cli", modelId, {
+      baseUrl: CODEX_BACKEND_BASE_URL,
     });
-    return provider(modelId);
   },
 };

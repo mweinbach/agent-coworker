@@ -1,37 +1,32 @@
-import { createOpenAI, openai, type OpenAIResponsesProviderOptions } from "@ai-sdk/openai";
+import type { Model, Api, SimpleStreamOptions } from "@mariozechner/pi-ai";
 
+import { resolvePiModel } from "../pi/providerAdapter";
 import type { AgentConfig } from "../types";
 
+/**
+ * Default stream options for OpenAI models.
+ *
+ * Pi's `streamSimple()` maps `reasoning: "high"` to OpenAI's
+ * `reasoning_effort: "high"` automatically.
+ */
+export const DEFAULT_OPENAI_STREAM_OPTIONS: SimpleStreamOptions = {
+  reasoning: "high",
+};
+
+/**
+ * Legacy shape preserved for config compatibility.
+ */
 export const DEFAULT_OPENAI_PROVIDER_OPTIONS = {
   reasoningEffort: "high",
   reasoningSummary: "detailed",
-
-  // Other OpenAI Responses provider options you can enable/override:
-  // conversation: undefined,
-  // include: ["message.output_text.logprobs"],
-  // instructions: undefined,
-  // logprobs: true, // true | number (top-n)
-  // maxToolCalls: undefined,
-  // metadata: undefined,
-  // parallelToolCalls: true,
-  // previousResponseId: undefined,
-  // promptCacheKey: undefined,
-  // promptCacheRetention: "in_memory", // "in_memory" | "24h"
-  // safetyIdentifier: undefined,
-  // serviceTier: "auto", // "auto" | "flex" | "priority" | "default"
-  // store: true,
-  // strictJsonSchema: true,
-  textVerbosity: "high", // "low" | "medium" | "high"
-  // truncation: "auto", // "auto" | "disabled"
-  // user: undefined,
-  // systemMessageMode: "system", // "system" | "developer" | "remove"
-  // forceReasoning: false,
-} as const satisfies OpenAIResponsesProviderOptions;
+  textVerbosity: "high",
+} as const;
 
 export const openaiProvider = {
   keyCandidates: ["openai"] as const,
-  createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) => {
-    const provider = savedKey ? createOpenAI({ apiKey: savedKey }) : openai;
-    return provider(modelId);
+  createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }): Model<Api> => {
+    return resolvePiModel("openai", modelId, {
+      apiKey: savedKey,
+    });
   },
 };

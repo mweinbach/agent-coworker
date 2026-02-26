@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { ModelMessage } from "ai";
 import { z } from "zod";
 
 import { __internal } from "../src/runtime/piRuntime";
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
-import type { AgentConfig } from "../src/types";
+import type { AgentConfig, ModelMessage } from "../src/types";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {

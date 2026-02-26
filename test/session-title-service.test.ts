@@ -26,13 +26,17 @@ function makeConfig(provider: AgentConfig["provider"] = "openai"): AgentConfig {
 
 describe("sessionTitleService", () => {
   test("returns sanitized model title on first successful candidate", async () => {
-    const generateObject = mock(async (_args: any) => ({ object: { title: '  "Hello   World"  ' } }));
-    const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
+    const runTurn = mock(async (_args: any) => ({
+      text: '  "Hello   World"  ',
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateObject: generateObject as any,
-      getModel: getModel as any,
+      createRuntime: createRuntime as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
 
@@ -46,23 +50,27 @@ describe("sessionTitleService", () => {
       source: "model",
       model: "gpt-5-mini",
     });
-    expect(generateObject).toHaveBeenCalledTimes(1);
-    expect(generateObject.mock.calls[0]?.[0]?.maxOutputTokens).toBe(150);
+    expect(createRuntime).toHaveBeenCalledTimes(1);
+    expect(runTurn).toHaveBeenCalledTimes(1);
   });
 
   test("falls back to provider default model when primary model attempt fails", async () => {
-    const generateObject = mock(async ({ model }: { model: any }) => {
-      if (model.modelId === "gpt-5-mini") {
+    const runTurn = mock(async ({ config }: { config: AgentConfig }) => {
+      if (config.model === "gpt-5-mini") {
         throw new Error("primary unavailable");
       }
-      return { object: { title: "Fallback model title" } };
+      return {
+        text: "Fallback model title",
+        reasoningText: undefined,
+        responseMessages: [] as any[],
+        usage: undefined,
+      };
     });
-    const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateObject: generateObject as any,
-      getModel: getModel as any,
+      createRuntime: createRuntime as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
 
@@ -76,19 +84,19 @@ describe("sessionTitleService", () => {
       source: "model",
       model: "gpt-5.2",
     });
-    expect(generateObject).toHaveBeenCalledTimes(2);
+    expect(createRuntime).toHaveBeenCalledTimes(2);
+    expect(runTurn).toHaveBeenCalledTimes(2);
   });
 
   test("falls back to deterministic heuristic when all model attempts fail", async () => {
-    const generateObject = mock(async (_args: any) => {
+    const runTurn = mock(async (_args: any) => {
       throw new Error("all failed");
     });
-    const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateObject: generateObject as any,
-      getModel: getModel as any,
+      createRuntime: createRuntime as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
 
@@ -101,9 +109,11 @@ describe("sessionTitleService", () => {
     expect(result.model).toBeNull();
     expect(result.title.split(/\s+/).length).toBeLessThanOrEqual(30);
     expect(result.title.length).toBeLessThanOrEqual(53);
+    expect(createRuntime).toHaveBeenCalledTimes(2);
+    expect(runTurn).toHaveBeenCalledTimes(2);
   });
 
-  test("uses runtime turn path when runtime is pi", async () => {
+  test("uses runtime turn path", async () => {
     const runTurn = mock(async (_args: any) => ({
       text: '"Runtime  Title"',
       reasoningText: undefined,
@@ -136,18 +146,23 @@ describe("sessionTitleService", () => {
   });
 
   test("returns default title for empty queries", async () => {
-    const generateObject = mock(async (_args: any) => ({ object: { title: "unused" } }));
-    const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
+    const runTurn = mock(async (_args: any) => ({
+      text: "unused",
+      reasoningText: undefined,
+      responseMessages: [] as any[],
+      usage: undefined,
+    }));
+    const createRuntime = mock((_config: AgentConfig) => ({ name: "pi", runTurn }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateObject: generateObject as any,
-      getModel: getModel as any,
+      createRuntime: createRuntime as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
 
     const result = await generateSessionTitle({ config: makeConfig("openai"), query: "   " });
     expect(result).toEqual({ title: DEFAULT_SESSION_TITLE, source: "default", model: null });
-    expect(generateObject).not.toHaveBeenCalled();
+    expect(createRuntime).not.toHaveBeenCalled();
+    expect(runTurn).not.toHaveBeenCalled();
   });
 });

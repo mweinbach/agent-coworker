@@ -1,5 +1,3 @@
-import type { ModelMessage } from "ai";
-
 import type { connectProvider as connectModelProvider, ConnectProviderResult, getAiCoworkerPaths } from "../../connect";
 import type { runTurn } from "../../agent";
 import type { HarnessContextStore } from "../../harness/contextStore";
@@ -9,6 +7,7 @@ import type { getProviderStatuses } from "../../providerStatus";
 import type {
   AgentConfig,
   HarnessContextState,
+  ModelMessage,
   ServerErrorCode,
   ServerErrorSource,
   TodoItem,

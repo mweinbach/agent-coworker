@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 
-import { tool } from "ai";
 import { z } from "zod";
 
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 
 export function createEditTool(ctx: ToolContext) {
-  return tool({
+  return defineTool({
     description:
       "Replace exact text in a file. The oldString must exist and be unique unless replaceAll is true.",
     inputSchema: z.object({

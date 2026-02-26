@@ -1,5 +1,4 @@
-import { anthropic, createAnthropic, type AnthropicProviderOptions } from "@ai-sdk/anthropic";
-
+import { createAnthropicModelAdapter } from "./modelAdapter";
 import type { AgentConfig } from "../types";
 
 function normalizeAnthropicModelId(modelId: string): string {
@@ -43,12 +42,10 @@ export const DEFAULT_ANTHROPIC_PROVIDER_OPTIONS = {
   //     // { type: "clear_tool_uses_20250919", trigger: { type: "input_tokens", value: 12000 } },
   //   ],
   // },
-} as const satisfies AnthropicProviderOptions;
+} as const;
 
 export const anthropicProvider = {
   keyCandidates: ["anthropic"] as const,
-  createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) => {
-    const provider = savedKey ? createAnthropic({ apiKey: savedKey }) : anthropic;
-    return provider(normalizeAnthropicModelId(modelId));
-  },
+  createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) =>
+    createAnthropicModelAdapter(normalizeAnthropicModelId(modelId), savedKey),
 };

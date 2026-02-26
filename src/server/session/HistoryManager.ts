@@ -1,5 +1,4 @@
-import type { ModelMessage } from "ai";
-
+import type { ModelMessage } from "../../types";
 import type { SessionContext } from "./SessionContext";
 
 const MAX_MESSAGE_HISTORY = 200;

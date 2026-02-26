@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  Built on <a href="https://bun.sh">Bun</a> + <a href="https://ai-sdk.dev">Vercel AI SDK</a> · WebSocket-first architecture · TUI, CLI, Desktop, and Web interfaces
+  Built on <a href="https://bun.sh">Bun</a> + <a href="https://github.com/badlogic/pi-mono">pi-mono</a> · WebSocket-first architecture · TUI, CLI, Desktop, and Web interfaces
 </p>
 
 ---
@@ -220,7 +220,7 @@ Built-in [Langfuse](https://langfuse.com) + OpenTelemetry integration. Set `LANG
 └──────────────────────────┬──────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────┐
-│  Agent Engine (Vercel AI SDK)                           │
+│  Agent Engine (PI runtime)                              │
 │  createRunTurn() · System Prompt · Tool Execution       │
 └────────┬─────────────────┬──────────────────┬───────────┘
          │                 │                  │
@@ -228,7 +228,7 @@ Built-in [Langfuse](https://langfuse.com) + OpenTelemetry integration. Set `LANG
     (16 tools)        (Gemini/GPT/Claude)  (runtime-loaded)
 ```
 
-Everything flows through the WebSocket protocol. UIs never touch the AI SDK or tools directly.
+Everything flows through the WebSocket protocol. UIs never touch the runtime engine or tools directly.
 
 ### Key source paths
 
@@ -273,7 +273,7 @@ bun run docs:check   # Validate documentation
 | | |
 |---|---|
 | **Runtime** | [Bun](https://bun.sh) |
-| **AI** | [Vercel AI SDK](https://ai-sdk.dev) v6 |
+| **AI Runtime** | [pi-mono / @mariozechner/pi-ai](https://github.com/badlogic/pi-mono) |
 | **TUI** | [OpenTUI](https://github.com/anthropics/opentui) + [Solid.js](https://www.solidjs.com/) |
 | **Desktop** | Electron |
 | **Web** | [Next.js](https://nextjs.org/) |

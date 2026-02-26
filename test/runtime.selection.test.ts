@@ -33,15 +33,9 @@ describe("runtime selection", () => {
     expect(createRuntime(config).name).toBe("pi");
   });
 
-  test("respects explicit ai-sdk runtime in config", () => {
-    const config = makeConfig({ runtime: "ai-sdk" });
-    expect(resolveRuntimeName(config)).toBe("ai-sdk");
-    expect(createRuntime(config).name).toBe("ai-sdk");
-  });
-
-  test("forceRuntime override takes precedence over config runtime", () => {
+  test("respects explicit pi runtime in config", () => {
     const config = makeConfig({ runtime: "pi" });
-    expect(resolveRuntimeName(config, "ai-sdk")).toBe("ai-sdk");
-    expect(createRuntime(config, { forceRuntime: "ai-sdk" }).name).toBe("ai-sdk");
+    expect(resolveRuntimeName(config)).toBe("pi");
+    expect(createRuntime(config).name).toBe("pi");
   });
 });

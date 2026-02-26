@@ -1,6 +1,5 @@
-import type { ModelMessage } from "ai";
-
 import type { AgentConfig } from "../types";
+import type { ModelMessage } from "../types";
 
 export type RuntimeUsage = {
   promptTokens: number;
@@ -46,6 +45,6 @@ export interface RuntimeRunTurnResult {
 }
 
 export interface LlmRuntime {
-  readonly name: "ai-sdk" | "pi";
+  readonly name: "pi";
   runTurn(params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult>;
 }

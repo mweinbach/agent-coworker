@@ -1,4 +1,3 @@
-import type { ModelMessage } from "ai";
 import { z } from "zod";
 
 export const PROVIDER_NAMES = [
@@ -10,6 +9,12 @@ export const PROVIDER_NAMES = [
 
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 const providerNameSchema = z.enum(PROVIDER_NAMES);
+
+export type ModelMessage = {
+  role: "system" | "user" | "assistant" | "tool" | (string & {});
+  content: unknown;
+  [key: string]: unknown;
+};
 
 export function isProviderName(v: unknown): v is ProviderName {
   return providerNameSchema.safeParse(v).success;
@@ -24,7 +29,6 @@ export function resolveProviderName(v: unknown): ProviderName | null {
 
 export const RUNTIME_NAMES = [
   "pi",
-  "ai-sdk",
 ] as const;
 
 export type RuntimeName = (typeof RUNTIME_NAMES)[number];
@@ -77,14 +81,12 @@ export interface AgentConfig {
   configDirs: string[];
 
   /**
-   * Optional AI SDK providerOptions to pass through to model calls.
-   * This lets us tune reasoning/thinking behavior per provider without hardcoding it in every call site.
+   * Optional provider-specific options forwarded to runtime model calls.
    */
   providerOptions?: Record<string, any>;
 
   /**
    * Optional runtime controls for model calls.
-   * These map to AI SDK call settings such as maxRetries.
    */
   modelSettings?: ModelRuntimeSettings;
 

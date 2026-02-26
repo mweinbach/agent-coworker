@@ -1,5 +1,4 @@
-import { createOpenAI, openai, type OpenAIResponsesProviderOptions } from "@ai-sdk/openai";
-
+import { createOpenAiModelAdapter } from "./modelAdapter";
 import type { AgentConfig } from "../types";
 
 export const DEFAULT_OPENAI_PROVIDER_OPTIONS = {
@@ -26,12 +25,10 @@ export const DEFAULT_OPENAI_PROVIDER_OPTIONS = {
   // user: undefined,
   // systemMessageMode: "system", // "system" | "developer" | "remove"
   // forceReasoning: false,
-} as const satisfies OpenAIResponsesProviderOptions;
+} as const;
 
 export const openaiProvider = {
   keyCandidates: ["openai"] as const,
-  createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) => {
-    const provider = savedKey ? createOpenAI({ apiKey: savedKey }) : openai;
-    return provider(modelId);
-  },
+  createModel: ({ modelId, savedKey }: { config: AgentConfig; modelId: string; savedKey?: string }) =>
+    createOpenAiModelAdapter(modelId, savedKey),
 };

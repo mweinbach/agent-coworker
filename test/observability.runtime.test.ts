@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { AgentConfig } from "../src/types";
 import {
   __internal,
-  buildAiSdkTelemetrySettings,
+  buildRuntimeTelemetrySettings,
   ensureObservabilityRuntime,
   getObservabilityHealth,
   noteObservabilityFailure,
@@ -73,9 +73,9 @@ describe("observability runtime", () => {
     expect(snapshot.hasSpanProcessor).toBe(true);
   });
 
-  test("buildAiSdkTelemetrySettings enables full I/O capture", async () => {
+  test("buildRuntimeTelemetrySettings enables full I/O capture", async () => {
     const cfg = makeConfig();
-    const telemetry = await buildAiSdkTelemetrySettings(cfg, {
+    const telemetry = await buildRuntimeTelemetrySettings(cfg, {
       functionId: "session.turn",
       metadata: {
         sessionId: "session-123",
@@ -91,9 +91,9 @@ describe("observability runtime", () => {
     expect((telemetry?.metadata as any)?.provider).toBe("openai");
   });
 
-  test("buildAiSdkTelemetrySettings returns undefined when observability is disabled", async () => {
+  test("buildRuntimeTelemetrySettings returns undefined when observability is disabled", async () => {
     const cfg = makeConfig({ observabilityEnabled: false });
-    const telemetry = await buildAiSdkTelemetrySettings(cfg, {
+    const telemetry = await buildRuntimeTelemetrySettings(cfg, {
       functionId: "session.turn",
     });
     expect(telemetry).toBeUndefined();

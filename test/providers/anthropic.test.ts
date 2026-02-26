@@ -2,8 +2,6 @@ import { describe, expect, test } from "bun:test";
 
 import path from "node:path";
 
-import { anthropic } from "@ai-sdk/anthropic";
-
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot, writeJson } from "./helpers";
 
@@ -57,14 +55,15 @@ describe("Anthropic provider (claude-opus-4-6)", () => {
     expect(model.provider).toBe("anthropic.messages");
   });
 
-  test("directly created anthropic model matches getModel output", () => {
-    const direct = anthropic("claude-opus-4-6");
+  test("getModel exposes stable adapter shape", async () => {
     const cfg = makeConfig({ provider: "anthropic", model: "claude-opus-4-6" });
-    const viaGetModel = getModel(cfg);
+    const viaGetModel = getModel(cfg) as any;
+    const headers = await viaGetModel.config.headers();
 
-    expect(viaGetModel.modelId).toBe(direct.modelId);
-    expect(viaGetModel.provider).toBe(direct.provider);
-    expect(viaGetModel.specificationVersion).toBe(direct.specificationVersion);
+    expect(viaGetModel.modelId).toBe("claude-opus-4-6");
+    expect(viaGetModel.provider).toBe("anthropic.messages");
+    expect(viaGetModel.specificationVersion).toBe("v3");
+    expect(typeof headers).toBe("object");
   });
 
   test("anthropic provider options have thinking config with budget", () => {

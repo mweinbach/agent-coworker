@@ -1,9 +1,9 @@
-import type { ModelMessage } from "ai";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 
 import type { PersistedSessionMutation, PersistedSessionRecord } from "../sessionDb";
 import type { PersistedSessionSnapshot, PersistedSessionSummary } from "../sessionStore";
+import type { ModelMessage } from "../../types";
 import { mapPersistedSessionRecordRow, mapPersistedSessionSummaryRow } from "./mappers";
 import {
   parseBooleanInteger,

@@ -1,10 +1,10 @@
 import fg from "fast-glob";
 import path from "node:path";
 
-import { tool } from "ai";
 import { z } from "zod";
 
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertReadPathAllowed } from "../utils/permissions";
 
@@ -40,7 +40,7 @@ function assertSafeGlobPattern(pattern: string): void {
 }
 
 export function createGlobTool(ctx: ToolContext) {
-  return tool({
+  return defineTool({
     description: "Find files matching a glob pattern. Returns paths sorted by modification time.",
     inputSchema: globInputSchema,
     execute: async ({ pattern, cwd, maxResults }) => {

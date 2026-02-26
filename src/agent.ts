@@ -1,15 +1,14 @@
-import type { ModelMessage } from "ai";
 import { z } from "zod";
 
-import { buildAiSdkTelemetrySettings } from "./observability/runtime";
+import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
-import type { AgentConfig, TodoItem } from "./types";
+import type { AgentConfig, ModelMessage, TodoItem } from "./types";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
-import type { AiSdkRuntimeDeps } from "./runtime";
 
 const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
+const MAX_STREAM_SETTLE_TICKS = 64;
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const messageRecordSchema = z.object({
   role: z.string(),
@@ -23,6 +22,21 @@ const messageContentPartSchema = z.union([
   }).passthrough(),
 ]);
 const messageContentSchema = z.array(messageContentPartSchema);
+const usageSchema = z.object({
+  promptTokens: z.number(),
+  completionTokens: z.number(),
+  totalTokens: z.number(),
+});
+const responseMessagesSchema = z.array(z.unknown());
+const stringSchema = z.string();
+const asyncIterableSchema = z.custom<AsyncIterable<unknown>>((value) => {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) return false;
+  const iterable = value as { [Symbol.asyncIterator]?: unknown };
+  return typeof iterable[Symbol.asyncIterator] === "function";
+});
+const streamResultWithFullStreamSchema = z.object({
+  fullStream: asyncIterableSchema.optional(),
+}).passthrough();
 
 export interface RunTurnParams {
   config: AgentConfig;
@@ -141,7 +155,22 @@ type RunTurnDeps = {
   loadMCPTools: typeof loadMCPTools;
 };
 
-type RunTurnOverrides = Partial<RunTurnDeps> & Partial<AiSdkRuntimeDeps>;
+type LegacyStreamTextInput = Record<string, unknown>;
+type LegacyStreamTextOutput = {
+  text: string | Promise<string>;
+  reasoningText?: string | Promise<string | undefined>;
+  response?: unknown | Promise<unknown>;
+  fullStream?: AsyncIterable<unknown>;
+};
+type LegacyStreamText = (input: LegacyStreamTextInput) => Promise<LegacyStreamTextOutput>;
+type LegacyStepCountIs = (maxSteps: number) => unknown;
+type LegacyGetModel = (config: AgentConfig, id?: string) => unknown;
+
+type RunTurnOverrides = Partial<RunTurnDeps> & {
+  streamText?: LegacyStreamText;
+  stepCountIs?: LegacyStepCountIs;
+  getModel?: LegacyGetModel;
+};
 
 export function createRunTurn(overrides: RunTurnOverrides = {}) {
   const {
@@ -157,11 +186,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     loadMCPTools,
     ...runtimeOverrides,
   };
-  const aiSdkDeps: Partial<AiSdkRuntimeDeps> = {};
-  if (legacyStreamText) aiSdkDeps.streamText = legacyStreamText;
-  if (legacyStepCountIs) aiSdkDeps.stepCountIs = legacyStepCountIs;
-  if (legacyGetModel) aiSdkDeps.getModel = legacyGetModel;
-  const forceAiSdkRuntime = Object.keys(aiSdkDeps).length > 0;
+  const useLegacyModelApi = Boolean(legacyStreamText && legacyStepCountIs && legacyGetModel);
 
   return async function runTurn(params: RunTurnParams): Promise<{
     text: string;
@@ -212,16 +237,104 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
     }> => {
       try {
-        const telemetry = await buildAiSdkTelemetrySettings(config, {
+        const telemetry = await buildRuntimeTelemetrySettings(config, {
           functionId: params.telemetryContext?.functionId ?? "agent.runTurn",
           metadata: {
             ...(params.telemetryContext?.metadata ?? {}),
           },
         });
-        const runtime = deps.createRuntime(config, {
-          ...(forceAiSdkRuntime ? { forceRuntime: "ai-sdk" as const } : {}),
-          ...(forceAiSdkRuntime ? { aiSdkDeps } : {}),
-        });
+        if (useLegacyModelApi && legacyStreamText && legacyStepCountIs && legacyGetModel) {
+          const streamTextInput: LegacyStreamTextInput = {
+            model: legacyGetModel(config),
+            system: turnSystem,
+            messages,
+            tools,
+            providerOptions: turnProviderOptions,
+            ...(telemetry ? { experimental_telemetry: telemetry } : {}),
+            stopWhen: legacyStepCountIs(params.maxSteps ?? 100),
+            ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
+            abortSignal,
+            ...(typeof config.modelSettings?.maxRetries === "number"
+              ? { maxRetries: config.modelSettings.maxRetries }
+              : {}),
+            onError: async ({ error }: { error: unknown }) => {
+              log(`[model:error] ${String(error)}`);
+              await params.onModelError?.(error);
+            },
+            onAbort: async () => {
+              log("[model:abort]");
+              await params.onModelAbort?.();
+            },
+            includeRawChunks: params.includeRawChunks ?? true,
+          };
+
+          const streamResult = await legacyStreamText(streamTextInput);
+          let streamConsumptionSettled = false;
+          let streamPartCount = 0;
+          const streamConsumption = (async () => {
+            if (!params.onModelStreamPart) return;
+            const parsedStream = streamResultWithFullStreamSchema.safeParse(streamResult);
+            const fullStream = parsedStream.success ? parsedStream.data.fullStream : undefined;
+            if (!fullStream) return;
+
+            const streamIterator = fullStream[Symbol.asyncIterator]();
+            while (true) {
+              const next = await streamIterator.next();
+              if (next.done) break;
+              await params.onModelStreamPart(next.value);
+              streamPartCount += 1;
+            }
+          })().finally(() => {
+            streamConsumptionSettled = true;
+          });
+
+          const [text, reasoningText, response] = await Promise.all([
+            Promise.resolve(streamResult.text),
+            Promise.resolve(streamResult.reasoningText),
+            Promise.resolve(streamResult.response),
+          ]);
+
+          if (params.onModelStreamPart) {
+            let previousCount = streamPartCount;
+            let stableTicks = 0;
+            let ticks = 0;
+            while (!streamConsumptionSettled && stableTicks < 2 && ticks < MAX_STREAM_SETTLE_TICKS) {
+              await Promise.resolve();
+              ticks += 1;
+              if (streamPartCount === previousCount) {
+                stableTicks += 1;
+              } else {
+                previousCount = streamPartCount;
+                stableTicks = 0;
+              }
+            }
+            if (streamConsumptionSettled) {
+              try {
+                await streamConsumption;
+              } catch (error) {
+                log(`[warn] Model stream ended with error: ${String(error)}`);
+              }
+            } else {
+              log("[warn] Model stream did not drain after response completion; continuing turn.");
+              void streamConsumption.catch((error) => {
+                log(`[warn] Model stream ended with error after response completion: ${String(error)}`);
+              });
+            }
+          }
+
+          const parsedResponseMessages = responseMessagesSchema.safeParse((response as any)?.messages);
+          const parsedReasoningText = stringSchema.safeParse(reasoningText);
+          const parsedUsage = usageSchema.safeParse((response as any)?.usage);
+
+          return {
+            text: String(text ?? ""),
+            reasoningText: parsedReasoningText.success ? parsedReasoningText.data : undefined,
+            responseMessages: (parsedResponseMessages.success ? parsedResponseMessages.data : []) as ModelMessage[],
+            usage: parsedUsage.success ? parsedUsage.data : undefined,
+          };
+        }
+
+        const runtime = deps.createRuntime(config);
         return await runtime.runTurn({
           config,
           system: turnSystem,

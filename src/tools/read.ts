@@ -1,15 +1,15 @@
 import { createReadStream } from "node:fs";
 import readline from "node:readline";
 
-import { tool } from "ai";
 import { z } from "zod";
 
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 import { resolveMaybeRelative, truncateLine } from "../utils/paths";
 import { assertReadPathAllowed } from "../utils/permissions";
 
 export function createReadTool(ctx: ToolContext) {
-  return tool({
+  return defineTool({
     description:
       "Read a file from the filesystem. Returns content with line numbers. Use offset/limit for large files.",
     inputSchema: z.object({

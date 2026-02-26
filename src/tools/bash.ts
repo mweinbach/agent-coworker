@@ -1,8 +1,8 @@
-import { tool } from "ai";
 import { z } from "zod";
 import { execFile } from "node:child_process";
 
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 import { truncateText } from "../utils/paths";
 
 type ExecResult = { stdout: string; stderr: string; exitCode: number; errorCode?: string };
@@ -84,7 +84,7 @@ async function runShellCommand(opts: {
 }
 
 export function createBashTool(ctx: ToolContext) {
-  return tool({
+  return defineTool({
     description: `Execute a shell command. Use for git, npm, docker, system operations, and anything requiring the shell.
 
 Platform notes:

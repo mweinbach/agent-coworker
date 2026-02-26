@@ -1,15 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { tool } from "ai";
 import { z } from "zod";
 
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 
 export function createWriteTool(ctx: ToolContext) {
-  return tool({
+  return defineTool({
     description:
       "Write content to a file. Creates parent directories if needed. Overwrites existing files.",
     inputSchema: z.object({

@@ -2112,7 +2112,7 @@ Message history response to `get_messages`.
 |-------|------|-------------|
 | `type` | `"messages"` | — |
 | `sessionId` | `string` | Session identifier |
-| `messages` | `unknown[]` | Slice of AI SDK `ModelMessage` objects |
+| `messages` | `unknown[]` | Slice of runtime `ModelMessage` objects |
 | `total` | `number` | Total number of messages in history |
 | `offset` | `number` | Start index of this slice |
 | `limit` | `number` | Requested limit |

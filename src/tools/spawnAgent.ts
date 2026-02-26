@@ -1,15 +1,16 @@
-import { stepCountIs as realStepCountIs, streamText as realStreamText, tool } from "ai";
 import path from "node:path";
 import { z } from "zod";
 
 import { getModel as realGetModel } from "../config";
-import { buildAiSdkTelemetrySettings } from "../observability/runtime";
+import { buildRuntimeTelemetrySettings } from "../observability/runtime";
 import { buildGooglePrepareStep } from "../providers/googleReplay";
 import { loadSubAgentPrompt as realLoadSubAgentPrompt } from "../prompt";
 import { createRuntime as realCreateRuntime } from "../runtime";
+import type { AgentConfig } from "../types";
 import { classifyCommandDetailed as realClassifyCommandDetailed } from "../utils/approval";
 
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 import { createBashTool } from "./bash";
 import { createGlobTool } from "./glob";
 import { createGrepTool } from "./grep";
@@ -26,11 +27,20 @@ type AgentType = "explore" | "research" | "general";
 const MAX_SUB_AGENT_DEPTH = 2;
 const MAX_SUB_AGENT_TASK_CHARS = 20_000;
 
+type LegacyStreamTextResult = {
+  text: string | Promise<string>;
+};
+
+type LegacyStreamTextInput = Record<string, unknown>;
+type LegacyStreamText = (input: LegacyStreamTextInput) => Promise<LegacyStreamTextResult>;
+type LegacyStepCountIs = (maxSteps: number) => unknown;
+type LegacyGetModel = (config: AgentConfig, modelId?: string) => unknown;
+
 export type SpawnAgentDeps = Partial<{
   createRuntime: typeof realCreateRuntime;
-  streamText: typeof realStreamText;
-  stepCountIs: typeof realStepCountIs;
-  getModel: typeof realGetModel;
+  streamText: LegacyStreamText;
+  stepCountIs: LegacyStepCountIs;
+  getModel: LegacyGetModel;
   loadSubAgentPrompt: typeof realLoadSubAgentPrompt;
   classifyCommandDetailed: typeof realClassifyCommandDetailed;
 }>;
@@ -91,12 +101,12 @@ function createSubAgentTools(
 
 export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}) {
   const createRuntime = deps.createRuntime ?? realCreateRuntime;
-  const streamText = deps.streamText ?? realStreamText;
-  const stepCountIs = deps.stepCountIs ?? realStepCountIs;
+  const streamText = deps.streamText;
+  const stepCountIs = deps.stepCountIs;
   const getModel = deps.getModel ?? realGetModel;
   const loadSubAgentPrompt = deps.loadSubAgentPrompt ?? realLoadSubAgentPrompt;
   const classifyCommandDetailed = deps.classifyCommandDetailed ?? realClassifyCommandDetailed;
-  const forceAiSdkRuntime = Boolean(deps.streamText || deps.stepCountIs || deps.getModel);
+  const useLegacyModelApi = Boolean(streamText && stepCountIs && deps.getModel);
   const safeApprove = (command: string) =>
     classifyCommandDetailed(command, {
       allowedRoots: [
@@ -107,7 +117,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
       workingDirectory: ctx.config.workingDirectory,
     }).kind === "auto";
 
-  return tool({
+  return defineTool({
     description:
       "Launch a sub-agent for a focused task (explore, research, or general). Sub-agents run with their own prompt and restricted tools and return their result.",
     inputSchema: z.object({
@@ -137,7 +147,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
         ctx.config.provider === "google" && Object.keys(tools).length > 0
           ? buildGooglePrepareStep(ctx.config.providerOptions, ctx.log)
           : undefined;
-      const telemetry = await buildAiSdkTelemetrySettings(ctx.config, {
+      const telemetry = await buildRuntimeTelemetrySettings(ctx.config, {
         functionId: "tool.spawnAgent",
         metadata: {
           agentType,
@@ -147,7 +157,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
       });
 
       let text = "";
-      if (forceAiSdkRuntime) {
+      if (useLegacyModelApi && streamText && stepCountIs) {
         const streamTextInput = {
           model: getModel(ctx.config, modelId),
           system,
@@ -161,7 +171,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
             : {}),
           abortSignal: ctx.abortSignal,
           prompt: normalizedTask,
-        } as Parameters<typeof streamText>[0];
+        } as LegacyStreamTextInput;
         const streamResult = await streamText(streamTextInput);
         text = await streamResult.text;
       } else {

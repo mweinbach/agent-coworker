@@ -93,7 +93,7 @@ describe("loadConfig", () => {
     expect(cfg.model).toBe("gpt-5.2");
   });
 
-  test("runtime defaults to pi and AGENT_RUNTIME overrides config layers", async () => {
+  test("runtime defaults to pi and ignores unsupported AGENT_RUNTIME values", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -108,9 +108,9 @@ describe("loadConfig", () => {
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
-      env: { AGENT_RUNTIME: "ai-sdk" },
+      env: { AGENT_RUNTIME: "legacy-runtime" },
     });
-    expect(cfg2.runtime).toBe("ai-sdk");
+    expect(cfg2.runtime).toBe("pi");
   });
 
   // ---- New tests ----

@@ -1,4 +1,3 @@
-import { tool } from "ai";
 import { z } from "zod";
 
 import { Readability } from "@mozilla/readability";
@@ -6,6 +5,7 @@ import { JSDOM } from "jsdom";
 import TurndownService from "turndown";
 
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 import { truncateText } from "../utils/paths";
 import { resolveSafeWebUrl } from "../utils/webSafety";
 
@@ -68,7 +68,7 @@ async function fetchWithSafeRedirects(url: string, abortSignal?: AbortSignal): P
 }
 
 export function createWebFetchTool(ctx: ToolContext) {
-  return tool({
+  return defineTool({
     description:
       "Fetch a URL and return its content as clean markdown. Use to read documentation or web pages.",
     inputSchema: z.object({

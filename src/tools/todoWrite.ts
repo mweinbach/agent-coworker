@@ -1,8 +1,8 @@
-import { tool } from "ai";
 import { z } from "zod";
 
 import type { TodoItem } from "../types";
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 
 const todoSchema = z.object({
   content: z.string().min(1).describe("Imperative task description"),
@@ -22,7 +22,7 @@ export function onTodoChange(fn: TodoListener) {
   listeners.push(fn);
 }
 
-export const todoWrite = tool({
+export const todoWrite = defineTool({
   description: `Update the progress tracker for multi-step tasks. Sends the COMPLETE todo list each call (overwrite, not append).
 
 Rules:
@@ -41,7 +41,7 @@ Rules:
 });
 
 export function createTodoWriteTool(ctx: ToolContext) {
-  return tool({
+  return defineTool({
     description: todoWrite.description,
     inputSchema: todoWriteInputSchema,
     execute: async ({ todos }) => {

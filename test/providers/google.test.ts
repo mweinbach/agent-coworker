@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test";
 
-import { google } from "@ai-sdk/google";
-
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
 import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot } from "./helpers";
@@ -36,14 +34,15 @@ describe("Google provider (gemini-3.1-pro-preview-customtools)", () => {
     expect(model.provider).toBe("google.generative-ai");
   });
 
-  test("directly created google model matches getModel output", () => {
-    const direct = google("gemini-3-flash-preview");
+  test("getModel exposes stable adapter shape", async () => {
     const cfg = makeConfig({ provider: "google", model: "gemini-3-flash-preview" });
-    const viaGetModel = getModel(cfg);
+    const viaGetModel = getModel(cfg) as any;
+    const headers = await viaGetModel.config.headers();
 
-    expect(viaGetModel.modelId).toBe(direct.modelId);
-    expect(viaGetModel.provider).toBe(direct.provider);
-    expect(viaGetModel.specificationVersion).toBe(direct.specificationVersion);
+    expect(viaGetModel.modelId).toBe("gemini-3-flash-preview");
+    expect(viaGetModel.provider).toBe("google.generative-ai");
+    expect(viaGetModel.specificationVersion).toBe("v3");
+    expect(typeof headers).toBe("object");
   });
 
   test("google provider options have thinking config", () => {

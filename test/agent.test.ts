@@ -477,7 +477,7 @@ describe("runTurn", () => {
     expect(callArg.providerOptions).toBeUndefined();
   });
 
-  test("enables AI SDK telemetry with full I/O when observability is configured", async () => {
+  test("enables runtime telemetry with full I/O when observability is configured", async () => {
     const config = makeConfig({
       observabilityEnabled: true,
       observability: {

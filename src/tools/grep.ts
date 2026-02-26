@@ -1,9 +1,9 @@
-import { tool } from "ai";
 import { z } from "zod";
 import { execFile } from "node:child_process";
 import path from "node:path";
 
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 import { resolveMaybeRelative, truncateText } from "../utils/paths";
 import { ensureRipgrep } from "../utils/ripgrep";
 import { assertReadPathAllowed } from "../utils/permissions";
@@ -17,7 +17,7 @@ export function createGrepTool(
   const execFileImpl = opts.execFileImpl ?? execFile;
   const ensureRipgrepImpl = opts.ensureRipgrepImpl ?? ensureRipgrep;
 
-  return tool({
+  return defineTool({
     description:
       "Search file contents for a regex pattern using ripgrep (rg). Returns matching lines with filenames and line numbers. If rg is missing, Cowork will auto-download it.",
     inputSchema: z.object({

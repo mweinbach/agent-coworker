@@ -4,20 +4,15 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { generateText as realGenerateText, stepCountIs as realStepCountIs, tool as aiTool } from "ai";
-import type { ModelMessage } from "ai";
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { createOpenAI } from "@ai-sdk/openai";
-
-import { loadConfig, getModel as realGetModel } from "../src/config";
+import { loadConfig } from "../src/config";
 import { runTurnWithDeps } from "../src/agent";
 import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
 import { loadSubAgentPrompt, loadSystemPromptWithSkills } from "../src/prompt";
-import type { AgentConfig, ProviderName, TodoItem } from "../src/types";
+import type { AgentConfig, ModelMessage, ProviderName, TodoItem } from "../src/types";
 import type { ToolContext } from "../src/tools";
 import { createAskTool } from "../src/tools/ask";
 import { createBashTool } from "../src/tools/bash";
+import { defineTool } from "../src/tools/defineTool";
 import { createEditTool } from "../src/tools/edit";
 import { createGlobTool } from "../src/tools/glob";
 import { createGrepTool } from "../src/tools/grep";
@@ -32,7 +27,7 @@ import { createWebSearchTool } from "../src/tools/webSearch";
 import { createWriteTool } from "../src/tools/write";
 import { classifyCommand } from "../src/utils/approval";
 import { emitObservabilityEvent } from "../src/observability/otel";
-import { buildAiSdkTelemetrySettings, getObservabilityHealth } from "../src/observability/runtime";
+import { getObservabilityHealth } from "../src/observability/runtime";
 
 type AskEvent = {
   at: string;
@@ -135,21 +130,6 @@ function parseArgs(argv: string[]): RawLoopArgs {
   return args;
 }
 
-class RateLimiter {
-  private nextAllowedAtMs = 0;
-
-  constructor(private readonly minIntervalMs: number) {}
-
-  async wait() {
-    const now = Date.now();
-    const waitMs = this.nextAllowedAtMs - now;
-    if (waitMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
-    }
-    this.nextAllowedAtMs = Date.now() + this.minIntervalMs;
-  }
-}
-
 type RunTrace = {
   runId: string;
   startedAt: string;
@@ -226,74 +206,6 @@ function safeJsonStringify(v: unknown): string {
   );
 }
 
-function makeTracedGenerateText(
-  steps: TracedStep[],
-  scope: string,
-  limiter: RateLimiter,
-  config: AgentConfig,
-  metadata?: Record<string, string | number | boolean | null | undefined>
-): typeof realGenerateText {
-  const traced = (async (opts: any) => {
-    const callerOnStepFinish = opts?.onStepFinish;
-    const callerOnFinish = opts?.onFinish;
-    const callerPrepareStep = opts?.prepareStep;
-    const callerTelemetry = opts?.experimental_telemetry;
-    const telemetry = await buildAiSdkTelemetrySettings(config, {
-      functionId: `harness.generateText.${scope}`,
-      metadata: {
-        scope,
-        ...(metadata ?? {}),
-      },
-    });
-    const mergedTelemetry = telemetry
-      ? {
-          ...telemetry,
-          ...(callerTelemetry ?? {}),
-          metadata: {
-            ...(telemetry.metadata ?? {}),
-            ...(callerTelemetry?.metadata ?? {}),
-          },
-        }
-      : callerTelemetry;
-
-    return await realGenerateText({
-      ...opts,
-      // Avoid internal retries that can blow past free-tier request quotas.
-      maxRetries: typeof opts?.maxRetries === "number" ? opts.maxRetries : 0,
-      ...(mergedTelemetry ? { experimental_telemetry: mergedTelemetry } : {}),
-      experimental_include: {
-        requestBody: true,
-        responseBody: true,
-        ...(opts?.experimental_include ?? {}),
-      },
-      prepareStep: async (...args: any[]) => {
-        await limiter.wait();
-        if (typeof callerPrepareStep === "function") {
-          return await callerPrepareStep(...args);
-        }
-        return undefined;
-      },
-      onStepFinish: (stepResult: unknown) => {
-        steps.push({ scope, step: stepResult });
-        try {
-          return callerOnStepFinish?.(stepResult);
-        } catch {
-          // ignore caller callback errors
-        }
-      },
-      onFinish: (evt: unknown) => {
-        try {
-          return callerOnFinish?.(evt);
-        } catch {
-          // ignore caller callback errors
-        }
-      },
-    });
-  }) as typeof realGenerateText;
-
-  return traced;
-}
-
 type SkillGuardConfig = {
   requiredSkillName?: string;
   guardedToolNames?: string[];
@@ -348,7 +260,7 @@ function withExecuteGuard(
   onSuccess?: (input: any, output: any) => void
 ): any {
   if (!original || typeof original.execute !== "function") return original;
-  return aiTool({
+  return defineTool({
     description: String(original.description ?? ""),
     inputSchema: original.inputSchema,
     execute: async (input: any) => {
@@ -365,15 +277,10 @@ function withExecuteGuard(
 function createToolsWithTracing(
   ctx: ToolContext,
   steps: TracedStep[],
-  limiter: RateLimiter,
-  getModelImpl: typeof realGetModel,
   skillGuard?: SkillGuardConfig,
   prerequisiteToolGuard?: PrerequisiteToolGuardConfig
 ): Record<string, any> {
-  // Capture sub-agent model calls (spawnAgent uses its own generateText invocation).
-  const tracedForSubAgent = makeTracedGenerateText(steps, "spawnAgent", limiter, ctx.config, {
-    toolName: "spawnAgent",
-  });
+  void steps;
 
   const baseTools = {
     bash: createBashTool(ctx),
@@ -387,11 +294,8 @@ function createToolsWithTracing(
     ask: createAskTool(ctx),
     todoWrite: createTodoWriteTool(ctx),
     spawnAgent: createSpawnAgentTool(ctx, {
-      generateText: tracedForSubAgent,
-      stepCountIs: realStepCountIs,
-      getModel: getModelImpl,
       loadSubAgentPrompt,
-      classifyCommand,
+      classifyCommandDetailed: classifyCommand as any,
     }),
     notebookEdit: createNotebookEditTool(ctx),
     skill: createSkillTool(ctx),
@@ -1057,38 +961,6 @@ async function main() {
   const cliArgs = parseArgs(process.argv.slice(2));
   const repoDir = process.cwd();
 
-  const googleApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || "";
-  const openaiApiKey = process.env.OPENAI_API_KEY || "";
-  const anthropicApiKey = process.env.ANTHROPIC_API_KEY || "";
-
-  // Force API keys from env so we don't accidentally use older stored keys from ~/.cowork/auth/connections.json.
-  const googleProvider = googleApiKey ? createGoogleGenerativeAI({ apiKey: googleApiKey }) : null;
-  const openaiProvider = openaiApiKey ? createOpenAI({ apiKey: openaiApiKey }) : null;
-  const anthropicProvider = anthropicApiKey ? createAnthropic({ apiKey: anthropicApiKey }) : null;
-
-  const forcedGetModel: typeof realGetModel = (config: AgentConfig, id?: string) => {
-    const modelId = id || config.model;
-    if (config.provider === "google") {
-      if (!googleProvider) {
-        throw new Error("Missing GEMINI_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY env var (required for Gemini runs).");
-      }
-      return googleProvider(modelId);
-    }
-    if (config.provider === "openai") {
-      if (!openaiProvider) {
-        throw new Error("Missing OPENAI_API_KEY env var (required for GPT runs).");
-      }
-      return openaiProvider(modelId);
-    }
-    if (config.provider === "anthropic") {
-      if (!anthropicProvider) {
-        throw new Error("Missing ANTHROPIC_API_KEY env var (required for Claude runs).");
-      }
-      return anthropicProvider(modelId);
-    }
-    return realGetModel(config, modelId);
-  };
-
   const baseConfig = await loadConfig({
     cwd: repoDir,
     env: {
@@ -1109,8 +981,6 @@ async function main() {
   await ensureDir(runRoot);
 
   let anthropicModelIds: string[] = [];
-
-  const limiter = new RateLimiter(1000);
 
   const mixedRuns: RunSpec[] = [
     {
@@ -1447,8 +1317,6 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
     const runDir = path.join(runRoot, runDirName);
     await ensureDir(runDir);
 
-    const minIntervalMs = typeof run.minIntervalMs === "number" ? run.minIntervalMs : 1000;
-    const runLimiter = run.minIntervalMs ? new RateLimiter(minIntervalMs) : limiter;
     const startedAt = isoSafeNow();
     const startedAtMs = Date.now();
 
@@ -1559,21 +1427,10 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
         todoEvents.push({ at: isoSafeNow(), todos });
       };
 
-      const tracedMainGenerateText = makeTracedGenerateText(steps, "main", runLimiter, config, {
-        runId: run.id,
-        scenario: cliArgs.scenario,
-      });
-      const tracedFinalizeGenerateText = makeTracedGenerateText(steps, "finalize", runLimiter, config, {
-        runId: run.id,
-        scenario: cliArgs.scenario,
-      });
-
       const createToolsOverride = (ctx: ToolContext) =>
         createToolsWithTracing(
           ctx,
           steps,
-          runLimiter,
-          forcedGetModel,
           {
             requiredSkillName: run.requiredSkillBeforeTools,
             guardedToolNames: run.guardedToolsBeforeSkill,
@@ -1607,9 +1464,7 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
             },
           },
           {
-            generateText: tracedMainGenerateText as any,
             createTools: createToolsOverride as any,
-            getModel: forcedGetModel as any,
           }
         );
 
@@ -1654,18 +1509,28 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
             },
           ];
 
-          const finalized = await tracedFinalizeGenerateText({
-            model: forcedGetModel(config),
-            system,
-            messages: finalizeMessages,
-            providerOptions: config.providerOptions,
-            stopWhen: realStepCountIs(1),
-          } as any);
+          const finalized = await runTurnWithDeps(
+            {
+              config,
+              system,
+              messages: finalizeMessages,
+              log,
+              askUser,
+              approveCommand,
+              updateTodos,
+              discoveredSkills,
+              maxSteps: 1,
+              enableMcp: false,
+            },
+            {
+              createTools: createToolsOverride as any,
+            }
+          );
 
-          const finalizedText = String(finalized?.text ?? "");
+          const finalizedText = String(finalized.text ?? "");
           if (finalizedText.trim()) finalText = finalizedText;
-          if (typeof finalized?.reasoningText === "string") finalReasoningText = finalized.reasoningText;
-          const moreMsgs = (finalized?.response?.messages || []) as ModelMessage[];
+          if (typeof finalized.reasoningText === "string") finalReasoningText = finalized.reasoningText;
+          const moreMsgs = (finalized.responseMessages || []) as ModelMessage[];
           if (moreMsgs.length > 0) finalResponseMessages = [...finalResponseMessages, ...moreMsgs];
         }
 

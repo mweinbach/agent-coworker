@@ -26,10 +26,6 @@
     "test:stable": "bun scripts/run_tests_stable.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.46",
-    "@ai-sdk/google": "^3.0.30",
-    "@ai-sdk/mcp": "^1.0.21",
-    "@ai-sdk/openai": "^3.0.31",
     "@langfuse/otel": "^4.6.1",
     "@mariozechner/pi-ai": "^0.55.1",
     "@modelcontextprotocol/sdk": "^1.27.0",
@@ -39,7 +35,6 @@
     "@opentui/core": "^0.1.81",
     "@opentui/react": "^0.1.81",
     "@opentui/solid": "^0.1.81",
-    "ai": "^6.0.97",
     "fast-glob": "^3.3.3",
     "fuzzysort": "^3.1.0",
     "jsdom": "^28.1.0",

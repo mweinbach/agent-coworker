@@ -1,11 +1,18 @@
 import { LangfuseSpanProcessor } from "@langfuse/otel";
 import type { AttributeValue } from "@opentelemetry/api";
 import { NodeSDK } from "@opentelemetry/sdk-node";
-import type { TelemetrySettings } from "ai";
 import { z } from "zod";
 
 import type { AgentConfig, ObservabilityConfig, ObservabilityHealth } from "../types";
 import { nowIso } from "../utils/typeGuards";
+
+export type TelemetrySettings = {
+  isEnabled: boolean;
+  recordInputs?: boolean;
+  recordOutputs?: boolean;
+  functionId?: string;
+  metadata?: Record<string, AttributeValue>;
+};
 
 const DEFAULT_LANGFUSE_BASE_URL = "https://cloud.langfuse.com";
 const WARN_ONCE_KEYS = new Set<string>();
@@ -328,7 +335,7 @@ function sanitizeTelemetryMetadata(
   return out;
 }
 
-export async function buildAiSdkTelemetrySettings(
+export async function buildRuntimeTelemetrySettings(
   config: AgentConfig,
   context: TelemetryContext
 ): Promise<TelemetrySettings | undefined> {

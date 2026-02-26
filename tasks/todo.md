@@ -1,3 +1,27 @@
+# Task: Remove AI SDK dependencies completely (PI-only runtime)
+
+## Plan
+- [x] Remove all `ai` / `@ai-sdk/*` imports from `src/` runtime paths and keep PI as the sole production runtime.
+- [x] Replace AI SDK `ModelMessage` and `tool()` usage with local types/helpers.
+- [x] Replace `@ai-sdk/mcp` client plumbing with `@modelcontextprotocol/sdk` client transports.
+- [x] Refactor provider model adapters to local implementations (no AI SDK provider packages) while preserving existing config/header behavior.
+- [x] Update tests that assert AI SDK-specific behavior to the PI/local-adapter behavior.
+- [x] Remove `ai` / `@ai-sdk/*` dependencies from `package.json` and refresh lockfile.
+- [x] Run targeted suites + full `bun test`, then document review outcomes.
+
+## Review
+- Removed all runtime/test/script imports from `ai` and `@ai-sdk/*`; PI runtime is now the only model runtime in `src/runtime/`.
+- Replaced SDK-coupled tool wrappers with a local `defineTool()` helper and moved `ModelMessage` to a local type in `src/types.ts`.
+- Replaced MCP client integration from `@ai-sdk/mcp` to direct `@modelcontextprotocol/sdk` transports (`stdio`, `sse`, `streamableHttp`) while preserving `loadMCPTools()` behavior.
+- Refactored provider adapters to local header-based model adapters (`src/providers/modelAdapter.ts`) and removed AI SDK provider package usage.
+- Removed AI SDK fallback title generation path; session titles now use runtime turn calls only.
+- Updated docs (`README.md`, `docs/architecture.md`, `docs/custom-tools.md`, `docs/harness/observability.md`, `docs/websocket-protocol.md`) to reflect PI-only runtime/tooling language.
+- Verification:
+  - `bun test test/runtime.selection.test.ts test/runtime.pi-message-bridge.test.ts test/runtime.pi-options.test.ts test/session-title-service.test.ts test/config.test.ts test/providers/index.test.ts test/providers/openai.test.ts test/providers/google.test.ts test/providers/anthropic.test.ts test/providers/codex-cli.test.ts test/providers/saved-keys.test.ts test/providers/provider-options.test.ts test/tools.test.ts test/mcp.test.ts test/mcp.local.integration.test.ts test/agent.test.ts test/spawnAgent.tool.test.ts` -> **355 pass, 0 fail**
+  - `bun test` -> **1684 pass, 2 skip, 0 fail**
+
+---
+
 # Task: Migrate agent runtime from AI SDK to PI (all phases)
 
 ## Plan

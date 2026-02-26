@@ -1,11 +1,10 @@
-import type { ModelMessage } from "ai";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
 import type { AiCoworkerPaths } from "../connect";
 import { PROVIDER_NAMES } from "../types";
-import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
+import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../types";
 import type { SessionTitleSource } from "./sessionTitleService";
 
 const PRIVATE_DIR_MODE = 0o700;

@@ -243,7 +243,7 @@ describe("spawnAgent tool", () => {
     expect(lastGenerateTextArgs.abortSignal).toBe(controller.signal);
   });
 
-  test("enables AI SDK telemetry with full I/O when observability is configured", async () => {
+  test("enables runtime telemetry with full I/O when observability is configured", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-telemetry-"));
     const ctx = makeCtx(dir, {
       config: makeConfig(dir, {

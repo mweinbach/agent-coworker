@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { createMCPClient } from "@ai-sdk/mcp";
-import type { OAuthClientProvider } from "@ai-sdk/mcp";
-import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client";
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
 
 import type { AgentConfig, MCPServerConfig } from "../types";
@@ -81,6 +83,73 @@ const runtimeMcpClientSchema = z.custom<RuntimeMcpClient>((value) => {
   const maybeClient = value as { tools?: unknown; close?: unknown };
   return typeof maybeClient.tools === "function" && typeof maybeClient.close === "function";
 });
+
+type RuntimeMcpHttpTransport = Extract<MCPServerConfig["transport"], { type: "http" | "sse" }> & {
+  authProvider?: OAuthClientProvider;
+};
+type RuntimeMcpTransport = Extract<MCPServerConfig["transport"], { type: "stdio" }> | RuntimeMcpHttpTransport;
+type RuntimeMcpClientFactory = (opts: { name: string; transport: RuntimeMcpTransport }) => Promise<RuntimeMcpClient>;
+
+function normalizeToolArguments(input: unknown): Record<string, unknown> {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return {};
+  return input as Record<string, unknown>;
+}
+
+async function createRuntimeMcpClient(opts: {
+  name: string;
+  transport: RuntimeMcpTransport;
+}): Promise<RuntimeMcpClient> {
+  const client = new McpClient({ name: `agent-coworker/${opts.name}`, version: "0.1.0" });
+
+  const requestInit = (() => {
+    if (opts.transport.type === "stdio") return undefined;
+    if (!opts.transport.headers || Object.keys(opts.transport.headers).length === 0) return undefined;
+    return { headers: opts.transport.headers };
+  })();
+
+  const transport =
+    opts.transport.type === "stdio"
+      ? new StdioClientTransport({
+          command: opts.transport.command,
+          args: opts.transport.args ?? [],
+          env: opts.transport.env,
+          cwd: opts.transport.cwd,
+        })
+      : opts.transport.type === "sse"
+        ? new SSEClientTransport(new URL(opts.transport.url), {
+            ...(requestInit ? { requestInit } : {}),
+            ...(opts.transport.authProvider ? { authProvider: opts.transport.authProvider } : {}),
+          })
+        : new StreamableHTTPClientTransport(new URL(opts.transport.url), {
+            ...(requestInit ? { requestInit } : {}),
+            ...(opts.transport.authProvider ? { authProvider: opts.transport.authProvider } : {}),
+          });
+
+  await client.connect(transport);
+
+  return {
+    tools: async () => {
+      const listed = await client.listTools();
+      const discovered: Record<string, unknown> = {};
+      for (const entry of listed.tools ?? []) {
+        discovered[entry.name] = {
+          description: entry.description ?? `MCP tool ${entry.name}`,
+          inputSchema: entry.inputSchema ?? { type: "object", properties: {}, additionalProperties: true },
+          execute: async (input: unknown) =>
+            await client.callTool({
+              name: entry.name,
+              arguments: normalizeToolArguments(input),
+            }),
+        };
+      }
+      return discovered;
+    },
+    close: async () => {
+      await client.close();
+      await transport.close();
+    },
+  };
+}
 
 function toOAuthTokensForSdk(tokens: MCPServerOAuthTokens): {
   access_token: string;
@@ -325,11 +394,11 @@ export async function loadMCPTools(
   servers: MCPServerConfig[],
   opts: {
     log?: (line: string) => void;
-    createClient?: typeof createMCPClient;
+    createClient?: RuntimeMcpClientFactory;
     sleep?: (ms: number) => Promise<void>;
   } = {},
 ): Promise<{ tools: Record<string, unknown>; errors: string[]; close: () => Promise<void> }> {
-  const createClient = opts.createClient ?? createMCPClient;
+  const createClient = opts.createClient ?? createRuntimeMcpClient;
   const sleep = opts.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const tools: Record<string, unknown> = {};
   const errors: string[] = [];
@@ -359,19 +428,9 @@ export async function loadMCPTools(
     for (let attempt = 0; attempt <= retries; attempt++) {
       let client: RuntimeMcpClient | null = null;
       try {
-        const transport =
-          server.transport.type === "stdio"
-            ? new Experimental_StdioMCPTransport({
-                command: server.transport.command,
-                args: server.transport.args || [],
-                env: server.transport.env,
-                cwd: server.transport.cwd,
-              })
-            : server.transport;
-
         const rawClient = await createClient({
           name: server.name,
-          transport,
+          transport: server.transport as RuntimeMcpTransport,
         });
         const parsedClient = runtimeMcpClientSchema.safeParse(rawClient);
         if (!parsedClient.success) {

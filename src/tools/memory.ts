@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 
-import { tool } from "ai";
 import { z } from "zod";
 
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 import { isPathInside, truncateText } from "../utils/paths";
 
 const abortByNameSchema = z.object({ name: z.literal("AbortError") }).passthrough();
@@ -47,7 +47,7 @@ export function createMemoryTool(
 ) {
   const execFileImpl = opts.execFileImpl ?? execFile;
 
-  return tool({
+  return defineTool({
     description: `Read or update persistent memory.
 
 Memory has two tiers:

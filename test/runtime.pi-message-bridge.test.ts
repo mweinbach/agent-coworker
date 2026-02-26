@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ModelMessage } from "ai";
+import type { ModelMessage } from "../src/types";
 
 import {
   extractPiAssistantText,

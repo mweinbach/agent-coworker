@@ -1,6 +1,6 @@
-import type { ModelMessage } from "ai";
 import type { Message as PiMessage } from "@mariozechner/pi-ai";
 
+import type { ModelMessage } from "../types";
 import type { RuntimeUsage } from "./types";
 
 function asRecord(value: unknown): Record<string, unknown> | null {

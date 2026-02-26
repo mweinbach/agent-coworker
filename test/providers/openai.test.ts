@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
-import { openai } from "@ai-sdk/openai";
-
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot, writeJson } from "./helpers";
 
@@ -40,14 +38,15 @@ describe("OpenAI provider (gpt-5.2 with reasoning)", () => {
     expect(model.provider).toBe("openai.responses");
   });
 
-  test("directly created openai model matches getModel output", () => {
-    const direct = openai("gpt-5.2");
+  test("getModel exposes stable adapter shape", async () => {
     const cfg = makeConfig({ provider: "openai", model: "gpt-5.2" });
-    const viaGetModel = getModel(cfg);
+    const viaGetModel = getModel(cfg) as any;
+    const headers = await viaGetModel.config.headers();
 
-    expect(viaGetModel.modelId).toBe(direct.modelId);
-    expect(viaGetModel.provider).toBe(direct.provider);
-    expect(viaGetModel.specificationVersion).toBe(direct.specificationVersion);
+    expect(viaGetModel.modelId).toBe("gpt-5.2");
+    expect(viaGetModel.provider).toBe("openai.responses");
+    expect(viaGetModel.specificationVersion).toBe("v3");
+    expect(typeof headers).toBe("object");
   });
 
   test("openai provider options have reasoning enabled", () => {

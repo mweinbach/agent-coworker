@@ -1,12 +1,10 @@
 import path from "node:path";
 
-import { anthropic } from "@ai-sdk/anthropic";
-import { openai } from "@ai-sdk/openai";
-import { tool } from "ai";
 import { z } from "zod";
 
 import { getAiCoworkerPaths, readToolApiKey } from "../connect";
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 
 interface CustomWebSearchToolOptions {
   exaOnly?: boolean;
@@ -118,7 +116,7 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
     maxResults: z.number().int().min(1).max(20).optional().default(10),
   }).passthrough();
 
-  return tool({
+  return defineTool({
     description: exaOnly
       ? "Search the web for current information using Exa. Requires EXA_API_KEY. Returns titles, URLs, and snippets."
       : "Search the web for current information. Requires BRAVE_API_KEY or EXA_API_KEY. Returns titles, URLs, and snippets.",
@@ -238,14 +236,8 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
 }
 
 export function createWebSearchTool(ctx: ToolContext) {
-  switch (ctx.config.provider) {
-    case "openai":
-      return openai.tools.webSearch({});
-    case "google":
-      return createCustomWebSearchTool(ctx, { exaOnly: true });
-    case "anthropic":
-      return anthropic.tools.webSearch_20250305({});
-    case "codex-cli":
-      return createCustomWebSearchTool(ctx);
+  if (ctx.config.provider === "google") {
+    return createCustomWebSearchTool(ctx, { exaOnly: true });
   }
+  return createCustomWebSearchTool(ctx);
 }

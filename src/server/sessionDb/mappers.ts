@@ -1,7 +1,6 @@
-import type { ModelMessage } from "ai";
 import { z } from "zod";
 
-import type { HarnessContextState, TodoItem } from "../../types";
+import type { HarnessContextState, ModelMessage, TodoItem } from "../../types";
 import type { PersistedSessionRecord } from "../sessionDb";
 import type { PersistedSessionSummary } from "../sessionStore";
 import {

@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test";
 
-import { createOpenAI } from "@ai-sdk/openai";
-
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot } from "./helpers";
 
@@ -22,14 +20,15 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
     expect(model.specificationVersion).toBe("v3");
   });
 
-  test("directly created named OpenAI provider model matches getModel output", () => {
-    const direct = createOpenAI({ name: "codex-cli", apiKey: "test" })(DEFAULT_CODEX_MODEL);
+  test("getModel exposes stable adapter shape", async () => {
     const cfg = makeConfig({ provider: "codex-cli", model: DEFAULT_CODEX_MODEL });
-    const viaGetModel = getModel(cfg, DEFAULT_CODEX_MODEL);
+    const viaGetModel = getModel(cfg, DEFAULT_CODEX_MODEL) as any;
+    const headers = await viaGetModel.config.headers();
 
-    expect(viaGetModel.modelId).toBe(direct.modelId);
-    expect(viaGetModel.provider).toBe(direct.provider);
-    expect(viaGetModel.specificationVersion).toBe(direct.specificationVersion);
+    expect(viaGetModel.modelId).toBe(DEFAULT_CODEX_MODEL);
+    expect(viaGetModel.provider).toBe("codex-cli.responses");
+    expect(viaGetModel.specificationVersion).toBe("v3");
+    expect(typeof headers).toBe("object");
   });
 
   test("codex provider options are configured", () => {

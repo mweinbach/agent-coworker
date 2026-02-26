@@ -1,9 +1,8 @@
-import type { ModelMessage } from "ai";
 import { Database } from "bun:sqlite";
 import path from "node:path";
 
 import type { AiCoworkerPaths } from "../connect";
-import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
+import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../types";
 import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionTitleSource } from "./sessionTitleService";
 import { ensurePrivateDirectory, hardenPrivateFile, quarantineCorruptedDb } from "./sessionDb/fileHardening";

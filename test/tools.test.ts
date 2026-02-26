@@ -2,7 +2,7 @@ import { describe, expect, test, mock, beforeEach } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { asSchema } from "@ai-sdk/provider-utils";
+import { z } from "zod";
 
 import type { AgentConfig } from "../src/types";
 import type { ToolContext } from "../src/tools/context";
@@ -1094,15 +1094,16 @@ describe("webSearch tool", () => {
       }),
     });
 
-  test("uses OpenAI provider-native web search for openai provider", async () => {
+  test("uses custom web search tool for openai provider", async () => {
     const dir = await tmpDir();
     const t: any = createWebSearchTool(
       makeCtx(dir, {
         config: makeConfig(dir, { provider: "openai", model: "gpt-5.2", subAgentModel: "gpt-5.2" }),
       })
     );
-    expect(t.type).toBe("provider");
-    expect(t.id).toBe("openai.web_search");
+    expect(t.type).toBeUndefined();
+    expect(typeof t.execute).toBe("function");
+    expect(t.description).toContain("BRAVE_API_KEY");
   });
 
   test("uses Exa-backed web search for google provider (Gemini model IDs)", async () => {
@@ -1221,7 +1222,7 @@ describe("webSearch tool", () => {
     }
   });
 
-  test("uses Anthropic provider-native web search for anthropic provider", async () => {
+  test("uses custom web search tool for anthropic provider", async () => {
     const dir = await tmpDir();
     const t: any = createWebSearchTool(
       makeCtx(dir, {
@@ -1232,8 +1233,9 @@ describe("webSearch tool", () => {
         }),
       })
     );
-    expect(t.type).toBe("provider");
-    expect(t.id).toBe("anthropic.web_search_20250305");
+    expect(t.type).toBeUndefined();
+    expect(typeof t.execute).toBe("function");
+    expect(t.description).toContain("BRAVE_API_KEY");
   });
 
   test("returns disabled message without API keys", async () => {
@@ -1842,7 +1844,7 @@ describe("ask tool", () => {
   test("exports a provider-compatible top-level object input schema", async () => {
     const dir = await tmpDir();
     const t: any = createAskTool(makeCtx(dir));
-    const schema = asSchema(t.inputSchema).jsonSchema as Record<string, unknown>;
+    const schema = z.toJSONSchema(t.inputSchema) as Record<string, unknown>;
 
     expect(schema.type).toBe("object");
   });

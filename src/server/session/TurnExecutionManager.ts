@@ -218,7 +218,7 @@ export class TurnExecutionManager {
         Date.now() - turnStartedAt
       );
     } catch (err) {
-      // If AI SDK threw NoOutputGeneratedError but we saw an error stream chunk, surface that underlying error instead.
+      // If the model pipeline reported no output but we saw a stream error chunk, surface the stream error instead.
       const actualErr = (lastStreamError && this.context.formatError(err).includes("No output generated")) 
         ? lastStreamError 
         : err;

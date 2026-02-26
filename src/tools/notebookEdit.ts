@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 
-import { tool } from "ai";
 import { z } from "zod";
 
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 
@@ -19,7 +19,7 @@ const notebookSchema = z.object({
 }).passthrough();
 
 export function createNotebookEditTool(ctx: ToolContext) {
-  return tool({
+  return defineTool({
     description:
       "Edit a Jupyter notebook (.ipynb) cell. Supports replace, insert, and delete operations.",
     inputSchema: z.object({

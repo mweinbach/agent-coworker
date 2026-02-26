@@ -1,7 +1,7 @@
-import { tool } from "ai";
 import { z } from "zod";
 
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 
 const nonEmptyQuestionSchema = z.string().trim().min(1).describe("The question to ask");
 
@@ -69,7 +69,7 @@ export const askInputSchema = z
   });
 
 export function createAskTool(ctx: ToolContext) {
-  return tool({
+  return defineTool({
     description:
       "Ask the user a clarifying question. Provide options when possible. Returns the user's answer.",
     inputSchema: askInputSchema,

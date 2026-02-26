@@ -26,9 +26,9 @@ export function createTools(ctx: ToolContext) {
 }
 ```
 
-## Vercel AI SDK and Zod
+## Tool Definitions and Zod
 
-Tools are built using the Vercel AI SDK `tool()` wrapper. This wrapper provides a standard interface for defining the tool's description, parameters (using Zod for schema validation), and the execution logic.
+Tools use a local `defineTool()` helper with Zod-based `inputSchema` validation. This provides a consistent interface for defining a tool's description, parameters, and execution logic.
 
 The `parameters` property (the `inputSchema`) ensures that the agent provides correctly typed arguments before the tool's execution function is invoked.
 
@@ -59,14 +59,14 @@ Here is a complete example of a custom tool demonstrating these concepts:
 
 ```typescript
 // src/tools/myCustomTool.ts
-import { tool } from 'ai';
 import { z } from 'zod';
-import type { ToolContext } from './types'; 
+import type { ToolContext } from './types';
+import { defineTool } from './defineTool';
 
 export function myCustomTool(ctx: ToolContext) {
-  return tool({
+  return defineTool({
     description: 'A custom tool that simulates a long-running, sensitive operation.',
-    parameters: z.object({
+    inputSchema: z.object({
       targetName: z.string().describe('The name of the target to operate on.'),
       iterations: z.number().min(1).max(10).default(3).describe('Number of steps to perform.'),
     }),

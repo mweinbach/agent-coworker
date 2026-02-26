@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
 
-import { openai } from "@ai-sdk/openai";
-import { generateText, tool } from "ai";
-import { z } from "zod";
-
 import { runTurn } from "../../src/agent";
 import { makeConfig } from "./helpers";
 
@@ -162,35 +158,4 @@ describe("live model API integration", () => {
     expect(result.responseMessages.length).toBeGreaterThan(0);
   }, 120_000);
 
-  test("OpenAI direct SDK tool call path returns tool execution", async () => {
-    if (!shouldRunTest("openai direct generateText tool call", openAiKey)) return;
-
-    let executions = 0;
-
-    const result = await generateText({
-      model: openai("gpt-5.2"),
-      prompt: "Call the addNumbers tool with a=7 and b=8, then answer with ONLY the numeric result.",
-      tools: {
-        addNumbers: tool({
-          description: "Add two numbers and return the sum.",
-          inputSchema: z.object({ a: z.number(), b: z.number() }),
-          execute: async ({ a, b }) => {
-            executions += 1;
-            return { sum: a + b };
-          },
-        }),
-      },
-      toolChoice: "required",
-      maxSteps: 3,
-      providerOptions: {
-        openai: {
-          reasoningEffort: "low",
-          reasoningSummary: "detailed",
-        },
-      },
-    });
-
-    expect(executions).toBeGreaterThan(0);
-    expect((result.toolResults ?? []).length).toBeGreaterThan(0);
-  }, 120_000);
 });

@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { tool } from "ai";
 import { z } from "zod";
 
 import { discoverSkills, stripSkillFrontMatter } from "../skills";
 import type { ToolContext } from "./context";
+import { defineTool } from "./defineTool";
 
 type SkillCacheEntry = {
   content: string;
@@ -53,7 +53,7 @@ export function createSkillTool(ctx: ToolContext) {
     paramDesc = "The skill to load (use the exact name from the Available Skills section of the system prompt)";
   }
 
-  return tool({
+  return defineTool({
     description,
     inputSchema: z.object({
       skillName: z.string().describe(paramDesc),

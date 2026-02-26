@@ -24,14 +24,30 @@ function makeConfig(provider: AgentConfig["provider"] = "openai"): AgentConfig {
   };
 }
 
+/** Build a mock AssistantMessage with text content. */
+function mockAssistantMessage(text: string) {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    api: "openai" as any,
+    provider: "openai",
+    model: "gpt-5-mini",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "stop" as const,
+    timestamp: Date.now(),
+  };
+}
+
 describe("sessionTitleService", () => {
   test("returns sanitized model title on first successful candidate", async () => {
-    const generateObject = mock(async (_args: any) => ({ object: { title: '  "Hello   World"  ' } }));
+    const completeSimple = mock(async (_model: any, _context: any, _opts?: any) =>
+      mockAssistantMessage('  "Hello   World"  ')
+    );
     const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateObject: generateObject as any,
+      completeSimple: completeSimple as any,
       getModel: getModel as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
@@ -46,22 +62,24 @@ describe("sessionTitleService", () => {
       source: "model",
       model: "gpt-5-mini",
     });
-    expect(generateObject).toHaveBeenCalledTimes(1);
-    expect(generateObject.mock.calls[0]?.[0]?.maxOutputTokens).toBe(150);
+    expect(completeSimple).toHaveBeenCalledTimes(1);
+    expect(completeSimple.mock.calls[0]?.[2]?.maxTokens).toBe(150);
   });
 
   test("falls back to provider default model when primary model attempt fails", async () => {
-    const generateObject = mock(async ({ model }: { model: any }) => {
-      if (model.modelId === "gpt-5-mini") {
+    let callCount = 0;
+    const completeSimple = mock(async (_model: any, _context: any, _opts?: any) => {
+      callCount++;
+      if (callCount === 1) {
         throw new Error("primary unavailable");
       }
-      return { object: { title: "Fallback model title" } };
+      return mockAssistantMessage("Fallback model title");
     });
     const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateObject: generateObject as any,
+      completeSimple: completeSimple as any,
       getModel: getModel as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
@@ -76,18 +94,18 @@ describe("sessionTitleService", () => {
       source: "model",
       model: "gpt-5.2",
     });
-    expect(generateObject).toHaveBeenCalledTimes(2);
+    expect(completeSimple).toHaveBeenCalledTimes(2);
   });
 
   test("falls back to deterministic heuristic when all model attempts fail", async () => {
-    const generateObject = mock(async (_args: any) => {
+    const completeSimple = mock(async (_model: any, _context: any, _opts?: any) => {
       throw new Error("all failed");
     });
     const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateObject: generateObject as any,
+      completeSimple: completeSimple as any,
       getModel: getModel as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
@@ -104,18 +122,20 @@ describe("sessionTitleService", () => {
   });
 
   test("returns default title for empty queries", async () => {
-    const generateObject = mock(async (_args: any) => ({ object: { title: "unused" } }));
+    const completeSimple = mock(async (_model: any, _context: any, _opts?: any) =>
+      mockAssistantMessage("unused")
+    );
     const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateObject: generateObject as any,
+      completeSimple: completeSimple as any,
       getModel: getModel as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
 
     const result = await generateSessionTitle({ config: makeConfig("openai"), query: "   " });
     expect(result).toEqual({ title: DEFAULT_SESSION_TITLE, source: "default", model: null });
-    expect(generateObject).not.toHaveBeenCalled();
+    expect(completeSimple).not.toHaveBeenCalled();
   });
 });

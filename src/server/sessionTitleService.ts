@@ -1,12 +1,6 @@
-import { generateObject } from "ai";
-import { z } from "zod";
-
 import { defaultModelForProvider, getModel } from "../config";
+import { completeSimple, type AssistantMessage } from "../pi/types";
 import type { AgentConfig } from "../types";
-
-const TITLE_SCHEMA = z.object({
-  title: z.string().min(1),
-});
 
 const TITLE_MODEL_BY_PROVIDER = {
   anthropic: "claude-haiku-4-5",
@@ -29,7 +23,7 @@ export type SessionTitleResult = {
 };
 
 type SessionTitleDeps = {
-  generateObject: typeof generateObject;
+  completeSimple: typeof completeSimple;
   getModel: typeof getModel;
   defaultModelForProvider: typeof defaultModelForProvider;
 };
@@ -130,9 +124,17 @@ function buildTitlePrompt(query: string): string {
   ].join("\n");
 }
 
+function extractTextFromAssistantMessage(msg: AssistantMessage): string {
+  const parts: string[] = [];
+  for (const part of msg.content) {
+    if (part.type === "text" && part.text) parts.push(part.text);
+  }
+  return parts.join("").trim();
+}
+
 export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps> = {}) {
   const deps: SessionTitleDeps = {
-    generateObject,
+    completeSimple,
     getModel,
     defaultModelForProvider,
     ...overrides,
@@ -154,15 +156,16 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
     const candidates = modelCandidatesForProvider(opts.config.provider, deps.defaultModelForProvider);
     for (const modelId of candidates) {
       try {
-        const model = deps.getModel(opts.config, modelId) as Parameters<typeof deps.generateObject>[0]["model"];
-        const { object } = await deps.generateObject({
-          model,
-          schema: TITLE_SCHEMA,
-          prompt: buildTitlePrompt(query),
-          maxOutputTokens: TITLE_MAX_TOKENS,
+        const model = deps.getModel(opts.config, modelId);
+        const response = await deps.completeSimple(model, {
+          systemPrompt: buildTitlePrompt(query),
+          messages: [{ role: "user", content: query, timestamp: Date.now() }],
+        }, {
+          maxTokens: TITLE_MAX_TOKENS,
         });
 
-        const title = sanitizeModelTitle(object.title);
+        const rawTitle = extractTextFromAssistantMessage(response);
+        const title = sanitizeModelTitle(rawTitle);
         if (!title) continue;
 
         return {

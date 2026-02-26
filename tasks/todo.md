@@ -1,173 +1,222 @@
-# Task: Validate real production loop tool coverage for Google gemini-3.1-pro-preview-customtools
+# Task: Migrate from Vercel AI SDK to Pi Framework (`@mariozechner/pi-ai` + `@mariozechner/pi-agent-core`)
 
-## Plan
-- [x] Add a dedicated raw harness scenario/runs for Google `gemini-3.1-pro-preview-customtools` that require all built-in tools at least once across runs.
-- [x] Run the scenario against real provider auth with production loop wiring and capture artifacts.
-- [x] Fix any runtime regressions discovered while running the live loop.
-- [x] Add/adjust regression tests where needed and run targeted suites.
-- [x] Run full verification (`bun test`) and record outcomes.
+## Summary
 
-## Review
-- Added a new harness scenario, `google-customtools-tool-coverage`, in `scripts/run_raw_agent_loops.ts` and updated argument parsing/help + run-root naming to support selecting it.
-- Scenario includes 4 Google runs on `gemini-3.1-pro-preview-customtools` covering all built-in tools: `ask`, `bash`, `edit`, `glob`, `grep`, `memory`, `notebookEdit`, `read`, `skill`, `spawnAgent`, `todoWrite`, `webFetch`, `webSearch`, `write`.
-- Fixed a real harness validation bug discovered during live run: `requiredFirstNonTodoToolCall` was derived only from traced stream payloads, which can miss tool calls for some provider/tool traces. Added ordered `tool-log` extraction and used it as primary source (with traced fallback).
-- Removed unnecessary first-call ordering enforcement from `gct-02-skill-bash`; kept required tool usage assertions.
-- Fixed unrelated pre-existing red suite while validating: `createWebSearchTool()` now returns Anthropic provider-native `anthropic.tools.webSearch_20250305({})` for `provider: "anthropic"`, matching expected runtime/tool id.
-- Live production loop verification (using saved Google auth from `~/.cowork/auth/connections.json`):
-  - `bun scripts/run_raw_agent_loops.ts --scenario google-customtools-tool-coverage --report-only`
-  - latest run root: `tmp/raw-agent-loop_google-customtools-tool-coverage_2026-02-24T17-16-23-673Z`
-  - aggregated tool-log verification: `UNIQUE_TOOL_COUNT=14`
-- Verification:
-  - `bun test test/tools.test.ts test/repl.disconnect-send.test.ts` -> **154 pass, 0 fail**
-  - `bun test` -> **1671 pass, 2 skip, 0 fail**
+Replace the Vercel AI SDK (`ai`, `@ai-sdk/anthropic`, `@ai-sdk/openai`, `@ai-sdk/google`, `@ai-sdk/mcp`) with the Pi framework (`@mariozechner/pi-ai`, `@mariozechner/pi-agent-core`) while preserving all four provider backends (Anthropic, OpenAI, Google, Codex CLI) as first-class citizens.
 
----
+## Key Architecture Decisions
 
-# Task: Loosen strict Zod validation around tool-call stream parsing
+### D1 — Tool Schema Format: Zod → TypeBox
+Pi uses TypeBox (`@sinclair/typebox`) for tool parameter schemas instead of Zod. Since TypeBox compiles to standard JSON Schema and pi validates with AJV internally, we have two options:
+- **Option A (Recommended)**: Convert tool schemas to TypeBox. This is cleaner and avoids runtime conversion overhead. TypeBox is re-exported from `@mariozechner/pi-ai` so no extra dependency needed.
+- **Option B**: Write a `zodToJsonSchema()` adapter that converts at tool registration time. Keeps existing Zod schemas but adds indirection.
 
-## Plan
-- [x] Add tolerant server-event parsing for `model_stream_chunk` (non-object `part`, partial stream metadata defaults).
-- [x] Add detailed parse diagnostics (`parseServerEventDetailed`) while keeping `safeParseServerEvent` compatibility.
-- [x] Wire client socket diagnostics via optional `onInvalidEvent` and robust frame decoding (string/ArrayBuffer/ArrayBufferView/Blob/object).
-- [x] Loosen tool-call ID handling across stream normalizers (numeric IDs + anonymous fallback IDs instead of empty strings).
-- [x] Improve raw provider-event mapping resilience (`evt.rawPart` fallback + loose primitive text coercion).
-- [x] Preserve structured array args in TUI tool-input lifecycle.
-- [x] Keep sanitization defaults but add an explicit fuller mode (`rawPartMode: "full"` + `COWORK_MODEL_STREAM_RAW_MODE=full` hook).
-- [x] Update protocol docs and regression tests for the new behavior.
-- [x] Run targeted verification suites.
+**Decision: Option A** — Convert to TypeBox. The tool count is manageable (14 built-in) and TypeBox schemas are more concise.
 
-## Review
-- Added `parseServerEventDetailed` + `ServerEventParseResult`/`ServerEventParseErrorReason` in `src/server/protocolEventParser.ts`, exported via `src/server/protocol.ts`.
-- `model_stream_chunk` parsing now tolerates missing `turnId/index/provider/model` (defaults: `"unknown-turn"`, `-1`, `"unknown"`, `"unknown"`) and normalizes non-object `part` payloads to `{ value: <raw> }`.
-- `AgentSocket` now supports optional invalid-event diagnostics (`onInvalidEvent`) and decodes binary/blob websocket frames before parsing.
-- Server and client stream normalization now coerce numeric IDs, avoid empty-string tool IDs, and use deterministic anonymous IDs.
-- Client stream mapper now performs looser primitive text coercion and uses `evt.rawPart` as a secondary fallback for provider raw event mapping.
-- TUI tool-arg normalization now preserves parsed array payloads instead of forcing record-only shape.
-- Added/updated regression coverage in:
-  - `test/agentSocket.parse.test.ts`
-  - `test/server.model-stream.test.ts`
-  - `test/tui.model-stream.test.ts`
-- Updated `docs/websocket-protocol.md` validation + `model_stream_chunk` notes for diagnostics/defaults/part normalization/raw mode.
-- Verification:
-  - `bun test test/agentSocket.parse.test.ts test/server.model-stream.test.ts test/tui.model-stream.test.ts test/model-stream.provider-loop.test.ts test/session.stream-pipeline.test.ts`
-  - `bun test test/protocol.test.ts`
-  - `bun test` -> **1666 pass, 2 skip, 0 fail**
+### D2 — Agent Loop Strategy: `agentLoop()` vs manual `stream()` + tool dispatch
+- **`agentLoop()`** (from `pi-agent-core`): Handles the full multi-turn cycle (LLM call → tool execution → next LLM call). Yields fine-grained events. This is pi's idiomatic approach.
+- **`stream()`** (from `pi-ai`): Low-level single-turn streaming. Requires manual tool dispatch loop.
 
----
+**Decision: `agentLoop()`** — It handles tool execution, validation, and multi-turn orchestration out of the box. Our `runTurn()` currently delegates all of this to AI SDK's `streamText()` with `stopWhen: stepCountIs(N)`, so `agentLoop()` is the natural replacement. We'll consume its events to drive `onModelStreamPart`.
 
-# Task: Fix PR review regressions (desktop persistence, auth resilience, protocol coverage)
+### D3 — Message Type: `ModelMessage` → Pi's `Message`
+Pi defines `UserMessage`, `AssistantMessage`, and `ToolResultMessage` with timestamps and richer metadata. We need to:
+1. Define a type alias `type AgentMessage = import("@mariozechner/pi-ai").Message` (or similar)
+2. Update all message-touching code (HistoryManager, SessionContext, sessionStore, sessionDb)
+3. Adapt serialization/deserialization in session persistence
 
-## Plan
-- [x] Restore desktop persisted-state backward compatibility on load while keeping save-time safety.
-- [x] Make desktop transcript hydration resilient to malformed lines and avoid thread selection hard-failures.
-- [x] Restore legacy transcript reasoning aliases (`assistant_reasoning`, `reasoning_summary`) in feed mapping.
-- [x] Align desktop persisted-state IPC validation with runtime expectations.
-- [x] Relax Codex device OAuth response parsing to accept forward-compatible extra fields.
-- [x] Make MCP auth-store reads recover from malformed/invalid credential files instead of failing closed.
-- [x] Make CLI state loading recover from malformed/invalid JSON schema drift.
-- [x] Change `set_model` / `set_enable_mcp` persistence failures to fail-open runtime updates with surfaced non-fatal errors.
-- [x] Expand parser/decode regression coverage (server-event fixture parsing + binary websocket decode path).
-- [x] Update websocket protocol docs for strict server-event parsing behavior and persistence-failure semantics.
-- [x] Run targeted and full verification (`bun test ...`, `bun test`).
+### D4 — MCP Integration
+Pi does not bundle `@ai-sdk/mcp`. Options:
+- **Option A (Recommended)**: Keep `@modelcontextprotocol/sdk` (already a dependency) and build a thin adapter that converts MCP tool definitions to Pi `AgentTool` format.
+- **Option B**: Use pi's extension system to register MCP tools.
 
-## Review
-- Desktop persistence now sanitizes malformed state, recovers from invalid `state.json` JSON, and skips malformed transcript lines.
-- Thread selection no longer hard-fails on transcript read errors, and legacy reasoning aliases are mapped correctly.
-- Desktop persisted-state schemas now default workspace/session booleans (`defaultEnableMcp`, `yolo`, `developerMode`, `showHiddenFiles`) for stronger IPC/runtime alignment.
-- `set_model` / `set_enable_mcp` now apply runtime updates even when persistence fails and surface non-fatal `internal_error` events.
-- MCP auth-store and CLI state-store reads now recover from malformed files instead of failing closed.
-- Added/updated regression coverage including binary decode parsing, server-event fixtures, desktop state/transcript recovery, and desktop schema defaults.
-- Documentation updated for server-event parsing behavior and `server_hello.protocolVersion` (`7.0`).
-- Verification:
-  - targeted suites for affected areas
-  - full suite: `bun test` → **1656 pass, 2 skip, 0 fail**
+**Decision: Option A** — Direct adapter. The existing MCP loading code is solid; we just need to change the output format from AI SDK `tool()` to Pi `AgentTool`.
+
+### D5 — Provider-Native Tools (webSearch)
+Currently `webSearch` uses `anthropic.tools.webSearch_20250305()` and `openai.tools.webSearch({})` for provider-native web search. Pi doesn't re-export these provider-native tool constructors.
+- **Decision**: For Anthropic and OpenAI, we'll need to either:
+  - Keep `@anthropic-ai/sdk` and `openai` SDK direct dependencies (which pi already depends on internally) for native tool access
+  - Or convert all providers to the custom Brave/Exa search implementation
+
+  **We'll keep provider-native tools** by importing from the underlying SDKs that pi already depends on, and wrap them as Pi `AgentTool` format.
+
+### D6 — `generateObject()` Replacement
+Pi doesn't have a direct `generateObject()` equivalent (used for session title generation). Options:
+- Use `complete()` with a JSON-formatted prompt and parse the response
+- Use pi's `stream()` with a schema instruction and validate with TypeBox/AJV
+- Keep a minimal shim using the underlying provider SDKs directly
+
+**Decision**: Use `complete()` + JSON prompt + TypeBox validation. This is what `generateObject` does under the hood anyway.
+
+### D7 — Observability / Telemetry
+The current `TelemetrySettings` type comes from AI SDK. Pi doesn't have built-in Langfuse integration.
+- **Decision**: Keep the existing OpenTelemetry/Langfuse setup but decouple it from AI SDK's `TelemetrySettings` type. Instrument pi's event stream manually with spans.
+
+### D8 — Google Thought Signature Replay
+`buildGooglePrepareStep()` repairs Gemini thought signatures across tool calls. Pi handles thinking/reasoning via `streamSimple()` with a unified `reasoning` parameter.
+- **Decision**: Investigate if pi's Google provider handles thought signatures internally. If not, port the repair logic to work with pi's message format.
 
 ---
 
-# Task: Preserve webSearch alias compatibility and harden legacy snapshot import
+## Phase 0: Preparation & Scaffolding
+- [ ] Create `src/pi/` adapter directory for migration helpers
+- [ ] Add pi dependencies: `@mariozechner/pi-ai`, `@mariozechner/pi-agent-core`
+- [ ] Keep AI SDK dependencies temporarily for incremental migration
+- [ ] Create `src/pi/types.ts` — Canonical message type aliases mapping pi's `Message` types to our domain
+- [ ] Create `src/pi/toolAdapter.ts` — Utility to convert our tool definitions to Pi `AgentTool` format
+- [ ] Verify pi packages install and basic `getModel()` + `stream()` works with each provider (Anthropic, OpenAI, Google)
+- [ ] Run `bun test` to confirm nothing breaks from just adding dependencies
 
-## Plan
-- [x] Restore compatibility alias support in `src/tools/webSearch.ts` for `q`, `searchQuery`, `text`, and `prompt`.
-- [x] Preserve strict input handling while allowing provider-native compatibility extras (`mode`, `dynamicThreshold`).
-- [x] Add `webSearch` regression coverage for alias-based inputs plus compatibility extras.
-- [x] Make `importLegacySnapshots()` skip unreadable legacy entries instead of aborting migration.
-- [x] Add SessionDb regression coverage proving unreadable `.json` entries are skipped while valid snapshots import.
-- [x] Run verification (`bun test test/tools.test.ts`, `bun test test/session-db.test.ts`, `bun test`).
+## Phase 1: Provider System Migration (`src/providers/`)
+- [ ] **`src/providers/anthropic.ts`**: Replace `@ai-sdk/anthropic` imports with `getModel("anthropic", ...)` from `@mariozechner/pi-ai`. Map `DEFAULT_ANTHROPIC_PROVIDER_OPTIONS` (thinking budget, disableParallelToolUse) to pi's provider options format (e.g., `streamSimple` reasoning config).
+- [ ] **`src/providers/openai.ts`**: Replace `@ai-sdk/openai` imports with `getModel("openai", ...)`. Map `DEFAULT_OPENAI_PROVIDER_OPTIONS` (reasoningEffort, textVerbosity) to pi equivalents.
+- [ ] **`src/providers/google.ts`**: Replace `@ai-sdk/google` imports with `getModel("google", ...)`. Map `DEFAULT_GOOGLE_PROVIDER_OPTIONS` (thinkingConfig) to pi's thinking options.
+- [ ] **`src/providers/codex-cli.ts`**: This uses OpenAI SDK with custom baseURL + OAuth fetch. Pi supports custom OpenAI-compatible endpoints. Adapt `createOpenAI({ baseURL, fetch })` pattern to pi's custom model registration (via `customModels` config or direct model object construction).
+- [ ] **`src/providers/index.ts`**: Update `ProviderRuntimeDefinition.createModel()` return type from AI SDK `LanguageModel` to pi's `Model` type. Update `getModelForProvider()`.
+- [ ] **`src/providers/providerOptions.ts`**: Remap `DEFAULT_PROVIDER_OPTIONS` from AI SDK provider option shapes to pi's option shapes (per-provider reasoning/thinking configs).
+- [ ] **`src/config.ts`**: Update `getModel()` to return pi `Model` instead of AI SDK model instance.
+- [ ] **`src/providers/googleReplay.ts`**: Evaluate if pi's Google provider handles thought signatures. If not, port `buildGooglePrepareStep()` to work with pi's `Message` types instead of `ModelMessage`.
+- [ ] Run provider-specific tests: `bun test test/providers/`
 
-## Review
-- `webSearch` input parsing now accepts legacy alias keys and resolves the first provided query field in priority order: `query`, `q`, `searchQuery`, `text`, `prompt`.
-- The schema remains `.strict()` and now explicitly allows compatibility extras `mode` and `dynamicThreshold` so provider-native payloads are not rejected before execution.
-- Added regression test `accepts compatibility query aliases and provider-native extra keys` in `test/tools.test.ts`.
-- `importLegacySnapshots()` now wraps per-file reads in `try/catch` so unreadable files are skipped and migration proceeds.
-- Added regression test `skips unreadable legacy snapshot entries while importing valid ones` in `test/session-db.test.ts`.
-- Verification:
-  - `bun test test/tools.test.ts`
-  - `bun test test/session-db.test.ts`
-  - `bun test`
+## Phase 2: Tool System Migration (`src/tools/`)
+- [ ] **`src/tools/context.ts`**: No changes needed (doesn't depend on AI SDK).
+- [ ] **Convert tool schemas from Zod to TypeBox** for all 14 tools. Create each tool as a Pi `AgentTool` with `name`, `label`, `description`, `parameters` (TypeBox), and `execute`:
+  - [ ] `src/tools/bash.ts` — `tool()` → `AgentTool` with TypeBox `Type.Object({ command: Type.String(), ... })`
+  - [ ] `src/tools/read.ts`
+  - [ ] `src/tools/write.ts`
+  - [ ] `src/tools/edit.ts`
+  - [ ] `src/tools/glob.ts`
+  - [ ] `src/tools/grep.ts`
+  - [ ] `src/tools/ask.ts`
+  - [ ] `src/tools/todoWrite.ts`
+  - [ ] `src/tools/webFetch.ts`
+  - [ ] `src/tools/webSearch.ts` — Also migrate provider-native tool wrappers (Anthropic webSearch, OpenAI webSearch) to Pi-compatible format or custom implementations
+  - [ ] `src/tools/spawnAgent.ts` — Internal `streamText()` call must also be migrated to pi's `agentLoop()` or `stream()`
+  - [ ] `src/tools/notebookEdit.ts`
+  - [ ] `src/tools/skill.ts`
+  - [ ] `src/tools/memory.ts`
+- [ ] **`src/tools/index.ts`**: Update `createTools()` return type from `Record<string, any>` (AI SDK tool objects) to `AgentTool[]` (pi expects an array).
+- [ ] Run tool tests: `bun test test/tools.test.ts`
+
+## Phase 3: Core Agent Loop Migration (`src/agent.ts`)
+- [ ] Replace `streamText` import with pi's `agentLoop` (or `stream` if manual control needed)
+- [ ] Replace `stepCountIs` with pi's built-in loop termination or manual step counting in the event consumer
+- [ ] Replace `ModelMessage` type with pi's `Message` type throughout
+- [ ] Rewrite `runTurn()` to:
+  1. Build pi `Context` object (`{ systemPrompt, messages, tools }`)
+  2. Build pi `AgentLoopConfig` (`{ model, convertToLlm, transformContext }`)
+  3. Call `agentLoop([userMessage], context, config)` and iterate events
+  4. Map pi events (`message_update`, `tool_execution_start/update/end`, `turn_end`, `agent_end`) to our existing `onModelStreamPart` callback format
+  5. Extract final text, reasoning, response messages, and usage from events
+- [ ] Update `RunTurnDeps` type to reflect pi dependencies instead of AI SDK
+- [ ] Update `RunTurnParams` — remove `includeRawChunks` (pi doesn't have this concept), adapt telemetry context
+- [ ] Handle abort signal integration — pi's `agentLoop` accepts `AbortSignal` via config
+- [ ] Port MCP tool merging to work with pi's `AgentTool[]` format instead of `Record<string, tool>`
+- [ ] Run agent tests: `bun test test/agent/`
+
+## Phase 4: Message Type Migration (Session Layer)
+- [ ] **`src/types.ts`**: Replace `import type { ModelMessage } from "ai"` with pi's `Message` type. Define any needed type aliases.
+- [ ] **`src/server/session/SessionContext.ts`**: Update all `ModelMessage` references to pi `Message`
+- [ ] **`src/server/session/HistoryManager.ts`**: Update `appendMessagesToHistory()` signature and windowing logic
+- [ ] **`src/server/sessionStore.ts`**: Update session snapshot serialization. Pi messages have `timestamp` fields and different content structures — ensure backward compatibility with existing persisted sessions (migration strategy needed).
+- [ ] **`src/server/sessionDb/mappers.ts`**: Update message mapping for database persistence
+- [ ] **`src/server/sessionDb/repository.ts`**: Update repository types
+- [ ] **`src/server/sessionDb.ts`**: Update DB session types
+- [ ] **`src/server/session/TurnExecutionManager.ts`** (if it references `ModelMessage`): Update
+- [ ] Add session snapshot migration logic: detect AI SDK `ModelMessage` format on load, convert to pi `Message` format transparently
+- [ ] Run session tests: `bun test test/session*`
+
+## Phase 5: Session Title Service
+- [ ] **`src/server/sessionTitleService.ts`**: Replace `generateObject()` with pi's `complete()` + JSON prompt + response parsing. Use TypeBox schema for validation instead of Zod.
+- [ ] Update `SessionTitleDeps` type
+- [ ] Run title service tests
+
+## Phase 6: MCP Integration
+- [ ] **`src/mcp/index.ts`**: Replace `@ai-sdk/mcp` imports (`createMCPClient`, `OAuthClientProvider`, `Experimental_StdioMCPTransport`) with direct `@modelcontextprotocol/sdk` usage
+- [ ] Create MCP tool adapter: convert MCP `Tool` definitions to Pi `AgentTool` format
+- [ ] Update `loadMCPTools()` to return `AgentTool[]` instead of AI SDK tool records
+- [ ] Verify OAuth provider flow still works without `@ai-sdk/mcp`'s `OAuthClientProvider` type
+- [ ] Run MCP tests: `bun test test/mcp*`
+
+## Phase 7: Observability
+- [ ] **`src/observability/runtime.ts`**: Remove `TelemetrySettings` import from `"ai"`. Define our own telemetry interface.
+- [ ] Create pi event → OpenTelemetry span mapping (instrument `agentLoop` events with manual spans)
+- [ ] Verify Langfuse integration still works end-to-end
+- [ ] Run observability tests
+
+## Phase 8: Sub-Agent (spawnAgent) Migration
+- [ ] **`src/tools/spawnAgent.ts`**: Replace internal `streamText()` + `stepCountIs()` with pi's `agentLoop()` for sub-agent runs
+- [ ] Ensure sub-agent tool subsets are passed correctly as `AgentTool[]`
+- [ ] Verify depth limiting still works
+- [ ] Run spawn agent tests
+
+## Phase 9: Test Harness & Scripts
+- [ ] **`scripts/run_raw_agent_loops.ts`**: Migrate from `generateText`/`stepCountIs`/`tool` to pi equivalents
+- [ ] **`test/tools.test.ts`**: Update schema validation from `asSchema` (`@ai-sdk/provider-utils`) to TypeBox schema introspection
+- [ ] **`test/providers/*.test.ts`**: Update provider tests to use pi model creation
+- [ ] **`test/providers/live-api.integration.test.ts`**: Update integration tests
+- [ ] **`test_model.ts`**: Update if it exists as a test utility
+
+## Phase 10: Cleanup & Dependency Removal
+- [ ] Remove AI SDK dependencies from `package.json`:
+  - `"ai"`
+  - `"@ai-sdk/anthropic"`
+  - `"@ai-sdk/google"`
+  - `"@ai-sdk/openai"`
+  - `"@ai-sdk/mcp"`
+- [ ] Remove any remaining `from "ai"` or `from "@ai-sdk/*"` imports
+- [ ] Replace `zod` with TypeBox where it was only used for tool schemas (keep `zod` for other validation — it's used extensively beyond tools)
+- [ ] Run full test suite: `bun test`
+- [ ] Run TypeScript check: `npx tsc --noEmit`
+- [ ] Manual smoke test: `bun run cli` with each provider
+
+## Phase 11: Documentation & Protocol
+- [ ] Update `docs/websocket-protocol.md` if message shapes changed
+- [ ] Update `CLAUDE.md` to reflect pi framework instead of AI SDK
+- [ ] Update any inline documentation referencing AI SDK patterns
 
 ---
 
-# Task: Handle invalid connection store without aborting auth flows
+## Risk Assessment
 
-## Plan
-- [x] Confirm the current `readConnectionStore()` error behavior for malformed and legacy-shape `connections.json`.
-- [x] Make `readConnectionStore()` treat invalid JSON/schema as recoverable and return an empty store instead of throwing.
-- [x] Add regression tests proving `connectProvider()` can recover from invalid store files.
-- [x] Add regression tests proving `getProviderStatuses()` still returns statuses when store JSON/schema is invalid.
-- [x] Run verification (`bun test test/connect.test.ts`, `bun test test/providerStatus.test.ts`, `bun test`).
-
-## Review
-- Added a dedicated `ConnectionStoreParseError` in `/Users/mweinbach/Projects/agent-coworker/src/store/connections.ts` so parse/schema failures are distinguishable from filesystem failures.
-- `readConnectionStore()` now treats invalid `connections.json` content as recoverable and falls back to an empty in-memory store, preserving normal `/connect` and provider-status flows.
-- Filesystem failures (other than `ENOENT`) still throw, so permission and IO issues remain visible.
-- Added regression test `recovers from malformed connection store JSON when saving a provider key` in `/Users/mweinbach/Projects/agent-coworker/test/connect.test.ts`.
-- Added regression test `treats legacy-shaped connection store as empty instead of throwing` in `/Users/mweinbach/Projects/agent-coworker/test/providerStatus.test.ts`.
-- Verification:
-  - `bun test test/connect.test.ts`
-  - `bun test test/providerStatus.test.ts`
-  - `bun test`
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Pi message format incompatible with persisted sessions | High | Add migration layer in sessionStore that converts old ModelMessage on load |
+| Provider-native webSearch tools unavailable in pi | Medium | Fall back to custom Brave/Exa implementations for all providers |
+| Google thought signature replay not handled by pi | Medium | Port existing repair logic to pi's message format |
+| Codex CLI custom OAuth flow breaks | High | Pi supports custom OpenAI-compatible endpoints; test thoroughly |
+| MCP OAuth flow depends on `@ai-sdk/mcp` types | Medium | Implement OAuth provider interface directly against `@modelcontextprotocol/sdk` |
+| TypeBox learning curve for contributors | Low | TypeBox API is simpler than Zod; document patterns |
+| `generateObject()` replacement less robust | Low | JSON prompt + validation is battle-tested |
+| Stream event mapping incomplete | Medium | Exhaustive event type mapping with fallback logging |
 
 ---
 
-# Task: Keep MCP/session loading resilient to malformed JSON
+## File Impact Summary
 
-## Plan
-- [x] Make `loadMCPConfigRegistry()` best-effort by turning per-layer parse failures into file-level parse warnings.
-- [x] Ensure malformed MCP layers do not block resolution of valid layers in snapshot/runtime paths.
-- [x] Make `listPersistedSessionSnapshots()` skip malformed/invalid snapshot files instead of throwing.
-- [x] Add regression coverage in `test/mcp.config-registry.test.ts` and `test/session-store.test.ts`.
-- [x] Run verification (`bun test test/mcp.config-registry.test.ts`, `bun test test/session-store.test.ts`, `bun test`).
+**High-impact files (core logic changes):**
+- `src/agent.ts` — Complete rewrite of turn loop
+- `src/providers/*.ts` — All 4 providers rewritten
+- `src/tools/*.ts` — All 14 tools converted
+- `src/mcp/index.ts` — MCP adapter rewritten
 
-## Review
-- `readLayer()` in `/Users/mweinbach/Projects/agent-coworker/src/mcp/configRegistry/layers.ts` now catches parse/schema failures per file, records `file.parseError`, and keeps loading remaining layers.
-- `loadMCPConfigRegistry()` now emits warning entries for malformed layer files while continuing to merge valid system/user/workspace servers.
-- Added regression coverage in `/Users/mweinbach/Projects/agent-coworker/test/mcp.config-registry.test.ts` proving malformed workspace JSON no longer aborts registry loading and warnings/parse metadata are populated.
-- `listPersistedSessionSnapshots()` in `/Users/mweinbach/Projects/agent-coworker/src/server/sessionStore.ts` now skips malformed JSON and invalid snapshot shapes per file instead of failing the entire list operation.
-- Added regression coverage in `/Users/mweinbach/Projects/agent-coworker/test/session-store.test.ts` proving corrupt session files are skipped while valid snapshots remain listable/sorted.
-- Verification:
-  - `bun test test/mcp.config-registry.test.ts`
-  - `bun test test/session-store.test.ts`
-  - `bun test`
+**Medium-impact files (type changes):**
+- `src/types.ts`
+- `src/server/session/SessionContext.ts`
+- `src/server/session/HistoryManager.ts`
+- `src/server/sessionStore.ts`
+- `src/server/sessionDb/*.ts`
+- `src/server/sessionTitleService.ts`
+- `src/observability/runtime.ts`
+- `src/providers/googleReplay.ts`
 
----
+**Low-impact files (import updates):**
+- `scripts/run_raw_agent_loops.ts`
+- `test/**/*.ts`
+- `package.json`
 
-# Task: Fix review regressions in stream event dispatch and anonymous tool IDs
-
-## Plan
-- [x] Stop classifying consumer `onEvent` exceptions as `invalid_envelope` in `AgentSocket`.
-- [x] Keep anonymous stream fallback IDs stable for a whole turn in `TurnExecutionManager`.
-- [x] Ensure id-less `tool_input_*`, `tool_call`, and `tool_result` chunks share one fallback key path.
-- [x] Add regression coverage for socket callback exception bubbling.
-- [x] Add regression coverage for id-less tool lifecycle key correlation.
-- [x] Run verification (`bun test` targeted suites + full suite).
-
-## Review
-- `src/client/agentSocket.ts` now limits `invalid_envelope` handling to decode/parse failures; valid event dispatch (`this.onEvent(evt)`) is outside that catch so consumer exceptions propagate instead of being suppressed.
-- `src/server/session/TurnExecutionManager.ts` now uses `fallbackIdSeed: turnId` (not per-part index), making anonymous fallback IDs stable for the whole streamed turn.
-- `src/server/modelStream.ts` now uses `toolCallId()` for `tool-input-start`, `tool-input-delta`, and `tool-input-end` IDs so id-less tool input/call/result chunks share one fallback call key.
-- Added runtime regression tests in `test/agentSocket.runtime.test.ts` covering invalid envelope diagnostics and non-swallowed `onEvent` exceptions.
-- Added stream lifecycle regression in `test/session.stream-pipeline.test.ts` proving id-less `tool_input_*`, `tool_call`, and `tool_result` chunks share the same fallback key.
-- Updated `test/server.model-stream.test.ts` expectations for tool-input anonymous ID fallback behavior.
-- Verification:
-  - `bun test test/agentSocket.runtime.test.ts test/server.model-stream.test.ts test/session.stream-pipeline.test.ts`
-  - `bun test` -> **1671 pass, 2 skip, 0 fail**
+**No changes needed:**
+- TUI layer (only consumes WebSocket events, never touches AI SDK directly)
+- CLI REPL
+- Server/protocol layer (messages are already serialized as JSON)
+- Config loading (except `getModel()` return type)

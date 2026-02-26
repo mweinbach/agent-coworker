@@ -39,6 +39,7 @@ mock.module("../src/lib/desktopCommands", () => ({
   saveState: async () => {},
   startWorkspaceServer: async () => ({ url: "ws://mock" }),
   stopWorkspaceServer: async () => {},
+  showContextMenu: async () => null,
   openPath: async () => {},
   revealPath: async () => {},
   copyPath: async () => {},

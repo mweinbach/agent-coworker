@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 
-import { Type } from "@mariozechner/pi-ai";
+import { Type } from "../pi/types";
 
 import { toAgentTool } from "../pi/toolAdapter";
 import type { ToolContext } from "./context";

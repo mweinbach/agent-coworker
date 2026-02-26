@@ -1,7 +1,14 @@
-import { Type, StringEnum } from "@mariozechner/pi-ai";
-import type { AgentLoopConfig, AgentMessage, AgentTool, Message } from "@mariozechner/pi-agent-core";
-import { agentLoop } from "@mariozechner/pi-agent-core";
 import path from "node:path";
+
+import {
+  Type,
+  StringEnum,
+  agentLoop,
+  type AgentLoopConfig,
+  type AgentMessage,
+  type AgentTool,
+  type Message,
+} from "../pi/types";
 
 import { getModel as realGetModel } from "../config";
 import { toAgentTool, toolRecordToArray } from "../pi/toolAdapter";

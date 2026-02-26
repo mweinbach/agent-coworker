@@ -1,4 +1,4 @@
-import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { SimpleStreamOptions } from "../pi/types";
 
 import { DEFAULT_ANTHROPIC_PROVIDER_OPTIONS, DEFAULT_ANTHROPIC_STREAM_OPTIONS } from "./anthropic";
 import { DEFAULT_CODEX_CLI_PROVIDER_OPTIONS, DEFAULT_CODEX_CLI_STREAM_OPTIONS } from "./codex-cli";

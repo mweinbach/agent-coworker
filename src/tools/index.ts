@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "../pi/types";
 
 import type { ToolContext } from "./context";
 

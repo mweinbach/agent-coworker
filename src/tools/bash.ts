@@ -1,4 +1,4 @@
-import { Type } from "@mariozechner/pi-ai";
+import { Type } from "../pi/types";
 import { execFile } from "node:child_process";
 import { z } from "zod";
 

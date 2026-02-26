@@ -1,4 +1,4 @@
-import type { Model, Api, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { Model, Api, SimpleStreamOptions } from "../pi/types";
 
 import { resolvePiModel } from "../pi/providerAdapter";
 import type { AgentConfig } from "../types";

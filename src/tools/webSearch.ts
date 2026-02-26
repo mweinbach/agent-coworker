@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { Type } from "@mariozechner/pi-ai";
+import { Type } from "../pi/types";
 import { z } from "zod";
 
 import { getAiCoworkerPaths, readToolApiKey } from "../connect";

@@ -1,7 +1,7 @@
 import fg from "fast-glob";
 import path from "node:path";
 
-import { Type } from "@mariozechner/pi-ai";
+import { Type } from "../pi/types";
 import { z } from "zod";
 
 import { toAgentTool } from "../pi/toolAdapter";

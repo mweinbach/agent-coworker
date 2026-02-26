@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 
-import { Type, StringEnum } from "@mariozechner/pi-ai";
+import { Type, StringEnum } from "../pi/types";
 import { z } from "zod";
 
 import { toAgentTool } from "../pi/toolAdapter";

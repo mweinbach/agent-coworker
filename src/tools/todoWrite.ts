@@ -1,4 +1,4 @@
-import { Type, StringEnum } from "@mariozechner/pi-ai";
+import { Type, StringEnum } from "../pi/types";
 
 import { toAgentTool } from "../pi/toolAdapter";
 import type { TodoItem } from "../types";

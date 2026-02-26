@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import readline from "node:readline";
 
-import { Type } from "@mariozechner/pi-ai";
+import { Type } from "../pi/types";
 
 import { toAgentTool } from "../pi/toolAdapter";
 import type { ToolContext } from "./context";

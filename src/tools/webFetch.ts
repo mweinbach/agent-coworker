@@ -1,4 +1,4 @@
-import { Type } from "@mariozechner/pi-ai";
+import { Type } from "../pi/types";
 
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";

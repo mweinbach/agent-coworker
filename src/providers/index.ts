@@ -1,4 +1,4 @@
-import type { Model, Api } from "@mariozechner/pi-ai";
+import type { Model, Api } from "../pi/types";
 
 import type { AgentConfig, ProviderName } from "../types";
 

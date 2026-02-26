@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { Model, Api, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { Model, Api, SimpleStreamOptions } from "../pi/types";
 
 import { getAiCoworkerPaths, type AiCoworkerPaths } from "../connect";
 import { resolvePiModel } from "../pi/providerAdapter";

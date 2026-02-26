@@ -1,4 +1,4 @@
-import type { Message, AssistantMessage, ThinkingContent, ToolCall } from "@mariozechner/pi-ai";
+import type { Message, AssistantMessage, ThinkingContent, ToolCall } from "../pi/types";
 import { z } from "zod";
 
 /**

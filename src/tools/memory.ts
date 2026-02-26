@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 
-import { Type, StringEnum } from "@mariozechner/pi-ai";
+import { Type, StringEnum } from "../pi/types";
 import { z } from "zod";
 
 import { toAgentTool } from "../pi/toolAdapter";

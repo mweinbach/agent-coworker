@@ -1,6 +1,7 @@
-import { tool } from "ai";
+import { Type } from "@mariozechner/pi-ai";
 import { z } from "zod";
 
+import { toAgentTool } from "../pi/toolAdapter";
 import type { ToolContext } from "./context";
 
 const nonEmptyQuestionSchema = z.string().trim().min(1).describe("The question to ask");
@@ -68,11 +69,32 @@ export const askInputSchema = z
     }
   });
 
+const askParameters = Type.Object({
+  question: Type.Optional(Type.String({ description: "The question to ask" })),
+  options: Type.Optional(Type.Array(Type.String(), { description: "Multiple-choice options" })),
+  questions: Type.Optional(Type.Array(
+    Type.Object({
+      question: Type.String({ description: "The complete question to ask the user" }),
+      header: Type.Optional(Type.String({ description: "Short label shown in UX" })),
+      options: Type.Optional(Type.Array(
+        Type.Object({
+          label: Type.String({ description: "Option label" }),
+          description: Type.Optional(Type.String({ description: "Option description" })),
+        }),
+        { description: "Structured options for the question" },
+      )),
+      multiSelect: Type.Optional(Type.Boolean({ description: "Whether multiple options may be selected" })),
+    }),
+    { description: "Questions to ask the user", minItems: 1, maxItems: 4 },
+  )),
+});
+
 export function createAskTool(ctx: ToolContext) {
-  return tool({
+  return toAgentTool({
+    name: "ask",
     description:
       "Ask the user a clarifying question. Provide options when possible. Returns the user's answer.",
-    inputSchema: askInputSchema,
+    parameters: askParameters,
     execute: async (input) => {
       const parsedInput = askInputSchema.safeParse(input);
       if (!parsedInput.success) {

@@ -1,23 +1,25 @@
 import { createReadStream } from "node:fs";
 import readline from "node:readline";
 
-import { tool } from "ai";
-import { z } from "zod";
+import { Type } from "@mariozechner/pi-ai";
 
+import { toAgentTool } from "../pi/toolAdapter";
 import type { ToolContext } from "./context";
 import { resolveMaybeRelative, truncateLine } from "../utils/paths";
 import { assertReadPathAllowed } from "../utils/permissions";
 
 export function createReadTool(ctx: ToolContext) {
-  return tool({
+  return toAgentTool({
+    name: "read",
     description:
       "Read a file from the filesystem. Returns content with line numbers. Use offset/limit for large files.",
-    inputSchema: z.object({
-      filePath: z.string().describe("Path to the file (prefer absolute)"),
-      offset: z.number().int().min(1).optional().describe("Start line (1-indexed)"),
-      limit: z.number().int().min(1).max(20000).optional().default(2000).describe("Max lines"),
+    parameters: Type.Object({
+      filePath: Type.String({ description: "Path to the file (prefer absolute)" }),
+      offset: Type.Optional(Type.Integer({ description: "Start line (1-indexed)", minimum: 1 })),
+      limit: Type.Optional(Type.Integer({ description: "Max lines", minimum: 1, maximum: 20000, default: 2000 })),
     }),
-    execute: async ({ filePath, offset, limit }) => {
+    execute: async ({ filePath, offset, limit: rawLimit }) => {
+      const limit = rawLimit ?? 2000;
       ctx.log(`tool> read ${JSON.stringify({ filePath, offset, limit })}`);
 
       const abs = await assertReadPathAllowed(
@@ -46,7 +48,6 @@ export function createReadTool(ctx: ToolContext) {
       }
 
       if (lineNo === 0 && start === 0) {
-        // Preserve existing behavior for empty files.
         numbered.push("1\t");
       }
 

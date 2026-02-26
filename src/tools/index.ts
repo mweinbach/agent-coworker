@@ -1,3 +1,5 @@
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+
 import type { ToolContext } from "./context";
 
 import { createAskTool } from "./ask";
@@ -15,7 +17,14 @@ import { createWebFetchTool } from "./webFetch";
 import { createWebSearchTool } from "./webSearch";
 import { createWriteTool } from "./write";
 
-export function createTools(ctx: ToolContext): Record<string, any> {
+/**
+ * Creates the full tool set as a name-keyed record of AgentTool objects.
+ *
+ * Pi's agentLoop expects AgentTool[], but we keep the record format for
+ * backward compatibility with MCP tool merging and the sub-agent tool subsetting.
+ * Use `Object.values(tools)` to get the array for pi.
+ */
+export function createTools(ctx: ToolContext): Record<string, AgentTool> {
   const askTool = createAskTool(ctx);
 
   return {
@@ -28,7 +37,6 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     webSearch: createWebSearchTool(ctx),
     webFetch: createWebFetchTool(ctx),
     ask: askTool,
-    AskUserQuestion: askTool,
     todoWrite: createTodoWriteTool(ctx),
     spawnAgent: createSpawnAgentTool(ctx),
     notebookEdit: createNotebookEditTool(ctx),

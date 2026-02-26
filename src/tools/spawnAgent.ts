@@ -1,10 +1,10 @@
-import { stepCountIs as realStepCountIs, streamText as realStreamText, tool } from "ai";
+import { Type, StringEnum } from "@mariozechner/pi-ai";
+import type { AgentLoopConfig, AgentMessage, AgentTool, Message } from "@mariozechner/pi-agent-core";
+import { agentLoop } from "@mariozechner/pi-agent-core";
 import path from "node:path";
-import { z } from "zod";
 
 import { getModel as realGetModel } from "../config";
-import { buildAiSdkTelemetrySettings } from "../observability/runtime";
-import { buildGooglePrepareStep } from "../providers/googleReplay";
+import { toAgentTool, toolRecordToArray } from "../pi/toolAdapter";
 import { loadSubAgentPrompt as realLoadSubAgentPrompt } from "../prompt";
 import { classifyCommandDetailed as realClassifyCommandDetailed } from "../utils/approval";
 
@@ -26,8 +26,6 @@ const MAX_SUB_AGENT_DEPTH = 2;
 const MAX_SUB_AGENT_TASK_CHARS = 20_000;
 
 export type SpawnAgentDeps = Partial<{
-  streamText: typeof realStreamText;
-  stepCountIs: typeof realStepCountIs;
   getModel: typeof realGetModel;
   loadSubAgentPrompt: typeof realLoadSubAgentPrompt;
   classifyCommandDetailed: typeof realClassifyCommandDetailed;
@@ -88,8 +86,6 @@ function createSubAgentTools(
 }
 
 export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}) {
-  const streamText = deps.streamText ?? realStreamText;
-  const stepCountIs = deps.stepCountIs ?? realStepCountIs;
   const getModel = deps.getModel ?? realGetModel;
   const loadSubAgentPrompt = deps.loadSubAgentPrompt ?? realLoadSubAgentPrompt;
   const classifyCommandDetailed = deps.classifyCommandDetailed ?? realClassifyCommandDetailed;
@@ -103,18 +99,23 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
       workingDirectory: ctx.config.workingDirectory,
     }).kind === "auto";
 
-  return tool({
+  return toAgentTool({
+    name: "spawnAgent",
     description:
       "Launch a sub-agent for a focused task (explore, research, or general). Sub-agents run with their own prompt and restricted tools and return their result.",
-    inputSchema: z.object({
-      task: z
-        .string()
-        .min(1)
-        .max(MAX_SUB_AGENT_TASK_CHARS)
-        .describe("What the sub-agent should accomplish"),
-      agentType: z.enum(["explore", "research", "general"]).optional().default("general"),
+    parameters: Type.Object({
+      task: Type.String({
+        description: "What the sub-agent should accomplish",
+        minLength: 1,
+        maxLength: MAX_SUB_AGENT_TASK_CHARS,
+      }),
+      agentType: Type.Optional(StringEnum(["explore", "research", "general"], {
+        description: "Agent type",
+        default: "general",
+      })),
     }),
-    execute: async ({ task, agentType }) => {
+    execute: async ({ task, agentType: rawAgentType }) => {
+      const agentType = (rawAgentType ?? "general") as AgentType;
       ctx.log(`tool> spawnAgent ${JSON.stringify({ agentType })}`);
       if ((ctx.spawnDepth ?? 0) >= MAX_SUB_AGENT_DEPTH) {
         throw new Error(
@@ -128,36 +129,37 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
       const modelId =
         agentType === "research" ? ctx.config.model : ctx.config.subAgentModel;
 
-      const tools = createSubAgentTools(ctx, agentType, safeApprove, normalizedTask);
-      const googlePrepareStep =
-        ctx.config.provider === "google" && Object.keys(tools).length > 0
-          ? buildGooglePrepareStep(ctx.config.providerOptions, ctx.log)
-          : undefined;
-      const telemetry = await buildAiSdkTelemetrySettings(ctx.config, {
-        functionId: "tool.spawnAgent",
-        metadata: {
-          agentType,
-          modelId,
-          spawnDepth: (ctx.spawnDepth ?? 0) + 1,
-        },
-      });
+      const toolRecord = createSubAgentTools(ctx, agentType, safeApprove, normalizedTask);
+      const tools = toolRecordToArray(toolRecord as Record<string, AgentTool>);
 
-      const streamTextInput = {
-        model: getModel(ctx.config, modelId),
-        system,
+      const model = getModel(ctx.config, modelId);
+      const context = {
+        systemPrompt: system,
+        messages: [] as AgentMessage[],
         tools,
-        stopWhen: stepCountIs(50),
-        providerOptions: ctx.config.providerOptions,
-        ...(telemetry ? { experimental_telemetry: telemetry } : {}),
-        ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
-        ...(typeof ctx.config.modelSettings?.maxRetries === "number"
-          ? { maxRetries: ctx.config.modelSettings.maxRetries }
-          : {}),
-        abortSignal: ctx.abortSignal,
-        prompt: normalizedTask,
-      } as Parameters<typeof streamText>[0];
-      const streamResult = await streamText(streamTextInput);
-      const text = await streamResult.text;
+      };
+      const config: AgentLoopConfig = {
+        model,
+        reasoning: "high",
+        convertToLlm: (msgs: AgentMessage[]) =>
+          msgs.filter((m): m is Message =>
+            m.role === "user" || m.role === "assistant" || m.role === "toolResult"
+          ),
+      };
+
+      const userMessage: AgentMessage = {
+        role: "user",
+        content: normalizedTask,
+        timestamp: Date.now(),
+      };
+
+      let text = "";
+      const eventStream = agentLoop([userMessage], context, config, ctx.abortSignal);
+      for await (const event of eventStream) {
+        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+          text += event.assistantMessageEvent.delta;
+        }
+      }
 
       ctx.log(`tool< spawnAgent ${JSON.stringify({ chars: text.length })}`);
       return text;

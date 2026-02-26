@@ -1,7 +1,8 @@
-import { tool } from "ai";
-import { z } from "zod";
+import { Type } from "@mariozechner/pi-ai";
 import { execFile } from "node:child_process";
+import { z } from "zod";
 
+import { toAgentTool } from "../pi/toolAdapter";
 import type { ToolContext } from "./context";
 import { truncateText } from "../utils/paths";
 
@@ -84,7 +85,8 @@ async function runShellCommand(opts: {
 }
 
 export function createBashTool(ctx: ToolContext) {
-  return tool({
+  return toAgentTool({
+    name: "bash",
     description: `Execute a shell command. Use for git, npm, docker, system operations, and anything requiring the shell.
 
 Platform notes:
@@ -102,8 +104,8 @@ Rules:
 - Always quote file paths containing spaces with double quotes
 - Prefer absolute paths; avoid cd
 - Output is truncated`,
-    inputSchema: z.object({
-      command: z.string().describe("The shell command to execute"),
+    parameters: Type.Object({
+      command: Type.String({ description: "The shell command to execute" }),
     }),
     execute: async ({ command }) => {
       ctx.log(`tool> bash ${JSON.stringify({ command })}`);

@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 
-import { tool } from "ai";
+import { Type, StringEnum } from "@mariozechner/pi-ai";
 import { z } from "zod";
 
+import { toAgentTool } from "../pi/toolAdapter";
 import type { ToolContext } from "./context";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
@@ -19,17 +20,19 @@ const notebookSchema = z.object({
 }).passthrough();
 
 export function createNotebookEditTool(ctx: ToolContext) {
-  return tool({
+  return toAgentTool({
+    name: "notebookEdit",
     description:
       "Edit a Jupyter notebook (.ipynb) cell. Supports replace, insert, and delete operations.",
-    inputSchema: z.object({
-      notebookPath: z.string().min(1).describe("Path to the .ipynb file (prefer absolute)"),
-      cellIndex: z.number().int().min(0).describe("0-indexed cell index"),
-      newSource: z.string().describe("New content for the cell"),
-      cellType: z.enum(["code", "markdown"]).optional(),
-      editMode: z.enum(["replace", "insert", "delete"]).optional().default("replace"),
+    parameters: Type.Object({
+      notebookPath: Type.String({ description: "Path to the .ipynb file (prefer absolute)", minLength: 1 }),
+      cellIndex: Type.Integer({ description: "0-indexed cell index", minimum: 0 }),
+      newSource: Type.String({ description: "New content for the cell" }),
+      cellType: Type.Optional(StringEnum(["code", "markdown"], { description: "Cell type" })),
+      editMode: Type.Optional(StringEnum(["replace", "insert", "delete"], { description: "Edit mode", default: "replace" })),
     }),
-    execute: async ({ notebookPath, cellIndex, newSource, cellType, editMode }) => {
+    execute: async ({ notebookPath, cellIndex, newSource, cellType, editMode: rawEditMode }) => {
+      const editMode = rawEditMode ?? "replace";
       ctx.log(
         `tool> notebookEdit ${JSON.stringify({ notebookPath, cellIndex, cellType, editMode })}`
       );

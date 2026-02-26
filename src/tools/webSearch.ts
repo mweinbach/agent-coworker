@@ -1,11 +1,10 @@
 import path from "node:path";
 
-import { anthropic } from "@ai-sdk/anthropic";
-import { openai } from "@ai-sdk/openai";
-import { tool } from "ai";
+import { Type } from "@mariozechner/pi-ai";
 import { z } from "zod";
 
 import { getAiCoworkerPaths, readToolApiKey } from "../connect";
+import { toAgentTool } from "../pi/toolAdapter";
 import type { ToolContext } from "./context";
 
 interface CustomWebSearchToolOptions {
@@ -107,36 +106,27 @@ async function resolveExaApiKey(ctx: ToolContext): Promise<string | undefined> {
 
 function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToolOptions = {}) {
   const exaOnly = options.exaOnly ?? false;
-  const webSearchInputSchema = z.object({
-    query: z.string().min(1).optional().describe("Search query"),
-    q: z.string().min(1).optional(),
-    searchQuery: z.string().min(1).optional(),
-    text: z.string().min(1).optional(),
-    prompt: z.string().min(1).optional(),
-    mode: z.unknown().optional(),
-    dynamicThreshold: z.unknown().optional(),
-    maxResults: z.number().int().min(1).max(20).optional().default(10),
-  }).passthrough();
 
-  return tool({
+  return toAgentTool({
+    name: "webSearch",
     description: exaOnly
       ? "Search the web for current information using Exa. Requires EXA_API_KEY. Returns titles, URLs, and snippets."
       : "Search the web for current information. Requires BRAVE_API_KEY or EXA_API_KEY. Returns titles, URLs, and snippets.",
-    inputSchema: webSearchInputSchema,
+    parameters: Type.Object({
+      query: Type.Optional(Type.String({ description: "Search query" })),
+      q: Type.Optional(Type.String()),
+      searchQuery: Type.Optional(Type.String()),
+      text: Type.Optional(Type.String()),
+      prompt: Type.Optional(Type.String()),
+      maxResults: Type.Optional(Type.Integer({ description: "Max results", minimum: 1, maximum: 20, default: 10 })),
+    }),
     execute: async (input) => {
-      const parsedInput = webSearchInputSchema.safeParse(input);
-      if (!parsedInput.success) {
-        const out = 'webSearch requires a query. Call webSearch with {"query":"..."}';
-        ctx.log(`tool< webSearch ${JSON.stringify({ ok: false, reason: "missing_query" })}`);
-        return out;
-      }
-
       const rawQuery = firstString(
-        parsedInput.data.query,
-        parsedInput.data.q,
-        parsedInput.data.searchQuery,
-        parsedInput.data.text,
-        parsedInput.data.prompt
+        input.query,
+        input.q,
+        input.searchQuery,
+        input.text,
+        input.prompt
       ) ?? firstString(ctx.turnUserPrompt);
       if (rawQuery === undefined) {
         const out = 'webSearch requires a query. Call webSearch with {"query":"..."}';
@@ -153,7 +143,7 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
         return out;
       }
 
-      const maxResults = parsedInput.data.maxResults ?? 10;
+      const maxResults = input.maxResults ?? 10;
       ctx.log(`tool> webSearch ${JSON.stringify({ query: safeQuery, maxResults })}`);
 
       if (!exaOnly && process.env.BRAVE_API_KEY) {
@@ -238,14 +228,13 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
 }
 
 export function createWebSearchTool(ctx: ToolContext) {
+  // All providers use the custom Brave/Exa search implementation.
+  // Provider-native tools (Anthropic webSearch_20250305, OpenAI tools.webSearch)
+  // are not compatible with pi's AgentTool format.
   switch (ctx.config.provider) {
-    case "openai":
-      return openai.tools.webSearch({});
     case "google":
       return createCustomWebSearchTool(ctx, { exaOnly: true });
-    case "anthropic":
-      return anthropic.tools.webSearch_20250305({});
-    case "codex-cli":
+    default:
       return createCustomWebSearchTool(ctx);
   }
 }

@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
 
-import { tool } from "ai";
+import { Type, StringEnum } from "@mariozechner/pi-ai";
 import { z } from "zod";
 
+import { toAgentTool } from "../pi/toolAdapter";
 import type { ToolContext } from "./context";
 import { isPathInside, truncateText } from "../utils/paths";
 
@@ -47,7 +48,8 @@ export function createMemoryTool(
 ) {
   const execFileImpl = opts.execFileImpl ?? execFile;
 
-  return tool({
+  return toAgentTool({
+    name: "memory",
     description: `Read or update persistent memory.
 
 Memory has two tiers:
@@ -55,11 +57,11 @@ Memory has two tiers:
 2) Deep storage: .agent/memory/ and ~/.agent/memory/
 
 Use action=read to retrieve memory, action=write to store new information, and action=search to find across memory files.`,
-    inputSchema: z.object({
-      action: z.enum(["read", "write", "search"]),
-      key: z.string().optional().describe("Memory key/path, e.g. 'people/sarah' or 'glossary'"),
-      content: z.string().optional().describe("Content to write (required for write)"),
-      query: z.string().optional().describe("Search query (required for search)"),
+    parameters: Type.Object({
+      action: StringEnum(["read", "write", "search"], { description: "Memory action" }),
+      key: Type.Optional(Type.String({ description: "Memory key/path, e.g. 'people/sarah' or 'glossary'" })),
+      content: Type.Optional(Type.String({ description: "Content to write (required for write)" })),
+      query: Type.Optional(Type.String({ description: "Search query (required for search)" })),
     }),
     execute: async ({ action, key, content, query }) => {
       ctx.log(`tool> memory ${JSON.stringify({ action, key, hasContent: !!content, query })}`);

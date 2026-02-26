@@ -1,23 +1,25 @@
 import fs from "node:fs/promises";
 
-import { tool } from "ai";
-import { z } from "zod";
+import { Type } from "@mariozechner/pi-ai";
 
+import { toAgentTool } from "../pi/toolAdapter";
 import type { ToolContext } from "./context";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 
 export function createEditTool(ctx: ToolContext) {
-  return tool({
+  return toAgentTool({
+    name: "edit",
     description:
       "Replace exact text in a file. The oldString must exist and be unique unless replaceAll is true.",
-    inputSchema: z.object({
-      filePath: z.string().min(1).describe("Path to the file (prefer absolute)"),
-      oldString: z.string().min(1).describe("Exact text to replace"),
-      newString: z.string().describe("Replacement text"),
-      replaceAll: z.boolean().optional().default(false).describe("Replace all occurrences"),
+    parameters: Type.Object({
+      filePath: Type.String({ description: "Path to the file (prefer absolute)", minLength: 1 }),
+      oldString: Type.String({ description: "Exact text to replace", minLength: 1 }),
+      newString: Type.String({ description: "Replacement text" }),
+      replaceAll: Type.Optional(Type.Boolean({ description: "Replace all occurrences", default: false })),
     }),
-    execute: async ({ filePath, oldString, newString, replaceAll }) => {
+    execute: async ({ filePath, oldString, newString, replaceAll: rawReplaceAll }) => {
+      const replaceAll = rawReplaceAll ?? false;
       ctx.log(`tool> edit ${JSON.stringify({ filePath, replaceAll })}`);
       if (oldString === "") throw new Error("oldString cannot be empty");
 

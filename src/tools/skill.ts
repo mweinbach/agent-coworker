@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { tool } from "ai";
-import { z } from "zod";
+import { Type } from "@mariozechner/pi-ai";
 
+import { toAgentTool } from "../pi/toolAdapter";
 import { discoverSkills, stripSkillFrontMatter } from "../skills";
 import type { ToolContext } from "./context";
 
@@ -53,10 +53,11 @@ export function createSkillTool(ctx: ToolContext) {
     paramDesc = "The skill to load (use the exact name from the Available Skills section of the system prompt)";
   }
 
-  return tool({
+  return toAgentTool({
+    name: "skill",
     description,
-    inputSchema: z.object({
-      skillName: z.string().describe(paramDesc),
+    parameters: Type.Object({
+      skillName: Type.String({ description: paramDesc }),
     }),
     execute: async ({ skillName }) => {
       ctx.log(`tool> skill ${JSON.stringify({ skillName })}`);

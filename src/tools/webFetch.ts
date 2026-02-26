@@ -1,10 +1,10 @@
-import { tool } from "ai";
-import { z } from "zod";
+import { Type } from "@mariozechner/pi-ai";
 
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 import TurndownService from "turndown";
 
+import { toAgentTool } from "../pi/toolAdapter";
 import type { ToolContext } from "./context";
 import { truncateText } from "../utils/paths";
 import { resolveSafeWebUrl } from "../utils/webSafety";
@@ -68,14 +68,16 @@ async function fetchWithSafeRedirects(url: string, abortSignal?: AbortSignal): P
 }
 
 export function createWebFetchTool(ctx: ToolContext) {
-  return tool({
+  return toAgentTool({
+    name: "webFetch",
     description:
       "Fetch a URL and return its content as clean markdown. Use to read documentation or web pages.",
-    inputSchema: z.object({
-      url: z.string().url().describe("URL to fetch"),
-      maxLength: z.number().int().min(1000).max(200000).optional().default(50000),
+    parameters: Type.Object({
+      url: Type.String({ description: "URL to fetch", format: "uri" }),
+      maxLength: Type.Optional(Type.Integer({ description: "Max content length", minimum: 1000, maximum: 200000, default: 50000 })),
     }),
-    execute: async ({ url, maxLength }) => {
+    execute: async ({ url, maxLength: rawMaxLength }) => {
+      const maxLength = rawMaxLength ?? 50000;
       ctx.log(`tool> webFetch ${JSON.stringify({ url, maxLength })}`);
 
       const res = await fetchWithSafeRedirects(url, ctx.abortSignal);

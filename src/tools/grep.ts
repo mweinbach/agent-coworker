@@ -1,8 +1,9 @@
-import { tool } from "ai";
+import { Type } from "@mariozechner/pi-ai";
 import { z } from "zod";
 import { execFile } from "node:child_process";
 import path from "node:path";
 
+import { toAgentTool } from "../pi/toolAdapter";
 import type { ToolContext } from "./context";
 import { resolveMaybeRelative, truncateText } from "../utils/paths";
 import { ensureRipgrep } from "../utils/ripgrep";
@@ -17,17 +18,19 @@ export function createGrepTool(
   const execFileImpl = opts.execFileImpl ?? execFile;
   const ensureRipgrepImpl = opts.ensureRipgrepImpl ?? ensureRipgrep;
 
-  return tool({
+  return toAgentTool({
+    name: "grep",
     description:
       "Search file contents for a regex pattern using ripgrep (rg). Returns matching lines with filenames and line numbers. If rg is missing, Cowork will auto-download it.",
-    inputSchema: z.object({
-      pattern: z.string().describe("Regex pattern"),
-      path: z.string().optional().describe("File or directory to search"),
-      fileGlob: z.string().optional().describe("Glob to filter files (e.g. *.ts)"),
-      contextLines: z.number().int().min(0).max(50).optional().describe("Context lines around matches"),
-      caseSensitive: z.boolean().optional().default(true),
+    parameters: Type.Object({
+      pattern: Type.String({ description: "Regex pattern" }),
+      path: Type.Optional(Type.String({ description: "File or directory to search" })),
+      fileGlob: Type.Optional(Type.String({ description: "Glob to filter files (e.g. *.ts)" })),
+      contextLines: Type.Optional(Type.Integer({ description: "Context lines around matches", minimum: 0, maximum: 50 })),
+      caseSensitive: Type.Optional(Type.Boolean({ description: "Case sensitive search", default: true })),
     }),
-    execute: async ({ pattern, path: searchPath, fileGlob, contextLines, caseSensitive }) => {
+    execute: async ({ pattern, path: searchPath, fileGlob, contextLines, caseSensitive: rawCaseSensitive }) => {
+      const caseSensitive = rawCaseSensitive ?? true;
       ctx.log(
         `tool> grep ${JSON.stringify({ pattern, path: searchPath, fileGlob, contextLines, caseSensitive })}`
       );

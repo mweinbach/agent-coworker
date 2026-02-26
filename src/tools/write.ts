@@ -1,20 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { tool } from "ai";
-import { z } from "zod";
+import { Type } from "@mariozechner/pi-ai";
 
+import { toAgentTool } from "../pi/toolAdapter";
 import type { ToolContext } from "./context";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 
 export function createWriteTool(ctx: ToolContext) {
-  return tool({
+  return toAgentTool({
+    name: "write",
     description:
       "Write content to a file. Creates parent directories if needed. Overwrites existing files.",
-    inputSchema: z.object({
-      filePath: z.string().min(1).describe("Path to write (prefer absolute)"),
-      content: z.string().max(2_000_000).describe("Content to write"),
+    parameters: Type.Object({
+      filePath: Type.String({ description: "Path to write (prefer absolute)", minLength: 1 }),
+      content: Type.String({ description: "Content to write", maxLength: 2_000_000 }),
     }),
     execute: async ({ filePath, content }) => {
       ctx.log(`tool> write ${JSON.stringify({ filePath, chars: content.length })}`);

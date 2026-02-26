@@ -1,17 +1,30 @@
 # Task: Migrate agent runtime from AI SDK to PI (all phases)
 
 ## Plan
-- [ ] Phase 1: Introduce a runtime abstraction (`LLMRuntime`) and route `runTurn` through it while preserving behavior.
-- [ ] Phase 2: Add a PI-backed runtime implementation behind config/runtime selection and keep AI SDK runtime available during transition.
-- [ ] Phase 3: Keep first-class provider behavior by mapping provider/model/auth/options semantics for `google`, `openai`, `anthropic`, and `codex-cli`.
-- [ ] Phase 4: Migrate `spawnAgent` and session title generation to runtime abstraction and PI-backed execution paths.
-- [ ] Phase 5: Preserve websocket/TUI stream compatibility by normalizing PI stream events into existing `model_stream_chunk` part contracts.
-- [ ] Phase 6: Flip default runtime to PI, update docs/config/protocol notes, and clean up direct AI SDK runtime wiring.
-- [ ] Add or update targeted regression tests for runtime selection, provider parity, stream mapping, subagent execution, and title generation.
-- [ ] Run targeted verification suites, then full `bun test`.
+- [x] Phase 1: Introduce a runtime abstraction (`LLMRuntime`) and route `runTurn` through it while preserving behavior.
+- [x] Phase 2: Add a PI-backed runtime implementation behind config/runtime selection and keep AI SDK runtime available during transition.
+- [x] Phase 3: Keep first-class provider behavior by mapping provider/model/auth/options semantics for `google`, `openai`, `anthropic`, and `codex-cli`.
+- [x] Phase 4: Migrate `spawnAgent` and session title generation to runtime abstraction and PI-backed execution paths.
+- [x] Phase 5: Preserve websocket/TUI stream compatibility by normalizing PI stream events into existing `model_stream_chunk` part contracts.
+- [x] Phase 6: Flip default runtime to PI, update docs/config/protocol notes, and clean up direct AI SDK runtime wiring.
+- [x] Add or update targeted regression tests for runtime selection, provider parity, stream mapping, subagent execution, and title generation.
+- [x] Run targeted verification suites, then full `bun test`.
 
 ## Review
-- Pending
+- Added `src/runtime/` with runtime boundary (`types.ts`) plus `aiSdkRuntime` and `piRuntime`; `src/agent.ts` now routes model execution through `createRuntime()` and keeps AI SDK override compatibility for existing tests.
+- Added runtime selection/config support (`AgentConfig.runtime`, `AGENT_RUNTIME`, defaults `runtime: "pi"` in `config/defaults.json`) and exported saved-key resolution for provider-auth parity in PI runtime.
+- Implemented PI provider/model/auth mapping for `openai`, `google`, `anthropic`, and `codex-cli` (including Codex OAuth refresh path), PI tool-schema bridging from Zod -> JSON Schema, and PI message bridging to existing `ModelMessage` history format.
+- Migrated subsystem callers to runtime abstraction: `spawnAgent` uses runtime by default with legacy AI SDK path for injected test deps; session title generation uses runtime path for PI while preserving AI SDK structured-title compatibility path.
+- Preserved stream contract by mapping PI stream/tool lifecycle events into existing normalized stream part types (`model_stream_chunk` compatibility retained in session pipeline/TUI/client reducers).
+- Updated documentation (`docs/architecture.md`, `docs/websocket-protocol.md`) for runtime abstraction and runtime-agnostic stream raw parts.
+- Added regression coverage: `test/runtime.selection.test.ts`, `test/runtime.pi-message-bridge.test.ts`, `test/runtime.pi-options.test.ts`, plus updates in `test/session-title-service.test.ts` and `test/config.test.ts`.
+- Fixed surfaced regressions during verification:
+  - `src/server/session/TurnExecutionManager.ts`: hoisted `lastStreamError` so catch-path classification uses in-scope stream error context.
+  - Desktop test stability: expanded mocked `desktopCommands` exports in multiple desktop tests to avoid full-suite order-dependent missing-export failures.
+- Verification:
+  - `bun test test/runtime.selection.test.ts test/runtime.pi-message-bridge.test.ts test/runtime.pi-options.test.ts test/session-title-service.test.ts test/agent.test.ts test/agent.toolloop.test.ts test/spawnAgent.tool.test.ts test/config.test.ts test/server.model-stream.test.ts test/session.stream-pipeline.test.ts` -> **288 pass, 0 fail**
+  - `bun test test/session.test.ts` -> **174 pass, 0 fail**
+  - `bun test` -> **1686 pass, 2 skip, 0 fail**
 
 ---
 

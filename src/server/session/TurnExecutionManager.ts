@@ -218,7 +218,6 @@ export class TurnExecutionManager {
         Date.now() - turnStartedAt
       );
     } catch (err) {
-      console.error("DEBUG ERR STACK:", err);
       // If AI SDK threw NoOutputGeneratedError but we saw an error stream chunk, surface that underlying error instead.
       const actualErr = (lastStreamError && this.context.formatError(err).includes("No output generated")) 
         ? lastStreamError 

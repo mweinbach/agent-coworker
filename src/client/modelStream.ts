@@ -1,4 +1,10 @@
+import { z } from "zod";
+
 import type { ServerEvent } from "../server/protocol";
+
+const stringSchema = z.string();
+const finiteNumberSchema = z.number().finite();
+const partRecordSchema = z.record(z.string(), z.unknown());
 
 export type ModelStreamChunkEvent = Extract<ServerEvent, { type: "model_stream_chunk" }>;
 
@@ -44,18 +50,47 @@ export type ModelStreamUpdate =
   | { kind: "unknown"; turnId: string; partType: string; payload: unknown };
 
 function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+  const parsed = stringSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function asIdString(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  return undefined;
+}
+
+function asLooseText(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : undefined;
+  if (typeof value === "boolean") return String(value);
+  if (typeof value === "bigint") return value.toString();
+  if (value && typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 function asFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  const parsed = finiteNumberSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function asPartRecord(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return {};
+  const parsed = partRecordSchema.safeParse(value);
+  return parsed.success ? parsed.data : {};
 }
 
 function asReasoningMode(value: unknown): "reasoning" | "summary" {
@@ -65,10 +100,9 @@ function asReasoningMode(value: unknown): "reasoning" | "summary" {
 function toolKey(evt: ModelStreamChunkEvent): string {
   const part = asPartRecord(evt.part);
   return (
-    asString(part.toolCallId) ??
-    asString(part.id) ??
-    asString(part.toolName) ??
-    `${evt.turnId}:${evt.index}`
+    asIdString(part.toolCallId) ??
+    asIdString(part.id) ??
+    `tool:${evt.turnId}:${evt.index}`
   );
 }
 
@@ -79,11 +113,17 @@ function toolName(evt: ModelStreamChunkEvent): string {
 
 function rawProviderKey(part: Record<string, unknown>, fallback: string): string {
   return (
-    asString(part.item_id) ??
-    asString(part.itemId) ??
-    asString(part.call_id) ??
-    asString(part.callId) ??
-    asString(part.id) ??
+    asIdString(part.item_id) ??
+    asIdString(part.itemId) ??
+    asIdString(part.call_id) ??
+    asIdString(part.callId) ??
+    asIdString(part.tool_call_id) ??
+    asIdString(part.toolCallId) ??
+    asIdString(part.function_call_id) ??
+    asIdString(part.functionCallId) ??
+    asIdString(part.invocation_id) ??
+    asIdString(part.invocationId) ??
+    asIdString(part.id) ??
     fallback
   );
 }
@@ -96,12 +136,12 @@ function mapProviderStreamEvent(
   const normalizedType = eventType.toLowerCase();
 
   if (normalizedType.includes("function_call_arguments") && normalizedType.endsWith(".delta")) {
-    const delta = asString(payload.delta) ?? asString(payload.arguments);
+    const delta = asLooseText(payload.delta) ?? asLooseText(payload.arguments);
     if (delta === undefined) return null;
     return {
       kind: "tool_input_delta",
       turnId: evt.turnId,
-      key: rawProviderKey(payload, `raw-tool:${evt.index}`),
+      key: rawProviderKey(payload, `raw-tool:${evt.turnId}:${evt.index}`),
       delta,
     };
   }
@@ -113,22 +153,22 @@ function mapProviderStreamEvent(
     return {
       kind: "tool_input_end",
       turnId: evt.turnId,
-      key: rawProviderKey(payload, `raw-tool:${evt.index}`),
+      key: rawProviderKey(payload, `raw-tool:${evt.turnId}:${evt.index}`),
       name: asString(payload.name) ?? asString(payload.tool_name) ?? "tool",
     };
   }
 
   if (normalizedType.includes("reasoning") && normalizedType.endsWith(".delta")) {
     const text =
-      asString(payload.delta) ??
-      asString(payload.text) ??
-      asString(payload.summary) ??
-      asString(payload.content);
+      asLooseText(payload.delta) ??
+      asLooseText(payload.text) ??
+      asLooseText(payload.summary) ??
+      asLooseText(payload.content);
     if (text === undefined) return null;
     return {
       kind: "reasoning_delta",
       turnId: evt.turnId,
-      streamId: rawProviderKey(payload, `raw-reasoning:${evt.index}`),
+      streamId: rawProviderKey(payload, `raw-reasoning:${evt.turnId}:${evt.index}`),
       mode: normalizedType.includes("summary") ? "summary" : "reasoning",
       text,
     };
@@ -141,7 +181,7 @@ function mapProviderStreamEvent(
     return {
       kind: "reasoning_end",
       turnId: evt.turnId,
-      streamId: rawProviderKey(payload, `raw-reasoning:${evt.index}`),
+      streamId: rawProviderKey(payload, `raw-reasoning:${evt.turnId}:${evt.index}`),
       mode: normalizedType.includes("summary") ? "summary" : "reasoning",
     };
   }
@@ -153,18 +193,18 @@ function mapProviderStreamEvent(
     return {
       kind: "reasoning_start",
       turnId: evt.turnId,
-      streamId: rawProviderKey(payload, `raw-reasoning:${evt.index}`),
+      streamId: rawProviderKey(payload, `raw-reasoning:${evt.turnId}:${evt.index}`),
       mode: normalizedType.includes("summary") ? "summary" : "reasoning",
     };
   }
 
   if (normalizedType.includes("output_text") && normalizedType.endsWith(".delta")) {
-    const text = asString(payload.delta) ?? asString(payload.text);
+    const text = asLooseText(payload.delta) ?? asLooseText(payload.text);
     if (text === undefined) return null;
     return {
       kind: "assistant_delta",
       turnId: evt.turnId,
-      streamId: rawProviderKey(payload, `raw-text:${evt.index}`),
+      streamId: rawProviderKey(payload, `raw-text:${evt.turnId}:${evt.index}`),
       text,
     };
   }
@@ -176,7 +216,7 @@ function mapProviderStreamEvent(
     return {
       kind: "assistant_text_end",
       turnId: evt.turnId,
-      streamId: rawProviderKey(payload, `raw-text:${evt.index}`),
+      streamId: rawProviderKey(payload, `raw-text:${evt.turnId}:${evt.index}`),
     };
   }
 
@@ -187,7 +227,7 @@ function mapProviderStreamEvent(
     return {
       kind: "assistant_text_start",
       turnId: evt.turnId,
-      streamId: rawProviderKey(payload, `raw-text:${evt.index}`),
+      streamId: rawProviderKey(payload, `raw-text:${evt.turnId}:${evt.index}`),
     };
   }
 
@@ -298,7 +338,7 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         mode: asReasoningMode(part.mode),
       };
     case "reasoning_delta": {
-      const text = asString(part.text);
+      const text = asLooseText(part.text);
       if (text === undefined) {
         return {
           kind: "unknown",
@@ -331,7 +371,7 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         args: part,
       };
     case "tool_input_delta": {
-      const delta = asString(part.delta);
+      const delta = asLooseText(part.delta);
       if (delta === undefined) {
         return {
           kind: "unknown",
@@ -408,8 +448,10 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
     case "raw":
       {
         const rawPayload = asPartRecord(part.raw);
-        const rawType = asString(rawPayload.type) ?? asString(rawPayload.event_type);
-        const rawMapped = rawType ? mapProviderStreamEvent(evt, rawType, rawPayload) : null;
+        const fallbackRaw = Object.keys(rawPayload).length > 0 ? rawPayload : asPartRecord(evt.rawPart);
+        const payload = Object.keys(fallbackRaw).length > 0 ? fallbackRaw : rawPayload;
+        const rawType = asString(payload.type) ?? asString(payload.event_type);
+        const rawMapped = rawType ? mapProviderStreamEvent(evt, rawType, payload) : null;
         if (rawMapped) return rawMapped;
       }
       return {
@@ -421,7 +463,12 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
       {
         const sdkType = asString(part.sdkType) ?? asString(part.type);
         const rawPayload = asPartRecord(part.raw);
-        const unknownMapped = sdkType ? mapProviderStreamEvent(evt, sdkType, rawPayload) : null;
+        const fallbackRaw = Object.keys(rawPayload).length > 0 ? rawPayload : asPartRecord(evt.rawPart);
+        const payload = Object.keys(fallbackRaw).length > 0 ? fallbackRaw : rawPayload;
+        const fallbackSdkType = asString(payload.type) ?? asString(payload.event_type);
+        const unknownMapped = (sdkType ?? fallbackSdkType)
+          ? mapProviderStreamEvent(evt, sdkType ?? (fallbackSdkType as string), payload)
+          : null;
         if (unknownMapped) return unknownMapped;
       }
       return {

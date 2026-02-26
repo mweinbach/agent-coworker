@@ -4,7 +4,7 @@ import type { AgentConfig } from "../types";
 
 function normalizeAnthropicModelId(modelId: string): string {
   const normalized = modelId.trim().toLowerCase();
-  if (normalized === "claude-4-6-sonnet") {
+  if (normalized === "claude-sonnet-4-6") {
     return "claude-sonnet-4-6";
   }
   return modelId;
@@ -15,6 +15,7 @@ export const DEFAULT_ANTHROPIC_PROVIDER_OPTIONS = {
     type: "enabled",
     budgetTokens: 32_000,
   },
+  disableParallelToolUse: true,
 
   // Other Anthropic provider options you can enable/override:
   // sendReasoning: true,

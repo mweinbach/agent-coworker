@@ -29,6 +29,17 @@ import {
 import { MessageBarResizer } from "./layout/MessageBarResizer";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
+import { MODEL_CHOICES, UI_DISABLED_PROVIDERS } from "../lib/modelChoices";
+import type { ProviderName } from "../lib/wsProtocol";
 import { cn } from "../lib/utils";
 import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
 import { ToolCard } from "./chat/toolCards/ToolCard";
@@ -150,6 +161,61 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
 
   return null;
 });
+
+const PROVIDER_LABELS: Record<ProviderName, string> = {
+  google: "Google",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  "codex-cli": "Codex CLI",
+};
+
+function ThreadModelSelector({
+  threadId,
+  provider,
+  model,
+  disabled
+}: {
+  threadId: string;
+  provider: ProviderName;
+  model: string;
+  disabled?: boolean;
+}) {
+  const setThreadModel = useAppStore((s) => s.setThreadModel);
+  const providers = (Object.keys(MODEL_CHOICES) as ProviderName[]).filter(p => !UI_DISABLED_PROVIDERS.has(p));
+  const value = `${provider}:${model}`;
+
+  return (
+    <Select
+      value={value}
+      disabled={disabled}
+      onValueChange={(val) => {
+        const [p, ...mParts] = val.split(":");
+        setThreadModel(threadId, p as ProviderName, mParts.join(":"));
+      }}
+    >
+      <SelectTrigger className="h-7 text-xs w-auto max-w-[200px] px-2.5 bg-transparent border-none shadow-none focus:ring-0 text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors">
+        <span className="truncate"><SelectValue placeholder="Model" /></span>
+      </SelectTrigger>
+      <SelectContent>
+        {providers.map(p => (
+          <SelectGroup key={p}>
+            <SelectLabel className="text-xs font-semibold px-2 py-1.5">{PROVIDER_LABELS[p] ?? p}</SelectLabel>
+            {MODEL_CHOICES[p].map(m => (
+              <SelectItem key={`${p}:${m}`} value={`${p}:${m}`} className="text-xs pl-6">
+                {m}
+              </SelectItem>
+            ))}
+            {p === provider && model && !MODEL_CHOICES[p].includes(model) ? (
+              <SelectItem key={`${p}:${model}`} value={`${p}:${model}`} className="text-xs pl-6">
+                {model} (custom)
+              </SelectItem>
+            ) : null}
+          </SelectGroup>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
 
 export function ChatView() {
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
@@ -324,6 +390,17 @@ export function ChatView() {
                 void sendMessage(composerText);
               }}
             >
+              {visibleFeed.length === 0 && rt?.config?.provider && rt?.config?.model && (
+                <div className="flex items-center self-end mb-1.5 ml-1">
+                  <ThreadModelSelector
+                    threadId={selectedThreadId}
+                    provider={rt.config.provider}
+                    model={rt.config.model}
+                    disabled={busy}
+                  />
+                  <div className="w-px h-5 bg-border/60 ml-1.5 mr-1" />
+                </div>
+              )}
               <PromptInputTextarea
                 value={composerText}
                 disabled={disabled}

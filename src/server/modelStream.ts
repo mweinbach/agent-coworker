@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ProviderName } from "../types";
 
 export type ModelStreamPartType =
@@ -37,27 +38,195 @@ export interface NormalizedModelStreamPart {
 export interface NormalizeModelStreamPartOptions {
   provider: ProviderName;
   includeRawPart?: boolean;
+  fallbackIdSeed?: string;
+  rawPartMode?: "sanitized" | "full";
 }
 
-const MAX_DEPTH = 8;
-const MAX_ARRAY_ITEMS = 128;
-const MAX_OBJECT_KEYS = 128;
-const MAX_STRING_LENGTH = 4000;
+type SanitizeLimits = {
+  maxDepth: number;
+  maxArrayItems: number;
+  maxObjectKeys: number;
+  maxStringLength: number;
+};
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const DEFAULT_SANITIZE_LIMITS: SanitizeLimits = {
+  maxDepth: 8,
+  maxArrayItems: 128,
+  maxObjectKeys: 128,
+  maxStringLength: 4000,
+};
+
+const FULL_SANITIZE_LIMITS: SanitizeLimits = {
+  maxDepth: 24,
+  maxArrayItems: 1024,
+  maxObjectKeys: 1024,
+  maxStringLength: 20000,
+};
+
+const recordSchema = z.record(z.string(), z.unknown());
+const typedRawPartSchema = z.object({ type: z.string() }).passthrough();
+const stringSchema = z.string();
+const booleanSchema = z.boolean();
+const finiteNumberSchema = z.number().finite();
+type ParsedRawPart = z.infer<typeof typedRawPartSchema>;
+type EmitPart = (partType: ModelStreamPartType, part: Record<string, unknown>) => NormalizedModelStreamPart;
+type PartNormalizerContext = {
+  emit: EmitPart;
+  parsedRaw: ParsedRawPart;
+  providerMetadata?: unknown;
+  mode: ModelStreamReasoningMode;
+  id: () => string;
+  toolCallId: () => string;
+  toolName: () => string;
+  fallbackId: (kind: string) => string;
+  san: (value: unknown) => unknown;
+};
+
+const streamPartNormalizers: Record<string, (ctx: PartNormalizerContext) => NormalizedModelStreamPart> = {
+  start: ({ emit }) => emit("start", {}),
+  finish: ({ emit, parsedRaw, san }) =>
+    emit("finish", {
+      finishReason: san(parsedRaw.finishReason) ?? "unknown",
+      rawFinishReason: san(parsedRaw.rawFinishReason),
+      totalUsage: san(parsedRaw.totalUsage),
+    }),
+  abort: ({ emit, parsedRaw, san }) => emit("abort", { reason: san(parsedRaw.reason) }),
+  error: ({ emit, parsedRaw, san }) => emit("error", { error: san(parsedRaw.error) }),
+  "start-step": ({ emit, parsedRaw, san }) =>
+    emit("start_step", {
+      stepNumber: asFiniteNumber(parsedRaw.stepNumber) ?? asFiniteNumber(parsedRaw.step),
+      request: san(parsedRaw.request),
+      warnings: san(parsedRaw.warnings),
+    }),
+  "finish-step": ({ emit, parsedRaw, san }) =>
+    emit("finish_step", {
+      stepNumber: asFiniteNumber(parsedRaw.stepNumber) ?? asFiniteNumber(parsedRaw.step),
+      response: san(parsedRaw.response),
+      usage: san(parsedRaw.usage),
+      finishReason: san(parsedRaw.finishReason) ?? "unknown",
+      rawFinishReason: san(parsedRaw.rawFinishReason),
+      providerMetadata: san(parsedRaw.providerMetadata),
+    }),
+  "text-start": ({ emit, id, providerMetadata }) => emit("text_start", { id: id(), providerMetadata }),
+  "text-delta": ({ emit, parsedRaw, id, providerMetadata }) =>
+    emit("text_delta", {
+      id: id(),
+      text: asSafeString(parsedRaw.text),
+      providerMetadata,
+    }),
+  "text-end": ({ emit, id, providerMetadata }) => emit("text_end", { id: id(), providerMetadata }),
+  "reasoning-start": ({ emit, id, mode, providerMetadata }) =>
+    emit("reasoning_start", {
+      id: id(),
+      mode,
+      providerMetadata,
+    }),
+  "reasoning-delta": ({ emit, parsedRaw, id, mode, providerMetadata }) =>
+    emit("reasoning_delta", {
+      id: id(),
+      mode,
+      text: asSafeString(parsedRaw.text),
+      providerMetadata,
+    }),
+  "reasoning-end": ({ emit, id, mode, providerMetadata }) =>
+    emit("reasoning_end", {
+      id: id(),
+      mode,
+      providerMetadata,
+    }),
+  "tool-input-start": ({ emit, parsedRaw, toolCallId, toolName, providerMetadata }) =>
+    emit("tool_input_start", {
+      id: toolCallId(),
+      toolName: toolName(),
+      providerExecuted: asBoolean(parsedRaw.providerExecuted),
+      dynamic: asBoolean(parsedRaw.dynamic),
+      title: asString(parsedRaw.title),
+      providerMetadata,
+    }),
+  "tool-input-delta": ({ emit, parsedRaw, toolCallId, providerMetadata }) =>
+    emit("tool_input_delta", {
+      id: toolCallId(),
+      delta: asSafeString(parsedRaw.delta),
+      providerMetadata,
+    }),
+  "tool-input-end": ({ emit, toolCallId, providerMetadata }) =>
+    emit("tool_input_end", { id: toolCallId(), providerMetadata }),
+  "tool-call": ({ emit, parsedRaw, toolCallId, toolName, san, providerMetadata }) =>
+    emit("tool_call", {
+      toolCallId: toolCallId(),
+      toolName: toolName(),
+      input: san(parsedRaw.input) ?? {},
+      dynamic: asBoolean(parsedRaw.dynamic),
+      invalid: asBoolean(parsedRaw.invalid),
+      error: san(parsedRaw.error),
+      providerMetadata,
+    }),
+  "tool-result": ({ emit, parsedRaw, toolCallId, toolName, san, providerMetadata }) =>
+    emit("tool_result", {
+      toolCallId: toolCallId(),
+      toolName: toolName(),
+      output: san(parsedRaw.output) ?? null,
+      dynamic: asBoolean(parsedRaw.dynamic),
+      providerMetadata,
+    }),
+  "tool-error": ({ emit, parsedRaw, toolCallId, toolName, san, providerMetadata }) =>
+    emit("tool_error", {
+      toolCallId: toolCallId(),
+      toolName: toolName(),
+      error: san(parsedRaw.error) ?? "unknown_error",
+      dynamic: asBoolean(parsedRaw.dynamic),
+      providerMetadata,
+    }),
+  "tool-output-denied": ({ emit, parsedRaw, toolCallId, toolName, san, providerMetadata }) =>
+    emit("tool_output_denied", {
+      toolCallId: toolCallId(),
+      toolName: toolName(),
+      reason: san(parsedRaw.reason),
+      providerMetadata,
+    }),
+  "tool-approval-request": ({ emit, parsedRaw, fallbackId, san }) =>
+    emit("tool_approval_request", {
+      approvalId: asIdString(parsedRaw.approvalId) ?? fallbackId("approval"),
+      toolCall: san(parsedRaw.toolCall) ?? {},
+    }),
+  source: ({ emit, parsedRaw, san }) =>
+    emit("source", {
+      source: san(compactRecord({ ...parsedRaw, type: undefined })) ?? {},
+    }),
+  file: ({ emit, parsedRaw, san }) => emit("file", { file: san(parsedRaw.file) ?? null }),
+  raw: ({ emit, parsedRaw, san }) =>
+    emit("raw", {
+      raw: san("rawValue" in parsedRaw ? parsedRaw.rawValue : parsedRaw.raw) ?? null,
+    }),
+};
 
 function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
+  const parsed = stringSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function asIdString(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  return undefined;
 }
 
 function asBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
+  const parsed = booleanSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function asFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value as number) ? value : undefined;
+  const parsed = finiteNumberSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function asSafeString(value: unknown): string {
@@ -81,27 +250,28 @@ function compactRecord(input: Record<string, unknown>): Record<string, unknown> 
   return out;
 }
 
-function truncateString(value: string): string {
-  if (value.length <= MAX_STRING_LENGTH) return value;
-  return `${value.slice(0, MAX_STRING_LENGTH)}...[truncated ${value.length - MAX_STRING_LENGTH} chars]`;
+function truncateString(value: string, limits: SanitizeLimits): string {
+  if (value.length <= limits.maxStringLength) return value;
+  return `${value.slice(0, limits.maxStringLength)}...[truncated ${value.length - limits.maxStringLength} chars]`;
 }
 
 function sanitizeUnknown(
   value: unknown,
   depth = 0,
-  seen: WeakSet<object> = new WeakSet()
+  seen: WeakSet<object> = new WeakSet(),
+  limits: SanitizeLimits = DEFAULT_SANITIZE_LIMITS
 ): unknown {
   if (value === null) return null;
 
   const t = typeof value;
-  if (t === "string") return truncateString(value as string);
+  if (t === "string") return truncateString(value as string, limits);
   if (t === "boolean") return value;
   if (t === "number") return Number.isFinite(value as number) ? value : String(value);
   if (t === "bigint") return value.toString();
   if (t === "undefined") return undefined;
   if (t === "symbol" || t === "function") return String(value);
 
-  if (depth >= MAX_DEPTH) return "[max_depth]";
+  if (depth >= limits.maxDepth) return "[max_depth]";
 
   if (value instanceof Date) {
     const ms = value.getTime();
@@ -112,15 +282,15 @@ function sanitizeUnknown(
     return compactRecord({
       name: value.name,
       message: value.message,
-      stack: typeof value.stack === "string" ? truncateString(value.stack) : undefined,
+      stack: typeof value.stack === "string" ? truncateString(value.stack, limits) : undefined,
     });
   }
 
   if (Array.isArray(value)) {
     const out: unknown[] = [];
-    const take = Math.min(value.length, MAX_ARRAY_ITEMS);
-    for (let i = 0; i < take; i++) out.push(sanitizeUnknown(value[i], depth + 1, seen));
-    if (value.length > MAX_ARRAY_ITEMS) out.push(`[truncated ${value.length - MAX_ARRAY_ITEMS} items]`);
+    const take = Math.min(value.length, limits.maxArrayItems);
+    for (let i = 0; i < take; i++) out.push(sanitizeUnknown(value[i], depth + 1, seen, limits));
+    if (value.length > limits.maxArrayItems) out.push(`[truncated ${value.length - limits.maxArrayItems} items]`);
     return out;
   }
 
@@ -131,14 +301,14 @@ function sanitizeUnknown(
     try {
       const entries = Object.entries(obj);
       const out: Record<string, unknown> = {};
-      const take = Math.min(entries.length, MAX_OBJECT_KEYS);
+      const take = Math.min(entries.length, limits.maxObjectKeys);
       for (let i = 0; i < take; i++) {
         const [k, v] = entries[i]!;
-        const sanitized = sanitizeUnknown(v, depth + 1, seen);
+        const sanitized = sanitizeUnknown(v, depth + 1, seen, limits);
         if (sanitized !== undefined) out[k] = sanitized;
       }
-      if (entries.length > MAX_OBJECT_KEYS) {
-        out.__truncatedKeys = entries.length - MAX_OBJECT_KEYS;
+      if (entries.length > limits.maxObjectKeys) {
+        out.__truncatedKeys = entries.length - limits.maxObjectKeys;
       }
       return out;
     } finally {
@@ -147,12 +317,6 @@ function sanitizeUnknown(
   }
 
   return String(value);
-}
-
-function sanitizeRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!isPlainObject(value)) return undefined;
-  const sanitized = sanitizeUnknown(value);
-  return isPlainObject(sanitized) ? sanitized : undefined;
 }
 
 export function reasoningModeForProvider(provider: ProviderName): ModelStreamReasoningMode {
@@ -164,8 +328,11 @@ export function normalizeModelStreamPart(
   opts: NormalizeModelStreamPartOptions
 ): NormalizedModelStreamPart {
   const includeRawPart = opts.includeRawPart ?? false;
-  const rawPart = sanitizeUnknown(raw);
+  const sanitizeLimits = opts.rawPartMode === "full" ? FULL_SANITIZE_LIMITS : DEFAULT_SANITIZE_LIMITS;
+  const san = (value: unknown) => sanitizeUnknown(value, 0, new WeakSet<object>(), sanitizeLimits);
+  const rawPart = san(raw);
   const mode = reasoningModeForProvider(opts.provider);
+  const fallbackId = (kind: string) => `anon:${opts.fallbackIdSeed ?? "unseeded"}:${kind}`;
 
   /** Emit a normalized part, compacting undefined fields from the record. */
   const emit = (partType: ModelStreamPartType, part: Record<string, unknown>): NormalizedModelStreamPart => {
@@ -174,67 +341,33 @@ export function normalizeModelStreamPart(
     return payload;
   };
 
-  if (!isPlainObject(raw) || typeof raw.type !== "string") {
+  const parsedRawPart = typedRawPartSchema.safeParse(raw);
+  if (!parsedRawPart.success) {
     return emit("unknown", { sdkType: typeof raw === "object" && raw !== null ? "invalid" : typeof raw, raw: rawPart });
   }
 
-  const type = raw.type;
-  const providerMetadata = sanitizeRecord(raw.providerMetadata);
+  const parsedRaw = parsedRawPart.data;
+  const type = parsedRaw.type;
+  const providerMetadata = san(parsedRaw.providerMetadata);
 
   // Shorthand extractors used across multiple branches.
-  const id = () => asString(raw.id) ?? "";
-  const toolCallId = () => asString(raw.toolCallId) ?? id();
-  const toolName = () => asString(raw.toolName) ?? "tool";
-  const san = sanitizeUnknown;
-
-  switch (type) {
-    case "start":
-      return emit("start", {});
-    case "finish":
-      return emit("finish", { finishReason: san(raw.finishReason) ?? "unknown", rawFinishReason: san(raw.rawFinishReason), totalUsage: san(raw.totalUsage) });
-    case "abort":
-      return emit("abort", { reason: san(raw.reason) });
-    case "error":
-      return emit("error", { error: san(raw.error) });
-    case "start-step":
-      return emit("start_step", { stepNumber: asFiniteNumber(raw.stepNumber) ?? asFiniteNumber(raw.step), request: san(raw.request), warnings: san(raw.warnings) });
-    case "finish-step":
-      return emit("finish_step", { stepNumber: asFiniteNumber(raw.stepNumber) ?? asFiniteNumber(raw.step), response: san(raw.response), usage: san(raw.usage), finishReason: san(raw.finishReason) ?? "unknown", rawFinishReason: san(raw.rawFinishReason), providerMetadata: san(raw.providerMetadata) });
-    case "text-start":
-      return emit("text_start", { id: id(), providerMetadata });
-    case "text-delta":
-      return emit("text_delta", { id: id(), text: asSafeString(raw.text), providerMetadata });
-    case "text-end":
-      return emit("text_end", { id: id(), providerMetadata });
-    case "reasoning-start":
-      return emit("reasoning_start", { id: id(), mode, providerMetadata });
-    case "reasoning-delta":
-      return emit("reasoning_delta", { id: id(), mode, text: asSafeString(raw.text), providerMetadata });
-    case "reasoning-end":
-      return emit("reasoning_end", { id: id(), mode, providerMetadata });
-    case "tool-input-start":
-      return emit("tool_input_start", { id: id(), toolName: toolName(), providerExecuted: asBoolean(raw.providerExecuted), dynamic: asBoolean(raw.dynamic), title: asString(raw.title), providerMetadata });
-    case "tool-input-delta":
-      return emit("tool_input_delta", { id: id(), delta: asSafeString(raw.delta), providerMetadata });
-    case "tool-input-end":
-      return emit("tool_input_end", { id: id(), providerMetadata });
-    case "tool-call":
-      return emit("tool_call", { toolCallId: toolCallId(), toolName: toolName(), input: san(raw.input) ?? {}, dynamic: asBoolean(raw.dynamic), invalid: asBoolean(raw.invalid), error: san(raw.error), providerMetadata });
-    case "tool-result":
-      return emit("tool_result", { toolCallId: toolCallId(), toolName: toolName(), output: san(raw.output) ?? null, dynamic: asBoolean(raw.dynamic), providerMetadata });
-    case "tool-error":
-      return emit("tool_error", { toolCallId: toolCallId(), toolName: toolName(), error: san(raw.error) ?? "unknown_error", dynamic: asBoolean(raw.dynamic), providerMetadata });
-    case "tool-output-denied":
-      return emit("tool_output_denied", { toolCallId: toolCallId(), toolName: toolName(), reason: san(raw.reason), providerMetadata });
-    case "tool-approval-request":
-      return emit("tool_approval_request", { approvalId: asString(raw.approvalId) ?? "", toolCall: san(raw.toolCall) ?? {} });
-    case "source":
-      return emit("source", { source: san(compactRecord({ ...raw, type: undefined })) ?? {} });
-    case "file":
-      return emit("file", { file: san(raw.file) ?? null });
-    case "raw":
-      return emit("raw", { raw: san("rawValue" in raw ? raw.rawValue : raw.raw) ?? null });
-    default:
-      return emit("unknown", { sdkType: type, raw: rawPart });
+  const id = () => asIdString(parsedRaw.id) ?? fallbackId("id");
+  const toolCallId = () => asIdString(parsedRaw.toolCallId) ?? asIdString(parsedRaw.id) ?? fallbackId("tool");
+  const toolName = () => asString(parsedRaw.toolName) ?? "tool";
+  const normalizer = streamPartNormalizers[type];
+  if (normalizer) {
+    return normalizer({
+      emit,
+      parsedRaw,
+      providerMetadata,
+      mode,
+      id,
+      toolCallId,
+      toolName,
+      fallbackId,
+      san,
+    });
   }
+
+  return emit("unknown", { sdkType: type, raw: rawPart });
 }

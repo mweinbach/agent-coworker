@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { z } from "zod";
 
 export const PROVIDER_NAMES = [
   "google",
@@ -8,13 +9,17 @@ export const PROVIDER_NAMES = [
 ] as const;
 
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
+const providerNameSchema = z.enum(PROVIDER_NAMES);
 
 export function isProviderName(v: unknown): v is ProviderName {
-  return typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
+  return providerNameSchema.safeParse(v).success;
 }
 
 export function resolveProviderName(v: unknown): ProviderName | null {
-  return isProviderName(v) ? v : null;
+  if (v === "gemini-cli") return "google";
+  if (v === "claude-code") return "anthropic";
+  const parsed = providerNameSchema.safeParse(v);
+  return parsed.success ? parsed.data : null;
 }
 
 export type CommandSource = "command" | "mcp" | "skill";

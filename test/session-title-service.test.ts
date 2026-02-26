@@ -26,12 +26,12 @@ function makeConfig(provider: AgentConfig["provider"] = "openai"): AgentConfig {
 
 describe("sessionTitleService", () => {
   test("returns sanitized model title on first successful candidate", async () => {
-    const generateText = mock(async (_args: any) => ({ output: { title: '  "Hello   World"  ' } }));
+    const generateObject = mock(async (_args: any) => ({ object: { title: '  "Hello   World"  ' } }));
     const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateText: generateText as any,
+      generateObject: generateObject as any,
       getModel: getModel as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
@@ -46,22 +46,22 @@ describe("sessionTitleService", () => {
       source: "model",
       model: "gpt-5-mini",
     });
-    expect(generateText).toHaveBeenCalledTimes(1);
-    expect(generateText.mock.calls[0]?.[0]?.maxOutputTokens).toBe(150);
+    expect(generateObject).toHaveBeenCalledTimes(1);
+    expect(generateObject.mock.calls[0]?.[0]?.maxOutputTokens).toBe(150);
   });
 
   test("falls back to provider default model when primary model attempt fails", async () => {
-    const generateText = mock(async ({ model }: { model: any }) => {
+    const generateObject = mock(async ({ model }: { model: any }) => {
       if (model.modelId === "gpt-5-mini") {
         throw new Error("primary unavailable");
       }
-      return { output: { title: "Fallback model title" } };
+      return { object: { title: "Fallback model title" } };
     });
     const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateText: generateText as any,
+      generateObject: generateObject as any,
       getModel: getModel as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
@@ -76,18 +76,18 @@ describe("sessionTitleService", () => {
       source: "model",
       model: "gpt-5.2",
     });
-    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(generateObject).toHaveBeenCalledTimes(2);
   });
 
   test("falls back to deterministic heuristic when all model attempts fail", async () => {
-    const generateText = mock(async (_args: any) => {
+    const generateObject = mock(async (_args: any) => {
       throw new Error("all failed");
     });
     const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateText: generateText as any,
+      generateObject: generateObject as any,
       getModel: getModel as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
@@ -104,18 +104,18 @@ describe("sessionTitleService", () => {
   });
 
   test("returns default title for empty queries", async () => {
-    const generateText = mock(async (_args: any) => ({ output: { title: "unused" } }));
+    const generateObject = mock(async (_args: any) => ({ object: { title: "unused" } }));
     const getModel = mock((_config: AgentConfig, modelId?: string) => ({ modelId }));
     const defaultModelForProvider = mock((_provider: AgentConfig["provider"]) => "gpt-5.2");
 
     const generateSessionTitle = createSessionTitleGenerator({
-      generateText: generateText as any,
+      generateObject: generateObject as any,
       getModel: getModel as any,
       defaultModelForProvider: defaultModelForProvider as any,
     });
 
     const result = await generateSessionTitle({ config: makeConfig("openai"), query: "   " });
     expect(result).toEqual({ title: DEFAULT_SESSION_TITLE, source: "default", model: null });
-    expect(generateText).not.toHaveBeenCalled();
+    expect(generateObject).not.toHaveBeenCalled();
   });
 });

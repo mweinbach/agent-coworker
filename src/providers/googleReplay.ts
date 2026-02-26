@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { z } from "zod";
 
 type GoogleProviderKey = "google" | "vertex";
 
@@ -7,8 +8,14 @@ type GooglePrepareStepPayload = {
   messages: ModelMessage[];
 };
 
+const recordSchema = z.record(z.string(), z.unknown());
+const assistantMessageWithContentSchema = z.object({
+  role: z.literal("assistant"),
+  content: z.array(z.unknown()),
+}).passthrough();
+
 function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
+  return recordSchema.safeParse(v).success;
 }
 
 function getGoogleProviderKey(providerOptions: Record<string, unknown>): GoogleProviderKey | undefined {
@@ -59,12 +66,13 @@ function repairGoogleToolCallSignatures(messages: ModelMessage[]): {
   let unresolvedToolCalls = 0;
 
   const repairedMessages = messages.map((message) => {
-    if (message.role !== "assistant" || !Array.isArray(message.content)) return message;
+    const parsedMessage = assistantMessageWithContentSchema.safeParse(message);
+    if (!parsedMessage.success) return message;
 
     let messageChanged = false;
     let lastSignature: string | undefined;
 
-    const repairedContent = message.content.map((part) => {
+    const repairedContent = parsedMessage.data.content.map((part) => {
       if (!isRecord(part)) return part;
 
       const existingSignature = getGoogleThoughtSignatureFromPart(part);
@@ -98,7 +106,7 @@ function repairGoogleToolCallSignatures(messages: ModelMessage[]): {
       };
     });
 
-    return messageChanged ? ({ ...message, content: repairedContent } as ModelMessage) : message;
+    return messageChanged ? ({ ...parsedMessage.data, content: repairedContent } as ModelMessage) : message;
   });
 
   return {
@@ -122,7 +130,7 @@ export function buildGooglePrepareStep(
   if (thinkingConfig?.includeThoughts !== true) return undefined;
 
   return async ({ stepNumber, messages }: GooglePrepareStepPayload) => {
-    if (stepNumber <= 0 || !Array.isArray(messages)) return undefined;
+    if (stepNumber <= 0) return undefined;
 
     const repaired = repairGoogleToolCallSignatures(messages);
     if (repaired.repairedToolCalls > 0) {

@@ -1,4 +1,5 @@
 import type { FeedItem } from "../../../app/types";
+import { z } from "zod";
 
 export type LegacyToolLog = {
   direction: "start" | "finish";
@@ -7,22 +8,29 @@ export type LegacyToolLog = {
 };
 
 const LEGACY_TOOL_LOG_RE = /^tool([<>])\s+([A-Za-z0-9_.:-]+)(?:\s+(.+))?$/;
+const toolDirectionSymbolSchema = z.enum([">", "<"]);
+const toolNameSchema = z.string().trim().regex(/^[A-Za-z0-9_.:-]+$/);
+const payloadTextSchema = z.string().trim().min(1);
+const payloadErrorStatusSchema = z.object({
+  error: z.unknown().optional(),
+  denied: z.unknown().optional(),
+}).passthrough();
 
-function parsePayload(value: string | undefined): unknown {
-  if (!value) return undefined;
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
+function parsePayload(value: unknown): unknown {
+  const parsedPayloadText = payloadTextSchema.safeParse(value);
+  if (!parsedPayloadText.success) return undefined;
+
   try {
-    return JSON.parse(trimmed);
+    return JSON.parse(parsedPayloadText.data);
   } catch {
-    return trimmed;
+    return parsedPayloadText.data;
   }
 }
 
 function inferStatusFromPayload(payload: unknown): "done" | "error" {
-  if (typeof payload === "object" && payload !== null) {
-    const record = payload as Record<string, unknown>;
-    if ("error" in record || "denied" in record) return "error";
+  const parsedPayload = payloadErrorStatusSchema.safeParse(payload);
+  if (parsedPayload.success) {
+    if ("error" in parsedPayload.data || "denied" in parsedPayload.data) return "error";
   }
   return "done";
 }
@@ -30,9 +38,14 @@ function inferStatusFromPayload(payload: unknown): "done" | "error" {
 export function parseLegacyToolLogLine(line: string): LegacyToolLog | null {
   const match = line.match(LEGACY_TOOL_LOG_RE);
   if (!match) return null;
+
+  const directionSymbol = toolDirectionSymbolSchema.safeParse(match[1]);
+  const name = toolNameSchema.safeParse(match[2]);
+  if (!directionSymbol.success || !name.success) return null;
+
   return {
-    direction: match[1] === ">" ? "start" : "finish",
-    name: match[2],
+    direction: directionSymbol.data === ">" ? "start" : "finish",
+    name: name.data,
     payload: parsePayload(match[3]),
   };
 }

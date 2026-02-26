@@ -230,28 +230,28 @@ describe("mcp auth store", () => {
     }
   });
 
-  test("setMCPServerApiKeyCredential propagates malformed auth store read errors", async () => {
+  test("setMCPServerApiKeyCredential recovers from malformed auth store and rewrites sanitized doc", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-malformed-workspace-"));
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-malformed-home-"));
     const builtInConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "mcp-auth-malformed-builtin-"));
     const config = makeConfig(workspace, home, builtInConfigDir);
     const authFile = path.join(workspace, ".cowork", "auth", "mcp-credentials.json");
-    const malformedDoc = "{ this is not valid JSON";
 
     try {
       await fs.mkdir(path.dirname(authFile), { recursive: true });
-      await fs.writeFile(authFile, malformedDoc, "utf-8");
+      await fs.writeFile(authFile, "{ this is not valid JSON", "utf-8");
 
-      await expect(
-        setMCPServerApiKeyCredential({
-          config,
-          server: workspaceServer("workspace-key"),
-          apiKey: "workspace-secret",
-        }),
-      ).rejects.toThrow("Failed to read MCP credential store");
+      const result = await setMCPServerApiKeyCredential({
+        config,
+        server: workspaceServer("workspace-key"),
+        apiKey: "workspace-secret",
+      });
 
-      const rawAfter = await fs.readFile(authFile, "utf-8");
-      expect(rawAfter).toBe(malformedDoc);
+      expect(result.scope).toBe("workspace");
+
+      const parsed = JSON.parse(await fs.readFile(authFile, "utf-8")) as Record<string, any>;
+      expect(parsed.version).toBe(1);
+      expect(parsed.servers?.["workspace-key"]?.apiKey?.value).toBe("workspace-secret");
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
       await fs.rm(home, { recursive: true, force: true });

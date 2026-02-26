@@ -21,6 +21,35 @@ async function makeTmpHome(): Promise<string> {
 }
 
 describe("getProviderStatuses", () => {
+  test("treats legacy-shaped connection store as empty instead of throwing", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
+    await fs.writeFile(
+      paths.connectionsFile,
+      JSON.stringify(
+        {
+          updatedAt: new Date().toISOString(),
+          connections: {
+            openai: {
+              mode: "api_key",
+              apiKey: "legacy-key",
+            },
+          },
+        },
+        null,
+        2
+      ),
+      "utf-8"
+    );
+
+    const statuses = await getProviderStatuses({ paths });
+    const openai = statuses.find((s) => s.provider === "openai");
+    expect(openai).toBeDefined();
+    expect(openai?.authorized).toBe(false);
+    expect(openai?.mode).toBe("missing");
+  });
+
   test("includes masked provider/tool API keys in google status", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
@@ -77,10 +106,11 @@ describe("getProviderStatuses", () => {
     const accessToken = "access-token";
 
     const codexAuth = {
+      version: 1,
       auth_mode: "chatgpt",
       tokens: { id_token: idToken, access_token: accessToken },
     };
-    const codexAuthPath = path.join(home, ".codex", "auth.json");
+    const codexAuthPath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
     await fs.mkdir(path.dirname(codexAuthPath), { recursive: true });
     await fs.writeFile(codexAuthPath, JSON.stringify(codexAuth), "utf-8");
 
@@ -111,6 +141,49 @@ describe("getProviderStatuses", () => {
     expect(codex?.account?.name).toBe("Example User");
   });
 
+  test("codex-cli: migrates legacy .codex auth path when cowork auth is missing", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+
+    const iss = "https://auth.example.com";
+    const idToken = makeJwt({ iss, email: "legacy@example.com" });
+    const accessToken = "legacy-access-token";
+    const legacyPath = path.join(home, ".codex", "auth.json");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({ auth_mode: "chatgpt", tokens: { id_token: idToken, access_token: accessToken } }),
+      "utf-8"
+    );
+
+    const fetchImpl = async (url: any, init?: any) => {
+      const u = String(url);
+      if (u === `${iss}/.well-known/openid-configuration`) {
+        return new Response(JSON.stringify({ userinfo_endpoint: `${iss}/userinfo` }), { status: 200 });
+      }
+      if (u === `${iss}/userinfo`) {
+        expect(init?.headers?.authorization).toBe(`Bearer ${accessToken}`);
+        return new Response(JSON.stringify({ email: "legacy@example.com", name: "Legacy User" }), { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    const statuses = await getProviderStatuses({ paths, fetchImpl: fetchImpl as any });
+    const codex = statuses.find((s) => s.provider === "codex-cli");
+    expect(codex).toBeDefined();
+    expect(codex?.authorized).toBe(true);
+    expect(codex?.verified).toBe(true);
+    expect(codex?.mode).toBe("oauth");
+    expect(codex?.account?.email).toBe("legacy@example.com");
+    expect(codex?.account?.name).toBe("Legacy User");
+
+    const migrated = JSON.parse(
+      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")
+    ) as any;
+    expect(migrated?.tokens?.access_token).toBe(accessToken);
+    expect(migrated?.tokens?.id_token).toBe(idToken);
+  });
+
   test("codex-cli: userinfo failure keeps credentials authorized but unverified", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
@@ -118,11 +191,11 @@ describe("getProviderStatuses", () => {
     const iss = "https://auth.example.com";
     const idToken = makeJwt({ iss, email: "jwt@example.com" });
     const accessToken = "access-token";
-    const codexAuthPath = path.join(home, ".codex", "auth.json");
+    const codexAuthPath = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
     await fs.mkdir(path.dirname(codexAuthPath), { recursive: true });
     await fs.writeFile(
       codexAuthPath,
-      JSON.stringify({ auth_mode: "chatgpt", tokens: { id_token: idToken, access_token: accessToken } }),
+      JSON.stringify({ version: 1, auth_mode: "chatgpt", tokens: { id_token: idToken, access_token: accessToken } }),
       "utf-8"
     );
 

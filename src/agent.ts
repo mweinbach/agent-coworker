@@ -1,5 +1,6 @@
 import { stepCountIs, streamText } from "ai";
 import type { ModelMessage } from "ai";
+import { z } from "zod";
 
 import { getModel } from "./config";
 import { buildAiSdkTelemetrySettings } from "./observability/runtime";
@@ -10,6 +11,34 @@ import { createTools } from "./tools";
 
 const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
 const MAX_STREAM_SETTLE_TICKS = 64;
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const messageRecordSchema = z.object({
+  role: z.string(),
+  content: z.unknown(),
+}).passthrough();
+const messageContentPartSchema = z.union([
+  z.string(),
+  z.object({
+    text: z.string().optional(),
+    inputText: z.string().optional(),
+  }).passthrough(),
+]);
+const messageContentSchema = z.array(messageContentPartSchema);
+const usageSchema = z.object({
+  promptTokens: z.number(),
+  completionTokens: z.number(),
+  totalTokens: z.number(),
+});
+const responseMessagesSchema = z.array(z.unknown());
+const stringSchema = z.string();
+const asyncIterableSchema = z.custom<AsyncIterable<unknown>>((value) => {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) return false;
+  const iterable = value as { [Symbol.asyncIterator]?: unknown };
+  return typeof iterable[Symbol.asyncIterator] === "function";
+});
+const streamResultWithFullStreamSchema = z.object({
+  fullStream: asyncIterableSchema.optional(),
+}).passthrough();
 
 export interface RunTurnParams {
   config: AgentConfig;
@@ -87,33 +116,32 @@ function mergeToolSets(
 
 function extractTurnUserPrompt(messages: ModelMessage[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const raw = messages[i] as any;
-    if (raw?.role !== "user") continue;
+    const raw = messageRecordSchema.safeParse(messages[i]);
+    if (!raw.success || raw.data.role !== "user") continue;
 
-    const content = raw.content;
-    if (typeof content === "string") {
-      const trimmed = content.trim();
-      if (trimmed) return trimmed;
-      continue;
+    const content = raw.data.content;
+    const directContent = nonEmptyTrimmedStringSchema.safeParse(content);
+    if (directContent.success) {
+      return directContent.data;
     }
 
-    if (!Array.isArray(content)) continue;
+    const parsedContent = messageContentSchema.safeParse(content);
+    if (!parsedContent.success) continue;
+
     const parts: string[] = [];
-    for (const part of content) {
+    for (const part of parsedContent.data) {
       if (typeof part === "string") {
-        if (part.trim()) parts.push(part.trim());
+        const text = nonEmptyTrimmedStringSchema.safeParse(part);
+        if (text.success) parts.push(text.data);
         continue;
       }
-      if (!part || typeof part !== "object") continue;
-
-      const text = typeof (part as any).text === "string" ? (part as any).text.trim() : "";
-      if (text) {
-        parts.push(text);
+      const text = nonEmptyTrimmedStringSchema.safeParse(part.text);
+      if (text.success) {
+        parts.push(text.data);
         continue;
       }
-
-      const inputText = typeof (part as any).inputText === "string" ? (part as any).inputText.trim() : "";
-      if (inputText) parts.push(inputText);
+      const inputText = nonEmptyTrimmedStringSchema.safeParse(part.inputText);
+      if (inputText.success) parts.push(inputText.data);
     }
 
     if (parts.length > 0) return parts.join("\n");
@@ -184,7 +212,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
         ? buildGooglePrepareStep(turnProviderOptions, log)
         : undefined;
 
-    const result = await (async () => {
+    const result = await (async (): Promise<{ text: unknown; reasoningText: unknown; response: unknown }> => {
       try {
         const telemetry = await buildAiSdkTelemetrySettings(config, {
           functionId: params.telemetryContext?.functionId ?? "agent.runTurn",
@@ -193,7 +221,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           },
         });
 
-        const streamResult = await deps.streamText({
+        const streamTextInput = {
           model: deps.getModel(config),
           system: turnSystem,
           messages,
@@ -215,16 +243,18 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
             await params.onModelAbort?.();
           },
           includeRawChunks: params.includeRawChunks ?? true,
-        } as any);
+        } as Parameters<typeof deps.streamText>[0];
+        const streamResult = await deps.streamText(streamTextInput);
 
         let streamConsumptionSettled = false;
         let streamPartCount = 0;
         const streamConsumption = (async () => {
           if (!params.onModelStreamPart) return;
-          const fullStream = (streamResult as any).fullStream;
-          if (!fullStream || typeof fullStream[Symbol.asyncIterator] !== "function") return;
+          const parsedStream = streamResultWithFullStreamSchema.safeParse(streamResult);
+          const fullStream = parsedStream.success ? parsedStream.data.fullStream : undefined;
+          if (!fullStream) return;
 
-          const streamIterator = (fullStream as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+          const streamIterator = fullStream[Symbol.asyncIterator]();
           while (true) {
             const next = await streamIterator.next();
             if (next.done) break;
@@ -269,7 +299,7 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
           }
         }
 
-        return { text, reasoningText, response } as any;
+        return { text, reasoningText, response };
       } finally {
         try {
           await closeMcp?.();
@@ -279,22 +309,15 @@ export function createRunTurn(overrides: Partial<RunTurnDeps> = {}) {
       }
     })();
 
-    const responseMessages = (result.response?.messages || []) as ModelMessage[];
+    const parsedResponseMessages = responseMessagesSchema.safeParse(result.response?.messages);
+    const responseMessages = (parsedResponseMessages.success ? parsedResponseMessages.data : []) as ModelMessage[];
     const rawUsage = result.response?.usage;
-    const usage =
-      rawUsage &&
-      typeof rawUsage.promptTokens === "number" &&
-      typeof rawUsage.completionTokens === "number" &&
-      typeof rawUsage.totalTokens === "number"
-        ? {
-            promptTokens: rawUsage.promptTokens,
-            completionTokens: rawUsage.completionTokens,
-            totalTokens: rawUsage.totalTokens,
-          }
-        : undefined;
+    const parsedUsage = usageSchema.safeParse(rawUsage);
+    const usage = parsedUsage.success ? parsedUsage.data : undefined;
+    const parsedReasoningText = stringSchema.safeParse(result.reasoningText);
     return {
       text: String(result.text ?? ""),
-      reasoningText: typeof result.reasoningText === "string" ? result.reasoningText : undefined,
+      reasoningText: parsedReasoningText.success ? parsedReasoningText.data : undefined,
       responseMessages,
       usage,
     };

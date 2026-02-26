@@ -4,6 +4,7 @@ import path from "node:path";
 import { createMCPClient } from "@ai-sdk/mcp";
 import type { OAuthClientProvider } from "@ai-sdk/mcp";
 import { Experimental_StdioMCPTransport } from "@ai-sdk/mcp/mcp-stdio";
+import { z } from "zod";
 
 import type { AgentConfig, MCPServerConfig } from "../types";
 import {
@@ -50,6 +51,37 @@ export interface MCPServersSnapshot {
   warnings: string[];
 }
 
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const oauthProviderTokensSchema = z.object({
+  access_token: nonEmptyTrimmedStringSchema,
+  token_type: nonEmptyTrimmedStringSchema.optional(),
+  refresh_token: nonEmptyTrimmedStringSchema.optional(),
+  expires_in: z.preprocess((value) => {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return undefined;
+  }, z.number().finite().optional()),
+  scope: nonEmptyTrimmedStringSchema.optional(),
+}).passthrough();
+const oauthClientInformationSchema = z.object({
+  client_id: nonEmptyTrimmedStringSchema,
+  client_secret: nonEmptyTrimmedStringSchema.optional(),
+}).passthrough();
+const retryCountSchema = z.number().finite().transform((value) => Math.max(0, Math.floor(value)));
+const mcpToolRecordSchema = z.record(z.string(), z.unknown());
+type RuntimeMcpClient = {
+  tools: () => Promise<Record<string, unknown>>;
+  close: () => Promise<void>;
+};
+const runtimeMcpClientSchema = z.custom<RuntimeMcpClient>((value) => {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) return false;
+  const maybeClient = value as { tools?: unknown; close?: unknown };
+  return typeof maybeClient.tools === "function" && typeof maybeClient.close === "function";
+});
+
 function toOAuthTokensForSdk(tokens: MCPServerOAuthTokens): {
   access_token: string;
   token_type: string;
@@ -74,13 +106,7 @@ function toOAuthTokensForSdk(tokens: MCPServerOAuthTokens): {
   };
 }
 
-function toStoredOAuthTokens(tokens: {
-  access_token: string;
-  token_type?: string;
-  refresh_token?: string;
-  expires_in?: number;
-  scope?: string;
-}): Omit<MCPServerOAuthTokens, "updatedAt"> {
+function toStoredOAuthTokens(tokens: z.infer<typeof oauthProviderTokensSchema>): Omit<MCPServerOAuthTokens, "updatedAt"> {
   const expiresAt = (() => {
     if (typeof tokens.expires_in !== "number" || !Number.isFinite(tokens.expires_in)) return undefined;
     return new Date(Date.now() + tokens.expires_in * 1000).toISOString();
@@ -116,15 +142,19 @@ function createRuntimeOAuthProvider(opts: {
       return toOAuthTokensForSdk(latestTokens);
     },
     saveTokens: async (tokens) => {
+      const parsedTokens = oauthProviderTokensSchema.safeParse(tokens);
+      if (!parsedTokens.success) return;
+
+      const storedTokens = toStoredOAuthTokens(parsedTokens.data);
       latestTokens = {
-        ...toStoredOAuthTokens(tokens as any),
+        ...storedTokens,
         updatedAt: new Date().toISOString(),
       };
       try {
         await completeMCPServerOAuth({
           config: opts.config,
           server: opts.server,
-          tokens: toStoredOAuthTokens(tokens as any),
+          tokens: storedTokens,
           clearPending: false,
         });
       } catch {
@@ -161,19 +191,21 @@ function createRuntimeOAuthProvider(opts: {
       };
     },
     saveClientInformation: async (info) => {
-      const clientId = typeof info === "object" && info ? (info as Record<string, unknown>).client_id : undefined;
-      if (typeof clientId !== "string" || !clientId) return;
-      const clientSecret = typeof info === "object" && info ? (info as Record<string, unknown>).client_secret : undefined;
+      const parsedInfo = oauthClientInformationSchema.safeParse(info);
+      if (!parsedInfo.success) return;
+
+      const clientId = parsedInfo.data.client_id;
+      const clientSecret = parsedInfo.data.client_secret;
       latestClientInfo = {
         clientId,
-        ...(typeof clientSecret === "string" && clientSecret ? { clientSecret } : {}),
+        ...(clientSecret ? { clientSecret } : {}),
         updatedAt: new Date().toISOString(),
       };
       try {
         await setMCPServerOAuthClientInformation({
           config: opts.config,
           server: opts.server,
-          clientInformation: { clientId, ...(typeof clientSecret === "string" && clientSecret ? { clientSecret } : {}) },
+          clientInformation: { clientId, ...(clientSecret ? { clientSecret } : {}) },
         });
       } catch {
         // best effort persistence only
@@ -212,9 +244,9 @@ async function hydrateServerForRuntime(config: AgentConfig, server: MCPRegistryS
       });
       if (provider) {
         runtimeServer.transport = {
-          ...(runtimeServer.transport as any),
+          ...runtimeServer.transport,
           authProvider: provider,
-        } as any;
+        } as MCPServerConfig["transport"];
       }
     }
 
@@ -263,7 +295,6 @@ export async function readProjectMCPServersDocument(config: AgentConfig): Promis
   rawJson: string;
   projectServers: MCPServerConfig[];
   effectiveServers: MCPServerConfig[];
-  parseError?: string;
 }> {
   const workspaceDoc = await readWorkspaceMCPServersDocument(config);
   const effectiveServers = await loadMCPServers(config);
@@ -272,7 +303,6 @@ export async function readProjectMCPServersDocument(config: AgentConfig): Promis
     rawJson: workspaceDoc.rawJson,
     projectServers: workspaceDoc.workspaceServers,
     effectiveServers,
-    ...(workspaceDoc.parseError ? { parseError: workspaceDoc.parseError } : {}),
   };
 }
 
@@ -298,17 +328,17 @@ export async function loadMCPTools(
     createClient?: typeof createMCPClient;
     sleep?: (ms: number) => Promise<void>;
   } = {},
-): Promise<{ tools: Record<string, any>; errors: string[]; close: () => Promise<void> }> {
+): Promise<{ tools: Record<string, unknown>; errors: string[]; close: () => Promise<void> }> {
   const createClient = opts.createClient ?? createMCPClient;
   const sleep = opts.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const tools: Record<string, any> = {};
+  const tools: Record<string, unknown> = {};
   const errors: string[] = [];
   const clients: Array<{ name: string; close: () => Promise<void> }> = [];
   let closed = false;
 
   const retriesFor = (value: unknown): number => {
-    if (typeof value !== "number" || !Number.isFinite(value)) return 3;
-    return Math.max(0, Math.floor(value));
+    const parsed = retryCountSchema.safeParse(value);
+    return parsed.success ? parsed.data : 3;
   };
 
   const close = async () => {
@@ -327,7 +357,7 @@ export async function loadMCPTools(
     const retries = retriesFor(server.retries);
 
     for (let attempt = 0; attempt <= retries; attempt++) {
-      let client: any | null = null;
+      let client: RuntimeMcpClient | null = null;
       try {
         const transport =
           server.transport.type === "stdio"
@@ -337,14 +367,24 @@ export async function loadMCPTools(
                 env: server.transport.env,
                 cwd: server.transport.cwd,
               })
-            : (server.transport as any);
+            : server.transport;
 
-        client = await createClient({
+        const rawClient = await createClient({
           name: server.name,
           transport,
         });
+        const parsedClient = runtimeMcpClientSchema.safeParse(rawClient);
+        if (!parsedClient.success) {
+          throw new Error(`MCP client for ${server.name} has an invalid runtime shape.`);
+        }
+        client = parsedClient.data;
 
-        const discovered = await client.tools();
+        const discoveredRaw = await client.tools();
+        const discoveredParsed = mcpToolRecordSchema.safeParse(discoveredRaw);
+        if (!discoveredParsed.success) {
+          throw new Error(`MCP client for ${server.name} returned invalid tool definitions.`);
+        }
+        const discovered = discoveredParsed.data;
 
         for (const [name, toolDef] of Object.entries(discovered)) {
           tools[`mcp__${server.name}__${name}`] = toolDef;

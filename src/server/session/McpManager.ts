@@ -1,53 +1,61 @@
 import type { MCPServerConfig } from "../../types";
+import type { SessionContext } from "./SessionContext";
+import { McpAuthFlow } from "./mcp/McpAuthFlow";
+import { McpRegistryFlow } from "./mcp/McpRegistryFlow";
+import { McpServerResolver } from "./mcp/McpServerResolver";
+import { McpValidationFlow } from "./mcp/McpValidationFlow";
 
 export class McpManager {
-  constructor(
-    private readonly handlers: {
-      setEnableMcp: (enableMcp: boolean) => Promise<void>;
-      emitMcpServers: () => Promise<void>;
-      upsertMcpServer: (server: MCPServerConfig, previousName?: string) => Promise<void>;
-      deleteMcpServer: (nameRaw: string) => Promise<void>;
-      validateMcpServer: (nameRaw: string) => Promise<void>;
-      authorizeMcpServerAuth: (nameRaw: string) => Promise<void>;
-      callbackMcpServerAuth: (nameRaw: string, codeRaw?: string) => Promise<void>;
-      setMcpServerApiKey: (nameRaw: string, apiKeyRaw: string) => Promise<void>;
-      migrateLegacyMcpServers: (scope: "workspace" | "user") => Promise<void>;
-    }
-  ) {}
+  private readonly resolver: McpServerResolver;
+  private readonly registryFlow: McpRegistryFlow;
+  private readonly validationFlow: McpValidationFlow;
+  private readonly authFlow: McpAuthFlow;
 
-  setEnableMcp(enableMcp: boolean) {
-    return this.handlers.setEnableMcp(enableMcp);
+  constructor(private readonly context: SessionContext) {
+    this.resolver = new McpServerResolver(context);
+    this.registryFlow = new McpRegistryFlow(context);
+    this.validationFlow = new McpValidationFlow(context, this.resolver);
+    this.authFlow = new McpAuthFlow(context, this.resolver, async () => {
+      await this.registryFlow.emitMcpServers();
+    });
   }
 
-  emitMcpServers() {
-    return this.handlers.emitMcpServers();
+  async setEnableMcp(enableMcp: boolean) {
+    await this.registryFlow.setEnableMcp(enableMcp);
   }
 
-  upsert(server: MCPServerConfig, previousName?: string) {
-    return this.handlers.upsertMcpServer(server, previousName);
+  async emitMcpServers() {
+    await this.registryFlow.emitMcpServers();
   }
 
-  delete(nameRaw: string) {
-    return this.handlers.deleteMcpServer(nameRaw);
+  async upsert(server: MCPServerConfig, previousName?: string) {
+    const validateName = await this.registryFlow.upsert(server, previousName);
+    if (validateName) void this.validate(validateName);
   }
 
-  validate(nameRaw: string) {
-    return this.handlers.validateMcpServer(nameRaw);
+  async delete(nameRaw: string) {
+    await this.registryFlow.delete(nameRaw);
   }
 
-  authorize(nameRaw: string) {
-    return this.handlers.authorizeMcpServerAuth(nameRaw);
+  async validate(nameRaw: string) {
+    await this.validationFlow.validate(nameRaw);
   }
 
-  callback(nameRaw: string, codeRaw?: string) {
-    return this.handlers.callbackMcpServerAuth(nameRaw, codeRaw);
+  async authorize(nameRaw: string) {
+    await this.authFlow.authorize(nameRaw);
   }
 
-  setApiKey(nameRaw: string, apiKeyRaw: string) {
-    return this.handlers.setMcpServerApiKey(nameRaw, apiKeyRaw);
+  async callback(nameRaw: string, codeRaw?: string) {
+    const validateName = await this.authFlow.callback(nameRaw, codeRaw);
+    if (validateName) void this.validate(validateName);
   }
 
-  migrate(scope: "workspace" | "user") {
-    return this.handlers.migrateLegacyMcpServers(scope);
+  async setApiKey(nameRaw: string, apiKeyRaw: string) {
+    const validateName = await this.authFlow.setApiKey(nameRaw, apiKeyRaw);
+    if (validateName) void this.validate(validateName);
+  }
+
+  async migrate(scope: "workspace" | "user") {
+    await this.registryFlow.migrate(scope);
   }
 }

@@ -1,12 +1,53 @@
-import type { ClientMessage, ServerEvent } from "../server/protocol";
+import { z } from "zod";
 
-export function safeJsonParse(raw: unknown): any | null {
-  if (typeof raw !== "string") return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
+import {
+  parseServerEventDetailed as parseServerEventDetailedFromProtocol,
+  safeParseServerEvent as safeParseServerEventFromProtocol,
+  safeParseServerEventJson,
+  type ClientMessage,
+  type ServerEvent,
+  type ServerEventParseErrorReason,
+  type ServerEventParseResult,
+} from "../server/protocol";
+
+const webSocketImplSchema = z.custom<typeof WebSocket>((value) => typeof value === "function");
+
+export function safeJsonParse(raw: unknown): unknown | null {
+  return safeParseServerEventJson(raw);
+}
+
+export function safeParseServerEvent(raw: unknown): ServerEvent | null {
+  return safeParseServerEventFromProtocol(raw);
+}
+
+export function safeParseServerEventDetailed(raw: unknown): ServerEventParseResult {
+  return parseServerEventDetailedFromProtocol(raw);
+}
+
+export type InvalidServerEvent = {
+  reason: ServerEventParseErrorReason;
+  message: string;
+  eventType?: string;
+  raw: unknown;
+};
+
+function isBlobLike(value: unknown): value is Blob {
+  return typeof Blob !== "undefined" && value instanceof Blob;
+}
+
+async function decodeSocketData(rawData: unknown): Promise<unknown> {
+  if (typeof rawData === "string") return rawData;
+  if (rawData instanceof ArrayBuffer) {
+    return new TextDecoder().decode(new Uint8Array(rawData));
   }
+  if (ArrayBuffer.isView(rawData)) {
+    const view = rawData as ArrayBufferView;
+    return new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+  }
+  if (isBlobLike(rawData)) {
+    return await rawData.text();
+  }
+  return rawData;
 }
 
 export type AgentSocketOpts = {
@@ -17,6 +58,7 @@ export type AgentSocketOpts = {
   onEvent: (evt: ServerEvent) => void;
   onClose?: (reason: string) => void;
   onOpen?: () => void;
+  onInvalidEvent?: (evt: InvalidServerEvent) => void;
   WebSocketImpl?: typeof WebSocket;
 
   /** Enable automatic reconnection on unexpected disconnects. Default: false. */
@@ -37,6 +79,7 @@ export class AgentSocket {
   private readonly onEvent: (evt: ServerEvent) => void;
   private readonly onClose?: (reason: string) => void;
   private readonly onOpen?: () => void;
+  private readonly onInvalidEvent?: (evt: InvalidServerEvent) => void;
   private readonly clientHello: { client: string; version?: string };
   private readonly WebSocketImpl: typeof WebSocket;
 
@@ -66,17 +109,19 @@ export class AgentSocket {
     this.onEvent = opts.onEvent;
     this.onClose = opts.onClose;
     this.onOpen = opts.onOpen;
+    this.onInvalidEvent = opts.onInvalidEvent;
     this.clientHello = { client: opts.client, version: opts.version };
 
     this.autoReconnect = opts.autoReconnect ?? false;
     this.maxReconnectAttempts = opts.maxReconnectAttempts ?? 10;
     this.pingIntervalMs = opts.pingIntervalMs ?? 30_000;
 
-    const impl = opts.WebSocketImpl ?? (globalThis as any).WebSocket;
-    if (!impl) {
+    const impl = opts.WebSocketImpl ?? (globalThis as { WebSocket?: unknown }).WebSocket;
+    const parsedImpl = webSocketImplSchema.safeParse(impl);
+    if (!parsedImpl.success) {
       throw new Error("WebSocket is not available in this environment.");
     }
-    this.WebSocketImpl = impl as typeof WebSocket;
+    this.WebSocketImpl = parsedImpl.data;
   }
 
   get sessionId() {
@@ -125,13 +170,35 @@ export class AgentSocket {
       this.onOpen?.();
     };
 
-    ws.onmessage = (ev) => {
-      const msg = safeJsonParse(String((ev as any).data));
-      if (!msg || typeof msg.type !== "string") return;
+    ws.onmessage = async (ev) => {
+      const rawData = (ev as { data?: unknown }).data;
+      let decoded: unknown;
+      try {
+        decoded = await decodeSocketData(rawData);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "failed_to_decode_socket_payload";
+        this.onInvalidEvent?.({
+          reason: "invalid_envelope",
+          message,
+          raw: rawData,
+        });
+        return;
+      }
 
-      const evt = msg as ServerEvent;
+      const parsed = safeParseServerEventDetailed(decoded);
+      if (!parsed.ok) {
+        this.onInvalidEvent?.({
+          reason: parsed.reason,
+          message: parsed.message,
+          eventType: parsed.eventType,
+          raw: decoded,
+        });
+        return;
+      }
 
-      // Pong is an internal keepalive — don't surface to consumer.
+      const evt = parsed.event;
+
+      // Pong is an internal keepalive and should not be surfaced to consumers.
       if (evt.type === "pong") return;
 
       if (evt.type === "server_hello") {
@@ -143,6 +210,7 @@ export class AgentSocket {
         this.flushSendQueue();
       }
 
+      // Surface consumer bugs to callers instead of relabeling them as parse errors.
       this.onEvent(evt);
     };
 

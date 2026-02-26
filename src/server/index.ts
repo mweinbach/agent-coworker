@@ -6,7 +6,8 @@ import path from "node:path";
 import { startAgentServer } from "./startServer";
 
 // Keep server output clean by default.
-(globalThis as any).AI_SDK_LOG_WARNINGS = false;
+const globalSettings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?: boolean };
+globalSettings.AI_SDK_LOG_WARNINGS = false;
 
 function printUsage() {
   console.log("Usage: bun src/server/index.ts [--dir <directory_path>] [--port <port>] [--yolo] [--json]");

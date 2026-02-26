@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 type FsLike = Pick<typeof fs, "mkdir" | "writeFile" | "rename" | "unlink">;
 
@@ -7,6 +8,7 @@ const WINDOWS_RETRYABLE_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
 const DEFAULT_MAX_ATTEMPTS = 8;
 const DEFAULT_INITIAL_DELAY_MS = 20;
 const DEFAULT_MAX_DELAY_MS = 500;
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -14,7 +16,8 @@ function sleep(ms: number): Promise<void> {
 
 function isRetryableRenameError(error: unknown, platform: NodeJS.Platform): boolean {
   if (platform !== "win32") return false;
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  const parsedCode = errorWithCodeSchema.safeParse(error);
+  const code = parsedCode.success ? parsedCode.data.code : undefined;
   return typeof code === "string" && WINDOWS_RETRYABLE_RENAME_CODES.has(code);
 }
 
@@ -91,7 +94,8 @@ export async function writeTextFileAtomic(
     try {
       await fsImpl.unlink(tempPath);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+      const parsedCode = errorWithCodeSchema.safeParse(error);
+      if (!parsedCode.success || parsedCode.data.code !== "ENOENT") {
         // ignore best-effort cleanup failures
       }
     }

@@ -7,6 +7,9 @@ import { truncateText } from "../utils/paths";
 
 type ExecResult = { stdout: string; stderr: string; exitCode: number; errorCode?: string };
 
+const abortByNameSchema = z.object({ name: z.literal("AbortError") }).passthrough();
+const errorCodeSchema = z.object({ code: z.union([z.string(), z.number()]) }).passthrough();
+
 function execFileAsync(
   file: string,
   args: string[],
@@ -23,7 +26,10 @@ function execFileAsync(
         ...(opts.signal ? { signal: opts.signal } : {}),
       },
       (err, stdout, stderr) => {
-        if ((err as any)?.name === "AbortError" || (err as any)?.code === "ABORT_ERR") {
+        const isAbortByName = abortByNameSchema.safeParse(err).success;
+        const parsedErrorCode = errorCodeSchema.safeParse(err);
+        const code = parsedErrorCode.success ? parsedErrorCode.data.code : undefined;
+        if (isAbortByName || code === "ABORT_ERR") {
           resolve({
             stdout: String(stdout ?? ""),
             stderr: String(stderr ?? "") || "Command aborted.",
@@ -32,7 +38,6 @@ function execFileAsync(
           });
           return;
         }
-        const code = (err as any)?.code;
         const errorCode = typeof code === "string" ? code : undefined;
         const exitCode = typeof code === "number" ? code : err ? 1 : 0;
         resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? ""), exitCode, errorCode });

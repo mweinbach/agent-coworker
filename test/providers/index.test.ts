@@ -27,7 +27,7 @@ describe("src/providers/index.ts", () => {
 
     test("creates Anthropic model and normalizes known alias model IDs", async () => {
       const config = makeConfig({ provider: "anthropic" });
-      const model = getModelForProvider(config, "claude-4-6-sonnet", "anthropic-key") as any;
+      const model = getModelForProvider(config, "claude-sonnet-4-6", "anthropic-key") as any;
       const headers = await model.config.headers();
       expect(model.modelId).toBe("claude-sonnet-4-6");
       expect(headers["x-api-key"]).toBe("anthropic-key");

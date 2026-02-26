@@ -7,6 +7,17 @@ import type { ToolContext } from "./context";
 import { resolveMaybeRelative } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 
+const notebookCellSchema = z.object({
+  cell_type: z.string().trim().min(1),
+  source: z.union([z.array(z.string()), z.string()]).transform((source) =>
+    typeof source === "string" ? [source] : source
+  ),
+}).passthrough();
+
+const notebookSchema = z.object({
+  cells: z.array(notebookCellSchema),
+}).passthrough();
+
 export function createNotebookEditTool(ctx: ToolContext) {
   return tool({
     description:
@@ -32,10 +43,20 @@ export function createNotebookEditTool(ctx: ToolContext) {
         throw new Error(`Notebook edit blocked: expected a .ipynb file: ${abs}`);
       }
       const raw = await fs.readFile(abs, "utf-8");
-      const nb = JSON.parse(raw);
-      const cells = nb?.cells;
-
-      if (!Array.isArray(cells)) throw new Error(`Invalid notebook format: ${abs}`);
+      let parsedJson: unknown;
+      try {
+        parsedJson = JSON.parse(raw);
+      } catch (error) {
+        throw new Error(`Invalid notebook JSON: ${abs}: ${String(error)}`);
+      }
+      const parsedNotebook = notebookSchema.safeParse(parsedJson);
+      if (!parsedNotebook.success) {
+        throw new Error(
+          `Invalid notebook format: ${abs}: ${parsedNotebook.error.issues[0]?.message ?? "validation_failed"}`
+        );
+      }
+      const nb = parsedNotebook.data;
+      const cells = nb.cells;
 
       const sourceLines = newSource
         .split("\n")
@@ -55,8 +76,8 @@ export function createNotebookEditTool(ctx: ToolContext) {
         });
       } else {
         if (cellIndex >= cells.length) throw new Error(`Cell ${cellIndex} out of range (${cells.length})`);
-        cells[cellIndex].source = sourceLines;
-        if (cellType) cells[cellIndex].cell_type = cellType;
+        cells[cellIndex]!.source = sourceLines;
+        if (cellType) cells[cellIndex]!.cell_type = cellType;
       }
 
       await fs.writeFile(abs, JSON.stringify(nb, null, 1), "utf-8");

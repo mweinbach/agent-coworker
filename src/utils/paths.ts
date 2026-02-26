@@ -8,6 +8,11 @@ export function resolveMaybeRelative(p: string, baseDir: string): string {
 
 export function isPathInside(parent: string, child: string): boolean {
   const rel = path.relative(path.resolve(parent), path.resolve(child));
+
+  // On Windows, crossing drive letters (or UNC roots) returns an absolute
+  // relative result (e.g. "D:\\target"), which must be treated as outside.
+  if (path.isAbsolute(rel)) return false;
+
   return rel === "" || (!rel.startsWith(".." + path.sep) && rel !== "..");
 }
 

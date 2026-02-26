@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { z } from "zod";
 
 import type { ApprovalRiskCode } from "../types";
 import { isPathInside } from "./paths";
+
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 
 export const AUTO_APPROVE_PATTERNS: RegExp[] = [
   /^ls\b/,
@@ -95,7 +98,8 @@ function canonicalizeExistingPrefixSync(targetPath: string): string {
       const canonical = fs.realpathSync.native(cursor);
       return tail.length > 0 ? path.join(canonical, ...tail.reverse()) : canonical;
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      const parsedCode = errorWithCodeSchema.safeParse(err);
+      const code = parsedCode.success ? parsedCode.data.code : undefined;
       if (code !== "ENOENT") throw err;
       const parent = path.dirname(cursor);
       if (parent === cursor) return resolved;
@@ -110,7 +114,8 @@ function canonicalizeRootSync(rootPath: string): string {
   try {
     return fs.realpathSync.native(resolved);
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    const parsedCode = errorWithCodeSchema.safeParse(err);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
     if (code !== "ENOENT") throw err;
     return resolved;
   }

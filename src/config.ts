@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 
 import { getAiCoworkerPaths } from "./connect";
+import { parseConnectionStoreJson } from "./store/connections";
 import { defaultModelForProvider, getModelForProvider, getProviderKeyCandidates } from "./providers";
 import { resolveProviderName } from "./types";
 import type { AgentConfig, CommandTemplateConfig, ProviderName } from "./types";
@@ -18,8 +20,42 @@ export interface LoadConfigOptions {
   env?: Record<string, string | undefined>;
 }
 
+const jsonObjectSchema = z.record(z.string(), z.unknown());
+const stringSchema = z.string();
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const finiteNumberSchema = z.number().finite();
+const booleanLikeSchema = z.union([
+  z.boolean(),
+  z.string().trim().transform((raw, ctx) => {
+    const normalized = raw.toLowerCase();
+    if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "y" || normalized === "on") {
+      return true;
+    }
+    if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "n" || normalized === "off") {
+      return false;
+    }
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "invalid_boolean" });
+    return z.NEVER;
+  }),
+]);
+const numberLikeSchema = z.union([
+  finiteNumberSchema,
+  z.string().trim().min(1).transform((raw, ctx) => {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "invalid_number" });
+      return z.NEVER;
+    }
+    return parsed;
+  }),
+]);
+const nonNegativeIntegerLikeSchema = numberLikeSchema
+  .transform((value) => Math.floor(value))
+  .refine((value) => value >= 0, { message: "invalid_non_negative_integer" });
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+  return jsonObjectSchema.safeParse(v).success;
 }
 
 function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
@@ -37,10 +73,69 @@ function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
 async function loadJsonSafe(filePath: string): Promise<Record<string, unknown>> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return {};
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`Invalid JSON in config file ${filePath}: ${String(error)}`);
+    }
+
+    const result = jsonObjectSchema.safeParse(parsed);
+    if (!result.success) {
+      throw new Error(`Config file must contain a JSON object: ${filePath}`);
+    }
+    return result.data;
+  } catch (error) {
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
+    if (code === "ENOENT") return {};
+    if (error instanceof Error) throw error;
+    throw new Error(`Failed to load config file ${filePath}: ${String(error)}`);
   }
+}
+
+const commandTemplateSchema = z.object({
+  template: z.string().trim().min(1),
+  description: z.string().optional(),
+  source: z.enum(["command", "mcp", "skill"]),
+}).strict();
+
+const commandConfigSchema = z.record(z.string().trim().min(1), commandTemplateSchema).transform((rawCommands) => {
+  const commands: Record<string, CommandTemplateConfig> = {};
+  for (const [name, command] of Object.entries(rawCommands)) {
+    commands[name.trim()] = {
+      template: command.template,
+      source: command.source,
+      ...(command.description !== undefined ? { description: command.description } : {}),
+    };
+  }
+  return commands;
+});
+const observabilityLayerSchema = z.object({
+  baseUrl: nonEmptyTrimmedStringSchema.optional(),
+  publicKey: nonEmptyTrimmedStringSchema.optional(),
+  secretKey: nonEmptyTrimmedStringSchema.optional(),
+  tracingEnvironment: nonEmptyTrimmedStringSchema.optional(),
+  release: nonEmptyTrimmedStringSchema.optional(),
+}).passthrough();
+const harnessLayerSchema = z.object({
+  reportOnly: booleanLikeSchema.optional(),
+  strictMode: booleanLikeSchema.optional(),
+}).passthrough();
+const modelSettingsLayerSchema = z.object({
+  maxRetries: nonNegativeIntegerLikeSchema.optional(),
+}).passthrough();
+
+function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
+  if (raw === undefined) return undefined;
+
+  const parsedRaw = commandConfigSchema.safeParse(raw);
+  if (!parsedRaw.success) {
+    throw new Error(`Invalid command config: ${parsedRaw.error.issues[0]?.message ?? "validation_failed"}`);
+  }
+
+  if (Object.keys(parsedRaw.data).length === 0) return undefined;
+  return parsedRaw.data;
 }
 
 function resolveBuiltInDir(): string {
@@ -48,79 +143,40 @@ function resolveBuiltInDir(): string {
   return path.resolve(here, "..");
 }
 
+function parseLayer<T>(schema: z.ZodType<T>, raw: unknown, fallback: T): T {
+  const parsed = schema.safeParse(raw);
+  return parsed.success ? parsed.data : fallback;
+}
+
 function asProviderName(v: unknown): ProviderName | null {
   return resolveProviderName(v);
 }
 
-function asBoolean(v: unknown): boolean | null {
-  if (typeof v === "boolean") return v;
-  if (typeof v !== "string") return null;
-  const s = v.trim().toLowerCase();
-  if (s === "1" || s === "true" || s === "yes" || s === "y" || s === "on") return true;
-  if (s === "0" || s === "false" || s === "no" || s === "n" || s === "off") return false;
-  return null;
+function asString(v: unknown): string | undefined {
+  const parsed = stringSchema.safeParse(v);
+  return parsed.success ? parsed.data : undefined;
 }
 
-function asNumber(v: unknown): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v !== "string" || !v.trim()) return null;
-  const parsed = Number(v);
-  if (!Number.isFinite(parsed)) return null;
-  return parsed;
+function asBoolean(v: unknown): boolean | null {
+  const parsed = booleanLikeSchema.safeParse(v);
+  return parsed.success ? parsed.data : null;
 }
 
 function asNonEmptyString(v: unknown): string | undefined {
-  return typeof v === "string" && v.trim() ? v.trim() : undefined;
+  const parsed = nonEmptyTrimmedStringSchema.safeParse(v);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function resolveDir(maybeRelative: unknown, baseDir: string): string {
-  if (typeof maybeRelative !== "string" || !maybeRelative) return baseDir;
-  if (path.isAbsolute(maybeRelative)) return maybeRelative;
-  return path.join(baseDir, maybeRelative);
-}
-
-function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
-  if (!isPlainObject(raw)) return undefined;
-  const commands: Record<string, CommandTemplateConfig> = {};
-
-  for (const [nameRaw, value] of Object.entries(raw)) {
-    const name = nameRaw.trim();
-    if (!name || !isPlainObject(value)) continue;
-
-    const template = typeof value.template === "string" ? value.template : "";
-    if (!template.trim()) continue;
-
-    const description = typeof value.description === "string" ? value.description : undefined;
-    const source =
-      value.source === "command" || value.source === "mcp" || value.source === "skill"
-        ? value.source
-        : "command";
-
-    commands[name] = {
-      description,
-      source,
-      template,
-    };
-  }
-
-  if (Object.keys(commands).length === 0) return undefined;
-  return commands;
-}
-
-function normalizePositiveInt(v: unknown): number | undefined {
-  const n = asNumber(v);
-  if (n === null) return undefined;
-  const i = Math.floor(n);
-  if (!Number.isFinite(i) || i <= 0) return undefined;
-  return i;
+  const parsed = stringSchema.safeParse(maybeRelative);
+  if (!parsed.success || !parsed.data) return baseDir;
+  if (path.isAbsolute(parsed.data)) return parsed.data;
+  return path.join(baseDir, parsed.data);
 }
 
 function normalizeNonNegativeInt(v: unknown): number | undefined {
-  const n = asNumber(v);
-  if (n === null) return undefined;
-  const i = Math.floor(n);
-  if (!Number.isFinite(i) || i < 0) return undefined;
-  return i;
+  const parsed = nonNegativeIntegerLikeSchema.safeParse(v);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function resolveUserHomeFromConfig(config: AgentConfig): string {
@@ -133,31 +189,23 @@ function resolveUserHomeFromConfig(config: AgentConfig): string {
 function readSavedApiKey(config: AgentConfig, provider: ProviderName): string | undefined {
   const home = resolveUserHomeFromConfig(config);
   const paths = getAiCoworkerPaths({ homedir: home });
-  const legacyConnectionsPath = path.join(home, ".ai-coworker", "config", "connections.json");
-
   const keyCandidates = getProviderKeyCandidates(provider);
 
-  const connectionFiles = [paths.connectionsFile, legacyConnectionsPath];
-  for (const connectionsPath of connectionFiles) {
-    try {
-      const raw = fsSync.readFileSync(connectionsPath, "utf-8");
-      const parsed = JSON.parse(raw) as any;
+  let raw: string;
+  try {
+    raw = fsSync.readFileSync(paths.connectionsFile, "utf-8");
+  } catch (error) {
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
+    if (code === "ENOENT") return undefined;
+    throw new Error(`Failed to read connection store at ${paths.connectionsFile}: ${String(error)}`);
+  }
 
-      for (const candidate of keyCandidates) {
-        const direct = parsed?.services?.[candidate];
-        const directKey =
-          typeof direct?.apiKey === "string" && direct.apiKey.trim() ? direct.apiKey.trim() : "";
-        if (directKey) return directKey;
-      }
+  const parsedStore = parseConnectionStoreJson(raw, paths.connectionsFile);
 
-      // Backward-compatible fallback for any simpler shape like { apiKeys: { openai: "..." } }.
-      for (const candidate of keyCandidates) {
-        const legacy = parsed?.apiKeys?.[candidate];
-        if (typeof legacy === "string" && legacy.trim()) return legacy.trim();
-      }
-    } catch {
-      // continue to fallback file (or default to env below)
-    }
+  for (const candidate of keyCandidates) {
+    const direct = parsedStore.services[candidate];
+    if (direct?.mode === "api_key" && direct.apiKey) return direct.apiKey;
   }
 
   return undefined;
@@ -190,19 +238,16 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const workingDirectory = env.AGENT_WORKING_DIR || cwd;
 
   const model =
-    env.AGENT_MODEL ||
-    (typeof projectConfig.model === "string" && projectConfig.model) ||
-    (typeof userConfig.model === "string" && userConfig.model) ||
-    (typeof builtInDefaults.model === "string" &&
-      builtInDefaults.model &&
-      asProviderName(builtInDefaults.provider) === provider &&
-      builtInDefaults.model) ||
+    asNonEmptyString(env.AGENT_MODEL) ||
+    asNonEmptyString(projectConfig.model) ||
+    asNonEmptyString(userConfig.model) ||
+    (asProviderName(builtInDefaults.provider) === provider && asNonEmptyString(builtInDefaults.model)) ||
     defaultModelForProvider(provider);
 
   const subAgentModel =
-    (typeof projectConfig.subAgentModel === "string" && projectConfig.subAgentModel) ||
-    (typeof userConfig.subAgentModel === "string" && userConfig.subAgentModel) ||
-    (typeof builtInDefaults.subAgentModel === "string" && builtInDefaults.subAgentModel) ||
+    asNonEmptyString(projectConfig.subAgentModel) ||
+    asNonEmptyString(userConfig.subAgentModel) ||
+    asNonEmptyString(builtInDefaults.subAgentModel) ||
     model;
 
   // Persistent, user-visible directories should be relative to the project (cwd) by default,
@@ -224,14 +269,15 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const uploadsDirectory = uploadsDirRaw ? resolveDir(uploadsDirRaw, cwd) : undefined;
 
   const userName =
-    env.AGENT_USER_NAME ||
-    (typeof projectConfig.userName === "string" && projectConfig.userName) ||
-    (typeof userConfig.userName === "string" && userConfig.userName) ||
-    (typeof builtInDefaults.userName === "string" ? builtInDefaults.userName : "");
+    asNonEmptyString(env.AGENT_USER_NAME) ||
+    asNonEmptyString(projectConfig.userName) ||
+    asNonEmptyString(userConfig.userName) ||
+    asString(builtInDefaults.userName) ||
+    "";
   const knowledgeCutoff =
-    (typeof projectConfig.knowledgeCutoff === "string" && projectConfig.knowledgeCutoff) ||
-    (typeof userConfig.knowledgeCutoff === "string" && userConfig.knowledgeCutoff) ||
-    (typeof builtInDefaults.knowledgeCutoff === "string" && builtInDefaults.knowledgeCutoff) ||
+    asNonEmptyString(projectConfig.knowledgeCutoff) ||
+    asNonEmptyString(userConfig.knowledgeCutoff) ||
+    asNonEmptyString(builtInDefaults.knowledgeCutoff) ||
     "unknown";
 
   const enableMcp =
@@ -241,7 +287,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.enableMcp) ??
     true;
 
-  const mergedObservability = isPlainObject(merged.observability) ? merged.observability : {};
+  const mergedObservability = parseLayer(observabilityLayerSchema, merged.observability, {});
   const observabilityEnabled =
     asBoolean(env.AGENT_OBSERVABILITY_ENABLED) ??
     asBoolean(projectConfig.observabilityEnabled) ??
@@ -250,14 +296,14 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     true;
   const langfuseBaseUrl = (
     env.LANGFUSE_BASE_URL ||
-    asNonEmptyString(mergedObservability["baseUrl"]) ||
+    mergedObservability.baseUrl ||
     "https://cloud.langfuse.com"
   ).replace(/\/+$/, "");
-  const langfusePublicKey = env.LANGFUSE_PUBLIC_KEY || asNonEmptyString(mergedObservability["publicKey"]);
-  const langfuseSecretKey = env.LANGFUSE_SECRET_KEY || asNonEmptyString(mergedObservability["secretKey"]);
+  const langfusePublicKey = env.LANGFUSE_PUBLIC_KEY || mergedObservability.publicKey;
+  const langfuseSecretKey = env.LANGFUSE_SECRET_KEY || mergedObservability.secretKey;
   const langfuseTracingEnvironment =
-    env.LANGFUSE_TRACING_ENVIRONMENT || asNonEmptyString(mergedObservability["tracingEnvironment"]);
-  const langfuseRelease = env.LANGFUSE_RELEASE || asNonEmptyString(mergedObservability["release"]);
+    env.LANGFUSE_TRACING_ENVIRONMENT || mergedObservability.tracingEnvironment;
+  const langfuseRelease = env.LANGFUSE_RELEASE || mergedObservability.release;
 
   const observability: AgentConfig["observability"] = {
     provider: "langfuse",
@@ -269,15 +315,15 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     ...(langfuseRelease ? { release: langfuseRelease } : {}),
   };
 
-  const mergedHarness = isPlainObject(merged.harness) ? merged.harness : {};
+  const mergedHarness = parseLayer(harnessLayerSchema, merged.harness, {});
   const harness = {
     reportOnly:
       asBoolean(env.AGENT_HARNESS_REPORT_ONLY) ??
-      asBoolean(mergedHarness["reportOnly"]) ??
+      mergedHarness.reportOnly ??
       true,
     strictMode:
       asBoolean(env.AGENT_HARNESS_STRICT_MODE) ??
-      asBoolean(mergedHarness["strictMode"]) ??
+      mergedHarness.strictMode ??
       false,
   };
 
@@ -286,23 +332,10 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     ? (deepMerge({}, (merged as Record<string, unknown>).providerOptions as Record<string, unknown>) as Record<string, any>)
     : undefined;
 
-  const mergedModelSettings = isPlainObject((merged as Record<string, unknown>).modelSettings)
-    ? ((merged as Record<string, unknown>).modelSettings as Record<string, unknown>)
-    : {};
-
-  const modelSettings: AgentConfig["modelSettings"] = {
-    ...(normalizeNonNegativeInt(env.AGENT_MODEL_MAX_RETRIES) !== undefined
-      ? { maxRetries: normalizeNonNegativeInt(env.AGENT_MODEL_MAX_RETRIES) }
-      : normalizeNonNegativeInt(mergedModelSettings.maxRetries) !== undefined
-        ? { maxRetries: normalizeNonNegativeInt(mergedModelSettings.maxRetries) }
-        : {}),
-  };
+  const mergedModelSettings = parseLayer(modelSettingsLayerSchema, (merged as Record<string, unknown>).modelSettings, {});
+  const maxRetries = normalizeNonNegativeInt(env.AGENT_MODEL_MAX_RETRIES) ?? mergedModelSettings.maxRetries;
   const normalizedModelSettings: AgentConfig["modelSettings"] =
-    typeof modelSettings.maxRetries === "number"
-      ? {
-          ...(typeof modelSettings.maxRetries === "number" ? { maxRetries: modelSettings.maxRetries } : {}),
-        }
-      : undefined;
+    typeof maxRetries === "number" ? { maxRetries } : undefined;
 
   return {
     provider,

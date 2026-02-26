@@ -12,7 +12,7 @@ import {
 describe("desktop IPC security helpers", () => {
   test("accepts trusted dev renderer URLs and rejects untrusted URLs", () => {
     expect(
-      isTrustedDesktopSenderUrl("http://127.0.0.1:1420/index.html", {
+      isTrustedDesktopSenderUrl("http://localhost:1420/index.html", {
         isPackaged: false,
         electronRendererUrl: undefined,
         desktopRendererPort: undefined,

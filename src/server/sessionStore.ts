@@ -1,21 +1,15 @@
 import type { ModelMessage } from "ai";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 import type { AiCoworkerPaths } from "../connect";
-import { isProviderName } from "../types";
+import { PROVIDER_NAMES } from "../types";
 import type { AgentConfig, HarnessContextState, TodoItem } from "../types";
-import { isRecord } from "../utils/typeGuards";
 import type { SessionTitleSource } from "./sessionTitleService";
 
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
-
-function asNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
 
 function sanitizeSessionId(sessionId: string): string {
   return sessionId.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -65,6 +59,58 @@ export type PersistedSessionSummary = {
   messageCount: number;
 };
 
+const sessionTitleSourceSchema = z.enum(["default", "model", "heuristic", "manual"]);
+const providerNameSchema = z.enum(PROVIDER_NAMES);
+const isoTimestampSchema = z.string().datetime({ offset: true });
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
+const modelMessageSchema = z.custom<ModelMessage>(
+  (value) => typeof value === "object" && value !== null,
+  "Invalid model message entry",
+);
+const todoItemSchema = z.object({
+  content: z.string(),
+  status: z.enum(["pending", "in_progress", "completed"]),
+  activeForm: z.string(),
+}).strict();
+const harnessContextMetadataSchema = z.record(z.string(), z.string());
+const harnessContextStateSchema = z.object({
+  runId: z.string(),
+  taskId: z.string().optional(),
+  objective: z.string(),
+  acceptanceCriteria: z.array(z.string()),
+  constraints: z.array(z.string()),
+  metadata: harnessContextMetadataSchema.optional(),
+  updatedAt: isoTimestampSchema,
+}).strict();
+
+const persistedSessionSnapshotSchema = z.object({
+  version: z.literal(1),
+  sessionId: z.string().trim().min(1),
+  createdAt: isoTimestampSchema,
+  updatedAt: isoTimestampSchema,
+  session: z.object({
+    title: z.string().trim().min(1),
+    titleSource: sessionTitleSourceSchema,
+    titleModel: z.string().trim().min(1).nullable(),
+    provider: providerNameSchema,
+    model: z.string().trim().min(1),
+  }).strict(),
+  config: z.object({
+    provider: providerNameSchema,
+    model: z.string().trim().min(1),
+    enableMcp: z.boolean(),
+    workingDirectory: z.string().trim().min(1),
+    outputDirectory: z.string().trim().min(1).optional(),
+    uploadsDirectory: z.string().trim().min(1).optional(),
+  }).strict(),
+  context: z.object({
+    system: z.string(),
+    messages: z.array(modelMessageSchema),
+    todos: z.array(todoItemSchema),
+    harnessContext: harnessContextStateSchema.nullable(),
+  }).strict(),
+}).strict();
+
 export function getPersistedSessionFilePath(paths: Pick<AiCoworkerPaths, "sessionsDir">, sessionId: string): string {
   return path.join(paths.sessionsDir, `${sanitizeSessionId(sessionId)}.json`);
 }
@@ -78,67 +124,40 @@ async function ensureSecureSessionsDir(sessionsDir: string): Promise<void> {
   }
 }
 
-export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSnapshot | null {
-  if (!isRecord(raw)) return null;
-  if (raw.version !== 1) return null;
+export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSnapshot {
+  const parsed = persistedSessionSnapshotSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid persisted session snapshot: ${parsed.error.issues[0]?.message ?? "validation_failed"}`
+    );
+  }
 
-  const sessionId = asNonEmptyString(raw.sessionId);
-  const createdAt = asNonEmptyString(raw.createdAt);
-  const updatedAt = asNonEmptyString(raw.updatedAt);
-  if (!sessionId || !createdAt || !updatedAt) return null;
-
-  const sessionRaw = isRecord(raw.session) ? raw.session : null;
-  const configRaw = isRecord(raw.config) ? raw.config : null;
-  const contextRaw = isRecord(raw.context) ? raw.context : null;
-  if (!sessionRaw || !configRaw || !contextRaw) return null;
-
-  const title = asNonEmptyString(sessionRaw.title) ?? "New session";
-  const titleSourceRaw = asNonEmptyString(sessionRaw.titleSource) ?? "default";
-  const titleSource: SessionTitleSource =
-    titleSourceRaw === "model" || titleSourceRaw === "heuristic" || titleSourceRaw === "manual" ? titleSourceRaw : "default";
-  const titleModel = typeof sessionRaw.titleModel === "string" ? sessionRaw.titleModel : null;
-
-  const providerRaw = asNonEmptyString(configRaw.provider);
-  const provider = providerRaw && isProviderName(providerRaw) ? providerRaw : null;
-  const model = asNonEmptyString(configRaw.model);
-  const workingDirectory = asNonEmptyString(configRaw.workingDirectory);
-  const outputDirectory = asNonEmptyString(configRaw.outputDirectory) ?? undefined;
-  const uploadsDirectory = asNonEmptyString(configRaw.uploadsDirectory) ?? undefined;
-  if (!provider || !model || !workingDirectory) return null;
-
-  const enableMcp = typeof configRaw.enableMcp === "boolean" ? configRaw.enableMcp : false;
-  const system = asNonEmptyString(contextRaw.system) ?? "";
-  const messages = Array.isArray(contextRaw.messages) ? (contextRaw.messages as ModelMessage[]) : [];
-  const todos = Array.isArray(contextRaw.todos) ? (contextRaw.todos as TodoItem[]) : [];
-  const harnessContext = isRecord(contextRaw.harnessContext)
-    ? (contextRaw.harnessContext as HarnessContextState)
-    : null;
-
+  const snapshot = parsed.data;
   return {
     version: 1,
-    sessionId,
-    createdAt,
-    updatedAt,
+    sessionId: snapshot.sessionId,
+    createdAt: snapshot.createdAt,
+    updatedAt: snapshot.updatedAt,
     session: {
-      title,
-      titleSource,
-      titleModel,
-      provider,
-      model,
+      title: snapshot.session.title,
+      titleSource: snapshot.session.titleSource,
+      titleModel: snapshot.session.titleModel,
+      provider: snapshot.session.provider,
+      model: snapshot.session.model,
     },
     config: {
-      provider,
-      model,
-      enableMcp,
-      workingDirectory,
-      outputDirectory,
-      uploadsDirectory,
+      provider: snapshot.config.provider,
+      model: snapshot.config.model,
+      enableMcp: snapshot.config.enableMcp,
+      workingDirectory: snapshot.config.workingDirectory,
+      outputDirectory: snapshot.config.outputDirectory,
+      uploadsDirectory: snapshot.config.uploadsDirectory,
     },
     context: {
-      system,
-      messages,
-      todos,
-      harnessContext,
+      system: snapshot.context.system,
+      messages: snapshot.context.messages,
+      todos: snapshot.context.todos,
+      harnessContext: snapshot.context.harnessContext,
     },
   };
 }
@@ -150,10 +169,19 @@ export async function readPersistedSessionSnapshot(opts: {
   const filePath = getPersistedSessionFilePath(opts.paths, opts.sessionId);
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(raw);
-    return parsePersistedSessionSnapshot(parsed);
-  } catch {
-    return null;
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`Invalid JSON in persisted session snapshot ${filePath}: ${String(error)}`);
+    }
+    return parsePersistedSessionSnapshot(parsedJson);
+  } catch (error) {
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
+    if (code === "ENOENT") return null;
+    if (error instanceof Error) throw error;
+    throw new Error(`Failed to read persisted session snapshot ${filePath}: ${String(error)}`);
   }
 }
 
@@ -203,22 +231,41 @@ export async function listPersistedSessionSnapshots(
   const summaries: PersistedSessionSummary[] = [];
   for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
+    const filePath = path.join(paths.sessionsDir, entry);
+
+    let raw: string;
     try {
-      const raw = await fs.readFile(path.join(paths.sessionsDir, entry), "utf-8");
-      const parsed = parsePersistedSessionSnapshot(JSON.parse(raw));
-      if (!parsed) continue;
-      summaries.push({
-        sessionId: parsed.sessionId,
-        title: parsed.session.title,
-        provider: parsed.session.provider,
-        model: parsed.session.model,
-        createdAt: parsed.createdAt,
-        updatedAt: parsed.updatedAt,
-        messageCount: parsed.context.messages.length,
-      });
-    } catch {
-      // skip unreadable files
+      raw = await fs.readFile(filePath, "utf-8");
+    } catch (error) {
+      const parsedCode = errorWithCodeSchema.safeParse(error);
+      const code = parsedCode.success ? parsedCode.data.code : undefined;
+      if (code === "ENOENT") continue;
+      throw error;
     }
+
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+
+    let parsed: PersistedSessionSnapshot;
+    try {
+      parsed = parsePersistedSessionSnapshot(parsedJson);
+    } catch {
+      continue;
+    }
+
+    summaries.push({
+      sessionId: parsed.sessionId,
+      title: parsed.session.title,
+      provider: parsed.session.provider,
+      model: parsed.session.model,
+      createdAt: parsed.createdAt,
+      updatedAt: parsed.updatedAt,
+      messageCount: parsed.context.messages.length,
+    });
   }
 
   summaries.sort((a, b) => (b.updatedAt > a.updatedAt ? 1 : b.updatedAt < a.updatedAt ? -1 : 0));

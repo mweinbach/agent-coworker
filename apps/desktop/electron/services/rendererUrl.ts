@@ -1,4 +1,5 @@
 const DEFAULT_DESKTOP_RENDERER_PORT = "1420";
+const DEFAULT_DESKTOP_RENDERER_HOST = "localhost";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1"]);
 
 export type DesktopRendererUrlResolution = {
@@ -25,7 +26,14 @@ function normalizeDesktopRendererPort(value: string | undefined): string {
 }
 
 function formatFallbackUrl(port: string): string {
-  return `http://127.0.0.1:${port}`;
+  return `http://${DEFAULT_DESKTOP_RENDERER_HOST}:${port}`;
+}
+
+function normalizeLoopbackHostname(hostname: string): string {
+  if (hostname === "[::1]") {
+    return "::1";
+  }
+  return hostname.toLowerCase();
 }
 
 function isAllowedDesktopRendererUrl(rawUrl: string, expectedPort: string): boolean {
@@ -40,7 +48,7 @@ function isAllowedDesktopRendererUrl(rawUrl: string, expectedPort: string): bool
     return false;
   }
 
-  if (!LOOPBACK_HOSTNAMES.has(parsed.hostname)) {
+  if (!LOOPBACK_HOSTNAMES.has(normalizeLoopbackHostname(parsed.hostname))) {
     return false;
   }
 

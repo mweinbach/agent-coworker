@@ -142,7 +142,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
         },
       });
 
-      const streamResult = await streamText({
+      const streamTextInput = {
         model: getModel(ctx.config, modelId),
         system,
         tools,
@@ -155,7 +155,8 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
           : {}),
         abortSignal: ctx.abortSignal,
         prompt: normalizedTask,
-      } as any);
+      } as Parameters<typeof streamText>[0];
+      const streamResult = await streamText(streamTextInput);
       const text = await streamResult.text;
 
       ctx.log(`tool< spawnAgent ${JSON.stringify({ chars: text.length })}`);

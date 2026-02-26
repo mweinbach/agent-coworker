@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { z } from "zod";
 
 /**
  * Prompt stash: temporary storage for prompt drafts.
@@ -17,6 +18,11 @@ export type StashEntry = {
   timestamp: number;
 };
 
+const stashEntrySchema: z.ZodType<StashEntry> = z.object({
+  input: z.string(),
+  timestamp: z.number(),
+});
+
 function loadStash(): StashEntry[] {
   try {
     const raw = fs.readFileSync(STASH_FILE, "utf-8").trim();
@@ -25,7 +31,11 @@ function loadStash(): StashEntry[] {
       .split("\n")
       .map((line) => {
         try {
-          return JSON.parse(line) as StashEntry;
+          const parsed = stashEntrySchema.safeParse(JSON.parse(line));
+          if (!parsed.success) {
+            return null;
+          }
+          return parsed.data;
         } catch {
           return null;
         }

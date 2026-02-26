@@ -2,6 +2,7 @@ import { createContext, useContext, createSignal, onCleanup, type JSX, type Acce
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { z } from "zod";
 
 type KVContextValue = {
   get: (key: string, defaultValue?: string) => string;
@@ -13,11 +14,16 @@ const KVContext = createContext<KVContextValue>();
 
 const KV_DIR = path.join(os.homedir(), ".cowork", "config");
 const KV_FILE = path.join(KV_DIR, "tui-kv.json");
+const kvStoreSchema = z.record(z.string(), z.string());
 
 function loadStore(): Record<string, string> {
   try {
     const raw = fs.readFileSync(KV_FILE, "utf-8");
-    return JSON.parse(raw);
+    const parsed = kvStoreSchema.safeParse(JSON.parse(raw));
+    if (!parsed.success) {
+      return {};
+    }
+    return parsed.data;
   } catch {
     return {};
   }

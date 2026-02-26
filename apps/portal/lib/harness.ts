@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 const RUN_ROOT_PREFIX = "raw-agent-loop_mixed_";
+const unknownRecordSchema = z.record(z.string(), z.unknown());
+const unknownRecordArraySchema = z.array(unknownRecordSchema);
 
 export type RunStatus = "pending" | "running" | "completed" | "failed";
 
@@ -87,10 +90,14 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function readJsonFile<T>(filePath: string): Promise<T | null> {
+async function readJsonFile<T>(filePath: string, schema: z.ZodType<T>): Promise<T | null> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(raw) as T;
+    const parsed = schema.safeParse(JSON.parse(raw));
+    if (!parsed.success) {
+      return null;
+    }
+    return parsed.data;
   } catch {
     return null;
   }
@@ -167,7 +174,10 @@ export async function resolveRepoRoot(): Promise<string> {
   ];
 
   for (const candidate of candidates) {
-    const pkg = await readJsonFile<{ name?: string }>(path.join(candidate, "package.json"));
+    const pkg = await readJsonFile(
+      path.join(candidate, "package.json"),
+      z.object({ name: z.string().optional() }).passthrough(),
+    );
     if (pkg?.name === "agent-coworker") {
       return candidate;
     }
@@ -195,9 +205,9 @@ async function listRunRootNames(repoRoot: string): Promise<string[]> {
 
 async function readRunSummary(runRootPath: string, runDirName: string): Promise<HarnessRunSummary | null> {
   const runDir = path.join(runRootPath, runDirName);
-  const runMeta = await readJsonFile<Record<string, unknown>>(path.join(runDir, "run_meta.json"));
-  const attempts = (await readJsonFile<Array<Record<string, unknown>>>(path.join(runDir, "attempts.json"))) ?? [];
-  const trace = await readJsonFile<Record<string, unknown>>(path.join(runDir, "trace.json"));
+  const runMeta = await readJsonFile(path.join(runDir, "run_meta.json"), unknownRecordSchema);
+  const attempts = (await readJsonFile(path.join(runDir, "attempts.json"), unknownRecordArraySchema)) ?? [];
+  const trace = await readJsonFile(path.join(runDir, "trace.json"), unknownRecordSchema);
   const finalText = await readTextFile(path.join(runDir, "final.txt"));
 
   const runId = asString(runMeta?.runId) ?? runDirName;
@@ -258,7 +268,7 @@ async function readRunRootSummary(repoRoot: string, runRootName: string): Promis
   if (!isSafeSegment(runRootName)) return null;
 
   const runRootPath = path.join(outputDirectory(repoRoot), runRootName);
-  const manifest = await readJsonFile<Record<string, unknown>>(path.join(runRootPath, "manifest.json"));
+  const manifest = await readJsonFile(path.join(runRootPath, "manifest.json"), unknownRecordSchema);
 
   let runDirNames: string[] = [];
   try {
@@ -342,8 +352,8 @@ export async function getHarnessRunDetail(runRootName: string, runDirName: strin
   if (!(await pathExists(runDir))) return null;
 
   const runRootPath = path.dirname(runDir);
-  const manifest = await readJsonFile<Record<string, unknown>>(path.join(runRootPath, "manifest.json"));
-  const runMeta = await readJsonFile<Record<string, unknown>>(path.join(runDir, "run_meta.json"));
+  const manifest = await readJsonFile(path.join(runRootPath, "manifest.json"), unknownRecordSchema);
+  const runMeta = await readJsonFile(path.join(runDir, "run_meta.json"), unknownRecordSchema);
 
   const [prompt, system, final, finalReasoning, toolLogText] = await Promise.all([
     readTextFile(path.join(runDir, "prompt.txt")),
@@ -353,10 +363,10 @@ export async function getHarnessRunDetail(runRootName: string, runDirName: strin
     readTextFile(path.join(runDir, "tool-log.txt")),
   ]);
 
-  const attempts = (await readJsonFile<Array<Record<string, unknown>>>(path.join(runDir, "attempts.json"))) ?? [];
-  const trace = await readJsonFile<Record<string, unknown>>(path.join(runDir, "trace.json"));
+  const attempts = (await readJsonFile(path.join(runDir, "attempts.json"), unknownRecordArraySchema)) ?? [];
+  const trace = await readJsonFile(path.join(runDir, "trace.json"), unknownRecordSchema);
   const artifactsIndex =
-    (await readJsonFile<Array<Record<string, unknown>>>(path.join(runDir, "artifacts_index.json"))) ?? [];
+    (await readJsonFile(path.join(runDir, "artifacts_index.json"), unknownRecordArraySchema)) ?? [];
 
   const traceRecord = toRecord(trace) ?? {};
   const traceResult = toRecord(traceRecord.result) ?? {};

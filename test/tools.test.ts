@@ -1258,17 +1258,18 @@ describe("webSearch tool", () => {
     const dir = await tmpDir();
     const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
     const out: string = await t.execute({ query: "   ", maxResults: 1 });
-    expect(out).toContain("requires a query");
+    expect(out).toContain("non-empty query");
   });
 
-  test("uses turnUserPrompt as fallback query for provider-native-style google inputs", async () => {
+  test("falls back to turnUserPrompt when query is missing", async () => {
     const dir = await tmpDir();
 
     const oldExa = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "test-exa-key";
 
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async (_url: any, init: any) => {
+    globalThis.fetch = mock(async (url: any, init: any) => {
+      expect(String(url)).toContain("api.exa.ai/search");
       const body = JSON.parse(String(init?.body ?? "{}"));
       expect(body.query).toBe("latest Apple earnings guidance");
       expect(body.numResults).toBe(2);
@@ -1276,9 +1277,9 @@ describe("webSearch tool", () => {
         JSON.stringify({
           results: [
             {
-              title: "Exa Result",
-              url: "https://exa.com",
-              text: { text: "Exa content" },
+              title: "Fallback Result",
+              url: "https://example.com/fallback",
+              text: "Fallback content",
             },
           ],
         }),
@@ -1299,14 +1300,128 @@ describe("webSearch tool", () => {
       );
 
       const out: string = await t.execute({
-        mode: "MODE_UNSPECIFIED",
-        dynamicThreshold: 1,
         maxResults: 2,
       });
-      expect(out).toContain("Exa Result");
-      expect(out).toContain("Exa content");
+      expect(out).toContain("Fallback Result");
+      expect((globalThis.fetch as any).mock.calls.length).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+    }
+  });
+
+  test("accepts compatibility query aliases and provider-native extra keys", async () => {
+    const dir = await tmpDir();
+
+    const oldBrave = process.env.BRAVE_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
+    process.env.BRAVE_API_KEY = "test-brave-key";
+    delete process.env.EXA_API_KEY;
+
+    const seenQueries: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (url: any) => {
+      const query = new URL(String(url)).searchParams.get("q") ?? "";
+      seenQueries.push(query);
+      return new Response(
+        JSON.stringify({
+          web: {
+            results: [
+              {
+                title: `Result for ${query}`,
+                url: "https://example.com",
+                description: "Alias compatibility",
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as any;
+
+    try {
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
+      const aliasInputs = [
+        { q: "q alias query" },
+        { searchQuery: "searchQuery alias query" },
+        { text: "text alias query" },
+        { prompt: "prompt alias query" },
+      ] as const;
+
+      for (const input of aliasInputs) {
+        const query = Object.values(input)[0];
+        const out: string = await t.execute({
+          ...input,
+          mode: "auto",
+          dynamicThreshold: 0.42,
+          maxResults: 1,
+        });
+        expect(out).toContain(`Result for ${query}`);
+      }
+
+      expect(seenQueries).toEqual([
+        "q alias query",
+        "searchQuery alias query",
+        "text alias query",
+        "prompt alias query",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
+      else delete process.env.BRAVE_API_KEY;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+    }
+  });
+
+  test("accepts unknown compatibility fields when query is present", async () => {
+    const dir = await tmpDir();
+
+    const oldBrave = process.env.BRAVE_API_KEY;
+    const oldExa = process.env.EXA_API_KEY;
+    process.env.BRAVE_API_KEY = "test-brave-key";
+    delete process.env.EXA_API_KEY;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (url: any) => {
+      const query = new URL(String(url)).searchParams.get("q") ?? "";
+      expect(query).toBe("query with unknown extras");
+      return new Response(
+        JSON.stringify({
+          web: {
+            results: [
+              {
+                title: "Compatibility Result",
+                url: "https://example.com/compat",
+                description: "Unknown key compatibility",
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as any;
+
+    try {
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
+      const out: string = await t.execute({
+        query: "query with unknown extras",
+        search_context_size: "low",
+        user_location: {
+          type: "approximate",
+          city: "Austin",
+        },
+        include_domains: ["example.com"],
+        maxResults: 1,
+      } as any);
+
+      expect(out).toContain("Compatibility Result");
+      expect(out).not.toContain("requires a query");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
+      else delete process.env.BRAVE_API_KEY;
       if (oldExa) process.env.EXA_API_KEY = oldExa;
       else delete process.env.EXA_API_KEY;
     }
@@ -1754,6 +1869,32 @@ describe("ask tool", () => {
     expect(res).toBe("42");
   });
 
+  test("rejects empty single-question prompt", async () => {
+    const dir = await tmpDir();
+    const askFn = mock(async (_q: string) => "unused");
+    const ctx = makeCtx(dir);
+    ctx.askUser = askFn;
+
+    const t: any = createAskTool(ctx);
+    await expect(t.execute({ question: "" })).rejects.toThrow();
+    expect(askFn).not.toHaveBeenCalled();
+  });
+
+  test("rejects whitespace-only structured question prompt", async () => {
+    const dir = await tmpDir();
+    const askFn = mock(async (_q: string) => "unused");
+    const ctx = makeCtx(dir);
+    ctx.askUser = askFn;
+
+    const t: any = createAskTool(ctx);
+    await expect(
+      t.execute({
+        questions: [{ question: "   " }],
+      })
+    ).rejects.toThrow();
+    expect(askFn).not.toHaveBeenCalled();
+  });
+
   test("passes options when provided", async () => {
     const dir = await tmpDir();
     const askFn = mock(async (q: string, opts?: string[]) => "option B");
@@ -1941,7 +2082,7 @@ describe("todoWrite tool", () => {
 // ---------------------------------------------------------------------------
 
 describe("notebookEdit tool", () => {
-  function makeNotebook(cells: Array<{ cell_type: string; source: string[] }>) {
+  function makeNotebook(cells: Array<{ cell_type: string; source: string[] | string }>) {
     return JSON.stringify(
       {
         nbformat: 4,
@@ -1978,6 +2119,29 @@ describe("notebookEdit tool", () => {
       editMode: "replace",
     });
     expect(res).toContain("replace");
+
+    const nb = JSON.parse(await fs.readFile(p, "utf-8"));
+    expect(nb.cells[0].source).toEqual(["print('new')"]);
+  });
+
+  test("accepts string-form notebook cell sources", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "nb.ipynb");
+    await fs.writeFile(
+      p,
+      makeNotebook([
+        { cell_type: "code", source: "print('old')" },
+        { cell_type: "markdown", source: ["# Title\n"] },
+      ])
+    );
+
+    const t: any = createNotebookEditTool(makeCtx(dir));
+    await t.execute({
+      notebookPath: p,
+      cellIndex: 0,
+      newSource: "print('new')",
+      editMode: "replace",
+    });
 
     const nb = JSON.parse(await fs.readFile(p, "utf-8"));
     expect(nb.cells[0].source).toEqual(["print('new')"]);
@@ -2069,6 +2233,22 @@ describe("notebookEdit tool", () => {
         editMode: "replace",
       })
     ).rejects.toThrow(/expected a \.ipynb file/i);
+  });
+
+  test("rejects invalid notebook JSON", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "nb.ipynb");
+    await fs.writeFile(p, "{ not-valid-json", "utf-8");
+
+    const t: any = createNotebookEditTool(makeCtx(dir));
+    await expect(
+      t.execute({
+        notebookPath: p,
+        cellIndex: 0,
+        newSource: "x = 2",
+        editMode: "replace",
+      })
+    ).rejects.toThrow(/Invalid notebook JSON/);
   });
 
   test("rejects path outside allowed dirs", async () => {

@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 import { app } from "electron";
 
 import type {
   PersistedState,
   ThreadRecord,
-  ThreadStatus,
-  ThreadTitleSource,
   TranscriptEvent,
   WorkspaceRecord,
 } from "../../src/app/types";
@@ -86,7 +85,12 @@ function asOptionalString(value: unknown): string | undefined {
   return candidate ?? undefined;
 }
 
-function asThreadStatus(value: unknown): ThreadStatus {
+function asNonNegativeInteger(value: unknown, fallback = 0): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
+}
+
+function asThreadStatus(value: unknown): ThreadRecord["status"] {
   return value === "active" || value === "disconnected" ? value : "disconnected";
 }
 
@@ -95,17 +99,19 @@ function isPlaceholderThreadTitle(title: string): boolean {
   return normalized === "new thread" || normalized === "new session" || normalized === "new conversation";
 }
 
-function asThreadTitleSource(value: unknown, fallbackTitle: string): ThreadTitleSource {
+function asThreadTitleSource(value: unknown, fallbackTitle: string): ThreadRecord["titleSource"] {
   if (value === "default" || value === "model" || value === "heuristic" || value === "manual") {
     return value;
   }
   return isPlaceholderThreadTitle(fallbackTitle) ? "default" : "manual";
 }
 
-function asNonNegativeInteger(value: unknown, fallback = 0): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.floor(value));
-}
+const transcriptEventSchema = z.object({
+  ts: z.string().trim().min(1),
+  threadId: z.string().trim().min(1),
+  direction: z.enum(["server", "client"]),
+  payload: z.unknown(),
+}).passthrough();
 
 async function resolveWorkspacePath(value: unknown): Promise<string | null> {
   const candidate = asNonEmptyString(value);
@@ -222,7 +228,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     workspaces,
     threads,
     developerMode: typeof value.developerMode === "boolean" ? value.developerMode : false,
-    showHiddenFiles: typeof (value as any).showHiddenFiles === "boolean" ? (value as any).showHiddenFiles : false,
+    showHiddenFiles: typeof value.showHiddenFiles === "boolean" ? value.showHiddenFiles : false,
   };
 }
 
@@ -256,7 +262,13 @@ export class PersistenceService {
     return await this.stateLock.run(async () => {
       try {
         const raw = await fs.readFile(this.stateFilePath, "utf8");
-        return await sanitizePersistedState(JSON.parse(raw));
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          return defaultState();
+        }
+        return await sanitizePersistedState(parsed);
       } catch (error) {
         if (isNotFound(error)) {
           return defaultState();
@@ -294,17 +306,24 @@ export class PersistenceService {
     }
 
     const events: TranscriptEvent[] = [];
-    for (const [idx, line] of raw.split(/\r?\n/).entries()) {
+    for (const line of raw.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
       }
 
+      let parsedJson: unknown;
       try {
-        events.push(JSON.parse(trimmed) as TranscriptEvent);
-      } catch (error) {
-        throw new Error(`Failed to parse transcript line ${idx + 1}: ${String(error)}`);
+        parsedJson = JSON.parse(trimmed);
+      } catch {
+        continue;
       }
+
+      const parsedLine = transcriptEventSchema.safeParse(parsedJson);
+      if (!parsedLine.success) {
+        continue;
+      }
+      events.push(parsedLine.data as TranscriptEvent);
     }
 
     return events;

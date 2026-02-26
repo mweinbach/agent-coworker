@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import { z } from "zod";
 
 import { app } from "electron";
 
@@ -19,11 +20,18 @@ type ServerHandle = {
 };
 
 type ServerListening = {
-  type: string;
+  type: "server_listening";
   url: string;
   port: number;
   cwd: string;
 };
+
+const serverListeningSchema = z.object({
+  type: z.literal("server_listening"),
+  url: z.string().min(1),
+  port: z.number(),
+  cwd: z.string().min(1),
+}).passthrough();
 
 function resolveRepoRoot(): string {
   const fromEnv = process.env.COWORK_REPO_ROOT;
@@ -192,12 +200,10 @@ function waitForServerListening(child: ChildProcessWithoutNullStreams): Promise<
         return;
       }
       try {
-        const parsed = JSON.parse(trimmed) as ServerListening;
-        if (!parsed?.url || parsed.type !== "server_listening") {
-          return;
-        }
+        const parsed = serverListeningSchema.safeParse(JSON.parse(trimmed));
+        if (!parsed.success) return;
         cleanup();
-        resolve(parsed);
+        resolve(parsed.data);
       } catch {
         // Ignore non-JSON lines while waiting for the startup event.
       }

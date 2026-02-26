@@ -13,6 +13,7 @@ import type {
   OAuthClientInformationMixed,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { AuthorizationServerMetadata } from "@modelcontextprotocol/sdk/client/auth.js";
+import { z } from "zod";
 
 import type { MCPRegistryServer } from "./configRegistry";
 import type { MCPServerOAuthClientInfo, MCPServerOAuthPending, MCPServerOAuthTokens } from "./authStore";
@@ -20,6 +21,12 @@ import { nowIso } from "../utils/typeGuards";
 
 /** Default client_id used when no dynamic registration endpoint is available. */
 const FALLBACK_CLIENT_ID = "agent-coworker-desktop";
+const nonEmptyStringSchema = z.string().trim().min(1);
+const nonEmptyStringArraySchema = z.array(nonEmptyStringSchema).min(1);
+const positiveFiniteNumberSchema = z.number().finite().positive();
+const authServerMetadataSchema = z.object({
+  registration_endpoint: nonEmptyStringSchema.optional(),
+}).passthrough();
 
 export interface MCPOAuthChallenge {
   method: "auto" | "code";
@@ -176,10 +183,8 @@ async function createCallbackCapture(challengeId: string, state: string, expires
 async function resolveAuthorizationServerUrl(serverUrl: string): Promise<string> {
   try {
     const resourceMeta = await discoverOAuthProtectedResourceMetadata(serverUrl);
-    const authServers = resourceMeta.authorization_servers;
-    if (Array.isArray(authServers) && authServers.length > 0 && typeof authServers[0] === "string") {
-      return authServers[0];
-    }
+    const authServers = nonEmptyStringArraySchema.safeParse(resourceMeta.authorization_servers);
+    if (authServers.success) return authServers.data[0]!;
   } catch {
     // Discovery unavailable — fall through to default.
   }
@@ -225,9 +230,9 @@ async function ensureClientInformation(opts: {
   }
 
   // Attempt dynamic client registration (RFC 7591).
-  const registrationEndpoint = (opts.metadata as Record<string, unknown> | undefined)
-    ?.registration_endpoint;
-  if (typeof registrationEndpoint === "string" && registrationEndpoint.length > 0) {
+  const metadata = authServerMetadataSchema.safeParse(opts.metadata);
+  const registrationEndpoint = metadata.success ? metadata.data.registration_endpoint : undefined;
+  if (registrationEndpoint) {
     try {
       const registered = await registerClient(opts.authServerUrl, {
         metadata: opts.metadata,
@@ -405,9 +410,8 @@ export async function exchangeMCPServerOAuthCode(opts: {
   });
 
   const expiresAt = (() => {
-    if (typeof sdkTokens.expires_in === "number" && Number.isFinite(sdkTokens.expires_in) && sdkTokens.expires_in > 0) {
-      return new Date(Date.now() + sdkTokens.expires_in * 1000).toISOString();
-    }
+    const expiresIn = positiveFiniteNumberSchema.safeParse(sdkTokens.expires_in);
+    if (expiresIn.success) return new Date(Date.now() + expiresIn.data * 1000).toISOString();
     return undefined;
   })();
 

@@ -48,7 +48,7 @@ describe("connect helpers", () => {
 });
 
 describe("connectProvider", () => {
-  test("readConnectionStore falls back to legacy path and migrates", async () => {
+  test("readConnectionStore ignores legacy path and only uses cowork auth store", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
     const legacyPath = path.join(home, ".ai-coworker", "config", "connections.json");
@@ -69,10 +69,30 @@ describe("connectProvider", () => {
     await fs.writeFile(legacyPath, JSON.stringify(legacyStore, null, 2), "utf-8");
 
     const store = await readConnectionStore(paths);
-    expect(store.services.openai?.apiKey).toBe("sk-legacy-openai");
+    expect(store.services.openai?.apiKey).toBeUndefined();
 
-    const migrated = JSON.parse(await fs.readFile(paths.connectionsFile, "utf-8")) as any;
-    expect(migrated?.services?.openai?.apiKey).toBe("sk-legacy-openai");
+    await expect(fs.readFile(paths.connectionsFile, "utf-8")).rejects.toThrow();
+  });
+
+  test("recovers from malformed connection store JSON when saving a provider key", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
+    await fs.writeFile(paths.connectionsFile, "{not-valid-json", "utf-8");
+
+    const result = await connectProvider({
+      provider: "openai",
+      apiKey: "sk-openai-test-5678",
+      paths,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.mode).toBe("api_key");
+
+    const store = await readConnectionStore(paths);
+    expect(store.services.openai?.mode).toBe("api_key");
+    expect(store.services.openai?.apiKey).toBe("sk-openai-test-5678");
   });
 
   test("stores api key mode when key is provided", async () => {
@@ -228,15 +248,30 @@ describe("connectProvider", () => {
         const u = String(url);
         if (u.endsWith("/api/accounts/deviceauth/usercode")) {
           expect(init?.method).toBe("POST");
-          return new Response(JSON.stringify({ device_auth_id: "dev_123", user_code: "ABCD-EFGH", interval: 1 }), {
-            status: 200,
-          });
+          return new Response(
+            JSON.stringify({
+              device_auth_id: "dev_123",
+              user_code: "ABCD-EFGH",
+              interval: 1,
+              expires_in: 600,
+            }),
+            {
+              status: 200,
+            },
+          );
         }
         if (u.endsWith("/api/accounts/deviceauth/token")) {
           expect(init?.method).toBe("POST");
-          return new Response(JSON.stringify({ authorization_code: "auth_code_123", code_verifier: "verifier_123" }), {
-            status: 200,
-          });
+          return new Response(
+            JSON.stringify({
+              authorization_code: "auth_code_123",
+              code_verifier: "verifier_123",
+              issued_at: "2026-02-23T00:00:00.000Z",
+            }),
+            {
+              status: 200,
+            },
+          );
         }
         if (u === "https://auth.openai.com/oauth/token") {
           return new Response(
@@ -268,6 +303,56 @@ describe("connectProvider", () => {
     expect(persisted?.tokens?.access_token).toBe("codex-device-access-token");
   });
 
+  test("codex-cli reuses and migrates legacy .codex credentials", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const accessToken = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3_600 });
+    const legacyPath = path.join(home, ".codex", "auth.json");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify(
+        {
+          auth_mode: "chatgpt",
+          issuer: "https://auth.openai.com",
+          client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+          tokens: {
+            access_token: accessToken,
+            refresh_token: "legacy-refresh-token",
+            id_token: makeJwt({
+              iss: "https://auth.openai.com",
+              email: "legacy@example.com",
+              "https://api.openai.com/auth": { chatgpt_account_id: "acc_legacy" },
+            }),
+          },
+        },
+        null,
+        2
+      ),
+      "utf-8"
+    );
+
+    const result = await connectProvider({
+      provider: "codex-cli",
+      paths,
+      fetchImpl: async () => {
+        throw new Error("Unexpected network call when legacy Codex credentials exist.");
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.mode).toBe("oauth");
+    expect(result.message).toContain("Existing Codex OAuth credentials detected.");
+    expect(result.oauthCredentialsFile).toBe(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"));
+
+    const migrated = JSON.parse(
+      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")
+    ) as any;
+    expect(migrated?.tokens?.access_token).toBe(accessToken);
+    expect(migrated?.tokens?.refresh_token).toBe("legacy-refresh-token");
+  });
+
   test("codex-cli stale credentials trigger new oauth flow", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
@@ -277,6 +362,8 @@ describe("connectProvider", () => {
       authFile,
       JSON.stringify(
         {
+          version: 1,
+          auth_mode: "chatgpt",
           issuer: "https://auth.openai.com",
           client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
           tokens: {
@@ -301,14 +388,29 @@ describe("connectProvider", () => {
       fetchImpl: async (url) => {
         const u = String(url);
         if (u.endsWith("/api/accounts/deviceauth/usercode")) {
-          return new Response(JSON.stringify({ device_auth_id: "dev_stale", user_code: "WXYZ-1234", interval: 1 }), {
-            status: 200,
-          });
+          return new Response(
+            JSON.stringify({
+              device_auth_id: "dev_stale",
+              user_code: "WXYZ-1234",
+              interval: 1,
+              expires_in: 600,
+            }),
+            {
+              status: 200,
+            },
+          );
         }
         if (u.endsWith("/api/accounts/deviceauth/token")) {
-          return new Response(JSON.stringify({ authorization_code: "fresh_code_1", code_verifier: "fresh_verifier_1" }), {
-            status: 200,
-          });
+          return new Response(
+            JSON.stringify({
+              authorization_code: "fresh_code_1",
+              code_verifier: "fresh_verifier_1",
+              issued_at: "2026-02-23T00:00:00.000Z",
+            }),
+            {
+              status: 200,
+            },
+          );
         }
         if (u === "https://auth.openai.com/oauth/token") {
           return new Response(

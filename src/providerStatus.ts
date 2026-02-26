@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { getAiCoworkerPaths, maskApiKey, readConnectionStore, type AiCoworkerPaths, type ConnectionStore } from "./connect";
 import { decodeJwtPayload, isTokenExpiring, readCodexAuthMaterial, refreshCodexAuthMaterial } from "./providers/codex-auth";
 import { PROVIDER_NAMES, type ProviderName } from "./types";
@@ -20,6 +22,13 @@ export type ProviderStatus = {
   savedApiKeyMasks?: Partial<Record<string, string>>;
 };
 
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
+const providerStatusModeSchema = z.enum(["api_key", "oauth", "oauth_pending"]);
+const oidcDiscoverySchema = z.object({
+  userinfo_endpoint: nonEmptyTrimmedStringSchema,
+}).passthrough();
+const oidcUserInfoSchema = z.record(z.string(), z.unknown());
+
 function joinUrl(base: string, suffix: string): string {
   const b = base.endsWith("/") ? base.slice(0, -1) : base;
   const s = suffix.startsWith("/") ? suffix : `/${suffix}`;
@@ -27,7 +36,13 @@ function joinUrl(base: string, suffix: string): string {
 }
 
 function normalizeProviderStatusMode(mode: unknown): ProviderStatusMode {
-  return mode === "api_key" || mode === "oauth" || mode === "oauth_pending" ? mode : "missing";
+  const parsed = providerStatusModeSchema.safeParse(mode);
+  return parsed.success ? parsed.data : "missing";
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  const parsed = nonEmptyTrimmedStringSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function buildSavedApiKeyMasks(opts: {
@@ -129,13 +144,8 @@ async function codexOidcUserInfo(opts: {
 }): Promise<{ email?: string; name?: string; message: string; ok: boolean }> {
   const idPayload = opts.idToken ? decodeJwtPayload(opts.idToken) : null;
   const accessPayload = decodeJwtPayload(opts.accessToken);
-  const email =
-    (typeof idPayload?.email === "string" ? idPayload.email : undefined) ??
-    (typeof accessPayload?.email === "string" ? accessPayload.email : undefined);
-  const iss =
-    (typeof idPayload?.iss === "string" ? idPayload.iss : undefined) ??
-    (typeof accessPayload?.iss === "string" ? accessPayload.iss : undefined) ??
-    opts.issuer;
+  const email = asNonEmptyString(idPayload?.email) ?? asNonEmptyString(accessPayload?.email);
+  const iss = asNonEmptyString(idPayload?.iss) ?? asNonEmptyString(accessPayload?.iss) ?? asNonEmptyString(opts.issuer);
   if (!iss) {
     return { email, ok: false, message: "Codex token missing issuer; cannot resolve userinfo endpoint." };
   }
@@ -146,13 +156,13 @@ async function codexOidcUserInfo(opts: {
     if (!wkRes.ok) {
       return { email, ok: false, message: `Failed to fetch OIDC discovery (${wkRes.status}).` };
     }
-    const wkJson = (await wkRes.json()) as any;
-    const userinfo = typeof wkJson?.userinfo_endpoint === "string" ? wkJson.userinfo_endpoint : null;
-    if (!userinfo) {
+    const wkJson = await wkRes.json();
+    const discovery = oidcDiscoverySchema.safeParse(wkJson);
+    if (!discovery.success) {
       return { email, ok: false, message: "OIDC discovery missing userinfo_endpoint." };
     }
 
-    const uiRes = await opts.fetchImpl(userinfo, {
+    const uiRes = await opts.fetchImpl(discovery.data.userinfo_endpoint, {
       method: "GET",
       headers: { authorization: `Bearer ${opts.accessToken}` },
     });
@@ -160,9 +170,10 @@ async function codexOidcUserInfo(opts: {
       return { email, ok: false, message: `OIDC userinfo failed (${uiRes.status}).` };
     }
 
-    const uiJson = (await uiRes.json()) as any;
-    const name = typeof uiJson?.name === "string" ? uiJson.name : undefined;
-    const uiEmail = typeof uiJson?.email === "string" ? uiJson.email : undefined;
+    const uiJson = await uiRes.json();
+    const parsedUserInfo = oidcUserInfoSchema.safeParse(uiJson);
+    const name = parsedUserInfo.success ? asNonEmptyString(parsedUserInfo.data.name) : undefined;
+    const uiEmail = parsedUserInfo.success ? asNonEmptyString(parsedUserInfo.data.email) : undefined;
     return { email: uiEmail ?? email, name, ok: true, message: "Verified via OIDC userinfo." };
   } catch (err) {
     return { email, ok: false, message: `OIDC userinfo error: ${String(err)}` };

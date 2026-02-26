@@ -1,4 +1,8 @@
-import type { ServerEvent as CoreServerEvent } from "@cowork/server/protocol";
+import {
+  safeParseServerEvent as safeParseServerEventFromProtocol,
+  safeParseServerEventJson,
+  type ServerEvent as CoreServerEvent,
+} from "@cowork/server/protocol";
 export { ASK_SKIP_TOKEN } from "@cowork/shared/ask";
 
 export { PROVIDER_NAMES } from "@cowork/types";
@@ -16,11 +20,10 @@ export type { ClientMessage, ServerEvent } from "@cowork/server/protocol";
 
 export type ConfigSubset = Extract<CoreServerEvent, { type: "server_hello" }>["config"];
 
-export function safeJsonParse(raw: unknown): any | null {
-  if (typeof raw !== "string") return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+export function safeJsonParse(raw: unknown): unknown | null {
+  return safeParseServerEventJson(raw);
+}
+
+export function safeParseServerEvent(raw: unknown): CoreServerEvent | null {
+  return safeParseServerEventFromProtocol(raw);
 }

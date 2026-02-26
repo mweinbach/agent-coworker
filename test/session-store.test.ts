@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   getPersistedSessionFilePath,
+  listPersistedSessionSnapshots,
   parsePersistedSessionSnapshot,
   readPersistedSessionSnapshot,
   writePersistedSessionSnapshot,
@@ -71,25 +72,53 @@ describe("sessionStore", () => {
     expect(loaded).toEqual(snapshot);
   });
 
-  test("readPersistedSessionSnapshot returns null for malformed files", async () => {
+  test("readPersistedSessionSnapshot throws for malformed files", async () => {
     const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-store-test-"));
     const sessionId = "sess-bad";
     const filePath = getPersistedSessionFilePath({ sessionsDir }, sessionId);
 
     await fs.writeFile(filePath, "not valid json {{{", "utf-8");
 
-    const loaded = await readPersistedSessionSnapshot({ paths: { sessionsDir }, sessionId });
-    expect(loaded).toBeNull();
+    await expect(
+      readPersistedSessionSnapshot({ paths: { sessionsDir }, sessionId }),
+    ).rejects.toThrow("Invalid JSON in persisted session snapshot");
   });
 
   test("parsePersistedSessionSnapshot rejects invalid shape", () => {
-    const parsed = parsePersistedSessionSnapshot({
-      version: 1,
-      sessionId: "sess-1",
-      createdAt: "2026-02-19T00:00:00.000Z",
-      updatedAt: "2026-02-19T00:00:01.000Z",
-      session: { title: "x" },
+    expect(() =>
+      parsePersistedSessionSnapshot({
+        version: 1,
+        sessionId: "sess-1",
+        createdAt: "2026-02-19T00:00:00.000Z",
+        updatedAt: "2026-02-19T00:00:01.000Z",
+        session: { title: "x" },
+      }),
+    ).toThrow("Invalid persisted session snapshot");
+  });
+
+  test("listPersistedSessionSnapshots skips malformed files", async () => {
+    const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-store-list-test-"));
+    const snapshotA = makeSnapshot("sess-a");
+    const snapshotB = {
+      ...makeSnapshot("sess-b"),
+      updatedAt: "2026-02-19T00:00:02.000Z",
+    };
+
+    await writePersistedSessionSnapshot({
+      paths: { sessionsDir },
+      snapshot: snapshotA,
     });
-    expect(parsed).toBeNull();
+    await writePersistedSessionSnapshot({
+      paths: { sessionsDir },
+      snapshot: snapshotB,
+    });
+
+    await fs.writeFile(path.join(sessionsDir, "broken.json"), "{ invalid", "utf-8");
+    await fs.writeFile(path.join(sessionsDir, "invalid-shape.json"), JSON.stringify({ version: 1 }), "utf-8");
+
+    const summaries = await listPersistedSessionSnapshots({ sessionsDir });
+
+    expect(summaries.map((summary) => summary.sessionId)).toEqual(["sess-b", "sess-a"]);
+    expect(summaries).toHaveLength(2);
   });
 });

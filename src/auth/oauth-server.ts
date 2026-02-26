@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { z } from "zod";
 
 export const OAUTH_SUCCESS_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Auth complete</title></head><body><h1>Authorization complete</h1><p>You can close this tab.</p></body></html>`;
 
@@ -6,30 +7,33 @@ export const OAUTH_FAILURE_HTML = (message: string) =>
   `<!doctype html><html><head><meta charset="utf-8"><title>Auth failed</title></head><body><h1>Authorization failed</h1><p>${message}</p></body></html>`;
 
 export const OAUTH_LOOPBACK_HOST = "127.0.0.1";
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
+const addressInfoSchema = z.object({ port: z.number().int().nonnegative() }).passthrough();
 
 export async function listenOnLocalhost(
   preferredPort: number,
   onRequest: (req: IncomingMessage, res: ServerResponse) => void
 ): Promise<{ port: number; close: () => void }> {
   const isAddrInUse = (err: unknown): boolean => {
-    return (err as { code?: string } | undefined)?.code === "EADDRINUSE";
+    const parsed = errorWithCodeSchema.safeParse(err);
+    return parsed.success && parsed.data.code === "EADDRINUSE";
   };
 
   const listen = async (port: number): Promise<{ port: number; close: () => void }> => {
     const server = createServer(onRequest);
     const resolvedPort = await new Promise<number>((resolve, reject) => {
-      const onError = (err: Error & { code?: string }) => {
+      const onError = (err: unknown) => {
         server.off("listening", onListening);
         reject(err);
       };
       const onListening = () => {
         server.off("error", onError);
-        const addr = server.address();
-        if (!addr || typeof addr === "string") {
+        const parsedAddress = addressInfoSchema.safeParse(server.address());
+        if (!parsedAddress.success) {
           reject(new Error("Unable to determine local callback port."));
           return;
         }
-        resolve(addr.port);
+        resolve(parsedAddress.data.port);
       };
       server.once("error", onError);
       server.once("listening", onListening);

@@ -202,7 +202,7 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
     await writeFile(
-      path.join(builtIn, "prompts", "system-models", "claude-4-6-opus.md"),
+      path.join(builtIn, "prompts", "system-models", "claude-opus-4-6.md"),
       "OPUS TEMPLATE {{modelName}}"
     );
 
@@ -222,7 +222,7 @@ describe("loadSystemPrompt", () => {
 
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
     await writeFile(
-      path.join(builtIn, "prompts", "system-models", "claude-4-6-sonnet.md"),
+      path.join(builtIn, "prompts", "system-models", "claude-sonnet-4-6.md"),
       "SONNET TEMPLATE {{modelName}}"
     );
 

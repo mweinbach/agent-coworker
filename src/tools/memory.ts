@@ -8,6 +8,9 @@ import { z } from "zod";
 import type { ToolContext } from "./context";
 import { isPathInside, truncateText } from "../utils/paths";
 
+const abortByNameSchema = z.object({ name: z.literal("AbortError") }).passthrough();
+const errorCodeSchema = z.object({ code: z.union([z.string(), z.number()]) }).passthrough();
+
 async function readIfExists(p: string): Promise<string | null> {
   try {
     return await fs.readFile(p, "utf-8");
@@ -130,12 +133,14 @@ Use action=read to retrieve memory, action=write to store new information, and a
               ...(ctx.abortSignal ? { signal: ctx.abortSignal } : {}),
             },
             (err, stdout, stderr) => {
-              if ((err as any)?.name === "AbortError" || (err as any)?.code === "ABORT_ERR") {
+              const isAbortByName = abortByNameSchema.safeParse(err).success;
+              const parsedErrorCode = errorCodeSchema.safeParse(err);
+              const code = parsedErrorCode.success ? parsedErrorCode.data.code : undefined;
+              if (isAbortByName || code === "ABORT_ERR") {
                 return resolve(`Memory search aborted.`);
               }
-              const code = (err as any)?.code;
               if (code === 1) return resolve(null);
-              if ((err as any)?.code === "ENOENT") return resolve(null);
+              if (code === "ENOENT") return resolve(null);
               if (err) return resolve(String(stderr || err));
               return resolve(stdout.toString());
             }

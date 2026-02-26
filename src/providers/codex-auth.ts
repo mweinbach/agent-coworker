@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 
 export const CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 export const CODEX_OAUTH_ISSUER = "https://auth.openai.com";
@@ -32,44 +33,77 @@ export type CodexAuthMaterial = {
   updatedAt?: string;
 };
 
-function isObjectLike(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function toNumber(value: unknown): number | undefined {
+const nonEmptyStringSchema = z.string().trim().min(1);
+const isoTimestampSchema = z.string().datetime({ offset: true });
+const recordSchema = z.record(z.string(), z.unknown());
+const organizationsSchema = z.array(z.object({
+  id: nonEmptyStringSchema.optional(),
+}).passthrough());
+const finiteNumberFromUnknownSchema = z.preprocess((value) => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) {
     const parsed = Number(value);
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}, z.number().finite());
+const codexOAuthTokenResponseSchema = z.object({
+  access_token: nonEmptyStringSchema,
+  refresh_token: nonEmptyStringSchema.optional(),
+  id_token: nonEmptyStringSchema.optional(),
+  expires_in: finiteNumberFromUnknownSchema.optional(),
+}).passthrough();
+const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
+const jsonStringSchema = z.string();
+
+const codexAuthDocumentSchema = z.object({
+  version: z.literal(1),
+  auth_mode: z.literal("chatgpt"),
+  issuer: nonEmptyStringSchema.optional(),
+  client_id: nonEmptyStringSchema.optional(),
+  tokens: z.object({
+    access_token: nonEmptyStringSchema,
+    refresh_token: nonEmptyStringSchema.optional(),
+    id_token: nonEmptyStringSchema.optional(),
+    expires_at: z.union([z.number().finite(), nonEmptyStringSchema]).optional(),
+  }).strict(),
+  account: z.object({
+    account_id: nonEmptyStringSchema.optional(),
+    email: nonEmptyStringSchema.optional(),
+    plan_type: nonEmptyStringSchema.optional(),
+  }).strict().optional(),
+  updated_at: isoTimestampSchema.optional(),
+  last_refresh: isoTimestampSchema.optional(),
+}).strict();
+
+const oauthNamespaceClaimsSchema = z.object({
+  chatgpt_account_id: nonEmptyStringSchema.optional(),
+  chatgpt_plan_type: nonEmptyStringSchema.optional(),
+}).passthrough();
+
+const profileNamespaceClaimsSchema = z.object({
+  email: nonEmptyStringSchema.optional(),
+}).passthrough();
+
+function parseWithSchema<T>(schema: z.ZodType<T>, value: unknown): T | undefined {
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function parseTokenResponse(
+  payload: unknown,
+  errorMessage = "Token response missing access_token."
+): z.infer<typeof codexOAuthTokenResponseSchema> {
+  const parsedPayload = codexOAuthTokenResponseSchema.safeParse(payload);
+  if (!parsedPayload.success) throw new Error(errorMessage);
+  return parsedPayload.data;
 }
 
 function toEpochMs(value: unknown): number | undefined {
-  const parsed = toNumber(value);
+  const parsed = parseWithSchema(finiteNumberFromUnknownSchema, value);
   if (parsed === undefined) return undefined;
   if (parsed <= 0) return undefined;
   return parsed < 1e12 ? Math.floor(parsed * 1000) : Math.floor(parsed);
-}
-
-function readStringAt(root: unknown, keys: string[]): string | undefined {
-  let cur: unknown = root;
-  for (const key of keys) {
-    if (!isObjectLike(cur)) return undefined;
-    cur = cur[key];
-  }
-  if (typeof cur !== "string") return undefined;
-  const trimmed = cur.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function readNumberAt(root: unknown, keys: string[]): number | undefined {
-  let cur: unknown = root;
-  for (const key of keys) {
-    if (!isObjectLike(cur)) return undefined;
-    cur = cur[key];
-  }
-  return toNumber(cur);
 }
 
 function base64UrlDecodeToString(value: string): string | null {
@@ -89,7 +123,7 @@ export function decodeJwtPayload(token: string): Record<string, unknown> | null 
   if (!payloadRaw) return null;
   try {
     const parsed = JSON.parse(payloadRaw);
-    return isObjectLike(parsed) ? parsed : null;
+    return parseWithSchema(recordSchema, parsed) ?? null;
   } catch {
     return null;
   }
@@ -97,57 +131,47 @@ export function decodeJwtPayload(token: string): Record<string, unknown> | null 
 
 export function extractJwtExpiryMs(token: string): number | undefined {
   const payload = decodeJwtPayload(token);
-  const exp = toNumber(payload?.exp);
+  const exp = parseWithSchema(finiteNumberFromUnknownSchema, payload?.exp);
   if (!exp || exp <= 0) return undefined;
   return Math.floor(exp * 1000);
 }
 
 export function extractAccountIdFromClaims(claims: Record<string, unknown>): string | undefined {
-  const direct = typeof claims.chatgpt_account_id === "string" ? claims.chatgpt_account_id : undefined;
+  const direct = parseWithSchema(nonEmptyStringSchema, claims.chatgpt_account_id);
   if (direct) return direct;
 
-  const nestedAuth = isObjectLike(claims["https://api.openai.com/auth"])
-    ? (claims["https://api.openai.com/auth"] as Record<string, unknown>)
-    : null;
-  const nested = nestedAuth && typeof nestedAuth.chatgpt_account_id === "string" ? nestedAuth.chatgpt_account_id : undefined;
+  const nestedAuth = parseWithSchema(oauthNamespaceClaimsSchema, claims["https://api.openai.com/auth"]);
+  const nested = nestedAuth?.chatgpt_account_id;
   if (nested) return nested;
 
-  if (Array.isArray(claims.organizations)) {
-    for (const item of claims.organizations) {
-      if (!isObjectLike(item)) continue;
-      if (typeof item.id === "string" && item.id.trim()) return item.id;
+  const organizations = parseWithSchema(organizationsSchema, claims.organizations);
+  if (organizations) {
+    for (const organization of organizations) {
+      if (organization.id) return organization.id;
     }
   }
 
-  const orgId = typeof claims.organization_id === "string" ? claims.organization_id : undefined;
+  const orgId = parseWithSchema(nonEmptyStringSchema, claims.organization_id);
   if (orgId) return orgId;
 
-  const account = typeof claims.account_id === "string" ? claims.account_id : undefined;
+  const account = parseWithSchema(nonEmptyStringSchema, claims.account_id);
   if (account) return account;
 
   return undefined;
 }
 
 export function extractEmailFromClaims(claims: Record<string, unknown>): string | undefined {
-  if (typeof claims.email === "string" && claims.email.trim()) return claims.email;
-  const profile = isObjectLike(claims["https://api.openai.com/profile"])
-    ? (claims["https://api.openai.com/profile"] as Record<string, unknown>)
-    : null;
-  if (profile && typeof profile.email === "string" && profile.email.trim()) return profile.email;
+  const direct = parseWithSchema(nonEmptyStringSchema, claims.email);
+  if (direct) return direct;
+  const profile = parseWithSchema(profileNamespaceClaimsSchema, claims["https://api.openai.com/profile"]);
+  const nested = profile?.email;
+  if (nested) return nested;
   return undefined;
 }
 
 export function extractPlanTypeFromClaims(claims: Record<string, unknown>): string | undefined {
-  const nestedAuth = isObjectLike(claims["https://api.openai.com/auth"])
-    ? (claims["https://api.openai.com/auth"] as Record<string, unknown>)
-    : null;
-  if (nestedAuth && typeof nestedAuth.chatgpt_plan_type === "string" && nestedAuth.chatgpt_plan_type.trim()) {
-    return nestedAuth.chatgpt_plan_type;
-  }
-  if (typeof claims.chatgpt_plan_type === "string" && claims.chatgpt_plan_type.trim()) {
-    return claims.chatgpt_plan_type;
-  }
-  return undefined;
+  const nestedAuth = parseWithSchema(oauthNamespaceClaimsSchema, claims["https://api.openai.com/auth"]);
+  return nestedAuth?.chatgpt_plan_type ?? parseWithSchema(nonEmptyStringSchema, claims.chatgpt_plan_type);
 }
 
 export function codexAuthFilePath(paths: Pick<CodexAuthPaths, "authDir">): string {
@@ -159,74 +183,78 @@ export function legacyCodexAuthFilePath(paths: Pick<CodexAuthPaths, "rootDir">):
   return path.join(homeDir, ".codex", "auth.json");
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const st = await fs.stat(filePath);
-    return st.isFile();
-  } catch {
-    return false;
+function readValueAtPath(root: unknown, keys: string[]): unknown {
+  let current: unknown = root;
+  for (const key of keys) {
+    const parsed = parseWithSchema(recordSchema, current);
+    if (!parsed) return undefined;
+    current = parsed[key];
   }
+  return current;
+}
+
+function readStringAtPath(root: unknown, keys: string[]): string | undefined {
+  return parseWithSchema(nonEmptyStringSchema, readValueAtPath(root, keys));
 }
 
 async function readJsonFile(filePath: string): Promise<unknown | null> {
   try {
     const raw = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return null;
+    const parsedRaw = jsonStringSchema.safeParse(raw);
+    if (!parsedRaw.success) {
+      throw new Error(`Invalid JSON in Codex auth file ${filePath}: failed to read UTF-8 text`);
+    }
+    try {
+      return JSON.parse(parsedRaw.data);
+    } catch (error) {
+      throw new Error(`Invalid JSON in Codex auth file ${filePath}: ${String(error)}`);
+    }
+  } catch (error) {
+    const parsedCode = errorWithCodeSchema.safeParse(error);
+    const code = parsedCode.success ? parsedCode.data.code : undefined;
+    if (code === "ENOENT") return null;
+    throw error;
   }
 }
 
-function parseCodexAuthJson(file: string, json: unknown): CodexAuthMaterial | null {
-  if (!isObjectLike(json)) return null;
+function isInvalidCodexAuthJsonError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("Invalid JSON in Codex auth file ");
+}
 
-  const accessToken =
-    readStringAt(json, ["tokens", "access_token"]) ??
-    readStringAt(json, ["access_token"]) ??
-    readStringAt(json, ["auth", "access_token"]);
-  if (!accessToken) return null;
+function parseCodexAuthJson(file: string, json: unknown): CodexAuthMaterial {
+  const parsed = codexAuthDocumentSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new Error(`Invalid Codex auth schema at ${file}: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+  }
 
-  const refreshToken =
-    readStringAt(json, ["tokens", "refresh_token"]) ??
-    readStringAt(json, ["refresh_token"]) ??
-    readStringAt(json, ["auth", "refresh_token"]);
-  const idToken =
-    readStringAt(json, ["tokens", "id_token"]) ??
-    readStringAt(json, ["id_token"]) ??
-    readStringAt(json, ["auth", "id_token"]);
-
-  const expiresAtMs =
-    toEpochMs(readNumberAt(json, ["tokens", "expires_at"])) ??
-    toEpochMs(readNumberAt(json, ["expires_at"])) ??
-    extractJwtExpiryMs(accessToken);
+  const doc = parsed.data;
+  const accessToken = doc.tokens.access_token;
+  const refreshToken = doc.tokens.refresh_token;
+  const idToken = doc.tokens.id_token;
+  const expiresAtMs = toEpochMs(doc.tokens.expires_at) ?? extractJwtExpiryMs(accessToken);
 
   const idClaims = idToken ? decodeJwtPayload(idToken) : null;
   const accessClaims = decodeJwtPayload(accessToken);
 
   const accountId =
-    readStringAt(json, ["account", "account_id"]) ??
-    readStringAt(json, ["chatgpt_account_id"]) ??
+    doc.account?.account_id ??
     (idClaims ? extractAccountIdFromClaims(idClaims) : undefined) ??
     (accessClaims ? extractAccountIdFromClaims(accessClaims) : undefined);
 
   const email =
-    readStringAt(json, ["account", "email"]) ??
+    doc.account?.email ??
     (idClaims ? extractEmailFromClaims(idClaims) : undefined) ??
     (accessClaims ? extractEmailFromClaims(accessClaims) : undefined);
 
   const planType =
-    readStringAt(json, ["account", "plan_type"]) ??
+    doc.account?.plan_type ??
     (idClaims ? extractPlanTypeFromClaims(idClaims) : undefined) ??
     (accessClaims ? extractPlanTypeFromClaims(accessClaims) : undefined);
 
-  const issuer = readStringAt(json, ["issuer"]) ?? CODEX_OAUTH_ISSUER;
-  const clientId = readStringAt(json, ["client_id"]) ?? CODEX_OAUTH_CLIENT_ID;
-  const updatedAt = readStringAt(json, ["updated_at"]) ?? readStringAt(json, ["last_refresh"]);
-
   return {
     file,
-    issuer,
-    clientId,
+    issuer: doc.issuer ?? CODEX_OAUTH_ISSUER,
+    clientId: doc.client_id ?? CODEX_OAUTH_CLIENT_ID,
     accessToken,
     refreshToken,
     idToken,
@@ -234,7 +262,62 @@ function parseCodexAuthJson(file: string, json: unknown): CodexAuthMaterial | nu
     accountId,
     email,
     planType,
-    updatedAt,
+    updatedAt: doc.updated_at ?? doc.last_refresh,
+  };
+}
+
+function parseLegacyCodexAuthJson(file: string, json: unknown): CodexAuthMaterial | null {
+  const accessToken =
+    readStringAtPath(json, ["tokens", "access_token"]) ??
+    readStringAtPath(json, ["access_token"]) ??
+    readStringAtPath(json, ["auth", "access_token"]);
+  if (!accessToken) return null;
+
+  const refreshToken =
+    readStringAtPath(json, ["tokens", "refresh_token"]) ??
+    readStringAtPath(json, ["refresh_token"]) ??
+    readStringAtPath(json, ["auth", "refresh_token"]);
+  const idToken =
+    readStringAtPath(json, ["tokens", "id_token"]) ??
+    readStringAtPath(json, ["id_token"]) ??
+    readStringAtPath(json, ["auth", "id_token"]);
+
+  const expiresAtMs =
+    toEpochMs(readValueAtPath(json, ["tokens", "expires_at"])) ??
+    toEpochMs(readValueAtPath(json, ["expires_at"])) ??
+    extractJwtExpiryMs(accessToken);
+
+  const idClaims = idToken ? decodeJwtPayload(idToken) : null;
+  const accessClaims = decodeJwtPayload(accessToken);
+
+  const accountId =
+    readStringAtPath(json, ["account", "account_id"]) ??
+    readStringAtPath(json, ["chatgpt_account_id"]) ??
+    (idClaims ? extractAccountIdFromClaims(idClaims) : undefined) ??
+    (accessClaims ? extractAccountIdFromClaims(accessClaims) : undefined);
+
+  const email =
+    readStringAtPath(json, ["account", "email"]) ??
+    (idClaims ? extractEmailFromClaims(idClaims) : undefined) ??
+    (accessClaims ? extractEmailFromClaims(accessClaims) : undefined);
+
+  const planType =
+    readStringAtPath(json, ["account", "plan_type"]) ??
+    (idClaims ? extractPlanTypeFromClaims(idClaims) : undefined) ??
+    (accessClaims ? extractPlanTypeFromClaims(accessClaims) : undefined);
+
+  return {
+    file,
+    issuer: readStringAtPath(json, ["issuer"]) ?? CODEX_OAUTH_ISSUER,
+    clientId: readStringAtPath(json, ["client_id"]) ?? CODEX_OAUTH_CLIENT_ID,
+    accessToken,
+    refreshToken,
+    idToken,
+    expiresAtMs,
+    accountId,
+    email,
+    planType,
+    updatedAt: readStringAtPath(json, ["updated_at"]) ?? readStringAtPath(json, ["last_refresh"]),
   };
 }
 
@@ -306,21 +389,37 @@ export async function readCodexAuthMaterial(
   opts: { migrateLegacy?: boolean; onLine?: (line: string) => void } = {}
 ): Promise<CodexAuthMaterial | null> {
   const coworkFile = codexAuthFilePath(paths);
-  const coworkJson = await readJsonFile(coworkFile);
-  const coworkParsed = parseCodexAuthJson(coworkFile, coworkJson);
-  if (coworkParsed) return coworkParsed;
+  let coworkJson: unknown | null = null;
+  try {
+    coworkJson = await readJsonFile(coworkFile);
+  } catch (error) {
+    if (!isInvalidCodexAuthJsonError(error)) throw error;
+  }
+  if (coworkJson) {
+    try {
+      return parseCodexAuthJson(coworkFile, coworkJson);
+    } catch {
+      const legacyCowork = parseLegacyCodexAuthJson(coworkFile, coworkJson);
+      if (legacyCowork) return legacyCowork;
+    }
+  }
 
   if (!opts.migrateLegacy) return null;
 
   const legacyFile = legacyCodexAuthFilePath(paths);
-  if (!(await fileExists(legacyFile))) return null;
+  let legacyJson: unknown | null;
+  try {
+    legacyJson = await readJsonFile(legacyFile);
+  } catch {
+    return null;
+  }
+  if (!legacyJson) return null;
 
-  const legacyJson = await readJsonFile(legacyFile);
-  const legacyParsed = parseCodexAuthJson(legacyFile, legacyJson);
-  if (!legacyParsed) return null;
+  const parsedLegacy = parseLegacyCodexAuthJson(legacyFile, legacyJson);
+  if (!parsedLegacy) return null;
 
   const migrated = await writeCodexAuthMaterial(paths, {
-    ...legacyParsed,
+    ...parsedLegacy,
     file: coworkFile,
   });
   opts.onLine?.(`[auth] migrated legacy Codex credentials from ${legacyFile}`);
@@ -328,7 +427,7 @@ export async function readCodexAuthMaterial(
 }
 
 function expiresInMsFromResponse(payload: CodexOAuthTokenResponse): number | undefined {
-  const expiresIn = toNumber(payload.expires_in);
+  const expiresIn = parseWithSchema(finiteNumberFromUnknownSchema, payload.expires_in);
   if (!expiresIn || expiresIn <= 0) return undefined;
   return Math.floor(expiresIn * 1000);
 }
@@ -339,34 +438,25 @@ export function codexMaterialFromTokenResponse(
   opts: {
     issuer?: string;
     clientId?: string;
-    fallbackRefreshToken?: string;
-    fallbackIdToken?: string;
-    fallbackAccountId?: string;
-    fallbackEmail?: string;
-    fallbackPlanType?: string;
   } = {}
 ): CodexAuthMaterial {
-  const accessToken = typeof payload.access_token === "string" ? payload.access_token : "";
-  if (!accessToken.trim()) throw new Error("Token response missing access_token.");
+  const parsedPayload = parseTokenResponse(payload);
 
-  const refreshToken =
-    (typeof payload.refresh_token === "string" ? payload.refresh_token : undefined) ?? opts.fallbackRefreshToken;
-  const idToken = (typeof payload.id_token === "string" ? payload.id_token : undefined) ?? opts.fallbackIdToken;
+  const accessToken = parsedPayload.access_token;
+  const refreshToken = parsedPayload.refresh_token;
+  const idToken = parsedPayload.id_token;
 
   const accessClaims = decodeJwtPayload(accessToken);
   const idClaims = idToken ? decodeJwtPayload(idToken) : null;
   const accountId =
     (idClaims ? extractAccountIdFromClaims(idClaims) : undefined) ??
-    (accessClaims ? extractAccountIdFromClaims(accessClaims) : undefined) ??
-    opts.fallbackAccountId;
+    (accessClaims ? extractAccountIdFromClaims(accessClaims) : undefined);
   const email =
     (idClaims ? extractEmailFromClaims(idClaims) : undefined) ??
-    (accessClaims ? extractEmailFromClaims(accessClaims) : undefined) ??
-    opts.fallbackEmail;
+    (accessClaims ? extractEmailFromClaims(accessClaims) : undefined);
   const planType =
     (idClaims ? extractPlanTypeFromClaims(idClaims) : undefined) ??
-    (accessClaims ? extractPlanTypeFromClaims(accessClaims) : undefined) ??
-    opts.fallbackPlanType;
+    (accessClaims ? extractPlanTypeFromClaims(accessClaims) : undefined);
 
   const expiresAtMs =
     (() => {
@@ -396,11 +486,6 @@ export async function persistCodexAuthFromTokenResponse(
   opts: {
     issuer?: string;
     clientId?: string;
-    fallbackRefreshToken?: string;
-    fallbackIdToken?: string;
-    fallbackAccountId?: string;
-    fallbackEmail?: string;
-    fallbackPlanType?: string;
   } = {}
 ): Promise<CodexAuthMaterial> {
   const file = codexAuthFilePath(paths);
@@ -436,15 +521,21 @@ export async function refreshCodexAuthMaterial(opts: {
     throw new Error(`Codex token refresh failed (${response.status}): ${text.slice(0, 500)}`.trim());
   }
 
-  const payload = (await response.json()) as CodexOAuthTokenResponse;
-  return await persistCodexAuthFromTokenResponse(opts.paths, payload, {
+  const payload = parseTokenResponse(
+    await response.json(),
+    "Codex token refresh response missing access_token.",
+  );
+  const refreshed = codexMaterialFromTokenResponse(codexAuthFilePath(opts.paths), payload, {
     issuer: opts.material.issuer,
     clientId: opts.material.clientId,
-    fallbackRefreshToken: opts.material.refreshToken,
-    fallbackIdToken: opts.material.idToken,
-    fallbackAccountId: opts.material.accountId,
-    fallbackEmail: opts.material.email,
-    fallbackPlanType: opts.material.planType,
+  });
+  return await writeCodexAuthMaterial(opts.paths, {
+    ...refreshed,
+    refreshToken: refreshed.refreshToken ?? opts.material.refreshToken,
+    idToken: refreshed.idToken ?? opts.material.idToken,
+    accountId: refreshed.accountId ?? opts.material.accountId,
+    email: refreshed.email ?? opts.material.email,
+    planType: refreshed.planType ?? opts.material.planType,
   });
 }
 

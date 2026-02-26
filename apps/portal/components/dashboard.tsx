@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { z } from "zod";
 
 type RunStatus = "pending" | "running" | "completed" | "failed";
 
@@ -18,6 +19,9 @@ type HarnessRunSummary = {
   lastError: string | null;
   finalPreview: string;
   observabilityEnabled: boolean;
+  observabilityHealthStatus: string | null;
+  observabilityHealthReason: string | null;
+  observabilityHealthMessage: string | null;
   updatedAtMs: number;
 };
 
@@ -71,6 +75,86 @@ type HarnessRunDetail = {
 };
 
 type ConnectionState = "connecting" | "connected" | "disconnected" | "error";
+
+const runStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
+const unknownRecordSchema = z.record(z.string(), z.unknown());
+const unknownRecordArraySchema = z.array(unknownRecordSchema);
+
+const harnessRunSummarySchema: z.ZodType<HarnessRunSummary> = z.object({
+  runId: z.string(),
+  runDirName: z.string(),
+  provider: z.string(),
+  requestedModel: z.string().nullable(),
+  resolvedModel: z.string().nullable(),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable(),
+  status: runStatusSchema,
+  attemptsTotal: z.number(),
+  attemptsSucceeded: z.number(),
+  lastError: z.string().nullable(),
+  finalPreview: z.string(),
+  observabilityEnabled: z.boolean(),
+  observabilityHealthStatus: z.string().nullable(),
+  observabilityHealthReason: z.string().nullable(),
+  observabilityHealthMessage: z.string().nullable(),
+  updatedAtMs: z.number(),
+});
+
+const harnessRunRootSummarySchema: z.ZodType<HarnessRunRootSummary> = z.object({
+  runRootName: z.string(),
+  createdAt: z.string().nullable(),
+  harness: z.object({
+    reportOnly: z.boolean(),
+    strictMode: z.boolean(),
+  }).nullable(),
+  runs: z.array(harnessRunSummarySchema),
+  updatedAtMs: z.number(),
+});
+
+const harnessRunsSnapshotSchema: z.ZodType<HarnessRunsSnapshot> = z.object({
+  repoRoot: z.string(),
+  outputDirectory: z.string(),
+  generatedAt: z.string(),
+  roots: z.array(harnessRunRootSummarySchema),
+});
+
+const streamErrorSchema = z.object({
+  type: z.literal("stream_error"),
+  message: z.string(),
+});
+
+const streamEventSchema = z.union([harnessRunsSnapshotSchema, streamErrorSchema]);
+
+const harnessRunDetailSchema: z.ZodType<HarnessRunDetail> = z.object({
+  repoRoot: z.string(),
+  runRootName: z.string(),
+  runDirName: z.string(),
+  manifest: unknownRecordSchema.nullable(),
+  runMeta: unknownRecordSchema.nullable(),
+  prompt: z.string(),
+  system: z.string(),
+  final: z.string(),
+  finalReasoning: z.string(),
+  attempts: unknownRecordArraySchema,
+  traceSummary: z.object({
+    startedAt: z.string().nullable(),
+    finishedAt: z.string().nullable(),
+    stepCount: z.number(),
+    askEvents: z.number(),
+    approvalEvents: z.number(),
+    todoEvents: z.number(),
+    error: z.string().nullable(),
+    responseMessages: z.number(),
+  }),
+  traceStepPreview: z.object({
+    first: unknownRecordArraySchema,
+    last: unknownRecordArraySchema,
+  }),
+  artifactsIndex: unknownRecordArraySchema,
+  toolLogTail: z.array(z.string()),
+  files: z.array(z.string()),
+  updatedAtMs: z.number(),
+});
 
 function formatDate(input: string | null): string {
   if (!input) return "n/a";
@@ -139,13 +223,16 @@ export function Dashboard() {
       nextSource.onmessage = (event) => {
         if (disposed || source !== nextSource) return;
         try {
-          const payload = JSON.parse(event.data) as HarnessRunsSnapshot | { type: "stream_error"; message: string };
-          if ((payload as { type?: string }).type === "stream_error") {
-            setRunsError((payload as { message: string }).message);
+          const parsed = streamEventSchema.safeParse(JSON.parse(event.data));
+          if (!parsed.success) {
+            setRunsError(`Bad stream payload: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
             return;
           }
-          const snapshot = payload as HarnessRunsSnapshot;
-          setRunsSnapshot(snapshot);
+          if ("type" in parsed.data && parsed.data.type === "stream_error") {
+            setRunsError(parsed.data.message);
+            return;
+          }
+          setRunsSnapshot(parsed.data as HarnessRunsSnapshot);
         } catch (err) {
           setRunsError(`Bad stream payload: ${String(err)}`);
         }
@@ -212,9 +299,12 @@ export function Dashboard() {
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
-        const payload = (await response.json()) as HarnessRunDetail;
+        const parsed = harnessRunDetailSchema.safeParse(await response.json());
+        if (!parsed.success) {
+          throw new Error(`Invalid run detail payload: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+        }
         if (cancelled) return;
-        setRunDetail(payload);
+        setRunDetail(parsed.data);
         setDetailError("");
       } catch (err) {
         if (cancelled) return;

@@ -60,7 +60,7 @@ const mockGenerateSessionTitle = mock(async () => ({
 const mockWritePersistedSessionSnapshot = mock(async () => "/tmp/mock-home/.cowork/sessions/mock.json");
 
 // Import AgentSession AFTER the runTurn mock is registered so it picks up the mock.
-const { AgentSession } = await import("../src/server/session");
+const { AgentSession } = await import("../src/server/session/AgentSession");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -428,6 +428,24 @@ describe("AgentSession", () => {
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({ enableMcp: false });
     });
 
+    test("setEnableMcp persistence failures still apply runtime state and emit a non-fatal error", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {
+        throw new Error("write failed");
+      });
+      const { session, events } = makeSession({ persistProjectConfigPatchImpl });
+
+      await session.setEnableMcp(false);
+
+      expect(session.getEnableMcp()).toBe(false);
+      expect(events.some((evt) => evt.type === "session_settings")).toBe(true);
+      const errEvt = events.find((evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error");
+      expect(errEvt).toBeDefined();
+      if (errEvt) {
+        expect(errEvt.code).toBe("internal_error");
+        expect(errEvt.message).toContain("MCP setting updated for this session");
+      }
+    });
+
     test("setEnableMcp while running emits Agent is busy", async () => {
       const { session, events } = makeSession();
 
@@ -628,12 +646,11 @@ describe("AgentSession", () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
-      session.setConfig({
+      await session.setConfig({
         subAgentModel: "gpt-5.2-mini",
         observabilityEnabled: true,
         maxSteps: 25,
       });
-      await flushAsyncWork();
 
       const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
       expect(cfgEvt).toBeDefined();
@@ -645,6 +662,34 @@ describe("AgentSession", () => {
         subAgentModel: "gpt-5.2-mini",
         observabilityEnabled: true,
       });
+    });
+
+    test("setConfig persistence failures do not apply runtime config changes", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {
+        throw new Error("persist failed");
+      });
+      const { session, events } = makeSession({ persistProjectConfigPatchImpl });
+
+      await session.setConfig({
+        subAgentModel: "gpt-5.2-mini",
+        observabilityEnabled: true,
+        maxSteps: 25,
+      });
+
+      const cfg = session.getSessionConfigEvent().config;
+      expect(cfg.subAgentModel).toBe("gemini-2.0-flash");
+      expect(cfg.observabilityEnabled).toBe(false);
+      expect(cfg.maxSteps).toBe(100);
+
+      const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
+      expect(cfgEvt).toBeUndefined();
+
+      const errEvt = events.find((evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error");
+      expect(errEvt).toBeDefined();
+      if (errEvt) {
+        expect(errEvt.code).toBe("internal_error");
+        expect(errEvt.message).toContain("Failed to persist config defaults");
+      }
     });
   });
 
@@ -889,7 +934,7 @@ describe("AgentSession", () => {
       });
     });
 
-    test("persistence-hook failures do not roll back config_updated", async () => {
+    test("persistence-hook failures keep model updates and emit a non-fatal error", async () => {
       const persistModelSelectionImpl = mock(async () => {
         throw new Error("disk write failed");
       });
@@ -897,11 +942,12 @@ describe("AgentSession", () => {
 
       await session.setModel("gpt-5.2");
 
-      const updated = events.find((e) => e.type === "config_updated");
+      const updated = events.find((e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated");
       expect(updated).toBeDefined();
+      expect(session.getPublicConfig().model).toBe("gpt-5.2");
       const err = events.find(
         (e): e is Extract<ServerEvent, { type: "error" }> =>
-          e.type === "error" && e.message.includes("persisting defaults failed")
+          e.type === "error" && e.message.includes("Model updated for this session")
       );
       expect(err).toBeDefined();
       if (err) {
@@ -2859,6 +2905,38 @@ describe("AgentSession", () => {
       if (errorEvt) {
         expect(errorEvt.code).toBe("observability_error");
         expect(errorEvt.source).toBe("observability");
+      }
+    });
+
+    test("structured error code/source is routed without message matching", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw { code: "provider_error", source: "provider", message: "Token exchange failed" };
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("provider_error");
+        expect(errorEvt.source).toBe("provider");
+      }
+    });
+
+    test("structured error code without source falls back to default source mapping", async () => {
+      mockRunTurn.mockImplementation(async () => {
+        throw { code: "permission_denied", message: "Denied" };
+      });
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("permission_denied");
+        expect(errorEvt.source).toBe("permissions");
       }
     });
 

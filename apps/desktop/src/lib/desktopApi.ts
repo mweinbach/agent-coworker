@@ -44,8 +44,20 @@ export type OpenPathInput = {
   path: string;
 };
 
+export type PreviewOSFileInput = {
+  path: string;
+};
+
 export type RevealPathInput = {
   path: string;
+};
+
+export type ReadFileInput = {
+  path: string;
+};
+
+export type ReadFileOutput = {
+  content: string;
 };
 
 export type CopyPathInput = {
@@ -133,6 +145,8 @@ export interface DesktopApi {
   windowClose(): Promise<void>;
   getPlatform(): Promise<string>;
   listDirectory(opts: ListDirectoryInput): Promise<ExplorerEntry[]>;
+  readFile(opts: ReadFileInput): Promise<ReadFileOutput>;
+  previewOSFile(opts: PreviewOSFileInput): Promise<void>;
   openPath(opts: OpenPathInput): Promise<void>;
   revealPath(opts: RevealPathInput): Promise<void>;
   copyPath(opts: CopyPathInput): Promise<void>;
@@ -163,6 +177,8 @@ export const DESKTOP_IPC_CHANNELS = {
   windowClose: "desktop:windowClose",
   getPlatform: "desktop:getPlatform",
   listDirectory: "desktop:listDirectory",
+  readFile: "desktop:readFile",
+  previewOSFile: "desktop:previewOSFile",
   openPath: "desktop:openPath",
   revealPath: "desktop:revealPath",
   copyPath: "desktop:copyPath",

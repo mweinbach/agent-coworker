@@ -679,6 +679,8 @@ describe("WebSocket Lifecycle", () => {
       );
       expect(responses[0].type).toBe("error");
       expect(responses[0].message).toContain("Missing type");
+      expect(responses[0].code).toBe("missing_type");
+      expect(responses[0].source).toBe("protocol");
     } finally {
       server.stop();
     }
@@ -695,6 +697,8 @@ describe("WebSocket Lifecycle", () => {
       );
       expect(responses[0].type).toBe("error");
       expect(responses[0].message).toContain("Unknown type");
+      expect(responses[0].code).toBe("unknown_type");
+      expect(responses[0].source).toBe("protocol");
     } finally {
       server.stop();
     }
@@ -1132,6 +1136,8 @@ describe("WebSocket Lifecycle", () => {
 
       expect(result.type).toBe("error");
       expect(result.message).toContain("Expected object");
+      expect(result.code).toBe("invalid_payload");
+      expect(result.source).toBe("protocol");
     } finally {
       server.stop();
     }
@@ -1165,6 +1171,8 @@ describe("WebSocket Lifecycle", () => {
 
       expect(result.type).toBe("error");
       expect(result.message).toContain("Expected object");
+      expect(result.code).toBe("invalid_payload");
+      expect(result.source).toBe("protocol");
     } finally {
       server.stop();
     }
@@ -1197,6 +1205,9 @@ describe("WebSocket Lifecycle", () => {
       });
 
       expect(result.type).toBe("error");
+      expect(result.message).toContain("Expected object");
+      expect(result.code).toBe("invalid_payload");
+      expect(result.source).toBe("protocol");
     } finally {
       server.stop();
     }
@@ -1909,6 +1920,39 @@ describe("Protocol Doc Parity", () => {
       const persistedConfig = JSON.parse(await fs.readFile(persistedConfigPath, "utf-8")) as Record<string, unknown>;
       expect(persistedConfig.provider).toBe("openai");
       expect(persistedConfig.model).toBe("gpt-5.2");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("set_model applies runtime updates even when project config parse fails", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      await fs.writeFile(path.join(tmpDir, ".agent", "config.json"), "{ not valid json", "utf-8");
+
+      const result = await sendAndCollect(
+        url,
+        (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.2" }),
+        2,
+      );
+
+      expect(result.responses[0].type).toBe("config_updated");
+      if (result.responses[0].type === "config_updated") {
+        expect(result.responses[0].config.provider).toBe("openai");
+        expect(result.responses[0].config.model).toBe("gpt-5.2");
+      }
+
+      expect(result.responses[1].type).toBe("error");
+      if (result.responses[1].type === "error") {
+        expect(result.responses[1].code).toBe("internal_error");
+        expect(result.responses[1].message).toContain("Invalid JSON in config file");
+      }
+
+      const nextSessionHello = (await collectMessages(url, 1))[0];
+      expect(nextSessionHello.type).toBe("server_hello");
+      // Persistence failed, so newly created sessions keep project defaults.
+      expect(nextSessionHello.config.provider).toBe("google");
     } finally {
       server.stop();
     }

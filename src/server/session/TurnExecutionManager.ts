@@ -113,6 +113,7 @@ export class TurnExecutionManager {
     this.context.state.currentTurnId = turnId;
     this.context.state.currentTurnOutcome = "completed";
     const cause: "user_message" | "command" = displayText?.startsWith("/") ? "command" : "user_message";
+    let lastStreamError: unknown = null;
     try {
       this.context.emit({ type: "user_message", sessionId: this.context.id, text: displayText ?? text, clientMessageId });
       this.context.emit({ type: "session_busy", sessionId: this.context.id, busy: true, turnId, cause });
@@ -126,7 +127,6 @@ export class TurnExecutionManager {
       this.context.queuePersistSessionSnapshot("session.user_message");
 
       let streamPartIndex = 0;
-      let lastStreamError: unknown = null;
       const res = await this.context.deps.runTurnImpl({
         config: this.context.state.config,
         system: this.context.state.system,

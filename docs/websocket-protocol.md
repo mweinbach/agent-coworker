@@ -379,6 +379,16 @@ Returned in `server_hello` and `config_updated`:
 | "source" | "file" | "raw" | "unknown"
 ```
 
+**Reasoning part shapes** (used for model thought traces and summaries):
+
+| partType | Part fields | Description |
+|----------|-------------|-------------|
+| `reasoning_start` | `id`, `mode`, `providerMetadata?` | Start of a reasoning/summary block |
+| `reasoning_delta` | `id`, `mode`, `text`, `providerMetadata?` | Incremental reasoning text chunk |
+| `reasoning_end` | `id`, `mode`, `providerMetadata?` | End of a reasoning/summary block |
+
+The `mode` field is `"reasoning"` for full thought traces (Google Gemini, Anthropic) or `"summary"` for reasoning summaries (OpenAI, Codex CLI). Clients should use `mode` to choose display labels (e.g. "Thinking" vs "Summary").
+
 ### ApprovalRiskCode
 
 ```
@@ -1723,7 +1733,7 @@ Reasoning or summary text produced by the model during a turn.
 |-------|------|-------------|
 | `type` | `"reasoning"` | — |
 | `sessionId` | `string` | Session identifier |
-| `kind` | `"reasoning" \| "summary"` | Whether this is reasoning (e.g. Anthropic extended thinking) or a summary (e.g. OpenAI reasoning summary) |
+| `kind` | `"reasoning" \| "summary"` | Whether this is full reasoning (e.g. Anthropic extended thinking, Google Gemini thought traces) or a summary (e.g. OpenAI reasoning summary) |
 | `text` | `string` | Reasoning/summary text |
 
 ---

@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { getModel as realGetModel } from "./config";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
@@ -186,7 +187,8 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     loadMCPTools,
     ...runtimeOverrides,
   };
-  const useLegacyModelApi = Boolean(legacyStreamText && legacyStepCountIs && legacyGetModel);
+  const legacyModelResolver = legacyGetModel ?? realGetModel;
+  const useLegacyModelApi = Boolean(legacyStreamText && legacyStepCountIs);
 
   return async function runTurn(params: RunTurnParams): Promise<{
     text: string;
@@ -243,9 +245,9 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
             ...(params.telemetryContext?.metadata ?? {}),
           },
         });
-        if (useLegacyModelApi && legacyStreamText && legacyStepCountIs && legacyGetModel) {
+        if (useLegacyModelApi && legacyStreamText && legacyStepCountIs) {
           const streamTextInput: LegacyStreamTextInput = {
-            model: legacyGetModel(config),
+            model: legacyModelResolver(config),
             system: turnSystem,
             messages,
             tools,

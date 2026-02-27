@@ -539,6 +539,30 @@ export async function refreshCodexAuthMaterial(opts: {
   });
 }
 
+const codexRefreshInFlight = new Map<string, Promise<CodexAuthMaterial>>();
+
+export async function refreshCodexAuthMaterialCoalesced(opts: {
+  paths: Pick<CodexAuthPaths, "authDir">;
+  material: CodexAuthMaterial;
+  fetchImpl?: typeof fetch;
+}): Promise<CodexAuthMaterial> {
+  const file = codexAuthFilePath(opts.paths);
+  const existing = codexRefreshInFlight.get(file);
+  if (existing) {
+    return await existing;
+  }
+
+  const inFlight = refreshCodexAuthMaterial(opts);
+  codexRefreshInFlight.set(file, inFlight);
+  try {
+    return await inFlight;
+  } finally {
+    if (codexRefreshInFlight.get(file) === inFlight) {
+      codexRefreshInFlight.delete(file);
+    }
+  }
+}
+
 export function isTokenExpiring(material: CodexAuthMaterial, marginMs = 60_000): boolean {
   const expiresAtMs = material.expiresAtMs ?? extractJwtExpiryMs(material.accessToken);
   if (!expiresAtMs) return false;

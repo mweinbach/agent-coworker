@@ -145,8 +145,11 @@ async function createRuntimeMcpClient(opts: {
       return discovered;
     },
     close: async () => {
-      await client.close();
-      await transport.close();
+      try {
+        await client.close();
+      } finally {
+        await transport.close();
+      }
     },
   };
 }
@@ -478,4 +481,3 @@ export async function loadMCPTools(
 
   return { tools, errors, close };
 }
-

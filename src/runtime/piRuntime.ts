@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { SpanStatusCode, trace, type AttributeValue, type Span } from "@opentelemetry/api";
 import { stream as piStream } from "@mariozechner/pi-ai";
-import { asFiniteNumber, asNonEmptyString, asRecord, asString, buildPiStreamOptions, extractToolCallsFromAssistant, pickKnownPiModel, toPiJsonSchema, toolCallFromPartial, type PiModel, type PiToolCallLike } from "./piRuntimeOptions";
+import { asFiniteNumber, asNonEmptyString, asRecord, asString, buildPiStreamOptions, extractToolCallsFromAssistant, isZodSchema, pickKnownPiModel, toPiJsonSchema, toolCallFromPartial, type PiModel, type PiToolCallLike } from "./piRuntimeOptions";
 
 import { getSavedProviderApiKey } from "../config";
 import { getAiCoworkerPaths } from "../connect";
@@ -10,9 +10,9 @@ import {
   CODEX_BACKEND_BASE_URL,
   isTokenExpiring,
   readCodexAuthMaterial,
-  refreshCodexAuthMaterial,
+  refreshCodexAuthMaterialCoalesced,
 } from "../providers/codex-auth";
-import type { AgentConfig, ProviderName } from "../types";
+import type { AgentConfig, ModelMessage, ProviderName } from "../types";
 import type { TelemetrySettings } from "../observability/runtime";
 
 import {
@@ -22,7 +22,7 @@ import {
   modelMessagesToPiMessages,
   piTurnMessagesToModelMessages,
 } from "./piMessageBridge";
-import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeToolDefinition } from "./types";
+import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeStepOverride, RuntimeToolDefinition } from "./types";
 
 function safeJsonStringify(value: unknown): string {
   try {
@@ -30,6 +30,87 @@ function safeJsonStringify(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function redactTelemetrySecrets(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (typeof value !== "object" || value === null) return value;
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactTelemetrySecrets(entry, seen));
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const normalized = key.toLowerCase();
+    const sensitive =
+      normalized.includes("api_key") ||
+      normalized.includes("apikey") ||
+      normalized.includes("authorization") ||
+      normalized.includes("access_token") ||
+      normalized.includes("refresh_token") ||
+      normalized.includes("id_token") ||
+      normalized === "token";
+    out[key] = sensitive ? "[REDACTED]" : redactTelemetrySecrets(raw, seen);
+  }
+  return out;
+}
+
+function isModelMessageArray(value: unknown): value is ModelMessage[] {
+  if (!Array.isArray(value)) return false;
+  return value.every((entry) => {
+    const record = asRecord(entry);
+    return !!record && typeof record.role === "string" && "content" in record;
+  });
+}
+
+function splitStepOverrides(raw: unknown): RuntimeStepOverrides {
+  const parsed = asRecord(raw);
+  if (!parsed) return {};
+
+  const messages = isModelMessageArray(parsed.messages) ? parsed.messages : undefined;
+  const providerOptions = asRecord(parsed.providerOptions) ?? undefined;
+  const explicitStreamOptions = asRecord(parsed.streamOptions);
+
+  const streamOptions: Record<string, unknown> = explicitStreamOptions ? { ...explicitStreamOptions } : {};
+  if (!explicitStreamOptions) {
+    for (const [key, value] of Object.entries(parsed)) {
+      if (key === "messages" || key === "providerOptions") continue;
+      streamOptions[key] = value;
+    }
+  }
+
+  return {
+    ...(messages ? { messages } : {}),
+    ...(providerOptions ? { providerOptions } : {}),
+    ...(Object.keys(streamOptions).length > 0 ? { streamOptions } : {}),
+  };
+}
+
+function buildStepState(
+  params: RuntimeRunTurnParams,
+  resolved: ResolvedPiRuntimeModel,
+  overrides: RuntimeStepOverrides,
+  fallbackMessages: ModelMessage[]
+): RuntimeStepState {
+  const modelMessages = overrides.messages ?? fallbackMessages;
+  const providerOptions = overrides.providerOptions ?? params.providerOptions;
+  const baseStreamOptions = buildPiStreamOptions(
+    { ...params, providerOptions } as RuntimeRunTurnParams,
+    resolved.apiKey,
+    resolved.headers
+  );
+  const streamOptions = {
+    ...baseStreamOptions,
+    ...(overrides.streamOptions ?? {}),
+  };
+  return {
+    modelMessages,
+    providerOptions,
+    streamOptions,
+    piMessages: modelMessagesToPiMessages(modelMessages, params.config.provider) as Array<Record<string, unknown>>,
+  };
 }
 
 function isAbortLikeError(error: unknown, signal?: AbortSignal): boolean {
@@ -62,6 +143,15 @@ type ResolvedCodexAuth = {
   accountId?: string;
 };
 
+type RuntimeStepOverrides = RuntimeStepOverride;
+
+type RuntimeStepState = {
+  modelMessages: ModelMessage[];
+  providerOptions: Record<string, unknown> | undefined;
+  streamOptions: Record<string, unknown>;
+  piMessages: Array<Record<string, unknown>>;
+};
+
 async function resolveCodexAccessToken(
   config: AgentConfig,
   log?: (line: string) => void
@@ -74,7 +164,7 @@ async function resolveCodexAccessToken(
 
   if (isTokenExpiring(material) && material.refreshToken) {
     try {
-      material = await refreshCodexAuthMaterial({
+      material = await refreshCodexAuthMaterialCoalesced({
         paths,
         material,
         fetchImpl: fetch,
@@ -222,7 +312,7 @@ function startModelCallSpan(
   if (telemetry.recordInputs) {
     attributes["llm.input.system"] = params.system;
     attributes["llm.input.messages"] = safeJsonStringify(piMessages);
-    attributes["llm.input.options"] = safeJsonStringify(stepOptions);
+    attributes["llm.input.options"] = safeJsonStringify(redactTelemetrySecrets(stepOptions));
   }
 
   return trace
@@ -289,6 +379,27 @@ function normalizeToolResultContent(result: unknown): Array<{ type: "text"; text
   return [{ type: "text", text: safeJsonStringify(result) }];
 }
 
+function extractToolExecutionErrorMessage(result: unknown): string | undefined {
+  const record = asRecord(result);
+  if (!record || record.isError !== true) return undefined;
+
+  const contentParts = Array.isArray(record.content) ? record.content : [];
+  const contentText = contentParts
+    .map((part) => {
+      const partRecord = asRecord(part);
+      if (!partRecord || partRecord.type !== "text") return "";
+      return asString(partRecord.text) ?? "";
+    })
+    .join("\n")
+    .trim();
+  if (contentText) return contentText;
+
+  const explicitMessage = asNonEmptyString(record.error) ?? asNonEmptyString(record.message);
+  if (explicitMessage) return explicitMessage;
+
+  return safeJsonStringify(result);
+}
+
 function reasoningModeForProvider(provider: ProviderName): "reasoning" | "summary" {
   return provider === "openai" || provider === "codex-cli" ? "summary" : "reasoning";
 }
@@ -296,6 +407,7 @@ function reasoningModeForProvider(provider: ProviderName): "reasoning" | "summar
 async function emitPiEventAsRawPart(
   event: any,
   provider: ProviderName,
+  includeUnknown: boolean,
   emit: (part: unknown) => Promise<void>
 ): Promise<void> {
   const mode = reasoningModeForProvider(provider);
@@ -342,18 +454,20 @@ async function emitPiEventAsRawPart(
       });
       return;
     }
-    case "toolcall_end":
+    case "toolcall_end": {
+      const toolCall = toolCallFromPartial(event);
       await emit({
         type: "tool-input-end",
-        id: event.toolCall?.id,
+        id: toolCall.toolCallId,
       });
       await emit({
         type: "tool-call",
-        toolCallId: event.toolCall?.id,
-        toolName: event.toolCall?.name,
-        input: event.toolCall?.arguments ?? {},
+        toolCallId: toolCall.toolCallId,
+        toolName: toolCall.toolName,
+        input: asRecord(toolCall.input) ?? {},
       });
       return;
+    }
     case "done":
       await emit({
         type: "finish",
@@ -374,6 +488,7 @@ async function emitPiEventAsRawPart(
       });
       return;
     default:
+      if (!includeUnknown) return;
       await emit({
         type: "unknown",
         sdkType: String(event?.type ?? "unknown"),
@@ -388,6 +503,10 @@ async function executeToolCall(
   params: RuntimeRunTurnParams,
   emitPart: (part: unknown) => Promise<void>
 ): Promise<Record<string, unknown>> {
+  if (params.abortSignal?.aborted) {
+    throw new Error("Model turn aborted.");
+  }
+
   const toolDef = params.tools[toolCall.name];
   if (!toolDef) {
     const result = {
@@ -410,6 +529,25 @@ async function executeToolCall(
   try {
     const parsedInput = validateToolInput(toolDef, toolCall.arguments);
     const result = await toolDef.execute(parsedInput);
+    const executionError = extractToolExecutionErrorMessage(result);
+    if (executionError) {
+      await emitPart({
+        type: "tool-error",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        error: executionError,
+      });
+      return {
+        role: "toolResult",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        content: [{ type: "text", text: executionError }],
+        details: asRecord(result) ?? result,
+        isError: true,
+        timestamp: Date.now(),
+      };
+    }
+
     const content = normalizeToolResultContent(result);
     await emitPart({
       type: "tool-result",
@@ -449,6 +587,11 @@ async function executeToolCall(
 export const __internal = {
   parseTelemetrySettings,
   resolvePiModel,
+  redactTelemetrySecrets,
+  splitStepOverrides,
+  emitPiEventAsRawPart,
+  extractToolExecutionErrorMessage,
+  executeToolCall,
 } as const;
 
 export function createPiRuntime(): LlmRuntime {
@@ -464,10 +607,11 @@ export function createPiRuntime(): LlmRuntime {
         const resolved = await resolvePiModel(params);
         const telemetry = parseTelemetrySettings(params.telemetry);
         const piTools = toolMapToPiTools(params.tools);
-        const streamOptions = buildPiStreamOptions(params, resolved.apiKey, resolved.headers);
-        const piMessages = modelMessagesToPiMessages(params.messages, params.config.provider);
-        const turnMessages: any[] = [];
+        const includeUnknownRawParts = params.includeRawChunks ?? true;
+        const turnMessages: Array<Record<string, unknown>> = [];
         let usage = undefined as RuntimeRunTurnResult["usage"];
+        let stepMessages: ModelMessage[] = [...params.messages];
+        let stepProviderOptions: Record<string, unknown> | undefined = asRecord(params.providerOptions) ?? undefined;
 
         const maxSteps = Math.max(1, params.maxSteps);
         for (let step = 0; step < maxSteps; step += 1) {
@@ -481,29 +625,46 @@ export function createPiRuntime(): LlmRuntime {
             request: { model: resolved.model.id, provider: params.config.provider },
           });
 
-          let stepOptions: Record<string, unknown> = streamOptions;
+          let overrides: RuntimeStepOverrides = {};
           if (params.prepareStep) {
-            const stepOverrides = await params.prepareStep({ stepNumber: step + 1, messages: piMessages as any });
-            if (stepOverrides) {
-              stepOptions = { ...streamOptions, ...stepOverrides };
-            }
+            const stepOverrides = await params.prepareStep({
+              stepNumber: step + 1,
+              messages: stepMessages,
+            });
+            overrides = splitStepOverrides(stepOverrides);
           }
 
-          const span = startModelCallSpan(telemetry, params, resolved, step + 1, stepOptions, piMessages);
+          const stepState = buildStepState(
+            { ...params, providerOptions: stepProviderOptions } as RuntimeRunTurnParams,
+            resolved,
+            overrides,
+            stepMessages
+          );
+          stepMessages = stepState.modelMessages;
+          stepProviderOptions = stepState.providerOptions;
+
+          const span = startModelCallSpan(
+            telemetry,
+            params,
+            resolved,
+            step + 1,
+            stepState.streamOptions,
+            stepState.piMessages
+          );
           let assistantRecord: Record<string, unknown> = {};
           try {
             const stream = piStream(
               resolved.model as any,
               {
                 systemPrompt: params.system,
-                messages: piMessages as any,
+                messages: stepState.piMessages as any,
                 tools: piTools as any,
               },
-              stepOptions as any
+              stepState.streamOptions as any
             );
 
             for await (const event of stream as any) {
-              await emitPiEventAsRawPart(event, params.config.provider, emitPart);
+              await emitPiEventAsRawPart(event, params.config.provider, includeUnknownRawParts, emitPart);
             }
 
             const assistant = await (stream as any).result();
@@ -515,8 +676,11 @@ export function createPiRuntime(): LlmRuntime {
           }
 
           turnMessages.push(assistantRecord);
-          piMessages.push(assistantRecord as any);
           usage = mergePiUsage(usage, assistantRecord.usage);
+          stepMessages = [
+            ...stepMessages,
+            ...piTurnMessagesToModelMessages([assistantRecord as any]),
+          ];
 
           await emitPart({
             type: "finish-step",
@@ -544,9 +708,15 @@ export function createPiRuntime(): LlmRuntime {
           }
 
           for (const toolCall of toolCalls) {
+            if (params.abortSignal?.aborted) {
+              throw new Error("Model turn aborted.");
+            }
             const toolResult = await executeToolCall(toolCall, params, emitPart);
             turnMessages.push(toolResult);
-            piMessages.push(toolResult as any);
+            stepMessages = [
+              ...stepMessages,
+              ...piTurnMessagesToModelMessages([toolResult as any]),
+            ];
           }
         }
 
@@ -567,4 +737,3 @@ export function createPiRuntime(): LlmRuntime {
     },
   };
 }
-

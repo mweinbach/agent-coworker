@@ -1,3 +1,66 @@
+# Task: Close remaining PI runtime PR follow-ups (tool-call IDs + MCP error semantics)
+
+## Plan
+- [x] Ensure `toolcall_end` uses the same derived tool ID/name path as `toolcall_start`/`toolcall_delta`.
+- [x] Treat MCP-style `{ isError: true }` tool outputs as tool failures in PI runtime execution.
+- [x] Add targeted regression tests for the above.
+- [x] Run focused verification and record results.
+
+## Review
+- Updated `src/runtime/piRuntime.ts` raw event mapping so `toolcall_end` now derives identifiers from `toolCallFromPartial(event)` (same path as start/delta), preserving stable `tool_input_*`/`tool_call` correlation.
+- Updated PI runtime tool execution to classify MCP-style error payloads (`{ isError: true, ... }`) as `tool-error` events and persisted `toolResult.isError: true` entries instead of false-success `tool-result` emissions.
+- Exposed targeted runtime internals for regression tests and added coverage in `test/runtime.pi-runtime.test.ts` for:
+  - `toolcall_end` ID/name consistency from partial payloads,
+  - MCP-style `isError` mapping to `tool-error`.
+- Verification:
+  - `bun test test/runtime.pi-runtime.test.ts` -> pass
+
+---
+
+# Task: Fix all current PR review findings (security, bugs, race, flakiness, maintainability)
+
+## Plan
+- [x] Remove secret leakage from runtime telemetry spans.
+- [x] Fix PI runtime correctness bugs (`isZodSchema` import, `prepareStep` overrides, abort-before-tools checks, non-text message bridging).
+- [x] Eliminate Codex auth refresh races and improve auth/header error handling semantics.
+- [x] Restore provider-aware webSearch behavior and expand regression coverage.
+- [x] Fix raw harness script regressions (missing provider key vars, finalize pass tool side-effects).
+- [x] Improve maintainability hotspots (runtime path duplication/gating cleanup, stale comments/types, runtime selection behavior).
+- [x] Address test flakiness in Codex auth-related tests by removing hidden network/shared-state dependencies.
+- [x] Run targeted suites, then full `bun test`, and document outcomes.
+
+## Review
+- Redacted telemetry inputs in PI runtime so `llm.input.options` no longer records sensitive auth material (`apiKey`, `authorization`, token-like keys).
+- Fixed PI runtime correctness issues:
+  - restored missing `isZodSchema` import path,
+  - applied `prepareStep` overrides correctly by separating message/provider-option overrides from raw stream options,
+  - added abort checks before tool execution to prevent post-cancel side effects,
+  - preserved non-text user content in PI bridge via explicit placeholders.
+- Added Codex refresh coalescing (`refreshCodexAuthMaterialCoalesced`) and wired both runtime + model adapter to remove concurrent refresh races.
+- Tightened Codex adapter auth semantics by failing on expired token instead of silently returning empty auth headers.
+- Restored provider-aware `webSearch` behavior with BRAVE-first fallback (for non-google providers), EXA fallback, and provider-appropriate disabled messages.
+- Fixed raw harness regressions:
+  - restored required provider API key environment resolution variables,
+  - disabled tools in finalize pass (instead of relying on prompt-only behavior).
+- Maintainability improvements:
+  - runtime selection now explicitly uses config-driven resolution (`createRuntime` switch on `resolveRuntimeName`),
+  - removed stale `@deprecated` marker from active `modelAdapter`,
+  - made `defineTool.execute` required,
+  - simplified legacy runtime path gating (`streamText + stepCountIs`) in both `agent` and `spawnAgent`.
+- Flakiness fixes:
+  - avoided near-expiry Codex token refresh path in `test/runtime.pi-runtime.test.ts`,
+  - removed hidden shared tmp-state dependence in provider test helpers and stabilized codex header-shape test with explicit env key.
+- Added regression coverage:
+  - `test/runtime.pi-runtime.test.ts`
+  - `test/runtime.pi-message-bridge.test.ts`
+  - `test/tools.test.ts`
+- Verification:
+  - `bun test test/runtime.pi-runtime.test.ts test/runtime.pi-message-bridge.test.ts test/tools.test.ts test/providers/codex-cli.test.ts`
+  - `bun test test/agent.test.ts test/spawnAgent.tool.test.ts test/mcp.test.ts test/runtime.selection.test.ts`
+  - `bun test` -> **1681 pass, 2 skip, 0 fail**
+
+---
+
 # Task: Address PR review must-fix items (runtime telemetry/auth/raw-chunk correctness)
 
 ## Plan

@@ -15,10 +15,17 @@ export type RuntimeToolDefinition = {
 
 export type RuntimeToolMap = Record<string, RuntimeToolDefinition>;
 
+export type RuntimeStepOverride = {
+  messages?: ModelMessage[];
+  providerOptions?: Record<string, unknown>;
+  streamOptions?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
 export type RuntimePrepareStep = (step: {
   stepNumber: number;
   messages: ModelMessage[];
-}) => Promise<Record<string, unknown> | undefined>;
+}) => Promise<RuntimeStepOverride | undefined>;
 
 export interface RuntimeRunTurnParams {
   config: AgentConfig;

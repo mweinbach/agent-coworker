@@ -1110,6 +1110,22 @@ describe("webSearch tool", () => {
     expect(t.description).toContain("EXA_API_KEY");
   });
 
+  test("openai/codex-style search advertises BRAVE or EXA keys", async () => {
+    const dir = await tmpDir();
+    const t: any = createWebSearchTool(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "openai",
+          model: "gpt-5.2",
+          subAgentModel: "gpt-5.2",
+        }),
+      })
+    );
+
+    expect(t.description).toContain("BRAVE_API_KEY");
+    expect(t.description).toContain("EXA_API_KEY");
+  });
+
   test("web search requires EXA_API_KEY", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;
@@ -1143,6 +1159,90 @@ describe("webSearch tool", () => {
       const out: string = await t.execute({ query: "test", maxResults: 1 });
       expect(out).toContain("webSearch disabled");
     } finally {
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+    }
+  });
+
+  test("uses Brave search when BRAVE_API_KEY is set", async () => {
+    const dir = await tmpDir();
+    const oldExa = process.env.EXA_API_KEY;
+    const oldBrave = process.env.BRAVE_API_KEY;
+    delete process.env.EXA_API_KEY;
+    process.env.BRAVE_API_KEY = "brave_test_key";
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response(
+        JSON.stringify({
+          web: {
+            results: [
+              {
+                title: "RFC 2324",
+                url: "https://www.rfc-editor.org/rfc/rfc2324",
+                description: "Hyper Text Coffee Pot Control Protocol",
+              },
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+    }) as any;
+
+    try {
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
+      const out: string = await t.execute({ q: "HTTP 418 RFC 2324", maxResults: 1 });
+      expect(out).toContain("RFC 2324");
+      expect(out).toContain("rfc2324");
+      expect((globalThis.fetch as any).mock.calls[0][0]).toContain("api.search.brave.com");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+      if (oldBrave) process.env.BRAVE_API_KEY = oldBrave;
+      else delete process.env.BRAVE_API_KEY;
+    }
+  });
+
+  test("accepts alias query keys with provider-compatible extra args", async () => {
+    const dir = await tmpDir();
+    const oldExa = process.env.EXA_API_KEY;
+    process.env.EXA_API_KEY = "exa_test_key";
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      expect(body.query).toBe("latest sdk changelog");
+      expect(body.numResults).toBe(3);
+      return new Response(
+        JSON.stringify({
+          results: [
+            {
+              title: "Result title",
+              url: "https://example.com",
+              text: "Snippet",
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }) as any;
+
+    try {
+      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
+      const out: string = await t.execute({
+        searchQuery: "latest sdk changelog",
+        mode: "web",
+        dynamicThreshold: 0.2,
+        maxResults: 3,
+      });
+      expect(out).toContain("Result title");
+      expect(out).toContain("https://example.com");
+    } finally {
+      globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;
       else delete process.env.EXA_API_KEY;
     }

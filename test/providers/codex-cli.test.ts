@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
-import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot } from "./helpers";
+import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot, withEnv } from "./helpers";
 
 const DEFAULT_CODEX_MODEL = "gpt-5.3-codex";
 
@@ -21,14 +21,16 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
   });
 
   test("getModel exposes stable adapter shape", async () => {
-    const cfg = makeConfig({ provider: "codex-cli", model: DEFAULT_CODEX_MODEL });
-    const viaGetModel = getModel(cfg, DEFAULT_CODEX_MODEL) as any;
-    const headers = await viaGetModel.config.headers();
+    await withEnv("OPENAI_API_KEY", "test_openai_key", async () => {
+      const cfg = makeConfig({ provider: "codex-cli", model: DEFAULT_CODEX_MODEL });
+      const viaGetModel = getModel(cfg, DEFAULT_CODEX_MODEL) as any;
+      const headers = await viaGetModel.config.headers();
 
-    expect(viaGetModel.modelId).toBe(DEFAULT_CODEX_MODEL);
-    expect(viaGetModel.provider).toBe("codex-cli.responses");
-    expect(viaGetModel.specificationVersion).toBe("v3");
-    expect(typeof headers).toBe("object");
+      expect(viaGetModel.modelId).toBe(DEFAULT_CODEX_MODEL);
+      expect(viaGetModel.provider).toBe("codex-cli.responses");
+      expect(viaGetModel.specificationVersion).toBe("v3");
+      expect(headers).toEqual({ authorization: "Bearer test_openai_key" });
+    });
   });
 
   test("codex provider options are configured", () => {

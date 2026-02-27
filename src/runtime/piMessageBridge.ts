@@ -38,8 +38,31 @@ function contentTextParts(content: unknown): string[] {
     }
     const record = asRecord(part);
     if (!record) continue;
+    const partType = asString(record.type)?.toLowerCase();
     const text = asString(record.text) ?? asString(record.inputText);
-    if (text?.trim()) parts.push(text);
+    if (text?.trim()) {
+      parts.push(text);
+      continue;
+    }
+
+    if (
+      partType === "image" ||
+      partType === "input_image" ||
+      partType === "image_url" ||
+      partType === "file"
+    ) {
+      parts.push(partType === "file" ? "[file]" : "[image]");
+      continue;
+    }
+
+    if (
+      record.image !== undefined ||
+      record.imageUrl !== undefined ||
+      record.url !== undefined ||
+      record.file !== undefined
+    ) {
+      parts.push("[non-text content]");
+    }
   }
   return parts;
 }

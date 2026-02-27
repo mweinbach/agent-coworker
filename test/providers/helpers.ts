@@ -43,7 +43,10 @@ export async function makeTmpDirs() {
 }
 
 export function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
-  const dir = os.tmpdir();
+  const dir = path.join(
+    os.tmpdir(),
+    `agent-provider-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  );
   return {
     provider: "google",
     model: "gemini-3-flash-preview",

@@ -980,6 +980,15 @@ async function main() {
   const runRoot = path.join(baseConfig.outputDirectory || path.join(repoDir, "tmp"), `${runRootPrefix}_${safeStamp()}`);
   await ensureDir(runRoot);
 
+  const googleApiKey = (
+    process.env.GEMINI_API_KEY ??
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY ??
+    process.env.GOOGLE_API_KEY ??
+    ""
+  ).trim();
+  const openaiApiKey = (process.env.OPENAI_API_KEY ?? "").trim();
+  const anthropicApiKey = (process.env.ANTHROPIC_API_KEY ?? "").trim();
+
   let anthropicModelIds: string[] = [];
 
   const mixedRuns: RunSpec[] = [
@@ -1523,7 +1532,7 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
               enableMcp: false,
             },
             {
-              createTools: createToolsOverride as any,
+              createTools: (() => ({})) as any,
             }
           );
 

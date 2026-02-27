@@ -1,15 +1,11 @@
 import path from "node:path";
 
-/**
- * @deprecated This module is only kept for legacy test API path compatibility with Vercel AI SDK.
- */
-
 import { getAiCoworkerPaths } from "../connect";
 import type { AgentConfig } from "../types";
 import {
   isTokenExpiring,
   readCodexAuthMaterial,
-  refreshCodexAuthMaterial,
+  refreshCodexAuthMaterialCoalesced,
 } from "./codex-auth";
 
 type HeaderMap = Record<string, string>;
@@ -73,37 +69,31 @@ export function createAnthropicModelAdapter(modelId: string, savedKey?: string):
 }
 
 async function resolveCodexAuthHeaders(config: AgentConfig): Promise<HeaderMap> {
-  try {
-    const homedir = config.userAgentDir ? path.dirname(config.userAgentDir) : undefined;
-    const paths = getAiCoworkerPaths(homedir ? { homedir } : {});
+  const homedir = config.userAgentDir ? path.dirname(config.userAgentDir) : undefined;
+  const paths = getAiCoworkerPaths(homedir ? { homedir } : {});
 
-    let material = await readCodexAuthMaterial(paths, { migrateLegacy: true });
-    if (!material?.accessToken) return {};
+  let material = await readCodexAuthMaterial(paths, { migrateLegacy: true });
+  if (!material?.accessToken) return {};
 
-    if (isTokenExpiring(material) && material.refreshToken) {
-      try {
-        material = await refreshCodexAuthMaterial({
-          paths,
-          material,
-          fetchImpl: fetch,
-        });
-      } catch {
-        // best effort refresh
-      }
-    }
-
-    if (isTokenExpiring(material, 0)) return {};
-
-    const headers: HeaderMap = {
-      authorization: `Bearer ${material.accessToken}`,
-    };
-    if (material.accountId?.trim()) {
-      headers["ChatGPT-Account-ID"] = material.accountId.trim();
-    }
-    return headers;
-  } catch {
-    return {};
+  if (isTokenExpiring(material) && material.refreshToken) {
+    material = await refreshCodexAuthMaterialCoalesced({
+      paths,
+      material,
+      fetchImpl: fetch,
+    });
   }
+
+  if (isTokenExpiring(material, 0)) {
+    throw new Error("Codex token is expired. Run /connect codex-cli to re-authenticate.");
+  }
+
+  const headers: HeaderMap = {
+    authorization: `Bearer ${material.accessToken}`,
+  };
+  if (material.accountId?.trim()) {
+    headers["ChatGPT-Account-ID"] = material.accountId.trim();
+  }
+  return headers;
 }
 
 export function createCodexCliModelAdapter(

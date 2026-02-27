@@ -76,7 +76,7 @@ describe("pi runtime regressions", () => {
       accessToken: "tok_live",
       refreshToken: "refresh_live",
       accountId: "acct_123",
-      expiresAtMs: Date.now() + 60_000,
+      expiresAtMs: Date.now() + 10 * 60_000,
       issuer: "https://auth.example.invalid",
       clientId: "client-id",
     });
@@ -120,5 +120,95 @@ describe("pi runtime regressions", () => {
         enabled: true,
       },
     });
+  });
+
+  test("telemetry redaction strips API keys and token-like fields", () => {
+    const redacted = piRuntimeInternal.redactTelemetrySecrets({
+      apiKey: "key_123",
+      headers: {
+        authorization: "Bearer secret",
+        "x-custom": "ok",
+      },
+      nested: {
+        access_token: "tok_1",
+        refresh_token: "tok_2",
+        safe: true,
+      },
+    }) as Record<string, any>;
+
+    expect(redacted.apiKey).toBe("[REDACTED]");
+    expect(redacted.headers.authorization).toBe("[REDACTED]");
+    expect(redacted.headers["x-custom"]).toBe("ok");
+    expect(redacted.nested.access_token).toBe("[REDACTED]");
+    expect(redacted.nested.refresh_token).toBe("[REDACTED]");
+    expect(redacted.nested.safe).toBe(true);
+  });
+
+  test("step override splitting honors messages/providerOptions and keeps stream overrides", () => {
+    const messages: ModelMessage[] = [{ role: "user", content: "hello" }];
+    const result = piRuntimeInternal.splitStepOverrides({
+      messages,
+      providerOptions: { google: { thinkingConfig: { includeThoughts: false } } },
+      temperature: 0.2,
+      streamOptions: { maxOutputTokens: 1024 },
+    });
+
+    expect(result.messages).toEqual(messages);
+    expect(result.providerOptions).toEqual({ google: { thinkingConfig: { includeThoughts: false } } });
+    expect(result.streamOptions).toEqual({ maxOutputTokens: 1024 });
+  });
+
+  test("toolcall_end keeps tool IDs consistent with partial payload", async () => {
+    const emitted: Array<Record<string, unknown>> = [];
+    await piRuntimeInternal.emitPiEventAsRawPart(
+      {
+        type: "toolcall_end",
+        contentIndex: 0,
+        partial: {
+          content: [{ id: "call_partial", name: "grep", arguments: { query: "needle" } }],
+        },
+      },
+      "openai",
+      true,
+      async (part) => {
+        emitted.push(part as Record<string, unknown>);
+      }
+    );
+
+    expect(emitted).toEqual([
+      { type: "tool-input-end", id: "call_partial" },
+      { type: "tool-call", toolCallId: "call_partial", toolName: "grep", input: { query: "needle" } },
+    ]);
+  });
+
+  test("executeToolCall maps MCP-style isError responses to tool-error", async () => {
+    const emitted: Array<Record<string, unknown>> = [];
+    const result = await piRuntimeInternal.executeToolCall(
+      { id: "call-1", name: "mcp__local__ping", arguments: {} },
+      makeParams(makeConfig(process.cwd()), {
+        tools: {
+          mcp__local__ping: {
+            execute: async () => ({
+              isError: true,
+              content: [{ type: "text", text: "permission denied" }],
+            }),
+          },
+        },
+      }),
+      async (part) => {
+        emitted.push(part as Record<string, unknown>);
+      }
+    );
+
+    expect(emitted).toEqual([
+      {
+        type: "tool-error",
+        toolCallId: "call-1",
+        toolName: "mcp__local__ping",
+        error: "permission denied",
+      },
+    ]);
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: "permission denied" }]);
   });
 });

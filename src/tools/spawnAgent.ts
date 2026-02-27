@@ -106,7 +106,7 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
   const getModel = deps.getModel ?? realGetModel;
   const loadSubAgentPrompt = deps.loadSubAgentPrompt ?? realLoadSubAgentPrompt;
   const classifyCommandDetailed = deps.classifyCommandDetailed ?? realClassifyCommandDetailed;
-  const useLegacyModelApi = Boolean(streamText && stepCountIs && deps.getModel);
+  const useLegacyModelApi = Boolean(streamText && stepCountIs);
   const safeApprove = (command: string) =>
     classifyCommandDetailed(command, {
       allowedRoots: [

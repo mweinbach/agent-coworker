@@ -41,6 +41,20 @@ describe("pi message bridge", () => {
     expect((piMessages[2] as any).toolCallId).toBe("call-1");
   });
 
+  test("preserves non-text user content with a placeholder", () => {
+    const modelMessages = [
+      {
+        role: "user",
+        content: [{ type: "image", image: "data:image/png;base64,abc" }],
+      },
+    ] as ModelMessage[];
+
+    const piMessages = modelMessagesToPiMessages(modelMessages, "google");
+    expect(piMessages).toHaveLength(1);
+    expect((piMessages[0] as any).role).toBe("user");
+    expect((piMessages[0] as any).content).toContain("[image]");
+  });
+
   test("converts pi turn messages back to model messages", () => {
     const piTurnMessages = [
       {

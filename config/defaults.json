@@ -10,6 +10,30 @@
     "baseUrl": "https://cloud.langfuse.com",
     "otelEndpoint": "https://cloud.langfuse.com/api/public/otel/v1/traces"
   },
+  "providerOptions": {
+    "google": {
+      "thinkingConfig": {
+        "includeThoughts": true,
+        "thinkingLevel": "high"
+      }
+    },
+    "openai": {
+      "reasoningEffort": "high",
+      "reasoningSummary": "detailed",
+      "textVerbosity": "high"
+    },
+    "anthropic": {
+      "thinking": {
+        "type": "enabled",
+        "budgetTokens": 32000
+      }
+    },
+    "codex-cli": {
+      "reasoningEffort": "high",
+      "reasoningSummary": "detailed",
+      "textVerbosity": "high"
+    }
+  },
   "harness": {
     "reportOnly": true,
     "strictMode": false

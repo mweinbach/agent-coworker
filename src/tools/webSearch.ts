@@ -6,24 +6,10 @@ import { getAiCoworkerPaths, readToolApiKey } from "../connect";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
-interface CustomWebSearchToolOptions {
-  exaOnly?: boolean;
-}
-
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const stringSchema = z.string();
 const recordSchema = z.record(z.string(), z.unknown());
 const exaSnippetTextSchema = z.object({ text: stringSchema }).passthrough();
-const braveResultSchema = z.object({
-  title: stringSchema.optional(),
-  url: stringSchema.optional(),
-  description: stringSchema.optional(),
-}).passthrough();
-const braveResponseSchema = z.object({
-  web: z.object({
-    results: z.array(braveResultSchema).optional(),
-  }).passthrough().optional(),
-}).passthrough();
 const exaResultSchema = z.object({
   title: stringSchema.optional(),
   url: stringSchema.optional(),
@@ -103,8 +89,7 @@ async function resolveExaApiKey(ctx: ToolContext): Promise<string | undefined> {
   }
 }
 
-function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToolOptions = {}) {
-  const exaOnly = options.exaOnly ?? false;
+export function createWebSearchTool(ctx: ToolContext) {
   const webSearchInputSchema = z.object({
     query: z.string().min(1).optional().describe("Search query"),
     q: z.string().min(1).optional(),
@@ -117,9 +102,7 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
   }).passthrough();
 
   return defineTool({
-    description: exaOnly
-      ? "Search the web for current information using Exa. Requires EXA_API_KEY. Returns titles, URLs, and snippets."
-      : "Search the web for current information. Requires BRAVE_API_KEY or EXA_API_KEY. Returns titles, URLs, and snippets.",
+    description: "Search the web for current information using Exa. Requires EXA_API_KEY. Returns titles, URLs, and snippets.",
     inputSchema: webSearchInputSchema,
     execute: async (input) => {
       const parsedInput = webSearchInputSchema.safeParse(input);
@@ -153,38 +136,6 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
 
       const maxResults = parsedInput.data.maxResults ?? 10;
       ctx.log(`tool> webSearch ${JSON.stringify({ query: safeQuery, maxResults })}`);
-
-      if (!exaOnly && process.env.BRAVE_API_KEY) {
-        const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(
-          safeQuery
-        )}&count=${maxResults}`;
-        const res = await fetch(url, {
-          headers: {
-            Accept: "application/json",
-            "X-Subscription-Token": process.env.BRAVE_API_KEY,
-          },
-        });
-
-        if (!res.ok) {
-          const text = await res.text();
-          const msg = `Brave search failed: ${res.status} ${res.statusText}: ${text.slice(0, 500)}`;
-          ctx.log(`tool< webSearch ${JSON.stringify({ ok: false })}`);
-          return msg;
-        }
-
-        const data = await res.json();
-        const parsedData = braveResponseSchema.safeParse(data);
-        const braveResults = parsedData.success ? (parsedData.data.web?.results ?? []) : [];
-        const results = braveResults.map((r) => ({
-          title: r.title,
-          url: r.url,
-          description: r.description,
-        }));
-
-        const out = formatResults(results);
-        ctx.log(`tool< webSearch ${JSON.stringify({ provider: "brave" })}`);
-        return out;
-      }
 
       const exaApiKey = await resolveExaApiKey(ctx);
       if (exaApiKey) {
@@ -226,18 +177,9 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
         }
       }
 
-      const out = exaOnly
-        ? "webSearch disabled: set EXA_API_KEY or save Exa API key in provider settings"
-        : "webSearch disabled: set BRAVE_API_KEY or EXA_API_KEY";
+      const out = "webSearch disabled: set EXA_API_KEY or save Exa API key in provider settings";
       ctx.log(`tool< webSearch ${JSON.stringify({ disabled: true })}`);
       return out;
     },
   });
-}
-
-export function createWebSearchTool(ctx: ToolContext) {
-  if (ctx.config.provider === "google") {
-    return createCustomWebSearchTool(ctx, { exaOnly: true });
-  }
-  return createCustomWebSearchTool(ctx);
 }

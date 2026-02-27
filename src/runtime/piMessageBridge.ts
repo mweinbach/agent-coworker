@@ -146,8 +146,9 @@ function toolResultMessagesFromModelMessage(message: Record<string, unknown>): P
   return out;
 }
 
-export function modelMessagesToPiMessages(messages: ModelMessage[]): PiMessage[] {
+export function modelMessagesToPiMessages(messages: ModelMessage[], provider: string = "openai"): PiMessage[] {
   const out: PiMessage[] = [];
+  const now = Date.now();
   for (const rawMessage of messages) {
     const message = asRecord(rawMessage);
     if (!message) continue;
@@ -161,7 +162,7 @@ export function modelMessagesToPiMessages(messages: ModelMessage[]): PiMessage[]
       out.push({
         role: "user",
         content: text,
-        timestamp: Date.now(),
+        timestamp: now,
       } as PiMessage);
       continue;
     }
@@ -177,8 +178,8 @@ export function modelMessagesToPiMessages(messages: ModelMessage[]): PiMessage[]
       out.push({
         role: "assistant",
         content: content as any,
-        api: "openai-responses",
-        provider: "openai",
+        api: provider === "codex-cli" ? "openai-codex-responses" : `${provider}-responses`,
+        provider: provider,
         model: "unknown",
         usage: {
           input: 0,
@@ -189,7 +190,7 @@ export function modelMessagesToPiMessages(messages: ModelMessage[]): PiMessage[]
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
         stopReason: "stop",
-        timestamp: Date.now(),
+        timestamp: now,
       } as PiMessage);
       continue;
     }
@@ -245,6 +246,8 @@ function toolResultContentToText(content: unknown): string {
 }
 
 export function piTurnMessagesToModelMessages(messages: PiMessage[]): ModelMessage[] {
+  // Note: This intentionally never emits 'user' role messages,
+  // as it is only used to extract the new turn output (assistant/toolResults) to append to the chat.
   const out: ModelMessage[] = [];
   for (const rawMessage of messages as any[]) {
     if (!rawMessage || typeof rawMessage !== "object") continue;

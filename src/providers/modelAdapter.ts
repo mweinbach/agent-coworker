@@ -1,5 +1,9 @@
 import path from "node:path";
 
+/**
+ * @deprecated This module is only kept for legacy test API path compatibility with Vercel AI SDK.
+ */
+
 import { getAiCoworkerPaths } from "../connect";
 import type { AgentConfig } from "../types";
 import {

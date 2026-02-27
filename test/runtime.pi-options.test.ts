@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 
-import { __internal } from "../src/runtime/piRuntime";
+import * as __internal from "../src/runtime/piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../src/types";
 

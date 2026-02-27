@@ -9,6 +9,7 @@ export function resolveRuntimeName(config: AgentConfig): RuntimeName {
 }
 
 export function createRuntime(config: AgentConfig): LlmRuntime {
+  // config is passed to allow future runtime selection (e.g. routing based on config.runtime)
   void config;
   return createPiRuntime();
 }

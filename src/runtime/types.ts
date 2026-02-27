@@ -44,7 +44,9 @@ export interface RuntimeRunTurnResult {
   usage?: RuntimeUsage;
 }
 
+import type { RuntimeName } from "../types";
+
 export interface LlmRuntime {
-  readonly name: "pi";
+  readonly name: RuntimeName;
   runTurn(params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult>;
 }

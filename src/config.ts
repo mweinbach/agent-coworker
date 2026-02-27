@@ -297,6 +297,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.enableMcp) ??
     true;
 
+  const includeRawChunks =
+    asBoolean(env.AGENT_INCLUDE_RAW_CHUNKS) ??
+    asBoolean(projectConfig.includeRawChunks) ??
+    asBoolean(userConfig.includeRawChunks) ??
+    asBoolean(builtInDefaults.includeRawChunks) ??
+    true;
+
   const mergedObservability = parseLayer(observabilityLayerSchema, merged.observability, {});
   const observabilityEnabled =
     asBoolean(env.AGENT_OBSERVABILITY_ENABLED) ??
@@ -374,6 +381,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     configDirs: [projectAgentDir, userAgentDir, builtInConfigDir],
 
     enableMcp,
+    includeRawChunks,
     observabilityEnabled,
     observability,
     harness,

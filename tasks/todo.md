@@ -1,3 +1,28 @@
+# Task: Address PR review must-fix items (runtime telemetry/auth/raw-chunk correctness)
+
+## Plan
+- [x] Eliminate duplicate abort-callback execution in PI runtime turn loop.
+- [x] Preserve Codex account-header behavior in PI runtime auth path (`ChatGPT-Account-ID` parity).
+- [x] Honor `includeRawChunks` end-to-end in session stream normalization/emission.
+- [x] Ensure runtime telemetry is actually applied on PI model calls (or adjust behavior/docs if unsupported).
+- [x] Add targeted regression coverage for the above and run full verification (`bun test`).
+
+## Review
+- Removed duplicate abort callback invocation in `src/runtime/piRuntime.ts` by relying on the outer catch-path abort handling.
+- Restored Codex account-header parity by carrying `accountId` through runtime model resolution and forwarding `ChatGPT-Account-ID` into PI stream headers.
+- Added `AgentConfig.includeRawChunks` plumbing (`src/types.ts`, `src/config.ts`, `config/defaults.json`) and used it in `TurnExecutionManager` for both runtime call options and `rawPart` emission.
+- Added PI-runtime telemetry span instrumentation in `src/runtime/piRuntime.ts` and explicit telemetry parsing helpers (`__internal.parseTelemetrySettings`).
+- Added regression coverage:
+  - `test/runtime.pi-runtime.test.ts`
+  - `test/runtime.pi-options.test.ts`
+  - `test/session.stream-pipeline.test.ts`
+- Verification:
+  - `~/.bun/bin/bun test test/runtime.pi-runtime.test.ts test/runtime.pi-options.test.ts test/session.stream-pipeline.test.ts` -> **39 pass, 0 fail**
+  - `~/.bun/bin/bun test` -> **1673 pass, 2 skip, 2 fail** (sandbox EPERM writing `~/.cowork/state/cli-state.json.*.tmp` in two CLI REPL tests)
+  - `HOME=/tmp/agent-coworker-test-home ~/.bun/bin/bun test` -> **1675 pass, 2 skip, 0 fail**
+
+---
+
 # Task: Remove AI SDK dependencies completely (PI-only runtime)
 
 ## Plan

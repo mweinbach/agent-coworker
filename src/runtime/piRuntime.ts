@@ -1,7 +1,7 @@
 import path from "node:path";
 
-import { getModel as getPiModel, getModels as getPiModels, stream as piStream } from "@mariozechner/pi-ai";
-import { z } from "zod";
+import { SpanStatusCode, trace, type AttributeValue, type Span } from "@opentelemetry/api";
+import { stream as piStream } from "@mariozechner/pi-ai";
 import { asFiniteNumber, asNonEmptyString, asRecord, asString, buildPiStreamOptions, extractToolCallsFromAssistant, pickKnownPiModel, toPiJsonSchema, toolCallFromPartial, type PiModel, type PiToolCallLike } from "./piRuntimeOptions";
 
 import { getSavedProviderApiKey } from "../config";
@@ -13,6 +13,7 @@ import {
   refreshCodexAuthMaterial,
 } from "../providers/codex-auth";
 import type { AgentConfig, ProviderName } from "../types";
+import type { TelemetrySettings } from "../observability/runtime";
 
 import {
   extractPiAssistantText,
@@ -53,9 +54,18 @@ function runtimeHomeFromConfig(config: AgentConfig): string | undefined {
 type ResolvedPiRuntimeModel = {
   model: PiModel;
   apiKey?: string;
+  headers?: Record<string, string>;
 };
 
-async function resolveCodexAccessToken(config: AgentConfig, log?: (line: string) => void): Promise<string> {
+type ResolvedCodexAuth = {
+  accessToken: string;
+  accountId?: string;
+};
+
+async function resolveCodexAccessToken(
+  config: AgentConfig,
+  log?: (line: string) => void
+): Promise<ResolvedCodexAuth> {
   const paths = getAiCoworkerPaths({ homedir: runtimeHomeFromConfig(config) });
   let material = await readCodexAuthMaterial(paths, { migrateLegacy: true });
   if (!material?.accessToken) {
@@ -79,7 +89,11 @@ async function resolveCodexAccessToken(config: AgentConfig, log?: (line: string)
     throw new Error("Codex token is expired. Run /connect codex-cli to re-authenticate.");
   }
 
-  return material.accessToken;
+  const accountId = material.accountId?.trim();
+  return {
+    accessToken: material.accessToken,
+    ...(accountId ? { accountId } : {}),
+  };
 }
 
 async function resolvePiModel(params: RuntimeRunTurnParams): Promise<ResolvedPiRuntimeModel> {
@@ -136,6 +150,11 @@ async function resolvePiModel(params: RuntimeRunTurnParams): Promise<ResolvedPiR
     if (!codexModel) {
       throw new Error(`No PI model metadata available for provider codex-cli/openai-codex (model: ${modelId}).`);
     }
+    const codexAuth = await resolveCodexAccessToken(params.config, params.log);
+    const codexHeaders = codexAuth.accountId
+      ? { "ChatGPT-Account-ID": codexAuth.accountId }
+      : undefined;
+
     return {
       model: {
         ...codexModel,
@@ -144,13 +163,105 @@ async function resolvePiModel(params: RuntimeRunTurnParams): Promise<ResolvedPiR
         provider: "openai-codex",
         api: "openai-codex-responses",
         baseUrl: CODEX_BACKEND_BASE_URL,
+        ...(codexHeaders ? { headers: { ...(codexModel.headers ?? {}), ...codexHeaders } } : {}),
       },
-      apiKey: await resolveCodexAccessToken(params.config, params.log),
+      apiKey: codexAuth.accessToken,
+      ...(codexHeaders ? { headers: codexHeaders } : {}),
     };
   }
 
   const exhaustive: never = provider;
   throw new Error(`Unsupported provider for PI runtime: ${String(exhaustive)}`);
+}
+
+function parseTelemetrySettings(raw: unknown): TelemetrySettings | undefined {
+  const parsed = asRecord(raw);
+  if (!parsed || parsed.isEnabled !== true) return undefined;
+
+  const metadataInput = asRecord(parsed.metadata);
+  const metadata: Record<string, AttributeValue> = {};
+  if (metadataInput) {
+    for (const [key, value] of Object.entries(metadataInput)) {
+      if (typeof value === "string" || typeof value === "boolean") {
+        metadata[key] = value;
+        continue;
+      }
+      if (typeof value === "number" && Number.isFinite(value)) {
+        metadata[key] = value;
+      }
+    }
+  }
+
+  return {
+    isEnabled: true,
+    recordInputs: parsed.recordInputs === true,
+    recordOutputs: parsed.recordOutputs === true,
+    functionId: asNonEmptyString(parsed.functionId),
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
+}
+
+function startModelCallSpan(
+  telemetry: TelemetrySettings | undefined,
+  params: RuntimeRunTurnParams,
+  resolved: ResolvedPiRuntimeModel,
+  stepNumber: number,
+  stepOptions: Record<string, unknown>,
+  piMessages: unknown
+): Span | null {
+  if (!telemetry?.isEnabled) return null;
+
+  const attributes: Record<string, AttributeValue> = {
+    "llm.runtime": "pi",
+    "llm.provider": params.config.provider,
+    "llm.model": resolved.model.id,
+    "llm.step_number": stepNumber,
+    ...(telemetry.metadata ?? {}),
+  };
+
+  if (telemetry.recordInputs) {
+    attributes["llm.input.system"] = params.system;
+    attributes["llm.input.messages"] = safeJsonStringify(piMessages);
+    attributes["llm.input.options"] = safeJsonStringify(stepOptions);
+  }
+
+  return trace
+    .getTracer("agent-coworker.runtime")
+    .startSpan(telemetry.functionId ?? "agent.runtime.pi.model_call", { attributes });
+}
+
+function markModelCallSpanSuccess(
+  span: Span | null,
+  telemetry: TelemetrySettings | undefined,
+  assistantRecord: Record<string, unknown>
+): void {
+  if (!span) return;
+
+  if (telemetry?.recordOutputs) {
+    span.setAttribute("llm.output.stop_reason", asString(assistantRecord.stopReason) ?? "unknown");
+    span.setAttribute("llm.output.response", safeJsonStringify(assistantRecord));
+  }
+
+  const usage = asRecord(assistantRecord.usage);
+  const input = asFiniteNumber(usage?.input);
+  const output = asFiniteNumber(usage?.output);
+  const total = asFiniteNumber(usage?.totalTokens);
+  if (input !== undefined) span.setAttribute("llm.usage.input_tokens", input);
+  if (output !== undefined) span.setAttribute("llm.usage.output_tokens", output);
+  if (total !== undefined) span.setAttribute("llm.usage.total_tokens", total);
+
+  span.setStatus({ code: SpanStatusCode.OK });
+  span.end();
+}
+
+function markModelCallSpanError(span: Span | null, error: unknown): void {
+  if (!span) return;
+  const message = error instanceof Error ? error.message : String(error);
+  span.setStatus({ code: SpanStatusCode.ERROR, message });
+  if (error instanceof Error) {
+    span.recordException(error);
+  }
+  span.end();
 }
 
 function toolMapToPiTools(tools: RuntimeRunTurnParams["tools"]): Array<Record<string, unknown>> {
@@ -335,6 +446,11 @@ async function executeToolCall(
   }
 }
 
+export const __internal = {
+  parseTelemetrySettings,
+  resolvePiModel,
+} as const;
+
 export function createPiRuntime(): LlmRuntime {
   return {
     name: "pi",
@@ -346,8 +462,9 @@ export function createPiRuntime(): LlmRuntime {
 
       try {
         const resolved = await resolvePiModel(params);
+        const telemetry = parseTelemetrySettings(params.telemetry);
         const piTools = toolMapToPiTools(params.tools);
-        const streamOptions = buildPiStreamOptions(params, resolved.apiKey);
+        const streamOptions = buildPiStreamOptions(params, resolved.apiKey, resolved.headers);
         const piMessages = modelMessagesToPiMessages(params.messages, params.config.provider);
         const turnMessages: any[] = [];
         let usage = undefined as RuntimeRunTurnResult["usage"];
@@ -355,7 +472,6 @@ export function createPiRuntime(): LlmRuntime {
         const maxSteps = Math.max(1, params.maxSteps);
         for (let step = 0; step < maxSteps; step += 1) {
           if (params.abortSignal?.aborted) {
-            await params.onModelAbort?.();
             throw new Error("Model turn aborted.");
           }
 
@@ -365,7 +481,7 @@ export function createPiRuntime(): LlmRuntime {
             request: { model: resolved.model.id, provider: params.config.provider },
           });
 
-          let stepOptions = streamOptions;
+          let stepOptions: Record<string, unknown> = streamOptions;
           if (params.prepareStep) {
             const stepOverrides = await params.prepareStep({ stepNumber: step + 1, messages: piMessages as any });
             if (stepOverrides) {
@@ -373,22 +489,31 @@ export function createPiRuntime(): LlmRuntime {
             }
           }
 
-          const stream = piStream(
-            resolved.model as any,
-            {
-              systemPrompt: params.system,
-              messages: piMessages as any,
-              tools: piTools as any,
-            },
-            stepOptions as any
-          );
+          const span = startModelCallSpan(telemetry, params, resolved, step + 1, stepOptions, piMessages);
+          let assistantRecord: Record<string, unknown> = {};
+          try {
+            const stream = piStream(
+              resolved.model as any,
+              {
+                systemPrompt: params.system,
+                messages: piMessages as any,
+                tools: piTools as any,
+              },
+              stepOptions as any
+            );
 
-          for await (const event of stream as any) {
-            await emitPiEventAsRawPart(event, params.config.provider, emitPart);
+            for await (const event of stream as any) {
+              await emitPiEventAsRawPart(event, params.config.provider, emitPart);
+            }
+
+            const assistant = await (stream as any).result();
+            assistantRecord = asRecord(assistant) ?? {};
+            markModelCallSpanSuccess(span, telemetry, assistantRecord);
+          } catch (error) {
+            markModelCallSpanError(span, error);
+            throw error;
           }
 
-          const assistant = await (stream as any).result();
-          const assistantRecord = asRecord(assistant) ?? {};
           turnMessages.push(assistantRecord);
           piMessages.push(assistantRecord as any);
           usage = mergePiUsage(usage, assistantRecord.usage);

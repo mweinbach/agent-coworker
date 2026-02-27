@@ -3,6 +3,7 @@
   "runtime": "pi",
   "userName": "",
   "knowledgeCutoff": "End of May 2025",
+  "includeRawChunks": true,
   "observabilityEnabled": true,
   "observability": {
     "provider": "langfuse",

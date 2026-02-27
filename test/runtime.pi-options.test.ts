@@ -122,6 +122,18 @@ describe("pi runtime provider option mapping", () => {
     });
   });
 
+  test("includes explicit stream headers when provided", () => {
+    const params = makeParams(makeConfig({ provider: "codex-cli" }));
+    const mapped = __internal.buildPiStreamOptions(
+      params,
+      "token-123",
+      { "ChatGPT-Account-ID": "acct_123" }
+    ) as any;
+
+    expect(mapped.apiKey).toBe("token-123");
+    expect(mapped.headers).toEqual({ "ChatGPT-Account-ID": "acct_123" });
+  });
+
   test("converts zod tool schemas into json schema", () => {
     const schema = z.object({
       path: z.string(),

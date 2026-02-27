@@ -97,6 +97,12 @@ export interface AgentConfig {
   enableMcp?: boolean;
 
   /**
+   * Whether to include raw model stream chunks in emitted stream events.
+   * Defaults to true when not specified.
+   */
+  includeRawChunks?: boolean;
+
+  /**
    * Whether Langfuse observability integration is enabled for this session/run.
    * Defaults to false when not specified.
    */

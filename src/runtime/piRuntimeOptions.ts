@@ -77,10 +77,17 @@ export function toGoogleThinkingLevel(value: unknown): "MINIMAL" | "LOW" | "MEDI
   return undefined;
 }
 
-export function buildPiStreamOptions(params: RuntimeRunTurnParams, apiKey?: string): Record<string, unknown> {
+export function buildPiStreamOptions(
+  params: RuntimeRunTurnParams,
+  apiKey?: string,
+  headers?: Record<string, string>
+): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (apiKey) options.apiKey = apiKey;
   if (params.abortSignal) options.signal = params.abortSignal;
+  if (headers && Object.keys(headers).length > 0) {
+    options.headers = { ...headers };
+  }
 
   const providerSection = providerSectionForPi(params.config.provider, params.providerOptions);
 

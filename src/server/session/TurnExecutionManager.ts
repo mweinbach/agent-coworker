@@ -127,6 +127,7 @@ export class TurnExecutionManager {
       this.context.queuePersistSessionSnapshot("session.user_message");
 
       let streamPartIndex = 0;
+      const includeRawChunks = this.context.state.config.includeRawChunks ?? true;
       const res = await this.context.deps.runTurnImpl({
         config: this.context.state.config,
         system: this.context.state.system,
@@ -147,7 +148,7 @@ export class TurnExecutionManager {
           },
         },
         abortSignal: this.context.state.abortController.signal,
-        includeRawChunks: true,
+        includeRawChunks,
         onModelError: async (error) => {
           lastStreamError = error;
           this.context.emitTelemetry("agent.stream.error", "error", {
@@ -168,7 +169,7 @@ export class TurnExecutionManager {
           const partIndex = streamPartIndex++;
           const normalized = normalizeModelStreamPart(rawPart, {
             provider: this.context.state.config.provider,
-            includeRawPart: true,
+            includeRawPart: includeRawChunks,
             fallbackIdSeed: turnId,
             rawPartMode: process.env.COWORK_MODEL_STREAM_RAW_MODE === "full" ? "full" : "sanitized",
           });

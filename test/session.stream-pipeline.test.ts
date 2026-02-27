@@ -606,6 +606,25 @@ describe("AgentSession stream pipeline", () => {
     expect(rawPart.input).toEqual({ pattern: "foo" });
   });
 
+  test("rawPart is omitted when includeRawChunks is disabled in config", async () => {
+    const config = makeConfig("/tmp/test-session");
+    config.includeRawChunks = false;
+    const { session, events } = makeSession({ config });
+
+    await sendWithStreamParts(session, [
+      {
+        type: "tool-call",
+        toolCallId: "tc-no-raw",
+        toolName: "grep",
+        input: { pattern: "foo" },
+      },
+    ]);
+
+    const chunks = getStreamChunks(events);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].rawPart).toBeUndefined();
+  });
+
   // =========================================================================
   // 22. Provider-specific reasoning mode
   // =========================================================================

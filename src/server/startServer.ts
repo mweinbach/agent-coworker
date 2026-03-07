@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../connect";
@@ -131,6 +132,7 @@ export async function startAgentServer(
     paths: getAiCoworkerPathsImpl({ homedir: opts.homedir }),
   });
   const sessionBindings = new Map<string, SessionBinding>();
+  const wsAuthToken = randomBytes(24).toString("base64url");
 
   const buildSession = (binding: SessionBinding, persistedSessionId?: string): {
     session: AgentSession;
@@ -198,6 +200,10 @@ export async function startAgentServer(
       fetch(req, srv) {
         const url = new URL(req.url);
         if (url.pathname === "/ws") {
+          const providedToken = url.searchParams.get("token")?.trim();
+          if (!providedToken || providedToken !== wsAuthToken) {
+            return new Response("Unauthorized", { status: 401 });
+          }
           const resumeSessionIdRaw = url.searchParams.get("resumeSessionId");
           const resumeSessionId = resumeSessionIdRaw && resumeSessionIdRaw.trim() ? resumeSessionIdRaw.trim() : undefined;
           const upgraded = srv.upgrade(req, { data: { resumeSessionId } });
@@ -382,6 +388,6 @@ export async function startAgentServer(
     return originalStop();
   };
 
-  const url = `ws://${hostname}:${server.port}/ws`;
+  const url = `ws://${hostname}:${server.port}/ws?token=${encodeURIComponent(wsAuthToken)}`;
   return { server, config, system, url };
 }

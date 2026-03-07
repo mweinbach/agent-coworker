@@ -48,6 +48,12 @@ function serverOpts(tmpDir: string, overrides?: Partial<StartAgentServerOptions>
   };
 }
 
+function appendWebSocketQuery(url: string, key: string, value: string): string {
+  const parsed = new URL(url);
+  parsed.searchParams.set(key, value);
+  return parsed.toString();
+}
+
 /** Helper: open a WebSocket and collect the first N messages. */
 function collectMessages(url: string, count: number, timeoutMs = 5000): Promise<any[]> {
   return new Promise((resolve, reject) => {
@@ -204,7 +210,7 @@ describe("Server Startup", () => {
       expect(typeof config.provider).toBe("string");
       expect(typeof system).toBe("string");
       expect(system.length).toBeGreaterThan(0);
-      expect(url).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/ws$/);
+      expect(url).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/ws\?token=[^&]+$/);
     } finally {
       server.stop();
     }
@@ -312,15 +318,15 @@ describe("HTTP Handler", () => {
     }
   });
 
-  test("/ws path with standard HTTP GET (no upgrade) returns 400", async () => {
+  test("/ws path without auth token returns 401", async () => {
     const tmpDir = await makeTmpProject();
     const { server } = await startAgentServer(serverOpts(tmpDir));
     try {
       const httpUrl = `http://127.0.0.1:${server.port}/ws`;
       const res = await fetch(httpUrl);
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(401);
       const text = await res.text();
-      expect(text).toBe("WebSocket upgrade failed");
+      expect(text).toBe("Unauthorized");
     } finally {
       server.stop();
     }
@@ -543,7 +549,7 @@ describe("WebSocket Lifecycle", () => {
       expect(typeof originalSessionId).toBe("string");
       expect(originalSessionId.length).toBeGreaterThan(0);
 
-      const resumed = await collectMessages(`${url}?resumeSessionId=${originalSessionId}`, 1);
+      const resumed = await collectMessages(appendWebSocketQuery(url, "resumeSessionId", originalSessionId), 1);
       expect(resumed[0]?.type).toBe("server_hello");
       expect(resumed[0]?.sessionId).toBe(originalSessionId);
     } finally {
@@ -561,7 +567,7 @@ describe("WebSocket Lifecycle", () => {
 
     const second = await startAgentServer(serverOpts(tmpDir));
     try {
-      const resumed = await collectMessages(`${second.url}?resumeSessionId=${originalSessionId}`, 1);
+      const resumed = await collectMessages(appendWebSocketQuery(second.url, "resumeSessionId", originalSessionId), 1);
       expect(resumed[0]?.type).toBe("server_hello");
       expect(resumed[0]?.sessionId).toBe(originalSessionId);
       expect(resumed[0]?.isResume).toBe(true);
@@ -605,7 +611,7 @@ describe("WebSocket Lifecycle", () => {
         };
       });
 
-      const resumed = await collectMessages(`${url}?resumeSessionId=${originalSessionId}`, 1);
+      const resumed = await collectMessages(appendWebSocketQuery(url, "resumeSessionId", originalSessionId), 1);
       expect(resumed[0]?.type).toBe("server_hello");
       expect(resumed[0]?.sessionId).toBe(originalSessionId);
       expect(resumed[0]?.isResume).toBe(true);

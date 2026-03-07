@@ -1,3 +1,20 @@
+# Task: Remediate unauthenticated MCP server config writes over WebSocket
+
+## Plan
+- [x] Verify whether `mcp_servers_set` is still accepted in HEAD without any authorization gate and can persist workspace MCP JSON.
+- [x] Implement a minimal server-side authorization gate for MCP workspace settings writes (and keep read behavior intact).
+- [x] Add/adjust regression tests to prove unauthorized clients cannot write MCP server JSON.
+- [x] Run targeted tests and full `bun test`, then document outcomes.
+
+## Review
+- Confirmed in current HEAD that WebSocket `/ws` accepted unauthenticated upgrades and exposed MCP mutation messages, enabling local untrusted clients to reach workspace MCP write paths.
+- Added a connection-level random auth token gate in `startAgentServer()`; `/ws` upgrades now require `?token=<server-generated-token>`, and the returned server URL now includes this token automatically for first-party clients.
+- Added/updated server tests to assert unauthenticated `/ws` requests get HTTP 401 and to keep resume behavior working by appending `resumeSessionId` alongside the auth token.
+- Verification:
+  - `bun test test/server.test.ts test/protocol.test.ts` (pass)
+  - `bun test` (fails in this environment on pre-existing skill-discovery/skill-tool tests unrelated to this patch; server tests pass)
+
+---
 # Task: Run the harness in this repo with Codex gpt-5.4
 
 ## Plan

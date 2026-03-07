@@ -829,3 +829,13 @@
   - `C:\Users\maxw6\.bun\bin\bun run typecheck:desktop` -> pass
   - `git -c safe.directory=C:/Users/maxw6/Projects/agent-coworker -C C:\Users\maxw6\Projects\agent-coworker diff --check` -> pass
   - `C:\Users\maxw6\.bun\bin\bun test` -> Bun runtime crash after extensive passing output (`panic(main thread): switch on corrupt value`), so the full-suite result is inconclusive and appears environmental rather than caused by this patch.
+# Task: Add desktop release CI for macOS and Windows
+
+## Plan
+- [x] Review the existing desktop packaging config, release prerequisites, and GitHub Actions conventions.
+- [ ] Add a GitHub Actions workflow for desktop release builds on macOS and Windows, plus any supporting script changes needed for CI publishing.
+- [ ] Update the desktop docs/task review with the new release flow and required secrets.
+- [ ] Run verification commands, inspect the diff, and record outcomes in the review section below.
+
+## Review
+- Pending.

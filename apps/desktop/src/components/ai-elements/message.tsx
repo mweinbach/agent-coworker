@@ -65,17 +65,30 @@ const defaultDesktopRehypePlugins: PluggableList = [
   [rehypeSanitize, desktopSanitizeSchema],
   defaultRehypePlugins.harden,
 ];
+const bareDesktopFilePathPatterns = [
+  /(?:[A-Za-z]:\\(?:[^\\\r\n<>:"|?*]+\\)*[^\\\r\n<>:"|?*]+\.[A-Za-z0-9]{1,12})(?=$|[\s),\].!?:;"'])/g,
+  /(?:\\\\[^\\\r\n<>:"|?*]+\\(?:[^\\\r\n<>:"|?*]+\\)*[^\\\r\n<>:"|?*]+\.[A-Za-z0-9]{1,12})(?=$|[\s),\].!?:;"'])/g,
+  /(?:\/(?:Users|home|tmp|var|opt|Applications|Volumes)(?:\/[^\/\r\n]+)+\.[A-Za-z0-9]{1,12})(?=$|[\s),\].!?:;"'])/g,
+] as const;
+const autoLinkSkippedNodeTypes = new Set(["code", "inlineCode", "html", "link", "linkReference"]);
 
 type HastNode = {
   type?: string;
   tagName?: string;
   url?: string;
+  value?: string;
   properties?: Record<string, unknown>;
   children?: HastNode[];
 };
 
 type DesktopMessageLinkProps = ComponentProps<"a"> & {
   node?: unknown;
+};
+
+type DesktopPathMatch = {
+  start: number;
+  end: number;
+  path: string;
 };
 
 function isExternalMessageHref(rawHref: string): boolean {
@@ -85,6 +98,12 @@ function isExternalMessageHref(rawHref: string): boolean {
   } catch {
     return false;
   }
+}
+
+function desktopPathBasename(rawPath: string): string {
+  const normalized = rawPath.replace(/[\\/]+$/, "").replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+  return parts[parts.length - 1] || rawPath;
 }
 
 export function fileUrlToDesktopPath(rawHref: string): string | null {
@@ -113,6 +132,38 @@ export function fileUrlToDesktopPath(rawHref: string): string | null {
   }
 }
 
+export function desktopPathToFileUrl(rawPath: string): string | null {
+  const normalized = rawPath.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.startsWith("\\\\")) {
+    const parts = normalized.slice(2).split("\\").filter(Boolean);
+    const [host, ...rest] = parts;
+    if (!host || rest.length === 0) {
+      return null;
+    }
+    return `file://${host}/${rest.map((part) => encodeURIComponent(part)).join("/")}`;
+  }
+
+  const slashPath = normalized.replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(slashPath)) {
+    const [drive, ...rest] = slashPath.split("/");
+    return `file:///${drive}/${rest.map((part) => encodeURIComponent(part)).join("/")}`;
+  }
+
+  if (!slashPath.startsWith("/")) {
+    return null;
+  }
+
+  return `file:///${slashPath
+    .split("/")
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join("/")}`;
+}
+
 export function encodeDesktopLocalFileHref(rawHref: string): string | null {
   const path = fileUrlToDesktopPath(rawHref);
   if (!path) {
@@ -138,8 +189,126 @@ export function decodeDesktopLocalFileHref(rawHref?: string | null): string | nu
   }
 }
 
+function normalizeDesktopFileLinkLabel(node: HastNode, desktopPath: string, rawHref: string): void {
+  if (!Array.isArray(node.children) || node.children.length !== 1) {
+    return;
+  }
+
+  const [onlyChild] = node.children;
+  if (onlyChild?.type !== "text" || typeof onlyChild.value !== "string") {
+    return;
+  }
+
+  const candidate = onlyChild.value.trim();
+  const normalizedDesktopPath = desktopPath.replace(/\\/g, "/");
+  if (candidate === desktopPath || candidate === normalizedDesktopPath || candidate === rawHref) {
+    onlyChild.value = desktopPathBasename(desktopPath);
+  }
+}
+
+function isAutoLinkSkippedNode(node: HastNode): boolean {
+  if (autoLinkSkippedNodeTypes.has(node.type ?? "")) {
+    return true;
+  }
+
+  return node.type === "element" && (node.tagName === "a" || node.tagName === "code" || node.tagName === "pre");
+}
+
+function findBareDesktopFilePathMatches(text: string): DesktopPathMatch[] {
+  const matches: DesktopPathMatch[] = [];
+
+  for (const pattern of bareDesktopFilePathPatterns) {
+    for (const match of text.matchAll(pattern)) {
+      if (typeof match.index !== "number") {
+        continue;
+      }
+
+      matches.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        path: match[0],
+      });
+    }
+  }
+
+  matches.sort((left, right) => left.start - right.start || (right.end - right.start) - (left.end - left.start));
+
+  const deduped: DesktopPathMatch[] = [];
+  for (const match of matches) {
+    const previous = deduped[deduped.length - 1];
+    if (previous && match.start < previous.end) {
+      continue;
+    }
+    deduped.push(match);
+  }
+
+  return deduped;
+}
+
+function buildBareDesktopPathNodes(text: string): HastNode[] | null {
+  const matches = findBareDesktopFilePathMatches(text);
+  if (matches.length === 0) {
+    return null;
+  }
+
+  const nodes: HastNode[] = [];
+  let cursor = 0;
+
+  for (const match of matches) {
+    if (match.start > cursor) {
+      nodes.push({ type: "text", value: text.slice(cursor, match.start) });
+    }
+
+    const fileUrl = desktopPathToFileUrl(match.path);
+    if (fileUrl) {
+      nodes.push({
+        type: "link",
+        url: fileUrl,
+        children: [{ type: "text", value: desktopPathBasename(match.path) }],
+      });
+    } else {
+      nodes.push({ type: "text", value: text.slice(match.start, match.end) });
+    }
+
+    cursor = match.end;
+  }
+
+  if (cursor < text.length) {
+    nodes.push({ type: "text", value: text.slice(cursor) });
+  }
+
+  return nodes.filter((node) => node.type !== "text" || Boolean(node.value));
+}
+
+export function rewriteBareDesktopFilePathsInTree(node: HastNode): void {
+  if (isAutoLinkSkippedNode(node) || !Array.isArray(node.children)) {
+    return;
+  }
+
+  const nextChildren: HastNode[] = [];
+  for (const child of node.children) {
+    if (child.type === "text" && typeof child.value === "string") {
+      const rewrittenNodes = buildBareDesktopPathNodes(child.value);
+      if (rewrittenNodes) {
+        nextChildren.push(...rewrittenNodes);
+        continue;
+      }
+    }
+
+    rewriteBareDesktopFilePathsInTree(child);
+    nextChildren.push(child);
+  }
+
+  node.children = nextChildren;
+}
+
 export function rewriteDesktopFileLinksInTree(node: HastNode): void {
   if (typeof node.url === "string") {
+    const desktopPath = fileUrlToDesktopPath(node.url);
+    if (desktopPath) {
+      normalizeDesktopFileLinkLabel(node, desktopPath, node.url);
+    }
+
     const rewrittenUrl = encodeDesktopLocalFileHref(node.url);
     if (rewrittenUrl) {
       node.url = rewrittenUrl;
@@ -147,7 +316,13 @@ export function rewriteDesktopFileLinksInTree(node: HastNode): void {
   }
 
   if (node.type === "element" && node.tagName === "a" && typeof node.properties?.href === "string") {
-    const rewrittenHref = encodeDesktopLocalFileHref(node.properties.href);
+    const href = node.properties.href;
+    const desktopPath = fileUrlToDesktopPath(href);
+    if (desktopPath) {
+      normalizeDesktopFileLinkLabel(node, desktopPath, href);
+    }
+
+    const rewrittenHref = encodeDesktopLocalFileHref(href);
     if (rewrittenHref) {
       node.properties.href = rewrittenHref;
     }
@@ -164,6 +339,7 @@ export function rewriteDesktopFileLinksInTree(node: HastNode): void {
 
 export function remarkRewriteDesktopFileLinks() {
   return (tree: HastNode) => {
+    rewriteBareDesktopFilePathsInTree(tree);
     rewriteDesktopFileLinksInTree(tree);
   };
 }

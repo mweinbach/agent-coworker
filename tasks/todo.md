@@ -1,3 +1,23 @@
+# Task: Move desktop Exa Search API settings into their own section
+
+## Plan
+- [x] Inspect the current desktop Providers settings page and isolate how `exa_api_key` is being grouped under Google.
+- [x] Update the desktop Providers settings UI so Google no longer renders the Exa key inside its auth methods and Exa appears in its own dedicated settings card.
+- [x] Add focused desktop regression coverage for the section split.
+- [x] Run targeted verification, then record the outcome in the review section below.
+
+## Review
+- Updated `C:\Users\maxw6\Projects\agent-coworker\apps\desktop\src\ui\settings\pages\ProvidersPage.tsx` so the desktop Providers page no longer renders `exa_api_key` inside the Google card. Google still shows its own auth methods and models, while Exa Search now appears as its own dedicated expandable card in the same settings list.
+- Kept the existing backend wiring intact. The Exa card still saves through provider `google` plus method `exa_api_key`, so no server/auth registry changes were needed for this desktop-only settings fix.
+- Added `C:\Users\maxw6\Projects\agent-coworker\apps\desktop\test\providers-page.test.ts` with regression coverage proving the expanded Google card no longer exposes the Exa input and the dedicated Exa Search card still renders its own API-key control.
+
+### Verification
+- `~/.bun/bin/bun test apps/desktop/test/providers-page.test.ts` -> pass (`2 pass, 0 fail`)
+- `~/.bun/bin/bun test apps/desktop/test/providers-page.test.ts apps/desktop/test/settings-nav.test.ts` -> pass (`11 pass, 0 fail`)
+- `~/.bun/bin/bunx tsc --noEmit -p apps/desktop/tsconfig.json` -> pass
+- `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`142 pass, 0 fail`)
+- `~/.bun/bin/bun test` -> reproducibly crashes inside Bun after many passing suites with `panic(main thread): switch on corrupt value`, so the repo-wide run could not complete in this environment.
+
 # Task: Add a real general sub-agent prompt
 
 ## Plan
@@ -792,3 +812,20 @@
   - `~/.bun/bin/bunx tsc --noEmit` -> pass
   - `~/.bun/bin/bun test` -> pass (`1723 pass, 2 skip, 0 fail`)
   - `git diff --check` -> pass
+
+# Task: Make desktop chat file references clickable short labels
+
+## Plan
+- [x] Inspect the desktop chat markdown pipeline and confirm where bare local file paths currently bypass link handling.
+- [x] Update the desktop message renderer so bare absolute local file paths become clickable links that display only the file name.
+- [x] Add regression tests for raw absolute paths, keep existing markdown file links working, and run focused verification.
+
+## Review
+- Updated [message.tsx](/C:/Users/maxw6/Projects/agent-coworker/apps/desktop/src/components/ai-elements/message.tsx) so assistant markdown now auto-links bare absolute local file paths during the Streamdown remark pass, reuses the existing local `cowork-file` link flow, and shortens local file link labels down to their basename when the label is just a full path.
+- The transform explicitly skips existing links, inline code, fenced code, and raw anchor/code/pre elements so code samples and authored markdown links are not rewritten.
+- Added regression coverage in [message-links.test.ts](/C:/Users/maxw6/Projects/agent-coworker/apps/desktop/test/message-links.test.ts) for bare path rewriting, basename normalization, rendered assistant output, and the inline-code exclusion.
+- Verification:
+  - `C:\Users\maxw6\.bun\bin\bun test apps\desktop\test\message-links.test.ts` -> pass (`9 pass, 0 fail`)
+  - `C:\Users\maxw6\.bun\bin\bun run typecheck:desktop` -> pass
+  - `git -c safe.directory=C:/Users/maxw6/Projects/agent-coworker -C C:\Users\maxw6\Projects\agent-coworker diff --check` -> pass
+  - `C:\Users\maxw6\.bun\bin\bun test` -> Bun runtime crash after extensive passing output (`panic(main thread): switch on corrupt value`), so the full-suite result is inconclusive and appears environmental rather than caused by this patch.

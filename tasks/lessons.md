@@ -10,3 +10,4 @@
 - For grouped desktop trace cleanup, merge adjacent tool rows by lifecycle compatibility and result shape, not just by matching tool name, and verify the header layout inside the real three-column shell because viewport breakpoints alone can hide narrow-panel collisions.
 - When default skills are meant to live in `~/.cowork/skills`, move the bootstrap into shared runtime startup and widen read-only permissions for `skillsDirs`; do not solve it in a desktop-only wrapper or by only changing bundled app assets.
 - For workspace-clutter complaints, inspect the actual user workspace path and generated artifact set first; prevent disposable scaffolding at the prompt/skill layer before considering UI hiding rules.
+- For desktop chat file listings, auto-link bare absolute local file paths in the Streamdown remark transform and shorten labels to basenames there; do not rely on the model to author markdown links or try to fix it only at the anchor component layer.

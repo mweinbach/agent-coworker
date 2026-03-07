@@ -8,6 +8,7 @@ import {
   fileUrlToDesktopPath,
   MessageResponse,
   remarkRewriteDesktopFileLinks,
+  rewriteBareDesktopFilePathsInTree,
   rewriteDesktopFileLinksInTree,
 } from "../src/components/ai-elements/message";
 
@@ -59,6 +60,29 @@ describe("desktop message local file links", () => {
     expect(tree.children[0]?.children[1]?.url).toBe("https://example.com/docs");
   });
 
+  test("rewrites bare desktop file paths into local links with basename labels", () => {
+    const tree = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [{ type: "text", value: "PDF: C:\\Users\\Test\\Desktop\\Cowork Test\\macbook_neo_report.pdf" }],
+        },
+      ],
+    };
+
+    rewriteBareDesktopFilePathsInTree(tree);
+
+    expect(tree.children[0]?.children).toEqual([
+      { type: "text", value: "PDF: " },
+      {
+        type: "link",
+        url: "file:///C:/Users/Test/Desktop/Cowork%20Test/macbook_neo_report.pdf",
+        children: [{ type: "text", value: "macbook_neo_report.pdf" }],
+      },
+    ]);
+  });
+
   test("remark transformer also rewrites rendered anchor hrefs", () => {
     const transform = remarkRewriteDesktopFileLinks();
     const tree = {
@@ -82,6 +106,20 @@ describe("desktop message local file links", () => {
     );
   });
 
+  test("normalizes full-path local markdown labels down to basenames", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        MessageResponse,
+        null,
+        "[C:\\Users\\Test\\Desktop\\Cowork Test\\create_models.py](file:///C:/Users/Test/Desktop/Cowork%20Test/create_models.py)",
+      ),
+    );
+
+    expect(html).toContain("create_models.py");
+    expect(html).toContain("<button");
+    expect(html).not.toContain("C:\\Users\\Test\\Desktop\\Cowork Test\\create_models.py");
+  });
+
   test("renders local file citations without blocked markers", () => {
     const html = renderToStaticMarkup(
       createElement(
@@ -94,5 +132,39 @@ describe("desktop message local file links", () => {
     expect(html).toContain("create_models.py");
     expect(html).toContain("<button");
     expect(html).not.toContain("[blocked]");
+  });
+
+  test("auto-links bare absolute file paths in rendered assistant text", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        MessageResponse,
+        null,
+        [
+          "Updated files:",
+          "- PDF: C:\\Users\\Test\\Desktop\\Cowork Test\\macbook_neo_report.pdf",
+          "- Page 1: C:\\Users\\Test\\Desktop\\Cowork Test\\macbook_neo_report_page_1.png",
+        ].join("\n"),
+      ),
+    );
+
+    expect((html.match(/<button/g) ?? []).length).toBe(2);
+    expect(html).toContain("macbook_neo_report.pdf");
+    expect(html).toContain("macbook_neo_report_page_1.png");
+    expect(html).not.toContain("C:\\Users\\Test\\Desktop\\Cowork Test\\macbook_neo_report.pdf");
+    expect(html).not.toContain("C:\\Users\\Test\\Desktop\\Cowork Test\\macbook_neo_report_page_1.png");
+  });
+
+  test("does not auto-link file paths inside inline code", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        MessageResponse,
+        null,
+        "`C:\\Users\\Test\\Desktop\\Cowork Test\\create_models.py`",
+      ),
+    );
+
+    expect(html).toContain("<code");
+    expect(html).toContain("C:\\Users\\Test\\Desktop\\Cowork Test\\create_models.py");
+    expect(html).not.toContain("<button");
   });
 });

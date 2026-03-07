@@ -23,7 +23,9 @@
     "docs:check": "bun scripts/check_docs.ts",
     "harness:run": "bun scripts/run_raw_agent_loops.ts --report-only",
     "test": "bun test",
-    "test:stable": "bun scripts/run_tests_stable.ts"
+    "test:stable": "bun scripts/run_tests_stable.ts",
+    "typecheck": "bunx tsc --noEmit && bunx tsc --noEmit -p apps/desktop/tsconfig.json",
+    "typecheck:desktop": "bunx tsc --noEmit -p apps/desktop/tsconfig.json"
   },
   "dependencies": {
     "@langfuse/otel": "^4.6.1",

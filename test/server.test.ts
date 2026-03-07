@@ -569,6 +569,102 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("resumeSessionId replays turn events emitted while the client was disconnected", async () => {
+    const tmpDir = await makeTmpProject();
+    const runTurnImpl = async (params: any) => {
+      await params.onModelStreamPart?.({ type: "start" });
+      await params.onModelStreamPart?.({ type: "text-delta", id: "txt_resume", text: "before disconnect" });
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      await params.onModelStreamPart?.({ type: "text-delta", id: "txt_resume", text: "after disconnect" });
+      await params.onModelStreamPart?.({ type: "finish", finishReason: "stop" });
+      return {
+        text: "after disconnect",
+        responseMessages: [],
+      };
+    };
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: runTurnImpl as any,
+    }));
+
+    try {
+      const originalSessionId = await new Promise<string>((resolve, reject) => {
+        const ws = new WebSocket(url);
+        let sessionId = "";
+        const timer = setTimeout(() => {
+          ws.close();
+          reject(new Error("Timed out waiting for disconnect replay setup"));
+        }, 5000);
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+          if (!sessionId && msg.type === "server_hello") {
+            sessionId = msg.sessionId;
+            ws.send(JSON.stringify({ type: "user_message", sessionId, text: "resume me" }));
+            return;
+          }
+
+          if (
+            msg.type === "model_stream_chunk" &&
+            msg.partType === "text_delta" &&
+            typeof msg.part?.text === "string" &&
+            msg.part.text.includes("before disconnect")
+          ) {
+            clearTimeout(timer);
+            ws.close();
+            resolve(sessionId);
+          }
+        };
+
+        ws.onerror = (event) => {
+          clearTimeout(timer);
+          reject(new Error(`WebSocket error during replay setup: ${event}`));
+        };
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      const resumedEvents = await new Promise<any[]>((resolve, reject) => {
+        const ws = new WebSocket(`${url}?resumeSessionId=${originalSessionId}`);
+        const seen: any[] = [];
+        const timer = setTimeout(() => {
+          ws.close();
+          reject(new Error("Timed out waiting for replayed disconnect events"));
+        }, 5000);
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+          seen.push(msg);
+          if (msg.type === "assistant_message" && msg.text === "after disconnect") {
+            clearTimeout(timer);
+            ws.close();
+            resolve(seen);
+          }
+        };
+
+        ws.onerror = (event) => {
+          clearTimeout(timer);
+          ws.close();
+          reject(new Error(`WebSocket error during replay verification: ${event}`));
+        };
+      });
+
+      expect(resumedEvents.some((evt) => evt.type === "server_hello" && evt.sessionId === originalSessionId)).toBe(true);
+      expect(
+        resumedEvents.some(
+          (evt) =>
+            evt.type === "model_stream_chunk" &&
+            evt.partType === "text_delta" &&
+            typeof evt.part?.text === "string" &&
+            evt.part.text.includes("after disconnect")
+        )
+      ).toBe(true);
+      expect(resumedEvents.some((evt) => evt.type === "assistant_message" && evt.text === "after disconnect")).toBe(true);
+    } finally {
+      server.stop();
+    }
+  });
+
   test("resumeSessionId cold-rehydrates from storage after full server restart", async () => {
     const tmpDir = await makeTmpProject();
 

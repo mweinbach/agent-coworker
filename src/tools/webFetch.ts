@@ -10,6 +10,7 @@ import { truncateText } from "../utils/paths";
 import { resolveSafeWebUrl } from "../utils/webSafety";
 
 const MAX_REDIRECTS = 5;
+let responseTimeoutMs = 5_000;
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
@@ -43,15 +44,43 @@ async function fetchWithSafeRedirects(url: string, abortSignal?: AbortSignal): P
 
   for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
     const { pinnedUrl, hostHeader } = buildPinnedUrl(current);
+    const timeoutController = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      timeoutController.abort();
+    }, responseTimeoutMs);
+    const onAbort = () => {
+      timeoutController.abort();
+    };
 
-    const res = await fetch(pinnedUrl, {
-      redirect: "manual",
-      headers: {
-        "User-Agent": "agent-coworker/0.1",
-        Host: hostHeader,
-      },
-      ...(abortSignal ? { signal: abortSignal } : {}),
-    });
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        onAbort();
+      } else {
+        abortSignal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(pinnedUrl, {
+        redirect: "manual",
+        headers: {
+          "User-Agent": "agent-coworker/0.1",
+          Host: hostHeader,
+        },
+        signal: timeoutController.signal,
+      });
+    } catch (error) {
+      if (timedOut) {
+        throw new Error(`webFetch timed out waiting for an initial response after ${responseTimeoutMs}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      abortSignal?.removeEventListener("abort", onAbort);
+    }
 
     if (!isRedirectStatus(res.status)) return res;
 
@@ -67,6 +96,13 @@ async function fetchWithSafeRedirects(url: string, abortSignal?: AbortSignal): P
   throw new Error(`Too many redirects while fetching URL: ${url}`);
 }
 
+export const __internal = {
+  getResponseTimeoutMs: () => responseTimeoutMs,
+  setResponseTimeoutMs: (ms: number) => {
+    responseTimeoutMs = ms;
+  },
+};
+
 export function createWebFetchTool(ctx: ToolContext) {
   return defineTool({
     description:
@@ -75,7 +111,7 @@ export function createWebFetchTool(ctx: ToolContext) {
       url: z.string().url().describe("URL to fetch"),
       maxLength: z.number().int().min(1000).max(200000).optional().default(50000),
     }),
-    execute: async ({ url, maxLength }) => {
+    execute: async ({ url, maxLength }: { url: string; maxLength: number }) => {
       ctx.log(`tool> webFetch ${JSON.stringify({ url, maxLength })}`);
 
       const res = await fetchWithSafeRedirects(url, ctx.abortSignal);

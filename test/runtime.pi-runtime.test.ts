@@ -211,4 +211,40 @@ describe("pi runtime regressions", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toEqual([{ type: "text", text: "permission denied" }]);
   });
+
+  test("executeToolCall preserves multimodal image tool results", async () => {
+    const emitted: Array<Record<string, unknown>> = [];
+    const imageResult = {
+      type: "content",
+      content: [
+        { type: "text", text: "Image file: chart.png" },
+        { type: "image", data: "abc123", mimeType: "image/png" },
+      ],
+    };
+
+    const result = await piRuntimeInternal.executeToolCall(
+      { id: "call-image", name: "read", arguments: { filePath: "/tmp/chart.png" } },
+      makeParams(makeConfig(process.cwd()), {
+        tools: {
+          read: {
+            execute: async () => imageResult,
+          },
+        },
+      }),
+      async (part) => {
+        emitted.push(part as Record<string, unknown>);
+      }
+    );
+
+    expect(emitted).toEqual([
+      {
+        type: "tool-result",
+        toolCallId: "call-image",
+        toolName: "read",
+        output: imageResult,
+      },
+    ]);
+    expect(result.isError).toBe(false);
+    expect(result.content).toEqual(imageResult.content);
+  });
 });

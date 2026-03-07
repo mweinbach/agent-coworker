@@ -292,16 +292,17 @@ async function hydrateServerForRuntime(config: AgentConfig, server: MCPRegistryS
   if (server.transport.type === "http" || server.transport.type === "sse") {
     const existingHeaders = server.transport.headers ?? {};
     const mergedHeaders = auth.headers ? { ...existingHeaders, ...auth.headers } : existingHeaders;
+    const runtimeTransport: RuntimeMcpHttpTransport = {
+      ...server.transport,
+      ...(Object.keys(mergedHeaders).length > 0 ? { headers: mergedHeaders } : {}),
+    };
 
     const runtimeServer: MCPServerConfig = {
       name: server.name,
       required: server.required,
       retries: server.retries,
       auth: server.auth,
-      transport: {
-        ...server.transport,
-        ...(Object.keys(mergedHeaders).length > 0 ? { headers: mergedHeaders } : {}),
-      },
+      transport: runtimeTransport,
     };
 
     if (server.auth?.type === "oauth") {
@@ -315,10 +316,7 @@ async function hydrateServerForRuntime(config: AgentConfig, server: MCPRegistryS
         clientInfo: auth.oauthClientInfo,
       });
       if (provider) {
-        runtimeServer.transport = {
-          ...runtimeServer.transport,
-          authProvider: provider,
-        } as MCPServerConfig["transport"];
+        runtimeTransport.authProvider = provider;
       }
     }
 

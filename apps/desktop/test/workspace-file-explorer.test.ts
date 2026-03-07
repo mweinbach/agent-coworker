@@ -5,6 +5,8 @@ import {
   buildDirectoryFingerprint,
   buildExplorerRows,
   normalizeExplorerPath,
+  shouldAutoRefreshExplorer,
+  shouldReuseBackgroundDirectorySnapshot,
 } from "../src/ui/file-explorer/WorkspaceFileExplorer";
 
 function entry(partial: Partial<ExplorerEntry> & Pick<ExplorerEntry, "name" | "path" | "isDirectory">): ExplorerEntry {
@@ -41,6 +43,42 @@ describe("workspace file explorer helpers", () => {
     const second = [...first].reverse();
 
     expect(buildDirectoryFingerprint(first)).toBe(buildDirectoryFingerprint(second));
+  });
+
+  test("skips unchanged background snapshot updates", () => {
+    const entries = [
+      entry({ name: "a.txt", path: "/tmp/a.txt", isDirectory: false, sizeBytes: 1 }),
+      entry({ name: "b", path: "/tmp/b", isDirectory: true }),
+    ];
+    const fingerprint = buildDirectoryFingerprint(entries);
+
+    expect(
+      shouldReuseBackgroundDirectorySnapshot(
+        { error: null, fingerprint },
+        fingerprint,
+        null,
+      )
+    ).toBe(true);
+    expect(
+      shouldReuseBackgroundDirectorySnapshot(
+        { error: null, fingerprint },
+        `${fingerprint}:changed`,
+        null,
+      )
+    ).toBe(false);
+    expect(
+      shouldReuseBackgroundDirectorySnapshot(
+        { error: "old error", fingerprint },
+        fingerprint,
+        null,
+      )
+    ).toBe(false);
+  });
+
+  test("auto refresh polling only runs while visible and focused", () => {
+    expect(shouldAutoRefreshExplorer("visible", true)).toBe(true);
+    expect(shouldAutoRefreshExplorer("hidden", true)).toBe(false);
+    expect(shouldAutoRefreshExplorer("visible", false)).toBe(false);
   });
 
   test("buildExplorerRows nests expanded directory entries", () => {

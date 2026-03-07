@@ -316,7 +316,7 @@ export function ChatView() {
   const disabled = busy || hasPromptModal;
   const transcriptOnly = rt?.transcriptOnly === true;
   const disconnected = !transcriptOnly && thread.status !== "active";
-  const showModelSelector = visibleFeed.length === 0 && !!rt?.config?.provider && !!rt?.config?.model;
+  const modelSelectorConfig = visibleFeed.length === 0 && rt?.config?.provider && rt?.config?.model ? rt.config : null;
 
   const placeholder = transcriptOnly
     ? "Continue in a new thread..."
@@ -404,11 +404,11 @@ export function ChatView() {
               </PromptInputBody>
               <PromptInputFooter>
                 <PromptInputTools>
-                  {showModelSelector ? (
+                  {modelSelectorConfig ? (
                     <ThreadModelSelector
                       threadId={selectedThreadId}
-                      provider={rt!.config.provider}
-                      model={rt!.config.model}
+                      provider={modelSelectorConfig.provider}
+                      model={modelSelectorConfig.model}
                       disabled={busy}
                     />
                   ) : null}

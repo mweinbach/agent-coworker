@@ -287,6 +287,19 @@ describe("isWritePathAllowed", () => {
       expect(isWritePathAllowed(path.join(root, "etc", "passwd"), cfg)).toBe(true);
       expect(isWritePathAllowed(path.join(root, "any", "path", "at", "all"), cfg)).toBe(true);
     });
+
+    test("denies symlink escapes in the sync helper", async () => {
+      if (process.platform === "win32") return;
+
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-sync-write-symlink-"));
+      const outside = await fs.mkdtemp(path.join(os.tmpdir(), "perm-sync-write-outside-"));
+      const cfg = makeConfig(dir);
+
+      const link = path.join(dir, "linked-outside");
+      await fs.symlink(outside, link);
+
+      expect(isWritePathAllowed(path.join(link, "pwned.txt"), cfg)).toBe(false);
+    });
   });
 });
 
@@ -372,6 +385,19 @@ describe("isReadPathAllowed", () => {
   test("denies reads outside allowed roots", () => {
     const cfg = makeConfig(PROJECT);
     expect(isReadPathAllowed("/etc/passwd", cfg)).toBe(false);
+  });
+
+  test("denies symlink escapes in the sync helper", async () => {
+    if (process.platform === "win32") return;
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "perm-sync-read-symlink-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "perm-sync-read-outside-"));
+    const cfg = makeConfig(dir);
+
+    const link = path.join(dir, "linked-outside");
+    await fs.symlink(outside, link);
+
+    expect(isReadPathAllowed(path.join(link, "pwned.txt"), cfg)).toBe(false);
   });
 });
 

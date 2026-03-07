@@ -15,6 +15,10 @@ const MODEL_SYSTEM_PROMPT_TEMPLATES: readonly ModelSystemPromptTemplate[] = [
     matches: (modelId) => modelId === "gpt-5.2",
   },
   {
+    fileName: "gpt-5.4.md",
+    matches: (modelId) => modelId === "gpt-5.4",
+  },
+  {
     fileName: "claude-opus-4-6.md",
     matches: (modelId) => modelId === "claude-opus-4-6" || modelId.startsWith("claude-opus-4-6-"),
   },

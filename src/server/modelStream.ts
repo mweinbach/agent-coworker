@@ -63,7 +63,6 @@ const FULL_SANITIZE_LIMITS: SanitizeLimits = {
   maxStringLength: 20000,
 };
 
-const recordSchema = z.record(z.string(), z.unknown());
 const typedRawPartSchema = z.object({ type: z.string() }).passthrough();
 const stringSchema = z.string();
 const booleanSchema = z.boolean();
@@ -267,7 +266,7 @@ function sanitizeUnknown(
   if (t === "string") return truncateString(value as string, limits);
   if (t === "boolean") return value;
   if (t === "number") return Number.isFinite(value as number) ? value : String(value);
-  if (t === "bigint") return value.toString();
+  if (t === "bigint") return (value as bigint).toString();
   if (t === "undefined") return undefined;
   if (t === "symbol" || t === "function") return String(value);
 

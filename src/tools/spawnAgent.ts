@@ -128,7 +128,13 @@ export function createSpawnAgentTool(ctx: ToolContext, deps: SpawnAgentDeps = {}
         .describe("What the sub-agent should accomplish"),
       agentType: z.enum(["explore", "research", "general"]).optional().default("general"),
     }),
-    execute: async ({ task, agentType }) => {
+    execute: async ({
+      task,
+      agentType,
+    }: {
+      task: string;
+      agentType: AgentType;
+    }) => {
       ctx.log(`tool> spawnAgent ${JSON.stringify({ agentType })}`);
       if ((ctx.spawnDepth ?? 0) >= MAX_SUB_AGENT_DEPTH) {
         throw new Error(

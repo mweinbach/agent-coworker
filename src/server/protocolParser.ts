@@ -138,14 +138,14 @@ function validateProviderAuthTarget(
 function schemaWithType<TType extends string>(
   type: TType,
   shape: z.ZodRawShape,
-): z.ZodObject<{ type: z.ZodLiteral<TType> } & z.ZodRawShape, "passthrough"> {
+) {
   return z.object({
     type: z.literal(type),
     ...shape,
   }).passthrough();
 }
 
-function sessionOnlySchema<TType extends string>(type: TType): z.ZodObject<{ type: z.ZodLiteral<TType> } & z.ZodRawShape, "passthrough"> {
+function sessionOnlySchema<TType extends string>(type: TType) {
   return schemaWithType(type, {
     sessionId: requiredSessionId(type),
   });
@@ -155,12 +155,11 @@ function sessionAndFieldSchema<TType extends string>(
   type: TType,
   field: string,
   label?: string,
-): z.ZodObject<{ type: z.ZodLiteral<TType> } & z.ZodRawShape, "passthrough"> {
-  const shape: z.ZodRawShape = {
+){
+  return schemaWithType(type, {
     sessionId: requiredSessionId(type),
-  };
-  shape[field] = requiredNonEmptyTrimmedString(`${type} missing/invalid ${label ?? field}`);
-  return schemaWithType(type, shape);
+    [field]: requiredNonEmptyTrimmedString(`${type} missing/invalid ${label ?? field}`),
+  });
 }
 
 const sessionOnlyTypes = [
@@ -194,17 +193,11 @@ const sessionAndNameTypes = [
   "mcp_server_auth_authorize",
 ] as const;
 
-const sessionOnlySchemas = Object.fromEntries(
-  sessionOnlyTypes.map((type) => [type, sessionOnlySchema(type)]),
-) as Record<(typeof sessionOnlyTypes)[number], z.ZodTypeAny>;
+const sessionOnlySchemaList = sessionOnlyTypes.map((type) => sessionOnlySchema(type));
 
-const sessionAndSkillNameSchemas = Object.fromEntries(
-  sessionAndSkillNameTypes.map((type) => [type, sessionAndFieldSchema(type, "skillName")]),
-) as Record<(typeof sessionAndSkillNameTypes)[number], z.ZodTypeAny>;
+const sessionAndSkillNameSchemaList = sessionAndSkillNameTypes.map((type) => sessionAndFieldSchema(type, "skillName"));
 
-const sessionAndNameSchemas = Object.fromEntries(
-  sessionAndNameTypes.map((type) => [type, sessionAndFieldSchema(type, "name")]),
-) as Record<(typeof sessionAndNameTypes)[number], z.ZodTypeAny>;
+const sessionAndNameSchemaList = sessionAndNameTypes.map((type) => sessionAndFieldSchema(type, "name"));
 
 const clientHelloSchema = schemaWithType("client_hello", {
   client: requiredNonEmptyTrimmedString("client_hello missing/invalid client"),
@@ -255,7 +248,10 @@ const providerAuthAuthorizeSchema = schemaWithType("provider_auth_authorize", {
   provider: z.unknown(),
   methodId: z.unknown(),
 }).superRefine((value, ctx) => {
-  validateProviderAuthTarget(ctx, value, "provider_auth_authorize");
+  validateProviderAuthTarget(ctx, {
+    provider: value["provider"],
+    methodId: value["methodId"],
+  }, "provider_auth_authorize");
 });
 
 const providerAuthCallbackSchema = schemaWithType("provider_auth_callback", {
@@ -264,9 +260,12 @@ const providerAuthCallbackSchema = schemaWithType("provider_auth_callback", {
   methodId: z.unknown(),
   code: z.unknown().optional(),
 }).superRefine((value, ctx) => {
-  if (!validateProviderAuthTarget(ctx, value, "provider_auth_callback")) return;
+  if (!validateProviderAuthTarget(ctx, {
+    provider: value["provider"],
+    methodId: value["methodId"],
+  }, "provider_auth_callback")) return;
 
-  if (value.code !== undefined && typeof value.code !== "string") {
+  if (value["code"] !== undefined && typeof value["code"] !== "string") {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["code"],
@@ -281,9 +280,12 @@ const providerAuthSetApiKeySchema = schemaWithType("provider_auth_set_api_key", 
   methodId: z.unknown(),
   apiKey: z.unknown(),
 }).superRefine((value, ctx) => {
-  if (!validateProviderAuthTarget(ctx, value, "provider_auth_set_api_key")) return;
+  if (!validateProviderAuthTarget(ctx, {
+    provider: value["provider"],
+    methodId: value["methodId"],
+  }, "provider_auth_set_api_key")) return;
 
-  if (!nonEmptyTrimmedStringSchema.safeParse(value.apiKey).success) {
+  if (!nonEmptyTrimmedStringSchema.safeParse(value["apiKey"]).success) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["apiKey"],
@@ -332,7 +334,8 @@ const mcpServerAuthSetApiKeySchema = schemaWithType("mcp_server_auth_set_api_key
   name: requiredNonEmptyTrimmedString("mcp_server_auth_set_api_key missing/invalid name"),
   apiKey: requiredNonEmptyTrimmedString("mcp_server_auth_set_api_key missing/invalid apiKey"),
 }).superRefine((value, ctx) => {
-  if (value.apiKey.length > MAX_MCP_API_KEY_SIZE) {
+  const apiKey = value["apiKey"];
+  if (typeof apiKey === "string" && apiKey.length > MAX_MCP_API_KEY_SIZE) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["apiKey"],
@@ -436,9 +439,9 @@ const uploadFileSchema = schemaWithType("upload_file", {
 });
 
 const clientMessageSchema = z.discriminatedUnion("type", [
-  ...Object.values(sessionOnlySchemas),
-  ...Object.values(sessionAndSkillNameSchemas),
-  ...Object.values(sessionAndNameSchemas),
+  ...sessionOnlySchemaList,
+  ...sessionAndSkillNameSchemaList,
+  ...sessionAndNameSchemaList,
   clientHelloSchema,
   userMessageSchema,
   askResponseSchema,
@@ -461,43 +464,49 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   deleteSessionSchema,
   setConfigSchema,
   uploadFileSchema,
-] as [z.ZodObject<any>, ...z.ZodObject<any>[]]);
+] as unknown as [any, ...any[]]);
 
-type ParsedClientMessage = z.infer<typeof clientMessageSchema>;
+type ParsedClientMessage = Record<string, unknown> & { type: ClientMessage["type"] };
 
 function normalizeClientMessage(parsed: ParsedClientMessage): ClientMessage {
   switch (parsed.type) {
     case "set_model": {
+      const sessionId = parsed.sessionId as string;
+      const model = parsed.model as string;
       const { provider } = parsed;
       if (provider !== undefined && !isProviderName(provider)) {
         throw new Error(`set_model invalid provider: ${String(provider)}`);
       }
       return {
         type: "set_model",
-        sessionId: parsed.sessionId,
-        model: parsed.model,
+        sessionId,
+        model,
         ...(provider !== undefined ? { provider } : {}),
       };
     }
     case "provider_auth_authorize": {
+      const sessionId = parsed.sessionId as string;
+      const methodId = parsed.methodId as string;
       if (!isProviderName(parsed.provider)) {
         throw new Error("provider_auth_authorize missing/invalid provider");
       }
-      if (!nonEmptyTrimmedStringSchema.safeParse(parsed.methodId).success) {
+      if (!nonEmptyTrimmedStringSchema.safeParse(methodId).success) {
         throw new Error("provider_auth_authorize missing/invalid methodId");
       }
       return {
         type: "provider_auth_authorize",
-        sessionId: parsed.sessionId,
+        sessionId,
         provider: parsed.provider,
-        methodId: parsed.methodId,
+        methodId,
       };
     }
     case "provider_auth_callback": {
+      const sessionId = parsed.sessionId as string;
+      const methodId = parsed.methodId as string;
       if (!isProviderName(parsed.provider)) {
         throw new Error("provider_auth_callback missing/invalid provider");
       }
-      if (!nonEmptyTrimmedStringSchema.safeParse(parsed.methodId).success) {
+      if (!nonEmptyTrimmedStringSchema.safeParse(methodId).success) {
         throw new Error("provider_auth_callback missing/invalid methodId");
       }
       if (parsed.code !== undefined && typeof parsed.code !== "string") {
@@ -505,65 +514,72 @@ function normalizeClientMessage(parsed: ParsedClientMessage): ClientMessage {
       }
       return {
         type: "provider_auth_callback",
-        sessionId: parsed.sessionId,
+        sessionId,
         provider: parsed.provider,
-        methodId: parsed.methodId,
+        methodId,
         ...(parsed.code !== undefined ? { code: parsed.code } : {}),
       };
     }
     case "provider_auth_set_api_key": {
+      const sessionId = parsed.sessionId as string;
+      const methodId = parsed.methodId as string;
+      const apiKey = parsed.apiKey as string;
       if (!isProviderName(parsed.provider)) {
         throw new Error("provider_auth_set_api_key missing/invalid provider");
       }
-      if (!nonEmptyTrimmedStringSchema.safeParse(parsed.methodId).success) {
+      if (!nonEmptyTrimmedStringSchema.safeParse(methodId).success) {
         throw new Error("provider_auth_set_api_key missing/invalid methodId");
       }
-      if (!nonEmptyTrimmedStringSchema.safeParse(parsed.apiKey).success) {
+      if (!nonEmptyTrimmedStringSchema.safeParse(apiKey).success) {
         throw new Error("provider_auth_set_api_key missing/invalid apiKey");
       }
       return {
         type: "provider_auth_set_api_key",
-        sessionId: parsed.sessionId,
+        sessionId,
         provider: parsed.provider,
-        methodId: parsed.methodId,
-        apiKey: parsed.apiKey,
+        methodId,
+        apiKey,
       };
     }
     case "mcp_server_upsert": {
+      const sessionId = parsed.sessionId as string;
+      const previousName = parsed.previousName as string | undefined;
       if (parsed.previousName !== undefined && !nonEmptyTrimmedStringSchema.safeParse(parsed.previousName).success) {
         throw new Error("mcp_server_upsert invalid previousName");
       }
       return {
         type: "mcp_server_upsert",
-        sessionId: parsed.sessionId,
+        sessionId,
         server: parseMCPServerConfig(parsed.server),
-        ...(parsed.previousName !== undefined ? { previousName: parsed.previousName } : {}),
+        ...(previousName !== undefined ? { previousName } : {}),
       };
     }
     case "harness_context_set": {
+      const sessionId = parsed.sessionId as string;
       const parsedContext = harnessContextSchema.safeParse(parsed.context);
       if (!parsedContext.success) {
         throw new Error("harness_context_set missing/invalid context");
       }
       return {
         type: "harness_context_set",
-        sessionId: parsed.sessionId,
+        sessionId,
         context: parsedContext.data,
       };
     }
     case "set_config": {
+      const sessionId = parsed.sessionId as string;
       const parsedConfig = setConfigPayloadSchema.safeParse(parsed.config);
       if (!parsedConfig.success) {
         throw new Error("set_config missing/invalid config");
       }
       return {
         type: "set_config",
-        sessionId: parsed.sessionId,
+        sessionId,
         config: parsedConfig.data,
       };
     }
     default:
-      return parsed;
+      return parsed as ClientMessage;
   }
 }
 
@@ -584,7 +600,7 @@ export function safeParseClientMessage(raw: string): ParseResult {
   const parsedMessage = clientMessageSchema.safeParse(obj);
   if (!parsedMessage.success) return err(firstIssueMessage(parsedMessage.error, obj.type));
   try {
-    return ok(normalizeClientMessage(parsedMessage.data));
+    return ok(normalizeClientMessage(parsedMessage.data as ParsedClientMessage));
   } catch (normalizeError) {
     const message = normalizeError instanceof Error ? normalizeError.message : "validation_failed";
     return err(message || "validation_failed");

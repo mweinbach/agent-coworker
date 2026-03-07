@@ -1,7 +1,8 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import type { Readable } from "node:stream";
 import { z } from "zod";
 
 import { app } from "electron";
@@ -14,10 +15,12 @@ const STDERR_TAIL_LIMIT = 16_384;
 const WINDOWS_SOURCE_START_ATTEMPTS = 2;
 
 type ServerHandle = {
-  child: ChildProcessWithoutNullStreams;
+  child: ServerChildProcess;
   url: string;
   cleanup: () => void;
 };
+
+type ServerChildProcess = ChildProcessByStdio<null, Readable, Readable>;
 
 type ServerListening = {
   type: "server_listening";
@@ -96,7 +99,7 @@ function findSidecarBinary(): string {
   throw new Error("Server sidecar binary not found");
 }
 
-function waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<boolean> {
+function waitForExit(child: ServerChildProcess, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(true);
   }
@@ -116,7 +119,7 @@ function waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): 
   });
 }
 
-async function gracefulKill(child: ChildProcessWithoutNullStreams): Promise<void> {
+async function gracefulKill(child: ServerChildProcess): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
@@ -145,7 +148,7 @@ async function gracefulKill(child: ChildProcessWithoutNullStreams): Promise<void
   await waitForExit(child, 1_000);
 }
 
-function waitForServerListening(child: ChildProcessWithoutNullStreams): Promise<ServerListening> {
+function waitForServerListening(child: ServerChildProcess): Promise<ServerListening> {
   return new Promise((resolve, reject) => {
     const rl = readline.createInterface({ input: child.stdout });
     const recentLines: string[] = [];

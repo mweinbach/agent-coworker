@@ -296,8 +296,9 @@ export function noteObservabilitySuccess(
 }
 
 export async function forceFlushObservabilityRuntime(): Promise<void> {
-  if (state.sdk && typeof state.sdk.forceFlush === "function") {
-    await state.sdk.forceFlush();
+  const sdkWithFlush = state.sdk as (typeof state.sdk & { forceFlush?: () => Promise<void> }) | null;
+  if (sdkWithFlush && typeof sdkWithFlush.forceFlush === "function") {
+    await sdkWithFlush.forceFlush();
     return;
   }
   if (state.spanProcessor) {

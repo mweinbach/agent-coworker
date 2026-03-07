@@ -43,7 +43,7 @@ export function createGlobTool(ctx: ToolContext) {
   return defineTool({
     description: "Find files matching a glob pattern. Returns paths sorted by modification time.",
     inputSchema: globInputSchema,
-    execute: async ({ pattern, cwd, maxResults }) => {
+    execute: async ({ pattern, cwd, maxResults }: z.infer<typeof globInputSchema>) => {
       const parsedInput = globInputSchema.safeParse({ pattern, cwd, maxResults });
       if (!parsedInput.success) {
         throw new Error(`glob invalid input: ${parsedInput.error.issues[0]?.message ?? "validation_failed"}`);

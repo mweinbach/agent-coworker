@@ -105,7 +105,10 @@ export async function startAgentServer(
 }> {
   const hostname = opts.hostname ?? "127.0.0.1";
   const rawEnv = opts.env ?? { ...process.env, AGENT_WORKING_DIR: opts.cwd };
-  const env = {
+  const env: Record<string, string | undefined> & {
+    COWORK_DISABLE_BUILTIN_SKILLS: string;
+    COWORK_BUILTIN_DIR?: string;
+  } = {
     ...rawEnv,
     COWORK_DISABLE_BUILTIN_SKILLS: rawEnv.COWORK_DISABLE_BUILTIN_SKILLS ?? "1",
   };
@@ -226,16 +229,17 @@ export async function startAgentServer(
             resumeSessionId && sessionBindings.has(resumeSessionId)
               ? sessionBindings.get(resumeSessionId)
               : undefined;
+          const resumableSession = resumable?.session ?? null;
 
           let session: AgentSession;
           let binding: SessionBinding;
           let isResume = false;
           let resumedFromStorage = false;
 
-          if (resumable && resumable.socket === null && resumable.session) {
+          if (resumable && resumable.socket === null && resumableSession) {
             binding = resumable;
             binding.socket = ws;
-            session = binding.session;
+            session = resumableSession;
             isResume = true;
           } else {
             binding = {
@@ -252,6 +256,14 @@ export async function startAgentServer(
 
           ws.data.session = session;
           ws.data.resumeSessionId = session.id;
+
+          const emitToCurrentSocket = (evt: ServerEvent) => {
+            try {
+              ws.send(JSON.stringify(evt));
+            } catch {
+              // ignore
+            }
+          };
 
           const hello: ServerEvent = {
             type: "server_hello",
@@ -291,6 +303,11 @@ export async function startAgentServer(
           void session.emitMcpServers();
           // Feature 7: push backup state on connect
           void session.getSessionBackupState();
+          if (isResume) {
+            for (const evt of session.drainDisconnectedReplayEvents()) {
+              emitToCurrentSocket(evt);
+            }
+          }
           // Feature 1: replay pending prompts on reconnect
           if (isResume) {
             session.replayPendingPrompts();
@@ -321,6 +338,7 @@ export async function startAgentServer(
 
           if (binding.socket === ws) {
             binding.socket = null;
+            session.beginDisconnectedReplayBuffer();
           }
         },
       },
@@ -363,10 +381,10 @@ export async function startAgentServer(
   }
 
   const server = serveWithPortFallback(requestedPort);
-  const originalStop = server.stop.bind(server);
+  const originalStop = server.stop.bind(server) as (closeActiveConnections?: boolean) => Promise<void>;
   let serverStopped = false;
-  const stoppableServer = server as typeof server & { stop: () => void };
-  stoppableServer.stop = () => {
+  const stoppableServer = server as typeof server & { stop: (closeActiveConnections?: boolean) => Promise<void> };
+  stoppableServer.stop = async (closeActiveConnections?: boolean) => {
     if (serverStopped) return;
     serverStopped = true;
     // Dispose all active sessions to abort running turns and close MCP child processes.
@@ -392,9 +410,9 @@ export async function startAgentServer(
     } catch {
       // ignore
     }
-    return originalStop();
+    await originalStop(closeActiveConnections);
   };
 
   const url = `ws://${hostname}:${server.port}/ws`;
-  return { server, config, system, url };
+  return { server: stoppableServer, config, system, url };
 }

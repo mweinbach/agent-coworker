@@ -27,7 +27,19 @@ export function createGrepTool(
       contextLines: z.number().int().min(0).max(50).optional().describe("Context lines around matches"),
       caseSensitive: z.boolean().optional().default(true),
     }),
-    execute: async ({ pattern, path: searchPath, fileGlob, contextLines, caseSensitive }) => {
+    execute: async ({
+      pattern,
+      path: searchPath,
+      fileGlob,
+      contextLines,
+      caseSensitive,
+    }: {
+      pattern: string;
+      path?: string;
+      fileGlob?: string;
+      contextLines?: number;
+      caseSensitive: boolean;
+    }) => {
       ctx.log(
         `tool> grep ${JSON.stringify({ pattern, path: searchPath, fileGlob, contextLines, caseSensitive })}`
       );

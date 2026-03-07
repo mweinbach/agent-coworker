@@ -10,7 +10,17 @@ import {
   type ServerEventParseResult,
 } from "../server/protocol";
 
-const webSocketImplSchema = z.custom<typeof WebSocket>((value) => typeof value === "function");
+type WebSocketLike = Pick<
+  WebSocket,
+  "readyState" | "send" | "close"
+> & Partial<Pick<WebSocket, "addEventListener" | "removeEventListener" | "onopen" | "onmessage" | "onerror" | "onclose">>;
+
+type WebSocketConstructorLike = {
+  new (url: string, protocols?: string | string[]): WebSocketLike;
+  readonly OPEN: number;
+};
+
+const webSocketImplSchema = z.custom<WebSocketConstructorLike>((value) => typeof value === "function");
 
 export function safeJsonParse(raw: unknown): unknown | null {
   return safeParseServerEventJson(raw);
@@ -50,6 +60,20 @@ async function decodeSocketData(rawData: unknown): Promise<unknown> {
   return rawData;
 }
 
+function bindSocketHandler(
+  ws: WebSocketLike,
+  eventName: "open" | "message" | "error" | "close",
+  handler: (event: Event | MessageEvent) => void,
+): void {
+  if (typeof ws.addEventListener === "function") {
+    ws.addEventListener(eventName, handler as EventListener);
+    return;
+  }
+
+  const propertyName = `on${eventName}` as const;
+  ws[propertyName] = handler as never;
+}
+
 export type AgentSocketOpts = {
   url: string;
   resumeSessionId?: string;
@@ -59,7 +83,7 @@ export type AgentSocketOpts = {
   onClose?: (reason: string) => void;
   onOpen?: () => void;
   onInvalidEvent?: (evt: InvalidServerEvent) => void;
-  WebSocketImpl?: typeof WebSocket;
+  WebSocketImpl?: WebSocketConstructorLike;
 
   /** Enable automatic reconnection on unexpected disconnects. Default: false. */
   autoReconnect?: boolean;
@@ -81,13 +105,13 @@ export class AgentSocket {
   private readonly onOpen?: () => void;
   private readonly onInvalidEvent?: (evt: InvalidServerEvent) => void;
   private readonly clientHello: { client: string; version?: string };
-  private readonly WebSocketImpl: typeof WebSocket;
+  private readonly WebSocketImpl: WebSocketConstructorLike;
 
   private readonly autoReconnect: boolean;
   private readonly maxReconnectAttempts: number;
   private readonly pingIntervalMs: number;
 
-  private ws: WebSocket | null = null;
+  private ws: WebSocketLike | null = null;
   private ready = Promise.withResolvers<string>();
   private _sessionId: string | null = null;
   private resumeSessionId: string | null = null;
@@ -154,7 +178,7 @@ export class AgentSocket {
     const ws = new this.WebSocketImpl(this.getConnectUrl());
     this.ws = ws;
 
-    ws.onopen = () => {
+    bindSocketHandler(ws, "open", () => {
       this.reconnectAttempt = 0;
       try {
         ws.send(
@@ -168,10 +192,10 @@ export class AgentSocket {
       }
       this.startPing();
       this.onOpen?.();
-    };
+    });
 
-    ws.onmessage = async (ev) => {
-      const rawData = (ev as { data?: unknown }).data;
+    bindSocketHandler(ws, "message", async (ev) => {
+      const rawData = "data" in ev ? ev.data : undefined;
       let decoded: unknown;
       try {
         decoded = await decodeSocketData(rawData);
@@ -212,13 +236,13 @@ export class AgentSocket {
 
       // Surface consumer bugs to callers instead of relabeling them as parse errors.
       this.onEvent(evt);
-    };
+    });
 
-    ws.onerror = () => {
+    bindSocketHandler(ws, "error", () => {
       // We'll rely on onclose for state transitions.
-    };
+    });
 
-    ws.onclose = () => {
+    bindSocketHandler(ws, "close", () => {
       this.stopPing();
       const hadSession = !!this._sessionId;
       const hasResumeCandidate = hadSession || !!this.resumeSessionId;
@@ -231,7 +255,7 @@ export class AgentSocket {
       } else {
         this.onClose?.("websocket closed");
       }
-    };
+    });
   }
 
   close() {

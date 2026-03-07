@@ -14,7 +14,7 @@ import { createBashTool } from "../src/tools/bash";
 import { createGlobTool } from "../src/tools/glob";
 import { createGrepTool } from "../src/tools/grep";
 import { createWebSearchTool } from "../src/tools/webSearch";
-import { createWebFetchTool } from "../src/tools/webFetch";
+import { __internal as webFetchInternal, createWebFetchTool } from "../src/tools/webFetch";
 import { createAskTool } from "../src/tools/ask";
 import { createTodoWriteTool, currentTodos, onTodoChange } from "../src/tools/todoWrite";
 import { createNotebookEditTool } from "../src/tools/notebookEdit";
@@ -176,6 +176,25 @@ describe("read tool", () => {
 
     const t: any = createReadTool(makeCtx(dir));
     await expect(t.execute({ filePath: outsideFile, limit: 10 })).rejects.toThrow(/blocked/i);
+  });
+
+  test("returns multimodal content for supported image files", async () => {
+    const dir = await tmpDir();
+    const p = path.join(dir, "pixel.png");
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4//8/AwAI/AL+X6ixAAAAAElFTkSuQmCC";
+    await fs.writeFile(p, Buffer.from(pngBase64, "base64"));
+
+    const t: any = createReadTool(makeCtx(dir));
+    const out = await t.execute({ filePath: p, limit: 2000 });
+
+    expect(out).toEqual({
+      type: "content",
+      content: [
+        { type: "text", text: "Image file: pixel.png" },
+        { type: "image", data: pngBase64, mimeType: "image/png" },
+      ],
+    });
   });
 });
 
@@ -1254,6 +1273,10 @@ describe("webSearch tool", () => {
 // ---------------------------------------------------------------------------
 
 describe("webFetch tool", () => {
+  beforeEach(() => {
+    webFetchInternal.setResponseTimeoutMs(5_000);
+  });
+
   test("fetches URL and returns content", async () => {
     const dir = await tmpDir();
 
@@ -1453,6 +1476,65 @@ describe("webFetch tool", () => {
       ).rejects.toThrow(/webFetch failed: 404/i);
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("times out when no initial response arrives", async () => {
+    const dir = await tmpDir();
+
+    webFetchInternal.setResponseTimeoutMs(25);
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
+      const signal = init?.signal;
+      return await new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => reject(new Error("fetch aborted")),
+          { once: true },
+        );
+      });
+    }) as typeof fetch;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      await expect(
+        t.execute({ url: "https://example.com/hangs", maxLength: 50000 })
+      ).rejects.toThrow(/timed out waiting for an initial response after 25ms/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+      webFetchInternal.setResponseTimeoutMs(5_000);
+    }
+  });
+
+  test("does not time out once the initial response has arrived", async () => {
+    const dir = await tmpDir();
+
+    webFetchInternal.setResponseTimeoutMs(10);
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        url: "https://example.com/slow-body",
+        headers: new Headers({ "Content-Type": "text/html" }),
+        text: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return "<html><body><p>Slow body</p></body></html>";
+        },
+      } as Response;
+    }) as typeof fetch;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      await expect(
+        t.execute({ url: "https://example.com/slow-body", maxLength: 50000 })
+      ).resolves.toContain("Slow body");
+    } finally {
+      globalThis.fetch = originalFetch;
+      webFetchInternal.setResponseTimeoutMs(5_000);
     }
   });
 });

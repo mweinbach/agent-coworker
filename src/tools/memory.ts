@@ -61,7 +61,17 @@ Use action=read to retrieve memory, action=write to store new information, and a
       content: z.string().optional().describe("Content to write (required for write)"),
       query: z.string().optional().describe("Search query (required for search)"),
     }),
-    execute: async ({ action, key, content, query }) => {
+    execute: async ({
+      action,
+      key,
+      content,
+      query,
+    }: {
+      action: "read" | "write" | "search";
+      key?: string;
+      content?: string;
+      query?: string;
+    }) => {
       ctx.log(`tool> memory ${JSON.stringify({ action, key, hasContent: !!content, query })}`);
 
       const projectMemoryDir = path.join(ctx.config.projectAgentDir, "memory");

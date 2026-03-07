@@ -1,4 +1,5 @@
-import fs from "node:fs/promises";
+import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import type { AgentConfig } from "../types";
@@ -31,11 +32,11 @@ function isPathInsideAnyRoot(filePath: string, roots: string[]): boolean {
 }
 
 export function isWritePathAllowed(filePath: string, config: AgentConfig): boolean {
-  return isPathInsideAnyRoot(filePath, writeRoots(config));
+  return isCanonicalPathInsideRoots(filePath, writeRoots(config));
 }
 
 export function isReadPathAllowed(filePath: string, config: AgentConfig): boolean {
-  return isPathInsideAnyRoot(filePath, readRoots(config));
+  return isCanonicalPathInsideRoots(filePath, readRoots(config));
 }
 
 async function canonicalizeExistingPrefix(targetPath: string): Promise<string> {
@@ -45,7 +46,7 @@ async function canonicalizeExistingPrefix(targetPath: string): Promise<string> {
 
   while (true) {
     try {
-      const canonical = await fs.realpath(cursor);
+      const canonical = await fsPromises.realpath(cursor);
       return tail.length > 0 ? path.join(canonical, ...tail.reverse()) : canonical;
     } catch (err) {
       const parsedCode = errorWithCodeSchema.safeParse(err);
@@ -60,14 +61,47 @@ async function canonicalizeExistingPrefix(targetPath: string): Promise<string> {
 }
 
 async function canonicalizeRoot(rootPath: string): Promise<string> {
-  const resolved = path.resolve(rootPath);
+  return canonicalizeExistingPrefix(rootPath);
+}
+
+function canonicalizeExistingPrefixSync(targetPath: string): string {
+  const resolved = path.resolve(targetPath);
+  const tail: string[] = [];
+  let cursor = resolved;
+
+  while (true) {
+    try {
+      const canonical = fs.realpathSync(cursor);
+      return tail.length > 0 ? path.join(canonical, ...tail.reverse()) : canonical;
+    } catch (err) {
+      const parsedCode = errorWithCodeSchema.safeParse(err);
+      const code = parsedCode.success ? parsedCode.data.code : undefined;
+      if (code !== "ENOENT") throw err;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return resolved;
+      tail.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+function canonicalizeRootSync(rootPath: string): string {
+  return canonicalizeExistingPrefixSync(rootPath);
+}
+
+function isCanonicalPathInsideRoots(filePath: string, roots: string[]): boolean {
+  const resolved = path.resolve(filePath);
+  if (!isPathInsideAnyRoot(resolved, roots)) {
+    return false;
+  }
+
   try {
-    return await fs.realpath(resolved);
-  } catch (err) {
-    const parsedCode = errorWithCodeSchema.safeParse(err);
-    const code = parsedCode.success ? parsedCode.data.code : undefined;
-    if (code !== "ENOENT") throw err;
-    return resolved;
+    const canonicalTarget = canonicalizeExistingPrefixSync(resolved);
+    return roots
+      .map((root) => canonicalizeRootSync(root))
+      .some((root) => isPathInside(root, canonicalTarget));
+  } catch {
+    return false;
   }
 }
 

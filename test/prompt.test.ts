@@ -59,6 +59,16 @@ function skillDoc(name: string, description: string, body = "# Skill Body\n"): s
   return ["---", `name: \"${name}\"`, `description: \"${description}\"`, "---", "", body].join("\n");
 }
 
+function expectWorkspaceHygieneAndShellFirstGuidance(prompt: string) {
+  expect(prompt).toContain(
+    "Do not create generic `/tmp`, `tmp`, `temp`, `output`, `outputs`, `scratch`"
+  );
+  expect(prompt).toContain(
+    "prefer the smallest shell-first path before creating a helper script"
+  );
+  expect(prompt).toContain("Only create an ad hoc Python or shell script");
+}
+
 // ---------------------------------------------------------------------------
 // loadSystemPrompt
 // ---------------------------------------------------------------------------
@@ -175,6 +185,59 @@ describe("loadSystemPrompt", () => {
 
     expect(prompt).toContain("GPT-5.2 SYSTEM TEMPLATE gpt-5.2");
     expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
+  });
+
+  test("uses model-specific system template for gpt-5.4 when present", async () => {
+    const { builtIn } = await makeTmpDirs();
+
+    await writeFile(
+      path.join(builtIn, "prompts", "system.md"),
+      "DEFAULT SYSTEM TEMPLATE {{modelName}}"
+    );
+    await writeFile(
+      path.join(builtIn, "prompts", "system-models", "gpt-5.4.md"),
+      "GPT-5.4 SYSTEM TEMPLATE {{modelName}}"
+    );
+
+    const config = makeConfig({
+      builtInDir: builtIn,
+      model: "gpt-5.4",
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expect(prompt).toContain("GPT-5.4 SYSTEM TEMPLATE gpt-5.4");
+    expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
+  });
+
+  test("real gpt-5.4 prompt includes workspace hygiene and shell-first guidance", async () => {
+    const config = makeConfig({
+      model: "gpt-5.4",
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expectWorkspaceHygieneAndShellFirstGuidance(prompt);
+  });
+
+  test("real gpt-5.2 prompt includes workspace hygiene and shell-first guidance", async () => {
+    const config = makeConfig({
+      model: "gpt-5.2",
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expectWorkspaceHygieneAndShellFirstGuidance(prompt);
+  });
+
+  test("default system prompt includes workspace hygiene and shell-first guidance", async () => {
+    const config = makeConfig({
+      model: "not-a-model-with-a-special-template",
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expectWorkspaceHygieneAndShellFirstGuidance(prompt);
   });
 
   test("uses model-specific system template for gemini-3.1-pro-preview when present", async () => {

@@ -105,7 +105,7 @@ Rules:
     inputSchema: z.object({
       command: z.string().describe("The shell command to execute"),
     }),
-    execute: async ({ command }) => {
+    execute: async ({ command }: { command: string }) => {
       ctx.log(`tool> bash ${JSON.stringify({ command })}`);
 
       if (ctx.abortSignal?.aborted) {

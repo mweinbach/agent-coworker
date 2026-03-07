@@ -41,6 +41,34 @@ describe("pi message bridge", () => {
     expect((piMessages[2] as any).toolCallId).toBe("call-1");
   });
 
+  test("preserves multimodal tool results when converting model messages into pi messages", () => {
+    const imageOutput = {
+      type: "content",
+      content: [
+        { type: "text", text: "Image file: chart.png" },
+        { type: "image", data: "abc123", mimeType: "image/png" },
+      ],
+    };
+    const modelMessages = [
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call-image",
+            toolName: "read",
+            output: imageOutput,
+          },
+        ],
+      },
+    ] as ModelMessage[];
+
+    const piMessages = modelMessagesToPiMessages(modelMessages);
+    expect(piMessages).toHaveLength(1);
+    expect((piMessages[0] as any).role).toBe("toolResult");
+    expect((piMessages[0] as any).content).toEqual(imageOutput.content);
+  });
+
   test("preserves non-text user content with a placeholder", () => {
     const modelMessages = [
       {
@@ -80,6 +108,37 @@ describe("pi message bridge", () => {
     expect((modelMessages[0] as any).content.some((part: any) => part.type === "reasoning")).toBe(true);
     expect(modelMessages[1].role).toBe("tool");
     expect((modelMessages[1] as any).content[0].type).toBe("tool-result");
+  });
+
+  test("preserves multimodal tool results when converting pi turn messages back to model messages", () => {
+    const piTurnMessages = [
+      {
+        role: "toolResult",
+        toolCallId: "call-image",
+        toolName: "read",
+        content: [
+          { type: "text", text: "Image file: chart.png" },
+          { type: "image", data: "abc123", mimeType: "image/png" },
+        ],
+        isError: false,
+      },
+    ] as any[];
+
+    const modelMessages = piTurnMessagesToModelMessages(piTurnMessages as any);
+    expect(modelMessages).toHaveLength(1);
+    expect((modelMessages[0] as any).content[0]).toEqual({
+      type: "tool-result",
+      toolCallId: "call-image",
+      toolName: "read",
+      output: {
+        type: "content",
+        content: [
+          { type: "text", text: "Image file: chart.png" },
+          { type: "image", data: "abc123", mimeType: "image/png" },
+        ],
+      },
+      isError: false,
+    });
   });
 
   test("extracts assistant text and reasoning from pi messages", () => {

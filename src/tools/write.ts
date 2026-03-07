@@ -16,7 +16,7 @@ export function createWriteTool(ctx: ToolContext) {
       filePath: z.string().min(1).describe("Path to write (prefer absolute)"),
       content: z.string().max(2_000_000).describe("Content to write"),
     }),
-    execute: async ({ filePath, content }) => {
+    execute: async ({ filePath, content }: { filePath: string; content: string }) => {
       ctx.log(`tool> write ${JSON.stringify({ filePath, chars: content.length })}`);
 
       const abs = await assertWritePathAllowed(

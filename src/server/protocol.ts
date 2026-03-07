@@ -14,8 +14,8 @@ import type { ProviderStatus } from "../providerStatus";
 import { type ProviderAuthMethod, type ProviderAuthChallenge } from "../providers/authRegistry";
 import type { ProviderCatalogEntry } from "../providers/connectionCatalog";
 import type { ModelStreamPartType } from "./modelStream";
+import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionBackupPublicState } from "./sessionBackup";
-import type { PersistedSessionSummary } from "./sessionDb";
 export { ASK_SKIP_TOKEN } from "../shared/ask";
 
 export type MCPServerEventSource = "workspace" | "user" | "system" | "workspace_legacy" | "user_legacy";

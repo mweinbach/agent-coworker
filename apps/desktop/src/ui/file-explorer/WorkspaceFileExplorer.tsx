@@ -20,7 +20,7 @@ export type WorkspaceFileExplorerProps = {
   className?: string;
 };
 
-const AUTO_REFRESH_INTERVAL_MS = 1000;
+const AUTO_REFRESH_INTERVAL_MS = 5000;
 
 type DirectorySnapshot = {
   entries: ExplorerEntry[];
@@ -29,6 +29,8 @@ type DirectorySnapshot = {
   updatedAt: number | null;
   fingerprint: string;
 };
+
+type DirectorySnapshotSummary = Pick<DirectorySnapshot, "error" | "fingerprint">;
 
 export type ExplorerTreeRow =
   | {
@@ -70,6 +72,18 @@ export function buildDirectoryFingerprint(entries: ExplorerEntry[]): string {
     })
     .sort()
     .join("|");
+}
+
+export function shouldReuseBackgroundDirectorySnapshot(
+  current: DirectorySnapshotSummary | undefined,
+  fingerprint: string,
+  error: string | null
+): boolean {
+  return !!current && current.error === error && current.fingerprint === fingerprint;
+}
+
+export function shouldAutoRefreshExplorer(visibilityState: string, hasFocus: boolean): boolean {
+  return visibilityState === "visible" && hasFocus;
 }
 
 export function buildExplorerRows(
@@ -241,9 +255,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   }, [explorer, refresh, workspaceId, workspacePath]);
 
   const loadDirectory = useCallback(
-    async (path: string, opts?: { background?: boolean }) => {
+    async (path: string, opts?: { background?: boolean }): Promise<boolean> => {
       const targetPath = normalizeExplorerPath(path);
-      if (!targetPath) return;
+      if (!targetPath) return false;
 
       const requestId = ++requestCounterRef.current;
       latestRequestByPathRef.current[targetPath] = requestId;
@@ -267,29 +281,51 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
       try {
         const listed = await listDirectory({ path: targetPath, includeHidden: showHiddenFiles });
         const entries = sortExplorerEntries(listed);
-        if (latestRequestByPathRef.current[targetPath] !== requestId) return;
+        if (latestRequestByPathRef.current[targetPath] !== requestId) return false;
 
-        setDirectoryByPath((previous) => ({
-          ...previous,
-          [targetPath]: {
-            entries,
-            loading: false,
-            error: null,
-            updatedAt: Date.now(),
-            fingerprint: buildDirectoryFingerprint(entries),
-          },
-        }));
+        const fingerprint = buildDirectoryFingerprint(entries);
+        let changed = false;
+        setDirectoryByPath((previous) => {
+          const current = previous[targetPath];
+          if (opts?.background && shouldReuseBackgroundDirectorySnapshot(current, fingerprint, null)) {
+            return previous;
+          }
+
+          changed = true;
+          return {
+            ...previous,
+            [targetPath]: {
+              entries,
+              loading: false,
+              error: null,
+              updatedAt: Date.now(),
+              fingerprint,
+            },
+          };
+        });
+        return changed;
       } catch (error) {
-        if (latestRequestByPathRef.current[targetPath] !== requestId) return;
+        if (latestRequestByPathRef.current[targetPath] !== requestId) return false;
 
-        setDirectoryByPath((previous) => ({
-          ...previous,
-          [targetPath]: {
-            ...(previous[targetPath] ?? defaultDirectorySnapshot()),
-            loading: false,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        }));
+        const message = error instanceof Error ? error.message : String(error);
+        let changed = false;
+        setDirectoryByPath((previous) => {
+          const current = previous[targetPath];
+          if (opts?.background && shouldReuseBackgroundDirectorySnapshot(current, current?.fingerprint ?? "", message)) {
+            return previous;
+          }
+
+          changed = true;
+          return {
+            ...previous,
+            [targetPath]: {
+              ...(current ?? defaultDirectorySnapshot()),
+              loading: false,
+              error: message,
+            },
+          };
+        });
+        return changed;
       }
     },
     [showHiddenFiles]
@@ -303,8 +339,10 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
 
       try {
         const paths = new Set<string>([currentRootPath, ...expandedPathsRef.current]);
-        await Promise.all(Array.from(paths).map((path) => loadDirectory(path, { background: true })));
-        void refresh(workspaceId).catch(() => {});
+        const updates = await Promise.all(Array.from(paths).map((path) => loadDirectory(path, { background: true })));
+        if (updates.some(Boolean)) {
+          void refresh(workspaceId).catch(() => {});
+        }
       } finally {
         syncInFlightRef.current = false;
       }
@@ -361,6 +399,9 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
   useEffect(() => {
     if (!rootPath) return;
     const interval = window.setInterval(() => {
+      if (!shouldAutoRefreshExplorer(document.visibilityState, document.hasFocus())) {
+        return;
+      }
       void refreshExpandedDirectories();
     }, AUTO_REFRESH_INTERVAL_MS);
 
@@ -460,6 +501,16 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
     [openFile, toggleDirectory, workspaceId]
   );
 
+  const handleSelectEntry = useCallback(
+    (entry: ExplorerEntry) => {
+      selectFile(workspaceId, entry.path);
+      if (!entry.isDirectory) {
+        void previewOSFile({ path: entry.path }).catch(() => {});
+      }
+    },
+    [selectFile, workspaceId]
+  );
+
   if (!workspacePath || !rootPath) {
     return (
       <div className={cn("flex items-center justify-center p-4 text-muted-foreground", className)}>
@@ -504,7 +555,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         ) : treeRows.length === 0 ? (
           <div className="py-6 text-center text-xs text-muted-foreground">This folder is empty</div>
         ) : (
-          <div className="space-y-0.5">
+          <div role="tree" aria-label={`Workspace files for ${rootLabel}`} className="space-y-0.5">
             {treeRows.map((row) => {
               if (row.kind === "status") {
                 return (
@@ -533,22 +584,20 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
               return (
                 <div
                   key={entry.path}
-                  role="button"
+                  role="treeitem"
                   tabIndex={0}
+                  aria-level={depth + 1}
+                  aria-selected={isSelected}
+                  aria-expanded={isDirectory ? row.expanded : undefined}
                   className={cn(
-                    "group flex cursor-pointer items-center gap-1 rounded-md py-1.5 pr-1 text-xs transition-colors select-none",
+                    "group flex cursor-pointer items-center gap-1 rounded-md py-1.5 pr-1 text-xs transition-colors",
                     isSelected
                       ? "bg-accent text-accent-foreground"
                       : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
                     entry.isHidden && "opacity-70"
                   )}
                   style={{ paddingLeft: `${depth * 0.85 + 0.35}rem` }}
-                  onClick={() => {
-                    selectFile(workspaceId, entry.path);
-                    if (!entry.isDirectory) {
-                      void previewOSFile({ path: entry.path }).catch(() => {});
-                    }
-                  }}
+                  onClick={() => handleSelectEntry(entry)}
                   onDoubleClick={() => handleOpenEntry(entry)}
                   onContextMenu={(event) => {
                     void handleContextMenu(event, entry);
@@ -557,6 +606,21 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                     if (event.key === "Enter") {
                       event.preventDefault();
                       handleOpenEntry(entry);
+                      return;
+                    }
+                    if (event.key === " " || event.key === "Spacebar") {
+                      event.preventDefault();
+                      handleSelectEntry(entry);
+                      return;
+                    }
+                    if (isDirectory && event.key === "ArrowRight" && !row.expanded) {
+                      event.preventDefault();
+                      toggleDirectory(entry.path);
+                      return;
+                    }
+                    if (isDirectory && event.key === "ArrowLeft" && row.expanded) {
+                      event.preventDefault();
+                      toggleDirectory(entry.path);
                     }
                   }}
                   title={entry.path}
@@ -566,7 +630,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                       type="button"
                       aria-label={row.expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
                       className={cn(
-                        "inline-flex h-5 w-5 items-center justify-center rounded transition-colors",
+                        "inline-flex h-5 w-5 items-center justify-center rounded transition-colors select-none",
                         isSelected ? "hover:bg-accent-foreground/15" : "hover:bg-muted"
                       )}
                       onClick={(event) => {
@@ -601,7 +665,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
                     type="button"
                     aria-label={`More options for ${entry.name}`}
                     className={cn(
-                      "inline-flex h-6 w-6 items-center justify-center rounded opacity-0 transition-opacity",
+                      "inline-flex h-6 w-6 items-center justify-center rounded opacity-0 transition-opacity select-none",
                       isSelected ? "opacity-100 hover:bg-accent-foreground/15" : "group-hover:opacity-100 hover:bg-muted"
                     )}
                     onClick={(event) => {

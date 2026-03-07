@@ -97,7 +97,7 @@ For headless/cloud testing, prefer `bun run serve` and interact via WebSocket (s
 
 - `bun test` runs the full suite (~1590 tests). All tests are deterministic and require no network or API keys.
 - Two tests are skipped by default (remote MCP integration tests requiring network).
-- There is no configured linter or formatter. `bunx tsc --noEmit` is the code quality check, but expect JSX type conflicts between the root tsconfig (React) and `apps/TUI/tsconfig.json` (Solid.js) — this is a known trade-off and does not affect runtime.
+- There is no configured linter or formatter. `bun run typecheck` is the code quality check; it runs the repo-root core typecheck plus `apps/desktop` (including `electron/*`). `apps/TUI` is not part of the default typecheck command.
 
 ### Desktop App
 

@@ -12,5 +12,6 @@
     "types": ["bun-types"],
     "noEmit": true
   },
-  "include": ["src", "test", "apps"]
+  "include": ["src"],
+  "exclude": ["src/index.ts", "src/tui/**/*"]
 }

@@ -49,21 +49,33 @@ function createModelAdapter(modelId: string, provider: string, headers: HeaderRe
 export function createOpenAiModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
   return createModelAdapter(modelId, "openai.responses", async () => {
     const key = firstNonEmpty(savedKey, envKey("OPENAI_API_KEY"));
-    return key ? { authorization: `Bearer ${key}` } : {};
+    const headers: HeaderMap = {};
+    if (key) {
+      headers.authorization = `Bearer ${key}`;
+    }
+    return headers;
   });
 }
 
 export function createGoogleModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
   return createModelAdapter(modelId, "google.generative-ai", async () => {
     const key = firstNonEmpty(savedKey, envKey("GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY"));
-    return key ? { "x-goog-api-key": key } : {};
+    const headers: HeaderMap = {};
+    if (key) {
+      headers["x-goog-api-key"] = key;
+    }
+    return headers;
   });
 }
 
 export function createAnthropicModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
   return createModelAdapter(modelId, "anthropic.messages", async () => {
     const key = firstNonEmpty(savedKey, envKey("ANTHROPIC_API_KEY"));
-    return key ? { "x-api-key": key } : {};
+    const headers: HeaderMap = {};
+    if (key) {
+      headers["x-api-key"] = key;
+    }
+    return headers;
   });
 }
 

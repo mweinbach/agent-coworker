@@ -45,7 +45,7 @@ export function decodeClientMessage(raw: unknown, sessionId: string): DecodedCli
   const text =
     typeof parsedRaw.data === "string"
       ? parsedRaw.data
-      : Buffer.from(parsedRaw.data).toString("utf-8");
+      : Buffer.from(parsedRaw.data instanceof Uint8Array ? parsedRaw.data : new Uint8Array(parsedRaw.data)).toString("utf-8");
   const parsed = safeParseClientMessage(text);
   if (!parsed.ok) {
     return {

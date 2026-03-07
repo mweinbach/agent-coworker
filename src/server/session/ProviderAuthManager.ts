@@ -198,7 +198,7 @@ export class ProviderAuthManager {
           sessionId: this.opts.sessionId,
           provider: providerRaw,
           methodId,
-          mode: result.mode ?? "unknown",
+          mode: result.ok ? result.mode : "unknown",
         },
         Date.now() - startedAt
       );
@@ -270,7 +270,7 @@ export class ProviderAuthManager {
           sessionId: this.opts.sessionId,
           provider: providerRaw,
           methodId,
-          mode: result.mode ?? "unknown",
+          mode: result.ok ? result.mode : "unknown",
         },
         Date.now() - startedAt
       );

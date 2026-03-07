@@ -1,7 +1,7 @@
-export type LocalToolDefinition = {
+export type LocalToolDefinition<TOutput = unknown> = {
   description?: string;
   inputSchema?: unknown;
-  execute: (input: unknown) => Promise<unknown> | unknown;
+  execute: (input: any) => Promise<TOutput> | TOutput;
 };
 
 export function defineTool<T extends LocalToolDefinition>(definition: T): T {

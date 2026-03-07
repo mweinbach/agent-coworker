@@ -72,7 +72,7 @@ export async function runCliRepl(
     // Internal hooks for tests to avoid global/module mocks.
     __internal?: {
       startAgentServer?: typeof startAgentServer;
-      WebSocket?: { new (url: string): WebSocket; OPEN: number };
+      WebSocket?: { new (url: string, protocols?: string | string[]): WebSocket; OPEN: number };
       createReadlineInterface?: () => readline.Interface;
     };
   } = {}

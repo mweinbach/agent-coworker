@@ -54,7 +54,6 @@ body {
   color: var(--text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
-  user-select: none;
 }
 
 * {
@@ -71,7 +70,7 @@ body {
   color: inherit;
 }
 
-:where(button, [role="button"], a, input, textarea, select, [role="separator"]):focus-visible {
+:where(button, [role="button"], [role="treeitem"], a, input, textarea, select, [role="separator"]):focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--app-bg), 0 0 0 4px color-mix(in srgb, var(--accent) 40%, transparent);
 }

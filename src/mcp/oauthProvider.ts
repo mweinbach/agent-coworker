@@ -10,9 +10,9 @@ import {
   registerClient,
 } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
+  AuthorizationServerMetadata,
   OAuthClientInformationMixed,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import type { AuthorizationServerMetadata } from "@modelcontextprotocol/sdk/client/auth.js";
 import { z } from "zod";
 
 import type { MCPRegistryServer } from "./configRegistry";
@@ -67,7 +67,9 @@ function generateOpaqueValue(bytes: number): string {
   return toBase64Url(randomBytes(bytes));
 }
 
-function isHttpLikeServer(server: MCPRegistryServer): boolean {
+function isHttpLikeServer(
+  server: MCPRegistryServer,
+): server is MCPRegistryServer & { transport: Extract<MCPRegistryServer["transport"], { type: "http" | "sse" }> } {
   return server.transport.type === "http" || server.transport.type === "sse";
 }
 
@@ -275,6 +277,7 @@ export async function authorizeMCPServerOAuth(
   if (!server.auth || server.auth.type !== "oauth") {
     throw new Error(`Server \"${server.name}\" is not configured for OAuth.`);
   }
+  const transport = server.transport;
 
   const method: "auto" | "code" = server.auth.oauthMode === "code" ? "code" : "auto";
   const createdAt = nowIso();
@@ -290,7 +293,7 @@ export async function authorizeMCPServerOAuth(
   }
 
   // 2. Discover authorization server via RFC 9728 + RFC 8414.
-  const authServerUrl = await resolveAuthorizationServerUrl(server.transport.url);
+  const authServerUrl = await resolveAuthorizationServerUrl(transport.url);
   const metadata = await resolveAuthServerMetadata(authServerUrl);
 
   // 3. Ensure we have client credentials (stored, registered, or fallback).
@@ -381,10 +384,11 @@ export async function exchangeMCPServerOAuthCode(opts: {
   if (!isHttpLikeServer(opts.server)) {
     throw new Error("OAuth is only supported for HTTP/SSE MCP transports.");
   }
+  const transport = opts.server.transport;
 
   // Resolve authorization server URL — use stored value from pending, or re-discover.
   const authServerUrl = opts.pending.authorizationServerUrl
-    ?? await resolveAuthorizationServerUrl(opts.server.transport.url);
+    ?? await resolveAuthorizationServerUrl(transport.url);
 
   // Discover metadata for the token endpoint.
   const metadata = await resolveAuthServerMetadata(authServerUrl);

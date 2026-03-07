@@ -26,6 +26,10 @@ function safeJsonStringify(value: unknown): string {
   }
 }
 
+type PiToolResultTextContent = { type: "text"; text: string };
+type PiToolResultImageContent = { type: "image"; data: string; mimeType: string };
+export type PiToolResultContentPart = PiToolResultTextContent | PiToolResultImageContent;
+
 function contentTextParts(content: unknown): string[] {
   if (typeof content === "string") return content.trim() ? [content] : [];
   if (!Array.isArray(content)) return [];
@@ -110,15 +114,84 @@ function assistantContentFromModelContent(content: unknown): Array<Record<string
   return out;
 }
 
-function toolResultTextFromOutput(output: unknown): string {
-  if (typeof output === "string") return output;
-  const record = asRecord(output);
-  if (!record) return safeJsonStringify(output);
+function normalizeToolResultContentPart(part: unknown): PiToolResultContentPart | null {
+  const record = asRecord(part);
+  if (!record) return null;
 
-  if (typeof record.value === "string") return record.value;
-  if (record.type === "json" && record.value !== undefined) return safeJsonStringify(record.value);
-  if (record.value !== undefined) return safeJsonStringify(record.value);
-  return safeJsonStringify(output);
+  if (record.type === "text") {
+    const text = asString(record.text);
+    return text === undefined ? null : { type: "text", text };
+  }
+
+  if (record.type === "image") {
+    const data = asNonEmptyString(record.data);
+    const mimeType = asNonEmptyString(record.mimeType);
+    if (!data || !mimeType) return null;
+    return { type: "image", data, mimeType };
+  }
+
+  return null;
+}
+
+function normalizedToolResultParts(value: unknown): PiToolResultContentPart[] | null {
+  if (!Array.isArray(value)) return null;
+  const parts = value.map(normalizeToolResultContentPart);
+  if (parts.some((part) => part === null)) return null;
+  return parts as PiToolResultContentPart[];
+}
+
+function richToolResultContentFromOutput(output: unknown): PiToolResultContentPart[] | null {
+  const directParts = normalizedToolResultParts(output);
+  if (directParts && directParts.length > 0) return directParts;
+
+  const record = asRecord(output);
+  if (!record || record.type !== "content") return null;
+
+  const parts = normalizedToolResultParts(record.content);
+  if (!parts || parts.length === 0) return null;
+  return parts;
+}
+
+export function toolResultContentFromOutput(output: unknown): PiToolResultContentPart[] {
+  const richContent = richToolResultContentFromOutput(output);
+  if (richContent) return richContent;
+
+  if (typeof output === "string") return [{ type: "text", text: output }];
+  if (typeof output === "number" || typeof output === "boolean" || typeof output === "bigint") {
+    return [{ type: "text", text: String(output) }];
+  }
+  if (output === undefined || output === null) return [{ type: "text", text: "" }];
+
+  const record = asRecord(output);
+  if (!record) return [{ type: "text", text: safeJsonStringify(output) }];
+
+  if (typeof record.value === "string") return [{ type: "text", text: record.value }];
+  if (record.type === "json" && record.value !== undefined) {
+    return [{ type: "text", text: safeJsonStringify(record.value) }];
+  }
+  if (record.value !== undefined) {
+    return [{ type: "text", text: safeJsonStringify(record.value) }];
+  }
+  return [{ type: "text", text: safeJsonStringify(output) }];
+}
+
+function toolResultContentToText(content: unknown): string {
+  const richContent = richToolResultContentFromOutput(content);
+  if (richContent) {
+    return richContent
+      .map((part) => (part.type === "text" ? part.text : "[image]"))
+      .join("\n");
+  }
+  return safeJsonStringify(content);
+}
+
+export function toolOutputFromPiToolResultContent(content: unknown): unknown {
+  const richContent = richToolResultContentFromOutput(content);
+  if (richContent?.some((part) => part.type === "image")) {
+    return { type: "content", content: richContent };
+  }
+
+  return { type: "text", value: toolResultContentToText(content) };
 }
 
 function toolResultMessagesFromModelMessage(message: Record<string, unknown>): PiMessage[] {
@@ -153,14 +226,13 @@ function toolResultMessagesFromModelMessage(message: Record<string, unknown>): P
       roleToolCallId ??
       `tool_${timestamp}_${out.length + 1}`;
     const toolName = asNonEmptyString(part.toolName) ?? roleToolName;
-    const outputText = toolResultTextFromOutput(part.output ?? part.content);
     const isError = part.isError === true;
 
     out.push({
       role: "toolResult",
       toolCallId,
       toolName,
-      content: [{ type: "text", text: outputText }],
+      content: toolResultContentFromOutput(part.output ?? part.content),
       isError,
       timestamp,
     } as PiMessage);
@@ -248,26 +320,6 @@ function modelContentFromAssistantPart(part: Record<string, unknown>): Record<st
   return null;
 }
 
-function toolResultContentToText(content: unknown): string {
-  if (!Array.isArray(content)) return safeJsonStringify(content);
-  const chunks: string[] = [];
-  for (const rawPart of content) {
-    const part = asRecord(rawPart);
-    if (!part) continue;
-    if (part.type === "text") {
-      const text = asString(part.text);
-      if (text !== undefined) chunks.push(text);
-      continue;
-    }
-    if (part.type === "image") {
-      chunks.push("[image]");
-      continue;
-    }
-    chunks.push(safeJsonStringify(part));
-  }
-  return chunks.join("\n");
-}
-
 export function piTurnMessagesToModelMessages(messages: PiMessage[]): ModelMessage[] {
   // Note: This intentionally never emits 'user' role messages,
   // as it is only used to extract the new turn output (assistant/toolResults) to append to the chat.
@@ -297,14 +349,13 @@ export function piTurnMessagesToModelMessages(messages: PiMessage[]): ModelMessa
     if (role === "toolResult") {
       const toolCallId = asNonEmptyString(rawMessage.toolCallId) ?? `tool_${Date.now()}`;
       const toolName = asNonEmptyString(rawMessage.toolName) ?? "tool";
-      const outputText = toolResultContentToText(rawMessage.content);
       out.push({
         role: "tool",
         content: [{
           type: "tool-result",
           toolCallId,
           toolName,
-          output: { type: "text", value: outputText },
+          output: toolOutputFromPiToolResultContent(rawMessage.content),
           isError: rawMessage.isError === true,
         }],
       } as ModelMessage);

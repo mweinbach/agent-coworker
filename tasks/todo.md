@@ -1,3 +1,50 @@
+# Task: Fix repo audit findings from the 2026-03-07 review
+
+## Plan
+- [x] Fix reconnect/resume event loss so resumed clients can recover events emitted during disconnect.
+- [x] Fix desktop file explorer polling, accessibility, and global text-selection regressions.
+- [x] Repair typecheck coverage/config, remove the permissions helper footgun, and make the relevant `tsc` checks pass.
+- [x] Rerun targeted tests/builds/typechecks, then update this review with the actual fixes landed.
+
+## Review
+- Reconnect/resume now buffers replayable turn events while a socket is detached and flushes them on resume before pending prompts replay. The server-side session binding cleanup path also starts that buffer on disconnect, and regression coverage was added in `test/server.test.ts`.
+- The desktop workspace file explorer no longer busy-polls every second regardless of visibility. Background refresh now reuses unchanged directory snapshots, refreshes expanded directories only when contents actually changed, and only auto-refreshes while the window is visible and focused. The tree rows now use `role="tree"` / `role="treeitem"` semantics with `aria-level`, `aria-expanded`, `aria-selected`, and keyboard handling for Enter, Space, ArrowLeft, and ArrowRight.
+- The desktop app no longer globally disables text selection. Row-level `select-none` was narrowed so filenames, paths, logs, and message content stay copyable.
+- The desktop package typecheck now includes `apps/desktop/electron/*`, and the repo now exposes `bun run typecheck` to run the working root-core plus desktop checks together. Root `tsconfig.json` was narrowed so the repo-root check no longer drags desktop/TUI code through the wrong compiler settings, and the desktop-specific type errors in the Electron launcher, chat view, protocol imports, and Streamdown integration were fixed.
+- `src/utils/permissions.ts` now canonicalizes paths for the sync helpers too, so the exported `isReadPathAllowed` / `isWritePathAllowed` helpers deny symlink escapes instead of relying only on lexical prefix checks. Regression tests cover both read and write helper escapes.
+
+### Verification
+- `~/.bun/bin/bun test` -> pass (`1710 pass, 2 skip, 0 fail`)
+- `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`140 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass
+- `~/.bun/bin/bunx tsc --noEmit` -> pass
+- `~/.bun/bin/bunx tsc --noEmit -p apps/desktop/tsconfig.json` -> pass
+- `git diff --check` -> pass
+
+# Task: Repo-wide audit with subagents to find fix-worthy issues
+
+## Plan
+- [x] Review prior audit context, current repo state, and repo instructions to set audit scope.
+- [x] Run parallel subagent audits over server/core, UI surfaces, providers/tools, and tests/docs.
+- [x] Validate the strongest findings locally with direct code inspection and targeted commands/tests.
+- [x] Record prioritized findings and concrete fix candidates in the review section below.
+
+## Review
+- High: reconnect/resume currently drops in-flight server events. `/Users/mweinbach/Projects/agent-coworker/src/server/startServer.ts` emits directly to the live socket and silently returns when the socket is absent, while reconnect only replays pending prompts; `/Users/mweinbach/Projects/agent-coworker/src/client/agentSocket.ts` only flushes queued outbound messages after `server_hello`. A disconnect during a turn can therefore lose `model_stream_chunk`, `assistant_message`, and `log` events with no automatic catch-up path in current clients.
+- High: the advertised repo-root typecheck is structurally broken, and the desktop package typecheck misses main-process code. Root `/Users/mweinbach/Projects/agent-coworker/tsconfig.json` includes `apps` under the OpenTUI/Bun config, so `bunx tsc --noEmit` compiles desktop React code without the desktop alias/path settings and reports many root-only failures. Meanwhile `/Users/mweinbach/Projects/agent-coworker/apps/desktop/tsconfig.json` only includes `src`, so `apps/desktop/electron/*` is not covered by the desktop package check.
+- High: the desktop workspace file explorer polls the root plus every expanded directory every second and rerenders the full tree each cycle. In large workspaces that is a constant filesystem + React work loop while idle, which is likely to show up as sidebar sluggishness and battery drain.
+- Medium: the desktop file tree is not keyboard/accessibility complete. Row containers are `div role="button"` elements that also contain nested real `<button>` controls, and row keyboard handling only supports `Enter`, so the primary navigation surface has weak semantics and incomplete keyboard behavior.
+- Medium: `apps/desktop/src/styles.css` globally disables text selection with `body { user-select: none; }`. Unless descendants opt back in, that makes filenames, paths, logs, and error text harder or impossible to copy in the desktop app.
+- Low: `src/utils/permissions.ts` exports `isReadPathAllowed` / `isWritePathAllowed` helpers that only do lexical prefix checks, while the symlink-safe behavior lives in the `assert*` variants. I did not find current runtime callers of the weaker helpers, but keeping both exported in a security-sensitive module is an avoidable footgun.
+
+### Verification
+- `~/.bun/bin/bun test` -> pass (`1705 pass, 2 skip, 0 fail`)
+- `~/.bun/bin/bun run docs:check` -> pass
+- `~/.bun/bin/bun run portal:build` -> pass
+- `~/.bun/bin/bun run --cwd apps/desktop electron-vite build` -> pass
+- `~/.bun/bin/bunx tsc --noEmit` -> fails with root-config / desktop-config mismatch plus additional type errors
+- `~/.bun/bin/bunx tsc --noEmit -p apps/desktop/tsconfig.json` -> fails and does not include `apps/desktop/electron/*`
+
 # Task: Move default skill bootstrap into shared runtime startup and expose installed skills to file tools
 
 ## Plan
@@ -602,3 +649,86 @@
 - Verification:
   - `bun test test/agentSocket.runtime.test.ts test/server.model-stream.test.ts test/session.stream-pipeline.test.ts`
   - `bun test` -> **1671 pass, 2 skip, 0 fail**
+
+# Task: Add initial-response timeout to webFetch for hanging sites
+
+## Plan
+- [x] Inspect current webFetch hang behavior and existing tests.
+- [x] Add a 5000ms timeout that only applies until the initial response arrives.
+- [x] Add regression coverage and rerun the relevant tests.
+
+## Review
+- `src/tools/webFetch.ts` now applies a 5000ms abort timeout only while waiting for each `fetch()` call to produce an initial `Response`. Once headers arrive, the timer is cleared, so slow body reads are still allowed.
+- The timeout is wired through the existing safe redirect loop, so a hung redirect hop is also bounded instead of stalling the tool indefinitely.
+- Added focused regression coverage in `test/tools.test.ts` for both cases: a never-responding fetch now fails fast with a timeout, and a quick response with a slow `text()` body still succeeds.
+- Verification:
+  - `~/.bun/bin/bun test test/tools.test.ts` -> pass (`144 pass, 0 fail`)
+  - `~/.bun/bin/bunx tsc --noEmit` -> pass
+  - `git diff --check` -> pass
+
+# Task: Add a dedicated gpt-5.4 system prompt
+
+## Plan
+- [x] Add a model-specific gpt-5.4 prompt file under prompts/system-models.
+- [x] Wire gpt-5.4 into the prompt template matcher.
+- [x] Add regression coverage and run the prompt tests.
+
+## Review
+- Added [gpt-5.4.md](/Users/mweinbach/Projects/agent-coworker/prompts/system-models/gpt-5.4.md) as a dedicated model-specific prompt file. It currently starts as the same template content as `gpt-5.2`, but it is now a separate file that can diverge cleanly later.
+- Updated [prompt.ts](/Users/mweinbach/Projects/agent-coworker/src/prompt.ts) so `gpt-5.4` resolves to `prompts/system-models/gpt-5.4.md` instead of falling back to the default `system.md`.
+- Added regression coverage in [prompt.test.ts](/Users/mweinbach/Projects/agent-coworker/test/prompt.test.ts) to ensure `gpt-5.4` prefers its model-specific prompt when present.
+- Verification:
+  - `~/.bun/bin/bun test test/prompt.test.ts` -> pass (`41 pass, 0 fail`)
+  - `~/.bun/bin/bunx tsc --noEmit` -> pass
+
+# Task: Tune the gpt-5.4 system prompt for cleaner workspace behavior
+
+## Plan
+- [x] Inspect the current gpt-5.4 prompt sections that drive file creation and coding workflow.
+- [x] Update the prompt to avoid generic /tmp or output folders, keep work in relevant project paths, and prefer shell-first coding before creating helper files.
+- [x] Run targeted prompt verification and record the outcome.
+
+## Review
+- Updated [gpt-5.4.md](/Users/mweinbach/Projects/agent-coworker/prompts/system-models/gpt-5.4.md) to explicitly keep the workspace clean, avoid generic `/tmp`, `tmp`, `temp`, `output`, `outputs`, and `scratch` folders unless the user or project convention requires them, and prefer task-relevant workspace paths.
+- Added shell-first guidance to the same prompt: use direct shell commands, existing project tooling, and direct file edits first for code tasks, and only create ad hoc Python or shell scripts when the user asked for one, the task clearly needs a reusable multi-step program, or repeated shell-first attempts are error-prone enough that a file is more efficient.
+- Added a real-prompt regression test in [prompt.test.ts](/Users/mweinbach/Projects/agent-coworker/test/prompt.test.ts) so the shipped `gpt-5.4` prompt must continue to contain the new workspace-hygiene and shell-first instructions.
+- Verification:
+  - `~/.bun/bin/bun test test/prompt.test.ts` -> pass (`42 pass, 0 fail`)
+  - `~/.bun/bin/bunx tsc --noEmit` -> pass
+
+# Task: Propagate workspace-hygiene prompt guidance to shared prompts
+
+## Plan
+- [x] Inspect the matching file-operation and bash sections in `prompts/system.md` and `prompts/system-models/gpt-5.2.md`.
+- [x] Copy the workspace-cleanliness and shell-first guidance from `gpt-5.4` into the default and `gpt-5.2` prompts.
+- [x] Extend prompt regression coverage so the shipped default, `gpt-5.2`, and `gpt-5.4` prompts all retain the new guidance.
+- [x] Run targeted prompt verification and record the outcome.
+
+## Review
+- Updated [system.md](/Users/mweinbach/Projects/agent-coworker/prompts/system.md) and [gpt-5.2.md](/Users/mweinbach/Projects/agent-coworker/prompts/system-models/gpt-5.2.md) so the shared file-operation guidance now explicitly keeps the workspace clean, avoids generic `/tmp`, `tmp`, `temp`, `output`, `outputs`, and `scratch` folders unless the user or project convention requires them, and prefers task-relevant workspace folders when a new directory is genuinely needed.
+- Added the same shell-first coding guidance to both prompts: prefer direct shell commands, existing project tooling, and direct file edits first, and only create ad hoc Python or shell scripts when the user asked for a script, the task clearly needs a reusable multi-step program, or repeated shell-first attempts are error-prone enough that a helper file is more reliable.
+- Extended [prompt.test.ts](/Users/mweinbach/Projects/agent-coworker/test/prompt.test.ts) so the shipped default prompt, `gpt-5.2`, and `gpt-5.4` all have to retain the shared workspace-hygiene and shell-first instructions.
+- Verification:
+  - `~/.bun/bin/bun test test/prompt.test.ts` -> pass (`44 pass, 0 fail`)
+  - `~/.bun/bin/bunx tsc --noEmit` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1716 pass, 2 skip, 0 fail`)
+  - `git diff --check` -> pass
+
+# Task: Add multimodal image support to the read tool
+
+## Plan
+- [x] Inspect the current `read` tool, PI runtime tool-result handling, and replay bridge to locate where image content is dropped.
+- [x] Update the `read` tool so supported image files return multimodal image content instead of UTF-8 line reads.
+- [x] Preserve multimodal tool-result content through PI runtime execution and replay/persistence conversion.
+- [x] Add regression tests and rerun the relevant verification commands.
+
+## Review
+- Updated [read.ts](/Users/mweinbach/Projects/agent-coworker/src/tools/read.ts) so `read` now detects supported raster image files (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`) and returns multimodal tool content with a small text preface plus an actual image payload, instead of trying to stream the file as UTF-8 text lines.
+- Updated [piMessageBridge.ts](/Users/mweinbach/Projects/agent-coworker/src/runtime/piMessageBridge.ts) so tool results that carry multimodal content survive model-message to PI-message conversion and PI replay back into persisted model messages. Image-bearing tool results are now preserved as a structured content envelope instead of being flattened into placeholder text.
+- Updated [piRuntime.ts](/Users/mweinbach/Projects/agent-coworker/src/runtime/piRuntime.ts) so live tool execution hands multimodal `read` results through to `pi-ai` as real `toolResult` image content, which lets vision-capable models inspect the returned image.
+- Added regression coverage in [tools.test.ts](/Users/mweinbach/Projects/agent-coworker/test/tools.test.ts), [runtime.pi-message-bridge.test.ts](/Users/mweinbach/Projects/agent-coworker/test/runtime.pi-message-bridge.test.ts), and [runtime.pi-runtime.test.ts](/Users/mweinbach/Projects/agent-coworker/test/runtime.pi-runtime.test.ts) for direct image reads, live runtime execution, and replay/persistence roundtrips.
+- Verification:
+  - `~/.bun/bin/bun test test/tools.test.ts test/runtime.pi-message-bridge.test.ts test/runtime.pi-runtime.test.ts` -> pass (`160 pass, 0 fail`)
+  - `~/.bun/bin/bunx tsc --noEmit` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1720 pass, 2 skip, 0 fail`)
+  - `git diff --check` -> pass

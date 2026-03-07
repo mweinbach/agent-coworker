@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
-import { PROVIDER_NAMES, resolveProviderName, type ProviderName } from "../types";
+import { resolveProviderName, type ProviderName } from "../types";
 
 export type ConnectService = ProviderName;
 export const TOOL_API_KEY_NAMES = ["exa"] as const;

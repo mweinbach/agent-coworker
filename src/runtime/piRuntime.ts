@@ -19,6 +19,7 @@ import {
   mergePiUsage,
   modelMessagesToPiMessages,
   piTurnMessagesToModelMessages,
+  toolResultContentFromOutput,
 } from "./piMessageBridge";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeStepOverride, RuntimeToolDefinition } from "./types";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
@@ -108,7 +109,7 @@ function buildStepState(
     modelMessages,
     providerOptions,
     streamOptions,
-    piMessages: modelMessagesToPiMessages(modelMessages, params.config.provider) as Array<Record<string, unknown>>,
+    piMessages: modelMessagesToPiMessages(modelMessages, params.config.provider) as unknown as Array<Record<string, unknown>>,
   };
 }
 
@@ -364,15 +365,6 @@ function validateToolInput(def: RuntimeToolDefinition, input: unknown): unknown 
   throw new Error(issue?.message ?? "Invalid tool input.");
 }
 
-function normalizeToolResultContent(result: unknown): Array<{ type: "text"; text: string }> {
-  if (typeof result === "string") return [{ type: "text", text: result }];
-  if (typeof result === "number" || typeof result === "boolean" || typeof result === "bigint") {
-    return [{ type: "text", text: String(result) }];
-  }
-  if (result === undefined || result === null) return [{ type: "text", text: "" }];
-  return [{ type: "text", text: safeJsonStringify(result) }];
-}
-
 function extractToolExecutionErrorMessage(result: unknown): string | undefined {
   const record = asRecord(result);
   if (!record || record.isError !== true) return undefined;
@@ -542,7 +534,7 @@ async function executeToolCall(
       };
     }
 
-    const content = normalizeToolResultContent(result);
+    const content = toolResultContentFromOutput(result);
     await emitPart({
       type: "tool-result",
       toolCallId: toolCall.id,

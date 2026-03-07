@@ -29,7 +29,19 @@ export function createNotebookEditTool(ctx: ToolContext) {
       cellType: z.enum(["code", "markdown"]).optional(),
       editMode: z.enum(["replace", "insert", "delete"]).optional().default("replace"),
     }),
-    execute: async ({ notebookPath, cellIndex, newSource, cellType, editMode }) => {
+    execute: async ({
+      notebookPath,
+      cellIndex,
+      newSource,
+      cellType,
+      editMode,
+    }: {
+      notebookPath: string;
+      cellIndex: number;
+      newSource: string;
+      cellType?: "code" | "markdown";
+      editMode?: "replace" | "insert" | "delete";
+    }) => {
       ctx.log(
         `tool> notebookEdit ${JSON.stringify({ notebookPath, cellIndex, cellType, editMode })}`
       );
@@ -60,7 +72,7 @@ export function createNotebookEditTool(ctx: ToolContext) {
 
       const sourceLines = newSource
         .split("\n")
-        .map((l, i, a) => l + (i < a.length - 1 ? "\n" : ""));
+        .map((line: string, index: number, allLines: string[]) => line + (index < allLines.length - 1 ? "\n" : ""));
 
       if (editMode === "delete") {
         if (cellIndex >= cells.length) throw new Error(`Cell ${cellIndex} out of range (${cells.length})`);

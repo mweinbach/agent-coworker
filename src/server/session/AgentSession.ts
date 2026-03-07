@@ -54,6 +54,33 @@ function makeId(): string {
   return crypto.randomUUID();
 }
 
+const MAX_DISCONNECTED_REPLAY_EVENTS = 256;
+const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<ServerEvent["type"]>([
+  "user_message",
+  "session_busy",
+  "model_stream_chunk",
+  "assistant_message",
+  "reasoning",
+  "log",
+  "todos",
+  "reset_done",
+  "ask",
+  "approval",
+  "provider_auth_challenge",
+  "provider_auth_result",
+  "mcp_server_validation",
+  "mcp_server_auth_challenge",
+  "mcp_server_auth_result",
+  "error",
+  "file_uploaded",
+  "turn_usage",
+  "config_updated",
+]);
+
+function shouldReplayDisconnectedEvent(evt: ServerEvent): boolean {
+  return DISCONNECTED_REPLAY_EVENT_TYPES.has(evt.type);
+}
+
 export class AgentSession {
   readonly id: string;
 
@@ -74,6 +101,8 @@ export class AgentSession {
   private readonly metadataManager: SessionMetadataManager;
   private readonly adminManager: SessionAdminManager;
   private readonly backupController: SessionBackupController;
+  private bufferDisconnectedEvents = false;
+  private disconnectedReplayEvents: ServerEvent[] = [];
 
   constructor(opts: {
     config: AgentConfig;
@@ -160,13 +189,23 @@ export class AgentSession {
       this.deps.harnessContextStore.set(this.id, hydrated.harnessContext);
     }
 
+    const emit = (evt: ServerEvent) => {
+      if (this.bufferDisconnectedEvents && shouldReplayDisconnectedEvent(evt)) {
+        this.disconnectedReplayEvents.push(evt);
+        if (this.disconnectedReplayEvents.length > MAX_DISCONNECTED_REPLAY_EVENTS) {
+          this.disconnectedReplayEvents.splice(0, this.disconnectedReplayEvents.length - MAX_DISCONNECTED_REPLAY_EVENTS);
+        }
+      }
+      opts.emit(evt);
+    };
+
     this.runtimeSupport = new SessionRuntimeSupport({
       sessionId: this.id,
       state: this.state,
       deps: this.deps,
-      emit: (evt) => opts.emit(evt),
+      emit,
       emitObservabilityStatusChanged: () => {
-        opts.emit(this.metadataManager.getObservabilityStatusEvent());
+        emit(this.metadataManager.getObservabilityStatusEvent());
       },
     });
 
@@ -174,7 +213,7 @@ export class AgentSession {
       id: this.id,
       state: this.state,
       deps: this.deps,
-      emit: (evt) => opts.emit(evt),
+      emit,
       emitError: (code, source, message) => this.emitError(code, source, message),
       emitTelemetry: (name, status, attributes, durationMs) => this.emitTelemetry(name, status, attributes, durationMs),
       formatError: (err) => this.formatErrorMessage(err),
@@ -393,6 +432,18 @@ export class AgentSession {
 
   replayPendingPrompts() {
     this.interactionManager.replayPendingPrompts();
+  }
+
+  beginDisconnectedReplayBuffer() {
+    this.bufferDisconnectedEvents = true;
+    this.disconnectedReplayEvents = [];
+  }
+
+  drainDisconnectedReplayEvents(): ServerEvent[] {
+    this.bufferDisconnectedEvents = false;
+    const drained = this.disconnectedReplayEvents;
+    this.disconnectedReplayEvents = [];
+    return drained;
   }
 
   reset() {

@@ -31,11 +31,11 @@ Rules:
 - Mark tasks completed immediately when done.
 - Include a final verification step for non-trivial work.`,
   inputSchema: todoWriteInputSchema,
-  execute: async ({ todos }) => {
+  execute: async ({ todos }: z.infer<typeof todoWriteInputSchema>) => {
     currentTodos = todos;
     for (const fn of listeners) fn(todos);
 
-    const summary = todos.map((t) => `[${t.status}] ${t.content}`).join("\n");
+    const summary = todos.map((todo: TodoItem) => `[${todo.status}] ${todo.content}`).join("\n");
     return `Todo list updated:\n${summary}`;
   },
 });
@@ -44,7 +44,7 @@ export function createTodoWriteTool(ctx: ToolContext) {
   return defineTool({
     description: todoWrite.description,
     inputSchema: todoWriteInputSchema,
-    execute: async ({ todos }) => {
+    execute: async ({ todos }: z.infer<typeof todoWriteInputSchema>) => {
       ctx.log(`tool> todoWrite ${JSON.stringify({ count: todos.length })}`);
       ctx.updateTodos?.(todos);
       // Keep global store updated too, so existing CLI renderers still work.

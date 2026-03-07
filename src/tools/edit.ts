@@ -17,7 +17,17 @@ export function createEditTool(ctx: ToolContext) {
       newString: z.string().describe("Replacement text"),
       replaceAll: z.boolean().optional().default(false).describe("Replace all occurrences"),
     }),
-    execute: async ({ filePath, oldString, newString, replaceAll }) => {
+    execute: async ({
+      filePath,
+      oldString,
+      newString,
+      replaceAll,
+    }: {
+      filePath: string;
+      oldString: string;
+      newString: string;
+      replaceAll?: boolean;
+    }) => {
       ctx.log(`tool> edit ${JSON.stringify({ filePath, replaceAll })}`);
       if (oldString === "") throw new Error("oldString cannot be empty");
 

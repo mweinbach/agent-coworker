@@ -1,4 +1,6 @@
 import type { ComponentProps, HTMLAttributes } from "react";
+import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
+import type { PluggableList } from "unified";
 
 import { memo } from "react";
 import {
@@ -51,14 +53,14 @@ export function MessageContent({ className, ...props }: MessageContentProps) {
 
 const streamdownPlugins = { cjk, code, math, mermaid };
 const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
-const desktopSanitizeSchema = {
+const desktopSanitizeSchema: RehypeSanitizeOptions = {
   ...defaultSchema,
   protocols: {
     ...defaultSchema.protocols,
     href: [...(defaultSchema.protocols?.href ?? []), "tel", "cowork-file"],
   },
 };
-const defaultDesktopRehypePlugins = [
+const defaultDesktopRehypePlugins: PluggableList = [
   defaultRehypePlugins.raw,
   [rehypeSanitize, desktopSanitizeSchema],
   defaultRehypePlugins.harden,

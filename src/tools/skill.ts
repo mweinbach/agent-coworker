@@ -64,7 +64,7 @@ export function createSkillTool(ctx: ToolContext) {
     inputSchema: z.object({
       skillName: z.string().describe(paramDesc),
     }),
-    execute: async ({ skillName }) => {
+    execute: async ({ skillName }: { skillName: string }) => {
       ctx.log(`tool> skill ${JSON.stringify({ skillName })}`);
       const discovered = await discoverSkills(ctx.config.skillsDirs);
       const selected = discovered.find((s) => s.enabled && s.name === skillName);

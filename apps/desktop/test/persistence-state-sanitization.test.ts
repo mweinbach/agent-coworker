@@ -4,10 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 let userDataDir = "";
+let appDataDir = "";
 
 mock.module("electron", () => ({
   app: {
-    getPath: () => userDataDir,
+    getPath: (name: string) => (name === "appData" ? appDataDir : userDataDir),
   },
 }));
 
@@ -17,15 +18,18 @@ const TS = "2024-01-01T00:00:00.000Z";
 
 describe("desktop persistence state validation", () => {
   beforeEach(async () => {
-    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-state-"));
+    appDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-appdata-"));
+    userDataDir = path.join(appDataDir, "Cowork");
+    await fs.mkdir(userDataDir, { recursive: true });
   });
 
   afterEach(async () => {
-    if (!userDataDir) {
+    if (!appDataDir) {
       return;
     }
-    await fs.rm(userDataDir, { recursive: true, force: true });
+    await fs.rm(appDataDir, { recursive: true, force: true });
     userDataDir = "";
+    appDataDir = "";
   });
 
   test("saveState skips invalid workspaces and orphan threads instead of failing", async () => {
@@ -171,5 +175,65 @@ describe("desktop persistence state validation", () => {
     expect(transcript).toHaveLength(2);
     expect(transcript[0]?.direction).toBe("server");
     expect(transcript[1]?.direction).toBe("client");
+  });
+
+  test("loadState migrates legacy desktop user data into Cowork on first access", async () => {
+    const persistence = new PersistenceService();
+    const legacyDir = path.join(appDataDir, "desktop");
+    const legacyWorkspace = path.join(legacyDir, "workspace-from-legacy");
+    const legacyTranscriptDir = path.join(legacyDir, "transcripts");
+    await fs.mkdir(legacyWorkspace, { recursive: true });
+    await fs.mkdir(legacyTranscriptDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(legacyDir, "state.json"),
+      JSON.stringify(
+        {
+          version: 2,
+          workspaces: [
+            {
+              id: "ws_legacy",
+              name: "Legacy workspace",
+              path: legacyWorkspace,
+              createdAt: TS,
+              lastOpenedAt: TS,
+              defaultEnableMcp: true,
+              yolo: false,
+            },
+          ],
+          threads: [
+            {
+              id: "thread_legacy",
+              workspaceId: "ws_legacy",
+              title: "Legacy thread",
+              createdAt: TS,
+              lastMessageAt: TS,
+              status: "active",
+              sessionId: null,
+              lastEventSeq: 0,
+            },
+          ],
+          developerMode: false,
+          showHiddenFiles: false,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(legacyTranscriptDir, "thread_legacy.jsonl"),
+      `${JSON.stringify({ ts: TS, threadId: "thread_legacy", direction: "server", payload: { type: "log" } })}\n`,
+      "utf8",
+    );
+
+    const loaded = await persistence.loadState();
+    const transcript = await persistence.readTranscript("thread_legacy");
+
+    expect(loaded.workspaces).toHaveLength(1);
+    expect(loaded.workspaces[0]?.id).toBe("ws_legacy");
+    expect(transcript).toHaveLength(1);
+    expect(await fs.readFile(path.join(userDataDir, "state.json"), "utf8")).toContain("\"ws_legacy\"");
+    expect(await fs.readFile(path.join(userDataDir, "transcripts", "thread_legacy.jsonl"), "utf8")).toContain("\"thread_legacy\"");
   });
 });

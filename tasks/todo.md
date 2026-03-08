@@ -119,6 +119,29 @@
 - `bun run typecheck` -> pass
 - `bun test` -> pass (`1730 pass, 2 skip, 0 fail`)
 
+# Task: Stabilize packaged Windows desktop server troubleshooting
+
+## Plan
+- [x] Reproduce the packaged desktop startup path and verify whether the bundled sidecar actually fails or whether diagnostics/state are misleading.
+- [x] Fix the packaged Electron app identity so Windows uses a stable `Cowork` user-data folder, and migrate legacy persisted desktop state from `%APPDATA%\desktop`.
+- [x] Persist packaged sidecar startup diagnostics to a user-data log file so installed-app server failures can be inspected after the fact.
+- [x] Run focused desktop tests plus the required repo verification commands, then record the outcome below.
+
+## Review
+- Reproduced the packaged Windows startup path with `apps/desktop/release/win-unpacked/Cowork.exe` and verified that the bundled sidecar launches correctly from `resources/binaries` and listens on an ephemeral localhost port. In other words, current HEAD does not have a blanket “desktop sidecar is missing/broken” packaging bug.
+- Found a concrete packaged-Windows identity bug instead: Electron was using the package name `desktop` for `userData`, so the installed app was persisting state under `%APPDATA%\desktop` rather than `%APPDATA%\Cowork`. That makes troubleshooting confusing, can mix packaged state with older/dev runs, and hides the actual persisted workspace/session state in an unexpected folder.
+- Updated `C:\Users\maxw6\Projects\agent-coworker\apps\desktop\electron\main.ts` to explicitly set the Electron app name to `Cowork`, and updated `C:\Users\maxw6\Projects\agent-coworker\apps\desktop\electron\services\persistence.ts` to migrate legacy `state.json`, `transcripts/`, and `logs/server.log` forward from `%APPDATA%\desktop` into the new `%APPDATA%\Cowork` location on first access.
+- Added persistent sidecar startup diagnostics in `C:\Users\maxw6\Projects\agent-coworker\apps\desktop\electron\services\serverManager.ts`. Packaged server start attempts, stderr summaries, retries, success, and failure details now append to `%APPDATA%\Cowork\logs\server.log`, which gives installed Windows users an actual file to inspect when they hit “server unavailable” errors.
+- Expanded desktop regression coverage in `C:\Users\maxw6\Projects\agent-coworker\apps\desktop\test\persistence-state-sanitization.test.ts`, `C:\Users\maxw6\Projects\agent-coworker\apps\desktop\test\persistence-permissions.test.ts`, and `C:\Users\maxw6\Projects\agent-coworker\apps\desktop\test\server-manager.test.ts`. Also fixed `C:\Users\maxw6\Projects\agent-coworker\apps\desktop\test\sidecar.test.ts`, which had Windows-brittle mock paths and was failing independently of runtime behavior.
+
+### Verification
+- `~/.bun/bin/bun test apps/desktop/test/persistence-state-sanitization.test.ts apps/desktop/test/persistence-permissions.test.ts apps/desktop/test/server-manager.test.ts apps/desktop/test/sidecar.test.ts` -> pass (`20 pass, 0 fail`)
+- `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`154 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck:desktop` -> pass
+- `~/.bun/bin/bun run typecheck` -> pass
+- `git diff --check` -> pass (only line-ending warnings from Git on Windows)
+- `~/.bun/bin/bun test` -> still fails outside this change with existing unrelated suites (`CLI REPL websocket send failures`, `webSearch tool`, `memory tool`)
+
 # Task: Move desktop Exa Search API settings into their own section
 
 ## Plan

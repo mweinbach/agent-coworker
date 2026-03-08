@@ -13,6 +13,7 @@ import { findPackagedSidecarBinary } from "./sidecar";
 const SERVER_STARTUP_TIMEOUT_MS = 15_000;
 const STDERR_TAIL_LIMIT = 16_384;
 const WINDOWS_SOURCE_START_ATTEMPTS = 2;
+const SERVER_LOG_FILE_NAME = "server.log";
 
 type ServerHandle = {
   child: ServerChildProcess;
@@ -272,6 +273,24 @@ function toErrorMessage(error: unknown): string {
   return String(error);
 }
 
+function getServerLogPath(): string {
+  return path.join(app.getPath("userData"), "logs", SERVER_LOG_FILE_NAME);
+}
+
+function logServerManagerEvent(message: string): void {
+  try {
+    const logPath = getServerLogPath();
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${message}\n`, "utf8");
+  } catch {
+    // Best effort diagnostics only.
+  }
+}
+
+function summarizeLogChunk(chunk: string): string {
+  return chunk.replace(/\s+/g, " ").trim().slice(0, 1000);
+}
+
 export class ServerManager {
   private readonly servers = new Map<string, ServerHandle>();
 
@@ -300,6 +319,10 @@ export class ServerManager {
       throw new Error(`Bundled dist directory not found: ${builtInDir}`);
     }
 
+    logServerManagerEvent(
+      `workspace=${workspaceId} start requested mode=${useSource ? "source" : "packaged"} workspacePath=${workspacePath}`
+    );
+
     const attemptCount = useSource && process.platform === "win32" ? WINDOWS_SOURCE_START_ATTEMPTS : 1;
     let previousError: unknown = null;
 
@@ -324,6 +347,10 @@ export class ServerManager {
             },
           });
 
+      logServerManagerEvent(
+        `workspace=${workspaceId} attempt=${attempt}/${attemptCount} spawn=${useSource ? "bun" : sidecar!}`
+      );
+
       let stderrTail = "";
       child.stderr.on("data", (chunk) => {
         const text = chunk.toString();
@@ -332,11 +359,16 @@ export class ServerManager {
           stderrTail = stderrTail.slice(-STDERR_TAIL_LIMIT);
         }
         process.stderr.write(`[cowork-server] ${text}`);
+        const summary = summarizeLogChunk(text);
+        if (summary) {
+          logServerManagerEvent(`workspace=${workspaceId} stderr=${summary}`);
+        }
       });
 
       try {
         const listening = await waitForServerListening(child);
         const url = listening.url;
+        logServerManagerEvent(`workspace=${workspaceId} listening url=${url}`);
 
         let cleaned = false;
         const cleanupOnce = () => {
@@ -370,6 +402,9 @@ export class ServerManager {
 
         if (shouldRetry) {
           previousError = error;
+          logServerManagerEvent(
+            `workspace=${workspaceId} retrying after Bun crash attempt=${attempt} error=${toErrorMessage(error)}`
+          );
           process.stderr.write(
             "[cowork-server] Bun crashed during startup; retrying with async transpiler disabled.\n"
           );
@@ -377,12 +412,18 @@ export class ServerManager {
         }
 
         if (isLikelyBunSegfault(stderrTail)) {
+          logServerManagerEvent(
+            `workspace=${workspaceId} bun_crash error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`
+          );
           throw new Error(
             `Cowork server crashed inside Bun while starting: ${toErrorMessage(error)}. ` +
               "Try upgrading Bun and retrying."
           );
         }
 
+        logServerManagerEvent(
+          `workspace=${workspaceId} start_failed error=${toErrorMessage(error)} stderrTail=${summarizeLogChunk(stderrTail)}`
+        );
         throw error;
       }
     }
@@ -418,7 +459,10 @@ export const __internal = {
   buildServerEnv,
   buildSourceEnvForAttempt,
   findSidecarBinary,
+  getServerLogPath,
   isLikelyBunSegfault,
+  logServerManagerEvent,
   resolveSourceStartup,
+  summarizeLogChunk,
   waitForServerListening,
 };

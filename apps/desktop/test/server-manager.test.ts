@@ -5,9 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 
+let userDataDir = process.cwd();
+
 mock.module("electron", () => ({
   app: {
-    getPath: () => process.cwd(),
+    getPath: (name: string) => (name === "userData" ? userDataDir : process.cwd()),
     getAppPath: () => process.cwd(),
     isPackaged: false,
   },
@@ -104,5 +106,21 @@ describe("desktop server manager bun crash detection", () => {
     expect(__internal.isLikelyBunSegfault("panic(main thread): Segmentation fault at address 0x1")).toBe(true);
     expect(__internal.isLikelyBunSegfault("oh no: Bun has crashed.")).toBe(true);
     expect(__internal.isLikelyBunSegfault("normal stderr line")).toBe(false);
+  });
+
+  test("writes persistent server-manager diagnostics under userData logs", async () => {
+    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-logs-"));
+
+    try {
+      __internal.logServerManagerEvent("workspace=ws_1 start_failed error=boom");
+      const logPath = __internal.getServerLogPath();
+      const contents = await fs.readFile(logPath, "utf8");
+
+      expect(logPath).toBe(path.join(userDataDir, "logs", "server.log"));
+      expect(contents).toContain("workspace=ws_1 start_failed error=boom");
+    } finally {
+      await fs.rm(userDataDir, { recursive: true, force: true });
+      userDataDir = process.cwd();
+    }
   });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import path from "node:path";
 
 import {
   buildSidecarManifest,
@@ -38,15 +39,15 @@ describe("desktop sidecar packaging helpers", () => {
   });
 
   test("findPackagedSidecarBinary follows the packaged manifest", () => {
-    const dir = "/bundle/Resources/binaries";
-    const manifestPath = `${dir}/${SIDECAR_MANIFEST_NAME}`;
+    const dir = path.join(path.sep, "bundle", "Resources", "binaries");
+    const manifestPath = path.join(dir, SIDECAR_MANIFEST_NAME);
     const manifest = {
       filename: "cowork-server-aarch64-apple-darwin",
       targetTriple: "aarch64-apple-darwin",
       platform: "darwin",
       arch: "arm64",
     };
-    const binaryPath = `${dir}/${manifest.filename}`;
+    const binaryPath = path.join(dir, manifest.filename);
 
     const binary = findPackagedSidecarBinary([dir], {
       platform: "darwin",
@@ -65,8 +66,8 @@ describe("desktop sidecar packaging helpers", () => {
   });
 
   test("findPackagedSidecarBinary falls back to the expected exact filename", () => {
-    const dir = "/bundle/Resources/binaries";
-    const binaryPath = `${dir}/cowork-server-aarch64-apple-darwin`;
+    const dir = path.join(path.sep, "bundle", "Resources", "binaries");
+    const binaryPath = path.join(dir, "cowork-server-aarch64-apple-darwin");
 
     const binary = findPackagedSidecarBinary([dir], {
       platform: "darwin",
@@ -82,7 +83,7 @@ describe("desktop sidecar packaging helpers", () => {
   });
 
   test("findPackagedSidecarBinary reports stale sidecar candidates clearly", () => {
-    const dir = "/bundle/Resources/binaries";
+    const dir = path.join(path.sep, "bundle", "Resources", "binaries");
 
     expect(() =>
       findPackagedSidecarBinary([dir], {

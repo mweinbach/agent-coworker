@@ -238,9 +238,14 @@ function isNotFound(error: unknown): boolean {
 
 export class PersistenceService {
   private readonly stateLock = new AsyncLock();
+  private storageReady: Promise<void> | null = null;
 
   private get appDataDir(): string {
     return app.getPath("userData");
+  }
+
+  private get legacyAppDataDir(): string {
+    return path.join(app.getPath("appData"), "desktop");
   }
 
   private get stateFilePath(): string {
@@ -258,7 +263,83 @@ export class PersistenceService {
     return file;
   }
 
+  private async ensureStorageReady(): Promise<void> {
+    if (!this.storageReady) {
+      this.storageReady = this.migrateLegacyUserDataIfNeeded();
+    }
+    await this.storageReady;
+  }
+
+  private async migrateLegacyUserDataIfNeeded(): Promise<void> {
+    const currentDir = path.resolve(this.appDataDir);
+    const legacyDir = path.resolve(this.legacyAppDataDir);
+    if (currentDir === legacyDir) {
+      return;
+    }
+
+    let legacyStat: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      legacyStat = await fs.stat(legacyDir);
+    } catch (error) {
+      if (isNotFound(error)) {
+        return;
+      }
+      throw new Error(`Failed to inspect legacy desktop data: ${String(error)}`);
+    }
+
+    if (!legacyStat.isDirectory()) {
+      return;
+    }
+
+    await fs.mkdir(currentDir, { recursive: true, mode: PRIVATE_DIR_MODE });
+
+    const migrateEntry = async (name: string) => {
+      const from = path.join(legacyDir, name);
+      const to = path.join(currentDir, name);
+
+      try {
+        await fs.stat(from);
+      } catch (error) {
+        if (isNotFound(error)) {
+          return;
+        }
+        throw error;
+      }
+
+      try {
+        await fs.stat(to);
+        return;
+      } catch (error) {
+        if (!isNotFound(error)) {
+          throw error;
+        }
+      }
+
+      try {
+        await fs.rename(from, to);
+        return;
+      } catch {
+        // Fall back to copy on cross-device or partially-created target failures.
+      }
+
+      const anyFs = fs as typeof fs & {
+        cp?: (src: string, dest: string, options?: { recursive?: boolean; force?: boolean }) => Promise<void>;
+      };
+
+      if (typeof anyFs.cp === "function") {
+        await anyFs.cp(from, to, { recursive: true, force: false });
+      } else {
+        await copyLegacyEntry(from, to);
+      }
+    };
+
+    await migrateEntry("state.json");
+    await migrateEntry("transcripts");
+    await migrateEntry(path.join("logs", "server.log"));
+  }
+
   async loadState(): Promise<PersistedState> {
+    await this.ensureStorageReady();
     return await this.stateLock.run(async () => {
       try {
         const raw = await fs.readFile(this.stateFilePath, "utf8");
@@ -279,6 +360,7 @@ export class PersistenceService {
   }
 
   async saveState(state: PersistedState): Promise<void> {
+    await this.ensureStorageReady();
     await this.stateLock.run(async () => {
       await fs.mkdir(this.appDataDir, { recursive: true, mode: PRIVATE_DIR_MODE });
 
@@ -293,6 +375,7 @@ export class PersistenceService {
   }
 
   async readTranscript(threadId: string): Promise<TranscriptEvent[]> {
+    await this.ensureStorageReady();
     const filePath = this.transcriptFilePath(threadId);
 
     let raw: string;
@@ -338,6 +421,7 @@ export class PersistenceService {
       return;
     }
 
+    await this.ensureStorageReady();
     await fs.mkdir(this.transcriptsDir, { recursive: true, mode: PRIVATE_DIR_MODE });
 
     const grouped = new Map<string, TranscriptBatchInput[]>();
@@ -363,6 +447,7 @@ export class PersistenceService {
   }
 
   async deleteTranscript(threadId: string): Promise<void> {
+    await this.ensureStorageReady();
     const filePath = this.transcriptFilePath(threadId);
 
     try {
@@ -374,4 +459,19 @@ export class PersistenceService {
       throw new Error(`Failed to delete transcript: ${String(error)}`);
     }
   }
+}
+
+async function copyLegacyEntry(from: string, to: string): Promise<void> {
+  const stat = await fs.stat(from);
+  if (stat.isDirectory()) {
+    await fs.mkdir(to, { recursive: true, mode: PRIVATE_DIR_MODE });
+    const entries = await fs.readdir(from, { withFileTypes: true });
+    for (const entry of entries) {
+      await copyLegacyEntry(path.join(from, entry.name), path.join(to, entry.name));
+    }
+    return;
+  }
+
+  await fs.mkdir(path.dirname(to), { recursive: true, mode: PRIVATE_DIR_MODE });
+  await fs.copyFile(from, to);
 }

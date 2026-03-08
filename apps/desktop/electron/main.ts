@@ -39,6 +39,8 @@ let unregisterIpc = () => {};
 let unregisterAppearanceListener = () => {};
 let mainWindow: BrowserWindow | null = null;
 
+app.setName("Cowork");
+
 if (!app.isPackaged && process.env.COWORK_ELECTRON_REMOTE_DEBUG === "1") {
   const port = process.env.COWORK_ELECTRON_REMOTE_DEBUG_PORT?.trim() || "9222";
   app.commandLine.appendSwitch("remote-debugging-port", port);

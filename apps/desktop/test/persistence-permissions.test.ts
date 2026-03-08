@@ -4,10 +4,11 @@ import os from "node:os";
 import path from "node:path";
 
 let userDataDir = "";
+let appDataDir = "";
 
 mock.module("electron", () => ({
   app: {
-    getPath: () => userDataDir,
+    getPath: (name: string) => (name === "appData" ? appDataDir : userDataDir),
   },
 }));
 
@@ -19,15 +20,18 @@ function unixMode(mode: number): number {
 
 describe("desktop persistence permissions", () => {
   beforeEach(async () => {
-    userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-persist-"));
+    appDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-persist-"));
+    userDataDir = path.join(appDataDir, "Cowork");
+    await fs.mkdir(userDataDir, { recursive: true });
   });
 
   afterEach(async () => {
-    if (!userDataDir) {
+    if (!appDataDir) {
       return;
     }
-    await fs.rm(userDataDir, { recursive: true, force: true });
+    await fs.rm(appDataDir, { recursive: true, force: true });
     userDataDir = "";
+    appDataDir = "";
   });
 
   test("writes state file with private permissions", async () => {

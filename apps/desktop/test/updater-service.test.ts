@@ -58,7 +58,7 @@ describe("desktop updater service", () => {
   test("stays disabled for unpackaged builds", async () => {
     const updater = new FakeUpdater();
     const service = new DesktopUpdaterService({
-      currentVersion: "0.1.1",
+      currentVersion: "0.1.2",
       isPackaged: false,
       updater,
     });
@@ -73,7 +73,7 @@ describe("desktop updater service", () => {
     const updater = new FakeUpdater();
     const states: string[] = [];
     const service = new DesktopUpdaterService({
-      currentVersion: "0.1.1",
+      currentVersion: "0.1.2",
       isPackaged: true,
       updater,
       onStateChange: (state) => {
@@ -115,7 +115,7 @@ describe("desktop updater service", () => {
       throw new Error("network down");
     };
     const service = new DesktopUpdaterService({
-      currentVersion: "0.1.1",
+      currentVersion: "0.1.2",
       isPackaged: true,
       updater,
       now: () => "2026-03-07T12:00:00.000Z",

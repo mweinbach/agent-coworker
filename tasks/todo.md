@@ -1,3 +1,20 @@
+# Task: Ship 0.1.2 to replace the broken 0.1.1 desktop release
+
+## Plan
+- [x] Bump the repo and desktop release versions to `0.1.2`, keeping the updater hotfix commit as the release base.
+- [x] Rerun the release validation stack (`typecheck`, desktop tests, full tests, packaged desktop build) against `0.1.2`.
+- [x] Push the release commit, tag `v0.1.2`, and publish release notes that explicitly acknowledge the `0.1.1` updater import regression and the fix.
+
+## Review
+- Bumped `/Users/mweinbach/Projects/agent-coworker/package.json` and `/Users/mweinbach/Projects/agent-coworker/apps/desktop/package.json` to `0.1.2`, and updated the desktop tests that assert the visible current version in updater-facing UI/service state.
+- Kept the hotfix release base at `26896b2 Fix desktop updater module interop`, which is the commit that corrected the packaged Electron main-process `electron-updater` CommonJS/ESM interop failure introduced in `0.1.1`.
+- Verification before tagging:
+  - `bun run typecheck` -> pass
+  - `bun test --cwd apps/desktop` -> pass (`165 pass, 0 fail`)
+  - `bun test` -> pass (`1749 pass, 2 skip, 0 fail`)
+  - `bun run desktop:build -- --publish never` -> pass; generated `apps/desktop/release/Cowork-0.1.2-mac-arm64.zip`, `apps/desktop/release/Cowork-0.1.2-mac-arm64.dmg`, blockmaps, and refreshed updater manifests
+- Release-note intent for `v0.1.2`: explicitly state that `v0.1.1` was broken because the updater rollout imported `electron-updater` incorrectly in the packaged Electron main process, that this was my release regression, and that `0.1.2` replaces it with the verified interop fix.
+
 # Task: Fix packaged desktop auto-updater startup after the 0.1.1 release
 
 ## Plan

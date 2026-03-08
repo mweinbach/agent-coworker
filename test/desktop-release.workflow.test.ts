@@ -11,7 +11,7 @@ describe("desktop release workflow", () => {
       /- name: Build macOS desktop artifacts[\s\S]*?CSC_LINK: \$\{\{ secrets\.CSC_LINK \}\}[\s\S]*?CSC_KEY_PASSWORD: \$\{\{ secrets\.CSC_KEY_PASSWORD \}\}/,
     );
     expect(workflow).toMatch(
-      /- name: Build Windows desktop artifacts[\s\S]*?CSC_LINK: \$\{\{ secrets\.WIN_CSC_LINK \}\}[\s\S]*?CSC_KEY_PASSWORD: \$\{\{ secrets\.WIN_CSC_KEY_PASSWORD \}\}/,
+      /- name: Build Windows desktop artifacts[\s\S]*?CSC_LINK: \$\{\{ env\.WIN_CSC_LINK \}\}[\s\S]*?CSC_KEY_PASSWORD: \$\{\{ env\.WIN_CSC_KEY_PASSWORD \}\}/,
     );
     expect(workflow).not.toMatch(
       /- name: Build Windows desktop artifacts[\s\S]*?CSC_LINK: \$\{\{ secrets\.CSC_LINK \}\}/,
@@ -20,7 +20,10 @@ describe("desktop release workflow", () => {
 
   test("only uploads Windows release assets when Windows signing secrets exist", () => {
     expect(workflow).toMatch(
-      /- name: Upload Windows desktop artifacts[\s\S]*?if: \$\{\{ runner\.os == 'Windows' && secrets\.WIN_CSC_LINK != '' \}\}[\s\S]*?apps\/desktop\/release\/latest\.yml/,
+      /env:[\s\S]*?WIN_CSC_LINK: \$\{\{ secrets\.WIN_CSC_LINK \}\}[\s\S]*?WIN_CSC_KEY_PASSWORD: \$\{\{ secrets\.WIN_CSC_KEY_PASSWORD \}\}/,
+    );
+    expect(workflow).toMatch(
+      /- name: Upload Windows desktop artifacts[\s\S]*?if: \$\{\{ runner\.os == 'Windows' && env\.WIN_CSC_LINK != '' && env\.WIN_CSC_KEY_PASSWORD != '' \}\}[\s\S]*?apps\/desktop\/release\/latest\.yml/,
     );
     expect(workflow).toContain("- name: Skip unsigned Windows release upload");
     expect(workflow).toContain("Skipping Windows release asset upload so auto-update metadata is never published for an unsigned build.");

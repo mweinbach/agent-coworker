@@ -43,6 +43,9 @@ jobs:
     needs: validate
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
     strategy:
       fail-fast: false
       matrix:
@@ -140,8 +143,8 @@ jobs:
       - name: Build Windows desktop artifacts
         if: ${{ runner.os == 'Windows' }}
         env:
-          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          CSC_LINK: ${{ env.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ env.WIN_CSC_KEY_PASSWORD }}
         run: bun run desktop:build -- --publish never
 
       - name: Verify macOS signing and notarization
@@ -169,7 +172,7 @@ jobs:
           spctl -a -vv --type exec "$app_path"
 
       - name: Verify Windows signing
-        if: ${{ runner.os == 'Windows' && secrets.WIN_CSC_LINK != '' }}
+        if: ${{ runner.os == 'Windows' && env.WIN_CSC_LINK != '' && env.WIN_CSC_KEY_PASSWORD != '' }}
         shell: pwsh
         run: |
           $installer = Get-ChildItem apps/desktop/release/*.exe | Select-Object -First 1
@@ -186,7 +189,7 @@ jobs:
           }
 
       - name: Skip unsigned Windows release upload
-        if: ${{ runner.os == 'Windows' && secrets.WIN_CSC_LINK == '' }}
+        if: ${{ runner.os == 'Windows' && (env.WIN_CSC_LINK == '' || env.WIN_CSC_KEY_PASSWORD == '') }}
         shell: pwsh
         run: |
           Write-Host "WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD not configured; Windows packaging smoke-tested only."
@@ -206,7 +209,7 @@ jobs:
           retention-days: 14
 
       - name: Upload Windows desktop artifacts
-        if: ${{ runner.os == 'Windows' && secrets.WIN_CSC_LINK != '' }}
+        if: ${{ runner.os == 'Windows' && env.WIN_CSC_LINK != '' && env.WIN_CSC_KEY_PASSWORD != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}

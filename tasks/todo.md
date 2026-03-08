@@ -1,16 +1,19 @@
-# Task: Ship desktop hotfix release 0.1.4
+# Task: Ship desktop hotfix release 0.1.5
 
 ## Plan
-- [x] Bump the repo and desktop release versions from `0.1.3` to `0.1.4`, keeping the Windows updater-signing workflow fix in the release payload.
-- [x] Restore desktop typecheck health if needed, rerun the release-focused validation stack, and confirm the packaged desktop artifacts reflect `0.1.4`.
-- [ ] Commit the hotfix, tag `v0.1.4`, push to `origin/main`, and note any remaining release-management follow-up that cannot be completed from this machine.
+- [x] Bump the repo and desktop release versions from `0.1.4` to `0.1.5`, keeping the Windows updater-signing workflow fix in the release payload.
+- [x] Restore desktop typecheck health if needed, rerun the release-focused validation stack, and confirm the packaged desktop artifacts reflect `0.1.5`.
+- [x] Fix the GitHub Actions schema issue in the release workflow so Windows upload gating does not use disallowed `secrets.*` expressions in `if:` conditions.
+- [ ] Commit the hotfix, tag `v0.1.5`, push to `origin/main`, and note any remaining release-management follow-up that cannot be completed from this machine.
 
 ## Review
-- Bumped `/Users/mweinbach/Projects/agent-coworker/package.json` and `/Users/mweinbach/Projects/agent-coworker/apps/desktop/package.json` to `0.1.4`, plus the desktop updater/UI tests that assert the visible version string.
+- Initial attempt: pushed `v0.1.4`, which exposed that GitHub Actions rejects `secrets.*` inside step-level `if:` expressions. That meant the tag existed but the desktop release workflow file was considered invalid and did not run successfully from that tag.
+- Fixed `.github/workflows/desktop-release.yml` to promote the Windows signing secrets into job-level env and gate the Windows signing/upload steps on `env.WIN_CSC_LINK` / `env.WIN_CSC_KEY_PASSWORD` instead of `secrets.*` inside `if:` expressions.
+- Bumped `/Users/mweinbach/Projects/agent-coworker/package.json` and `/Users/mweinbach/Projects/agent-coworker/apps/desktop/package.json` to `0.1.5`, plus the desktop updater/UI tests that assert the visible version string.
 - Added `apps/desktop/src/electron-updater.d.ts` with the small subset of `electron-updater` types used by `apps/desktop/electron/services/updater.ts`, which restored `bun run typecheck` in this checkout without changing runtime behavior.
 - Verified the desktop release workflow hotfix still holds: macOS uses the Apple Developer ID `CSC_*` secrets, Windows uses only `WIN_CSC_*`, unsigned Windows builds do not upload release metadata, and the publish job now uploads exactly the assets that were downloaded.
 - Local packaging initially failed because a stale `cowork-server-x86_64-pc-windows-msvc.exe` process was running from `apps/desktop/resources/binaries` and locking the sidecar output directory. After stopping that stale sidecar process, `bun run desktop:build -- --publish never` completed successfully.
-- Local packaging produced `apps/desktop/release/Cowork-0.1.4-win-x64.exe`, `apps/desktop/release/Cowork-0.1.4-win-x64.exe.blockmap`, and refreshed `apps/desktop/release/latest.yml` with `version: 0.1.4`.
+- Local packaging produced `apps/desktop/release/Cowork-0.1.5-win-x64.exe`, `apps/desktop/release/Cowork-0.1.5-win-x64.exe.blockmap`, and refreshed `apps/desktop/release/latest.yml` with `version: 0.1.5`.
 - Verification:
   - `~/.bun/bin/bun test test/desktop-release.workflow.test.ts` -> pass (`2 pass, 0 fail`)
   - `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`167 pass, 0 fail`)

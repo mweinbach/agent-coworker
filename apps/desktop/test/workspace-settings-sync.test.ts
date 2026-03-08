@@ -339,7 +339,7 @@ describe("workspace settings sync", () => {
     expect(runtime?.controlSessionConfig?.subAgentModel).toBe("gpt-5-mini");
   });
 
-  test("control session_config merges editable providerOptions into workspace defaults", async () => {
+  test("control session_config replaces editable providerOptions in workspace defaults", async () => {
     useAppStore.setState((state) => ({
       ...state,
       workspaces: state.workspaces.map((workspace) =>
@@ -350,6 +350,10 @@ describe("workspace settings sync", () => {
                 openai: {
                   reasoningEffort: "high",
                   reasoningSummary: "detailed",
+                },
+                "codex-cli": {
+                  reasoningEffort: "low",
+                  reasoningSummary: "auto",
                 },
               },
             }
@@ -385,7 +389,6 @@ describe("workspace settings sync", () => {
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(workspace?.providerOptions).toEqual({
       openai: {
-        reasoningEffort: "high",
         reasoningSummary: "concise",
         textVerbosity: "high",
       },
@@ -404,6 +407,46 @@ describe("workspace settings sync", () => {
         reasoningSummary: "auto",
       },
     });
+  });
+
+  test("control session_config clears stale editable providerOptions when snapshot omits them", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              providerOptions: {
+                openai: {
+                  reasoningEffort: "high",
+                  reasoningSummary: "detailed",
+                  textVerbosity: "medium",
+                },
+              },
+            }
+          : workspace,
+      ),
+    }));
+
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+
+    controlSocket.emit({
+      type: "session_config",
+      sessionId: "control-session",
+      config: {
+        yolo: false,
+        observabilityEnabled: true,
+        subAgentModel: "gpt-5.4-mini",
+        maxSteps: 75,
+      },
+    });
+
+    const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
+    const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
+    expect(workspace?.providerOptions).toBeUndefined();
+    expect((runtime?.controlSessionConfig as any)?.providerOptions).toBeUndefined();
   });
 
   test("applyWorkspaceDefaultsToThread sends model, session config, and mcp toggle", async () => {

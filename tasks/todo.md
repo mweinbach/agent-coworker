@@ -1,3 +1,17 @@
+# Task: Fix desktop control-session providerOptions snapshot sync
+
+## Plan
+- [x] Change desktop `session_config` handling so editable provider options replace the local snapshot instead of merge-only behavior.
+- [x] Add focused regression coverage for partial and missing `providerOptions` snapshots from the control session.
+- [x] Run the relevant desktop tests and record the verified outcome below.
+
+## Review
+- Updated `apps/desktop/src/app/store.helpers/controlSocket.ts` so `session_config` now treats editable `providerOptions` as the authoritative control-session snapshot. The desktop workspace record now replaces its OpenAI/Codex editable provider-options subset with the normalized event payload and clears stale local values when the snapshot omits them.
+- Updated `apps/desktop/test/workspace-settings-sync.test.ts` to lock the new semantics: partial `session_config.providerOptions` snapshots replace prior editable values instead of merging them, and a snapshot with no `providerOptions` clears previously stored overrides.
+- Verification:
+  - `bun test apps/desktop/test/workspace-settings-sync.test.ts` -> pass (`8 pass, 0 fail`)
+  - `bun run typecheck` -> pass
+
 # Task: Expose reasoning summary in OpenAI-compatible workspace controls
 
 ## Plan

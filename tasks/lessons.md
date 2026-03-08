@@ -19,3 +19,4 @@
 - For Codex auth bugs, verify the entire acquisition stack end to end; removing a broken OAuth link is not enough if `connect.ts` still uses a different custom flow than the PI-native Codex login the runtime expects.
 - For desktop auth regressions, clear stale `provider_auth_challenge` UI state when the live flow changes; an old cached challenge URL can keep surfacing a dead `Open link` even after the server-side OAuth path is fixed.
 - On Windows, never open OAuth URLs through `cmd /c start` without avoiding shell parsing; query-string `&` separators get split into separate commands and the browser receives a truncated auth URL.
+- For provider/model support assertions in reviews, verify current official docs before claiming a setting is invalid; local SDK typings and bundled adapters may lag behind current OpenAI model support.

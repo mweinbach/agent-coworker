@@ -1345,3 +1345,22 @@
 - `C:\Users\maxw6\.bun\bin\bun.exe test --cwd apps\desktop` -> pass (`171 pass, 0 fail`)
 - `CSC_IDENTITY_AUTO_DISCOVERY=false C:\Users\maxw6\.bun\bin\bun.exe run desktop:build -- --publish never` -> pass; produced `apps/desktop/release/Cowork-0.1.10-win-x64.exe`, `.blockmap`, updated `latest.yml`, and refreshed `win-unpacked`
 - Packaged sidecar launch with `COWORK_BUILTIN_DIR=C:\Users\maxw6\Projects\agent-coworker\apps\desktop\release\win-unpacked\resources\dist` and `COWORK_DESKTOP_BUNDLE=1` -> emitted `{"type":"server_listening","url":"ws://127.0.0.1:62693/ws","port":62693,"cwd":"C:\\Users\\maxw6\\Desktop\\Cowork"}`
+
+# Task: Allow unsigned Windows auto-update from GitHub Releases
+
+## Plan
+- [x] Inspect the current desktop updater flow and the release workflow gate that suppresses unsigned Windows update metadata.
+- [x] Update the Windows packaging/release config so unsigned releases still publish `latest.yml` and `.blockmap`.
+- [x] Verify the desktop build/test flow and confirm the unsigned release artifacts include the updater feed files.
+
+## Review
+- Bumped [package.json](/C:/Users/maxw6/Projects/agent-coworker/package.json) and [apps/desktop/package.json](/C:/Users/maxw6/Projects/agent-coworker/apps/desktop/package.json) from `0.1.10` to `0.1.11` so the unsigned auto-update path ships in a fresh desktop release.
+- Updated [electron-builder.yml](/C:/Users/maxw6/Projects/agent-coworker/apps/desktop/electron-builder.yml) to explicitly set `win.verifyUpdateCodeSignature: false`. The builder docs expose that switch for Windows update verification, and making it explicit keeps the unsigned-update behavior obvious instead of relying on implicit defaults.
+- Updated [desktop-release.yml](/C:/Users/maxw6/Projects/agent-coworker/.github/workflows/desktop-release.yml) so the Windows packaging job always stages the installer, `.blockmap`, and `latest.yml` into the release upload set. Signing is still used when `WIN_CSC_*` exists, but it is no longer a prerequisite for publishing Windows update metadata to GitHub Releases.
+- Updated [README.md](/C:/Users/maxw6/Projects/agent-coworker/apps/desktop/README.md) to document the new unsigned Windows path clearly: GitHub Releases can now act as the updater feed without Windows signing, but installs will still trigger SmartScreen friction and updates lose signature-based trust validation.
+
+### Verification
+- `C:\Users\maxw6\.bun\bin\bun.exe run typecheck` -> pass
+- `C:\Users\maxw6\.bun\bin\bun.exe test --cwd apps\desktop` -> pass (`171 pass, 0 fail`)
+- `CSC_IDENTITY_AUTO_DISCOVERY=false C:\Users\maxw6\.bun\bin\bun.exe run desktop:build -- --publish never` -> pass
+- Built unsigned Windows release artifacts include both [latest.yml](/C:/Users/maxw6/Projects/agent-coworker/apps/desktop/release/latest.yml) and [Cowork-0.1.11-win-x64.exe.blockmap](/C:/Users/maxw6/Projects/agent-coworker/apps/desktop/release/Cowork-0.1.11-win-x64.exe.blockmap), which are the files the workflow now stages even without `WIN_CSC_*`

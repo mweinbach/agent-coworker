@@ -91,7 +91,7 @@ Required for signed and notarized macOS releases:
 Windows release secrets:
 - `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` for Windows-only signing
 
-If `WIN_CSC_LINK` is not configured, the Windows CI job still publishes the unsigned `.exe` installer for manual downloads, but it intentionally skips `latest.yml` and `.blockmap` so GitHub Releases never advertise unsigned or mis-signed Windows auto-update metadata.
+If `WIN_CSC_LINK` is not configured, the Windows CI job still publishes `latest.yml` and the installer `.blockmap` alongside the unsigned `.exe`, so GitHub Releases remain usable as the Windows auto-update feed. This keeps updater-driven installs working without Windows signing, but new installs should still expect SmartScreen warnings and there is no signature-based trust check on the downloaded update payload.
 
 In GitHub Actions, store `APPLE_API_KEY` as the raw `.p8` file contents. The workflow writes it to a temporary file before packaging.
 The macOS job now fails before upload if those signing/notarization inputs are missing, and it validates the packaged `.app` with `codesign`, `stapler`, and `spctl`.

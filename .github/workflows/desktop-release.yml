@@ -214,24 +214,24 @@ jobs:
           }
 
           Copy-Item $installer.FullName -Destination $stagingDir
+          $blockmapPath = "$($installer.FullName).blockmap"
+
+          if (-not (Test-Path $blockmapPath)) {
+            throw "Expected blockmap alongside $($installer.Name)"
+          }
+
+          Copy-Item $blockmapPath -Destination $stagingDir
+
+          if (-not (Test-Path "apps/desktop/release/latest.yml")) {
+            throw "Expected latest.yml for the Windows release"
+          }
+
+          Copy-Item "apps/desktop/release/latest.yml" -Destination $stagingDir
 
           if ($env:WIN_CSC_LINK -and $env:WIN_CSC_KEY_PASSWORD) {
-            $blockmapPath = "$($installer.FullName).blockmap"
-
-            if (-not (Test-Path $blockmapPath)) {
-              throw "Expected blockmap alongside $($installer.Name)"
-            }
-
-            Copy-Item $blockmapPath -Destination $stagingDir
-
-            if (-not (Test-Path "apps/desktop/release/latest.yml")) {
-              throw "Expected latest.yml for a signed Windows release"
-            }
-
-            Copy-Item "apps/desktop/release/latest.yml" -Destination $stagingDir
+            Write-Host "Windows signing secrets configured; publishing signed installer plus updater metadata."
           } else {
-            Write-Host "WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD not configured; publishing the Windows installer only."
-            Write-Host "Skipping Windows latest.yml and blockmap upload so unsigned auto-update metadata is never published."
+            Write-Host "WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD not configured; publishing unsigned installer plus updater metadata."
           }
 
       - name: Upload macOS desktop artifacts

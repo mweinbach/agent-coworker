@@ -125,6 +125,7 @@ export async function runCliRepl(
   let sessionId: string | null = null;
   let lastKnownSessionId: string | null = initialResumeSessionId;
   let config: PublicConfig | null = null;
+  let selectedProvider: string | null = null;
   let disconnectNotified = false;
 
   let pendingAsk: AskPrompt[] = [];
@@ -230,6 +231,7 @@ export async function runCliRepl(
     socket = null;
     sessionId = null;
     config = null;
+    selectedProvider = null;
     busy = false;
     providerList = [...UI_PROVIDER_NAMES];
     providerAuthMethods = {};
@@ -269,6 +271,12 @@ export async function runCliRepl(
     },
     set config(value) {
       config = value;
+    },
+    get selectedProvider() {
+      return selectedProvider;
+    },
+    set selectedProvider(value) {
+      selectedProvider = value;
     },
     get busy() {
       return busy;
@@ -492,6 +500,10 @@ export async function runCliRepl(
           getSessionId: () => sessionId,
           getBusy: () => busy,
           getConfig: () => config,
+          getSelectedProvider: () => selectedProvider,
+          setSelectedProvider: (provider) => {
+            selectedProvider = provider;
+          },
           getProviderList: () => providerList,
           getProviderAuthMethods: () => providerAuthMethods,
           trySend: (msg) => {

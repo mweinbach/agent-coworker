@@ -23,6 +23,8 @@ export type ReplCommandContext = {
   getSessionId: () => string | null;
   getBusy: () => boolean;
   getConfig: () => PublicConfig | null;
+  getSelectedProvider: () => string | null;
+  setSelectedProvider: (provider: string | null) => void;
   getProviderList: () => string[];
   getProviderAuthMethods: () => Record<string, ProviderAuthMethod[]>;
   trySend: (msg: ClientMessage) => boolean;
@@ -36,7 +38,7 @@ export type ReplCommandContext = {
 };
 
 function currentOpenAiCompatibleProvider(ctx: ReplCommandContext): "openai" | "codex-cli" | null {
-  const provider = ctx.getConfig()?.provider;
+  const provider = ctx.getSelectedProvider() ?? ctx.getConfig()?.provider;
   return isOpenAiCompatibleProviderName(provider) ? provider : null;
 }
 
@@ -103,6 +105,7 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
     if (sessionId()) {
       const ok = ctx.trySend({ type: "set_model", sessionId: sessionId()!, provider: name, model: nextModel });
       if (!ok) return true;
+      ctx.setSelectedProvider(name);
     }
     ctx.activateNextPrompt();
     return true;

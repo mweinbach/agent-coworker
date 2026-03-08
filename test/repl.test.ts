@@ -355,6 +355,7 @@ describe("REPL command parsing", () => {
 
 describe("REPL slash command routing", () => {
   function makeCommandContext(overrides: Partial<ReplCommandContext> = {}): ReplCommandContext {
+    let selectedProvider: string | null = null;
     return {
       rl: { close: mock(() => {}) } as any,
       getSessionId: () => "session-1",
@@ -364,6 +365,10 @@ describe("REPL slash command routing", () => {
         model: "gpt-5.4",
         workingDirectory: "/tmp",
       }),
+      getSelectedProvider: () => selectedProvider,
+      setSelectedProvider: (provider) => {
+        selectedProvider = provider;
+      },
       getProviderList: () => ["openai", "codex-cli", "google"],
       getProviderAuthMethods: () => ({}),
       trySend: mock(() => true),
@@ -403,6 +408,38 @@ describe("REPL slash command routing", () => {
       },
     });
     expect(activateNextPrompt).toHaveBeenCalled();
+  });
+
+  test("/provider immediately retargets subsequent option commands", async () => {
+    const trySend = mock(() => true);
+    const activateNextPrompt = mock(() => {});
+    const ctx = makeCommandContext({ trySend, activateNextPrompt });
+    const originalLog = console.log;
+    console.log = mock(() => {}) as any;
+    try {
+      expect(await handleSlashCommand("/provider codex-cli", ctx)).toBe(true);
+      expect(await handleSlashCommand("/effort xhigh", ctx)).toBe(true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(trySend).toHaveBeenNthCalledWith(1, {
+      type: "set_model",
+      sessionId: "session-1",
+      provider: "codex-cli",
+      model: "gpt-5.4",
+    });
+    expect(trySend).toHaveBeenNthCalledWith(2, {
+      type: "set_config",
+      sessionId: "session-1",
+      config: {
+        providerOptions: {
+          "codex-cli": {
+            reasoningEffort: "xhigh",
+          },
+        },
+      },
+    });
   });
 
   test("/reasoning-effort refuses non-openai-compatible providers", async () => {

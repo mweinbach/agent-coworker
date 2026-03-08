@@ -1301,3 +1301,22 @@
 - `bun test --cwd apps/desktop` -> pass (`146 pass, 0 fail`)
 - `CSC_IDENTITY_AUTO_DISCOVERY=false bun run desktop:build` -> pass when rerun outside the sandbox; produced `apps/desktop/release/Cowork-0.1.0-win-x64.exe`, `.blockmap`, and `latest.yml`
 - `git -c safe.directory=C:/Users/maxw6/Projects/agent-coworker diff --check` -> pass
+
+# Task: Review open PR comments for remaining work
+
+## Plan
+- [x] Inspect the current branch context, repo task log, and PR-comment handling skill.
+- [x] Verify `gh` auth, find the open PR for the current branch, and fetch all review comments/threads.
+- [x] Compare the still-open feedback against the current code and summarize the actionable items to work on next.
+
+## Review
+- PR `#29` (`Add GPT-5.4 defaults and workspace provider controls`) currently has two unresolved review threads from `chatgpt-codex-connector`.
+- Thread 1 on `apps/TUI/component/prompt/slash-commands.ts` is already fixed in the branch: the slash-command helper now checks the boolean return from `syncActions.setConfig(...)`, shows `Not connected — reconnect and try again` on failure, and only shows the success toast when the update was actually dispatched.
+- Follow-up fix applied for thread 2 on `src/cli/repl/commandRouter.ts`: the REPL now tracks the most recently requested provider locally as soon as `/provider <name>` successfully dispatches, and refreshes that selection from `server_hello` / `config_updated`. That makes `/provider codex-cli` followed immediately by `/effort xhigh` target `codex-cli` instead of the previously active provider.
+- Verification:
+  - `C:\Program Files\GitHub CLI\gh.exe auth status` -> authenticated as `mweinbach`
+  - `C:\Program Files\GitHub CLI\gh.exe pr view --json number,title,url,headRefName,baseRefName,state,isDraft,author` -> open PR `#29`
+  - `C:\Program Files\GitHub CLI\gh.exe api graphql ... reviewThreads(first: 100)` -> 2 unresolved threads
+  - `C:\Users\maxw6\.bun\bin\bun test test/repl.test.ts test/tui.slash-commands.test.ts` -> pass (`83 pass, 0 fail`)
+  - `C:\Users\maxw6\.bun\bin\bun test test/repl.test.ts` -> pass (`74 pass, 0 fail`)
+  - `C:\Users\maxw6\.bun\bin\bun run typecheck` -> pass

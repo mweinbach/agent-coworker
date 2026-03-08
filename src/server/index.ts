@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { DEFAULT_PROVIDER_OPTIONS } from "../providers";
 import { startAgentServer } from "./startServer";
 
 // Keep server output clean by default.
@@ -74,6 +75,7 @@ async function main() {
     hostname: "127.0.0.1",
     port,
     env: { ...process.env, AGENT_WORKING_DIR: cwd },
+    providerOptions: DEFAULT_PROVIDER_OPTIONS,
     yolo,
   });
 

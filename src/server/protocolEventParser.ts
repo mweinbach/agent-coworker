@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import {
+  OPENAI_REASONING_EFFORT_VALUES,
+  OPENAI_REASONING_SUMMARY_VALUES,
+  OPENAI_TEXT_VERBOSITY_VALUES,
+} from "../shared/openaiCompatibleOptions";
 import type { ServerEvent } from "./protocol";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
@@ -12,6 +17,15 @@ const nonEmptyTrimmedStringSchema = z.preprocess((value) => {
 const stringArraySchema = z.array(z.string());
 const unknownArraySchema = z.array(z.unknown());
 const recordUnknownSchema = z.record(z.string(), z.unknown());
+const openAiCompatibleProviderOptionsSchema = z.object({
+  reasoningEffort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
+  reasoningSummary: z.enum(OPENAI_REASONING_SUMMARY_VALUES).optional(),
+  textVerbosity: z.enum(OPENAI_TEXT_VERBOSITY_VALUES).optional(),
+}).passthrough();
+const editableOpenAiProviderOptionsByProviderSchema = z.object({
+  openai: openAiCompatibleProviderOptionsSchema.optional(),
+  "codex-cli": openAiCompatibleProviderOptionsSchema.optional(),
+}).passthrough();
 
 export type ServerEventParseErrorReason = "invalid_json" | "invalid_envelope" | "unknown_type" | "invalid_event";
 
@@ -300,6 +314,7 @@ const serverEventSchema = z.discriminatedUnion("type", [
       observabilityEnabled: z.boolean(),
       subAgentModel: z.string(),
       maxSteps: z.number(),
+      providerOptions: editableOpenAiProviderOptionsByProviderSchema.optional(),
     }).passthrough(),
   }).passthrough(),
   z.object({

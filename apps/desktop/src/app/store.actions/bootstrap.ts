@@ -48,6 +48,7 @@ import {
   normalizeThreadTitleSource,
   truncateTitle,
 } from "../store.helpers";
+import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
 const optionalStringWithContentSchema = z.preprocess(
@@ -84,6 +85,7 @@ const persistedWorkspaceSchema = z.object({
   defaultProvider: normalizedProviderSchema,
   defaultModel: optionalStringWithContentSchema,
   defaultSubAgentModel: optionalStringWithContentSchema,
+  providerOptions: z.unknown().optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough().transform((workspace): WorkspaceRecord => {
@@ -97,6 +99,7 @@ const persistedWorkspaceSchema = z.object({
     defaultProvider: workspace.defaultProvider,
     defaultModel: model,
     defaultSubAgentModel: workspace.defaultSubAgentModel ?? model,
+    providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
     defaultEnableMcp: workspace.defaultEnableMcp,
     yolo: workspace.yolo,
   };

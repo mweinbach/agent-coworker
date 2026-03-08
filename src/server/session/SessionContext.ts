@@ -4,6 +4,7 @@ import type { HarnessContextStore } from "../../harness/contextStore";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { getProviderStatuses } from "../../providerStatus";
+import type { OpenAiCompatibleProviderOptionsByProvider } from "../../shared/openaiCompatibleOptions";
 import type {
   AgentConfig,
   HarnessContextState,
@@ -28,7 +29,9 @@ export type PersistedModelSelection = {
 
 export type PersistedProjectConfigPatch = Partial<
   Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">
->;
+> & {
+  providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
+};
 
 export type SessionInfoState = Omit<Extract<ServerEvent, { type: "session_info" }>, "type" | "sessionId">;
 

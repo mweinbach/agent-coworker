@@ -1,6 +1,7 @@
 import { AgentSocket } from "../../lib/agentSocket";
 import type { ClientMessage, ProviderName, ServerEvent } from "../../lib/wsProtocol";
 import type { StoreGet, StoreSet } from "../store.helpers";
+import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import type { Notification } from "../types";
 import { RUNTIME } from "./runtimeState";
 
@@ -100,10 +101,15 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
         }
 
         if (evt.type === "session_config") {
+          const providerOptions = normalizeWorkspaceProviderOptions((evt.config as any).providerOptions);
           set((s) => ({
             workspaces: s.workspaces.map((workspace) =>
               workspace.id === workspaceId
-                ? { ...workspace, defaultSubAgentModel: evt.config.subAgentModel }
+                ? {
+                    ...workspace,
+                    defaultSubAgentModel: evt.config.subAgentModel,
+                    providerOptions,
+                  }
                 : workspace,
             ),
             workspaceRuntimeById: {

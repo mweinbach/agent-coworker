@@ -113,6 +113,7 @@ export function Prompt(props: {
   const localSlashCommands = createLocalSlashCommands({
     syncActions,
     route,
+    getCurrentProvider: () => syncState.provider,
     dialog,
     exit: exitCtx,
   });

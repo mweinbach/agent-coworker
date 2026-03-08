@@ -2,7 +2,10 @@ import type { ServerEvent } from "../server/protocol";
 
 export type ParsedCommand =
   | { type: "help" | "exit" | "new" | "restart" | "tools" | "sessions" }
-  | { type: "model" | "provider" | "connect" | "cwd" | "resume"; arg: string }
+  | {
+      type: "model" | "provider" | "connect" | "cwd" | "resume" | "verbosity" | "reasoning-effort" | "effort" | "reasoning-summary";
+      arg: string;
+    }
   | { type: "unknown"; name: string; arg: string }
   | { type: "message"; arg: string };
 
@@ -30,6 +33,10 @@ export function parseReplInput(input: string): ParsedCommand {
     case "connect":
     case "cwd":
     case "resume":
+    case "verbosity":
+    case "reasoning-effort":
+    case "effort":
+    case "reasoning-summary":
       return { type: cmd, arg };
     default:
       return { type: "unknown", name: cmd, arg };

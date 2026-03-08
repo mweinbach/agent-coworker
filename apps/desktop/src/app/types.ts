@@ -8,6 +8,7 @@ import type {
   SkillEntry,
   TodoItem,
 } from "../lib/wsProtocol";
+import type { WorkspaceProviderOptions } from "./openaiCompatibleProviderOptions";
 
 export type ExplorerEntry = {
   name: string;
@@ -37,6 +38,7 @@ export type WorkspaceRecord = {
   defaultProvider?: ProviderName;
   defaultModel?: string;
   defaultSubAgentModel?: string;
+  providerOptions?: WorkspaceProviderOptions;
   defaultEnableMcp: boolean;
   yolo: boolean;
 };

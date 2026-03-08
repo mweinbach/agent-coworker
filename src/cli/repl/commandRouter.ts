@@ -1,10 +1,20 @@
 import readline from "node:readline";
 
+import {
+  OPENAI_REASONING_EFFORT_VALUES,
+  OPENAI_REASONING_SUMMARY_VALUES,
+  OPENAI_TEXT_VERBOSITY_VALUES,
+  isOpenAiCompatibleProviderName,
+  isOpenAiReasoningEffort,
+  isOpenAiReasoningSummary,
+  isOpenAiTextVerbosity,
+} from "../../shared/openaiCompatibleOptions";
 import { promptForApiKey, promptForProviderMethod } from "./authPrompts";
 import { normalizeProviderAuthMethods, type ProviderAuthMethod } from "../parser";
 import { defaultModelForProvider } from "../../config";
 import type { ClientMessage } from "../../server/protocol";
 import { isProviderName, PROVIDER_NAMES } from "../../types";
+import type { PublicConfig } from "./serverEventHandler";
 
 const UI_PROVIDER_NAMES = PROVIDER_NAMES;
 
@@ -12,6 +22,9 @@ export type ReplCommandContext = {
   rl: readline.Interface;
   getSessionId: () => string | null;
   getBusy: () => boolean;
+  getConfig: () => PublicConfig | null;
+  getSelectedProvider: () => string | null;
+  setSelectedProvider: (provider: string | null) => void;
   getProviderList: () => string[];
   getProviderAuthMethods: () => Record<string, ProviderAuthMethod[]>;
   trySend: (msg: ClientMessage) => boolean;
@@ -23,6 +36,11 @@ export type ReplCommandContext = {
   setCwd: (cwd: string) => void;
   resumeSession: (targetSessionId: string) => Promise<void>;
 };
+
+function currentOpenAiCompatibleProvider(ctx: ReplCommandContext): "openai" | "codex-cli" | null {
+  const provider = ctx.getSelectedProvider() ?? ctx.getConfig()?.provider;
+  return isOpenAiCompatibleProviderName(provider) ? provider : null;
+}
 
 export async function handleSlashCommand(input: string, ctx: ReplCommandContext): Promise<boolean> {
   if (!input.startsWith("/")) return false;
@@ -87,7 +105,122 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
     if (sessionId()) {
       const ok = ctx.trySend({ type: "set_model", sessionId: sessionId()!, provider: name, model: nextModel });
       if (!ok) return true;
+      ctx.setSelectedProvider(name);
     }
+    ctx.activateNextPrompt();
+    return true;
+  }
+
+  if (cmd === "verbosity") {
+    const provider = currentOpenAiCompatibleProvider(ctx);
+    if (!provider) {
+      console.log("current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first");
+      ctx.activateNextPrompt();
+      return true;
+    }
+
+    const value = rest[0]?.trim().toLowerCase() ?? "";
+    if (!isOpenAiTextVerbosity(value)) {
+      console.log(`usage: /verbosity <${OPENAI_TEXT_VERBOSITY_VALUES.join("|")}>`);
+      ctx.activateNextPrompt();
+      return true;
+    }
+
+    if (!sessionId()) {
+      console.log("not connected: cannot change verbosity yet");
+      ctx.activateNextPrompt();
+      return true;
+    }
+
+    const ok = ctx.trySend({
+      type: "set_config",
+      sessionId: sessionId()!,
+      config: {
+        providerOptions: {
+          [provider]: {
+            textVerbosity: value,
+          },
+        },
+      },
+    });
+    if (!ok) return true;
+    console.log(`${provider} verbosity set to ${value}`);
+    ctx.activateNextPrompt();
+    return true;
+  }
+
+  if (cmd === "reasoning-effort" || cmd === "effort") {
+    const provider = currentOpenAiCompatibleProvider(ctx);
+    if (!provider) {
+      console.log("current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first");
+      ctx.activateNextPrompt();
+      return true;
+    }
+
+    const value = rest[0]?.trim().toLowerCase() ?? "";
+    if (!isOpenAiReasoningEffort(value)) {
+      console.log(`usage: /reasoning-effort <${OPENAI_REASONING_EFFORT_VALUES.join("|")}>`);
+      ctx.activateNextPrompt();
+      return true;
+    }
+
+    if (!sessionId()) {
+      console.log("not connected: cannot change reasoning effort yet");
+      ctx.activateNextPrompt();
+      return true;
+    }
+
+    const ok = ctx.trySend({
+      type: "set_config",
+      sessionId: sessionId()!,
+      config: {
+        providerOptions: {
+          [provider]: {
+            reasoningEffort: value,
+          },
+        },
+      },
+    });
+    if (!ok) return true;
+    console.log(`${provider} reasoning effort set to ${value}`);
+    ctx.activateNextPrompt();
+    return true;
+  }
+
+  if (cmd === "reasoning-summary") {
+    const provider = currentOpenAiCompatibleProvider(ctx);
+    if (!provider) {
+      console.log("current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first");
+      ctx.activateNextPrompt();
+      return true;
+    }
+
+    const value = rest[0]?.trim().toLowerCase() ?? "";
+    if (!isOpenAiReasoningSummary(value)) {
+      console.log(`usage: /reasoning-summary <${OPENAI_REASONING_SUMMARY_VALUES.join("|")}>`);
+      ctx.activateNextPrompt();
+      return true;
+    }
+
+    if (!sessionId()) {
+      console.log("not connected: cannot change reasoning summary yet");
+      ctx.activateNextPrompt();
+      return true;
+    }
+
+    const ok = ctx.trySend({
+      type: "set_config",
+      sessionId: sessionId()!,
+      config: {
+        providerOptions: {
+          [provider]: {
+            reasoningSummary: value,
+          },
+        },
+      },
+    });
+    if (!ok) return true;
+    console.log(`${provider} reasoning summary set to ${value}`);
     ctx.activateNextPrompt();
     return true;
   }

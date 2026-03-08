@@ -125,6 +125,7 @@ export async function runCliRepl(
   let sessionId: string | null = null;
   let lastKnownSessionId: string | null = initialResumeSessionId;
   let config: PublicConfig | null = null;
+  let selectedProvider: string | null = null;
   let disconnectNotified = false;
 
   let pendingAsk: AskPrompt[] = [];
@@ -156,10 +157,14 @@ export async function runCliRepl(
     console.log("  /exit                 Quit");
     console.log("  /new                  Clear conversation");
     console.log("  /restart              Restart server and auto-resume latest session");
-    console.log("  /model <id>            Set model id for this session");
-    console.log(`  /provider <name>       Set provider (${UI_PROVIDER_NAMES.join("|")})`);
-    console.log(`  /connect <name> [key]  Connect via auth methods (${UI_PROVIDER_NAMES.join("|")})`);
-    console.log("  /cwd <path>            Set working directory for this session");
+    console.log("  /model <id>           Set model id for this session");
+    console.log(`  /provider <name>      Set provider (${UI_PROVIDER_NAMES.join("|")})`);
+    console.log("  /verbosity <level>    Set active-provider verbosity (low|medium|high)");
+    console.log("  /reasoning-effort <level>  Set active-provider reasoning effort (none|low|medium|high|xhigh)");
+    console.log("  /effort <level>       Alias for /reasoning-effort");
+    console.log("  /reasoning-summary <mode>  Set active-provider reasoning summary (auto|concise|detailed)");
+    console.log(`  /connect <name> [key] Connect via auth methods (${UI_PROVIDER_NAMES.join("|")})`);
+    console.log("  /cwd <path>           Set working directory for this session");
     console.log("  /sessions             List sessions from the server");
     console.log("  /resume <sessionId>   Reconnect to a specific session");
     console.log("  /tools                List tool names\n");
@@ -226,6 +231,7 @@ export async function runCliRepl(
     socket = null;
     sessionId = null;
     config = null;
+    selectedProvider = null;
     busy = false;
     providerList = [...UI_PROVIDER_NAMES];
     providerAuthMethods = {};
@@ -265,6 +271,12 @@ export async function runCliRepl(
     },
     set config(value) {
       config = value;
+    },
+    get selectedProvider() {
+      return selectedProvider;
+    },
+    set selectedProvider(value) {
+      selectedProvider = value;
     },
     get busy() {
       return busy;
@@ -487,6 +499,11 @@ export async function runCliRepl(
           rl,
           getSessionId: () => sessionId,
           getBusy: () => busy,
+          getConfig: () => config,
+          getSelectedProvider: () => selectedProvider,
+          setSelectedProvider: (provider) => {
+            selectedProvider = provider;
+          },
           getProviderList: () => providerList,
           getProviderAuthMethods: () => providerAuthMethods,
           trySend: (msg) => {

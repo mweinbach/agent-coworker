@@ -27,6 +27,7 @@ import type {
   TrashPathInput,
 } from "./desktopApi";
 import type { PersistedState } from "../app/types";
+import { workspaceProviderOptionsSchema } from "../app/openaiCompatibleProviderOptions";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const invalidPathSegmentPattern = /[/\\\0]/;
@@ -111,6 +112,7 @@ const persistedWorkspaceSchema = z.object({
   defaultProvider: optionalNonEmptyStringSchema,
   defaultModel: optionalNonEmptyStringSchema,
   defaultSubAgentModel: optionalNonEmptyStringSchema,
+  providerOptions: workspaceProviderOptionsSchema.optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough();

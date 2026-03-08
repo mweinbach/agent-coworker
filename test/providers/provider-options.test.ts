@@ -49,6 +49,7 @@ describe("Provider options structure", () => {
   test("provider defaults include reasoning/thinking profiles", () => {
     // OpenAI: reasoningEffort is "high"
     expect(DEFAULT_PROVIDER_OPTIONS.openai.reasoningEffort).toBe("high");
+    expect(DEFAULT_PROVIDER_OPTIONS.openai.textVerbosity).toBe("medium");
 
     // Google: thinkingConfig.includeThoughts is true
     expect(DEFAULT_PROVIDER_OPTIONS.google.thinkingConfig.includeThoughts).toBe(true);
@@ -121,7 +122,7 @@ describe("Agent providerOptions pass-through", () => {
     const providerOptions = { openai: { reasoningEffort: "high" } };
     const config = makeConfig({
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       providerOptions,
     });
 
@@ -134,7 +135,7 @@ describe("Agent providerOptions pass-through", () => {
   });
 
   test("providerOptions is undefined in streamText when config has none", async () => {
-    const config = makeConfig({ provider: "openai", model: "gpt-5.2" });
+    const config = makeConfig({ provider: "openai", model: "gpt-5.4" });
     delete config.providerOptions;
 
     await runTurn(makeRunTurnParams({ config }));

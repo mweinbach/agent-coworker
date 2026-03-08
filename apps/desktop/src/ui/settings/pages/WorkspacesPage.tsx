@@ -2,6 +2,20 @@ import { useMemo } from "react";
 
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 
+import {
+  getWorkspaceReasoningEffort,
+  getWorkspaceReasoningSummary,
+  getWorkspaceTextVerbosity,
+  mergeWorkspaceProviderOptions,
+  REASONING_EFFORT_VALUES,
+  REASONING_SUMMARY_VALUES,
+  TEXT_VERBOSITY_VALUES,
+  type OpenAICompatibleProviderName,
+  type ReasoningEffortValue,
+  type ReasoningSummaryValue,
+  type TextVerbosityValue,
+} from "../../../app/openaiCompatibleProviderOptions";
+import type { WorkspaceRecord } from "../../../app/types";
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -24,12 +38,160 @@ function displayProviderName(provider: ProviderName): string {
     google: "Google",
     openai: "OpenAI",
     anthropic: "Anthropic",
-    "codex-cli": "Codex CLI",  };
+    "codex-cli": "Codex CLI",
+  };
   return names[provider] ?? provider;
 }
 
 function toBoolean(checked: boolean | "indeterminate"): boolean {
   return checked === true;
+}
+
+function updateProviderOption(
+  providerOptions: ReturnType<typeof mergeWorkspaceProviderOptions>,
+  provider: OpenAICompatibleProviderName,
+  patch: {
+    reasoningEffort?: ReasoningEffortValue;
+    reasoningSummary?: ReasoningSummaryValue;
+    textVerbosity?: TextVerbosityValue;
+  }
+) {
+  return mergeWorkspaceProviderOptions(providerOptions, {
+    [provider]: patch,
+  });
+}
+
+type OpenAiCompatibleModelSettingsCardProps = {
+  workspace: Pick<WorkspaceRecord, "id" | "providerOptions">;
+  updateWorkspaceDefaults: (
+    workspaceId: string,
+    patch: { providerOptions?: ReturnType<typeof mergeWorkspaceProviderOptions> },
+  ) => Promise<unknown> | void;
+};
+
+export function OpenAiCompatibleModelSettingsCard({
+  workspace,
+  updateWorkspaceDefaults,
+}: OpenAiCompatibleModelSettingsCardProps) {
+  const openAiVerbosity = getWorkspaceTextVerbosity(workspace.providerOptions, "openai");
+  const openAiReasoningEffort = getWorkspaceReasoningEffort(workspace.providerOptions, "openai");
+  const openAiReasoningSummary = getWorkspaceReasoningSummary(workspace.providerOptions, "openai");
+  const codexVerbosity = getWorkspaceTextVerbosity(workspace.providerOptions, "codex-cli");
+  const codexReasoningEffort = getWorkspaceReasoningEffort(workspace.providerOptions, "codex-cli");
+  const codexReasoningSummary = getWorkspaceReasoningSummary(workspace.providerOptions, "codex-cli");
+
+  return (
+    <Card className="border-border/80 bg-card/85">
+      <CardHeader>
+        <CardTitle>OpenAI-Compatible Model Settings</CardTitle>
+        <CardDescription>
+          Workspace defaults for OpenAI API and Codex CLI responses models.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {([
+          {
+            key: "openai",
+            label: "OpenAI API",
+            verbosity: openAiVerbosity,
+            reasoningEffort: openAiReasoningEffort,
+            reasoningSummary: openAiReasoningSummary,
+          },
+          {
+            key: "codex-cli",
+            label: "Codex CLI",
+            verbosity: codexVerbosity,
+            reasoningEffort: codexReasoningEffort,
+            reasoningSummary: codexReasoningSummary,
+          },
+        ] as const).map((section) => (
+          <div key={section.key} className="space-y-4 rounded-xl border border-border/70 p-4">
+            <div className="space-y-1">
+              <div className="text-sm font-medium text-foreground">{section.label}</div>
+              <div className="text-xs text-muted-foreground">
+                Applies when this workspace runs on {section.label}.
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium text-foreground">Verbosity</div>
+              <Select
+                value={section.verbosity}
+                onValueChange={(value) => {
+                  void updateWorkspaceDefaults(workspace.id, {
+                    providerOptions: updateProviderOption(workspace.providerOptions, section.key, {
+                      textVerbosity: value as TextVerbosityValue,
+                    }),
+                  });
+                }}
+              >
+                <SelectTrigger aria-label={`${section.label} verbosity`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {TEXT_VERBOSITY_VALUES.map((entry) => (
+                    <SelectItem key={entry} value={entry}>
+                      {entry}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium text-foreground">Reasoning effort</div>
+              <Select
+                value={section.reasoningEffort}
+                onValueChange={(value) => {
+                  void updateWorkspaceDefaults(workspace.id, {
+                    providerOptions: updateProviderOption(workspace.providerOptions, section.key, {
+                      reasoningEffort: value as ReasoningEffortValue,
+                    }),
+                  });
+                }}
+              >
+                <SelectTrigger aria-label={`${section.label} reasoning effort`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {REASONING_EFFORT_VALUES.map((entry) => (
+                    <SelectItem key={entry} value={entry}>
+                      {entry}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium text-foreground">Reasoning summary</div>
+              <Select
+                value={section.reasoningSummary}
+                onValueChange={(value) => {
+                  void updateWorkspaceDefaults(workspace.id, {
+                    providerOptions: updateProviderOption(workspace.providerOptions, section.key, {
+                      reasoningSummary: value as ReasoningSummaryValue,
+                    }),
+                  });
+                }}
+              >
+                <SelectTrigger aria-label={`${section.label} reasoning summary`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {REASONING_SUMMARY_VALUES.map((entry) => (
+                    <SelectItem key={entry} value={entry}>
+                      {entry}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
 }
 
 export function WorkspacesPage() {
@@ -238,6 +400,11 @@ export function WorkspacesPage() {
               </div>
             </CardContent>
           </Card>
+
+          <OpenAiCompatibleModelSettingsCard
+            workspace={ws}
+            updateWorkspaceDefaults={updateWorkspaceDefaults}
+          />
 
           <Card className="border-border/80 bg-card/85">
             <CardHeader>

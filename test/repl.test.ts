@@ -2,6 +2,7 @@ import { describe, expect, test, mock, beforeEach } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { handleSlashCommand, type ReplCommandContext } from "../src/cli/repl/commandRouter";
 import { __internal as replInternal } from "../src/cli/repl";
 
 // ---------------------------------------------------------------------------
@@ -303,6 +304,38 @@ describe("REPL command parsing", () => {
     expect(result.arg).toBe("/path/with spaces/dir");
   });
 
+  test("/verbosity is parsed correctly", () => {
+    const result = parseReplInput("/verbosity medium");
+    expect(result.type).toBe("verbosity");
+    if (result.type === "verbosity") {
+      expect(result.arg).toBe("medium");
+    }
+  });
+
+  test("/reasoning-effort is parsed correctly", () => {
+    const result = parseReplInput("/reasoning-effort xhigh");
+    expect(result.type).toBe("reasoning-effort");
+    if (result.type === "reasoning-effort") {
+      expect(result.arg).toBe("xhigh");
+    }
+  });
+
+  test("/effort is parsed correctly", () => {
+    const result = parseReplInput("/effort high");
+    expect(result.type).toBe("effort");
+    if (result.type === "effort") {
+      expect(result.arg).toBe("high");
+    }
+  });
+
+  test("/reasoning-summary is parsed correctly", () => {
+    const result = parseReplInput("/reasoning-summary concise");
+    expect(result.type).toBe("reasoning-summary");
+    if (result.type === "reasoning-summary") {
+      expect(result.arg).toBe("concise");
+    }
+  });
+
   // TODO: Integration tests that start runCliRepl with mocked readline and
   // verify actual console output are difficult because runCliRepl:
   //   1. Calls loadConfig which reads real filesystem config
@@ -318,6 +351,187 @@ describe("REPL command parsing", () => {
   //
   // This is deferred as it requires significant setup and the command parsing
   // and helper logic is well-covered by the replicated unit tests above.
+});
+
+describe("REPL slash command routing", () => {
+  function makeCommandContext(overrides: Partial<ReplCommandContext> = {}): ReplCommandContext {
+    let selectedProvider: string | null = null;
+    return {
+      rl: { close: mock(() => {}) } as any,
+      getSessionId: () => "session-1",
+      getBusy: () => false,
+      getConfig: () => ({
+        provider: "openai",
+        model: "gpt-5.4",
+        workingDirectory: "/tmp",
+      }),
+      getSelectedProvider: () => selectedProvider,
+      setSelectedProvider: (provider) => {
+        selectedProvider = provider;
+      },
+      getProviderList: () => ["openai", "codex-cli", "google"],
+      getProviderAuthMethods: () => ({}),
+      trySend: mock(() => true),
+      activateNextPrompt: mock(() => {}),
+      printHelp: mock(() => {}),
+      showConnectStatus: mock(() => {}),
+      restartServer: async () => {},
+      resolveAndValidateDir: async (dirArg: string) => dirArg,
+      setCwd: mock(() => {}),
+      resumeSession: async () => {},
+      ...overrides,
+    };
+  }
+
+  test("/verbosity sends set_config for the active provider", async () => {
+    const trySend = mock(() => true);
+    const activateNextPrompt = mock(() => {});
+    const ctx = makeCommandContext({ trySend, activateNextPrompt });
+    const originalLog = console.log;
+    console.log = mock(() => {}) as any;
+    try {
+      const handled = await handleSlashCommand("/verbosity medium", ctx);
+      expect(handled).toBe(true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(trySend).toHaveBeenCalledWith({
+      type: "set_config",
+      sessionId: "session-1",
+      config: {
+        providerOptions: {
+          openai: {
+            textVerbosity: "medium",
+          },
+        },
+      },
+    });
+    expect(activateNextPrompt).toHaveBeenCalled();
+  });
+
+  test("/provider immediately retargets subsequent option commands", async () => {
+    const trySend = mock(() => true);
+    const activateNextPrompt = mock(() => {});
+    const ctx = makeCommandContext({ trySend, activateNextPrompt });
+    const originalLog = console.log;
+    console.log = mock(() => {}) as any;
+    try {
+      expect(await handleSlashCommand("/provider codex-cli", ctx)).toBe(true);
+      expect(await handleSlashCommand("/effort xhigh", ctx)).toBe(true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(trySend).toHaveBeenNthCalledWith(1, {
+      type: "set_model",
+      sessionId: "session-1",
+      provider: "codex-cli",
+      model: "gpt-5.4",
+    });
+    expect(trySend).toHaveBeenNthCalledWith(2, {
+      type: "set_config",
+      sessionId: "session-1",
+      config: {
+        providerOptions: {
+          "codex-cli": {
+            reasoningEffort: "xhigh",
+          },
+        },
+      },
+    });
+  });
+
+  test("/reasoning-effort refuses non-openai-compatible providers", async () => {
+    const trySend = mock(() => true);
+    const activateNextPrompt = mock(() => {});
+    const log = mock(() => {});
+    const ctx = makeCommandContext({
+      trySend,
+      activateNextPrompt,
+      getConfig: () => ({
+        provider: "google",
+        model: "gemini-3.1-pro-preview-customtools",
+        workingDirectory: "/tmp",
+      }),
+    });
+    const originalLog = console.log;
+    console.log = log as any;
+    try {
+      const handled = await handleSlashCommand("/reasoning-effort high", ctx);
+      expect(handled).toBe(true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(trySend).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      "current provider must be openai or codex-cli; use /provider openai or /provider codex-cli first",
+    );
+    expect(activateNextPrompt).toHaveBeenCalled();
+  });
+
+  test("/effort aliases reasoning-effort for codex-cli", async () => {
+    const trySend = mock(() => true);
+    const activateNextPrompt = mock(() => {});
+    const ctx = makeCommandContext({
+      trySend,
+      activateNextPrompt,
+      getConfig: () => ({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        workingDirectory: "/tmp",
+      }),
+    });
+    const originalLog = console.log;
+    console.log = mock(() => {}) as any;
+    try {
+      const handled = await handleSlashCommand("/effort xhigh", ctx);
+      expect(handled).toBe(true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(trySend).toHaveBeenCalledWith({
+      type: "set_config",
+      sessionId: "session-1",
+      config: {
+        providerOptions: {
+          "codex-cli": {
+            reasoningEffort: "xhigh",
+          },
+        },
+      },
+    });
+    expect(activateNextPrompt).toHaveBeenCalled();
+  });
+
+  test("/reasoning-summary sends set_config for the active provider", async () => {
+    const trySend = mock(() => true);
+    const activateNextPrompt = mock(() => {});
+    const ctx = makeCommandContext({ trySend, activateNextPrompt });
+    const originalLog = console.log;
+    console.log = mock(() => {}) as any;
+    try {
+      const handled = await handleSlashCommand("/reasoning-summary concise", ctx);
+      expect(handled).toBe(true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(trySend).toHaveBeenCalledWith({
+      type: "set_config",
+      sessionId: "session-1",
+      config: {
+        providerOptions: {
+          openai: {
+            reasoningSummary: "concise",
+          },
+        },
+      },
+    });
+    expect(activateNextPrompt).toHaveBeenCalled();
+  });
 });
 
 describe("connect auth method helpers", () => {

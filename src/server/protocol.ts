@@ -10,6 +10,7 @@ import type {
   SkillEntry,
   TodoItem,
 } from "../types";
+import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
 import type { ProviderStatus } from "../providerStatus";
 import { type ProviderAuthMethod, type ProviderAuthChallenge } from "../providers/authRegistry";
 import type { ProviderCatalogEntry } from "../providers/connectionCatalog";
@@ -20,6 +21,22 @@ export { ASK_SKIP_TOKEN } from "../shared/ask";
 
 export type MCPServerEventSource = "workspace" | "user" | "system" | "workspace_legacy" | "user_legacy";
 export type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oauth_pending" | "error";
+
+export type SessionConfigPatch = {
+  yolo?: boolean;
+  observabilityEnabled?: boolean;
+  subAgentModel?: string;
+  maxSteps?: number;
+  providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
+};
+
+export type SessionConfigState = {
+  yolo: boolean;
+  observabilityEnabled: boolean;
+  subAgentModel: string;
+  maxSteps: number;
+  providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
+};
 
 export type ClientMessage =
   | { type: "client_hello"; client: "tui" | "cli" | string; version?: string }
@@ -85,12 +102,7 @@ export type ClientMessage =
   | {
       type: "set_config";
       sessionId: string;
-      config: {
-        yolo?: boolean;
-        observabilityEnabled?: boolean;
-        subAgentModel?: string;
-        maxSteps?: number;
-      };
+      config: SessionConfigPatch;
     }
   | { type: "upload_file"; sessionId: string; filename: string; contentBase64: string };
 
@@ -284,18 +296,13 @@ export type ServerEvent =
   | {
       type: "session_config";
       sessionId: string;
-      config: {
-        yolo: boolean;
-        observabilityEnabled: boolean;
-        subAgentModel: string;
-        maxSteps: number;
-      };
+      config: SessionConfigState;
     }
   | { type: "file_uploaded"; sessionId: string; filename: string; path: string }
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.0";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.2";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",

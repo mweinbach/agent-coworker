@@ -26,7 +26,7 @@ describe("Provider switching via config", () => {
     });
 
     expect(cfg.provider).toBe("openai");
-    expect(cfg.model).toBe("gpt-5.2");
+    expect(cfg.model).toBe("gpt-5.4");
   });
 
   test("switching from google to anthropic via env uses anthropic default model", async () => {
@@ -48,7 +48,7 @@ describe("Provider switching via config", () => {
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
     });
 
     // Switch provider but keep model from config
@@ -60,8 +60,8 @@ describe("Provider switching via config", () => {
     });
 
     expect(cfg.provider).toBe("anthropic");
-    // model from project config is "gpt-5.2" which is kept even though provider changed
-    expect(cfg.model).toBe("gpt-5.2");
+    // model from project config is "gpt-5.4" which is kept even though provider changed
+    expect(cfg.model).toBe("gpt-5.4");
   });
 
   test("provider from user config can be overridden by project config", async () => {
@@ -83,7 +83,7 @@ describe("Provider switching via config", () => {
     });
 
     expect(cfg.provider).toBe("openai");
-    expect(cfg.model).toBe("gpt-5.2");
+    expect(cfg.model).toBe("gpt-5.4");
   });
 });
 
@@ -111,7 +111,7 @@ describe("Model defaults when built-in defaults specify a different provider", (
 
     // Should NOT use gemini model with openai provider - should use openai's default
     expect(cfg.provider).toBe("openai");
-    expect(cfg.model).toBe("gpt-5.2");
+    expect(cfg.model).toBe("gpt-5.4");
   });
 
   test("built-in model IS used when provider matches", async () => {

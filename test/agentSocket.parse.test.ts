@@ -61,6 +61,28 @@ describe("agent socket parser", () => {
         part: { text: "hello" },
       },
       {
+        type: "session_config",
+        sessionId: "s-1",
+        config: {
+          yolo: false,
+          observabilityEnabled: true,
+          subAgentModel: "gpt-5.4",
+          maxSteps: 100,
+          providerOptions: {
+            openai: {
+              reasoningEffort: "high",
+              reasoningSummary: "detailed",
+              textVerbosity: "medium",
+            },
+            "codex-cli": {
+              reasoningEffort: "xhigh",
+              reasoningSummary: "concise",
+              textVerbosity: "low",
+            },
+          },
+        },
+      },
+      {
         type: "error",
         sessionId: "s-1",
         message: "boom",

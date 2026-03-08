@@ -10,6 +10,7 @@ import type {
   TranscriptEvent,
   WorkspaceRecord,
 } from "../../src/app/types";
+import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibleProviderOptions";
 import type { TranscriptBatchInput } from "../../src/lib/desktopApi";
 
 import { assertDirection, assertSafeId, assertWithinTranscriptsDir } from "./validation";
@@ -161,6 +162,7 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       defaultProvider: asOptionalString(item.defaultProvider) as WorkspaceRecord["defaultProvider"],
       defaultModel: asOptionalString(item.defaultModel),
       defaultSubAgentModel: asOptionalString(item.defaultSubAgentModel),
+      providerOptions: normalizeWorkspaceProviderOptions(item.providerOptions),
       defaultEnableMcp: typeof item.defaultEnableMcp === "boolean" ? item.defaultEnableMcp : true,
       yolo: typeof item.yolo === "boolean" ? item.yolo : false,
     });

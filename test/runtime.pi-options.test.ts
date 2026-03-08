@@ -8,8 +8,8 @@ import type { AgentConfig, ModelMessage } from "../src/types";
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     provider: "openai",
-    model: "gpt-5.2",
-    subAgentModel: "gpt-5.2",
+    model: "gpt-5.4",
+    subAgentModel: "gpt-5.4",
     workingDirectory: "/tmp",
     outputDirectory: "/tmp/output",
     uploadsDirectory: "/tmp/uploads",
@@ -104,11 +104,11 @@ describe("pi runtime provider option mapping", () => {
     const codexParams = makeParams(makeConfig({
       provider: "codex-cli",
       providerOptions: {
-        "codex-cli": { reasoningEffort: "minimal" },
+        "codex-cli": { reasoningEffort: "xhigh" },
       },
     }));
     expect(__internal.providerSectionForPi("codex-cli", codexParams.providerOptions)).toEqual({
-      reasoningEffort: "minimal",
+      reasoningEffort: "xhigh",
     });
 
     const fallbackParams = makeParams(makeConfig({

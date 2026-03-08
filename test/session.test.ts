@@ -642,6 +642,46 @@ describe("AgentSession", () => {
       expect(evt.config.maxSteps).toBe(100);
     });
 
+    test("getSessionConfigEvent exposes editable openai-compatible provider options", () => {
+      const dir = path.join(os.tmpdir(), `session-config-${Date.now()}`);
+      const { session } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          providerOptions: {
+            openai: {
+              reasoningEffort: "high",
+              reasoningSummary: "detailed",
+              textVerbosity: "medium",
+            },
+            "codex-cli": {
+              reasoningEffort: "none",
+              textVerbosity: "low",
+            },
+            google: {
+              thinkingConfig: {
+                includeThoughts: true,
+                thinkingLevel: "high",
+              },
+            },
+          },
+        },
+      });
+
+      const evt = session.getSessionConfigEvent();
+      expect(evt.config.providerOptions).toEqual({
+        openai: {
+          reasoningEffort: "high",
+          reasoningSummary: "detailed",
+          textVerbosity: "medium",
+        },
+        "codex-cli": {
+          reasoningEffort: "none",
+          textVerbosity: "low",
+        },
+      });
+      expect((evt.config.providerOptions as any)?.google).toBeUndefined();
+    });
+
     test("setConfig emits session_config and persists subAgentModel/observability", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
@@ -690,6 +730,57 @@ describe("AgentSession", () => {
         expect(errEvt.code).toBe("internal_error");
         expect(errEvt.message).toContain("Failed to persist config defaults");
       }
+    });
+
+    test("setConfig merges editable providerOptions and preserves unrelated keys", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const dir = path.join(os.tmpdir(), `session-config-merge-${Date.now()}`);
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          providerOptions: {
+            openai: {
+              reasoningEffort: "high",
+              reasoningSummary: "detailed",
+              textVerbosity: "medium",
+            },
+          },
+        },
+        persistProjectConfigPatchImpl,
+      });
+
+      await session.setConfig({
+        providerOptions: {
+          openai: {
+            textVerbosity: "low",
+          },
+          "codex-cli": {
+            reasoningEffort: "xhigh",
+          },
+        },
+      });
+
+      const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
+      expect(cfgEvt.config.providerOptions).toEqual({
+        openai: {
+          reasoningEffort: "high",
+          reasoningSummary: "detailed",
+          textVerbosity: "low",
+        },
+        "codex-cli": {
+          reasoningEffort: "xhigh",
+        },
+      });
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        providerOptions: {
+          openai: {
+            textVerbosity: "low",
+          },
+          "codex-cli": {
+            reasoningEffort: "xhigh",
+          },
+        },
+      });
     });
   });
 
@@ -988,9 +1079,9 @@ describe("AgentSession", () => {
     test("emitProviderCatalog emits provider_catalog event", async () => {
       const catalog = {
         all: [
-          { id: "openai", name: "OpenAI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" },
+          { id: "openai", name: "OpenAI", models: ["gpt-5.4"], defaultModel: "gpt-5.4" },
         ],
-        default: { openai: "gpt-5.2" },
+        default: { openai: "gpt-5.4" },
         connected: ["openai"],
       };
       const getProviderCatalogImpl = mock(async () => catalog);
@@ -1050,8 +1141,8 @@ describe("AgentSession", () => {
         },
       ];
       const getProviderCatalogImpl = mock(async () => ({
-        all: [{ id: "openai", name: "OpenAI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" }],
-        default: { openai: "gpt-5.2" },
+        all: [{ id: "openai", name: "OpenAI", models: ["gpt-5.4"], defaultModel: "gpt-5.4" }],
+        default: { openai: "gpt-5.4" },
         connected: ["openai"],
       }));
       const getProviderStatusesImpl = mock(async () => statuses);
@@ -1077,8 +1168,8 @@ describe("AgentSession", () => {
 
     test("callbackProviderAuth emits provider_auth_result for oauth method", async () => {
       const getProviderCatalogImpl = mock(async () => ({
-        all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.3-codex"], defaultModel: "gpt-5.3-codex" }],
-        default: { "codex-cli": "gpt-5.3-codex" },
+        all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.4"], defaultModel: "gpt-5.4" }],
+        default: { "codex-cli": "gpt-5.4" },
         connected: ["codex-cli"],
       }));
       const getProviderStatusesImpl = mock(async () => []);

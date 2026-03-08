@@ -2,6 +2,11 @@ import { z } from "zod";
 
 import { parseMCPServerConfig, parseMCPServersDocument } from "../mcp/configRegistry";
 import { resolveProviderAuthMethod } from "../providers/authRegistry";
+import {
+  OPENAI_REASONING_EFFORT_VALUES,
+  OPENAI_REASONING_SUMMARY_VALUES,
+  OPENAI_TEXT_VERBOSITY_VALUES,
+} from "../shared/openaiCompatibleOptions";
 import { isProviderName } from "../types";
 
 import type { ClientMessage } from "./protocol";
@@ -21,6 +26,7 @@ const setConfigFieldErrorMessages: Record<string, string> = {
   observabilityEnabled: "set_config config.observabilityEnabled must be boolean",
   subAgentModel: "set_config config.subAgentModel must be non-empty string",
   maxSteps: "set_config config.maxSteps must be number 1-1000",
+  providerOptions: "set_config config.providerOptions must be an object",
 };
 
 function requiredString(message: string): z.ZodType<string> {
@@ -60,11 +66,23 @@ const harnessContextSchema = z.object({
   metadata: z.record(z.string(), z.string()).optional(),
 }).passthrough();
 
+const openAiCompatibleProviderOptionsSchema = z.object({
+  reasoningEffort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
+  reasoningSummary: z.enum(OPENAI_REASONING_SUMMARY_VALUES).optional(),
+  textVerbosity: z.enum(OPENAI_TEXT_VERBOSITY_VALUES).optional(),
+}).strict();
+
+const editableOpenAiProviderOptionsByProviderSchema = z.object({
+  openai: openAiCompatibleProviderOptionsSchema.optional(),
+  "codex-cli": openAiCompatibleProviderOptionsSchema.optional(),
+}).strict();
+
 const setConfigPayloadSchema = z.object({
   yolo: z.boolean().optional(),
   observabilityEnabled: z.boolean().optional(),
   subAgentModel: z.string().trim().min(1).optional(),
   maxSteps: z.number().min(1).max(1000).optional(),
+  providerOptions: editableOpenAiProviderOptionsByProviderSchema.optional(),
 }).passthrough();
 
 const MAX_MCP_API_KEY_SIZE = 100_000;
@@ -133,6 +151,45 @@ function validateProviderAuthTarget(
   }
 
   return true;
+}
+
+function setConfigIssueMessage(issue: z.ZodIssue): string {
+  const path = issue.path.map((part) => String(part));
+  const [field, provider, option] = path;
+
+  if (field === "providerOptions") {
+    if (issue.code === "unrecognized_keys") {
+      if (provider === undefined) {
+        return "set_config config.providerOptions only supports openai and codex-cli";
+      }
+      return `set_config config.providerOptions.${provider} only supports reasoningEffort, reasoningSummary, and textVerbosity`;
+    }
+
+    if (!provider) {
+      return "set_config config.providerOptions must be an object";
+    }
+
+    if (!option) {
+      return `set_config config.providerOptions.${provider} must be an object`;
+    }
+
+    if (option === "reasoningEffort") {
+      return `set_config config.providerOptions.${provider}.reasoningEffort must be one of ${OPENAI_REASONING_EFFORT_VALUES.join(", ")}`;
+    }
+
+    if (option === "textVerbosity") {
+      return `set_config config.providerOptions.${provider}.textVerbosity must be one of ${OPENAI_TEXT_VERBOSITY_VALUES.join(", ")}`;
+    }
+
+    if (option === "reasoningSummary") {
+      return `set_config config.providerOptions.${provider}.reasoningSummary must be one of ${OPENAI_REASONING_SUMMARY_VALUES.join(", ")}`;
+    }
+
+    return "set_config missing/invalid config";
+  }
+
+  const message = setConfigFieldErrorMessages[field] ?? "set_config missing/invalid config";
+  return message;
 }
 
 function schemaWithType<TType extends string>(
@@ -422,8 +479,7 @@ const setConfigSchema = schemaWithType("set_config", {
   if (parsedConfig.success) return;
 
   const issue = parsedConfig.error.issues[0];
-  const field = String(issue?.path?.[0] ?? "");
-  const message = setConfigFieldErrorMessages[field] ?? "set_config missing/invalid config";
+  const message = issue ? setConfigIssueMessage(issue) : "set_config missing/invalid config";
 
   ctx.addIssue({
     code: z.ZodIssueCode.custom,

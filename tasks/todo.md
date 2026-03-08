@@ -35,6 +35,51 @@
   - publish an unsigned Windows installer asset without `latest.yml` for manual downloads only, or
   - obtain a real Windows-trusted Authenticode certificate (or equivalent managed signing service) and then upload the resulting signing credentials to GitHub.
 
+# Task: Fix desktop control-session providerOptions snapshot sync
+
+## Plan
+- [x] Change desktop `session_config` handling so editable provider options replace the local snapshot instead of merge-only behavior.
+- [x] Add focused regression coverage for partial and missing `providerOptions` snapshots from the control session.
+- [x] Run the relevant desktop tests and record the verified outcome below.
+
+## Review
+- Updated `apps/desktop/src/app/store.helpers/controlSocket.ts` so `session_config` now treats editable `providerOptions` as the authoritative control-session snapshot. The desktop workspace record now replaces its OpenAI/Codex editable provider-options subset with the normalized event payload and clears stale local values when the snapshot omits them.
+- Updated `apps/desktop/test/workspace-settings-sync.test.ts` to lock the new semantics: partial `session_config.providerOptions` snapshots replace prior editable values instead of merging them, and a snapshot with no `providerOptions` clears previously stored overrides.
+- Verification:
+  - `bun test apps/desktop/test/workspace-settings-sync.test.ts` -> pass (`8 pass, 0 fail`)
+  - `bun run typecheck` -> pass
+
+# Task: Expose reasoning summary in OpenAI-compatible workspace controls
+
+## Plan
+- [x] Extend the shared OpenAI-compatible provider-option helpers and protocol/session validators to accept editable `reasoningSummary`.
+- [x] Add desktop workspace settings plus TUI/CLI command surfaces for `reasoningSummary` on OpenAI API and Codex CLI.
+- [x] Update docs and regression tests, then rerun the relevant verification commands and record the outcome below.
+
+## Review
+- Extended the editable OpenAI-compatible `providerOptions` subset so `reasoningSummary` now flows through `set_config`, `session_config`, desktop workspace persistence, and runtime deep-merge behavior for both `openai` and `codex-cli`.
+- Desktop workspace settings now include a `Reasoning summary` select alongside verbosity and reasoning effort for OpenAI API and Codex CLI, and TUI/CLI now support `/reasoning-summary <auto|concise|detailed>` for the active OpenAI-compatible provider.
+- Bumped the WebSocket protocol version to `7.2` and updated the protocol reference so the editable `providerOptions` contract documents `reasoningSummary`.
+- Verification completed with `~/.bun/bin/bun test test/protocol.test.ts test/session.test.ts test/server.test.ts test/agentSocket.parse.test.ts test/repl.test.ts test/tui.slash-commands.test.ts apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/workspaces-page.test.ts` (`486 pass, 0 fail`), `~/.bun/bin/bun run typecheck` (`pass`), and `~/.bun/bin/bun test` (`1773 pass, 2 skip, 0 fail`).
+
+# Task: Add GPT-5.4 defaults and OpenAI-compatible workspace controls
+
+## Plan
+- [x] Update provider defaults and catalogs so `openai` and `codex-cli` default to `gpt-5.4`, with `textVerbosity: "medium"` and existing reasoning defaults.
+- [x] Extend the WebSocket/session config path to accept, persist, emit, and merge editable OpenAI-compatible `providerOptions`.
+- [x] Add desktop workspace settings plus live-thread sync for OpenAI API and Codex CLI verbosity and reasoning effort.
+- [x] Add TUI and CLI command surfaces for active-provider verbosity and reasoning effort using the shared `set_config` path.
+- [x] Update protocol/docs, add regression coverage, run required tests, and record the verified outcome below.
+
+## Review
+- UI/command-surface scope completed in this worktree: desktop workspace settings now expose separate OpenAI API and Codex CLI verbosity / reasoning-effort controls, desktop sync applies `providerOptions` through control-session `session_config` and live-thread `set_config`, and TUI/CLI now support `/verbosity`, `/reasoning-effort`, and `/effort` for the active OpenAI-compatible provider.
+- Verification completed for the owned scope with `~/.bun/bin/bun test apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/workspaces-page.test.ts test/tui.slash-commands.test.ts test/repl.test.ts` (`88 pass, 0 fail`).
+- Backend/core scope completed in this worktree: OpenAI API and Codex CLI now default to `gpt-5.4`, OpenAI-compatible defaults keep `reasoningEffort: "high"` and `reasoningSummary: "detailed"` while lowering `textVerbosity` to `medium`, and server-only startup now seeds `DEFAULT_PROVIDER_OPTIONS`.
+- Extended the core WebSocket/session path so `set_config` accepts editable `providerOptions` for `openai` and `codex-cli`, `session_config` emits the same normalized subset, and both runtime state and persisted `.agent/config.json` deep-merge the editable fields while preserving unrelated keys like `reasoningSummary` and non-OpenAI provider settings.
+- Isolated the new desktop workspace-settings rendering behind `OpenAiCompatibleModelSettingsCard` so the `workspaces-page` test no longer needs to mock the shared desktop store module; this removed the mock leakage that was contaminating later desktop tests during full-suite runs.
+- Updated the protocol reference to `7.1` and added regression coverage across protocol parsing, session state, server persistence, provider defaults, runtime PI mapping, and client-side server-event parsing.
+- Verification completed for the owned scope with `~/.bun/bin/bun test test/protocol.test.ts test/session.test.ts test/server.test.ts test/runtime.pi-options.test.ts test/providers/openai.test.ts test/providers/codex-cli.test.ts test/providers/provider-options.test.ts test/providers/config-switching.test.ts test/config.test.ts test/agentSocket.parse.test.ts test/docs.check.test.ts` (`492 pass, 0 fail`), `~/.bun/bin/bun run typecheck` (`pass`), and `~/.bun/bin/bun test` (`1770 pass, 2 skip, 0 fail`).
+
 # Task: Ship desktop hotfix release 0.1.8
 
 ## Plan
@@ -110,6 +155,20 @@
   - `~/.bun/bin/bun test test/utils.browser.test.ts test/connect.test.ts test/providers/auth-registry.test.ts test/mcp.oauth-provider.test.ts apps/desktop/test/providers-page.test.ts apps/desktop/test/protocol-v2-events.test.ts` -> pass (`51 pass, 0 fail`)
   - `~/.bun/bin/bun run typecheck` -> pass
   - `~/.bun/bin/bun test` -> pass (`1750 pass, 2 skip, 0 fail`)
+
+# Task: Prep release version 0.1.9 for merge to main
+
+## Plan
+- [x] Identify the authoritative release version surfaces and any tests that pin the visible app version.
+- [x] Bump the repo and desktop package versions from `0.1.8` to `0.1.9` and align the desktop updater/UI tests.
+- [x] Run focused verification for the bumped version and record the outcome below.
+
+## Review
+- Bumped `package.json` and `apps/desktop/package.json` from `0.1.8` to `0.1.9` to prep the next merge-to-main release version.
+- Updated the desktop updater and updates-page tests so their `currentVersion` fixtures and visible version assertions match `0.1.9`.
+- Verification:
+  - `bun test apps/desktop/test/updater-service.test.ts apps/desktop/test/updates-page.test.ts` -> pass (`11 pass, 0 fail`)
+  - `bun run typecheck` -> pass
   - `git diff --check` -> pass aside from existing CRLF conversion warnings on Windows
 
 # Task: Clear stale desktop Codex auth challenge URLs
@@ -1384,3 +1443,22 @@
 - `C:\Users\maxw6\.bun\bin\bun.exe run typecheck` -> pass
 - `CSC_IDENTITY_AUTO_DISCOVERY=false C:\Users\maxw6\.bun\bin\bun.exe run desktop:build -- --publish never` -> pass; produced `apps/desktop/release/Cowork-0.1.12-win-x64.exe` and `.blockmap`
 - `C:\Users\maxw6\.bun\bin\bun.exe test` -> still fails on this Windows machine in pre-existing unrelated `webSearch` and `memory` cases (`4 fail` total); the `desktop-release.workflow` regression now passes locally, and the failed GitHub Actions run showed this was the only CI failure in `Validate`
+
+# Task: Review open PR comments for remaining work
+
+## Plan
+- [x] Inspect the current branch context, repo task log, and PR-comment handling skill.
+- [x] Verify `gh` auth, find the open PR for the current branch, and fetch all review comments/threads.
+- [x] Compare the still-open feedback against the current code and summarize the actionable items to work on next.
+
+## Review
+- PR `#29` (`Add GPT-5.4 defaults and workspace provider controls`) currently has two unresolved review threads from `chatgpt-codex-connector`.
+- Thread 1 on `apps/TUI/component/prompt/slash-commands.ts` is already fixed in the branch: the slash-command helper now checks the boolean return from `syncActions.setConfig(...)`, shows `Not connected — reconnect and try again` on failure, and only shows the success toast when the update was actually dispatched.
+- Follow-up fix applied for thread 2 on `src/cli/repl/commandRouter.ts`: the REPL now tracks the most recently requested provider locally as soon as `/provider <name>` successfully dispatches, and refreshes that selection from `server_hello` / `config_updated`. That makes `/provider codex-cli` followed immediately by `/effort xhigh` target `codex-cli` instead of the previously active provider.
+- Verification:
+  - `C:\Program Files\GitHub CLI\gh.exe auth status` -> authenticated as `mweinbach`
+  - `C:\Program Files\GitHub CLI\gh.exe pr view --json number,title,url,headRefName,baseRefName,state,isDraft,author` -> open PR `#29`
+  - `C:\Program Files\GitHub CLI\gh.exe api graphql ... reviewThreads(first: 100)` -> 2 unresolved threads
+  - `C:\Users\maxw6\.bun\bin\bun test test/repl.test.ts test/tui.slash-commands.test.ts` -> pass (`83 pass, 0 fail`)
+  - `C:\Users\maxw6\.bun\bin\bun test test/repl.test.ts` -> pass (`74 pass, 0 fail`)
+  - `C:\Users\maxw6\.bun\bin\bun run typecheck` -> pass

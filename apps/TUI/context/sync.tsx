@@ -312,6 +312,16 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       });
     },
 
+    setConfig(config) {
+      const sessionId = state.sessionId;
+      if (!sessionId || !socketLifecycle.hasSocket()) return false;
+      return socketLifecycle.send({
+        type: "set_config",
+        sessionId,
+        config,
+      } as any);
+    },
+
     requestProviderCatalog() {
       const sessionId = state.sessionId;
       if (!sessionId || !socketLifecycle.hasSocket()) return;

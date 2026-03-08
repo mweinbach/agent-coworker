@@ -90,7 +90,7 @@ describe("loadConfig", () => {
     });
 
     expect(cfg.provider).toBe("openai");
-    expect(cfg.model).toBe("gpt-5.2");
+    expect(cfg.model).toBe("gpt-5.4");
   });
 
   test("runtime defaults to pi and ignores unsupported AGENT_RUNTIME values", async () => {
@@ -564,7 +564,7 @@ describe("loadConfig", () => {
 
     await writeJson(path.join(customBuiltIn, "config", "defaults.json"), {
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       providerOptions: {
         openai: {
           reasoningEffort: "low",

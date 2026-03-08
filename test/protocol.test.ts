@@ -962,15 +962,30 @@ describe("safeParseClientMessage", () => {
         JSON.stringify({
           type: "set_config",
           sessionId: "s1",
-          config: { yolo: true, observabilityEnabled: false, subAgentModel: "gpt-5.2", maxSteps: 25 },
+          config: {
+            yolo: true,
+            observabilityEnabled: false,
+            subAgentModel: "gpt-5.4",
+            maxSteps: 25,
+            providerOptions: {
+              openai: {
+                reasoningEffort: "xhigh",
+                reasoningSummary: "concise",
+                textVerbosity: "medium",
+              },
+            },
+          },
         }),
       );
       expect(msg.type).toBe("set_config");
       if (msg.type === "set_config") {
         expect(msg.config.yolo).toBe(true);
         expect(msg.config.observabilityEnabled).toBe(false);
-        expect(msg.config.subAgentModel).toBe("gpt-5.2");
+        expect(msg.config.subAgentModel).toBe("gpt-5.4");
         expect(msg.config.maxSteps).toBe(25);
+        expect(msg.config.providerOptions?.openai?.reasoningEffort).toBe("xhigh");
+        expect(msg.config.providerOptions?.openai?.reasoningSummary).toBe("concise");
+        expect(msg.config.providerOptions?.openai?.textVerbosity).toBe("medium");
       }
     });
 
@@ -998,6 +1013,54 @@ describe("safeParseClientMessage", () => {
       expect(
         expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { maxSteps: 1001 } })),
       ).toBe("set_config config.maxSteps must be number 1-1000");
+      expect(
+        expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { providerOptions: "nope" } })),
+      ).toBe("set_config config.providerOptions must be an object");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { providerOptions: { anthropic: { reasoningEffort: "high" } } },
+          }),
+        ),
+      ).toBe("set_config config.providerOptions only supports openai and codex-cli");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { providerOptions: { openai: { unsupported: true } } },
+          }),
+        ),
+      ).toBe("set_config config.providerOptions.openai only supports reasoningEffort, reasoningSummary, and textVerbosity");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { providerOptions: { openai: { reasoningEffort: "max" } } },
+          }),
+        ),
+      ).toBe("set_config config.providerOptions.openai.reasoningEffort must be one of none, low, medium, high, xhigh");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { providerOptions: { openai: { reasoningSummary: "verbose" } } },
+          }),
+        ),
+      ).toBe("set_config config.providerOptions.openai.reasoningSummary must be one of auto, concise, detailed");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { providerOptions: { "codex-cli": { textVerbosity: "verbose" } } },
+          }),
+        ),
+      ).toBe("set_config config.providerOptions.codex-cli.textVerbosity must be one of low, medium, high");
     });
   });
 

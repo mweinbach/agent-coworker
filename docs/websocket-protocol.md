@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.0`
+- Current protocol version: `7.2`
 
 ## Table of Contents
 
@@ -47,6 +47,16 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.2`:
+
+- OpenAI-compatible editable `providerOptions` now also include `reasoningSummary` for `openai` and `codex-cli`.
+
+Changes in `7.1`:
+
+- `set_config.config` now accepts editable OpenAI-compatible `providerOptions` for `openai` and `codex-cli` only.
+- `session_config.config` now includes the same normalized OpenAI-compatible `providerOptions` subset when configured.
+- OpenAI API and Codex CLI provider defaults now use `gpt-5.4`.
 
 Changes in `7.0`:
 
@@ -91,7 +101,7 @@ When a WebSocket connection opens, the server sends these events in order:
 
 1. `server_hello` — session ID, config, protocol version, capabilities
 2. `session_settings` — current runtime settings (e.g. MCP toggle)
-3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `subAgentModel`, `maxSteps`)
+3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `subAgentModel`, `maxSteps`, `providerOptions`)
 4. `session_info` — session metadata including title
 5. `observability_status` — Langfuse observability state
 6. `provider_catalog` — available providers and models (async)
@@ -135,7 +145,7 @@ Returned in `server_hello` and `config_updated`:
 ```json
 {
   "provider": "openai",
-  "model": "gpt-4o",
+  "model": "gpt-5.4",
   "workingDirectory": "/path/to/project"
 }
 ```
@@ -148,8 +158,8 @@ Returned in `server_hello` and `config_updated`:
 {
   "id": "openai",
   "name": "OpenAI",
-  "models": ["gpt-4o", "gpt-4o-mini", "o3"],
-  "defaultModel": "gpt-4o"
+  "models": ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex"],
+  "defaultModel": "gpt-5.4"
 }
 ```
 
@@ -495,7 +505,7 @@ Respond to an `approval` event.
 Update session model and optionally provider. On success, server emits `config_updated` and persists the selection as the default for new sessions in the current project.
 
 ```json
-{ "type": "set_model", "sessionId": "...", "model": "gpt-4o", "provider": "openai" }
+{ "type": "set_model", "sessionId": "...", "model": "gpt-5.4", "provider": "openai" }
 ```
 
 | Field | Type | Required | Description |
@@ -1214,7 +1224,15 @@ Update runtime configuration values.
   "sessionId": "...",
   "config": {
     "yolo": true,
-    "maxSteps": 200
+    "maxSteps": 200,
+    "providerOptions": {
+      "openai": {
+        "textVerbosity": "medium"
+      },
+      "codex-cli": {
+        "reasoningEffort": "xhigh"
+      }
+    }
   }
 }
 ```
@@ -1228,8 +1246,19 @@ Update runtime configuration values.
 | `config.observabilityEnabled` | `boolean` | No | Toggle observability |
 | `config.subAgentModel` | `string` | No | Non-empty sub-agent model ID |
 | `config.maxSteps` | `number` | No | Max steps per turn (1-1000) |
+| `config.providerOptions` | `object` | No | Editable OpenAI-compatible provider option patch. Only `openai` and `codex-cli` are allowed |
+| `config.providerOptions.openai.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | OpenAI reasoning effort |
+| `config.providerOptions.openai.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | No | OpenAI reasoning summary |
+| `config.providerOptions.openai.textVerbosity` | `"low" \| "medium" \| "high"` | No | OpenAI verbosity |
+| `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | Codex CLI reasoning effort |
+| `config.providerOptions.codex-cli.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | No | Codex CLI reasoning summary |
+| `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | No | Codex CLI verbosity |
 
 **Response:** `session_config`
+
+Notes:
+- `providerOptions` is a deep-merged patch against the workspace config. Unrelated provider settings outside this editable subset are preserved.
+- Only `openai` and `codex-cli` are editable through this message. Other provider option trees remain internal.
 
 ---
 
@@ -1263,13 +1292,13 @@ Initial handshake event sent immediately on WebSocket connection.
 {
   "type": "server_hello",
   "sessionId": "abc-123-def",
-  "protocolVersion": "7.0",
+  "protocolVersion": "7.2",
   "capabilities": {
     "modelStreamChunk": "v1"
   },
   "config": {
     "provider": "openai",
-    "model": "gpt-4o",
+    "model": "gpt-5.4",
     "workingDirectory": "/path/to/project"
   },
   "isResume": true,
@@ -1285,7 +1314,7 @@ Initial handshake event sent immediately on WebSocket connection.
 |-------|------|-------------|
 | `type` | `"server_hello"` | — |
 | `sessionId` | `string` | The session identifier. Use this for all subsequent messages |
-| `protocolVersion` | `string?` | Protocol version (currently `"7.0"`) |
+| `protocolVersion` | `string?` | Protocol version (currently `"7.2"`) |
 | `capabilities` | `object?` | Optional capabilities object. Currently: `{ modelStreamChunk: "v1" }` |
 | `config` | `PublicConfig` | Session config: `provider`, `model`, `workingDirectory`, and optionally `outputDirectory` |
 | `isResume` | `boolean?` | Present and `true` only when resuming a disconnected session |
@@ -1327,11 +1356,11 @@ Canonical session metadata snapshot. Sent on connection and whenever title, prov
   "sessionId": "...",
   "title": "Summarize websocket title service",
   "titleSource": "model",
-  "titleModel": "gpt-4o-mini",
+  "titleModel": "gpt-5.4",
   "createdAt": "2026-02-19T18:10:00.000Z",
   "updatedAt": "2026-02-19T18:10:03.000Z",
   "provider": "openai",
-  "model": "gpt-4o"
+  "model": "gpt-5.4"
 }
 ```
 
@@ -1489,9 +1518,9 @@ Provider catalog metadata. Sent on connection and after model changes.
   "type": "provider_catalog",
   "sessionId": "...",
   "all": [
-    { "id": "openai", "name": "OpenAI", "models": ["gpt-4o", "gpt-4o-mini"], "defaultModel": "gpt-4o" }
+    { "id": "openai", "name": "OpenAI", "models": ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex"], "defaultModel": "gpt-5.4" }
   ],
-  "default": { "openai": "gpt-4o", "google": "gemini-2.5-pro" },
+  "default": { "openai": "gpt-5.4", "google": "gemini-2.5-pro" },
   "connected": ["openai"]
 }
 ```
@@ -1674,7 +1703,7 @@ Incremental model stream chunk. Emitted during a turn for each streaming part fr
   "turnId": "turn-abc",
   "index": 0,
   "provider": "openai",
-  "model": "gpt-4o",
+  "model": "gpt-5.4",
   "partType": "text_delta",
   "part": { "text": "Hello" },
   "rawPart": { ... }
@@ -1845,7 +1874,7 @@ Updated session public config after a `set_model` or other runtime change.
   "sessionId": "...",
   "config": {
     "provider": "openai",
-    "model": "gpt-4o",
+    "model": "gpt-5.4",
     "workingDirectory": "/path/to/project"
   }
 }
@@ -2132,7 +2161,7 @@ Persisted session list response to `list_sessions`.
       "sessionId": "abc-123",
       "title": "Fix login bug",
       "provider": "openai",
-      "model": "gpt-4o",
+      "model": "gpt-5.4",
       "createdAt": "2026-02-19T18:00:00.000Z",
       "updatedAt": "2026-02-19T18:30:00.000Z",
       "messageCount": 24
@@ -2188,8 +2217,20 @@ Current runtime config. Sent on connection and after `set_config`.
   "config": {
     "yolo": false,
     "observabilityEnabled": true,
-    "subAgentModel": "gpt-4o-mini",
-    "maxSteps": 100
+    "subAgentModel": "gpt-5.4",
+    "maxSteps": 100,
+    "providerOptions": {
+      "openai": {
+        "reasoningEffort": "high",
+        "reasoningSummary": "detailed",
+        "textVerbosity": "medium"
+      },
+      "codex-cli": {
+        "reasoningEffort": "high",
+        "reasoningSummary": "detailed",
+        "textVerbosity": "medium"
+      }
+    }
   }
 }
 ```
@@ -2202,6 +2243,13 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.observabilityEnabled` | `boolean` | Whether observability is enabled |
 | `config.subAgentModel` | `string` | Sub-agent model identifier |
 | `config.maxSteps` | `number` | Maximum steps per turn |
+| `config.providerOptions` | `object?` | Editable OpenAI-compatible provider options when configured |
+| `config.providerOptions.openai.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable OpenAI reasoning effort |
+| `config.providerOptions.openai.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | Current editable OpenAI reasoning summary |
+| `config.providerOptions.openai.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable OpenAI verbosity |
+| `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable Codex CLI reasoning effort |
+| `config.providerOptions.codex-cli.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | Current editable Codex CLI reasoning summary |
+| `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable Codex CLI verbosity |
 
 ---
 

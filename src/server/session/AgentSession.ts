@@ -44,6 +44,7 @@ import type {
   SessionDependencies,
   SessionRuntimeState,
 } from "./SessionContext";
+import type { SessionConfigPatch } from "../protocol";
 import { SessionMetadataManager } from "./SessionMetadataManager";
 import { SessionRuntimeSupport } from "./SessionRuntimeSupport";
 import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
@@ -595,12 +596,7 @@ export class AgentSession {
     await this.adminManager.deleteSession(targetSessionId);
   }
 
-  async setConfig(patch: {
-    yolo?: boolean;
-    observabilityEnabled?: boolean;
-    subAgentModel?: string;
-    maxSteps?: number;
-  }) {
+  async setConfig(patch: SessionConfigPatch) {
     await this.metadataManager.setConfig(patch);
   }
 

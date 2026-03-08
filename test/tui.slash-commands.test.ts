@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 
 import {
   createLocalSlashCommands,
@@ -7,24 +7,31 @@ import {
   parseSlashInput,
 } from "../apps/TUI/component/prompt/slash-commands";
 
+function makeDeps(overrides: Record<string, unknown> = {}) {
+  return {
+    syncActions: {
+      reset: () => {},
+      cancel: () => {},
+      setConfig: () => true,
+      setProviderApiKey: () => {},
+      requestHarnessContext: () => {},
+      setHarnessContext: () => {},
+    },
+    route: {
+      navigate: () => {},
+    },
+    getCurrentProvider: () => "openai",
+    dialog: {},
+    exit: {
+      exit: () => {},
+    },
+    ...overrides,
+  } as Parameters<typeof createLocalSlashCommands>[0];
+}
+
 describe("local slash command registry", () => {
   test("autocomplete items come from executable registry entries", () => {
-    const commands = createLocalSlashCommands({
-      syncActions: {
-        reset: () => {},
-        cancel: () => {},
-        setProviderApiKey: () => {},
-        requestHarnessContext: () => {},
-        setHarnessContext: () => {},
-      },
-      route: {
-        navigate: () => {},
-      },
-      dialog: {},
-      exit: {
-        exit: () => {},
-      },
-    });
+    const commands = createLocalSlashCommands(makeDeps());
 
     const items = localSlashCommandsToAutocompleteItems(commands);
     expect(items.length).toBeGreaterThan(0);
@@ -42,12 +49,13 @@ describe("local slash command registry", () => {
     let resetCalls = 0;
     let navigateCalls = 0;
 
-    const commands = createLocalSlashCommands({
+    const commands = createLocalSlashCommands(makeDeps({
       syncActions: {
         reset: () => {
           resetCalls += 1;
         },
         cancel: () => {},
+        setConfig: () => true,
         setProviderApiKey: () => {},
         requestHarnessContext: () => {},
         setHarnessContext: () => {},
@@ -61,7 +69,7 @@ describe("local slash command registry", () => {
       exit: {
         exit: () => {},
       },
-    });
+    }));
 
     const resolved = findLocalSlashCommand(commands, "clear");
     expect(resolved?.name).toBe("new");
@@ -96,10 +104,11 @@ describe("local slash command registry", () => {
   test("hctx set generates a default harness context payload", async () => {
     let setPayload: any = null;
 
-    const commands = createLocalSlashCommands({
+    const commands = createLocalSlashCommands(makeDeps({
       syncActions: {
         reset: () => {},
         cancel: () => {},
+        setConfig: () => true,
         setProviderApiKey: () => {},
         requestHarnessContext: () => {},
         setHarnessContext: (context) => {
@@ -113,7 +122,7 @@ describe("local slash command registry", () => {
       exit: {
         exit: () => {},
       },
-    });
+    }));
 
     const resolved = findLocalSlashCommand(commands, "hctx");
     expect(resolved).not.toBeNull();
@@ -128,23 +137,114 @@ describe("local slash command registry", () => {
     expect(setPayload.metadata?.source).toBe("tui");
   });
 
-  test("slo command is not registered", () => {
-    const commands = createLocalSlashCommands({
+  test("/verbosity updates the active openai provider via setConfig", async () => {
+    const setConfig = mock(() => true);
+    const commands = createLocalSlashCommands(makeDeps({
       syncActions: {
         reset: () => {},
         cancel: () => {},
+        setConfig,
         setProviderApiKey: () => {},
         requestHarnessContext: () => {},
         setHarnessContext: () => {},
       },
-      route: {
-        navigate: () => {},
-      },
-      dialog: {},
-      exit: {
-        exit: () => {},
+      getCurrentProvider: () => "openai",
+    }));
+
+    const resolved = findLocalSlashCommand(commands, "verbosity");
+    expect(resolved).not.toBeNull();
+
+    await Promise.resolve(resolved?.execute("high"));
+
+    expect(setConfig).toHaveBeenCalledWith({
+      providerOptions: {
+        openai: {
+          textVerbosity: "high",
+        },
       },
     });
+  });
+
+  test("/effort aliases reasoning-effort and targets codex-cli when active", async () => {
+    const setConfig = mock(() => true);
+    const commands = createLocalSlashCommands(makeDeps({
+      syncActions: {
+        reset: () => {},
+        cancel: () => {},
+        setConfig,
+        setProviderApiKey: () => {},
+        requestHarnessContext: () => {},
+        setHarnessContext: () => {},
+      },
+      getCurrentProvider: () => "codex-cli",
+    }));
+
+    const resolved = findLocalSlashCommand(commands, "effort");
+    expect(resolved?.name).toBe("reasoning-effort");
+
+    await Promise.resolve(resolved?.execute("xhigh"));
+
+    expect(setConfig).toHaveBeenCalledWith({
+      providerOptions: {
+        "codex-cli": {
+          reasoningEffort: "xhigh",
+        },
+      },
+    });
+  });
+
+  test("/reasoning-summary updates the active provider via setConfig", async () => {
+    const setConfig = mock(() => true);
+    const commands = createLocalSlashCommands(makeDeps({
+      syncActions: {
+        reset: () => {},
+        cancel: () => {},
+        setConfig,
+        setProviderApiKey: () => {},
+        requestHarnessContext: () => {},
+        setHarnessContext: () => {},
+      },
+      getCurrentProvider: () => "openai",
+    }));
+
+    const resolved = findLocalSlashCommand(commands, "reasoning-summary");
+    expect(resolved).not.toBeNull();
+
+    await Promise.resolve(resolved?.execute("concise"));
+
+    expect(setConfig).toHaveBeenCalledWith({
+      providerOptions: {
+        openai: {
+          reasoningSummary: "concise",
+        },
+      },
+    });
+  });
+
+  test("provider-setting commands refuse non-openai-compatible providers", async () => {
+    const setConfig = mock(() => true);
+    const commands = createLocalSlashCommands(makeDeps({
+      syncActions: {
+        reset: () => {},
+        cancel: () => {},
+        setConfig,
+        setProviderApiKey: () => {},
+        requestHarnessContext: () => {},
+        setHarnessContext: () => {},
+      },
+      getCurrentProvider: () => "google",
+    }));
+
+    const resolved = findLocalSlashCommand(commands, "verbosity");
+    expect(resolved).not.toBeNull();
+
+    await Promise.resolve(resolved?.execute("medium"));
+
+    expect(setConfig).not.toHaveBeenCalled();
+  });
+
+  test("slo command is not registered", () => {
+    const commands = createLocalSlashCommands(makeDeps());
 
     const resolved = findLocalSlashCommand(commands, "slo");
     expect(resolved).toBeNull();

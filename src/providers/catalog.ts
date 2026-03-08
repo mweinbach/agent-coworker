@@ -11,7 +11,7 @@ export const PROVIDER_MODEL_CATALOG = {
     availableModels: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"],
   },
   "codex-cli": {
-    defaultModel: "gpt-5.3-codex",
+    defaultModel: "gpt-5.4",
     availableModels: ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.2"],
   },
   google: {
@@ -19,8 +19,8 @@ export const PROVIDER_MODEL_CATALOG = {
     availableModels: ["gemini-3.1-pro-preview-customtools", "gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-3.1-pro-preview"],
   },
   openai: {
-    defaultModel: "gpt-5.2",
-    availableModels: ["gpt-5.2", "gpt-5.2-codex", "gpt-5.1", "gpt-5-mini", "gpt-5.2-pro"],
+    defaultModel: "gpt-5.4",
+    availableModels: ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex", "gpt-5.1", "gpt-5-mini", "gpt-5.2-pro"],
   },
 } as const satisfies Record<ProviderName, ProviderModelDefinition>;
 

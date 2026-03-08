@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import path from "node:path";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot, withEnv } from "./helpers";
 
-const DEFAULT_CODEX_MODEL = "gpt-5.3-codex";
+const DEFAULT_CODEX_MODEL = "gpt-5.4";
 
 describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
   test(`defaultModelForProvider returns ${DEFAULT_CODEX_MODEL}`, () => {
@@ -22,7 +23,12 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
 
   test("getModel exposes stable adapter shape", async () => {
     await withEnv("OPENAI_API_KEY", "test_openai_key", async () => {
-      const cfg = makeConfig({ provider: "codex-cli", model: DEFAULT_CODEX_MODEL });
+      const { home } = await makeTmpDirs();
+      const cfg = makeConfig({
+        provider: "codex-cli",
+        model: DEFAULT_CODEX_MODEL,
+        userAgentDir: path.join(home, ".agent"),
+      });
       const viaGetModel = getModel(cfg, DEFAULT_CODEX_MODEL) as any;
       const headers = await viaGetModel.config.headers();
 
@@ -38,6 +44,7 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
     expect(opts).toBeDefined();
     expect(opts.reasoningEffort).toBe("high");
     expect(opts.reasoningSummary).toBe("detailed");
+    expect(opts.textVerbosity).toBe("medium");
   });
 
   test(`loadConfig with codex-cli provider returns ${DEFAULT_CODEX_MODEL} model`, async () => {

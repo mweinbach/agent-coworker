@@ -4,7 +4,7 @@ import { createCodexCliModelAdapter } from "./modelAdapter";
 export const DEFAULT_CODEX_CLI_PROVIDER_OPTIONS = {
   reasoningEffort: "high",
   reasoningSummary: "detailed",
-  textVerbosity: "high",
+  textVerbosity: "medium",
 } as const;
 
 export const codexCliProvider = {

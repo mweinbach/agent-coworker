@@ -20,7 +20,7 @@ export const DEFAULT_OPENAI_PROVIDER_OPTIONS = {
   // serviceTier: "auto", // "auto" | "flex" | "priority" | "default"
   // store: true,
   // strictJsonSchema: true,
-  textVerbosity: "high", // "low" | "medium" | "high"
+  textVerbosity: "medium", // "low" | "medium" | "high"
   // truncation: "auto", // "auto" | "disabled"
   // user: undefined,
   // systemMessageMode: "system", // "system" | "developer" | "remove"

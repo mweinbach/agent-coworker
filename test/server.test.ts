@@ -11,6 +11,7 @@ import {
   SERVER_EVENT_TYPES,
   WEBSOCKET_PROTOCOL_VERSION,
 } from "../src/server/protocol";
+import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
 
 function repoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -437,6 +438,29 @@ describe("WebSocket Lifecycle", () => {
       expect(typeof configEvt.config.observabilityEnabled).toBe("boolean");
       expect(typeof configEvt.config.subAgentModel).toBe("string");
       expect(typeof configEvt.config.maxSteps).toBe("number");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("connect emits editable provider options when startup defaults are supplied", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, { providerOptions: DEFAULT_PROVIDER_OPTIONS }));
+    try {
+      const messages = await collectMessages(url, 4);
+      const configEvt = messages.find((msg: any) => msg.type === "session_config");
+      expect(configEvt?.config.providerOptions).toEqual({
+        openai: {
+          reasoningEffort: "high",
+          reasoningSummary: "detailed",
+          textVerbosity: "medium",
+        },
+        "codex-cli": {
+          reasoningEffort: "high",
+          reasoningSummary: "detailed",
+          textVerbosity: "medium",
+        },
+      });
     } finally {
       server.stop();
     }
@@ -2017,24 +2041,24 @@ describe("Protocol Doc Parity", () => {
 
       const model = await sendAndCollect(
         url,
-        (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.2" }),
+        (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.4" }),
         1,
       );
       expect(model.responses[0].type).toBe("config_updated");
       if (model.responses[0].type === "config_updated") {
         expect(model.responses[0].config.provider).toBe("openai");
-        expect(model.responses[0].config.model).toBe("gpt-5.2");
+        expect(model.responses[0].config.model).toBe("gpt-5.4");
       }
 
       const nextSessionHello = (await collectMessages(url, 1))[0];
       expect(nextSessionHello.type).toBe("server_hello");
       expect(nextSessionHello.config.provider).toBe("openai");
-      expect(nextSessionHello.config.model).toBe("gpt-5.2");
+      expect(nextSessionHello.config.model).toBe("gpt-5.4");
 
       const persistedConfigPath = path.join(tmpDir, ".agent", "config.json");
       const persistedConfig = JSON.parse(await fs.readFile(persistedConfigPath, "utf-8")) as Record<string, unknown>;
       expect(persistedConfig.provider).toBe("openai");
-      expect(persistedConfig.model).toBe("gpt-5.2");
+      expect(persistedConfig.model).toBe("gpt-5.4");
     } finally {
       server.stop();
     }
@@ -2048,14 +2072,14 @@ describe("Protocol Doc Parity", () => {
 
       const result = await sendAndCollect(
         url,
-        (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.2" }),
+        (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.4" }),
         2,
       );
 
       expect(result.responses[0].type).toBe("config_updated");
       if (result.responses[0].type === "config_updated") {
         expect(result.responses[0].config.provider).toBe("openai");
-        expect(result.responses[0].config.model).toBe("gpt-5.2");
+        expect(result.responses[0].config.model).toBe("gpt-5.4");
       }
 
       expect(result.responses[1].type).toBe("error");
@@ -2068,6 +2092,82 @@ describe("Protocol Doc Parity", () => {
       expect(nextSessionHello.type).toBe("server_hello");
       // Persistence failed, so newly created sessions keep project defaults.
       expect(nextSessionHello.config.provider).toBe("google");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("set_config deep-merges editable providerOptions into project config", async () => {
+    const tmpDir = await makeTmpProject();
+    await fs.writeFile(
+      path.join(tmpDir, ".agent", "config.json"),
+      `${JSON.stringify({
+        providerOptions: {
+          openai: {
+            reasoningEffort: "high",
+            reasoningSummary: "detailed",
+            textVerbosity: "medium",
+          },
+          google: {
+            thinkingConfig: {
+              includeThoughts: true,
+              thinkingLevel: "low",
+            },
+          },
+        },
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, { providerOptions: DEFAULT_PROVIDER_OPTIONS }));
+    try {
+      const event = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({
+          type: "set_config",
+          sessionId,
+          config: {
+            providerOptions: {
+              openai: {
+                textVerbosity: "low",
+              },
+              "codex-cli": {
+                reasoningEffort: "xhigh",
+              },
+            },
+          },
+        }),
+        (message) =>
+          message.type === "session_config" &&
+          message.config?.providerOptions?.openai?.textVerbosity === "low" &&
+          message.config?.providerOptions?.["codex-cli"]?.reasoningEffort === "xhigh",
+      );
+
+      expect(event.config.providerOptions).toEqual({
+        openai: {
+          reasoningEffort: "high",
+          reasoningSummary: "detailed",
+          textVerbosity: "low",
+        },
+        "codex-cli": {
+          reasoningEffort: "xhigh",
+          reasoningSummary: "detailed",
+          textVerbosity: "medium",
+        },
+      });
+      expect((event.config.providerOptions as any)?.google).toBeUndefined();
+
+      const persistedConfig = JSON.parse(
+        await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),
+      ) as any;
+      expect(persistedConfig.providerOptions.google.thinkingConfig.includeThoughts).toBe(true);
+      expect(persistedConfig.providerOptions.google.thinkingConfig.thinkingLevel).toBe("low");
+      expect(persistedConfig.providerOptions.openai.reasoningEffort).toBe("high");
+      expect(persistedConfig.providerOptions.openai.reasoningSummary).toBe("detailed");
+      expect(persistedConfig.providerOptions.openai.textVerbosity).toBe("low");
+      expect(persistedConfig.providerOptions["codex-cli"].reasoningEffort).toBe("xhigh");
+      expect(persistedConfig.providerOptions["codex-cli"].reasoningSummary).toBe("detailed");
+      expect(persistedConfig.providerOptions["codex-cli"].textVerbosity).toBe("medium");
     } finally {
       server.stop();
     }

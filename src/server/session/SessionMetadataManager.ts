@@ -1,5 +1,10 @@
 import { getObservabilityHealth } from "../../observability/runtime";
+import {
+  mergeEditableOpenAiCompatibleProviderOptions,
+  pickEditableOpenAiCompatibleProviderOptions,
+} from "../../shared/openaiCompatibleOptions";
 import type { AgentConfig, HarnessContextPayload } from "../../types";
+import type { SessionConfigPatch } from "../protocol";
 import { DEFAULT_SESSION_TITLE, heuristicTitleFromQuery, type SessionTitleSource } from "../sessionTitleService";
 import type { SessionContext } from "./SessionContext";
 
@@ -24,6 +29,7 @@ export class SessionMetadataManager {
   }
 
   getSessionConfigEvent(): Extract<import("../protocol").ServerEvent, { type: "session_config" }> {
+    const providerOptions = pickEditableOpenAiCompatibleProviderOptions(this.context.state.config.providerOptions);
     return {
       type: "session_config",
       sessionId: this.context.id,
@@ -32,6 +38,7 @@ export class SessionMetadataManager {
         observabilityEnabled: this.context.state.config.observabilityEnabled ?? false,
         subAgentModel: this.context.state.config.subAgentModel,
         maxSteps: this.context.state.maxSteps,
+        ...(providerOptions ? { providerOptions } : {}),
       },
     };
   }
@@ -149,18 +156,16 @@ export class SessionMetadataManager {
     });
   }
 
-  async setConfig(patch: {
-    yolo?: boolean;
-    observabilityEnabled?: boolean;
-    subAgentModel?: string;
-    maxSteps?: number;
-  }) {
+  async setConfig(patch: SessionConfigPatch) {
     const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
     if (patch.subAgentModel !== undefined) {
       persistPatch.subAgentModel = patch.subAgentModel;
     }
     if (patch.observabilityEnabled !== undefined) {
       persistPatch.observabilityEnabled = patch.observabilityEnabled;
+    }
+    if (patch.providerOptions !== undefined) {
+      persistPatch.providerOptions = patch.providerOptions;
     }
     if (Object.keys(persistPatch).length > 0 && this.context.deps.persistProjectConfigPatchImpl) {
       try {
@@ -182,6 +187,15 @@ export class SessionMetadataManager {
     }
     if (patch.subAgentModel !== undefined) {
       this.context.state.config = { ...this.context.state.config, subAgentModel: patch.subAgentModel };
+    }
+    if (patch.providerOptions !== undefined) {
+      this.context.state.config = {
+        ...this.context.state.config,
+        providerOptions: mergeEditableOpenAiCompatibleProviderOptions(
+          this.context.state.config.providerOptions,
+          patch.providerOptions,
+        ),
+      };
     }
     if (patch.maxSteps !== undefined) this.context.state.maxSteps = patch.maxSteps;
 

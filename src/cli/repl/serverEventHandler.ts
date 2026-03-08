@@ -18,6 +18,7 @@ export type ReplServerEventState = {
   sessionId: string | null;
   lastKnownSessionId: string | null;
   config: PublicConfig | null;
+  selectedProvider: string | null;
   busy: boolean;
   providerList: string[];
   providerAuthMethods: Record<string, ProviderAuthMethod[]>;
@@ -53,6 +54,7 @@ export function createServerEventHandler(ctx: ReplServerEventContext) {
       ctx.state.sessionId = evt.sessionId;
       ctx.state.lastKnownSessionId = evt.sessionId;
       ctx.state.config = evt.config;
+      ctx.state.selectedProvider = evt.config.provider;
       ctx.state.busy = false;
       ctx.state.disconnectNotified = false;
       ctx.resetModelStreamState();
@@ -217,6 +219,7 @@ export function createServerEventHandler(ctx: ReplServerEventContext) {
         break;
       case "config_updated":
         ctx.state.config = evt.config;
+        ctx.state.selectedProvider = evt.config.provider;
         console.log(`config updated: ${evt.config.provider}/${evt.config.model}`);
         break;
       case "provider_catalog":

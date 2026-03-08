@@ -8,6 +8,11 @@ import type { runTurn as runTurnFn } from "../agent";
 import type { AgentConfig } from "../types";
 import { loadConfig } from "../config";
 import { loadSystemPromptWithSkills } from "../prompt";
+import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
+import {
+  OPENAI_COMPATIBLE_PROVIDER_NAMES,
+  mergeEditableOpenAiCompatibleProviderOptions,
+} from "../shared/openaiCompatibleOptions";
 import { ensureDefaultGlobalSkillsReady } from "../skills/defaultGlobalSkills";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 
@@ -67,7 +72,10 @@ async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unkn
 
 async function persistProjectConfigPatch(
   projectAgentDir: string,
-  patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">>
+  patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">> & {
+    providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
+  },
+  runtimeProviderOptions?: AgentConfig["providerOptions"],
 ): Promise<void> {
   const entries = Object.entries(patch).filter(([, value]) => value !== undefined);
   if (entries.length === 0) return;
@@ -75,11 +83,53 @@ async function persistProjectConfigPatch(
   const current = await loadJsonObjectSafe(configPath);
   const next: Record<string, unknown> = { ...current };
   for (const [key, value] of entries) {
+    if (key === "providerOptions") {
+      const currentProviderOptions = isPlainObject(current[key]) ? { ...current[key] } : {};
+      for (const provider of OPENAI_COMPATIBLE_PROVIDER_NAMES) {
+        const sectionPatch = patch.providerOptions?.[provider];
+        if (!sectionPatch) continue;
+
+        const runtimeSection =
+          isPlainObject(runtimeProviderOptions) && isPlainObject(runtimeProviderOptions[provider])
+            ? { ...runtimeProviderOptions[provider] }
+            : {};
+        const currentSection = isPlainObject(currentProviderOptions[provider])
+          ? { ...currentProviderOptions[provider] }
+          : {};
+
+        // Merge order (lowest → highest priority):
+        //   runtimeSection  — options passed at server startup (e.g. CLI flags or desktop launch config)
+        //   currentSection  — previously persisted values in .agent/config.json
+        //   sectionPatch    — the incoming patch from this set_config call
+        // Launch-time options are intentionally overridable by persisted config and new patches so
+        // that user changes made via the UI/CLI survive server restarts.
+        currentProviderOptions[provider] = {
+          ...runtimeSection,
+          ...currentSection,
+          ...sectionPatch,
+        };
+      }
+      next[key] = Object.keys(currentProviderOptions).length > 0 ? currentProviderOptions : undefined;
+      continue;
+    }
     next[key] = value;
   }
   await fs.mkdir(projectAgentDir, { recursive: true });
   const payload = `${JSON.stringify(next, null, 2)}\n`;
   await writeTextFileAtomic(configPath, payload);
+}
+
+function mergeConfigPatch(
+  config: AgentConfig,
+  patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">> & {
+    providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
+  }
+): AgentConfig {
+  const next: AgentConfig = { ...config, ...patch };
+  if (patch.providerOptions !== undefined) {
+    next.providerOptions = mergeEditableOpenAiCompatibleProviderOptions(config.providerOptions, patch.providerOptions);
+  }
+  return next;
 }
 
 export interface StartAgentServerOptions {
@@ -174,14 +224,16 @@ export async function startAgentServer(
         model: string;
         subAgentModel: string;
       }) => {
-        await persistProjectConfigPatch(config.projectAgentDir, selection);
-        config = { ...config, ...selection };
+        await persistProjectConfigPatch(config.projectAgentDir, selection, config.providerOptions);
+        config = mergeConfigPatch(config, selection);
       },
       persistProjectConfigPatchImpl: async (
-        patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">>
+        patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">> & {
+          providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
+        }
       ) => {
-        await persistProjectConfigPatch(config.projectAgentDir, patch);
-        config = { ...config, ...patch };
+        await persistProjectConfigPatch(config.projectAgentDir, patch, config.providerOptions);
+        config = mergeConfigPatch(config, patch);
       },
       sessionDb,
       emit,

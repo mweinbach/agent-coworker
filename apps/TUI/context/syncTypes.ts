@@ -65,6 +65,23 @@ export type ContextUsageSnapshot = {
   totalTokens: number | null;
 };
 
+export type OpenAICompatibleProviderName = "openai" | "codex-cli";
+export type OpenAICompatibleReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
+export type OpenAICompatibleReasoningSummary = "auto" | "concise" | "detailed";
+export type OpenAICompatibleTextVerbosity = "low" | "medium" | "high";
+export type OpenAICompatibleProviderOptions = {
+  reasoningEffort?: OpenAICompatibleReasoningEffort;
+  reasoningSummary?: OpenAICompatibleReasoningSummary;
+  textVerbosity?: OpenAICompatibleTextVerbosity;
+};
+export type SyncConfigPatch = {
+  yolo?: boolean;
+  observabilityEnabled?: boolean;
+  subAgentModel?: string;
+  maxSteps?: number;
+  providerOptions?: Partial<Record<OpenAICompatibleProviderName, OpenAICompatibleProviderOptions>>;
+};
+
 export type SyncState = {
   status: "connecting" | "connected" | "disconnected";
   sessionId: string | null;
@@ -102,6 +119,7 @@ export type SyncActions = {
   answerAsk: (requestId: string, answer: string) => void;
   respondApproval: (requestId: string, approved: boolean) => void;
   setModel: (provider: string, model: string) => void;
+  setConfig: (config: SyncConfigPatch) => boolean;
   requestProviderCatalog: () => void;
   requestProviderAuthMethods: () => void;
   refreshProviderStatus: () => void;

@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 
@@ -18,6 +17,7 @@ import { z } from "zod";
 import type { MCPRegistryServer } from "./configRegistry";
 import type { MCPServerOAuthClientInfo, MCPServerOAuthPending, MCPServerOAuthTokens } from "./authStore";
 import { nowIso } from "../utils/typeGuards";
+import { openExternalUrl } from "../utils/browser";
 
 /** Default client_id used when no dynamic registration endpoint is available. */
 const FALLBACK_CLIENT_ID = "agent-coworker-desktop";
@@ -71,27 +71,6 @@ function isHttpLikeServer(
   server: MCPRegistryServer,
 ): server is MCPRegistryServer & { transport: Extract<MCPRegistryServer["transport"], { type: "http" | "sse" }> } {
   return server.transport.type === "http" || server.transport.type === "sse";
-}
-
-async function runCommand(command: string, args: string[]): Promise<boolean> {
-  return await new Promise((resolve) => {
-    const child = spawn(command, args, {
-      stdio: "ignore",
-      detached: false,
-    });
-    child.once("error", () => resolve(false));
-    child.once("exit", (code) => resolve(code === 0));
-  });
-}
-
-async function openUrlInBrowser(url: string): Promise<boolean> {
-  if (process.platform === "darwin") {
-    return await runCommand("open", [url]);
-  }
-  if (process.platform === "win32") {
-    return await runCommand("cmd", ["/c", "start", "", url]);
-  }
-  return await runCommand("xdg-open", [url]);
 }
 
 function closeCapture(capture: CallbackCapture, opts: { keepEntry?: boolean } = {}): void {
@@ -319,7 +298,7 @@ export async function authorizeMCPServerOAuth(
 
   let openedBrowser = false;
   if (method === "auto") {
-    openedBrowser = await openUrlInBrowser(url);
+    openedBrowser = await openExternalUrl(url);
   }
 
   const pending: MCPServerOAuthPending = {

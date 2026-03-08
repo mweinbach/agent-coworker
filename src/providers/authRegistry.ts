@@ -37,7 +37,6 @@ const PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> = {
   anthropic: [{ id: "api_key", type: "api", label: "API key" }],
   "codex-cli": [
     { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
-    { id: "oauth_device", type: "oauth", label: "Sign in with ChatGPT (device code)", oauthMode: "auto" },
     { id: "api_key", type: "api", label: "API key" },
   ],
 };
@@ -71,19 +70,14 @@ export function authorizeProviderAuth(opts: {
   }
 
   if (opts.provider === "codex-cli") {
-    const isDeviceCode = opts.methodId === "oauth_device";
     return {
       ok: true,
       challenge: {
         method: method.oauthMode ?? "auto",
-        instructions: isDeviceCode
-          ? "Use the device-code flow. A one-time code will be generated when you continue."
-          : "Continue to open browser-based ChatGPT OAuth and finish sign-in.",
-        url: isDeviceCode ? "https://auth.openai.com/codex/device" : "https://auth.openai.com/oauth/authorize",
+        instructions: "Continue to open browser-based ChatGPT OAuth and finish sign-in. The app will open the PI-native sign-in URL automatically.",
       },
     };
   }
-
 
   return { ok: false, message: `Provider ${opts.provider} does not support OAuth authorization.` };
 }

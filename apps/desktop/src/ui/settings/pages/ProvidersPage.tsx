@@ -62,7 +62,6 @@ function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
   if (provider === "codex-cli") {
     return [
       { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
-      { id: "oauth_device", type: "oauth", label: "Sign in with ChatGPT (device code)", oauthMode: "auto" },
       { id: "api_key", type: "api", label: "API key" },
     ];
   }
@@ -152,6 +151,15 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     setOptimisticApiKeyMaskByMethod((s) => ({ ...s, [stateKey]: nextMask }));
   }, [providerLastAuthResult, providerStatusByName]);
 
+  const startOauthSignIn = (provider: ProviderName, method: ProviderAuthMethod, code?: string) => {
+    void (async () => {
+      await authorizeProviderAuth(provider, method.id);
+      if (method.oauthMode !== "code") {
+        await callbackProviderAuth(provider, method.id, code);
+      }
+    })();
+  };
+
   const renderAuthMethod = (opts: {
     provider: ProviderName;
     providerDisplayName: string;
@@ -169,6 +177,10 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       providerLastAuthChallenge?.provider === opts.provider && providerLastAuthChallenge?.methodId === opts.method.id
         ? providerLastAuthChallenge
         : null;
+    const challengeUrl =
+      opts.provider === "codex-cli" && opts.method.id === "oauth_cli"
+        ? undefined
+        : challengeMatch?.challenge.url;
     const resultMatch =
       providerLastAuthResult?.provider === opts.provider && providerLastAuthResult?.methodId === opts.method.id
         ? providerLastAuthResult
@@ -256,7 +268,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
               disabled={!canConnectProvider}
               title={!canConnectProvider ? "Add a workspace first." : undefined}
               onClick={() => {
-                void authorizeProviderAuth(opts.provider, opts.method.id);
+                startOauthSignIn(opts.provider, opts.method);
               }}
             >
               Sign in
@@ -285,28 +297,17 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                   Submit
                 </Button>
               </>
-            ) : (
-              <Button
-                variant="outline"
-                type="button"
-                disabled={!canConnectProvider}
-                onClick={() => {
-                  void callbackProviderAuth(opts.provider, opts.method.id);
-                }}
-              >
-                Continue
-              </Button>
-            )}
+            ) : null}
           </div>
         )}
 
         {challengeMatch ? (
           <div className="text-xs text-muted-foreground">
             {challengeMatch.challenge.instructions}
-            {challengeMatch.challenge.url ? (
+            {challengeUrl ? (
               <>
                 {" "}
-                <a href={challengeMatch.challenge.url} target="_blank" rel="noreferrer" className="underline">
+                <a href={challengeUrl} target="_blank" rel="noreferrer" className="underline">
                   Open link
                 </a>
               </>

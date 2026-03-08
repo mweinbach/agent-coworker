@@ -61,6 +61,10 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
   
       const oauthMethod = methods.find((method) => method.type === "oauth");
       if (oauthMethod) {
+        set(() => ({
+          providerLastAuthChallenge: null,
+          providerLastAuthResult: null,
+        }));
         await get().authorizeProviderAuth(provider, oauthMethod.id);
         if (oauthMethod.oauthMode !== "code") {
           await get().callbackProviderAuth(provider, oauthMethod.id);
@@ -158,6 +162,11 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
         }));
         return;
       }
+
+      set(() => ({
+        providerLastAuthChallenge: null,
+        providerLastAuthResult: null,
+      }));
   
       const ok = sendControl(get, workspaceId, (sessionId) => ({
         type: "provider_auth_authorize",
@@ -210,6 +219,11 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
         }));
         return;
       }
+
+      set(() => ({
+        providerLastAuthChallenge: null,
+        providerLastAuthResult: null,
+      }));
   
       const normalizedCode = code?.trim();
       const ok = sendControl(get, workspaceId, (sessionId) => ({

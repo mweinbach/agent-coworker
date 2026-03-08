@@ -6,6 +6,21 @@ import { RUNTIME } from "./runtimeState";
 
 type ProviderStatusEvent = Extract<ServerEvent, { type: "provider_status" }>;
 type ProviderStatus = ProviderStatusEvent["providers"][number];
+type ProviderAuthChallengeEvent = Extract<ServerEvent, { type: "provider_auth_challenge" }>;
+
+function sanitizeProviderAuthChallenge(evt: ProviderAuthChallengeEvent): ProviderAuthChallengeEvent {
+  if (evt.provider !== "codex-cli" || evt.methodId !== "oauth_cli" || !evt.challenge.url) {
+    return evt;
+  }
+
+  return {
+    ...evt,
+    challenge: {
+      ...evt.challenge,
+      url: undefined,
+    },
+  };
+}
 
 type ControlSocketDeps = {
   nowIso: () => string;
@@ -43,6 +58,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
               },
             },
             providerStatusRefreshing: true,
+            providerLastAuthChallenge: null,
           }));
 
           try {
@@ -249,16 +265,17 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
         }
 
         if (evt.type === "provider_auth_challenge") {
-          const command = evt.challenge.command ? ` Command: ${evt.challenge.command}` : "";
-          const url = evt.challenge.url ? ` URL: ${evt.challenge.url}` : "";
+          const sanitized = sanitizeProviderAuthChallenge(evt);
+          const command = sanitized.challenge.command ? ` Command: ${sanitized.challenge.command}` : "";
+          const url = sanitized.challenge.url ? ` URL: ${sanitized.challenge.url}` : "";
           set((s) => ({
-            providerLastAuthChallenge: evt,
+            providerLastAuthChallenge: sanitized,
             notifications: deps.pushNotification(s.notifications, {
               id: deps.makeId(),
               ts: deps.nowIso(),
               kind: "info",
-              title: `Auth challenge: ${evt.provider}`,
-              detail: `${evt.challenge.instructions}${url}${command}`,
+              title: `Auth challenge: ${sanitized.provider}`,
+              detail: `${sanitized.challenge.instructions}${url}${command}`,
             }),
           }));
           return;

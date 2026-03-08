@@ -100,6 +100,7 @@ describe("desktop providers page", () => {
       providerCatalog: [
         { id: "google", name: "Google" },
         { id: "openai", name: "OpenAI" },
+        { id: "codex-cli", name: "Codex CLI" },
       ] as any,
       providerAuthMethodsByProvider: {
         google: [
@@ -107,6 +108,9 @@ describe("desktop providers page", () => {
           { id: "exa_api_key", type: "api", label: "Exa API key (web search)" },
         ],
         openai: [{ id: "api_key", type: "api", label: "API key" }],
+        "codex-cli": [
+          { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
+        ],
       } as any,
       providerLastAuthChallenge: null,
       providerLastAuthResult: null,
@@ -136,5 +140,59 @@ describe("desktop providers page", () => {
     expect(html).toContain("Exa Search");
     expect(html).toContain("Paste your Exa API key");
     expect(html).toContain("provider-panel-exa-search");
+  });
+
+  test("auto oauth providers do not render a separate continue step", () => {
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:codex-cli",
+      }),
+    );
+
+    expect(html).toContain("Codex CLI");
+    expect(html).toContain("Sign in with ChatGPT (browser)");
+    expect(html).not.toContain("device code");
+    expect(html).not.toContain(">Continue<");
+  });
+
+  test("codex browser auth ignores stale challenge URLs", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/ws-1",
+          createdAt: "2026-03-07T00:00:00.000Z",
+          lastOpenedAt: "2026-03-07T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      providerLastAuthChallenge: {
+        type: "provider_auth_challenge",
+        sessionId: "control-session",
+        provider: "codex-cli",
+        methodId: "oauth_cli",
+        challenge: {
+          method: "auto",
+          instructions: "Continue to open browser-based ChatGPT OAuth and finish sign-in.",
+          url: "https://auth.openai.com/oauth/authorize",
+        },
+      } as any,
+    }, true);
+
+    expect(useAppStore.getState().selectedWorkspaceId).toBe("ws-1");
+    expect(useAppStore.getState().workspaces).toHaveLength(1);
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:codex-cli",
+      }),
+    );
+
+    expect(html).not.toContain("Open link");
+    expect(html).not.toContain("https://auth.openai.com/oauth/authorize");
   });
 });

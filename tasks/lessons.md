@@ -16,3 +16,6 @@
 - For packaged desktop releases, inspect the built app bundle and runtime launcher together; do not assume `extraResources` alone guarantees the correct pinned sidecar binary is the one actually shipped and executed.
 - For Electron main-process dependencies that publish CommonJS, do not use named ESM imports in packaged code paths; load them through CommonJS interop (`createRequire` or equivalent) and verify packaged startup before shipping a release.
 - When the user asks to remove a broken platform from a release, do not assume they want CI packaging changed too; separate public release asset cleanup from the build matrix unless they explicitly ask to stop building it.
+- For Codex auth bugs, verify the entire acquisition stack end to end; removing a broken OAuth link is not enough if `connect.ts` still uses a different custom flow than the PI-native Codex login the runtime expects.
+- For desktop auth regressions, clear stale `provider_auth_challenge` UI state when the live flow changes; an old cached challenge URL can keep surfacing a dead `Open link` even after the server-side OAuth path is fixed.
+- On Windows, never open OAuth URLs through `cmd /c start` without avoiding shell parsing; query-string `&` separators get split into separate commands and the browser receives a truncated auth URL.

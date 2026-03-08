@@ -1,16 +1,32 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 
-import {
+const loginOpenAICodexMock = mock(async (options: any) => {
+  options.onAuth({
+    url: "https://auth.openai.com/oauth/authorize?client_id=app_EMoamEEZ73f0CkXaXp7hrann&originator=pi",
+    instructions: "A browser window should open. Complete login to finish.",
+  });
+  return {
+    access: "mock-access-token",
+    refresh: "mock-refresh-token",
+    expires: Date.now() + 3_600_000,
+    accountId: "acc_mock",
+  };
+});
+
+mock.module("@mariozechner/pi-ai", () => ({
+  loginOpenAICodex: loginOpenAICodexMock,
+}));
+
+const {
   connectProvider,
   getAiCoworkerPaths,
   isOauthCliProvider,
   maskApiKey,
   readConnectionStore,
-} from "../src/connect";
+} = await import("../src/connect");
 
 async function makeTmpHome(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "cowork-connect-test-"));
@@ -48,6 +64,22 @@ describe("connect helpers", () => {
 });
 
 describe("connectProvider", () => {
+  beforeEach(() => {
+    loginOpenAICodexMock.mockReset();
+    loginOpenAICodexMock.mockImplementation(async (options: any) => {
+      options.onAuth({
+        url: "https://auth.openai.com/oauth/authorize?client_id=app_EMoamEEZ73f0CkXaXp7hrann&originator=pi",
+        instructions: "A browser window should open. Complete login to finish.",
+      });
+      return {
+        access: "mock-access-token",
+        refresh: "mock-refresh-token",
+        expires: Date.now() + 3_600_000,
+        accountId: "acc_mock",
+      };
+    });
+  });
+
   test("readConnectionStore ignores legacy path and only uses cowork auth store", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
@@ -137,170 +169,38 @@ describe("connectProvider", () => {
     expect(entry?.apiKey).toBeUndefined();
   });
 
-  test("codex-cli browser oauth succeeds and stores oauth mode", async () => {
+  test("codex-cli PI-native oauth succeeds and stores oauth mode", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
     const openedUrls: string[] = [];
-    const blocker = createServer((_req, res) => {
-      res.statusCode = 200;
-      res.end("occupied");
-    });
-    let blockerListening = false;
-    try {
-      await new Promise<void>((resolve, reject) => {
-        blocker.once("error", reject);
-        blocker.listen(1455, "127.0.0.1", () => {
-          blockerListening = true;
-          resolve();
-        });
-      });
-    } catch (err) {
-      const code = (err as { code?: string } | undefined)?.code;
-      if (code !== "EADDRINUSE") throw err;
-    }
-
-    try {
-      const result = await connectProvider({
-        provider: "codex-cli",
-        paths,
-        openUrl: async (url) => {
-          openedUrls.push(url);
-          const parsed = new URL(url);
-          const state = parsed.searchParams.get("state");
-          const redirectUri = parsed.searchParams.get("redirect_uri");
-          expect(state).toBeTruthy();
-          expect(redirectUri).toBeTruthy();
-          if (!state || !redirectUri) return false;
-
-          const cb = new URL(redirectUri);
-          setTimeout(() => {
-            void fetch(`http://127.0.0.1:${cb.port}${cb.pathname}?code=test-auth-code&state=${state}`);
-          }, 10);
-          return true;
-        },
-        fetchImpl: async (url, init) => {
-          const u = String(url);
-          if (u === "https://auth.openai.com/oauth/token") {
-            expect(init?.method).toBe("POST");
-            return new Response(
-              JSON.stringify({
-                access_token: "codex-access-token",
-                refresh_token: "codex-refresh-token",
-                id_token: makeJwt({
-                  iss: "https://auth.openai.com",
-                  email: "user@example.com",
-                  chatgpt_account_id: "acc_123",
-                }),
-                expires_in: 3600,
-              }),
-              { status: 200 }
-            );
-          }
-          return new Response("not found", { status: 404 });
-        },
-      });
-
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.mode).toBe("oauth");
-      expect(result.message).toContain("Codex OAuth sign-in completed");
-      expect(openedUrls).toHaveLength(1);
-      expect(result.oauthCredentialsFile).toBe(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"));
-
-      const persisted = JSON.parse(
-        await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")
-      ) as any;
-      expect(persisted?.tokens?.access_token).toBe("codex-access-token");
-
-      const store = await readConnectionStore(paths);
-      const entry = store.services["codex-cli"];
-      expect(entry).toBeDefined();
-      expect(entry?.mode).toBe("oauth");
-    } finally {
-      if (blockerListening) {
-        await new Promise<void>((resolve) => {
-          blocker.close(() => resolve());
-        });
-      } else {
-        try {
-          blocker.close();
-        } catch {
-          // ignore
-        }
-      }
-    }
-  });
-
-  test("codex-cli device oauth succeeds and stores oauth mode", async () => {
-    const home = await makeTmpHome();
-    const paths = getAiCoworkerPaths({ homedir: home });
-    const openedUrls: string[] = [];
-
     const result = await connectProvider({
       provider: "codex-cli",
-      methodId: "oauth_device",
       paths,
       openUrl: async (url) => {
         openedUrls.push(url);
         return true;
-      },
-      fetchImpl: async (url, init) => {
-        const u = String(url);
-        if (u.endsWith("/api/accounts/deviceauth/usercode")) {
-          expect(init?.method).toBe("POST");
-          return new Response(
-            JSON.stringify({
-              device_auth_id: "dev_123",
-              user_code: "ABCD-EFGH",
-              interval: 1,
-              expires_in: 600,
-            }),
-            {
-              status: 200,
-            },
-          );
-        }
-        if (u.endsWith("/api/accounts/deviceauth/token")) {
-          expect(init?.method).toBe("POST");
-          return new Response(
-            JSON.stringify({
-              authorization_code: "auth_code_123",
-              code_verifier: "verifier_123",
-              issued_at: "2026-02-23T00:00:00.000Z",
-            }),
-            {
-              status: 200,
-            },
-          );
-        }
-        if (u === "https://auth.openai.com/oauth/token") {
-          return new Response(
-            JSON.stringify({
-              access_token: "codex-device-access-token",
-              refresh_token: "codex-device-refresh-token",
-              id_token: makeJwt({
-                iss: "https://auth.openai.com",
-                email: "device@example.com",
-                chatgpt_account_id: "acc_456",
-              }),
-              expires_in: 3600,
-            }),
-            { status: 200 }
-          );
-        }
-        return new Response("not found", { status: 404 });
       },
     });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.mode).toBe("oauth");
-    expect(openedUrls).toEqual(["https://auth.openai.com/codex/device"]);
+    expect(openedUrls).toEqual([
+      "https://auth.openai.com/oauth/authorize?client_id=app_EMoamEEZ73f0CkXaXp7hrann&originator=pi",
+    ]);
+    expect(loginOpenAICodexMock).toHaveBeenCalledTimes(1);
 
     const persisted = JSON.parse(
       await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")
     ) as any;
-    expect(persisted?.tokens?.access_token).toBe("codex-device-access-token");
+    expect(persisted?.tokens?.access_token).toBe("mock-access-token");
+    expect(persisted?.tokens?.refresh_token).toBe("mock-refresh-token");
+    expect(persisted?.account?.account_id).toBe("acc_mock");
+
+    const store = await readConnectionStore(paths);
+    const entry = store.services["codex-cli"];
+    expect(entry).toBeDefined();
+    expect(entry?.mode).toBe("oauth");
   });
 
   test("codex-cli reuses and migrates legacy .codex credentials", async () => {
@@ -377,57 +277,25 @@ describe("connectProvider", () => {
     );
 
     const openedUrls: string[] = [];
+    loginOpenAICodexMock.mockImplementationOnce(async (options: any) => {
+      options.onAuth({
+        url: "https://auth.openai.com/oauth/authorize?client_id=app_EMoamEEZ73f0CkXaXp7hrann&originator=pi",
+        instructions: "A browser window should open. Complete login to finish.",
+      });
+      return {
+        access: "fresh-access-token",
+        refresh: "fresh-refresh-token",
+        expires: Date.now() + 3_600_000,
+        accountId: "acc_789",
+      };
+    });
+
     const result = await connectProvider({
       provider: "codex-cli",
-      methodId: "oauth_device",
       paths,
       openUrl: async (url) => {
         openedUrls.push(url);
         return true;
-      },
-      fetchImpl: async (url) => {
-        const u = String(url);
-        if (u.endsWith("/api/accounts/deviceauth/usercode")) {
-          return new Response(
-            JSON.stringify({
-              device_auth_id: "dev_stale",
-              user_code: "WXYZ-1234",
-              interval: 1,
-              expires_in: 600,
-            }),
-            {
-              status: 200,
-            },
-          );
-        }
-        if (u.endsWith("/api/accounts/deviceauth/token")) {
-          return new Response(
-            JSON.stringify({
-              authorization_code: "fresh_code_1",
-              code_verifier: "fresh_verifier_1",
-              issued_at: "2026-02-23T00:00:00.000Z",
-            }),
-            {
-              status: 200,
-            },
-          );
-        }
-        if (u === "https://auth.openai.com/oauth/token") {
-          return new Response(
-            JSON.stringify({
-              access_token: "fresh-access-token",
-              refresh_token: "fresh-refresh-token",
-              id_token: makeJwt({
-                iss: "https://auth.openai.com",
-                email: "fresh@example.com",
-                chatgpt_account_id: "acc_789",
-              }),
-              expires_in: 3600,
-            }),
-            { status: 200 }
-          );
-        }
-        return new Response("not found", { status: 404 });
       },
     });
 
@@ -435,7 +303,9 @@ describe("connectProvider", () => {
     if (!result.ok) return;
     expect(result.mode).toBe("oauth");
     expect(result.message).toContain("Codex OAuth sign-in completed");
-    expect(openedUrls).toEqual(["https://auth.openai.com/codex/device"]);
+    expect(openedUrls).toEqual([
+      "https://auth.openai.com/oauth/authorize?client_id=app_EMoamEEZ73f0CkXaXp7hrann&originator=pi",
+    ]);
 
     const persisted = JSON.parse(await fs.readFile(authFile, "utf-8")) as any;
     expect(persisted?.tokens?.access_token).toBe("fresh-access-token");

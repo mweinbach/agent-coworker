@@ -1,3 +1,80 @@
+# Task: Fix Windows OAuth browser opener truncation
+
+## Plan
+- [x] Replace the Windows external-browser launcher so OAuth URLs with `&` are not parsed by `cmd` before the browser receives them.
+- [x] Reuse the same fixed opener in MCP OAuth flows so browser-based auth is consistent across the app.
+- [x] Add regression coverage for the Windows opener command, rerun focused auth tests plus the required repo verification, and record the validated outcome below.
+
+## Review
+- Root cause: on Windows, `src/utils/browser.ts` opened external URLs with `cmd /c start "" <url>`. OAuth authorize URLs contain query-string `&` separators, and `cmd` treats those as command delimiters unless they are shell-escaped. That meant the browser only received the truncated prefix of the OpenAI authorize URL, which directly explains the repeated `missing_required_parameter` failures even though PI was generating a valid full URL.
+- Replaced the Windows browser launcher in `src/utils/browser.ts` with a direct `rundll32.exe url.dll,FileProtocolHandler <url>` opener so the full OAuth URL is passed to the browser without shell parsing. Added an internal command-builder export and a regression test to lock the Windows path away from `cmd`.
+- Updated `src/mcp/oauthProvider.ts` to reuse the shared `openExternalUrl()` helper instead of its own duplicate `cmd /c start` implementation, so browser-based OAuth now uses the same safe launcher across provider auth and MCP auth flows.
+- Added regression coverage in `test/utils.browser.test.ts` to prove the Windows opener uses `rundll32.exe` and preserves the full OAuth URL, then reran the affected auth and desktop suites.
+- Verification:
+  - Reproduction before fix: `node -e "const {spawn}=require('node:child_process'); const child=spawn('cmd',['/c','echo','https://auth.openai.com/oauth/authorize?response_type=code&client_id=abc&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback']); ..."` -> `cmd` printed only the prefix URL and treated `client_id` / `redirect_uri` as separate commands.
+  - `~/.bun/bin/bun test test/utils.browser.test.ts test/connect.test.ts test/providers/auth-registry.test.ts test/mcp.oauth-provider.test.ts apps/desktop/test/providers-page.test.ts apps/desktop/test/protocol-v2-events.test.ts` -> pass (`51 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1750 pass, 2 skip, 0 fail`)
+  - `git diff --check` -> pass aside from existing CRLF conversion warnings on Windows
+
+# Task: Clear stale desktop Codex auth challenge URLs
+
+## Plan
+- [x] Trace and remove any stale desktop `provider_auth_challenge` state that can keep rendering the old Codex browser-auth link after the server-side flow changed.
+- [x] Harden the desktop auth UI/event handling so `codex-cli` browser auth never exposes a manual `Open link` URL, even if an old or malformed challenge payload appears.
+- [x] Add regression coverage for stale-challenge cleanup, rerun the relevant desktop/auth tests, and record the validated outcome below.
+
+## Review
+- Root cause: the PI-native login path was already generating a correct fully parameterized OAuth URL, but the desktop could still keep and render an older cached `provider_auth_challenge` for `codex-cli/oauth_cli`. That stale challenge contained the bare `https://auth.openai.com/oauth/authorize` link, so the settings page could still show `Open link` and send users into the same `missing_required_parameter` failure even after the server-side auth flow was fixed.
+- Hardened desktop control-state handling in `apps/desktop/src/app/store.helpers/controlSocket.ts` by clearing `providerLastAuthChallenge` on reconnect and sanitizing incoming `codex-cli/oauth_cli` challenge payloads so any `challenge.url` is dropped before it reaches state or notifications.
+- Hardened the auth actions in `apps/desktop/src/app/store.actions/provider.ts` to clear old auth challenge/result state before starting authorize or callback steps, which prevents stale login UI from surviving across retries.
+- Hardened the settings UI in `apps/desktop/src/ui/settings/pages/ProvidersPage.tsx` so `codex-cli` browser auth never renders a manual `Open link`, even if stale challenge data somehow exists, and so the `Sign in` button directly runs the full auto OAuth flow.
+- Added regression coverage:
+  - `apps/desktop/test/protocol-v2-events.test.ts` now proves a stale `codex-cli/oauth_cli` challenge URL is stripped before storing/rendering.
+  - `apps/desktop/test/providers-page.test.ts` now proves the Codex settings page ignores stale challenge URLs and still avoids a separate `Continue` step.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/providers-page.test.ts apps/desktop/test/protocol-v2-events.test.ts test/providers/auth-registry.test.ts test/connect.test.ts` -> pass (`45 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1749 pass, 2 skip, 0 fail`)
+
+# Task: Switch Codex desktop sign-in to PI native auth
+
+## Plan
+- [x] Replace the custom Codex OAuth connect flow with PI's native `loginOpenAICodex()` path while keeping our existing stored auth material format and connection-store updates.
+- [x] Align the provider auth registry and desktop settings UI with the PI-native Codex browser login path so the app no longer offers or describes the stale custom device/browser variants.
+- [x] Update focused auth/connect tests, run the required verification commands, and record the validated outcome below.
+
+## Review
+- Root cause: the first login fix removed the invalid bare authorize link, but `src/connect.ts` still acquired fresh Codex credentials through the repo’s older custom OAuth helpers. The runtime side already expects PI-style Codex credentials, so the desktop was still on the wrong acquisition stack even after the UI handoff improved.
+- Switched `src/connect.ts` to PI-native Codex auth by calling `loginOpenAICodex()` from `@mariozechner/pi-ai`, preserving the existing `.cowork/auth/codex-cli/auth.json` schema via `writeCodexAuthMaterial()`. Fresh browser sign-in now uses PI’s native `originator=pi` authorization flow while the rest of the app keeps the same stored-auth and connection-store behavior.
+- Removed the stale Codex device-code option from the provider auth registry and desktop fallback auth-method lists in `src/providers/authRegistry.ts`, `apps/desktop/src/ui/settings/pages/ProvidersPage.tsx`, and `apps/desktop/src/app/store.helpers.ts`. The desktop now consistently presents Codex as a single browser-based ChatGPT sign-in path, which matches PI native auth instead of advertising a flow we no longer use.
+- Updated regression coverage in `test/connect.test.ts`, `test/providers/auth-registry.test.ts`, `apps/desktop/test/providers-page.test.ts`, and `apps/desktop/test/protocol-v2-events.test.ts` to lock the PI-native login path, the reduced auth-method set, and the desktop challenge handling.
+- Verification:
+  - `~/.bun/bin/bun test test/connect.test.ts test/providers/auth-registry.test.ts apps/desktop/test/providers-page.test.ts apps/desktop/test/protocol-v2-events.test.ts` -> pass (`44 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1748 pass, 2 skip, 0 fail`)
+  - `git diff --check` -> pass aside from existing CRLF conversion warnings on Windows
+
+# Task: Fix desktop Codex OAuth login flow and auth handoff
+
+## Plan
+- [x] Remove or replace the unusable bare ChatGPT authorize link from the Codex browser-auth challenge so the desktop never points users at an invalid OAuth URL.
+- [x] Make the desktop provider sign-in flow automatically continue browser-based Codex OAuth from the settings page instead of requiring a separate manual "Continue" or "Open link" step.
+- [x] Add regression coverage for the auth challenge payload and desktop provider-page behavior, then run the targeted test suites and record the outcome below.
+
+## Review
+- Root cause: `src/providers/authRegistry.ts` exposed `https://auth.openai.com/oauth/authorize` as the browser-auth challenge URL for `codex-cli`, but that endpoint is invalid without the runtime-generated OAuth query parameters (`client_id`, `redirect_uri`, PKCE, `state`, etc.). When the desktop surfaced that raw link, clicking it produced the `missing_required_parameter` auth failure instead of starting a valid login.
+- Fixed the auth challenge payload by removing the unusable bare authorize URL for browser-based Codex OAuth and changing the instructions to make it explicit that the app opens the correct sign-in URL itself during the callback flow. Device-code auth still keeps the safe `https://auth.openai.com/codex/device` link.
+- Fixed the desktop settings UX in `apps/desktop/src/ui/settings/pages/ProvidersPage.tsx` so non-code OAuth methods perform the real authorize+callback sequence from a single `Sign in` action. The separate `Continue` step is gone for auto OAuth, which aligns the settings page with the working `connectProvider()` flow that already opens the browser on callback.
+- Added regression coverage:
+  - `test/providers/auth-registry.test.ts` now locks the browser-auth challenge to `url === undefined` and checks the updated instructions.
+  - `apps/desktop/test/providers-page.test.ts` now verifies the Codex provider page no longer renders a separate `Continue` step for auto OAuth.
+- Verification:
+  - `bun test test/providers/auth-registry.test.ts test/connect.test.ts` -> pass (`21 pass, 0 fail`)
+  - `bun test apps/desktop/test/providers-page.test.ts apps/desktop/test/protocol-v2-events.test.ts` -> pass (`25 pass, 0 fail`)
+  - `bun run typecheck` -> pass
+  - `bun test` -> pass (`1750 pass, 2 skip, 0 fail`)
+
 # Task: Remove broken Windows desktop release artifacts
 
 ## Plan

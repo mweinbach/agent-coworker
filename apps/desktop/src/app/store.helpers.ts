@@ -104,7 +104,6 @@ function defaultProviderAuthMethods(provider: ProviderName): ProviderAuthMethod[
   if (provider === "codex-cli") {
     return [
       { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
-      { id: "oauth_device", type: "oauth", label: "Sign in with ChatGPT (device code)", oauthMode: "auto" },
       { id: "api_key", type: "api", label: "API key" },
     ];
   }

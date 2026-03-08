@@ -14,7 +14,7 @@ const MOCK_SYSTEM_APPEARANCE = {
 const MOCK_UPDATE_STATE = {
   phase: "disabled",
   packaged: false,
-  currentVersion: "0.1.8",
+  currentVersion: "0.1.9",
   lastCheckStartedAt: null,
   lastCheckedAt: null,
   downloadedAt: null,
@@ -77,7 +77,7 @@ describe("desktop updates page", () => {
     const html = renderToStaticMarkup(createElement(UpdatesPage, { state: MOCK_UPDATE_STATE as any }));
 
     expect(html).toContain("Updates");
-    expect(html).toContain("0.1.8");
+    expect(html).toContain("0.1.9");
     expect(html).toContain("Updates are only available in packaged builds.");
     expect(html).toContain("Check now");
     expect(html).toContain("disabled");
@@ -94,7 +94,7 @@ describe("desktop updates page", () => {
       }),
     );
 
-    expect(html).toContain("0.1.8");
+    expect(html).toContain("0.1.9");
     expect(html).toContain("Updates are unavailable for this platform because no update feed is published.");
     expect(html).toContain("Unavailable");
     expect(html).toContain("Check now");
@@ -106,7 +106,7 @@ describe("desktop updates page", () => {
         state: {
           phase: "downloaded",
           packaged: true,
-          currentVersion: "0.1.8",
+          currentVersion: "0.1.9",
           lastCheckStartedAt: "2026-03-07T12:00:00.000Z",
           lastCheckedAt: "2026-03-07T12:00:30.000Z",
           downloadedAt: "2026-03-07T12:01:00.000Z",

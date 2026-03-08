@@ -184,10 +184,11 @@ jobs:
         if: ${{ runner.os == 'Windows' && env.WIN_CSC_LINK != '' && env.WIN_CSC_KEY_PASSWORD != '' }}
         shell: pwsh
         run: |
-          $installer = Get-ChildItem apps/desktop/release/*.exe | Select-Object -First 1
+          $version = (Get-Content apps/desktop/package.json -Raw | ConvertFrom-Json).version
+          $installer = Get-ChildItem "apps/desktop/release/*-$version-win-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
           if (-not $installer) {
-            throw "No packaged .exe installer found under apps/desktop/release"
+            throw "No packaged .exe installer found for version $version under apps/desktop/release"
           }
 
           $signature = Get-AuthenticodeSignature $installer.FullName
@@ -197,12 +198,41 @@ jobs:
             throw "Expected a valid Authenticode signature on $($installer.FullName)"
           }
 
-      - name: Skip unsigned Windows release upload
-        if: ${{ runner.os == 'Windows' && (env.WIN_CSC_LINK == '' || env.WIN_CSC_KEY_PASSWORD == '') }}
+      - name: Stage Windows desktop release assets
+        if: ${{ runner.os == 'Windows' }}
         shell: pwsh
         run: |
-          Write-Host "WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD not configured; Windows packaging smoke-tested only."
-          Write-Host "Skipping Windows release asset upload so auto-update metadata is never published for an unsigned build."
+          $stagingDir = "apps/desktop/release-upload"
+          $version = (Get-Content apps/desktop/package.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
+          Remove-Item "$stagingDir/*" -Force -ErrorAction SilentlyContinue
+
+          $installer = Get-ChildItem "apps/desktop/release/*-$version-win-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+          if (-not $installer) {
+            throw "No packaged .exe installer found for version $version under apps/desktop/release"
+          }
+
+          Copy-Item $installer.FullName -Destination $stagingDir
+
+          if ($env:WIN_CSC_LINK -and $env:WIN_CSC_KEY_PASSWORD) {
+            $blockmapPath = "$($installer.FullName).blockmap"
+
+            if (-not (Test-Path $blockmapPath)) {
+              throw "Expected blockmap alongside $($installer.Name)"
+            }
+
+            Copy-Item $blockmapPath -Destination $stagingDir
+
+            if (-not (Test-Path "apps/desktop/release/latest.yml")) {
+              throw "Expected latest.yml for a signed Windows release"
+            }
+
+            Copy-Item "apps/desktop/release/latest.yml" -Destination $stagingDir
+          } else {
+            Write-Host "WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD not configured; publishing the Windows installer only."
+            Write-Host "Skipping Windows latest.yml and blockmap upload so unsigned auto-update metadata is never published."
+          }
 
       - name: Upload macOS desktop artifacts
         if: ${{ runner.os == 'macOS' }}
@@ -218,14 +248,11 @@ jobs:
           retention-days: 14
 
       - name: Upload Windows desktop artifacts
-        if: ${{ runner.os == 'Windows' && env.WIN_CSC_LINK != '' && env.WIN_CSC_KEY_PASSWORD != '' }}
+        if: ${{ runner.os == 'Windows' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: |
-            apps/desktop/release/*.exe
-            apps/desktop/release/*.blockmap
-            apps/desktop/release/latest.yml
+          path: apps/desktop/release-upload/*
           if-no-files-found: error
           retention-days: 14
 

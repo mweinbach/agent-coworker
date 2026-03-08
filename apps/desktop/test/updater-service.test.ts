@@ -58,7 +58,7 @@ describe("desktop updater service", () => {
   test("stays disabled for unpackaged builds", async () => {
     const updater = new FakeUpdater();
     const service = new DesktopUpdaterService({
-      currentVersion: "0.1.8",
+      currentVersion: "0.1.9",
       isPackaged: false,
       updater,
     });
@@ -73,7 +73,7 @@ describe("desktop updater service", () => {
     const updater = new FakeUpdater();
     const states: string[] = [];
     const service = new DesktopUpdaterService({
-      currentVersion: "0.1.8",
+      currentVersion: "0.1.9",
       isPackaged: true,
       updater,
       onStateChange: (state) => {
@@ -115,7 +115,7 @@ describe("desktop updater service", () => {
       throw new Error("network down");
     };
     const service = new DesktopUpdaterService({
-      currentVersion: "0.1.8",
+      currentVersion: "0.1.9",
       isPackaged: true,
       updater,
       now: () => "2026-03-07T12:00:00.000Z",
@@ -134,7 +134,27 @@ describe("desktop updater service", () => {
       throw new Error("Cannot find latest.yml in the latest release artifacts: HttpError: 404");
     };
     const service = new DesktopUpdaterService({
-      currentVersion: "0.1.8",
+      currentVersion: "0.1.9",
+      isPackaged: true,
+      updater,
+      now: () => "2026-03-08T15:39:19.000Z",
+    });
+
+    await service.checkForUpdates();
+
+    const state = service.getState();
+    expect(state.phase).toBe("disabled");
+    expect(state.error).toBeNull();
+    expect(state.message).toContain("no update feed is published");
+  });
+
+  test("treats missing latest-mac.yml checks as unavailable instead of an error", async () => {
+    const updater = new FakeUpdater();
+    updater.checkForUpdates = async () => {
+      throw new Error("Cannot find latest-mac.yml in the latest release artifacts: HttpError: 404");
+    };
+    const service = new DesktopUpdaterService({
+      currentVersion: "0.1.9",
       isPackaged: true,
       updater,
       now: () => "2026-03-08T15:39:19.000Z",
@@ -151,7 +171,7 @@ describe("desktop updater service", () => {
   test("treats missing latest.yml error events as unavailable instead of an error", () => {
     const updater = new FakeUpdater();
     const service = new DesktopUpdaterService({
-      currentVersion: "0.1.8",
+      currentVersion: "0.1.9",
       isPackaged: true,
       updater,
       now: () => "2026-03-08T15:39:19.000Z",

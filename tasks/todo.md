@@ -1,3 +1,40 @@
+# Task: Ship desktop release 0.1.9 with robust updater behavior and Windows installer publishing
+
+## Plan
+- [x] Keep the packaged updater behavior clean when platform update metadata is absent, so packaged builds surface `Unavailable` instead of a raw updater error.
+- [x] Patch the desktop release workflow so unsigned Windows releases still publish the current installer, while signed-only updater metadata (`latest.yml`, `.blockmap`) stays gated behind `WIN_CSC_*`.
+- [ ] Commit the release, tag `v0.1.9`, push to `origin/main`, and confirm the published GitHub release assets match the intended Windows installer-only behavior when signing is absent.
+
+## Review
+- Root cause: after `v0.1.8`, packaged Windows builds handled missing `latest.yml` gracefully, but the release workflow still skipped every Windows asset when `WIN_CSC_LINK` was absent. That left no downloadable Windows installer at all.
+- The updater contract now stays clean across both cases:
+  - if platform metadata exists, `electron-updater` can proceed normally
+  - if `latest*.yml` is absent, the app moves into the existing `disabled` / `Unavailable` state instead of surfacing a raw 404
+- Updated `.github/workflows/desktop-release.yml` so the Windows job always stages and uploads the current version's `.exe` installer. It only stages the matching `.blockmap` plus `latest.yml` when `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` are both present.
+- Hardened the workflow to select the installer matching `apps/desktop/package.json` instead of the first `.exe` in `apps/desktop/release`, and to copy only the matching `.blockmap`. That avoids leaking stale local artifacts into staged Windows release uploads.
+- Bumped `/Users/mweinbach/Projects/agent-coworker/package.json` and `/Users/mweinbach/Projects/agent-coworker/apps/desktop/package.json` to `0.1.9`, updated the desktop updater/UI tests to assert `0.1.9`, and extended updater coverage to treat missing `latest-mac.yml` the same way as missing `latest.yml`.
+- Verification:
+  - `~/.bun/bin/bun test test/desktop-release.workflow.test.ts` -> pass (`2 pass, 0 fail`)
+  - `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`171 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `WIN_CSC_* / CSC_* unset; ~/.bun/bin/bun run desktop:build -- --publish never` -> pass; produced `apps/desktop/release/Cowork-0.1.9-win-x64.exe`
+  - simulated Windows artifact staging with signing secrets absent -> staged only `Cowork-0.1.9-win-x64.exe`
+
+# Task: Assess Windows signing secret creation for desktop releases
+
+## Plan
+- [x] Verify whether this machine has a real Windows code-signing certificate or exportable `.pfx`/`.p12` that can back `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`.
+- [x] Verify whether GitHub auth from this machine is sufficient to write repo secrets if valid signing material exists.
+- [x] Record whether generating fresh keys locally would produce a trusted Windows release or just recreate the untrusted-root updater failure.
+
+## Review
+- GitHub auth is available on this machine through the configured `git credential manager`, so pushing repo secrets is technically possible from here once valid signing material exists.
+- There is no usable Windows code-signing certificate in `Cert:\CurrentUser\My` or `Cert:\LocalMachine\My`, and no exportable `.pfx` / `.p12` was found in the usual local certificate file locations under `C:\Users\maxw6`.
+- Creating a new local self-signed code-signing certificate and uploading it as `WIN_CSC_*` would not fix the release path. Windows would not trust that certificate chain, so installer trust and updater signature validation would still fail with the same class of untrusted-root problem.
+- The remaining workable paths are:
+  - publish an unsigned Windows installer asset without `latest.yml` for manual downloads only, or
+  - obtain a real Windows-trusted Authenticode certificate (or equivalent managed signing service) and then upload the resulting signing credentials to GitHub.
+
 # Task: Ship desktop hotfix release 0.1.8
 
 ## Plan

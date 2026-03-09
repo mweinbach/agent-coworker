@@ -2596,7 +2596,7 @@ describe("memory tool", () => {
 describe("createTools", () => {
   test("returns object with all tool names", async () => {
     const dir = await tmpDir();
-    const tools = createTools(makeCtx(dir));
+    const { tools } = await createTools(makeCtx(dir));
     const expected = [
       "bash",
       "read",
@@ -2613,6 +2613,7 @@ describe("createTools", () => {
       "notebookEdit",
       "skill",
       "memory",
+      "usage",
     ];
     for (const name of expected) {
       expect(tools).toHaveProperty(name);
@@ -2621,7 +2622,7 @@ describe("createTools", () => {
 
   test("returns exactly 16 tools", async () => {
     const dir = await tmpDir();
-    const tools = createTools(makeCtx(dir));
+    const { tools } = await createTools(makeCtx(dir));
     expect(Object.keys(tools).length).toBe(16);
   });
 

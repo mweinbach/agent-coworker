@@ -135,7 +135,7 @@ const PRICING_TABLE: Record<string, ModelPricing> = {
  * Resolve pricing for a provider + model pair.
  *
  * 1. Try exact key `provider:model`.
- * 2. Try prefix matching (e.g. `google:gemini-3` matches `google:gemini-3-pro-preview`).
+ * 2. Try prefix matching (e.g. request `google:gemini-3-pro-preview` matches catalog `google:gemini-3`).
  * 3. Return null when no match is found.
  */
 export function resolveModelPricing(
@@ -177,9 +177,8 @@ export function calculateTokenCost(
 
 /**
  * Format a USD cost for display.
- * - Below $0.01: show as "$0.001" (3 decimal places)
- * - Below $1: show as "$0.01" (2 decimal places)
- * - Above $1: show as "$1.23" (2 decimal places)
+ * - Below $0.01: show with 4 decimal places (e.g. "$0.0012")
+ * - Above $0.01: show with 2 decimal places (e.g. "$1.23")
  */
 export function formatCost(usd: number): string {
   if (usd === 0) return "$0.00";

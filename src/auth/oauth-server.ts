@@ -9,6 +9,7 @@ export const OAUTH_FAILURE_HTML = (message: string) =>
 // Codex browser login expects localhost in the redirect URI; keep the listener
 // host aligned with the advertised callback URL.
 export const OAUTH_LOOPBACK_HOST = "localhost";
+const OAUTH_LOOPBACK_BIND_HOSTS = ["::1", "127.0.0.1"] as const;
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 const addressInfoSchema = z.object({ port: z.number().int().nonnegative() }).passthrough();
 
@@ -21,7 +22,12 @@ export async function listenOnLocalhost(
     return parsed.success && parsed.data.code === "EADDRINUSE";
   };
 
-  const listen = async (port: number): Promise<{ port: number; close: () => void }> => {
+  const hasCode = (err: unknown, code: string): boolean => {
+    const parsed = errorWithCodeSchema.safeParse(err);
+    return parsed.success && parsed.data.code === code;
+  };
+
+  const listen = async (host: string, port: number): Promise<{ port: number; close: () => void }> => {
     const server = createServer(onRequest);
     const resolvedPort = await new Promise<number>((resolve, reject) => {
       const onError = (err: unknown) => {
@@ -39,15 +45,52 @@ export async function listenOnLocalhost(
       };
       server.once("error", onError);
       server.once("listening", onListening);
-      server.listen(port, OAUTH_LOOPBACK_HOST);
+      server.listen(port, host);
     });
     return { port: resolvedPort, close: () => server.close() };
+  };
+
+  const listenLoopback = async (port: number): Promise<{ port: number; close: () => void }> => {
+    const listeners: Array<{ close: () => void }> = [];
+    let resolvedPort: number | null = port === 0 ? null : port;
+    let lastErr: unknown;
+
+    for (const host of OAUTH_LOOPBACK_BIND_HOSTS) {
+      try {
+        const listener = await listen(host, resolvedPort ?? 0);
+        listeners.push(listener);
+        resolvedPort = listener.port;
+      } catch (err) {
+        lastErr = err;
+        if (hasCode(err, "EAFNOSUPPORT") || hasCode(err, "EADDRNOTAVAIL")) {
+          continue;
+        }
+        if (listeners.length > 0 && isAddrInUse(err)) {
+          // Some platforms treat the first loopback bind as sufficient for both
+          // families; keep the successful listener instead of failing the flow.
+          continue;
+        }
+        for (const listener of listeners) listener.close();
+        throw err instanceof Error ? err : new Error(String(err));
+      }
+    }
+
+    if (listeners.length === 0 || resolvedPort == null) {
+      throw lastErr instanceof Error ? lastErr : new Error("Unable to bind localhost callback port.");
+    }
+
+    return {
+      port: resolvedPort,
+      close: () => {
+        for (const listener of listeners) listener.close();
+      },
+    };
   };
 
   let lastErr: unknown;
   const tryListen = async (port: number): Promise<{ port: number; close: () => void } | null> => {
     try {
-      return await listen(port);
+      return await listenLoopback(port);
     } catch (err) {
       lastErr = err;
       if (isAddrInUse(err)) return null;

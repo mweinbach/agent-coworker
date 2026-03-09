@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 import type { Readable } from "node:stream";
@@ -14,10 +15,16 @@ const SERVER_STARTUP_TIMEOUT_MS = 15_000;
 const STDERR_TAIL_LIMIT = 16_384;
 const WINDOWS_SOURCE_START_ATTEMPTS = 2;
 const SERVER_LOG_FILE_NAME = "server.log";
+const DEBUG_SERVER_STDERR = process.env.COWORK_DESKTOP_DEBUG_SERVER_STDERR === "1";
 
 type ServerHandle = {
   child: ServerChildProcess;
   url: string;
+  cleanup: () => void;
+};
+
+type PendingServerHandle = {
+  child: ServerChildProcess;
   cleanup: () => void;
 };
 
@@ -223,7 +230,10 @@ function resolveSourceStartup(
 }
 
 function buildServerEnv(): NodeJS.ProcessEnv {
-  return { ...process.env };
+  return {
+    ...process.env,
+    COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1",
+  };
 }
 
 function buildSourceEnvForAttempt(baseEnv: NodeJS.ProcessEnv, attempt: number): { env: NodeJS.ProcessEnv; cleanup: () => void } {
@@ -277,11 +287,28 @@ function getServerLogPath(): string {
   return path.join(app.getPath("userData"), "logs", SERVER_LOG_FILE_NAME);
 }
 
+let pendingServerLogWrite: Promise<void> = Promise.resolve();
+
 function logServerManagerEvent(message: string): void {
+  const entry = `[${new Date().toISOString()}] ${message}\n`;
+  pendingServerLogWrite = pendingServerLogWrite
+    .catch(() => {
+      // Preserve future writes if a previous append failed.
+    })
+    .then(async () => {
+      try {
+        const logPath = getServerLogPath();
+        await fsp.mkdir(path.dirname(logPath), { recursive: true });
+        await fsp.appendFile(logPath, entry, "utf8");
+      } catch {
+        // Best effort diagnostics only.
+      }
+    });
+}
+
+async function flushServerManagerLogWrites(): Promise<void> {
   try {
-    const logPath = getServerLogPath();
-    fs.mkdirSync(path.dirname(logPath), { recursive: true });
-    fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${message}\n`, "utf8");
+    await pendingServerLogWrite;
   } catch {
     // Best effort diagnostics only.
   }
@@ -293,12 +320,13 @@ function summarizeLogChunk(chunk: string): string {
 
 export class ServerManager {
   private readonly servers = new Map<string, ServerHandle>();
+  private readonly pendingStarts = new Map<string, PendingServerHandle>();
 
   async startWorkspaceServer(opts: { workspaceId: string; workspacePath: string; yolo: boolean }): Promise<{ url: string }> {
     const { workspaceId, workspacePath, yolo } = opts;
 
     assertSafeId(workspaceId, "workspaceId");
-    assertWorkspaceDirectory(workspacePath);
+    await assertWorkspaceDirectory(workspacePath);
 
     const existing = this.servers.get(workspaceId);
     if (existing) {
@@ -307,6 +335,15 @@ export class ServerManager {
       }
       this.servers.delete(workspaceId);
       existing.cleanup();
+    }
+
+    const pending = this.pendingStarts.get(workspaceId);
+    if (pending) {
+      if (pending.child.exitCode === null && pending.child.signalCode === null) {
+        throw new Error("Workspace server startup already in progress");
+      }
+      this.pendingStarts.delete(workspaceId);
+      pending.cleanup();
     }
 
     const useSource = !app.isPackaged || process.env.COWORK_DESKTOP_USE_SOURCE === "1";
@@ -351,6 +388,17 @@ export class ServerManager {
         `workspace=${workspaceId} attempt=${attempt}/${attemptCount} spawn=${useSource ? "bun" : sidecar!}`
       );
 
+      let cleaned = false;
+      const cleanupOnce = () => {
+        if (cleaned) {
+          return;
+        }
+        cleaned = true;
+        cleanup();
+      };
+
+      this.pendingStarts.set(workspaceId, { child, cleanup: cleanupOnce });
+
       let stderrTail = "";
       child.stderr.on("data", (chunk) => {
         const text = chunk.toString();
@@ -358,7 +406,9 @@ export class ServerManager {
         if (stderrTail.length > STDERR_TAIL_LIMIT) {
           stderrTail = stderrTail.slice(-STDERR_TAIL_LIMIT);
         }
-        process.stderr.write(`[cowork-server] ${text}`);
+        if (DEBUG_SERVER_STDERR) {
+          process.stderr.write(`[cowork-server] ${text}`);
+        }
         const summary = summarizeLogChunk(text);
         if (summary) {
           logServerManagerEvent(`workspace=${workspaceId} stderr=${summary}`);
@@ -369,19 +419,18 @@ export class ServerManager {
         const listening = await waitForServerListening(child);
         const url = listening.url;
         logServerManagerEvent(`workspace=${workspaceId} listening url=${url}`);
-
-        let cleaned = false;
-        const cleanupOnce = () => {
-          if (cleaned) {
-            return;
-          }
-          cleaned = true;
-          cleanup();
-        };
+        const pendingHandle = this.pendingStarts.get(workspaceId);
+        if (pendingHandle?.child === child) {
+          this.pendingStarts.delete(workspaceId);
+        }
 
         this.servers.set(workspaceId, { child, url, cleanup: cleanupOnce });
 
         child.once("exit", () => {
+          const pendingExit = this.pendingStarts.get(workspaceId);
+          if (pendingExit?.child === child) {
+            this.pendingStarts.delete(workspaceId);
+          }
           cleanupOnce();
           const handle = this.servers.get(workspaceId);
           if (handle?.child === child) {
@@ -392,7 +441,11 @@ export class ServerManager {
         return { url };
       } catch (error) {
         await gracefulKill(child);
-        cleanup();
+        const pendingHandle = this.pendingStarts.get(workspaceId);
+        if (pendingHandle?.child === child) {
+          this.pendingStarts.delete(workspaceId);
+        }
+        cleanupOnce();
 
         const shouldRetry =
           useSource &&
@@ -405,9 +458,11 @@ export class ServerManager {
           logServerManagerEvent(
             `workspace=${workspaceId} retrying after Bun crash attempt=${attempt} error=${toErrorMessage(error)}`
           );
-          process.stderr.write(
-            "[cowork-server] Bun crashed during startup; retrying with async transpiler disabled.\n"
-          );
+          if (DEBUG_SERVER_STDERR) {
+            process.stderr.write(
+              "[cowork-server] Bun crashed during startup; retrying with async transpiler disabled.\n"
+            );
+          }
           continue;
         }
 
@@ -434,6 +489,13 @@ export class ServerManager {
   async stopWorkspaceServer(workspaceId: string): Promise<void> {
     assertSafeId(workspaceId, "workspaceId");
 
+    const pending = this.pendingStarts.get(workspaceId);
+    if (pending) {
+      this.pendingStarts.delete(workspaceId);
+      await gracefulKill(pending.child);
+      pending.cleanup();
+    }
+
     const handle = this.servers.get(workspaceId);
     if (!handle) {
       return;
@@ -447,8 +509,15 @@ export class ServerManager {
   async stopAll(): Promise<void> {
     const entries = [...this.servers.entries()];
     this.servers.clear();
+    const pendingEntries = [...this.pendingStarts.entries()];
+    this.pendingStarts.clear();
 
     for (const [, handle] of entries) {
+      await gracefulKill(handle.child);
+      handle.cleanup();
+    }
+
+    for (const [, handle] of pendingEntries) {
       await gracefulKill(handle.child);
       handle.cleanup();
     }
@@ -462,6 +531,7 @@ export const __internal = {
   getServerLogPath,
   isLikelyBunSegfault,
   logServerManagerEvent,
+  flushServerManagerLogWrites,
   resolveSourceStartup,
   summarizeLogChunk,
   waitForServerListening,

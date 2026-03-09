@@ -13,7 +13,7 @@ Dev mode keeps Electron remote debugging disabled unless explicitly enabled.
 Set `COWORK_ELECTRON_REMOTE_DEBUG=1` to enable it, and optionally set `COWORK_ELECTRON_REMOTE_DEBUG_PORT` (default `9222`).
 
 Desktop renderer dev URL is restricted to loopback on `COWORK_DESKTOP_RENDERER_PORT` (default `1420`).
-If `ELECTRON_RENDERER_URL` points to another app (for example the harness portal), desktop falls back to its own renderer URL.
+If `ELECTRON_RENDERER_URL` points to another app on the wrong host or port, desktop falls back to its own renderer URL.
 
 ## Native Integration
 

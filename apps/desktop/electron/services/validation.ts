@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
@@ -31,14 +32,14 @@ export function assertValidFileName(name: string, label: string): void {
   }
 }
 
-export function assertWorkspaceDirectory(workspacePath: string): void {
+export async function assertWorkspaceDirectory(workspacePath: string): Promise<void> {
   if (!workspacePath.trim()) {
     throw new Error("workspacePath must not be empty");
   }
 
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(workspacePath);
+    stat = await fsp.stat(workspacePath);
   } catch {
     throw new Error(`Workspace path does not exist: ${workspacePath}`);
   }

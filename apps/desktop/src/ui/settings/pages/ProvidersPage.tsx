@@ -38,9 +38,9 @@ function providerStatusLabel(status: any): string {
 }
 
 function formatRateLimitName(entry: any): string {
-  const raw = typeof entry?.limitName === "string" && entry.limitName.trim() ? entry.limitName.trim() : "";
+  const raw: string = typeof entry?.limitName === "string" && entry.limitName.trim() ? entry.limitName.trim() : "";
   if (raw) return raw;
-  const limitId = typeof entry?.limitId === "string" && entry.limitId.trim() ? entry.limitId.trim() : "";
+  const limitId: string = typeof entry?.limitId === "string" && entry.limitId.trim() ? entry.limitId.trim() : "";
   if (!limitId) return "Unknown";
   return limitId
     .split(/[_-]+/)

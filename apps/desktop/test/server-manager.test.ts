@@ -15,13 +15,14 @@ mock.module("electron", () => ({
   },
 }));
 
-const { __internal } = await import("../electron/services/serverManager");
+const { ServerManager, __internal } = await import("../electron/services/serverManager");
 
 type FakeChild = EventEmitter & {
   stdout: PassThrough;
   stderr: PassThrough;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
+  kill: (signal?: NodeJS.Signals | number) => boolean;
 };
 
 function createFakeChild(): FakeChild {
@@ -30,6 +31,13 @@ function createFakeChild(): FakeChild {
   child.stderr = new PassThrough();
   child.exitCode = null;
   child.signalCode = null;
+  child.kill = () => {
+    child.exitCode = 0;
+    queueMicrotask(() => {
+      child.emit("exit", 0, null);
+    });
+    return true;
+  };
   return child;
 }
 
@@ -98,6 +106,7 @@ describe("desktop server manager startup mode", () => {
   test("buildServerEnv mirrors process env without desktop-only skill bootstrap flags", () => {
     const env = __internal.buildServerEnv();
     expect(env).not.toBe(process.env);
+    expect(env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP).toBe(process.env.COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP ?? "1");
   });
 });
 
@@ -113,6 +122,7 @@ describe("desktop server manager bun crash detection", () => {
 
     try {
       __internal.logServerManagerEvent("workspace=ws_1 start_failed error=boom");
+      await __internal.flushServerManagerLogWrites();
       const logPath = __internal.getServerLogPath();
       const contents = await fs.readFile(logPath, "utf8");
 
@@ -122,5 +132,24 @@ describe("desktop server manager bun crash detection", () => {
       await fs.rm(userDataDir, { recursive: true, force: true });
       userDataDir = process.cwd();
     }
+  });
+
+  test("stopWorkspaceServer kills a pending startup before server_listening", async () => {
+    const manager = new ServerManager();
+    const child = createFakeChild();
+    let cleaned = false;
+
+    (manager as any).pendingStarts.set("ws-pending", {
+      child,
+      cleanup: () => {
+        cleaned = true;
+      },
+    });
+
+    await manager.stopWorkspaceServer("ws-pending");
+
+    expect((manager as any).pendingStarts.has("ws-pending")).toBe(false);
+    expect(cleaned).toBe(true);
+    expect(child.exitCode).toBe(0);
   });
 });

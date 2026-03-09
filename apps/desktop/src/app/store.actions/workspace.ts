@@ -24,7 +24,9 @@ import {
   RUNTIME,
   appendThreadTranscript,
   basename,
+  bumpWorkspaceStartGeneration,
   buildContextPreamble,
+  clearWorkspaceStartState,
   ensureControlSocket,
   ensureServerRunning,
   ensureThreadRuntime,
@@ -96,11 +98,13 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       }));
       ensureWorkspaceRuntime(get, set, ws.id);
       await persistNow(get);
-      await get().selectWorkspace(ws.id);
+      await ensureServerRunning(get, set, ws.id);
+      ensureControlSocket(get, set, ws.id);
     },
   
 
     removeWorkspace: async (workspaceId: string) => {
+      bumpWorkspaceStartGeneration(workspaceId);
       const control = RUNTIME.controlSockets.get(workspaceId);
       closeControlSession(workspaceId);
       RUNTIME.controlSockets.delete(workspaceId);
@@ -145,6 +149,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
           selectedThreadId,
         };
       });
+      clearWorkspaceStartState(workspaceId);
       await persistNow(get);
     },
   
@@ -170,6 +175,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
   
 
     restartWorkspaceServer: async (workspaceId) => {
+      bumpWorkspaceStartGeneration(workspaceId);
       const control = RUNTIME.controlSockets.get(workspaceId);
       closeControlSession(workspaceId);
       control?.close();
@@ -202,7 +208,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
           },
         },
       }));
-  
+
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
     },

@@ -10,8 +10,8 @@ Agent-coworker follows a **WebSocket-first** architecture where the server manag
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Clients                                  │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────────────────┐ │
-│  │   TUI   │  │   CLI   │  │ Desktop │  │ Portal (Next.js)    │ │
-│  │(OpenTUI)│  │  REPL   │  │(Electron)│ │ Web Dashboard       │ │
+│  │   TUI   │  │   CLI   │  │ Desktop │  │ Custom Client       │ │
+│  │(OpenTUI)│  │  REPL   │  │(Electron)│ │ (WebSocket)         │ │
 │  └────┬────┘  └────┬────┘  └────┬────┘  └──────────┬──────────┘ │
 └───────┼────────────┼────────────┼──────────────────┼────────────┘
         │            │            │                  │
@@ -206,14 +206,6 @@ Electron + React wrapper:
 - Desktop notifications
 - Per-workspace server processes
 - Persistent workspace/thread state
-
-### Portal (`apps/portal/`)
-
-Next.js web dashboard:
-
-- Real-time harness monitoring
-- Session visualization
-- SLO dashboards
 
 ## Data Flow
 

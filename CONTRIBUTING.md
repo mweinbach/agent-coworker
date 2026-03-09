@@ -17,7 +17,7 @@ This guide covers everything you need to start contributing to the project.
 
 ```bash
 git clone <repo-url> && cd agent-coworker
-bun install                     # installs root + apps/desktop + apps/portal deps
+bun install                     # installs root + apps/desktop deps
 
 # Run in different modes:
 bun run start                   # TUI (default) -- starts server automatically
@@ -29,7 +29,7 @@ bun run dev                     # Watch mode (rebuilds on src/ changes)
 
 ## Architecture Overview
 
-The project follows a **WebSocket-first** pattern. The server manages sessions and agent turns; clients (TUI, CLI REPL, desktop app, web portal) are thin consumers of WebSocket events.
+The project follows a **WebSocket-first** pattern. The server manages sessions and agent turns; clients (TUI, CLI REPL, desktop app, or custom clients) are thin consumers of WebSocket events.
 
 ```
 Client (TUI / CLI / Desktop / Portal)
@@ -51,7 +51,6 @@ Key modules:
 | `src/skills/` | Skill discovery and trigger extraction. |
 | `apps/TUI/` | Default TUI built with OpenTUI + Solid.js (not React). |
 | `apps/desktop/` | Tauri desktop app wrapper. |
-| `apps/portal/` | Next.js web portal. |
 | `src/cli/` | CLI REPL client. |
 
 ## Directory Structure
@@ -77,7 +76,6 @@ src/
 apps/
   TUI/                  # OpenTUI + Solid.js terminal UI
   desktop/              # Tauri desktop app
-  portal/               # Next.js web portal
 config/
   defaults.json         # Built-in default configuration
   mcp-servers.json      # System-level MCP server definitions

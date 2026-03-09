@@ -1,3 +1,35 @@
+# Task: Remove the portal app
+
+## Plan
+- [x] Capture all repo wiring that still depends on `apps/portal` and isolate portal-only tests/docs.
+- [x] Remove the portal app, root scripts/CI hooks, and documentation references without disturbing unrelated React/OpenTUI portal mentions.
+- [x] Run the required verification (`bun test` and `bun run typecheck`) and record the result below.
+
+## Review
+- Removed the portal app completely: deleted `apps/portal/`, dropped the root `portal:*` scripts and portal install step from `package.json`, removed the portal-only test (`test/portal.harness.test.ts`), and removed the CI portal build step from `.github/workflows/ci.yml`.
+- Updated the repo docs and metadata that still presented portal as a supported interface, including `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `docs/architecture.md`, `docs/harness/runbook.md`, and the desktop README/test wording that used the old harness-portal example.
+- Regenerated the root lockfile with `bun install` after removing the portal app from the install flow.
+- Verification:
+  - `bun run typecheck` -> pass
+  - `bun test` -> 1 unrelated failure, `Codex provider (gpt-5.4) > getModel exposes stable adapter shape` in `test/providers/codex-cli.test.ts`
+  - The failing assertion expects API-key auth headers from the Codex provider adapter; this task did not modify provider/runtime code, and the portal-removal surface itself does not produce any test or typecheck failures.
+
+# Task: Update Bun dependencies and verify regressions
+
+## Plan
+- [x] Capture the clean baseline and run `bun update` from the repo root.
+- [x] Inspect the resulting dependency and lockfile changes for anything unexpected.
+- [x] Run the required regression checks (`bun test` and `bun run typecheck`), investigate failures if they appear, and record the outcome below.
+
+## Review
+- `bun update` completed cleanly from the repo root and updated only `/Users/mweinbach/Projects/agent-coworker/package.json` plus `/Users/mweinbach/Projects/agent-coworker/bun.lock`. The refreshed direct versions are `@mariozechner/pi-ai 0.55.4`, `@modelcontextprotocol/sdk 1.27.1`, `@opentui/{core,react,solid} 0.1.86`, `@types/node 25.3.5`, `bun-types 1.3.10`, and `puppeteer-core 24.38.0`.
+- The dependency refresh exposed one real compile regression in `/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/ui/settings/pages/ProvidersPage.tsx`: a `split(...).map(...)` callback started tripping `TS7006` because the surrounding helper was flowing `any`. Narrowing the local intermediate strings fixed the typecheck without changing runtime behavior.
+- The refresh also surfaced one stale provider assertion in `/Users/mweinbach/Projects/agent-coworker/test/providers/codex-cli.test.ts`. The repo’s current runtime/auth contract already treats `codex-cli` API keys separately from raw `OPENAI_API_KEY` fallback, so the test now seeds a real saved `codex-cli` key in `~/.cowork/auth/connections.json` instead of assuming OpenAI env reuse.
+- Verification passed after those fixes:
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test test/providers/codex-cli.test.ts test/providers/index.test.ts test/providers/saved-keys.test.ts` -> pass (`20 pass, 0 fail`)
+  - `~/.bun/bin/bun test` -> pass (`1819 pass, 0 fail`)
+
 # Task: Expose Codex OAuth status and rate limits in provider status
 
 ## Plan
@@ -205,6 +237,43 @@
 - [x] Bump the repo and desktop release versions from `0.1.7` to `0.1.8`, keeping the Windows updater runtime fix in the release payload.
 - [x] Rerun the desktop release validation stack and confirm packaged Windows builds show a friendly unavailable state when no signed feed exists.
 - [ ] Commit the hotfix, tag `v0.1.8`, push to `origin/main`, and note any remaining release-management follow-up that cannot be completed from this machine.
+
+# Task: Fix desktop workspace-add lag/timeouts from settings
+
+## Plan
+- [x] Trace the add-workspace flow from settings through renderer actions, desktop preload, Electron IPC, and workspace server startup.
+- [x] Remove main-process blocking work from the workspace-start IPC hot path and keep the startup/error behavior unchanged for callers.
+- [x] Add regression coverage for the desktop startup/diagnostics path, run required verification, and record the outcome below.
+
+## Review
+- The settings UI path was already thin: `WorkspacesPage` calls the store’s `addWorkspace()`, which persists the new workspace and immediately runs `selectWorkspace()`. The lag/timeout risk sits on the Electron side once `selectWorkspace()` reaches `desktop:startWorkspaceServer`.
+- `apps/desktop/electron/services/serverManager.ts` no longer performs synchronous file appends for startup diagnostics or mirrors every child-process stderr chunk to the Electron main process stderr by default. Diagnostics now queue async writes to the desktop log file, and stderr mirroring is opt-in via `COWORK_DESKTOP_DEBUG_SERVER_STDERR=1`.
+- `apps/desktop/electron/services/validation.ts` now validates workspace directories asynchronously before starting the workspace server, so the IPC startup path no longer blocks the Electron main thread on `statSync`.
+- Desktop-started workspace servers now default `COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP=1` in `apps/desktop/electron/services/serverManager.ts`, which removes first-run default-skill network/bootstrap work from the critical startup path unless the environment explicitly overrides it.
+- Restart/remove semantics are hardened across the renderer and main process:
+  - `apps/desktop/src/app/store.helpers/runtimeState.ts` now tracks per-workspace startup generations.
+  - `apps/desktop/src/app/store.helpers.ts` ignores stale startup completions/errors once a workspace start has been superseded.
+  - `apps/desktop/src/app/store.actions/workspace.ts` bumps startup generation on restart/remove and no longer does a second state save when adding a brand-new workspace.
+  - `apps/desktop/electron/services/serverManager.ts` tracks pending child startups so `stopWorkspaceServer()` and `stopAll()` can kill a server before `server_listening` is emitted.
+- Regression coverage was extended in `apps/desktop/test/server-manager.test.ts` and the new `apps/desktop/test/workspace-startup.test.ts` to cover async diagnostics flushes, stopping pending starts, single-save add behavior, and restart superseding an in-flight startup.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/server-manager.test.ts apps/desktop/test/workspace-startup.test.ts apps/desktop/test/protocol-v2-events.test.ts apps/desktop/test/thread-reconnect.test.ts apps/desktop/test/workspace-settings-sync.test.ts` -> pass
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> 1 unrelated failure, `runTurn + remote MCP (mcp.grep.app) > loads the remote MCP tools and can execute them via the tools passed to streamText`, failing with `Streamable HTTP error` / `405` from the remote MCP endpoint; desktop workspace-start changes do not touch that area
+
+# Task: Use app SVG on desktop home empty state
+
+## Plan
+- [x] Locate the desktop home empty-state component and the current app SVG asset.
+- [x] Replace the placeholder tile with the actual Cowork SVG while preserving the existing layout and accessibility semantics.
+- [x] Run focused verification for the desktop renderer path and record the result below.
+
+## Review
+- The desktop home empty state in `apps/desktop/src/ui/ChatView.tsx` now renders the existing app SVG from `apps/desktop/build/icon.icon/Assets/svgviewer-output.svg` instead of the previous placeholder gradient square.
+- The icon is used as a decorative image (`alt=""`, `aria-hidden="true"`) so the accessible content remains the empty-state heading, description, and button text.
+- Verification:
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test apps/desktop/test/settings-nav.test.ts apps/desktop/test/workspaces-page.test.ts apps/desktop/test/protocol-v2-events.test.ts` -> pass (`35 pass, 0 fail`)
 
 ## Review
 - `v0.1.7` fixed the release workflow, but packaged Windows apps still attempted to fetch `latest.yml` even when the release intentionally omitted unsigned Windows update metadata. That surfaced a noisy 404 from `electron-updater` instead of a usable in-app state.

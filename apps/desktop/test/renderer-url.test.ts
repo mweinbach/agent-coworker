@@ -21,7 +21,7 @@ describe("resolveDesktopRendererUrl", () => {
     expect(result.warning).toBeUndefined();
   });
 
-  test("rejects harness portal port and falls back to desktop renderer", () => {
+  test("rejects a non-desktop dev-server port and falls back to desktop renderer", () => {
     const result = resolveDesktopRendererUrl("http://localhost:3000", undefined);
     expect(result.url).toBe("http://localhost:1420");
     expect(result.warning).toContain("Ignoring ELECTRON_RENDERER_URL");

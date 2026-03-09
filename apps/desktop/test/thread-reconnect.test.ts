@@ -138,6 +138,7 @@ describe("thread reconnect", () => {
     RUNTIME.pendingThreadMessages.clear();
     RUNTIME.pendingWorkspaceDefaultApplyThreadIds.clear();
     RUNTIME.workspaceStartPromises.clear();
+    RUNTIME.workspaceStartGenerations.clear();
     RUNTIME.modelStreamByThread.clear();
 
     useAppStore.setState({

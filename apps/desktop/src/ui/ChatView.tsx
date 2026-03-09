@@ -2,6 +2,7 @@ import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRe
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { AlertTriangleIcon, MessageSquareIcon, RotateCcwIcon } from "lucide-react";
+import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 
 import { useAppStore } from "../app/store";
 import type { FeedItem } from "../app/types";
@@ -303,11 +304,18 @@ export function ChatView() {
 
   if (!selectedThreadId || !thread) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
-        <div className="h-14 w-14 rounded-2xl border border-border/80 bg-gradient-to-br from-primary/35 to-transparent" />
-        <h2 className="text-3xl font-semibold tracking-tight">Let&apos;s build</h2>
-        <p className="max-w-xl text-muted-foreground">Pick a workspace and start a new thread.</p>
-        <Button type="button" onClick={() => void newThread()}>New thread</Button>
+      <div className="flex h-full items-center justify-center px-6">
+        <div className="flex -translate-y-12 flex-col items-center justify-center gap-4 text-center">
+          <img
+            src={coworkIconSvg}
+            alt=""
+            aria-hidden="true"
+            className="h-36 w-36 select-none object-contain"
+          />
+          <h2 className="text-3xl font-semibold tracking-tight">Let&apos;s build</h2>
+          <p className="max-w-xl text-muted-foreground">Pick a workspace and start a new thread.</p>
+          <Button type="button" onClick={() => void newThread()}>New thread</Button>
+        </div>
       </div>
     );
   }

@@ -49,16 +49,6 @@ Each invocation writes a run root under `output/` and run artifacts per run dire
 - `run_meta.json`
 - `artifacts_index.json`
 
-## Portal
-
-Start the portal:
-
-```bash
-bun run portal:dev
-```
-
-The portal renders run catalog, run detail, attempts, trace summary, outputs, and artifact index.
-
 ## Validation Gates
 
 Before merging large harness/protocol changes, run:
@@ -66,5 +56,4 @@ Before merging large harness/protocol changes, run:
 ```bash
 bun test
 bun run docs:check
-bun run portal:build
 ```

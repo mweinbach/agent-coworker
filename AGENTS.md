@@ -14,7 +14,6 @@ When you have access to subagents or agent teams, feel free to use them. Subagen
 - `src/tools/`: built-in tools (`bash`, `read`, `write`, `webSearch`, etc.)
 - `apps/TUI/`: main TUI built with OpenTUI + Solid.js
 - `apps/desktop/`: Electron desktop application
-- `apps/portal/`: portal web application
 - `test/`: Bun tests (`*.test.ts`)
 - `config/`: built-in defaults and MCP server defaults
 - `config/observability/`: local observability stack definitions (Vector + Victoria)

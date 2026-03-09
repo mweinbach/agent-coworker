@@ -21,10 +21,13 @@ import { createControlSocketHelpers } from "./store.helpers/controlSocket";
 import { persist, persistNow } from "./store.helpers/persistence";
 import {
   RUNTIME,
+  bumpWorkspaceStartGeneration,
+  clearWorkspaceStartState,
   defaultThreadRuntime,
   defaultWorkspaceRuntime,
   ensureThreadRuntime,
   ensureWorkspaceRuntime,
+  getWorkspaceStartGeneration,
   queuePendingThreadMessage,
 } from "./store.helpers/runtimeState";
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
@@ -298,8 +301,9 @@ async function ensureServerRunning(
   if (rt.serverUrl && !rt.error) return;
 
   const inFlight = RUNTIME.workspaceStartPromises.get(workspaceId);
-  if (inFlight) {
-    await inFlight;
+  const generation = getWorkspaceStartGeneration(workspaceId);
+  if (inFlight && inFlight.generation === generation) {
+    await inFlight.promise;
     return;
   }
 
@@ -316,6 +320,9 @@ async function ensureServerRunning(
   const startPromise = (async () => {
     try {
       const res = await startWorkspaceServer({ workspaceId, workspacePath: ws.path, yolo: ws.yolo });
+      if (getWorkspaceStartGeneration(workspaceId) !== generation) {
+        return;
+      }
       set((s) => ({
         workspaceRuntimeById: {
           ...s.workspaceRuntimeById,
@@ -323,6 +330,9 @@ async function ensureServerRunning(
         },
       }));
     } catch (err) {
+      if (getWorkspaceStartGeneration(workspaceId) !== generation) {
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       set((s) => ({
         notifications: pushNotification(s.notifications, {
@@ -344,16 +354,21 @@ async function ensureServerRunning(
     }
   })();
 
-  RUNTIME.workspaceStartPromises.set(workspaceId, startPromise);
+  RUNTIME.workspaceStartPromises.set(workspaceId, { generation, promise: startPromise });
   try {
     await startPromise;
   } finally {
-    RUNTIME.workspaceStartPromises.delete(workspaceId);
+    const active = RUNTIME.workspaceStartPromises.get(workspaceId);
+    if (active?.generation === generation && active.promise === startPromise) {
+      RUNTIME.workspaceStartPromises.delete(workspaceId);
+    }
   }
 }
 
 export {
   RUNTIME,
+  bumpWorkspaceStartGeneration,
+  clearWorkspaceStartState,
   nowIso,
   makeId,
   basename,

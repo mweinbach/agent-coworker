@@ -13,7 +13,8 @@ export type RuntimeMaps = {
   optimisticUserMessageIds: Map<string, Set<string>>;
   pendingThreadMessages: Map<string, string[]>;
   pendingWorkspaceDefaultApplyThreadIds: Set<string>;
-  workspaceStartPromises: Map<string, Promise<void>>;
+  workspaceStartPromises: Map<string, { generation: number; promise: Promise<void> }>;
+  workspaceStartGenerations: Map<string, number>;
   modelStreamByThread: Map<string, ThreadModelStreamRuntime>;
   workspacePickerOpen: boolean;
 };
@@ -25,6 +26,7 @@ export const RUNTIME: RuntimeMaps = {
   pendingThreadMessages: new Map(),
   pendingWorkspaceDefaultApplyThreadIds: new Set(),
   workspaceStartPromises: new Map(),
+  workspaceStartGenerations: new Map(),
   modelStreamByThread: new Map(),
   workspacePickerOpen: false,
 };
@@ -96,6 +98,21 @@ export function defaultThreadRuntime(): ThreadRuntime {
     feed: [],
     transcriptOnly: false,
   };
+}
+
+export function getWorkspaceStartGeneration(workspaceId: string): number {
+  return RUNTIME.workspaceStartGenerations.get(workspaceId) ?? 0;
+}
+
+export function bumpWorkspaceStartGeneration(workspaceId: string): number {
+  const next = getWorkspaceStartGeneration(workspaceId) + 1;
+  RUNTIME.workspaceStartGenerations.set(workspaceId, next);
+  return next;
+}
+
+export function clearWorkspaceStartState(workspaceId: string): void {
+  RUNTIME.workspaceStartPromises.delete(workspaceId);
+  RUNTIME.workspaceStartGenerations.delete(workspaceId);
 }
 
 export function ensureWorkspaceRuntime(

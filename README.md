@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  Built on <a href="https://bun.sh">Bun</a> + <a href="https://github.com/badlogic/pi-mono">pi-mono</a> · WebSocket-first architecture · TUI, CLI, Desktop, and Web interfaces
+  Built on <a href="https://bun.sh">Bun</a> + <a href="https://github.com/badlogic/pi-mono">pi-mono</a> · WebSocket-first architecture · TUI, CLI, and Desktop interfaces
 </p>
 
 ---
@@ -16,7 +16,7 @@
 
 agent-coworker is a local AI agent that lives in your terminal and helps you write, debug, and ship code. It has a full toolbelt — file ops, shell execution, web research, code search, sub-agents, task management — and a command approval system so it doesn't `rm -rf` your life.
 
-It's built on a **WebSocket-first architecture**, which means the agent brain is completely decoupled from the UI. The TUI, CLI REPL, desktop app, and web portal are all thin clients talking to the same server. You can build your own client too — the [protocol is documented](docs/websocket-protocol.md).
+It's built on a **WebSocket-first architecture**, which means the agent brain is completely decoupled from the UI. The TUI, CLI REPL, desktop app, and any custom client are all thin clients talking to the same server. You can build your own client too — the [protocol is documented](docs/websocket-protocol.md).
 
 ### Why?
 
@@ -110,14 +110,6 @@ bun run desktop:dev
 
 Electron-based wrapper with workspace management, MCP settings UI, and browser automation via CDP.
 
-### Web Portal
-
-```bash
-bun run portal:dev
-```
-
-Next.js realtime dashboard for session monitoring, harness context, and live trace inspection.
-
 ### Standalone Server
 
 ```bash
@@ -210,7 +202,7 @@ Built-in [Langfuse](https://langfuse.com) + OpenTelemetry integration. Set `LANG
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Thin Clients                                           │
-│  TUI (OpenTUI+Solid.js) · CLI REPL · Desktop · Portal  │
+│  TUI (OpenTUI+Solid.js) · CLI REPL · Desktop · Custom  │
 └──────────────────────────┬──────────────────────────────┘
                            │ WebSocket (protocol v7.0)
 ┌──────────────────────────▼──────────────────────────────┐
@@ -242,7 +234,6 @@ Everything flows through the WebSocket protocol. UIs never touch the runtime eng
 | `src/mcp/` | MCP config loading, OAuth, auth storage |
 | `apps/TUI/` | Terminal UI (OpenTUI + Solid.js) |
 | `apps/desktop/` | Electron desktop app |
-| `apps/portal/` | Next.js web portal |
 
 ## Docs
 
@@ -263,7 +254,6 @@ bun install          # Install all dependencies (root + apps)
 bun test             # Run tests (Bun test runner)
 bun run dev          # Watch mode
 bun run desktop:dev  # Desktop app dev mode
-bun run portal:dev   # Web portal dev mode
 bun run harness:run  # Run evaluation harness
 bun run docs:check   # Validate documentation
 ```
@@ -276,7 +266,6 @@ bun run docs:check   # Validate documentation
 | **AI Runtime** | [pi-mono / @mariozechner/pi-ai](https://github.com/badlogic/pi-mono) |
 | **TUI** | [OpenTUI](https://github.com/anthropics/opentui) + [Solid.js](https://www.solidjs.com/) |
 | **Desktop** | Electron |
-| **Web** | [Next.js](https://nextjs.org/) |
 | **MCP** | [Model Context Protocol](https://modelcontextprotocol.io/) v1.26 |
 | **Observability** | [Langfuse](https://langfuse.com) + OpenTelemetry |
 | **Testing** | Bun built-in test runner |

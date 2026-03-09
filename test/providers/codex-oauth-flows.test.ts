@@ -77,6 +77,17 @@ describe("providers/codex-oauth-flows", () => {
     expect(openedRedirectUri.startsWith(`http://${OAUTH_LOOPBACK_HOST}:`)).toBe(true);
   });
 
+  test("prepareCodexBrowserOAuth advertises localhost in the browser redirect URI", async () => {
+    const pending = await prepareCodexBrowserOAuth();
+    try {
+      expect(pending.redirectUri.startsWith("http://localhost:")).toBe(true);
+      const authUrl = new URL(pending.authUrl);
+      expect(authUrl.searchParams.get("redirect_uri")).toBe(pending.redirectUri);
+    } finally {
+      pending.close();
+    }
+  });
+
   test("completeCodexBrowserOAuth exchanges a manually provided code with the prepared PKCE state", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-oauth-manual-"));
     const paths = getAiCoworkerPaths({ homedir: home });

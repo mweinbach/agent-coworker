@@ -412,7 +412,7 @@ export async function runCliRepl(
       url,
       resumeSessionId: resumeSessionId?.trim() || lastKnownSessionId || undefined,
       client: "cli",
-      version: "0.1.14",
+      version: "0.1.15",
       onEvent: (evt) => {
         if (epoch !== socketEpoch) return;
         handleServerEvent(evt, rl);

@@ -6,7 +6,9 @@ export const OAUTH_SUCCESS_HTML = `<!doctype html><html><head><meta charset="utf
 export const OAUTH_FAILURE_HTML = (message: string) =>
   `<!doctype html><html><head><meta charset="utf-8"><title>Auth failed</title></head><body><h1>Authorization failed</h1><p>${message}</p></body></html>`;
 
-export const OAUTH_LOOPBACK_HOST = "127.0.0.1";
+// Codex browser login expects localhost in the redirect URI; keep the listener
+// host aligned with the advertised callback URL.
+export const OAUTH_LOOPBACK_HOST = "localhost";
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 const addressInfoSchema = z.object({ port: z.number().int().nonnegative() }).passthrough();
 

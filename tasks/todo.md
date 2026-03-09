@@ -1,3 +1,22 @@
+# Task: Fix Codex OAuth loopback redirect regression
+
+## Plan
+- [x] Audit the shipped Codex OAuth browser-login contract against the current implementation to find the live redirect mismatch behind the `unknown_error` auth page.
+- [x] Patch the loopback callback/auth URL generation so the authorize request matches the expected Codex contract, and add regression coverage around the advertised redirect host.
+- [x] Rerun the OAuth-focused tests plus repo validation, then record the fix and ship a hotfix release because `v0.1.14` already contains the broken redirect host.
+
+## Review
+- Root cause: the shipped Codex browser-login flow was advertising `redirect_uri=http://127.0.0.1:.../auth/callback`, while the repo’s own pinned Codex auth contract expects `http://localhost:.../auth/callback`. That host mismatch is enough for the upstream auth page to reject the request with the generic `unknown_error` screen before the local callback ever runs.
+- Fixed `src/auth/oauth-server.ts` so the loopback host used by the listener and the advertised redirect URI is now `localhost`, not `127.0.0.1`. This keeps the browser authorize URL aligned with the accepted Codex contract.
+- Added a direct regression in `test/providers/codex-oauth-flows.test.ts` to assert that `prepareCodexBrowserOAuth()` advertises a `localhost` redirect URI in the actual browser challenge, not just in the lower-level URL builder helper.
+- Because `v0.1.14` was already published with the broken host, bumped the app/runtime version strings to `0.1.15` so the hotfix release and updater metadata are internally consistent.
+- Verification:
+  - `~/.bun/bin/bun run docs:check` -> pass
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test test/providers/codex-oauth-flows.test.ts test/connect.test.ts test/session.test.ts` -> pass (`201 pass, 0 fail`)
+  - `~/.bun/bin/bun test` -> pass (`1856 pass, 0 fail, 2 skip`)
+  - `~/.bun/bin/bun run desktop:build -- --publish never` -> pass for local unsigned packaging; produced `apps/desktop/release/Cowork-0.1.15-mac-arm64.dmg`, `apps/desktop/release/Cowork-0.1.15-mac-arm64.zip`, blockmaps, and refreshed updater metadata. Local signing/notarization remained intentionally skipped without Apple credentials.
+
 # Task: Ship desktop release v0.1.14
 
 ## Plan

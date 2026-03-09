@@ -1152,6 +1152,9 @@ describe("AgentSession", () => {
       if (evt && evt.type === "provider_auth_challenge") {
         expect(evt.provider).toBe("codex-cli");
         expect(evt.methodId).toBe("oauth_cli");
+        expect(evt.challenge.method).toBe("auto");
+        expect(typeof evt.challenge.url).toBe("string");
+        expect(evt.challenge.url).toContain("https://auth.openai.com/oauth/authorize");
       }
     });
   });
@@ -1230,6 +1233,7 @@ describe("AgentSession", () => {
         accountId: "acct_123",
       };
 
+      await session.authorizeProviderAuth("codex-cli", "oauth_cli");
       await session.callbackProviderAuth("codex-cli", "oauth_cli");
 
       const authEvt = events.find((e) => e.type === "provider_auth_result");
@@ -1237,6 +1241,64 @@ describe("AgentSession", () => {
       if (authEvt && authEvt.type === "provider_auth_result") {
         expect(authEvt.ok).toBe(true);
         expect(authEvt.provider).toBe("codex-cli");
+      }
+      expect((session as any).state.providerState).toBeNull();
+    });
+
+    test("callbackProviderAuth accepts a manual codex auth code after authorize", async () => {
+      const getProviderCatalogImpl = mock(async () => ({
+        all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.4"], defaultModel: "gpt-5.4" }],
+        default: { "codex-cli": "gpt-5.4" },
+        connected: ["codex-cli"],
+      }));
+      const getProviderStatusesImpl = mock(async () => []);
+      mockConnectModelProvider.mockImplementationOnce(async (opts: any) => {
+        expect(opts.provider).toBe("codex-cli");
+        expect(opts.methodId).toBe("oauth_cli");
+        expect(opts.code).toBe("manual-auth-code");
+        expect(opts.codexBrowserAuthPending).toBeDefined();
+        expect(typeof opts.codexBrowserAuthPending?.authUrl).toBe("string");
+        expect(opts.codexBrowserAuthPending?.authUrl).toContain("https://auth.openai.com/oauth/authorize");
+        return {
+          ok: true,
+          provider: "codex-cli",
+          mode: "oauth",
+          storageFile: "/tmp/mock-home/.cowork/auth/connections.json",
+          message: "OAuth sign-in completed.",
+        };
+      });
+      const { session, events } = makeSession({
+        connectProviderImpl: mockConnectModelProvider,
+        getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
+        getProviderCatalogImpl: getProviderCatalogImpl as any,
+        getProviderStatusesImpl: getProviderStatusesImpl as any,
+      });
+      (session as any).state.providerState = {
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        responseId: "resp_before_oauth",
+        updatedAt: "2026-02-16T00:00:00.000Z",
+        accountId: "acct_123",
+      };
+
+      await session.authorizeProviderAuth("codex-cli", "oauth_cli");
+
+      const challengeEvt = events.find((e) => e.type === "provider_auth_challenge");
+      expect(challengeEvt).toBeDefined();
+      if (challengeEvt && challengeEvt.type === "provider_auth_challenge") {
+        expect(challengeEvt.challenge.method).toBe("auto");
+        expect(typeof challengeEvt.challenge.url).toBe("string");
+        expect(challengeEvt.challenge.url).toContain("https://auth.openai.com/oauth/authorize");
+      }
+
+      await session.callbackProviderAuth("codex-cli", "oauth_cli", "manual-auth-code");
+
+      const authEvt = events.findLast((e) => e.type === "provider_auth_result");
+      expect(authEvt).toBeDefined();
+      if (authEvt && authEvt.type === "provider_auth_result") {
+        expect(authEvt.ok).toBe(true);
+        expect(authEvt.provider).toBe("codex-cli");
+        expect(authEvt.methodId).toBe("oauth_cli");
       }
       expect((session as any).state.providerState).toBeNull();
     });

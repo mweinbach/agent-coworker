@@ -6,6 +6,7 @@ import {
   type DisconnectProviderResult,
   type OauthStdioMode,
 } from "../connect";
+import type { CodexBrowserOAuthPending } from "./codex-oauth-flows";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 
 export type ProviderAuthMethodType = "api" | "oauth";
@@ -28,6 +29,7 @@ export type ConnectProviderHandler = (opts: {
   provider: ProviderName;
   methodId?: string;
   code?: string;
+  codexBrowserAuthPending?: CodexBrowserOAuthPending;
   apiKey?: string;
   cwd?: string;
   paths?: AiCoworkerPaths;
@@ -150,6 +152,7 @@ export async function callbackProviderAuth(opts: {
   provider: ProviderName;
   methodId: string;
   code?: string;
+  codexBrowserAuthPending?: CodexBrowserOAuthPending;
   cwd?: string;
   paths?: AiCoworkerPaths;
   connect: ConnectProviderHandler;
@@ -171,6 +174,7 @@ export async function callbackProviderAuth(opts: {
     provider: opts.provider,
     methodId: opts.methodId,
     code: opts.code?.trim() || undefined,
+    codexBrowserAuthPending: opts.codexBrowserAuthPending,
     cwd: opts.cwd,
     paths: opts.paths,
     oauthStdioMode: opts.oauthStdioMode,

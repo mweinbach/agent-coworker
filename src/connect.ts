@@ -4,7 +4,12 @@ import {
   readCodexAuthMaterial,
   refreshCodexAuthMaterial,
 } from "./providers/codex-auth";
-import { isOauthCliProvider, runCodexBrowserOAuth } from "./providers/codex-oauth-flows";
+import {
+  completeCodexBrowserOAuth,
+  isOauthCliProvider,
+  runCodexBrowserOAuth,
+  type CodexBrowserOAuthPending,
+} from "./providers/codex-oauth-flows";
 import {
   getAiCoworkerPaths,
   ensureAiCoworkerHome,
@@ -72,6 +77,7 @@ export async function connectProvider(opts: {
   provider: ConnectService;
   methodId?: string;
   code?: string;
+  codexBrowserAuthPending?: CodexBrowserOAuthPending;
   apiKey?: string;
   cwd?: string;
   paths?: AiCoworkerPaths;
@@ -166,12 +172,27 @@ export async function connectProvider(opts: {
     if (methodId !== "oauth_cli") {
       opts.onOauthLine?.(`[auth] deprecated Codex auth method "${methodId}" requested; using Cowork browser login.`);
     }
-    const oauthCredentialsFile = await runCodexBrowserOAuth({
-      paths,
-      fetchImpl,
-      onLine: opts.onOauthLine,
-      openUrl: opts.openUrl,
-    });
+    const code = opts.code?.trim() || "";
+    let oauthCredentialsFile = "";
+    if (opts.codexBrowserAuthPending) {
+      oauthCredentialsFile = await completeCodexBrowserOAuth({
+        paths,
+        pending: opts.codexBrowserAuthPending,
+        fetchImpl,
+        code: code || undefined,
+        onLine: opts.onOauthLine,
+        openUrl: opts.openUrl,
+      });
+    } else if (code) {
+      throw new Error("Authorization code requires an active Codex OAuth challenge. Start authorization first.");
+    } else {
+      oauthCredentialsFile = await runCodexBrowserOAuth({
+        paths,
+        fetchImpl,
+        onLine: opts.onOauthLine,
+        openUrl: opts.openUrl,
+      });
+    }
 
     store.services[provider] = {
       service: provider,

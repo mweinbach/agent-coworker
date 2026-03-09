@@ -218,6 +218,7 @@
 
 ## Plan
 - [ ] Remove automatic `~/.codex/auth.json` migration from the Codex connect, provider-status, runtime, and model-adapter paths so Cowork only uses its own `~/.cowork/auth/codex-cli/auth.json`.
+
 - [ ] Add a first-class Codex provider logout flow through the auth registry, WebSocket protocol/session handling, and desktop provider settings UI.
 - [ ] Update the focused regression tests for auth migration/logout behavior, rerun the provider/session/desktop verification slices, and record the validated outcome below.
 
@@ -1888,3 +1889,46 @@
 ### Verification
 - `bun test test/providers/codex-oauth-flows.test.ts test/providerStatus.test.ts test/modelStreamReplay.test.ts apps/desktop/test/store-feed-mapping.test.ts apps/desktop/test/protocol-v2-events.test.ts test/agentSocket.parse.test.ts` -> pass (`51 pass, 0 fail`)
 - `bun run typecheck` -> pass
+
+# Task: Re-check unresolved PR review comments for relevance
+
+## Plan
+- [x] Verify `gh` auth, locate the open PR for the current branch, and fetch unresolved review threads.
+- [x] Inspect the current code for each unresolved comment to determine whether the reported regression still exists at `HEAD`.
+- [x] Record which comments remain relevant and note any stale parts of the `gh-address-comments` skill workflow.
+
+## Review
+- `gh auth status` is healthy, and the current branch `codex/add-openai-compaction-support` has open PR `#31` (`Fix OpenAI compaction support for desktop flows`) with two unresolved review threads from `chatgpt-codex-connector`.
+- Thread 1 on `src/client/modelStreamReplay.ts` is no longer relevant at `HEAD`. GitHub marks it outdated, the current implementation returns `[]` on projection failure (`src/client/modelStreamReplay.ts:57-65`), and it only marks the turn as raw-backed after at least one replay update is produced (`src/client/modelStreamReplay.ts:92-94`).
+- Thread 1 is covered by `test/modelStreamReplay.test.ts`: one test proves normalized chunks are still accepted when raw replay yields no updates, and another proves raw-backed suppression starts only after replayable output exists.
+- Thread 2 on `src/connect.ts` is still relevant. `connectProvider()` accepts `code?: string` (`src/connect.ts:71-82`), but the Codex OAuth path always calls `runCodexBrowserOAuth(...)` (`src/connect.ts:165-174`) and never consumes or forwards `opts.code`, so a `provider_auth_callback` payload with a manual code still cannot complete via this path.
+- The surrounding plumbing still expects manual-code callbacks to work: `callbackProviderAuth()` forwards `code` into the connect handler (`src/providers/authRegistry.ts:170-178`) and the websocket protocol still documents `provider_auth_callback` with an optional `code` field (`docs/websocket-protocol.md:649-665`).
+- Coverage confirms the gap rather than closing it. `test/providers/auth-registry.test.ts` only verifies the registry forwards `code` to the connect handler, `test/session.test.ts` exercises the callback path without a code, and `test/connect.test.ts` only covers browser-based Codex OAuth. There is no `connectProvider()` test asserting a manual authorization code is consumed for Codex.
+- The `gh-address-comments` skill is only partially current: the overall `gh`/PR-comment workflow still applies, but the referenced helper `scripts/fetch_comments.py` is missing from this repo, so the fetching step should be updated to use the current `gh api graphql ... reviewThreads(first: 100)` flow instead.
+
+### Verification
+- `gh pr view --json number,title,headRefName,url,state,isDraft,reviewDecision,comments,reviews` -> open PR `#31`
+- `gh api graphql ... reviewThreads(first: 100)` -> 2 unresolved threads, 1 outdated and 1 current
+- `~/.bun/bin/bun test test/modelStreamReplay.test.ts test/connect.test.ts test/providers/auth-registry.test.ts test/session.test.ts test/protocol.test.ts` -> pass (`354 pass, 0 fail`)
+
+# Task: Fix Codex manual callback auth path for unresolved PR review feedback
+
+## Plan
+- [x] Rework the Codex browser OAuth helpers so an auth challenge can keep the PKCE redirect/code-verifier state alive across `provider_auth_authorize` and `provider_auth_callback`.
+- [x] Thread that pending Codex auth state through the session/provider connect path so manual callback codes are consumed instead of forcing a new browser listener flow.
+- [x] Add focused regression coverage for manual callback completion and rerun the relevant provider/session/protocol tests.
+
+## Review
+- `src/providers/codex-oauth-flows.ts` now separates Codex browser OAuth into `prepareCodexBrowserOAuth()` and `completeCodexBrowserOAuth(...)`. That keeps the generated PKCE verifier and redirect URI alive across the authorize/callback boundary and lets a manual callback code finish the token exchange without reopening the browser.
+- `src/server/session/ProviderAuthManager.ts` now owns the pending Codex browser challenge for the session. `provider_auth_authorize` emits a real challenge URL for `codex-cli/oauth_cli`, and `provider_auth_callback` passes the pending PKCE state into the connect path before clearing it.
+- `src/connect.ts` and `src/providers/authRegistry.ts` now thread optional pending Codex browser auth state through `connectProvider()`. When a manual `code` arrives with an active challenge, Cowork exchanges it directly; if a code arrives without a pending challenge, the call now fails clearly instead of silently starting a fresh browser-only flow.
+- Added regression coverage in `test/session.test.ts`, `test/connect.test.ts`, and `test/providers/codex-oauth-flows.test.ts` for:
+  - emitting a real Codex browser auth challenge URL at authorize time,
+  - keeping the old authorize -> callback browser path working,
+  - accepting a manual callback code after authorize,
+  - and exercising the real PKCE token exchange helper with a manual code.
+
+### Verification
+- `~/.bun/bin/bun test test/connect.test.ts test/providers/auth-registry.test.ts test/session.test.ts test/protocol.test.ts` -> pass (`354 pass, 0 fail`)
+- `~/.bun/bin/bun test test/providers/codex-oauth-flows.test.ts` -> pass (`3 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass

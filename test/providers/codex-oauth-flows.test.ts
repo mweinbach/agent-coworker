@@ -5,7 +5,12 @@ import path from "node:path";
 
 import { getAiCoworkerPaths } from "../../src/connect";
 import { OAUTH_LOOPBACK_HOST } from "../../src/auth/oauth-server";
-import { buildCodexAuthorizeUrl, runCodexBrowserOAuth } from "../../src/providers/codex-oauth-flows";
+import {
+  buildCodexAuthorizeUrl,
+  completeCodexBrowserOAuth,
+  prepareCodexBrowserOAuth,
+  runCodexBrowserOAuth,
+} from "../../src/providers/codex-oauth-flows";
 
 function b64url(input: string): string {
   return Buffer.from(input, "utf8").toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
@@ -70,5 +75,40 @@ describe("providers/codex-oauth-flows", () => {
 
     expect(file).toBe(path.join(paths.authDir, "codex-cli", "auth.json"));
     expect(openedRedirectUri.startsWith(`http://${OAUTH_LOOPBACK_HOST}:`)).toBe(true);
+  });
+
+  test("completeCodexBrowserOAuth exchanges a manually provided code with the prepared PKCE state", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-codex-oauth-manual-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const accessToken = makeJwt({
+      email: "manual@example.com",
+      chatgpt_account_id: "acct-manual",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    const pending = await prepareCodexBrowserOAuth();
+    let requestBody = "";
+
+    const file = await completeCodexBrowserOAuth({
+      paths,
+      pending,
+      code: "manual-auth-code",
+      fetchImpl: async (_url, init) => {
+        requestBody = String(init?.body ?? "");
+        return new Response(JSON.stringify({
+          access_token: accessToken,
+          refresh_token: "manual-refresh-token",
+          expires_in: 3600,
+        }), { status: 200 });
+      },
+      openUrl: async () => {
+        throw new Error("manual callback flow should not open a browser");
+      },
+    });
+
+    const params = new URLSearchParams(requestBody);
+    expect(params.get("code")).toBe("manual-auth-code");
+    expect(params.get("redirect_uri")).toBe(pending.redirectUri);
+    expect(params.get("code_verifier")).toBe(pending.codeVerifier);
+    expect(file).toBe(path.join(paths.authDir, "codex-cli", "auth.json"));
   });
 });

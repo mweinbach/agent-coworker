@@ -1,3 +1,20 @@
+# Task: Rewrite the root README into an accurate open-source front door
+
+## Plan
+- [x] Audit the current README against the implemented product surface across the CLI, TUI, WebSocket server, desktop app, tools, providers, MCP, skills, persistence, and harness docs.
+- [x] Rewrite `README.md` so it reflects the current architecture and workflow honestly, with a stronger project pitch, clearer setup, better feature framing, and better doc navigation.
+- [x] Run the required verification (`bun test` and `bun run typecheck`) and record the outcome below.
+
+## Review
+- Rewrote the root `README.md` from a basic terminal-tool overview into a code-accurate OSS front page that presents Cowork as a WebSocket-first local agent backend with official TUI, CLI, and desktop clients.
+- Updated the README content to match the current implementation surface: provider auth/status flows, persistent subagents, session backups/checkpoints, MCP management, layered skills, desktop workspace management, headless server usage, and the custom-client protocol story.
+- Tightened the setup and developer guidance so the README now states the real runtime expectations: TUI requires a real terminal, `bun run serve` is the headless entrypoint, provider credentials are only needed for live turns, and web search can use Brave or Exa credentials.
+- Verification:
+  - `~/.bun/bin/bun run docs:check` -> pass
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test test/providers/codex-oauth-flows.test.ts` -> pass (`3 pass, 0 fail`)
+  - `~/.bun/bin/bun test` -> still has 1 failing repo test: `test/providers/codex-oauth-flows.test.ts` (`completeCodexBrowserOAuth exchanges a manually provided code with the prepared PKCE state`), even though that same test passes in isolation. This README change did not touch runtime or auth code, so the remaining failure appears to be an existing order-dependent/flaky issue rather than a regression from the documentation update.
+
 # Task: Harden desktop trace ordering and duplicate suppression
 
 ## Plan
@@ -238,6 +255,7 @@
 - Live validation against the current machine state showed the exact split-brain bug: `~/.cowork/auth/codex-cli/auth.json` was valid while `connections.json` had an empty `services` object. After the patch, `getProviderCatalog()` still returns `["codex-cli"]` and `getProviderStatuses()` still resolves Codex as verified from the Cowork auth file.
 - Verification:
   - `~/.bun/bin/bun test test/connect.test.ts test/providerStatus.test.ts test/providers/saved-keys.test.ts test/runtime.pi-runtime.test.ts test/providers/connection-catalog.test.ts test/providers/codex-auth.test.ts` -> pass (`43 pass, 0 fail`)
+
   - `~/.bun/bin/bun run typecheck` -> pass
   - `~/.bun/bin/bun test apps/desktop/test/providers-page.test.ts apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/protocol-v2-events.test.ts` -> pass (`40 pass, 0 fail`)
 

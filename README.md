@@ -1,270 +1,294 @@
-<p align="center">
-  <strong>agent-coworker</strong>
-</p>
+# agent-coworker
+
+A local-first coding agent backend with official TUI, CLI, and desktop clients.
+
+`agent-coworker` is built around one architectural decision: the agent lives behind a WebSocket server, not inside a single UI. The server owns sessions, tool execution, provider auth, MCP, persistence, safety checks, and streaming. The TUI, CLI REPL, Electron app, and any custom client are thin clients on top of the same protocol.
+
+If you want "an AI terminal app", you can use it that way. If you want "an agent backend with a documented control plane and multiple frontends", that is what this repo actually is.
 
 <p align="center">
-  A terminal-first AI coworker that actually works with you — not just for you.
+  <img src="apps/desktop/screenshot.png" alt="Cowork desktop screenshot" width="1100" />
 </p>
 
-<p align="center">
-  Built on <a href="https://bun.sh">Bun</a> + <a href="https://github.com/badlogic/pi-mono">pi-mono</a> · WebSocket-first architecture · TUI, CLI, and Desktop interfaces
-</p>
+## Why this project exists
 
----
+Most coding agents collapse the runtime, UI, and provider glue into one product surface. That makes them hard to extend, hard to automate, and hard to trust once they start touching a real workspace.
 
-## What is this?
+Cowork takes the opposite approach:
 
-agent-coworker is a local AI agent that lives in your terminal and helps you write, debug, and ship code. It has a full toolbelt — file ops, shell execution, web research, code search, sub-agents, task management — and a command approval system so it doesn't `rm -rf` your life.
+- The server is the product boundary. UIs render state and send typed protocol messages.
+- Sessions are persistent, resumable objects backed by SQLite, not just transient chat tabs.
+- Tool execution happens server-side with command approvals and explicit `--yolo` escape hatches.
+- Providers are first-class integrations with auth methods, connection status, and per-session model configuration.
+- Skills, MCP servers, subagents, and checkpointed workspace backups are part of the core system, not afterthought plugins.
 
-It's built on a **WebSocket-first architecture**, which means the agent brain is completely decoupled from the UI. The TUI, CLI REPL, desktop app, and any custom client are all thin clients talking to the same server. You can build your own client too — the [protocol is documented](docs/websocket-protocol.md).
+## Highlights
 
-### Why?
-
-Most AI coding tools are either cloud-locked, single-interface, or treat the terminal as an afterthought. agent-coworker is:
-
-- **Local-first** — your code never leaves your machine unless you want it to
-- **Provider-agnostic** — swap between the Google Gemini API, OpenAI API, Anthropic API, or Codex CLI
-- **Interface-agnostic** — same agent, same tools, whether you're in the TUI, a desktop app, or a custom client
-- **Extensible** — skills, MCP servers, and sub-agents let you teach it anything
+- Official interfaces: terminal TUI, plain CLI REPL, Electron desktop app, and custom WebSocket clients.
+- Local-first workflow: your repo stays on your machine; external calls only happen through the providers and tools you configure.
+- Server-side tools for shell, files, search, fetch, notebook edits, memory, task tracking, and subagent delegation.
+- Persistent session history in `~/.cowork/sessions.db`, with resume support across restarts.
+- Session backup and checkpoint APIs for restoring a workspace to its original or checkpointed state.
+- Layered skills and MCP configuration for project, user, global, and built-in capabilities.
+- Provider catalog, auth, and status flows for Google, OpenAI, Anthropic, and `codex-cli`.
+- Harness and observability hooks for repeatable runs, traces, and artifact capture.
 
 ## Quickstart
 
-**Prerequisites:** [Bun](https://bun.sh) installed.
+### 1. Install
+
+Prerequisite: [Bun](https://bun.sh)
 
 ```bash
-git clone <repo-url> && cd agent-coworker
+git clone <repo-url>
+cd agent-coworker
 bun install
 ```
 
-Set an API key for your provider of choice:
+### 2. Configure a provider
 
-| Provider | Environment Variable |
-|---|---|
-| Google Gemini | `GOOGLE_GENERATIVE_AI_API_KEY` |
+Live AI turns require at least one configured provider. Starting the server, launching the UIs, and running tests do not.
+
+| Provider | Auth |
+| --- | --- |
+| Google | `GOOGLE_GENERATIVE_AI_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
 | Anthropic | `ANTHROPIC_API_KEY` |
+| Codex CLI | Built-in OAuth or API key flow via Cowork |
 
-Or use Codex CLI OAuth:
-
-```bash
-# OpenAI via Codex CLI
-npx @openai/codex login
-
-```
-
-Then run it:
+Examples:
 
 ```bash
-bun run start                          # TUI (starts server automatically)
-bun run start -- --dir /path/to/project  # target a specific directory
-bun run start -- --yolo                  # bypass command approvals (you asked for it)
+export OPENAI_API_KEY=...
 ```
 
-## Interfaces
+Or start the CLI and use the built-in connect flow:
 
-### TUI (default)
+```bash
+bun run cli
+# then inside the REPL:
+/connect codex-cli
+```
 
-The primary interface. Built with [OpenTUI](https://github.com/anthropics/opentui) + Solid.js, inspired by [opencode](https://github.com/anomalyco/opencode).
+### 3. Run it
 
-**Home screen** — centered prompt, random tips, provider/model info.
+Default TUI:
 
-**Session screen** — scrollable message feed with rendered markdown, tool calls, reasoning blocks, and an optional sidebar (`Ctrl+E`) showing context usage, MCP status, and todos.
+```bash
+bun run start
+```
 
-#### Key shortcuts
+Target a specific workspace:
 
-| Shortcut | Action |
-|---|---|
-| `Ctrl+K` | Command palette (fuzzy search across all commands) |
-| `Ctrl+N` | New session |
-| `Ctrl+E` | Toggle sidebar |
-| `Ctrl+Shift+L` | Switch model |
-| `Ctrl+X T` | Switch theme (31 built-in: catppuccin, dracula, gruvbox, nord, etc.) |
-| `Ctrl+X S` | List sessions |
-| `Ctrl+Z` / `Ctrl+Shift+Z` | Stash / pop prompt |
-| `Ctrl+]` | Toggle shell mode |
-| `Escape` | Cancel agent turn / dismiss dialog |
-| `?` | Help / keybinding reference |
+```bash
+bun run start -- --dir /path/to/project
+```
 
-#### Prompt features
-
-- **History** — `Up`/`Down` cycle through previous prompts (persisted in `~/.cowork/state/prompt-history.jsonl`)
-- **Autocomplete** — `@` for file completions, `/` for commands
-- **Shell mode** — prefix with `!` to run shell commands directly (e.g. `!ls -la`)
-- **Stash** — save the current prompt for later, restore it when you need it
-
-### CLI REPL
+Plain CLI REPL:
 
 ```bash
 bun run cli
 ```
 
-Lightweight REPL that connects to the same WebSocket server. Same agent, same tools, no UI overhead.
+Standalone server for headless use or custom clients:
 
-### Desktop App
+```bash
+bun run serve
+bun run serve -- --json
+```
+
+TUI requires a real terminal. For headless or cloud workflows, prefer `bun run serve` and connect over WebSocket.
+
+## Official clients
+
+### TUI
+
+The default interface is a terminal UI built with OpenTUI and Solid.js. It is not a thin text wrapper around the CLI; it renders the same structured server events the desktop app uses:
+
+- streamed assistant text, reasoning, and tool activity
+- approval and ask prompts
+- todo state
+- session backup status
+- session lists, themes, prompt stash, and command palette flows
+
+### CLI REPL
+
+The CLI is a lightweight readline client for the same server. It supports slash commands for provider and model control, session switching, connection flows, and tool listing.
+
+Useful commands include:
+
+- `/connect <provider>`
+- `/provider <name>`
+- `/model <id>`
+- `/sessions`
+- `/resume <sessionId>`
+- `/tools`
+
+### Desktop
+
+The Electron app is a fuller workstation client with:
+
+- workspace management
+- provider settings and auth
+- MCP settings and validation
+- chat transcript rendering
+- thread history
+- native menus, dialogs, notifications, and updater plumbing
+
+Run it in development with:
 
 ```bash
 bun run desktop:dev
 ```
 
-Electron-based wrapper with workspace management, MCP settings UI, and browser automation via CDP.
+### Custom clients
 
-### Standalone Server
+The WebSocket protocol is documented in [docs/websocket-protocol.md](docs/websocket-protocol.md). It covers much more than chat:
 
-```bash
-bun run serve
-```
-
-Run just the WebSocket server. Connect any client to `ws://127.0.0.1:7337/ws`. Build your own UI — the [WebSocket protocol spec](docs/websocket-protocol.md) has everything you need.
-
-## Tools
-
-16 built-in tools, all executed server-side with safety approvals for risky operations:
-
-| Tool | What it does |
-|---|---|
-| `bash` | Execute terminal commands (with approval for dangerous ops) |
-| `glob` | Fast file pattern matching ([fast-glob](https://github.com/mrmlnc/fast-glob)) |
-| `grep` | Regex content search across files |
-| `read` | Read files or list directories |
-| `write` | Create or overwrite files |
-| `edit` | Exact string replacements in files |
-| `webSearch` | Web search via [Exa](https://exa.ai) |
-| `webFetch` | Fetch web pages, convert to Markdown |
-| `todoWrite` | Inline task list for multi-step workflows |
-| `spawnAgent` | Launch sub-agents for parallel work |
-| `ask` | Prompt the user for clarification |
-| `skill` | Load domain-specific knowledge on demand |
-| `notebookEdit` | Edit Jupyter notebooks |
-| `memory` | Long-term context storage across sessions |
-
-## Skills
-
-Skills are instruction bundles that teach the agent domain-specific knowledge — frameworks, workflows, best practices. They're loaded on demand via the `skill` tool.
-
-- **Global skills** live in `skills/` (built-in: `doc`, `pdf`, `slides`, `spreadsheet`)
-- **Project skills** live in `.agent/skills/` in your workspace
-- **Structure:** a `SKILL.md` file with YAML frontmatter (`name`, `description`) + markdown instructions
-
-## MCP (Remote Tool Servers)
-
-[Model Context Protocol](https://modelcontextprotocol.io/) servers extend the agent with additional tools at runtime. Supports HTTP/SSE and stdio transports, OAuth and API key auth.
-
-```json
-{
-  "servers": [
-    {
-      "name": "grep",
-      "transport": { "type": "http", "url": "https://mcp.grep.app" },
-      "auth": { "type": "oauth", "oauthMode": "auto" }
-    }
-  ]
-}
-```
-
-Tools are namespaced as `mcp__{serverName}__{toolName}`. Config is loaded from (highest priority first):
-
-1. `.cowork/mcp-servers.json` (workspace)
-2. `~/.cowork/config/mcp-servers.json` (user)
-3. `config/mcp-servers.json` (built-in defaults)
-
-See [docs/mcp-guide.md](docs/mcp-guide.md) for the full setup guide.
-
-## Configuration
-
-Three-tier hierarchy: **built-in defaults** < **user config** < **project config** < **env vars**.
-
-```json
-// .agent/config.json (project-level)
-{
-  "provider": "openai",
-  "model": "gpt-5.2",
-  "subAgentModel": "gpt-5.2",
-  "userName": "Max"
-}
-```
-
-| Env Variable | Purpose |
-|---|---|
-| `AGENT_PROVIDER` | `google` · `openai` · `anthropic` · `codex-cli` |
-| `AGENT_MODEL` | Model ID |
-| `AGENT_WORKING_DIR` | Working directory for the agent |
-| `AGENT_USER_NAME` | Your name (used in system prompt) |
-| `AGENT_ENABLE_MCP` | Enable/disable MCP (`true`/`false`) |
-
-### Observability
-
-Built-in [Langfuse](https://langfuse.com) + OpenTelemetry integration. Set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and optionally `LANGFUSE_BASE_URL` to enable full LLM I/O tracing.
+- provider catalog, auth methods, auth callbacks, logout, and status
+- MCP server CRUD, validation, and auth
+- session listing, deletion, title changes, pagination, and file uploads
+- backup/checkpoint/restore flows
+- subagent creation and persistent subagent session management
+- observability and harness context
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Thin Clients                                           │
-│  TUI (OpenTUI+Solid.js) · CLI REPL · Desktop · Custom  │
-└──────────────────────────┬──────────────────────────────┘
-                           │ WebSocket (protocol v7.0)
-┌──────────────────────────▼──────────────────────────────┐
-│  Server                                                 │
-│  AgentSession · Model Streaming · Session Persistence   │
-│  MCP Management · Command Approval · SQLite Storage     │
-└──────────────────────────┬──────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────┐
-│  Agent Engine (PI runtime)                              │
-│  createRunTurn() · System Prompt · Tool Execution       │
-└────────┬─────────────────┬──────────────────┬───────────┘
-         │                 │                  │
-    Built-in Tools    Provider Registry                MCP Tools
-    (16 tools)        (Gemini API/OpenAI/Anthropic)   (runtime-loaded)
+```text
+TUI / CLI / Desktop / Custom Client
+                |
+                v
+        WebSocket protocol
+                |
+                v
+     agent-coworker server runtime
+  sessions | auth | MCP | persistence
+  tools    | streaming | checkpoints
+                |
+                v
+      model runtimes and tool execution
 ```
 
-Everything flows through the WebSocket protocol. UIs never touch the runtime engine or tools directly.
+A few architectural boundaries matter:
 
-### Key source paths
+- Business logic belongs in the server, not in the clients.
+- Sessions are durable and resumable.
+- Tools execute on the server in the workspace context.
+- Clients consume `ServerEvent`s and send `ClientMessage`s.
 
-| Path | What |
-|---|---|
-| `src/agent.ts` | Core agent loop (`createRunTurn()` factory) |
-| `src/server/session.ts` | Session state, turn execution, ask/approval flows |
-| `src/server/protocol.ts` | WebSocket message types (`ClientMessage`, `ServerEvent`) |
-| `src/tools/` | All 16 built-in tool implementations |
-| `src/providers/` | Provider registry (Google Gemini API, OpenAI API, Anthropic API, Codex CLI) |
-| `src/mcp/` | MCP config loading, OAuth, auth storage |
-| `apps/TUI/` | Terminal UI (OpenTUI + Solid.js) |
-| `apps/desktop/` | Electron desktop app |
+If you want the exact wire contract, use [docs/websocket-protocol.md](docs/websocket-protocol.md). If you want the broader component map, use [docs/architecture.md](docs/architecture.md).
 
-## Docs
+## Tools, skills, and MCP
 
-| Document | Description |
-|---|---|
-| [WebSocket Protocol](docs/websocket-protocol.md) | Full protocol spec (v7.0) — the source of truth for building clients |
-| [Architecture](docs/architecture.md) | System design and component relationships |
-| [MCP Guide](docs/mcp-guide.md) | Setting up and using MCP remote tool servers |
-| [Custom Tools](docs/custom-tools.md) | How to add your own tools |
-| [Session Storage](docs/session-storage-architecture.md) | Session persistence and backup architecture |
-| [Harness Runbook](docs/harness/runbook.md) | Running the evaluation harness |
-| [Harness Observability](docs/harness/observability.md) | Monitoring and tracing harness runs |
+### Built-in tools
+
+Cowork ships with server-side tools for:
+
+- shell execution: `bash`
+- file reads and writes: `read`, `write`, `edit`
+- workspace search: `glob`, `grep`
+- web research: `webSearch`, `webFetch`
+- workflow control: `ask`, `todoWrite`, `spawnAgent`
+- artifact editing: `notebookEdit`
+- contextual guidance: `skill`, `memory`
+
+Some sessions also expose persistent-agent control tools such as `spawnPersistentAgent`, `listPersistentAgents`, `sendAgentInput`, `waitForAgent`, and `closeAgent`.
+
+`webSearch` supports Brave or Exa depending on configured credentials. `webFetch` is not just a raw fetch; it extracts readable content and converts it into markdown-friendly text.
+
+### Skills
+
+Skills are instruction bundles rooted in `SKILL.md`. They are discovered from layered locations:
+
+1. `.agent/skills` in the current workspace
+2. `~/.cowork/skills`
+3. `~/.agent/skills`
+4. built-in `skills/`
+
+Built-in curated skills currently cover document, PDF, slide, and spreadsheet workflows. See [docs/custom-tools.md](docs/custom-tools.md) if you want to extend the system further.
+
+### MCP
+
+Cowork supports Model Context Protocol servers with layered config and auth:
+
+1. `.cowork/mcp-servers.json`
+2. `~/.cowork/config/mcp-servers.json`
+3. `config/mcp-servers.json`
+
+Supported flows include stdio and HTTP/SSE transports plus API-key and OAuth auth modes. See [docs/mcp-guide.md](docs/mcp-guide.md).
+
+## Persistence and safety
+
+Persistence is a core feature, not a convenience cache.
+
+- Canonical session storage lives in `~/.cowork/sessions.db`.
+- Legacy JSON session snapshots are import-only compatibility data.
+- Backup artifacts live under `~/.cowork/session-backups`.
+- Desktop transcript JSONL files are a renderer cache, not the source of truth.
+
+Safety model:
+
+- risky tool actions go through approval flows
+- `--yolo` disables command approvals when you explicitly want that behavior
+- sessions can be checkpointed and restored through the protocol
+
+For the full storage model, see [docs/session-storage-architecture.md](docs/session-storage-architecture.md).
 
 ## Development
 
+Common commands:
+
 ```bash
-bun install          # Install all dependencies (root + apps)
-bun test             # Run tests (Bun test runner)
-bun run dev          # Watch mode
-bun run desktop:dev  # Desktop app dev mode
-bun run harness:run  # Run evaluation harness
-bun run docs:check   # Validate documentation
+bun test
+bun run typecheck
+bun run docs:check
+bun run dev
+bun run desktop:dev
+bun run harness:run
 ```
 
-## Tech Stack
+Notes:
 
-| | |
-|---|---|
-| **Runtime** | [Bun](https://bun.sh) |
-| **AI Runtime** | [pi-mono / @mariozechner/pi-ai](https://github.com/badlogic/pi-mono) |
-| **TUI** | [OpenTUI](https://github.com/anthropics/opentui) + [Solid.js](https://www.solidjs.com/) |
-| **Desktop** | Electron |
-| **MCP** | [Model Context Protocol](https://modelcontextprotocol.io/) v1.26 |
-| **Observability** | [Langfuse](https://langfuse.com) + OpenTelemetry |
-| **Testing** | Bun built-in test runner |
-| **Persistence** | SQLite (`~/.cowork/sessions.db`) |
+- `bun install` at the repo root also installs desktop dependencies.
+- `bun run typecheck` covers the root project and `apps/desktop`.
+- `apps/TUI` is not part of the default typecheck command.
+- The test suite is deterministic and does not require provider credentials.
+
+## Repository map
+
+| Path | Purpose |
+| --- | --- |
+| `src/server/` | WebSocket server, protocol, session orchestration, persistence, backup |
+| `src/cli/` | CLI REPL and command parsing |
+| `src/tui/` | Thin TUI entrypoint that launches the main OpenTUI app |
+| `src/tools/` | Built-in server-side tools |
+| `src/providers/` | Provider catalog, auth, and model adapters |
+| `src/mcp/` | MCP config, auth, and client lifecycle |
+| `apps/TUI/` | Main OpenTUI + Solid TUI implementation |
+| `apps/desktop/` | Electron desktop app |
+| `skills/` | Bundled built-in skills |
+| `docs/` | Protocol, architecture, storage, MCP, and harness docs |
+
+## Docs
+
+| Document | What it covers |
+| --- | --- |
+| [docs/websocket-protocol.md](docs/websocket-protocol.md) | Canonical WebSocket contract for official and custom clients |
+| [docs/architecture.md](docs/architecture.md) | Component-level system overview |
+| [docs/mcp-guide.md](docs/mcp-guide.md) | MCP setup, layering, and auth |
+| [docs/session-storage-architecture.md](docs/session-storage-architecture.md) | SQLite session storage and resume behavior |
+| [docs/custom-tools.md](docs/custom-tools.md) | Extending Cowork with custom tools |
+| [docs/harness/index.md](docs/harness/index.md) | Harness docs index |
+| [docs/harness/runbook.md](docs/harness/runbook.md) | Running harness scenarios and collecting artifacts |
+| [docs/harness/observability.md](docs/harness/observability.md) | Langfuse and observability wiring |
+
+## Status
+
+This is an actively developed local agent system. The architecture is stable enough to build on, but the project is still moving quickly, especially around protocol surface, desktop polish, and provider/runtime behavior.
+
+If you want to contribute, the safest mental model is:
+
+- the server owns behavior
+- the protocol is a public contract
+- UIs are clients
+- README claims should match the code

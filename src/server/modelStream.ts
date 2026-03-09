@@ -29,7 +29,18 @@ export type ModelStreamPartType =
 
 export type ModelStreamReasoningMode = "reasoning" | "summary";
 
+export const MODEL_STREAM_NORMALIZER_VERSION = 1;
+
+export type ModelStreamRawFormat = "openai-responses-v1";
+
+export interface ModelStreamRawEvent {
+  format: ModelStreamRawFormat;
+  normalizerVersion: number;
+  event: Record<string, unknown>;
+}
+
 export interface NormalizedModelStreamPart {
+  normalizerVersion: number;
   partType: ModelStreamPartType;
   part: Record<string, unknown>;
   rawPart?: unknown;
@@ -106,14 +117,25 @@ const streamPartNormalizers: Record<string, (ctx: PartNormalizerContext) => Norm
       rawFinishReason: san(parsedRaw.rawFinishReason),
       providerMetadata: san(parsedRaw.providerMetadata),
     }),
-  "text-start": ({ emit, id, providerMetadata }) => emit("text_start", { id: id(), providerMetadata }),
+  "text-start": ({ emit, id, parsedRaw, providerMetadata }) =>
+    emit("text_start", {
+      id: id(),
+      providerMetadata,
+      ...(asString(parsedRaw.phase) ? { phase: asString(parsedRaw.phase) } : {}),
+    }),
   "text-delta": ({ emit, parsedRaw, id, providerMetadata }) =>
     emit("text_delta", {
       id: id(),
       text: asSafeString(parsedRaw.text),
       providerMetadata,
+      ...(asString(parsedRaw.phase) ? { phase: asString(parsedRaw.phase) } : {}),
     }),
-  "text-end": ({ emit, id, providerMetadata }) => emit("text_end", { id: id(), providerMetadata }),
+  "text-end": ({ emit, id, parsedRaw, providerMetadata }) =>
+    emit("text_end", {
+      id: id(),
+      providerMetadata,
+      ...(asString(parsedRaw.phase) ? { phase: asString(parsedRaw.phase) } : {}),
+    }),
   "reasoning-start": ({ emit, id, mode, providerMetadata }) =>
     emit("reasoning_start", {
       id: id(),
@@ -335,7 +357,16 @@ export function normalizeModelStreamPart(
 
   /** Emit a normalized part, compacting undefined fields from the record. */
   const emit = (partType: ModelStreamPartType, part: Record<string, unknown>): NormalizedModelStreamPart => {
-    const payload: NormalizedModelStreamPart = { partType, part: compactRecord(part) };
+    const payload = {
+      partType,
+      part: compactRecord(part),
+    } as NormalizedModelStreamPart;
+    Object.defineProperty(payload, "normalizerVersion", {
+      value: MODEL_STREAM_NORMALIZER_VERSION,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
     if (includeRawPart) payload.rawPart = rawPart;
     return payload;
   };

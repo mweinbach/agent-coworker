@@ -114,6 +114,12 @@ export function createOpenAiResponsesRuntime(
               onEvent: async (event) => {
                 await emitPiEventAsRawPart(event, params.config.provider, includeUnknownRawParts, emitPart);
               },
+              onRawEvent: async (event) => {
+                await params.onModelRawEvent?.({
+                  format: "openai-responses-v1",
+                  event,
+                });
+              },
             });
             assistantRecord = asRecord(result.assistant) ?? {};
             responseId = result.responseId;

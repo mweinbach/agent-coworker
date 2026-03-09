@@ -59,12 +59,20 @@ export type ThreadRecord = {
   lastEventSeq: number;
 };
 
+export type PersistedProviderStatus = Extract<ServerEvent, { type: "provider_status" }>["providers"][number];
+
+export type PersistedProviderState = {
+  statusByName?: Partial<Record<ProviderName, PersistedProviderStatus>>;
+  statusLastUpdatedAt?: string | null;
+};
+
 export type PersistedState = {
   version: number;
   workspaces: WorkspaceRecord[];
   threads: ThreadRecord[];
   developerMode?: boolean;
   showHiddenFiles?: boolean;
+  providerState?: PersistedProviderState;
 };
 
 export type TranscriptDirection = "server" | "client";

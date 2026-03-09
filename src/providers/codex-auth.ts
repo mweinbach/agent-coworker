@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
+import { writeTextFileAtomic } from "../utils/atomicFile";
+
 export const CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 export const CODEX_OAUTH_ISSUER = "https://auth.openai.com";
 export const CODEX_BACKEND_BASE_URL = "https://chatgpt.com/backend-api/codex";
@@ -178,11 +180,6 @@ export function extractPlanTypeFromClaims(claims: Record<string, unknown>): stri
 
 export function codexAuthFilePath(paths: Pick<CodexAuthPaths, "authDir">): string {
   return path.join(paths.authDir, "codex-cli", "auth.json");
-}
-
-export function legacyCodexAuthFilePath(paths: Pick<CodexAuthPaths, "rootDir">): string {
-  const homeDir = path.dirname(paths.rootDir);
-  return path.join(homeDir, ".codex", "auth.json");
 }
 
 function readValueAtPath(root: unknown, keys: string[]): unknown {
@@ -377,7 +374,7 @@ export async function writeCodexAuthMaterial(
   };
 
   const json = formatAuthJson(normalized);
-  await fs.writeFile(file, JSON.stringify(json, null, 2), { encoding: "utf-8", mode: 0o600 });
+  await writeTextFileAtomic(file, JSON.stringify(json, null, 2), { mode: 0o600 });
   try {
     await fs.chmod(file, 0o600);
   } catch {
@@ -404,8 +401,7 @@ export async function clearCodexAuthMaterial(
 }
 
 export async function readCodexAuthMaterial(
-  paths: CodexAuthPaths,
-  opts: { migrateLegacy?: boolean; onLine?: (line: string) => void } = {}
+  paths: Pick<CodexAuthPaths, "authDir">
 ): Promise<CodexAuthMaterial | null> {
   const coworkFile = codexAuthFilePath(paths);
   let coworkJson: unknown | null = null;
@@ -422,27 +418,7 @@ export async function readCodexAuthMaterial(
       if (legacyCowork) return legacyCowork;
     }
   }
-
-  if (!opts.migrateLegacy) return null;
-
-  const legacyFile = legacyCodexAuthFilePath(paths);
-  let legacyJson: unknown | null;
-  try {
-    legacyJson = await readJsonFile(legacyFile);
-  } catch {
-    return null;
-  }
-  if (!legacyJson) return null;
-
-  const parsedLegacy = parseLegacyCodexAuthJson(legacyFile, legacyJson);
-  if (!parsedLegacy) return null;
-
-  const migrated = await writeCodexAuthMaterial(paths, {
-    ...parsedLegacy,
-    file: coworkFile,
-  });
-  opts.onLine?.(`[auth] migrated legacy Codex credentials from ${legacyFile}`);
-  return migrated;
+  return null;
 }
 
 function expiresInMsFromResponse(payload: CodexOAuthTokenResponse): number | undefined {

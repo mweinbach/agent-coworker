@@ -10,10 +10,10 @@ import {
   isZodSchema,
   pickKnownPiModel,
   toPiJsonSchema,
-  toolCallFromPartial,
   type PiModel,
   type PiToolCallLike,
 } from "./piRuntimeOptions";
+import { mapPiEventToRawParts } from "./piStreamParts";
 
 import { getSavedProviderApiKey } from "../config";
 import { getAiCoworkerPaths } from "../connect";
@@ -171,7 +171,7 @@ async function resolveCodexAccessToken(
   log?: (line: string) => void
 ): Promise<ResolvedCodexAuth> {
   const paths = getAiCoworkerPaths({ homedir: runtimeHomeFromConfig(config) });
-  let material = await readCodexAuthMaterial(paths, { migrateLegacy: false });
+  let material = await readCodexAuthMaterial(paths);
   if (!material?.accessToken) {
     throw new Error("Codex auth is missing. Run /connect codex-cli to authenticate.");
   }
@@ -408,10 +408,6 @@ function extractToolExecutionErrorMessage(result: unknown): string | undefined {
   return safeJsonStringify(result);
 }
 
-function reasoningModeForProvider(provider: ProviderName): "reasoning" | "summary" {
-  return provider === "openai" || provider === "codex-cli" ? "summary" : "reasoning";
-}
-
 export function messagesAfterLastAssistant(messages: ModelMessage[]): ModelMessage[] {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const record = asRecord(messages[i]);
@@ -495,91 +491,8 @@ export async function emitPiEventAsRawPart(
   includeUnknown: boolean,
   emit: (part: unknown) => Promise<void>
 ): Promise<void> {
-  const mode = reasoningModeForProvider(provider);
-  const contentIndex = typeof event?.contentIndex === "number" ? event.contentIndex : 0;
-  const streamId = `s${contentIndex}`;
-
-  switch (event?.type) {
-    case "start":
-      await emit({ type: "start" });
-      return;
-    case "text_start":
-      await emit({ type: "text-start", id: streamId });
-      return;
-    case "text_delta":
-      await emit({ type: "text-delta", id: streamId, text: String(event.delta ?? "") });
-      return;
-    case "text_end":
-      await emit({ type: "text-end", id: streamId });
-      return;
-    case "thinking_start":
-      await emit({ type: "reasoning-start", id: streamId, mode });
-      return;
-    case "thinking_delta":
-      await emit({ type: "reasoning-delta", id: streamId, mode, text: String(event.delta ?? "") });
-      return;
-    case "thinking_end":
-      await emit({ type: "reasoning-end", id: streamId, mode });
-      return;
-    case "toolcall_start": {
-      const toolCall = toolCallFromPartial(event);
-      await emit({
-        type: "tool-input-start",
-        id: toolCall.toolCallId,
-        toolName: toolCall.toolName,
-      });
-      return;
-    }
-    case "toolcall_delta": {
-      const toolCall = toolCallFromPartial(event);
-      await emit({
-        type: "tool-input-delta",
-        id: toolCall.toolCallId,
-        delta: String(event.delta ?? ""),
-      });
-      return;
-    }
-    case "toolcall_end": {
-      const toolCall = toolCallFromPartial(event);
-      await emit({
-        type: "tool-input-end",
-        id: toolCall.toolCallId,
-      });
-      await emit({
-        type: "tool-call",
-        toolCallId: toolCall.toolCallId,
-        toolName: toolCall.toolName,
-        input: asRecord(toolCall.input) ?? {},
-      });
-      return;
-    }
-    case "done":
-      await emit({
-        type: "finish",
-        finishReason: event.reason,
-        totalUsage: event.message?.usage
-          ? {
-              promptTokens: event.message.usage.input,
-              completionTokens: event.message.usage.output,
-              totalTokens: event.message.usage.totalTokens,
-            }
-          : undefined,
-      });
-      return;
-    case "error":
-      await emit({
-        type: "error",
-        error: event.error?.errorMessage ?? event.error ?? "PI stream error",
-      });
-      return;
-    default:
-      if (!includeUnknown) return;
-      await emit({
-        type: "unknown",
-        sdkType: String(event?.type ?? "unknown"),
-        raw: event,
-      });
-      return;
+  for (const part of mapPiEventToRawParts(event, provider, includeUnknown)) {
+    await emit(part);
   }
 }
 

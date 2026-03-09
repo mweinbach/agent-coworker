@@ -96,6 +96,50 @@ describe("desktop persistence state validation", () => {
     expect(loaded.threads[0]?.id).toBe("thread_valid");
   });
 
+  test("saveState preserves sanitized provider status snapshots", async () => {
+    const persistence = new PersistenceService();
+    const validWorkspace = path.join(userDataDir, "workspace-provider");
+    await fs.mkdir(validWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_provider",
+          name: "Provider workspace",
+          path: validWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+      providerState: {
+        statusByName: {
+          "codex-cli": {
+            provider: "codex-cli",
+            authorized: true,
+            verified: false,
+            mode: "oauth",
+            account: { email: "max@example.com" },
+            message: "Codex credentials present.",
+            checkedAt: TS,
+          },
+        },
+        statusLastUpdatedAt: TS,
+      },
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.providerState?.statusLastUpdatedAt).toBe(TS);
+    expect(loaded.providerState?.statusByName?.["codex-cli"]?.authorized).toBe(true);
+    expect(loaded.providerState?.statusByName?.["codex-cli"]?.mode).toBe("oauth");
+    expect(loaded.providerState?.statusByName?.["codex-cli"]?.account?.email).toBe("max@example.com");
+  });
+
   test("loadState sanitizes malformed on-disk payloads instead of failing", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-from-disk");
@@ -126,6 +170,15 @@ describe("desktop persistence state validation", () => {
               status: "unknown",
             },
           ],
+          providerState: {
+            statusByName: {
+              "codex-cli": {
+                provider: "totally-wrong",
+                authorized: "yes",
+              },
+            },
+            statusLastUpdatedAt: 123,
+          },
           developerMode: "sometimes",
           showHiddenFiles: "always",
         },
@@ -141,6 +194,7 @@ describe("desktop persistence state validation", () => {
     expect(loaded.threads).toEqual([]);
     expect(loaded.developerMode).toBe(false);
     expect(loaded.showHiddenFiles).toBe(false);
+    expect(loaded.providerState).toBeUndefined();
   });
 
   test("loadState recovers from invalid JSON", async () => {

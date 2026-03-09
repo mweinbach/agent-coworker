@@ -82,7 +82,7 @@ export function createAnthropicModelAdapter(modelId: string, savedKey?: string):
 async function resolveCodexAuthHeaders(config: AgentConfig): Promise<HeaderMap> {
   const paths = getAiCoworkerPaths({ homedir: resolveCoworkHomedir(config.userAgentDir) });
 
-  let material = await readCodexAuthMaterial(paths, { migrateLegacy: false });
+  let material = await readCodexAuthMaterial(paths);
   if (!material?.accessToken) return {};
 
   if (isTokenExpiring(material) && material.refreshToken) {

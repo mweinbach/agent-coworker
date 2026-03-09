@@ -3,11 +3,22 @@ import { z } from "zod";
 import { parseStructuredToolInput } from "../../../../src/shared/structuredInput";
 
 import type { FeedItem, TranscriptEvent } from "./types";
-import { mapModelStreamChunk, type ModelStreamChunkEvent, type ModelStreamUpdate } from "./modelStream";
+import {
+  clearModelStreamReplayRuntime,
+  createModelStreamReplayRuntime,
+  mapModelStreamChunk,
+  replayModelStreamRawEvent,
+  shouldIgnoreNormalizedChunkForRawBackedTurn,
+  type ModelStreamChunkEvent,
+  type ModelStreamRawEvent,
+  type ModelStreamReplayRuntime,
+  type ModelStreamUpdate,
+} from "./modelStream";
 
 export type ThreadModelStreamRuntime = {
-  assistantItemIdByTurn: Map<string, string>;
-  assistantTextByTurn: Map<string, string>;
+  assistantItemIdByStream: Map<string, string>;
+  assistantTextByStream: Map<string, string>;
+  lastAssistantStreamKeyByTurn: Map<string, string>;
   reasoningItemIdByStream: Map<string, string>;
   reasoningTextByStream: Map<string, string>;
   reasoningTurns: Set<string>;
@@ -16,6 +27,7 @@ export type ThreadModelStreamRuntime = {
   toolInputByKey: Map<string, string>;
   lastAssistantTurnId: string | null;
   lastReasoningTurnId: string | null;
+  replay: ModelStreamReplayRuntime;
 };
 
 export type ThreadModelStreamFeedOps = {
@@ -28,8 +40,9 @@ export type ThreadModelStreamFeedOps = {
 
 export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
   return {
-    assistantItemIdByTurn: new Map(),
-    assistantTextByTurn: new Map(),
+    assistantItemIdByStream: new Map(),
+    assistantTextByStream: new Map(),
+    lastAssistantStreamKeyByTurn: new Map(),
     reasoningItemIdByStream: new Map(),
     reasoningTextByStream: new Map(),
     reasoningTurns: new Set(),
@@ -38,12 +51,14 @@ export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
     toolInputByKey: new Map(),
     lastAssistantTurnId: null,
     lastReasoningTurnId: null,
+    replay: createModelStreamReplayRuntime(),
   };
 }
 
 export function clearThreadModelStreamRuntime(runtime: ThreadModelStreamRuntime) {
-  runtime.assistantItemIdByTurn.clear();
-  runtime.assistantTextByTurn.clear();
+  runtime.assistantItemIdByStream.clear();
+  runtime.assistantTextByStream.clear();
+  runtime.lastAssistantStreamKeyByTurn.clear();
   runtime.reasoningItemIdByStream.clear();
   runtime.reasoningTextByStream.clear();
   runtime.reasoningTurns.clear();
@@ -52,6 +67,7 @@ export function clearThreadModelStreamRuntime(runtime: ThreadModelStreamRuntime)
   runtime.toolInputByKey.clear();
   runtime.lastAssistantTurnId = null;
   runtime.lastReasoningTurnId = null;
+  clearModelStreamReplayRuntime(runtime.replay);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -168,6 +184,28 @@ export function shouldSuppressRawDebugLogLine(line: string): boolean {
   return false;
 }
 
+export function shouldSkipAssistantMessageAfterStreamReplay(
+  stream: ThreadModelStreamRuntime,
+  assistantText: string,
+): boolean {
+  if (!stream.lastAssistantTurnId) return false;
+
+  const assistantKey = stream.lastAssistantStreamKeyByTurn.get(stream.lastAssistantTurnId);
+  const streamed = (assistantKey ? stream.assistantTextByStream.get(assistantKey) ?? "" : "").trim();
+  if (!streamed) return false;
+
+  const normalizedAssistantText = assistantText.trim();
+  if (!normalizedAssistantText) return false;
+
+  if (normalizedAssistantText === streamed) return true;
+
+  if (stream.replay.rawBackedTurns.has(stream.lastAssistantTurnId)) {
+    return normalizedAssistantText.endsWith(streamed);
+  }
+
+  return false;
+}
+
 function modelStreamSystemLine(update: ModelStreamUpdate): string | null {
   if (update.kind === "turn_abort") {
     const reason = previewValue(update.reason);
@@ -233,17 +271,22 @@ function applyModelStreamUpdate(
   }
 
   if (update.kind === "assistant_delta") {
+    if (update.phase === "commentary") {
+      return;
+    }
     stream.lastAssistantTurnId = update.turnId;
-    const itemId = stream.assistantItemIdByTurn.get(update.turnId);
-    const nextText = `${stream.assistantTextByTurn.get(update.turnId) ?? ""}${update.text}`;
-    stream.assistantTextByTurn.set(update.turnId, nextText);
+    const assistantKey = `${update.turnId}:${update.streamId}`;
+    stream.lastAssistantStreamKeyByTurn.set(update.turnId, assistantKey);
+    const itemId = stream.assistantItemIdByStream.get(assistantKey);
+    const nextText = `${stream.assistantTextByStream.get(assistantKey) ?? ""}${update.text}`;
+    stream.assistantTextByStream.set(assistantKey, nextText);
     if (itemId) {
       ops.updateFeedItem(itemId, (item) =>
         item.kind === "message" && item.role === "assistant" ? { ...item, text: nextText } : item
       );
     } else {
       const id = ops.makeId();
-      stream.assistantItemIdByTurn.set(update.turnId, id);
+      stream.assistantItemIdByStream.set(assistantKey, id);
       push({ id, kind: "message", role: "assistant", ts: ops.nowIso(), text: update.text });
     }
     return;
@@ -477,6 +520,10 @@ const transcriptModelStreamPayloadSchema = z.object({
   type: z.literal("model_stream_chunk"),
 }).passthrough();
 
+const transcriptModelStreamRawPayloadSchema = z.object({
+  type: z.literal("model_stream_raw"),
+}).passthrough();
+
 const transcriptAssistantMessagePayloadSchema = z.object({
   type: z.literal("assistant_message"),
   text: z.unknown().optional(),
@@ -523,6 +570,7 @@ const transcriptSessionBusyPayloadSchema = z.object({
 const transcriptFeedPayloadSchema = z.discriminatedUnion("type", [
   transcriptUserMessagePayloadSchema,
   transcriptModelStreamPayloadSchema,
+  transcriptModelStreamRawPayloadSchema,
   transcriptAssistantMessagePayloadSchema,
   transcriptReasoningPayloadSchema,
   transcriptAssistantReasoningPayloadSchema,
@@ -571,17 +619,25 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     }
 
     if (payload.type === "model_stream_chunk") {
+      if (shouldIgnoreNormalizedChunkForRawBackedTurn(stream.replay, payload as ModelStreamChunkEvent)) {
+        continue;
+      }
       const mapped = mapModelStreamChunk(payload as ModelStreamChunkEvent);
       if (mapped) appendModelStreamUpdateToFeed(out, evt.ts, stream, mapped);
       continue;
     }
 
+    if (payload.type === "model_stream_raw") {
+      const updates = replayModelStreamRawEvent(stream.replay, payload as ModelStreamRawEvent);
+      for (const update of updates) {
+        appendModelStreamUpdateToFeed(out, evt.ts, stream, update);
+      }
+      continue;
+    }
+
     if (payload.type === "assistant_message") {
       const text = String(payload.text ?? "");
-      if (stream.lastAssistantTurnId) {
-        const streamed = (stream.assistantTextByTurn.get(stream.lastAssistantTurnId) ?? "").trim();
-        if (streamed && streamed === text.trim()) continue;
-      }
+      if (shouldSkipAssistantMessageAfterStreamReplay(stream, text)) continue;
       out.push({
         id: makeId(),
         kind: "message",

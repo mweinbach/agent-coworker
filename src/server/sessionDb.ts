@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AiCoworkerPaths } from "../connect";
 import type { PersistentSubagentSummary, SessionKind, SubagentAgentType } from "../shared/persistentSubagents";
 import type { OpenAiContinuationState } from "../shared/openaiContinuation";
+import type { ModelStreamRawFormat } from "./modelStream";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../types";
 import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionTitleSource } from "./sessionTitleService";
@@ -77,6 +78,18 @@ export type PersistedSessionMutation = {
     todos: TodoItem[];
     harnessContext: HarnessContextState | null;
   };
+};
+
+export type PersistedModelStreamChunk = {
+  sessionId: string;
+  turnId: string;
+  chunkIndex: number;
+  ts: string;
+  provider: AgentConfig["provider"];
+  model: string;
+  rawFormat: ModelStreamRawFormat;
+  normalizerVersion: number;
+  rawEvent: unknown;
 };
 
 type SessionDbOptions = {
@@ -172,6 +185,14 @@ export class SessionDb {
 
   persistSessionMutation(opts: PersistedSessionMutation): number {
     return this.repository.persistSessionMutation(opts);
+  }
+
+  persistModelStreamChunk(opts: PersistedModelStreamChunk): void {
+    this.repository.persistModelStreamChunk(opts);
+  }
+
+  listModelStreamChunks(sessionId: string, turnId?: string): PersistedModelStreamChunk[] {
+    return this.repository.listModelStreamChunks(sessionId, turnId);
   }
 
   private async bootstrap(): Promise<void> {

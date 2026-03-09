@@ -3509,6 +3509,30 @@ describe("AgentSession", () => {
       expect(assistantEvt.text).toBe("message one\n\nmessage two");
     });
 
+    test("ignores commentary-phase assistant text in the fallback", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "",
+        reasoningText: undefined,
+        responseMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "output_text", text: "progress", phase: "commentary" }],
+          },
+          {
+            role: "assistant",
+            content: [{ type: "output_text", text: "final answer", phase: "final_answer" }],
+          },
+        ],
+      }));
+
+      const { session, events } = makeSession();
+      await session.sendUserMessage("go");
+
+      const assistantEvt = events.find((e) => e.type === "assistant_message") as any;
+      expect(assistantEvt).toBeDefined();
+      expect(assistantEvt.text).toBe("final answer");
+    });
+
     test("ignores non-text/non-output_text parts in the fallback", async () => {
       mockRunTurn.mockImplementation(async () => ({
         text: "",

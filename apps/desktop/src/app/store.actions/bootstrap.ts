@@ -48,8 +48,9 @@ import {
   normalizeThreadTitleSource,
   truncateTitle,
 } from "../store.helpers";
+import { deriveConnectedProviders, normalizePersistedProviderState } from "../persistedProviderState";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
-import type { ThreadRecord, WorkspaceRecord } from "../types";
+import type { PersistedProviderState, ThreadRecord, WorkspaceRecord } from "../types";
 
 const optionalStringWithContentSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : undefined),
@@ -133,6 +134,7 @@ const persistedStateSchema = z.object({
   developerMode: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   showHiddenFiles: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough().transform((state) => {
+  const providerState = normalizePersistedProviderState((state as { providerState?: unknown }).providerState);
   const workspaceByRecency = [...state.workspaces].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
   const selectedWorkspaceId = workspaceByRecency[0]?.id ?? null;
   const workspaceThreads = selectedWorkspaceId
@@ -151,6 +153,7 @@ const persistedStateSchema = z.object({
     selectedThreadId,
     developerMode: state.developerMode,
     showHiddenFiles: state.showHiddenFiles,
+    providerState,
   };
 });
 
@@ -171,6 +174,9 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           threads: state.threads,
           selectedWorkspaceId: state.selectedWorkspaceId,
           selectedThreadId: state.selectedThreadId,
+          providerStatusByName: state.providerState?.statusByName ?? {},
+          providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
+          providerConnected: deriveConnectedProviders(state.providerState as PersistedProviderState | undefined),
           developerMode: state.developerMode,
           showHiddenFiles: state.showHiddenFiles,
           updateState,

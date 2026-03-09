@@ -174,6 +174,8 @@ export function createServerEventHandler(ctx: ReplServerEventContext) {
         }
         break;
       }
+      case "model_stream_raw":
+        break;
       case "assistant_message": {
         const out = evt.text.trim();
         if (!out) break;

@@ -109,4 +109,315 @@ describe("desktop transcript feed mapping", () => {
     expect(feed[1]?.kind).toBe("reasoning");
     expect(feed[2]?.kind).toBe("message");
   });
+
+  test("replays raw model stream events and ignores stale normalized reasoning chunks", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-raw",
+          index: 0,
+          provider: "openai",
+          model: "gpt-5.2",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_item.added",
+            item: { type: "reasoning", id: "rs_1", summary: [] },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-raw",
+          index: 1,
+          provider: "openai",
+          model: "gpt-5.2",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.reasoning_summary_part.added",
+            part: { text: "" },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-raw",
+          index: 2,
+          provider: "openai",
+          model: "gpt-5.2",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.reasoning_summary_text.delta",
+            delta: "raw reasoning",
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:04.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-raw",
+          index: 3,
+          provider: "openai",
+          model: "gpt-5.2",
+          partType: "reasoning_delta",
+          part: { id: "r1", mode: "summary", text: "stale reasoning" },
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+
+    const reasoning = feed.filter((item) => item.kind === "reasoning");
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0]?.text).toBe("raw reasoning");
+  });
+
+  test("keeps separate assistant text streams within one turn", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-2",
+          index: 0,
+          provider: "openai",
+          model: "gpt-5.2",
+          partType: "text_delta",
+          part: { id: "txt_1", text: "First note." },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-2",
+          index: 1,
+          provider: "openai",
+          model: "gpt-5.2",
+          partType: "text_delta",
+          part: { id: "txt_2", text: "Second note." },
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+
+    const assistant = feed.filter((item) => item.kind === "message" && item.role === "assistant");
+    expect(assistant).toHaveLength(2);
+    expect(assistant.map((item) => item.text)).toEqual(["First note.", "Second note."]);
+  });
+
+  test("prefers raw final-answer text over a stale merged assistant_message on raw-backed turns", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 0,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_item.added",
+            item: { type: "message", id: "msg_commentary", phase: "commentary", content: [] },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 1,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.content_part.added",
+            item_id: "msg_commentary",
+            part: { type: "output_text", text: "" },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 2,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_text.delta",
+            item_id: "msg_commentary",
+            delta: "progress note",
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:04.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 3,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_item.done",
+            item: {
+              id: "msg_commentary",
+              type: "message",
+              phase: "commentary",
+              status: "completed",
+              content: [{ type: "output_text", text: "progress note" }],
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:05.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 4,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_item.added",
+            item: { type: "message", id: "msg_final", phase: "final_answer", content: [] },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:06.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 5,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.content_part.added",
+            item_id: "msg_final",
+            part: { type: "output_text", text: "" },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:07.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 6,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_text.delta",
+            item_id: "msg_final",
+            delta: "final answer",
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:08.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-commentary",
+          index: 7,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_item.done",
+            item: {
+              id: "msg_final",
+              type: "message",
+              phase: "final_answer",
+              status: "completed",
+              content: [{ type: "output_text", text: "final answer" }],
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:09.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "assistant_message",
+          text: "progress note\n\nfinal answer",
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    const assistant = feed.filter((item) => item.kind === "message" && item.role === "assistant");
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0]?.text).toBe("final answer");
+  });
 });

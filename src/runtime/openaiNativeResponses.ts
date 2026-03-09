@@ -36,6 +36,7 @@ export type OpenAiNativeStepRequest = {
   streamOptions: OpenAiNativeStreamOptions;
   previousResponseId?: string;
   onEvent?: (event: Record<string, unknown>) => void | Promise<void>;
+  onRawEvent?: (event: Record<string, unknown>) => void | Promise<void>;
 };
 
 export type OpenAiNativeStepResult = {
@@ -292,6 +293,13 @@ async function emitOpenAiNativeEvent(
   await opts.onEvent?.(event);
 }
 
+async function emitOpenAiNativeRawEvent(
+  opts: OpenAiNativeStepRequest,
+  event: Record<string, unknown>,
+): Promise<void> {
+  await opts.onRawEvent?.(event);
+}
+
 async function* tapOpenAiResponseIds(
   events: AsyncIterable<unknown>,
   onResponseId: (responseId: string) => void,
@@ -301,6 +309,19 @@ async function* tapOpenAiResponseIds(
     const response = asRecord(event?.response);
     const responseId = asNonEmptyString(response?.id);
     if (responseId) onResponseId(responseId);
+    yield rawEvent;
+  }
+}
+
+async function* tapOpenAiRawEvents(
+  opts: OpenAiNativeStepRequest,
+  events: AsyncIterable<unknown>,
+): AsyncIterable<unknown> {
+  for await (const rawEvent of events) {
+    const event = asRecord(rawEvent);
+    if (event) {
+      await emitOpenAiNativeRawEvent(opts, event as Record<string, unknown>);
+    }
     yield rawEvent;
   }
 }
@@ -333,7 +354,7 @@ export const runOpenAiNativeResponseStep: RunOpenAiNativeResponseStep = async (
 
   try {
     await processResponsesStream(
-      tapOpenAiResponseIds(normalizedEvents, (nextResponseId) => {
+      tapOpenAiResponseIds(tapOpenAiRawEvents(opts, normalizedEvents), (nextResponseId) => {
         responseId = nextResponseId;
       }) as AsyncIterable<any>,
       assistant as Record<string, any>,

@@ -201,17 +201,17 @@ describe("readCodexAuthMaterial fallback behavior", () => {
     };
   }
 
-  test("invalid cowork JSON is treated as missing when legacy migration is disabled", async () => {
+  test("invalid cowork JSON is treated as missing", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-auth-read-invalid-json-"));
     const paths = makePaths(home);
     const coworkPath = path.join(paths.authDir, "codex-cli", "auth.json");
     await fs.mkdir(path.dirname(coworkPath), { recursive: true });
     await fs.writeFile(coworkPath, "{not-valid-json", "utf-8");
 
-    await expect(readCodexAuthMaterial(paths, { migrateLegacy: false })).resolves.toBeNull();
+    await expect(readCodexAuthMaterial(paths)).resolves.toBeNull();
   });
 
-  test("schema-invalid cowork auth falls back to legacy auth migration", async () => {
+  test("schema-invalid cowork auth falls back to the legacy Cowork auth shape", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-auth-read-legacy-fallback-"));
     const paths = makePaths(home);
     const coworkPath = path.join(paths.authDir, "codex-cli", "auth.json");
@@ -220,26 +220,9 @@ describe("readCodexAuthMaterial fallback behavior", () => {
       coworkPath,
       JSON.stringify(
         {
-          version: 0,
-          auth_mode: "chatgpt",
-          tokens: { refresh_token: "cowork-refresh-only" },
-        },
-        null,
-        2
-      ),
-      "utf-8"
-    );
-
-    const legacyAccessToken = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, email: "legacy@example.com" });
-    const legacyPath = path.join(home, ".codex", "auth.json");
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.writeFile(
-      legacyPath,
-      JSON.stringify(
-        {
           auth_mode: "chatgpt",
           tokens: {
-            access_token: legacyAccessToken,
+            access_token: makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, email: "legacy@example.com" }),
             refresh_token: "legacy-refresh-token",
           },
         },
@@ -249,15 +232,10 @@ describe("readCodexAuthMaterial fallback behavior", () => {
       "utf-8"
     );
 
-    const material = await readCodexAuthMaterial(paths, { migrateLegacy: true });
+    const material = await readCodexAuthMaterial(paths);
     expect(material).toBeTruthy();
     expect(material?.file).toBe(coworkPath);
-    expect(material?.accessToken).toBe(legacyAccessToken);
+    expect(material?.accessToken).toBeTruthy();
     expect(material?.refreshToken).toBe("legacy-refresh-token");
-
-    const migrated = JSON.parse(await fs.readFile(coworkPath, "utf-8")) as Record<string, any>;
-    expect(migrated.version).toBe(1);
-    expect(migrated.tokens?.access_token).toBe(legacyAccessToken);
-    expect(migrated.tokens?.refresh_token).toBe("legacy-refresh-token");
   });
 });

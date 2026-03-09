@@ -17,6 +17,14 @@ function asNonEmptyString(value: unknown): string | undefined {
   return text ? text : undefined;
 }
 
+function assistantTextPhase(record: Record<string, unknown>): string | undefined {
+  return asNonEmptyString(record.phase);
+}
+
+function shouldPersistAssistantTextPhase(phase: string | undefined): boolean {
+  return phase !== "commentary";
+}
+
 function safeJsonStringify(value: unknown): string {
   try {
     const encoded = JSON.stringify(value);
@@ -107,7 +115,13 @@ function assistantContentFromModelContent(content: unknown): Array<Record<string
 
     const text = asString(record.text) ?? asString(record.inputText);
     if (text?.trim()) {
-      out.push({ type: "text", text });
+      const phase = assistantTextPhase(record);
+      if (!shouldPersistAssistantTextPhase(phase)) continue;
+      out.push({
+        type: "text",
+        text,
+        ...(phase ? { phase } : {}),
+      });
     }
   }
 
@@ -264,7 +278,7 @@ export function modelMessagesToPiMessages(messages: ModelMessage[], provider: st
 
     if (role === "assistant") {
       const content = assistantContentFromModelContent(message.content);
-      if (content.length === 0) {
+      if (content.length === 0 && !Array.isArray(message.content)) {
         const fallback = contentTextParts(message.content).join("\n").trim();
         if (fallback) content.push({ type: "text", text: fallback });
       }
@@ -301,7 +315,13 @@ function modelContentFromAssistantPart(part: Record<string, unknown>): Record<st
   const partType = asString(part.type);
   if (partType === "text") {
     const text = asString(part.text);
-    return text === undefined ? null : { type: "text", text };
+    const phase = assistantTextPhase(part);
+    if (text === undefined || !shouldPersistAssistantTextPhase(phase)) return null;
+    return {
+      type: "text",
+      text,
+      ...(phase ? { phase } : {}),
+    };
   }
   if (partType === "thinking") {
     const text = asString(part.thinking);
@@ -329,14 +349,15 @@ export function piTurnMessagesToModelMessages(messages: PiMessage[]): ModelMessa
     const role = asString(rawMessage.role);
     if (role === "assistant") {
       const parts: Array<Record<string, unknown>> = [];
-      const rawContent = Array.isArray(rawMessage.content) ? rawMessage.content : [];
+      const hasStructuredContent = Array.isArray(rawMessage.content);
+      const rawContent = hasStructuredContent ? rawMessage.content : [];
       for (const partRaw of rawContent) {
         const part = asRecord(partRaw);
         if (!part) continue;
         const mapped = modelContentFromAssistantPart(part);
         if (mapped) parts.push(mapped);
       }
-      if (parts.length === 0) {
+      if (parts.length === 0 && !hasStructuredContent) {
         const fallbackText = safeJsonStringify(rawMessage.content);
         if (fallbackText.trim()) {
           parts.push({ type: "text", text: fallbackText });
@@ -371,6 +392,7 @@ export function extractPiAssistantText(messages: PiMessage[]): string {
     for (const rawPart of rawMessage.content) {
       const part = asRecord(rawPart);
       if (!part || part.type !== "text") continue;
+      if (!shouldPersistAssistantTextPhase(assistantTextPhase(part))) continue;
       const text = asString(part.text);
       if (text?.trim()) chunks.push(text);
     }

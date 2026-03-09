@@ -1,8 +1,14 @@
 import { AgentSocket } from "../../lib/agentSocket";
 import type { ClientMessage, ServerEvent } from "../../lib/wsProtocol";
-import { mapModelStreamChunk, type ModelStreamUpdate } from "../modelStream";
+import {
+  mapModelStreamChunk,
+  replayModelStreamRawEvent,
+  shouldIgnoreNormalizedChunkForRawBackedTurn,
+  type ModelStreamUpdate,
+} from "../modelStream";
 import {
   applyModelStreamUpdateToThreadFeed as applyModelStreamUpdateToThreadFeedCore,
+  shouldSkipAssistantMessageAfterStreamReplay,
   shouldSuppressRawDebugLogLine,
   type ThreadModelStreamRuntime,
 } from "../store.feedMapping";
@@ -354,8 +360,19 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     }
 
     if (evt.type === "model_stream_chunk") {
+      if (shouldIgnoreNormalizedChunkForRawBackedTurn(stream.replay, evt)) {
+        return;
+      }
       const mapped = mapModelStreamChunk(evt);
       if (mapped) applyModelStreamUpdateToThreadFeed(get, set, threadId, stream, mapped);
+      return;
+    }
+
+    if (evt.type === "model_stream_raw") {
+      const updates = replayModelStreamRawEvent(stream.replay, evt);
+      for (const update of updates) {
+        applyModelStreamUpdateToThreadFeed(get, set, threadId, stream, update);
+      }
       return;
     }
 
@@ -390,12 +407,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     }
 
     if (evt.type === "assistant_message") {
-      if (stream.lastAssistantTurnId) {
-        const streamed = (stream.assistantTextByTurn.get(stream.lastAssistantTurnId) ?? "").trim();
-        if (streamed && streamed === evt.text.trim()) {
-          return;
-        }
-      }
+      if (shouldSkipAssistantMessageAfterStreamReplay(stream, evt.text)) return;
 
       pushFeedItem(set, threadId, {
         id: deps.makeId(),

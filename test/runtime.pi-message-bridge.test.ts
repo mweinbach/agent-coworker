@@ -110,6 +110,27 @@ describe("pi message bridge", () => {
     expect((modelMessages[1] as any).content[0].type).toBe("tool-result");
   });
 
+  test("drops commentary-phase assistant text when converting pi turn messages back to model messages", () => {
+    const piTurnMessages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "progress note", phase: "commentary" },
+          { type: "text", text: "final answer", phase: "final_answer" },
+          { type: "toolCall", id: "call-2", name: "write", arguments: { path: "/tmp/a.ts", content: "ok" } },
+        ],
+      },
+    ] as any[];
+
+    const modelMessages = piTurnMessagesToModelMessages(piTurnMessages as any);
+    expect(modelMessages).toHaveLength(1);
+    expect(modelMessages[0].role).toBe("assistant");
+    expect((modelMessages[0] as any).content).toEqual([
+      { type: "text", text: "final answer", phase: "final_answer" },
+      { type: "tool-call", toolCallId: "call-2", toolName: "write", input: { path: "/tmp/a.ts", content: "ok" } },
+    ]);
+  });
+
   test("preserves multimodal tool results when converting pi turn messages back to model messages", () => {
     const piTurnMessages = [
       {
@@ -161,6 +182,20 @@ describe("pi message bridge", () => {
 
     expect(extractPiAssistantText(piMessages as any)).toBe("first\n\nsecond");
     expect(extractPiReasoningText(piMessages as any)).toBe("thinking-1\n\nthinking-2");
+  });
+
+  test("ignores commentary-phase assistant text when extracting assistant text", () => {
+    const piMessages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "working", phase: "commentary" },
+          { type: "text", text: "done", phase: "final_answer" },
+        ],
+      },
+    ] as any[];
+
+    expect(extractPiAssistantText(piMessages as any)).toBe("done");
   });
 
   test("merges pi usage records into runtime usage totals", () => {

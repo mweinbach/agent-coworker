@@ -14,7 +14,7 @@ import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openai
 import type { ProviderStatus } from "../providerStatus";
 import { type ProviderAuthMethod, type ProviderAuthChallenge } from "../providers/authRegistry";
 import type { ProviderCatalogEntry } from "../providers/connectionCatalog";
-import type { ModelStreamPartType } from "./modelStream";
+import type { ModelStreamPartType, ModelStreamRawFormat } from "./modelStream";
 import type { PersistedSessionSummary } from "./sessionStore";
 import type { SessionBackupPublicState } from "./sessionBackup";
 import type { PersistentSubagentSummary, SessionKind, SubagentAgentType } from "../shared/persistentSubagents";
@@ -235,9 +235,21 @@ export type ServerEvent =
       index: number;
       provider: AgentConfig["provider"];
       model: string;
+      normalizerVersion?: number;
       partType: ModelStreamPartType;
       part: Record<string, unknown>;
       rawPart?: unknown;
+    }
+  | {
+      type: "model_stream_raw";
+      sessionId: string;
+      turnId: string;
+      index: number;
+      provider: AgentConfig["provider"];
+      model: string;
+      format: ModelStreamRawFormat;
+      normalizerVersion: number;
+      event: Record<string, unknown>;
     }
   | { type: "assistant_message"; sessionId: string; text: string }
   | { type: "reasoning"; sessionId: string; kind: "reasoning" | "summary"; text: string }
@@ -314,7 +326,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.4";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.5";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -382,6 +394,7 @@ export const SERVER_EVENT_TYPES = [
   "session_busy",
   "user_message",
   "model_stream_chunk",
+  "model_stream_raw",
   "assistant_message",
   "reasoning",
   "log",

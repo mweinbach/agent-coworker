@@ -240,6 +240,9 @@ export function reduceNonProviderEvent(evt: ServerEvent, deps: SyncEventReducerD
       deps.modelStreamLifecycle.handleChunkEvent(evt);
       return true;
 
+    case "model_stream_raw":
+      return true;
+
     case "log": {
       if (
         shouldSuppressRawDebugLogLine(evt.line) ||

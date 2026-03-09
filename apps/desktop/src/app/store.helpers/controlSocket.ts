@@ -250,6 +250,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
             providerStatusRefreshing: false,
             providerConnected: connected,
           }));
+          void deps.persist(get);
           return;
         }
 

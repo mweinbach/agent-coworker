@@ -11,6 +11,7 @@ import type {
   WorkspaceRecord,
 } from "../../src/app/types";
 import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibleProviderOptions";
+import { normalizePersistedProviderState } from "../../src/app/persistedProviderState";
 import type { TranscriptBatchInput } from "../../src/lib/desktopApi";
 
 import { assertDirection, assertSafeId, assertWithinTranscriptsDir } from "./validation";
@@ -221,6 +222,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
   const workspaces = await sanitizeWorkspaces(value.workspaces);
   const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
   const threads = sanitizeThreads(value.threads, workspaceIds);
+  const providerState = normalizePersistedProviderState(value.providerState);
   const parsedVersion =
     typeof value.version === "number" && Number.isFinite(value.version)
       ? Math.max(0, Math.floor(value.version))
@@ -231,6 +233,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     threads,
     developerMode: typeof value.developerMode === "boolean" ? value.developerMode : false,
     showHiddenFiles: typeof value.showHiddenFiles === "boolean" ? value.showHiddenFiles : false,
+    ...(providerState ? { providerState } : {}),
   };
 }
 

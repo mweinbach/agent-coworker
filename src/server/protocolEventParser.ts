@@ -67,6 +67,7 @@ const modelStreamChunkSchema = z.object({
   index: z.unknown().optional(),
   provider: z.unknown().optional(),
   model: z.unknown().optional(),
+  normalizerVersion: z.number().int().nonnegative().optional(),
   partType: z.string(),
   part: z.unknown(),
   rawPart: z.unknown().optional(),
@@ -77,6 +78,25 @@ const modelStreamChunkSchema = z.object({
   provider: normalizeChunkField(chunk.provider, "unknown"),
   model: normalizeChunkField(chunk.model, "unknown"),
   part: normalizeChunkPart(chunk.part),
+}));
+
+const modelStreamRawSchema = z.object({
+  type: z.literal("model_stream_raw"),
+  sessionId: nonEmptyTrimmedStringSchema,
+  turnId: z.unknown().optional(),
+  index: z.unknown().optional(),
+  provider: z.unknown().optional(),
+  model: z.unknown().optional(),
+  format: z.string(),
+  normalizerVersion: z.number().int().nonnegative(),
+  event: z.unknown(),
+}).passthrough().transform((chunk) => ({
+  ...chunk,
+  turnId: normalizeChunkField(chunk.turnId, "unknown-turn"),
+  index: normalizeChunkIndex(chunk.index),
+  provider: normalizeChunkField(chunk.provider, "unknown"),
+  model: normalizeChunkField(chunk.model, "unknown"),
+  event: normalizeChunkPart(chunk.event),
 }));
 
 const serverEventSchema = z.discriminatedUnion("type", [
@@ -200,6 +220,7 @@ const serverEventSchema = z.discriminatedUnion("type", [
     clientMessageId: z.string().optional(),
   }).passthrough(),
   modelStreamChunkSchema,
+  modelStreamRawSchema,
   z.object({
     type: z.literal("assistant_message"),
     sessionId: nonEmptyTrimmedStringSchema,
@@ -373,6 +394,7 @@ const KNOWN_SERVER_EVENT_TYPES = new Set<string>([
   "session_busy",
   "user_message",
   "model_stream_chunk",
+  "model_stream_raw",
   "assistant_message",
   "reasoning",
   "log",

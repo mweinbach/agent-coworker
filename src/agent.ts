@@ -4,6 +4,7 @@ import { getModel as realGetModel } from "./config";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
+import type { RuntimeModelRawEvent } from "./runtime/types";
 import type { OpenAiContinuationState } from "./shared/openaiContinuation";
 import type { PersistentAgentControl } from "./tools";
 import type { AgentConfig, ModelMessage, TodoItem } from "./types";
@@ -64,6 +65,7 @@ export interface RunTurnParams {
   enableMcp?: boolean;
   abortSignal?: AbortSignal;
   onModelStreamPart?: (part: unknown) => void | Promise<void>;
+  onModelRawEvent?: (event: RuntimeModelRawEvent) => void | Promise<void>;
   onModelError?: (error: unknown) => void | Promise<void>;
   onModelAbort?: () => void | Promise<void>;
   includeRawChunks?: boolean;
@@ -358,6 +360,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           telemetry,
           ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
           onModelStreamPart: params.onModelStreamPart,
+          onModelRawEvent: params.onModelRawEvent,
           onModelError: params.onModelError,
           onModelAbort: params.onModelAbort,
           log,

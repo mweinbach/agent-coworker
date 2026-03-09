@@ -2,10 +2,10 @@ import {
   safeParseServerEvent as safeParseServerEventFromProtocol,
   safeParseServerEventJson,
   type ServerEvent as CoreServerEvent,
-} from "@cowork/server/protocol";
-export { ASK_SKIP_TOKEN } from "@cowork/shared/ask";
+} from "../../../../src/server/protocol";
+export { ASK_SKIP_TOKEN } from "../../../../src/shared/ask";
 
-export { PROVIDER_NAMES } from "@cowork/types";
+export { PROVIDER_NAMES } from "../../../../src/types";
 export type {
   ApprovalRiskCode,
   MCPServerConfig,
@@ -14,9 +14,9 @@ export type {
   ServerErrorSource,
   SkillEntry,
   TodoItem,
-} from "@cowork/types";
+} from "../../../../src/types";
 
-export type { ClientMessage, ServerEvent } from "@cowork/server/protocol";
+export type { ClientMessage, ServerEvent } from "../../../../src/server/protocol";
 
 export type ConfigSubset = Extract<CoreServerEvent, { type: "server_hello" }>["config"];
 

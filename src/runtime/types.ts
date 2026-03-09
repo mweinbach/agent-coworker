@@ -2,6 +2,11 @@ import type { AgentConfig } from "../types";
 import type { ModelMessage } from "../types";
 import type { OpenAiContinuationState } from "../shared/openaiContinuation";
 
+export type RuntimeModelRawEvent = {
+  format: "openai-responses-v1";
+  event: Record<string, unknown>;
+};
+
 export type RuntimeUsage = {
   promptTokens: number;
   completionTokens: number;
@@ -42,6 +47,7 @@ export interface RuntimeRunTurnParams {
   telemetry?: unknown;
   prepareStep?: RuntimePrepareStep;
   onModelStreamPart?: (part: unknown) => void | Promise<void>;
+  onModelRawEvent?: (event: RuntimeModelRawEvent) => void | Promise<void>;
   onModelError?: (error: unknown) => void | Promise<void>;
   onModelAbort?: () => void | Promise<void>;
   log?: (line: string) => void;

@@ -564,6 +564,75 @@ describe("desktop protocol v2 mapping", () => {
     expect(tool.result).toEqual({ chars: 42 });
   });
 
+  test("model_stream_raw drives live feed replay and suppresses stale normalized reasoning chunks", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "model_stream_raw",
+      sessionId: "thread-session",
+      turnId: "turn-raw",
+      index: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      format: "openai-responses-v1",
+      normalizerVersion: 1,
+      event: {
+        type: "response.output_item.added",
+        item: { type: "reasoning", id: "rs_live", summary: [] },
+      },
+    });
+    threadSocket.emit({
+      type: "model_stream_raw",
+      sessionId: "thread-session",
+      turnId: "turn-raw",
+      index: 1,
+      provider: "openai",
+      model: "gpt-5.2",
+      format: "openai-responses-v1",
+      normalizerVersion: 1,
+      event: {
+        type: "response.reasoning_summary_part.added",
+        part: { text: "" },
+      },
+    });
+    threadSocket.emit({
+      type: "model_stream_raw",
+      sessionId: "thread-session",
+      turnId: "turn-raw",
+      index: 2,
+      provider: "openai",
+      model: "gpt-5.2",
+      format: "openai-responses-v1",
+      normalizerVersion: 1,
+      event: {
+        type: "response.reasoning_summary_text.delta",
+        delta: "live raw reasoning",
+      },
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-raw",
+      index: 3,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "reasoning_delta",
+      part: { id: "stale-r1", mode: "summary", text: "stale normalized reasoning" },
+    });
+
+    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
+    const reasoning = feed.filter((item) => item.kind === "reasoning");
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0]?.text).toBe("live raw reasoning");
+  });
+
   test("model stream approval parts render as tool cards while source/file/unknown parts stay in system items", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const threadId = useAppStore.getState().selectedThreadId;

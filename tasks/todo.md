@@ -16,6 +16,73 @@
   - `~/.bun/bin/bun run typecheck` -> pass
   - `~/.bun/bin/bun test` -> pass (`1831 pass, 0 fail`)
 
+# Task: Investigate desktop trace misclassification from persisted session data
+
+## Plan
+- [x] Inspect the affected desktop thread in persisted session state and transcript storage to determine whether the apparent misordering comes from storage order or desktop rendering.
+- [x] Compare the persisted event sequence with desktop feed mapping to identify whether the "reasoning-looking" block is actually stored as reasoning or assistant text.
+- [x] Record the root cause and the storage/rendering recommendation for follow-up implementation.
+
+## Review
+- SQLite `session_events` for session `6dca255f-b103-4476-b542-c9cedd169ca3` only stores coarse lifecycle markers like `session.todos_updated`; it does not preserve the message/reasoning/tool chunk sequence needed to debug this UI issue.
+- The exact mixed stream for desktop is in `/Users/mweinbach/Library/Application Support/Cowork/transcripts/5a551be4-4077-4af6-b6eb-e5bcbf0f6b3c.jsonl`. In that transcript, the relevant sequence is persisted in chronological order as:
+  - assistant text: `Created the PDF at ...`
+  - `todoWrite` tool input/call/result
+  - assistant text: `**Visual QA and verification** ...`
+- That means the trace ordering is correct for this example. The real bug is classification: `**Visual QA and verification**` and later `**Analyzing layout issues**` are persisted as `model_stream_chunk` `text_start` / `text_delta`, while `**Generating PDF and Images**` is persisted as `reasoning_*`.
+- The desktop mapper in `apps/desktop/src/app/store.feedMapping.ts` is therefore behaving consistently with persisted data: once a block is stored as `text_*`, it becomes a normal assistant message instead of grouped reasoning UI.
+- The classification happens before desktop rendering. The normalized transcript row for `Visual QA and verification` already has `rawPart.type = "text-start"` / `"text-delta"`, so the renderer no longer has enough information to distinguish "internal reasoning summary" from "assistant-visible text".
+- Recommendation:
+  - keep a stable normalized event stream for UI rendering,
+  - but also persist provider-raw stream events or a richer pre-normalized form with a `normalizerVersion`,
+  - so future renderer fixes or reclassifiers can rebuild old threads without losing provenance.
+
+# Task: Persist raw model stream events and replay them in desktop rendering
+
+## Plan
+- [x] Extract the OpenAI/Codex raw-response projector into a reusable stateful helper so runtime streaming and desktop replay can share the same normalization logic.
+- [x] Persist provider-raw model stream events alongside normalized chunks in the desktop transcript and add the protocol/runtime plumbing needed to emit them.
+- [x] Update live desktop event handling and transcript hydration to prefer raw replay when available while staying backward-compatible with old transcripts.
+- [x] Add regression coverage for raw replay fixing reasoning/tool classification and rerun the relevant desktop/runtime verification.
+
+## Review
+- Added a reusable OpenAI/Codex raw-response projector in `src/runtime/openaiResponsesProjector.ts` and a lightweight PI-event mapper in `src/runtime/piStreamParts.ts`. The runtime still emits normalized `model_stream_chunk` events, but desktop replay can now rebuild those same reasoning/text/tool boundaries from provider-native raw events without depending on the full server runtime.
+- Introduced `model_stream_raw` as a new websocket/transcript event in `src/server/protocol.ts`, `src/server/protocolEventParser.ts`, and `docs/websocket-protocol.md` (protocol `7.5`). `TurnExecutionManager` now emits raw provider events before the derived normalized chunks and tags normalized chunks with `normalizerVersion`.
+- Added durable raw chunk storage to SQLite via `session_model_stream_chunks` (`src/server/sessionDb.ts`, `src/server/sessionDb/repository.ts`, `src/server/sessionDb/migrations.ts`). This keeps raw model-stream provenance in the canonical session store instead of only in desktop JSONL transcripts.
+- Desktop transcript hydration and live reducer paths now prefer replaying `model_stream_raw` when present, while still keeping synthetic normalized chunks for step boundaries and tool results. This is implemented in `src/client/modelStreamReplay.ts`, `apps/desktop/src/app/store.feedMapping.ts`, and `apps/desktop/src/app/store.helpers/threadEventReducer.ts`.
+- While touching replay, assistant stream state is now keyed by `turnId:streamId` instead of only by turn. That prevents separate streamed text blocks within a single turn from collapsing into one assistant bubble during transcript replay.
+- Verification:
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test apps/desktop/test/store-feed-mapping.test.ts apps/desktop/test/protocol-v2-events.test.ts apps/desktop/test/ws-protocol-parse.test.ts test/session-db.test.ts test/session.stream-pipeline.test.ts test/agentSocket.parse.test.ts` -> pass (`80 pass, 0 fail`)
+  - `~/.bun/bin/bun test test/server.model-stream.test.ts test/docs.check.test.ts` -> pass (`120 pass, 0 fail`)
+  - `~/.bun/bin/bun test` -> pass (`1836 pass, 0 fail`)
+
+# Task: Re-normalize desktop model stream chunks from raw parts and reclassify scratchpad text
+
+## Plan
+- [ ] Rework desktop/client model-stream mapping so transcript hydration and live feed updates can derive normalized updates from stored `rawPart` first, with legacy fallback for old transcripts.
+- [ ] Split assistant streamed text by stream block and reclassify scratchpad-style step text into reasoning summaries when the block ends, without affecting normal assistant progress updates.
+- [ ] Add regression coverage for raw-backed normalization and reasoning reclassification, then run the relevant desktop tests, typecheck, and full repo tests.
+
+# Task: Stop commentary-phase assistant text from leaking into persisted chat/history
+
+## Plan
+- [x] Trace the Dell thread leakage through runtime turn assembly and desktop raw replay to confirm where `phase:"commentary"` assistant items are being treated as normal chat output.
+- [x] Filter commentary-phase assistant text out of persisted assistant/history extraction while preserving final-answer assistant content and non-commentary fallbacks.
+- [x] Update desktop raw replay/feed mapping so stored commentary-phase text does not hydrate as normal assistant chat, then add regressions and run the relevant tests.
+
+## Review
+- The Dell thread root cause was not renderer ordering. In `/Users/mweinbach/Library/Application Support/Cowork/transcripts/8531ab94-0114-4ff5-90d6-2db8077cf13a.jsonl`, the raw `response.output_item.done` payloads explicitly tagged multiple assistant `message` items as `phase:"commentary"` before the final `phase:"final_answer"` message. Our runtime was flattening all assistant text blocks from the turn into one persisted `assistant_message`, so commentary leaked into both visible chat and later turn history.
+- `src/runtime/openaiResponsesProjector.ts` and `src/runtime/piStreamParts.ts` now preserve assistant text `phase` metadata through raw replay, and `src/server/modelStream.ts` / `src/client/modelStream.ts` carry that phase through normalized desktop updates.
+- `src/runtime/piMessageBridge.ts` now drops `phase:"commentary"` assistant text when extracting final assistant text and when converting turn outputs back into `responseMessages` for persisted history. That keeps tool calls and final-answer text, but prevents commentary-only blocks from being appended back into future turn context.
+- `src/server/session/TurnExecutionManager.ts` now also ignores commentary-phase assistant parts in its fallback `responseMessages` text extraction, so even if a runtime hands back phase-tagged assistant content directly, the persisted `assistant_message` still only reflects final-answer text.
+- `apps/desktop/src/app/store.feedMapping.ts` now ignores commentary-phase assistant deltas during transcript/live raw replay, so previously stored raw commentary blocks do not hydrate as normal chat messages in the desktop thread history.
+- Added regressions in `test/runtime.openai-responses-runtime.test.ts`, `test/runtime.pi-message-bridge.test.ts`, `test/session.test.ts`, and `apps/desktop/test/store-feed-mapping.test.ts` that pin the Dell failure shape.
+- Verification:
+  - `~/.bun/bin/bun test test/runtime.pi-message-bridge.test.ts test/runtime.openai-responses-runtime.test.ts test/session.test.ts apps/desktop/test/store-feed-mapping.test.ts` -> pass (`208 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1843 pass, 0 fail`)
+
 # Task: Remove duplicated grouped reasoning disclosure in desktop trace
 
 ## Plan
@@ -155,6 +222,23 @@
 - [ ] Update the focused regression tests for auth migration/logout behavior, rerun the provider/session/desktop verification slices, and record the validated outcome below.
 
 ## Review
+
+# Task: Harden Cowork-owned Codex auth persistence across desktop restarts
+
+## Plan
+- [x] Remove the mistaken `~/.codex/auth.json` fallback changes and re-align Codex auth reads to Cowork-owned `~/.cowork/auth/codex-cli/auth.json` only.
+- [x] Harden Cowork auth-store writes so `codex-cli/auth.json` and `connections.json` are replaced atomically instead of being written in-place.
+- [x] Make provider catalog/status treat a valid Cowork Codex auth file as connected even if `connections.json` was cleared, then rerun focused core and desktop verification.
+
+## Review
+- The `.codex` migration detour was reverted in `src/connect.ts`, `src/providerStatus.ts`, `src/providers/modelAdapter.ts`, and `src/runtime/piRuntime.ts`; Codex resolution is back to Cowork-owned auth only.
+- `src/providers/codex-auth.ts` and `src/store/connections.ts` now write `~/.cowork/auth/codex-cli/auth.json` and `~/.cowork/auth/connections.json` through `writeTextFileAtomic()`, so desktop/server shutdown can no longer leave those files partially written in place.
+- `src/providers/connectionCatalog.ts` now checks Cowork’s Codex auth file directly (without any legacy migration) when deciding whether `codex-cli` is connected. This keeps the desktop Providers list correct even if `connections.json` loses the `codex-cli` entry while the Cowork auth file is still valid.
+- Live validation against the current machine state showed the exact split-brain bug: `~/.cowork/auth/codex-cli/auth.json` was valid while `connections.json` had an empty `services` object. After the patch, `getProviderCatalog()` still returns `["codex-cli"]` and `getProviderStatuses()` still resolves Codex as verified from the Cowork auth file.
+- Verification:
+  - `~/.bun/bin/bun test test/connect.test.ts test/providerStatus.test.ts test/providers/saved-keys.test.ts test/runtime.pi-runtime.test.ts test/providers/connection-catalog.test.ts test/providers/codex-auth.test.ts` -> pass (`43 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test apps/desktop/test/providers-page.test.ts apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/protocol-v2-events.test.ts` -> pass (`40 pass, 0 fail`)
 
 # Task: Own Codex OAuth in Cowork and add explicit Codex logout
 
@@ -1714,3 +1798,40 @@
 - The merge commit at `HEAD` was newer than the existing `v0.1.12` release commit, so treating it as the same release would have overwritten the previous release marker instead of minting the next patch.
 - Updated `package.json` and `apps/desktop/package.json` from `0.1.12` to `0.1.13` so the repository version matches the intended next release number.
 - Restored `v0.1.12` to commit `92863a1` (`Fix desktop release validation in v0.1.12`) and reserved the current commit for the new `v0.1.13` release tag.
+
+# Task: Persist desktop provider status across app restarts
+
+## Plan
+- [x] Confirm whether Codex OAuth itself is failing to persist or whether the desktop UI is only losing its in-memory provider status snapshot after restart.
+- [x] Persist a sanitized desktop provider-status snapshot in `state.json` and hydrate it during desktop bootstrap so Codex still shows connected immediately after reopen.
+- [x] Add regression coverage for persistence/bootstrap behavior, rerun the desktop verification slices, and record the outcome below.
+
+## Review
+- Live inspection showed the auth files were already persisting correctly under `/Users/mweinbach/.cowork/auth`: both `codex-cli/auth.json` and `connections.json` existed with a saved Codex OAuth session. The bug was the desktop UI forgetting the last known provider status because that snapshot only lived in renderer memory.
+- Added a shared `persistedProviderState` normalizer in `apps/desktop/src/app/persistedProviderState.ts`, extended `PersistedState` in `apps/desktop/src/app/types.ts`, and taught both the renderer persistence helper and Electron persistence service to save/load a sanitized provider-status snapshot alongside workspaces/threads.
+- Desktop bootstrap now hydrates `providerStatusByName`, `providerStatusLastUpdatedAt`, and `providerConnected` from the persisted snapshot before the first control-socket refresh completes, so reopening the app no longer makes Codex look logged out while the server reconnects.
+- The normal control-socket refresh path still remains authoritative: when a fresh `provider_status` event arrives, the desktop store updates from the server and immediately re-persists the newer snapshot.
+
+### Verification
+- `~/.bun/bin/bun test apps/desktop/test/persistence-state-sanitization.test.ts apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/providers-page.test.ts apps/desktop/test/protocol-v2-events.test.ts` -> pass (`46 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass
+- `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`195 pass, 0 fail`)
+
+# Task: Fix desktop renderer protocol alias resolution for Electron dev/build
+
+## Plan
+- [x] Inspect the desktop renderer alias/import path for `@cowork/server/protocol` and identify why electron-vite cannot resolve it during renderer compilation.
+- [x] Patch the desktop alias setup with the minimal change that restores `wsProtocol.ts` resolution without changing renderer protocol behavior.
+- [x] Re-run the desktop build path, desktop typecheck, and any focused tests needed to prove the fix.
+
+## Review
+- Root cause: the desktop renderer wrapper in `apps/desktop/src/lib/wsProtocol.ts` imported core protocol/types through the `@cowork/*` alias, but `electron-vite`/Rollup was not reliably resolving that repo-root alias during renderer compilation even though TypeScript accepted it. The failure reproduced exactly as `Rollup failed to resolve import "@cowork/server/protocol"`.
+- Fixed `apps/desktop/src/lib/wsProtocol.ts` to import the core protocol/types directly from the repo root via relative paths (`../../../../src/...`). That keeps the shared renderer-facing wrapper behavior unchanged while removing the brittle renderer alias dependency.
+- I also tested a renderer-config alias hardening in `apps/desktop/electron.vite.config.ts`, but `electron-vite build` still failed to resolve `@cowork/server/protocol`. I reverted that experiment so the final fix stays minimal and only keeps the proven `wsProtocol.ts` change.
+
+### Verification
+- `~/.bun/bin/bunx electron-vite build` (from `apps/desktop`) -> pass
+- `~/.bun/bin/bun run desktop:dev` -> pass through renderer startup (`dev server running for the electron renderer process at http://localhost:1420/`), then stopped manually
+- `~/.bun/bin/bun run typecheck:desktop` -> pass
+- `~/.bun/bin/bun test --cwd apps/desktop test/ws-protocol-parse.test.ts test/protocol-v2-events.test.ts` -> pass (`30 pass, 0 fail`)
+- `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`196 pass, 0 fail`)

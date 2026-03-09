@@ -30,9 +30,9 @@ export type ModelStreamUpdate =
       rawFinishReason?: unknown;
       providerMetadata?: unknown;
     }
-  | { kind: "assistant_text_start"; turnId: string; streamId: string }
-  | { kind: "assistant_delta"; turnId: string; streamId: string; text: string }
-  | { kind: "assistant_text_end"; turnId: string; streamId: string }
+  | { kind: "assistant_text_start"; turnId: string; streamId: string; phase?: string }
+  | { kind: "assistant_delta"; turnId: string; streamId: string; text: string; phase?: string }
+  | { kind: "assistant_text_end"; turnId: string; streamId: string; phase?: string }
   | { kind: "reasoning_start"; turnId: string; streamId: string; mode: "reasoning" | "summary" }
   | { kind: "reasoning_delta"; turnId: string; streamId: string; mode: "reasoning" | "summary"; text: string }
   | { kind: "reasoning_end"; turnId: string; streamId: string; mode: "reasoning" | "summary" }
@@ -128,6 +128,11 @@ function rawProviderKey(part: Record<string, unknown>, fallback: string): string
   );
 }
 
+function assistantPhase(value: unknown): string | undefined {
+  const phase = asString(value)?.trim();
+  return phase ? phase : undefined;
+}
+
 function mapProviderStreamEvent(
   evt: ModelStreamChunkEvent,
   eventType: string,
@@ -206,6 +211,7 @@ function mapProviderStreamEvent(
       turnId: evt.turnId,
       streamId: rawProviderKey(payload, `raw-text:${evt.turnId}:${evt.index}`),
       text,
+      ...(assistantPhase(payload.phase) ? { phase: assistantPhase(payload.phase) } : {}),
     };
   }
 
@@ -217,6 +223,7 @@ function mapProviderStreamEvent(
       kind: "assistant_text_end",
       turnId: evt.turnId,
       streamId: rawProviderKey(payload, `raw-text:${evt.turnId}:${evt.index}`),
+      ...(assistantPhase(payload.phase) ? { phase: assistantPhase(payload.phase) } : {}),
     };
   }
 
@@ -228,6 +235,7 @@ function mapProviderStreamEvent(
       kind: "assistant_text_start",
       turnId: evt.turnId,
       streamId: rawProviderKey(payload, `raw-text:${evt.turnId}:${evt.index}`),
+      ...(assistantPhase(payload.phase) ? { phase: assistantPhase(payload.phase) } : {}),
     };
   }
 
@@ -306,6 +314,7 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         kind: "assistant_text_start",
         turnId: evt.turnId,
         streamId: asString(part.id) ?? `text:${evt.index}`,
+        ...(assistantPhase(part.phase) ? { phase: assistantPhase(part.phase) } : {}),
       };
     case "text_delta": {
       const text = asString(part.text);
@@ -322,6 +331,7 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         turnId: evt.turnId,
         streamId: asString(part.id) ?? `text:${evt.index}`,
         text,
+        ...(assistantPhase(part.phase) ? { phase: assistantPhase(part.phase) } : {}),
       };
     }
     case "text_end":
@@ -329,6 +339,7 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         kind: "assistant_text_end",
         turnId: evt.turnId,
         streamId: asString(part.id) ?? `text:${evt.index}`,
+        ...(assistantPhase(part.phase) ? { phase: assistantPhase(part.phase) } : {}),
       };
     case "reasoning_start":
       return {

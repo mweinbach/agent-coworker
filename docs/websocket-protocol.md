@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.4`
+- Current protocol version: `7.5`
 
 ## Table of Contents
 
@@ -36,7 +36,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Keepalive: [ping](#ping)
 - [Server -> Client Events](#server---client-events)
   - Handshake & Lifecycle: [server_hello](#server_hello) | [session_settings](#session_settings) | [session_info](#session_info) | [session_busy](#session_busy) | [session_config](#session_config)
-  - Conversation: [user_message](#user_message-1) | [model_stream_chunk](#model_stream_chunk) | [assistant_message](#assistant_message) | [reasoning](#reasoning) | [log](#log) | [todos](#todos) | [reset_done](#reset_done)
+  - Conversation: [user_message](#user_message-1) | [model_stream_chunk](#model_stream_chunk) | [model_stream_raw](#model_stream_raw) | [assistant_message](#assistant_message) | [reasoning](#reasoning) | [log](#log) | [todos](#todos) | [reset_done](#reset_done)
   - Prompts: [ask](#ask) | [approval](#approval)
   - Provider: [provider_catalog](#provider_catalog) | [provider_auth_methods](#provider_auth_methods) | [provider_auth_challenge](#provider_auth_challenge) | [provider_auth_result](#provider_auth_result) | [provider_status](#provider_status) | [config_updated](#config_updated)
   - Tools & Skills: [tools](#tools) | [commands](#commands) | [skills_list](#skills_list) | [skill_content](#skill_content)
@@ -47,6 +47,11 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.5`:
+
+- New server event: `model_stream_raw`.
+- `model_stream_chunk` now includes optional `normalizerVersion` metadata so clients can decide whether to trust persisted normalization or replay provider raw events.
 
 Changes in `7.4`:
 
@@ -487,7 +492,7 @@ Send a user prompt to the session.
 **Response:** Triggers a full turn lifecycle:
 1. `user_message` (echo)
 2. `session_busy` (`busy: true`)
-3. Zero or more: `model_stream_chunk`, `log`, `todos`, `ask`, `approval`
+3. Zero or more: `model_stream_raw`, `model_stream_chunk`, `log`, `todos`, `ask`, `approval`
 4. `reasoning` (if applicable)
 5. `assistant_message`
 6. `session_busy` (`busy: false`)
@@ -1810,6 +1815,7 @@ Incremental model stream chunk. Emitted during a turn for each streaming part fr
   "index": 0,
   "provider": "openai",
   "model": "gpt-5.4",
+  "normalizerVersion": 1,
   "partType": "text_delta",
   "part": { "text": "Hello" },
   "rawPart": { ... }
@@ -1824,9 +1830,42 @@ Incremental model stream chunk. Emitted during a turn for each streaming part fr
 | `index` | `number` | Sequential chunk index within the turn (starting at 0). Fallback: `-1` |
 | `provider` | `ProviderName \| "unknown"` | Provider that generated this chunk. Fallback: `"unknown"` |
 | `model` | `string` | Model that generated this chunk. Fallback: `"unknown"` |
+| `normalizerVersion` | `number?` | Optional normalization version for the persisted `partType`/`part` mapping |
 | `partType` | `ModelStreamPartType` | Part type (see [ModelStreamPartType](#modelstreamparttype)) |
 | `part` | `object` | Normalized part payload. Shape varies by `partType`. If a non-object part is received, it is normalized to `{ "value": <original> }` |
 | `rawPart` | `unknown?` | Optional raw provider/runtime part (present when `includeRawChunks` is enabled). Default mode is sanitized; set `COWORK_MODEL_STREAM_RAW_MODE=full` to increase payload detail |
+
+---
+
+### model_stream_raw
+
+Provider-native raw model stream event. Emitted before any derived `model_stream_chunk` parts for the same provider event so clients can replay or re-normalize the stream themselves.
+
+```json
+{
+  "type": "model_stream_raw",
+  "sessionId": "...",
+  "turnId": "turn-abc",
+  "index": 0,
+  "provider": "openai",
+  "model": "gpt-5.4",
+  "format": "openai-responses-v1",
+  "normalizerVersion": 1,
+  "event": { "type": "response.output_item.added", "item": { "type": "reasoning" } }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"model_stream_raw"` | — |
+| `sessionId` | `string` | Session identifier |
+| `turnId` | `string` | Unique turn identifier (groups all raw events for one turn). Fallback: `"unknown-turn"` |
+| `index` | `number` | Sequential raw-event index within the turn (starting at 0). Fallback: `-1` |
+| `provider` | `ProviderName \| "unknown"` | Provider that generated this event. Fallback: `"unknown"` |
+| `model` | `string` | Model that generated this event. Fallback: `"unknown"` |
+| `format` | `"openai-responses-v1"` | Raw event envelope format |
+| `normalizerVersion` | `number` | Version identifier for the client/server raw-event normalizer |
+| `event` | `object` | Provider-native raw event payload. If a non-object payload is received, it is normalized to `{ "value": <original> }` |
 
 ---
 

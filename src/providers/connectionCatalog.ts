@@ -1,6 +1,7 @@
 import { getAiCoworkerPaths, readConnectionStore, type AiCoworkerPaths } from "../connect";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { PROVIDER_MODEL_CATALOG } from "./catalog";
+import { readCodexAuthMaterial } from "./codex-auth";
 
 export type ProviderCatalogEntry = {
   id: ProviderName;
@@ -35,16 +36,20 @@ export async function getProviderCatalog(opts: {
   homedir?: string;
   paths?: AiCoworkerPaths;
   readStore?: typeof readConnectionStore;
+  readCodexAuthMaterialImpl?: typeof readCodexAuthMaterial;
 } = {}): Promise<ProviderCatalogPayload> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir });
   const readStore = opts.readStore ?? readConnectionStore;
+  const readCodexAuthMaterialImpl = opts.readCodexAuthMaterialImpl ?? readCodexAuthMaterial;
   const store = await readStore(paths);
   const all = listProviderCatalogEntries();
   const defaults: Record<string, string> = {};
   for (const entry of all) defaults[entry.id] = entry.defaultModel;
+  const hasCodexOauth = Boolean((await readCodexAuthMaterialImpl(paths))?.accessToken);
   const connected = PROVIDER_NAMES.filter((provider) => {
     const entry = store.services[provider];
-    return entry?.mode === "api_key" || entry?.mode === "oauth";
+    if (entry?.mode === "api_key" || entry?.mode === "oauth") return true;
+    return provider === "codex-cli" && hasCodexOauth;
   });
   return { all, default: defaults, connected };
 }

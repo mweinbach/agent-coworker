@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { z } from "zod";
 
 import type { PersistentSubagentSummary } from "../../shared/persistentSubagents";
-import type { PersistedSessionMutation, PersistedSessionRecord } from "../sessionDb";
+import type { PersistedModelStreamChunk, PersistedSessionMutation, PersistedSessionRecord } from "../sessionDb";
 import type { PersistedSessionSnapshot, PersistedSessionSummary } from "../sessionStore";
 import type { ModelMessage } from "../../types";
 import { mapPersistedSessionRecordRow, mapPersistedSessionSubagentSummaryRow, mapPersistedSessionSummaryRow } from "./mappers";
@@ -15,6 +15,7 @@ import {
 } from "./normalizers";
 
 const messagesJsonSchema = z.array(z.unknown());
+const modelStreamRawFormatSchema = z.enum(["openai-responses-v1"]);
 
 export class SessionDbRepository {
   private readonly db: Database;
@@ -245,6 +246,77 @@ export class SessionDbRepository {
     return run(opts);
   }
 
+  persistModelStreamChunk(opts: PersistedModelStreamChunk): void {
+    const ts = parseRequiredIsoTimestamp(opts.ts, "model_stream_chunk.ts");
+    const chunkIndex = parseNonNegativeInteger(opts.chunkIndex, "model_stream_chunk.chunkIndex");
+    const rawFormat = modelStreamRawFormatSchema.parse(opts.rawFormat);
+
+    this.db
+      .query(
+        `INSERT INTO session_model_stream_chunks (
+           session_id,
+           turn_id,
+           chunk_index,
+           ts,
+           provider,
+           model,
+           raw_format,
+           normalizer_version,
+           raw_event_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        opts.sessionId,
+        opts.turnId,
+        chunkIndex,
+        ts,
+        opts.provider,
+        opts.model,
+        rawFormat,
+        opts.normalizerVersion,
+        toJsonString(opts.rawEvent),
+      );
+  }
+
+  listModelStreamChunks(sessionId: string, turnId?: string): PersistedModelStreamChunk[] {
+    const rows = turnId
+      ? (this.db
+          .query(
+            `SELECT session_id, turn_id, chunk_index, ts, provider, model, raw_format, normalizer_version, raw_event_json
+             FROM session_model_stream_chunks
+             WHERE session_id = ? AND turn_id = ?
+             ORDER BY chunk_index ASC`,
+          )
+          .all(sessionId, turnId) as Array<Record<string, unknown>>)
+      : (this.db
+          .query(
+            `SELECT session_id, turn_id, chunk_index, ts, provider, model, raw_format, normalizer_version, raw_event_json
+             FROM session_model_stream_chunks
+             WHERE session_id = ?
+             ORDER BY turn_id ASC, chunk_index ASC`,
+          )
+          .all(sessionId) as Array<Record<string, unknown>>);
+
+    return rows.map((row) => ({
+      sessionId: String(row.session_id),
+      turnId: String(row.turn_id),
+      chunkIndex: parseNonNegativeInteger(row.chunk_index, "session_model_stream_chunks.chunk_index"),
+      ts: parseRequiredIsoTimestamp(row.ts, "session_model_stream_chunks.ts"),
+      provider: String(row.provider) as PersistedModelStreamChunk["provider"],
+      model: String(row.model),
+      rawFormat: modelStreamRawFormatSchema.parse(row.raw_format),
+      normalizerVersion: parseNonNegativeInteger(
+        row.normalizer_version,
+        "session_model_stream_chunks.normalizer_version",
+      ),
+      rawEvent: parseJsonStringWithSchema(
+        row.raw_event_json,
+        z.unknown(),
+        "session_model_stream_chunks.raw_event_json",
+      ),
+    }));
+  }
+
   createBaseSchema(): void {
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS sessions (
@@ -294,10 +366,28 @@ export class SessionDbRepository {
        )`,
     );
 
+    this.db.exec(
+      `CREATE TABLE IF NOT EXISTS session_model_stream_chunks (
+         session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+         turn_id TEXT NOT NULL,
+         chunk_index INTEGER NOT NULL,
+         ts TEXT NOT NULL,
+         provider TEXT NOT NULL,
+         model TEXT NOT NULL,
+         raw_format TEXT NOT NULL,
+         normalizer_version INTEGER NOT NULL,
+         raw_event_json TEXT NOT NULL,
+         PRIMARY KEY(session_id, turn_id, chunk_index)
+       )`,
+    );
+
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_session_events_seq_desc ON session_events(session_id, seq DESC)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_status_updated ON sessions(status, updated_at DESC)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_parent_updated ON sessions(parent_session_id, updated_at DESC)");
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_session_model_stream_chunks_session_turn ON session_model_stream_chunks(session_id, turn_id, chunk_index)",
+    );
   }
 
   markMigration(version: number): void {
@@ -341,6 +431,26 @@ export class SessionDbRepository {
     }
     this.db.exec("UPDATE sessions SET session_kind = 'root' WHERE session_kind IS NULL OR session_kind = ''");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_parent_updated ON sessions(parent_session_id, updated_at DESC)");
+  }
+
+  addModelStreamChunksTable(): void {
+    this.db.exec(
+      `CREATE TABLE IF NOT EXISTS session_model_stream_chunks (
+         session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+         turn_id TEXT NOT NULL,
+         chunk_index INTEGER NOT NULL,
+         ts TEXT NOT NULL,
+         provider TEXT NOT NULL,
+         model TEXT NOT NULL,
+         raw_format TEXT NOT NULL,
+         normalizer_version INTEGER NOT NULL,
+         raw_event_json TEXT NOT NULL,
+         PRIMARY KEY(session_id, turn_id, chunk_index)
+       )`,
+    );
+    this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_session_model_stream_chunks_session_turn ON session_model_stream_chunks(session_id, turn_id, chunk_index)",
+    );
   }
 
   importLegacySnapshot(snapshot: PersistedSessionSnapshot): void {

@@ -80,6 +80,74 @@ describe("sessionDb", () => {
     }
   });
 
+  test("persists raw model stream chunks alongside session state", async () => {
+    const paths = await makeTmpCoworkHome();
+    const db = await SessionDb.create({ paths });
+    try {
+      const now = new Date().toISOString();
+      db.persistSessionMutation({
+        sessionId: "s-raw",
+        eventType: "session.created",
+        snapshot: {
+          sessionKind: "root",
+          parentSessionId: null,
+          agentType: null,
+          title: "Raw Session",
+          titleSource: "default",
+          titleModel: null,
+          provider: "openai",
+          model: "gpt-5.2",
+          workingDirectory: "/tmp/project",
+          enableMcp: true,
+          createdAt: now,
+          updatedAt: now,
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }],
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+        },
+      });
+
+      db.persistModelStreamChunk({
+        sessionId: "s-raw",
+        turnId: "turn-1",
+        chunkIndex: 0,
+        ts: now,
+        provider: "openai",
+        model: "gpt-5.2",
+        rawFormat: "openai-responses-v1",
+        normalizerVersion: 1,
+        rawEvent: {
+          type: "response.output_item.added",
+          item: { type: "reasoning", id: "rs_1" },
+        },
+      });
+
+      expect(db.listModelStreamChunks("s-raw")).toEqual([
+        {
+          sessionId: "s-raw",
+          turnId: "turn-1",
+          chunkIndex: 0,
+          ts: now,
+          provider: "openai",
+          model: "gpt-5.2",
+          rawFormat: "openai-responses-v1",
+          normalizerVersion: 1,
+          rawEvent: {
+            type: "response.output_item.added",
+            item: { type: "reasoning", id: "rs_1" },
+          },
+        },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   test("imports legacy JSON snapshots before marking legacy migration as applied", async () => {
     const paths = await makeTmpCoworkHome();
     const now = new Date().toISOString();

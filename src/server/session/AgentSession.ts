@@ -79,6 +79,7 @@ const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<ServerEvent["type"]>([
   "user_message",
   "session_busy",
   "model_stream_chunk",
+  "model_stream_raw",
   "assistant_message",
   "reasoning",
   "log",

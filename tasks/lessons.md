@@ -1,5 +1,6 @@
 # Lessons
 
+- For desktop renderer wrappers that re-export core protocol/types, prefer direct repo-root relative imports over `@cowork/*` aliases; `electron-vite` can accept the alias in TypeScript but still fail Rollup resolution at renderer build time.
 - When surfacing provider rate limits in the UI, present remaining capacity (`100% left`) instead of consumed budget (`0% used`); that matches how users reason about available headroom.
 - For Codex OAuth verification, mirror the Codex app contract: trust the Cowork token claims for account/email/plan context and verify backend access with `ChatGPT-Account-Id` against the ChatGPT/Codex usage endpoint, not generic OIDC `userinfo`.
 - When the user asks to “test the API with our logic,” run the real provider-status/runtime entry points against the current auth home; a storage/parser audit alone does not answer whether the live transport can actually make a request.
@@ -13,6 +14,8 @@
 - For grouped desktop tool traces, do not nest the full `ToolCard` disclosure stack inside the `Thinking` disclosure; use a flat, readable step list and visually verify the expanded state, not just the collapsed summary.
 - For grouped desktop reasoning summaries, do not stack a preview disclosure on top of the full rendered note; render the summary once in the trace and avoid duplicate preview/body text.
 - For grouped desktop trace cleanup, merge adjacent tool rows by lifecycle compatibility and result shape, not just by matching tool name, and verify the header layout inside the real three-column shell because viewport breakpoints alone can hide narrow-panel collisions.
+- When debugging desktop trace ordering versus misclassified reasoning, inspect the persisted transcript stream first: a block that looks like reasoning in the UI may already be stored as `text_*`, which means the bug is upstream of grouping/rendering rather than in the mixed-trace sort logic.
+- For Codex/OpenAI Responses turns, inspect `response.output_item.done` `message.phase` before blaming the renderer; `phase:"commentary"` assistant text must not be flattened into persisted `assistant_message`, history, or transcript hydration.
 - When default skills are meant to live in `~/.cowork/skills`, move the bootstrap into shared runtime startup and widen read-only permissions for `skillsDirs`; do not solve it in a desktop-only wrapper or by only changing bundled app assets.
 - For workspace-clutter complaints, inspect the actual user workspace path and generated artifact set first; prevent disposable scaffolding at the prompt/skill layer before considering UI hiding rules.
 - For desktop chat file listings, auto-link bare absolute local file paths in the Streamdown remark transform and shorten labels to basenames there; do not rely on the model to author markdown links or try to fix it only at the anchor component layer.
@@ -34,3 +37,5 @@
 - When a bug report spans both Codex and OpenAI “Responses-like” paths, identify the exact transport behind each screenshot first; the ChatGPT-backed Codex endpoint and the OpenAI Responses API accept different request fields and require different fixes.
 - Do not generalize a Codex transport workaround across all Codex modes: the ChatGPT-backed Codex backend may need field clamps, while the API-key-backed Codex/OpenAI Responses path should keep full user-facing options like low|medium|high verbosity.
 - When replacing Codex OAuth with an in-repo flow, mirror the official authorize contract exactly: use the official scopes, `originator`, and `http://localhost` redirect URI instead of inventing app-specific values.
+- When the user says a Codex auth problem is “mostly in the desktop UI,” verify the live `~/.cowork/auth` files before changing server-side OAuth logic; the token may already be persisted correctly and the real bug may be desktop state hydration after restart.
+- When a desktop Codex auth bug reproduces after restart, do not reach for `~/.codex` fallback unless the user explicitly confirms that source; first inspect Cowork’s own `~/.cowork/auth/codex-cli/auth.json` and `connections.json`, and harden those writes atomically so app/server shutdown cannot leave them half-written or silently emptied.

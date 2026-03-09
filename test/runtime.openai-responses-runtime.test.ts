@@ -48,6 +48,34 @@ function pickCodexModelId(): string {
 }
 
 describe("openai responses runtime", () => {
+  test("ignores commentary-phase assistant text in final runtime text and responseMessages", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-commentary-"));
+    const runtime = createOpenAiResponsesRuntime({
+      runStepImpl: async () => ({
+        assistant: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "progress note", phase: "commentary" },
+            { type: "text", text: "final answer", phase: "final_answer" },
+          ],
+          usage: { input: 1, output: 1, totalTokens: 2 },
+          stopReason: "stop",
+        },
+        responseId: "resp_commentary",
+      }),
+    });
+
+    const result = await runtime.runTurn(makeParams(makeConfig(homeDir)));
+
+    expect(result.text).toBe("final answer");
+    expect(result.responseMessages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "final answer", phase: "final_answer" }],
+      },
+    ]);
+  });
+
   test("seeds first OpenAI turn from full history when no continuation state exists", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-seed-"));
     const nativeCalls: Array<Record<string, unknown>> = [];

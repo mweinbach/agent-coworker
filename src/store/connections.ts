@@ -4,6 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import { resolveProviderName, type ProviderName } from "../types";
+import { writeTextFileAtomic } from "../utils/atomicFile";
 
 export type ConnectService = ProviderName;
 export const TOOL_API_KEY_NAMES = ["exa"] as const;
@@ -170,7 +171,7 @@ export async function readConnectionStore(paths: AiCoworkerPaths): Promise<Conne
 
 export async function writeConnectionStore(paths: AiCoworkerPaths, store: ConnectionStore): Promise<void> {
   await ensureAiCoworkerHome(paths);
-  await fs.writeFile(paths.connectionsFile, JSON.stringify(store, null, 2), { encoding: "utf-8", mode: 0o600 });
+  await writeTextFileAtomic(paths.connectionsFile, JSON.stringify(store, null, 2), { mode: 0o600 });
   try {
     await fs.chmod(paths.connectionsFile, 0o600);
   } catch {

@@ -64,6 +64,17 @@ describe("desktop ws protocol parser", () => {
         part: { text: "hello" },
       },
       {
+        type: "model_stream_raw",
+        sessionId: "desktop-s1",
+        turnId: "turn-1",
+        index: 1,
+        provider: "openai",
+        model: "gpt-5.2",
+        format: "openai-responses-v1",
+        normalizerVersion: 1,
+        event: { type: "response.output_item.added", item: { type: "reasoning" } },
+      },
+      {
         type: "error",
         sessionId: "desktop-s1",
         message: "boom",

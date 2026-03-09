@@ -70,9 +70,14 @@ function makeSession(overrides?: { config?: AgentConfig; provider?: string }) {
 // ---------------------------------------------------------------------------
 
 type StreamChunkEvent = Extract<ServerEvent, { type: "model_stream_chunk" }>;
+type RawStreamEvent = Extract<ServerEvent, { type: "model_stream_raw" }>;
 
 function getStreamChunks(events: ServerEvent[]): StreamChunkEvent[] {
   return events.filter((e): e is StreamChunkEvent => e.type === "model_stream_chunk");
+}
+
+function getRawStreamEvents(events: ServerEvent[]): RawStreamEvent[] {
+  return events.filter((e): e is RawStreamEvent => e.type === "model_stream_raw");
 }
 
 /**
@@ -105,6 +110,41 @@ describe("AgentSession stream pipeline", () => {
       responseMessages: [],
     }));
     await observabilityRuntimeInternal.resetForTests();
+  });
+
+  test("provider raw stream events are emitted before derived normalized chunks", async () => {
+    const { session, events } = makeSession();
+    mockRunTurn.mockImplementationOnce(async (params: any) => {
+      await params.onModelRawEvent?.({
+        format: "openai-responses-v1",
+        event: {
+          type: "response.output_item.added",
+          item: { type: "reasoning", id: "rs_1", summary: [] },
+        },
+      });
+      await params.onModelStreamPart({
+        type: "reasoning-start",
+        id: "s0",
+        mode: "summary",
+      });
+      return { text: "", reasoningText: undefined, responseMessages: [] };
+    });
+
+    await session.sendUserMessage("test");
+
+    const rawEvents = getRawStreamEvents(events);
+    expect(rawEvents).toHaveLength(1);
+    expect(rawEvents[0]).toMatchObject({
+      format: "openai-responses-v1",
+      event: {
+        type: "response.output_item.added",
+      },
+    });
+
+    const rawIndex = events.findIndex((evt) => evt.type === "model_stream_raw");
+    const chunkIndex = events.findIndex((evt) => evt.type === "model_stream_chunk");
+    expect(rawIndex).toBeGreaterThanOrEqual(0);
+    expect(chunkIndex).toBeGreaterThan(rawIndex);
   });
 
   // =========================================================================

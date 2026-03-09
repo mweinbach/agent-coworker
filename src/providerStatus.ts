@@ -339,7 +339,7 @@ async function getCodexCliStatus(opts: {
     return { ...base, provider: "codex-cli", authorized: true, mode: "api_key", verified: false, account: null };
   }
 
-  let material = await readCodexAuthMaterial(opts.paths, { migrateLegacy: false });
+  let material = await readCodexAuthMaterial(opts.paths);
   if (!material?.accessToken) {
     return {
       ...base,

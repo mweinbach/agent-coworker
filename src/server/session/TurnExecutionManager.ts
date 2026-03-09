@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { normalizeModelStreamPart, reasoningModeForProvider } from "../modelStream";
+import {
+  MODEL_STREAM_NORMALIZER_VERSION,
+  normalizeModelStreamPart,
+  reasoningModeForProvider,
+} from "../modelStream";
 import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
 import {
   SERVER_ERROR_CODES,
@@ -17,6 +21,7 @@ const assistantMessageContentArraySchema = z.array(z.unknown());
 const assistantMessageContentPartSchema = z.object({
   type: z.enum(["text", "output_text"]),
   text: z.string(),
+  phase: z.string().optional(),
 }).passthrough();
 const errorWithCodeSchema = z.object({ code: z.unknown() }).passthrough();
 const errorWithCodeAndSourceSchema = z.object({
@@ -74,6 +79,7 @@ function extractAssistantTextFromMessageContent(content: unknown): string {
   for (const part of parsedContent.data) {
     const parsedPart = assistantMessageContentPartSchema.safeParse(part);
     if (!parsedPart.success) continue;
+    if (parsedPart.data.phase === "commentary") continue;
     if (parsedPart.data.text.length > 0) chunks.push(parsedPart.data.text);
   }
   return chunks.join("");
@@ -151,6 +157,7 @@ export class TurnExecutionManager {
       this.context.queuePersistSessionSnapshot("session.user_message");
 
       let streamPartIndex = 0;
+      let rawStreamEventIndex = 0;
       const includeRawChunks = this.context.state.config.includeRawChunks ?? true;
       const invokeRunTurn = async (providerStateOverride = this.context.state.providerState) =>
         await this.context.deps.runTurnImpl({
@@ -241,6 +248,32 @@ export class TurnExecutionManager {
               model: this.context.state.config.model,
             });
           },
+          onModelRawEvent: async (rawEvent) => {
+            const index = rawStreamEventIndex++;
+            const eventPayload = {
+              type: "model_stream_raw" as const,
+              sessionId: this.context.id,
+              turnId,
+              index,
+              provider: this.context.state.config.provider,
+              model: this.context.state.config.model,
+              format: rawEvent.format,
+              normalizerVersion: MODEL_STREAM_NORMALIZER_VERSION,
+              event: rawEvent.event,
+            };
+            this.context.emit(eventPayload);
+            this.context.deps.sessionDb?.persistModelStreamChunk({
+              sessionId: this.context.id,
+              turnId,
+              chunkIndex: index,
+              ts: new Date().toISOString(),
+              provider: this.context.state.config.provider,
+              model: this.context.state.config.model,
+              rawFormat: rawEvent.format,
+              normalizerVersion: MODEL_STREAM_NORMALIZER_VERSION,
+              rawEvent: rawEvent.event,
+            });
+          },
           onModelStreamPart: async (rawPart) => {
             const partIndex = streamPartIndex++;
             const normalized = normalizeModelStreamPart(rawPart, {
@@ -259,6 +292,7 @@ export class TurnExecutionManager {
               index: partIndex,
               provider: this.context.state.config.provider,
               model: this.context.state.config.model,
+              normalizerVersion: normalized.normalizerVersion,
               partType: normalized.partType,
               part: normalized.part,
               ...(normalized.rawPart !== undefined ? { rawPart: normalized.rawPart } : {}),

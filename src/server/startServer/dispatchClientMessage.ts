@@ -137,5 +137,7 @@ export function dispatchClientMessage({
       return void session.setConfig(message.config);
     case "upload_file":
       return void session.uploadFile(message.filename, message.contentBase64);
+    case "get_session_usage":
+      return session.getSessionUsage();
   }
 }

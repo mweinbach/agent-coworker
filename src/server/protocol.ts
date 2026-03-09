@@ -10,6 +10,7 @@ import type {
   SkillEntry,
   TodoItem,
 } from "../types";
+import type { SessionUsageSnapshot } from "../session/costTracker";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
 import type { ProviderStatus } from "../providerStatus";
 import { type ProviderAuthMethod, type ProviderAuthChallenge } from "../providers/authRegistry";
@@ -51,28 +52,28 @@ export type ClientMessage =
   | { type: "provider_auth_authorize"; sessionId: string; provider: AgentConfig["provider"]; methodId: string }
   | { type: "provider_auth_logout"; sessionId: string; provider: AgentConfig["provider"] }
   | {
-      type: "provider_auth_callback";
-      sessionId: string;
-      provider: AgentConfig["provider"];
-      methodId: string;
-      code?: string;
-    }
+    type: "provider_auth_callback";
+    sessionId: string;
+    provider: AgentConfig["provider"];
+    methodId: string;
+    code?: string;
+  }
   | {
-      type: "provider_auth_set_api_key";
-      sessionId: string;
-      provider: AgentConfig["provider"];
-      methodId: string;
-      apiKey: string;
-    }
+    type: "provider_auth_set_api_key";
+    sessionId: string;
+    provider: AgentConfig["provider"];
+    methodId: string;
+    apiKey: string;
+  }
   | { type: "list_tools"; sessionId: string }
   | { type: "list_commands"; sessionId: string }
   | {
-      type: "execute_command";
-      sessionId: string;
-      name: string;
-      arguments?: string;
-      clientMessageId?: string;
-    }
+    type: "execute_command";
+    sessionId: string;
+    name: string;
+    arguments?: string;
+    clientMessageId?: string;
+  }
   | { type: "list_skills"; sessionId: string }
   | { type: "read_skill"; sessionId: string; skillName: string }
   | { type: "disable_skill"; sessionId: string; skillName: string }
@@ -104,153 +105,154 @@ export type ClientMessage =
   | { type: "subagent_create"; sessionId: string; agentType: SubagentAgentType; task: string }
   | { type: "subagent_sessions_get"; sessionId: string }
   | {
-      type: "set_config";
-      sessionId: string;
-      config: SessionConfigPatch;
-    }
-  | { type: "upload_file"; sessionId: string; filename: string; contentBase64: string };
+    type: "set_config";
+    sessionId: string;
+    config: SessionConfigPatch;
+  }
+  | { type: "upload_file"; sessionId: string; filename: string; contentBase64: string }
+  | { type: "get_session_usage"; sessionId: string };
 
 export type ServerEvent =
   | {
-      type: "server_hello";
-      sessionId: string;
-      protocolVersion?: string;
-      capabilities?: {
-        modelStreamChunk: "v1";
-      };
-      config: Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & { outputDirectory?: string };
-      isResume?: boolean;
-      resumedFromStorage?: boolean;
-      busy?: boolean;
-      messageCount?: number;
-      hasPendingAsk?: boolean;
-      hasPendingApproval?: boolean;
-      sessionKind?: SessionKind;
-      parentSessionId?: string;
-      agentType?: SubagentAgentType;
-    }
+    type: "server_hello";
+    sessionId: string;
+    protocolVersion?: string;
+    capabilities?: {
+      modelStreamChunk: "v1";
+    };
+    config: Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & { outputDirectory?: string };
+    isResume?: boolean;
+    resumedFromStorage?: boolean;
+    busy?: boolean;
+    messageCount?: number;
+    hasPendingAsk?: boolean;
+    hasPendingApproval?: boolean;
+    sessionKind?: SessionKind;
+    parentSessionId?: string;
+    agentType?: SubagentAgentType;
+  }
   | { type: "session_settings"; sessionId: string; enableMcp: boolean }
   | {
-      type: "session_info";
-      sessionId: string;
-      title: string;
-      titleSource: "default" | "model" | "heuristic" | "manual";
-      titleModel: string | null;
-      createdAt: string;
-      updatedAt: string;
-      provider: AgentConfig["provider"];
-      model: string;
-      sessionKind?: SessionKind;
-      parentSessionId?: string;
-      agentType?: SubagentAgentType;
-    }
+    type: "session_info";
+    sessionId: string;
+    title: string;
+    titleSource: "default" | "model" | "heuristic" | "manual";
+    titleModel: string | null;
+    createdAt: string;
+    updatedAt: string;
+    provider: AgentConfig["provider"];
+    model: string;
+    sessionKind?: SessionKind;
+    parentSessionId?: string;
+    agentType?: SubagentAgentType;
+  }
   | {
-      type: "mcp_servers";
-      sessionId: string;
-      servers: Array<
-        MCPServerConfig & {
-          source: MCPServerEventSource;
-          inherited: boolean;
-          authMode: MCPServerAuthMode;
-          authScope: "workspace" | "user";
-          authMessage: string;
-        }
-      >;
-      legacy: {
-        workspace: { path: string; exists: boolean };
-        user: { path: string; exists: boolean };
-      };
-      files: Array<{
+    type: "mcp_servers";
+    sessionId: string;
+    servers: Array<
+      MCPServerConfig & {
         source: MCPServerEventSource;
-        path: string;
-        exists: boolean;
-        editable: boolean;
-        legacy: boolean;
-        parseError?: string;
-        serverCount: number;
-      }>;
-      warnings?: string[];
-    }
+        inherited: boolean;
+        authMode: MCPServerAuthMode;
+        authScope: "workspace" | "user";
+        authMessage: string;
+      }
+    >;
+    legacy: {
+      workspace: { path: string; exists: boolean };
+      user: { path: string; exists: boolean };
+    };
+    files: Array<{
+      source: MCPServerEventSource;
+      path: string;
+      exists: boolean;
+      editable: boolean;
+      legacy: boolean;
+      parseError?: string;
+      serverCount: number;
+    }>;
+    warnings?: string[];
+  }
   | {
-      type: "mcp_server_validation";
-      sessionId: string;
-      name: string;
-      ok: boolean;
-      mode: MCPServerAuthMode;
-      message: string;
-      toolCount?: number;
-      latencyMs?: number;
-    }
+    type: "mcp_server_validation";
+    sessionId: string;
+    name: string;
+    ok: boolean;
+    mode: MCPServerAuthMode;
+    message: string;
+    toolCount?: number;
+    latencyMs?: number;
+  }
   | {
-      type: "mcp_server_auth_challenge";
-      sessionId: string;
-      name: string;
-      challenge: {
-        method: "auto" | "code";
-        instructions: string;
-        url?: string;
-        expiresAt?: string;
-      };
-    }
+    type: "mcp_server_auth_challenge";
+    sessionId: string;
+    name: string;
+    challenge: {
+      method: "auto" | "code";
+      instructions: string;
+      url?: string;
+      expiresAt?: string;
+    };
+  }
   | {
-      type: "mcp_server_auth_result";
-      sessionId: string;
-      name: string;
-      ok: boolean;
-      mode?: MCPServerAuthMode;
-      message: string;
-    }
+    type: "mcp_server_auth_result";
+    sessionId: string;
+    name: string;
+    ok: boolean;
+    mode?: MCPServerAuthMode;
+    message: string;
+  }
   | { type: "provider_catalog"; sessionId: string; all: ProviderCatalogEntry[]; default: Record<string, string>; connected: string[] }
   | { type: "provider_auth_methods"; sessionId: string; methods: Record<string, ProviderAuthMethod[]> }
   | {
-      type: "provider_auth_challenge";
-      sessionId: string;
-      provider: AgentConfig["provider"];
-      methodId: string;
-      challenge: ProviderAuthChallenge;
-    }
+    type: "provider_auth_challenge";
+    sessionId: string;
+    provider: AgentConfig["provider"];
+    methodId: string;
+    challenge: ProviderAuthChallenge;
+  }
   | {
-      type: "provider_auth_result";
-      sessionId: string;
-      provider: AgentConfig["provider"];
-      methodId: string;
-      ok: boolean;
-      mode?: "api_key" | "oauth" | "oauth_pending";
-      message: string;
-    }
+    type: "provider_auth_result";
+    sessionId: string;
+    provider: AgentConfig["provider"];
+    methodId: string;
+    ok: boolean;
+    mode?: "api_key" | "oauth" | "oauth_pending";
+    message: string;
+  }
   | { type: "provider_status"; sessionId: string; providers: ProviderStatus[] }
   | {
-      type: "session_busy";
-      sessionId: string;
-      busy: boolean;
-      turnId?: string;
-      cause?: "user_message" | "command";
-      outcome?: "completed" | "cancelled" | "error";
-    }
+    type: "session_busy";
+    sessionId: string;
+    busy: boolean;
+    turnId?: string;
+    cause?: "user_message" | "command";
+    outcome?: "completed" | "cancelled" | "error";
+  }
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
   | {
-      type: "model_stream_chunk";
-      sessionId: string;
-      turnId: string;
-      index: number;
-      provider: AgentConfig["provider"];
-      model: string;
-      normalizerVersion?: number;
-      partType: ModelStreamPartType;
-      part: Record<string, unknown>;
-      rawPart?: unknown;
-    }
+    type: "model_stream_chunk";
+    sessionId: string;
+    turnId: string;
+    index: number;
+    provider: AgentConfig["provider"];
+    model: string;
+    normalizerVersion?: number;
+    partType: ModelStreamPartType;
+    part: Record<string, unknown>;
+    rawPart?: unknown;
+  }
   | {
-      type: "model_stream_raw";
-      sessionId: string;
-      turnId: string;
-      index: number;
-      provider: AgentConfig["provider"];
-      model: string;
-      format: ModelStreamRawFormat;
-      normalizerVersion: number;
-      event: Record<string, unknown>;
-    }
+    type: "model_stream_raw";
+    sessionId: string;
+    turnId: string;
+    index: number;
+    provider: AgentConfig["provider"];
+    model: string;
+    format: ModelStreamRawFormat;
+    normalizerVersion: number;
+    event: Record<string, unknown>;
+  }
   | { type: "assistant_message"; sessionId: string; text: string }
   | { type: "reasoning"; sessionId: string; kind: "reasoning" | "summary"; text: string }
   | { type: "log"; sessionId: string; line: string }
@@ -258,70 +260,75 @@ export type ServerEvent =
   | { type: "reset_done"; sessionId: string }
   | { type: "ask"; sessionId: string; requestId: string; question: string; options?: string[] }
   | {
-      type: "approval";
-      sessionId: string;
-      requestId: string;
-      command: string;
-      dangerous: boolean;
-      reasonCode: ApprovalRiskCode;
-    }
+    type: "approval";
+    sessionId: string;
+    requestId: string;
+    command: string;
+    dangerous: boolean;
+    reasonCode: ApprovalRiskCode;
+  }
   | {
-      type: "config_updated";
-      sessionId: string;
-      config: Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & { outputDirectory?: string };
-    }
+    type: "config_updated";
+    sessionId: string;
+    config: Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & { outputDirectory?: string };
+  }
   | { type: "tools"; sessionId: string; tools: Array<{ name: string; description: string }> }
   | { type: "commands"; sessionId: string; commands: CommandInfo[] }
   | { type: "skills_list"; sessionId: string; skills: SkillEntry[] }
   | { type: "skill_content"; sessionId: string; skill: SkillEntry; content: string }
   | {
-      type: "session_backup_state";
-      sessionId: string;
-      reason: "requested" | "auto_checkpoint" | "manual_checkpoint" | "restore" | "delete";
-      backup: SessionBackupPublicState;
-    }
+    type: "session_backup_state";
+    sessionId: string;
+    reason: "requested" | "auto_checkpoint" | "manual_checkpoint" | "restore" | "delete";
+    backup: SessionBackupPublicState;
+  }
   | {
-      type: "observability_status";
-      sessionId: string;
-      enabled: boolean;
-      health: ObservabilityHealth;
-      config:
-        | {
-            provider: "langfuse";
-            baseUrl: string;
-            otelEndpoint: string;
-            tracingEnvironment?: string;
-            release?: string;
-            hasPublicKey: boolean;
-            hasSecretKey: boolean;
-            configured: boolean;
-          }
-        | null;
+    type: "observability_status";
+    sessionId: string;
+    enabled: boolean;
+    health: ObservabilityHealth;
+    config:
+    | {
+      provider: "langfuse";
+      baseUrl: string;
+      otelEndpoint: string;
+      tracingEnvironment?: string;
+      release?: string;
+      hasPublicKey: boolean;
+      hasSecretKey: boolean;
+      configured: boolean;
     }
+    | null;
+  }
   | { type: "harness_context"; sessionId: string; context: (HarnessContextPayload & { updatedAt: string }) | null }
   | {
-      type: "turn_usage";
-      sessionId: string;
-      turnId: string;
-      usage: { promptTokens: number; completionTokens: number; totalTokens: number };
-    }
+    type: "turn_usage";
+    sessionId: string;
+    turnId: string;
+    usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+  }
   | {
-      type: "messages";
-      sessionId: string;
-      messages: unknown[];
-      total: number;
-      offset: number;
-      limit: number;
-    }
+    type: "session_usage";
+    sessionId: string;
+    usage: SessionUsageSnapshot | null;
+  }
+  | {
+    type: "messages";
+    sessionId: string;
+    messages: unknown[];
+    total: number;
+    offset: number;
+    limit: number;
+  }
   | { type: "sessions"; sessionId: string; sessions: PersistedSessionSummary[] }
   | { type: "subagent_created"; sessionId: string; subagent: PersistentSubagentSummary }
   | { type: "subagent_sessions"; sessionId: string; subagents: PersistentSubagentSummary[] }
   | { type: "session_deleted"; sessionId: string; targetSessionId: string }
   | {
-      type: "session_config";
-      sessionId: string;
-      config: SessionConfigState;
-    }
+    type: "session_config";
+    sessionId: string;
+    config: SessionConfigState;
+  }
   | { type: "file_uploaded"; sessionId: string; filename: string; path: string }
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
@@ -376,6 +383,7 @@ export const CLIENT_MESSAGE_TYPES = [
   "subagent_sessions_get",
   "set_config",
   "upload_file",
+  "get_session_usage",
 ] as const;
 
 export const SERVER_EVENT_TYPES = [
@@ -411,6 +419,7 @@ export const SERVER_EVENT_TYPES = [
   "observability_status",
   "harness_context",
   "turn_usage",
+  "session_usage",
   "messages",
   "sessions",
   "subagent_created",

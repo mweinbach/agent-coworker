@@ -1,6 +1,7 @@
 import type { PersistentSubagentSummary, SubagentAgentType } from "../shared/persistentSubagents";
 import type { AgentConfig } from "../types";
 import type { TodoItem } from "../types";
+import type { SessionCostTracker } from "../session/costTracker";
 
 export type PersistentAgentWaitResult = {
   agentId: string;
@@ -48,4 +49,7 @@ export interface ToolContext {
 
   /** Session-backed persistent agent lifecycle callbacks. */
   persistentAgentControl?: PersistentAgentControl;
+
+  /** Session-level cost tracker. Tools can query and set budget thresholds. */
+  costTracker?: SessionCostTracker;
 }

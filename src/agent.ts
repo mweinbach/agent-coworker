@@ -8,6 +8,7 @@ import type { RuntimeModelRawEvent } from "./runtime/types";
 import type { OpenAiContinuationState } from "./shared/openaiContinuation";
 import type { PersistentAgentControl } from "./tools";
 import type { AgentConfig, ModelMessage, TodoItem } from "./types";
+import type { SessionCostTracker } from "./session/costTracker";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
 
@@ -73,6 +74,9 @@ export interface RunTurnParams {
     functionId?: string;
     metadata?: Record<string, string | number | boolean | null | undefined>;
   };
+
+  /** Session cost tracker instance, if available. */
+  costTracker?: SessionCostTracker;
 }
 
 function stripStaticMcpNamespacingGuidance(system: string): string {
@@ -217,6 +221,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       availableSkills: discoveredSkills,
       turnUserPrompt: extractTurnUserPrompt(messages),
       persistentAgentControl: params.persistentAgentControl,
+      costTracker: params.costTracker,
     };
     const builtInTools = deps.createTools(toolCtx);
 

@@ -18,6 +18,7 @@ import { createReadTool } from "./read";
 import { createSkillTool } from "./skill";
 import { createSpawnAgentTool } from "./spawnAgent";
 import { createTodoWriteTool } from "./todoWrite";
+import { createUsageTool } from "./usage";
 import { createWebFetchTool } from "./webFetch";
 import { createWebSearchTool } from "./webSearch";
 import { createWriteTool } from "./write";
@@ -40,6 +41,7 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     notebookEdit: createNotebookEditTool(ctx),
     skill: createSkillTool(ctx),
     memory: createMemoryTool(ctx),
+    usage: createUsageTool(ctx),
   };
 
   if (!ctx.persistentAgentControl) {

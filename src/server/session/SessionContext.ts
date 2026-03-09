@@ -1,4 +1,5 @@
 import type { connectProvider as connectModelProvider, ConnectProviderResult, getAiCoworkerPaths } from "../../connect";
+import type { SessionCostTracker } from "../../session/costTracker";
 import type { runTurn } from "../../agent";
 import type { HarnessContextStore } from "../../harness/contextStore";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
@@ -71,6 +72,7 @@ export type SessionRuntimeState = {
   sessionBackupInit: Promise<void> | null;
   backupOperationQueue: Promise<void>;
   lastAutoCheckpointAt: number;
+  costTracker: SessionCostTracker | null;
 };
 
 export type SessionDependencies = {

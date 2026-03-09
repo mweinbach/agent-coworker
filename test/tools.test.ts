@@ -51,7 +51,7 @@ function makeConfig(dir: string, overrides: Partial<AgentConfig> = {}): AgentCon
 function makeCtx(dir: string, overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     config: makeConfig(dir),
-    log: () => {},
+    log: () => { },
     askUser: async () => "",
     approveCommand: async () => true,
     ...overrides,
@@ -1812,7 +1812,7 @@ describe("todoWrite tool", () => {
 
   test("calls updateTodos callback when provided", async () => {
     const dir = await tmpDir();
-    const updateFn = mock((_todos: any) => {});
+    const updateFn = mock((_todos: any) => { });
     const ctx = makeCtx(dir);
     ctx.updateTodos = updateFn;
 
@@ -2619,10 +2619,10 @@ describe("createTools", () => {
     }
   });
 
-  test("returns exactly 15 tools", async () => {
+  test("returns exactly 16 tools", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));
-    expect(Object.keys(tools).length).toBe(15);
+    expect(Object.keys(tools).length).toBe(16);
   });
 
   test("each tool is executable or provider-native", async () => {

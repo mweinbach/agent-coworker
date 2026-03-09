@@ -1,6 +1,7 @@
 import { connectProvider as connectModelProvider, getAiCoworkerPaths, type ConnectProviderResult } from "../../connect";
 import { runTurn } from "../../agent";
 import { HarnessContextStore } from "../../harness/contextStore";
+import { SessionCostTracker } from "../../session/costTracker";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import { getProviderCatalog } from "../../providers/connectionCatalog";
 import { getProviderStatuses } from "../../providerStatus";
@@ -95,6 +96,7 @@ const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<ServerEvent["type"]>([
   "error",
   "file_uploaded",
   "turn_usage",
+  "session_usage",
   "config_updated",
 ]);
 
@@ -199,6 +201,7 @@ export class AgentSession {
       sessionBackupInit: null,
       backupOperationQueue: Promise.resolve(),
       lastAutoCheckpointAt: 0,
+      costTracker: null,
     };
 
     this.deps = {
@@ -350,6 +353,9 @@ export class AgentSession {
     this.adminManager = new SessionAdminManager(this.context);
 
     this.historyManager.refreshRuntimeMessagesFromHistory();
+
+    // Initialize cost tracker for this session.
+    this.state.costTracker = new SessionCostTracker(this.id);
 
     if (!opts.skipInitialPersist) {
       this.queuePersistSessionSnapshot("session.created");
@@ -730,6 +736,23 @@ export class AgentSession {
 
   async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
     await this.turnExecutionManager.sendUserMessage(text, clientMessageId, displayText);
+  }
+
+  getSessionUsage() {
+    const tracker = this.state.costTracker;
+    if (!tracker) {
+      this.context.emit({
+        type: "session_usage",
+        sessionId: this.id,
+        usage: null,
+      });
+      return;
+    }
+    this.context.emit({
+      type: "session_usage",
+      sessionId: this.id,
+      usage: tracker.getSnapshot(),
+    });
   }
 
   private buildPersistedSnapshotAt(updatedAt: string): PersistedSessionSnapshot {

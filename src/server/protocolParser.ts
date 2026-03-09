@@ -213,7 +213,7 @@ function sessionAndFieldSchema<TType extends string>(
   type: TType,
   field: string,
   label?: string,
-){
+) {
   return schemaWithType(type, {
     sessionId: requiredSessionId(type),
     [field]: requiredNonEmptyTrimmedString(`${type} missing/invalid ${label ?? field}`),
@@ -237,6 +237,7 @@ const sessionOnlyTypes = [
   "harness_context_get",
   "session_backup_get",
   "session_backup_checkpoint",
+  "get_session_usage",
 ] as const;
 
 const sessionAndSkillNameTypes = [

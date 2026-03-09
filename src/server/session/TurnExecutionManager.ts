@@ -123,7 +123,7 @@ export class TurnExecutionManager {
       metadataManager: SessionMetadataManager;
       backupController: SessionBackupController;
     }
-  ) {}
+  ) { }
 
   async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
     if (this.context.state.running) {
@@ -232,6 +232,7 @@ export class TurnExecutionManager {
           },
           abortSignal: this.context.state.abortController!.signal,
           includeRawChunks,
+          costTracker: this.context.state.costTracker ?? undefined,
           onModelError: async (error) => {
             lastStreamError = error;
             this.context.emitTelemetry("agent.stream.error", "error", {
@@ -339,6 +340,29 @@ export class TurnExecutionManager {
 
       if (res.usage) {
         this.context.emit({ type: "turn_usage", sessionId: this.context.id, turnId, usage: res.usage });
+
+        // Record in cost tracker for cumulative tracking.
+        const tracker = this.context.state.costTracker;
+        if (tracker) {
+          const entry = tracker.recordTurn({
+            turnId,
+            provider: this.context.state.config.provider,
+            model: this.context.state.config.model,
+            usage: res.usage,
+          });
+
+          // Emit cumulative session usage after each turn.
+          this.context.emit({
+            type: "session_usage",
+            sessionId: this.context.id,
+            usage: tracker.getSnapshot(),
+          });
+
+          // Surface budget alerts as log lines so the agent and client both see them.
+          if (tracker.isBudgetExceeded()) {
+            this.log(`[cost] 🛑 Budget exceeded — session cost has passed the hard cap.`);
+          }
+        }
       }
 
       this.context.emitTelemetry(
@@ -353,8 +377,8 @@ export class TurnExecutionManager {
       );
     } catch (err) {
       // If the model pipeline reported no output but we saw a stream error chunk, surface the stream error instead.
-      const actualErr = (lastStreamError && this.context.formatError(err).includes("No output generated")) 
-        ? lastStreamError 
+      const actualErr = (lastStreamError && this.context.formatError(err).includes("No output generated"))
+        ? lastStreamError
         : err;
       const msg = this.context.formatError(actualErr);
       if (!this.isAbortLikeError(actualErr)) {

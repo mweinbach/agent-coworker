@@ -23,6 +23,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - [TodoItem](#todoitem) | [CommandInfo](#commandinfo) | [SkillEntry](#skillentry) | [HarnessContextPayload](#harnesscontextpayload)
   - [SessionBackupPublicState](#sessionbackuppublicstate) | [ObservabilityHealth](#observabilityhealth)
   - [ModelStreamPartType](#modelstreamparttype) | [ApprovalRiskCode](#approvalriskcode) | [ServerErrorCode](#servererrorcode) | [ServerErrorSource](#servererrorsource)
+  - [SessionUsageSnapshot](#sessionusagesnapshot) | [BudgetStatus](#budgetstatus)
 - [Client -> Server Messages](#client---server-messages)
   - Handshake: [client_hello](#client_hello)
   - Conversation: [user_message](#user_message) | [ask_response](#ask_response) | [approval_response](#approval_response) | [cancel](#cancel) | [reset](#reset)
@@ -30,7 +31,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Tools & Commands: [list_tools](#list_tools) | [list_commands](#list_commands) | [execute_command](#execute_command)
   - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill)
   - MCP: [set_enable_mcp](#set_enable_mcp) | [mcp_servers_get](#mcp_servers_get) | [mcp_server_upsert](#mcp_server_upsert) | [mcp_server_delete](#mcp_server_delete) | [mcp_server_validate](#mcp_server_validate) | [mcp_server_auth_authorize](#mcp_server_auth_authorize) | [mcp_server_auth_callback](#mcp_server_auth_callback) | [mcp_server_auth_set_api_key](#mcp_server_auth_set_api_key) | [mcp_servers_migrate_legacy](#mcp_servers_migrate_legacy)
-  - Session Management: [session_close](#session_close) | [get_messages](#get_messages) | [set_session_title](#set_session_title) | [list_sessions](#list_sessions) | [delete_session](#delete_session) | [subagent_create](#subagent_create) | [subagent_sessions_get](#subagent_sessions_get) | [set_config](#set_config) | [upload_file](#upload_file)
+  - Session Management: [session_close](#session_close) | [get_messages](#get_messages) | [set_session_title](#set_session_title) | [list_sessions](#list_sessions) | [delete_session](#delete_session) | [subagent_create](#subagent_create) | [subagent_sessions_get](#subagent_sessions_get) | [set_config](#set_config) | [upload_file](#upload_file) | [get_session_usage](#get_session_usage)
   - Backup: [session_backup_get](#session_backup_get) | [session_backup_checkpoint](#session_backup_checkpoint) | [session_backup_restore](#session_backup_restore) | [session_backup_delete_checkpoint](#session_backup_delete_checkpoint)
   - Harness: [harness_context_get](#harness_context_get) | [harness_context_set](#harness_context_set)
   - Keepalive: [ping](#ping)
@@ -41,7 +42,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Provider: [provider_catalog](#provider_catalog) | [provider_auth_methods](#provider_auth_methods) | [provider_auth_challenge](#provider_auth_challenge) | [provider_auth_result](#provider_auth_result) | [provider_status](#provider_status) | [config_updated](#config_updated)
   - Tools & Skills: [tools](#tools) | [commands](#commands) | [skills_list](#skills_list) | [skill_content](#skill_content)
   - MCP: [mcp_servers](#mcp_servers) | [mcp_server_validation](#mcp_server_validation) | [mcp_server_auth_challenge](#mcp_server_auth_challenge) | [mcp_server_auth_result](#mcp_server_auth_result)
-  - Session Data: [messages](#messages) | [sessions](#sessions) | [subagent_created](#subagent_created) | [subagent_sessions](#subagent_sessions) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage)
+  - Session Data: [messages](#messages) | [sessions](#sessions) | [subagent_created](#subagent_created) | [subagent_sessions](#subagent_sessions) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage) | [session_usage](#session_usage)
   - Backup & Observability: [session_backup_state](#session_backup_state) | [observability_status](#observability_status)
   - Harness: [harness_context](#harness_context)
   - Error & Keepalive: [error](#error) | [pong](#pong)
@@ -64,6 +65,10 @@ Changes in `7.3`:
 - New server events: `subagent_created`, `subagent_sessions`.
 - `server_hello` and `session_info` can now identify child sessions via `sessionKind`, `parentSessionId`, and `agentType`.
 - `list_sessions` remains root-only; persistent subagents are discovered separately.
+
+- Added session-level cost tracking support.
+- New client message: `get_session_usage`.
+- New server event: `session_usage`.
 
 Changes in `7.2`:
 
@@ -451,6 +456,58 @@ Returned in `server_hello` and `config_updated`:
 "protocol" | "session" | "tool" | "provider"
 | "backup" | "observability" | "permissions"
 ```
+
+### SessionUsageSnapshot
+
+```json
+{
+  "sessionId": "abc-123",
+  "totalTurns": 12,
+  "totalPromptTokens": 5000,
+  "totalCompletionTokens": 2000,
+  "totalTokens": 7000,
+  "estimatedTotalCostUsd": 0.45,
+  "costTrackingAvailable": true,
+  "budgetStatus": { ... },
+  "createdAt": "2026-03-09T18:00:00.000Z",
+  "updatedAt": "2026-03-09T18:05:00.000Z"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sessionId` | `string` | Session identifier |
+| `totalTurns` | `number` | Total number of recorded turns |
+| `totalPromptTokens` | `number` | Cumulative prompt tokens |
+| `totalCompletionTokens` | `number` | Cumulative completion tokens |
+| `totalTokens` | `number` | Cumulative total tokens |
+| `estimatedTotalCostUsd` | `number \| null` | Cumulative estimated cost in USD |
+| `costTrackingAvailable` | `boolean` | Whether cost tracking is active for this session |
+| `budgetStatus` | `BudgetStatus` | Current budget configuration and status |
+| `createdAt` | `string` | ISO 8601 creation timestamp |
+| `updatedAt` | `string` | ISO 8601 last update timestamp |
+
+### BudgetStatus
+
+```json
+{
+  "configured": true,
+  "warnAtUsd": 10.0,
+  "stopAtUsd": 50.0,
+  "warningTriggered": false,
+  "stopTriggered": false,
+  "currentCostUsd": 0.45
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `configured` | `boolean` | Whether any budget thresholds are set |
+| `warnAtUsd` | `number \| null` | Warning threshold in USD |
+| `stopAtUsd` | `number \| null` | Hard stop threshold in USD |
+| `warningTriggered` | `boolean` | Whether the warning threshold has been reached |
+| `stopTriggered` | `boolean` | Whether the stop threshold has been exceeded |
+| `currentCostUsd` | `number \| null` | Current cumulative cost |
 
 ---
 
@@ -1381,6 +1438,23 @@ Upload a file to the session's uploads directory.
 
 ---
 
+### get_session_usage
+
+Request the accumulated token usage and estimated cost for the current session.
+
+```json
+{ "type": "get_session_usage", "sessionId": "..." }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"get_session_usage"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+
+**Response:** `session_usage`
+
+---
+
 ## Server -> Client Events
 
 ### server_hello
@@ -2261,6 +2335,45 @@ Token usage data for a completed turn. Emitted after `assistant_message` when th
 | `usage.promptTokens` | `number` | Input tokens consumed |
 | `usage.completionTokens` | `number` | Output tokens generated |
 | `usage.totalTokens` | `number` | Total tokens |
+
+---
+
+### session_usage
+
+Accumulated session usage and budget status. Sent in response to `get_session_usage` and automatically when tracked usage changes.
+
+```json
+{
+  "type": "session_usage",
+  "sessionId": "...",
+  "usage": {
+    "sessionId": "abc-123",
+    "totalTurns": 12,
+    "totalPromptTokens": 5000,
+    "totalCompletionTokens": 2000,
+    "totalTokens": 7000,
+    "estimatedTotalCostUsd": 0.45,
+    "costTrackingAvailable": true,
+    "budgetStatus": {
+      "configured": true,
+      "warnAtUsd": 10.0,
+      "stopAtUsd": 50.0,
+      "warningTriggered": false,
+      "stopTriggered": false,
+      "currentCostUsd": 0.45
+    },
+    "createdAt": "2026-03-09T18:00:00.000Z",
+    "updatedAt": "2026-03-09T18:05:00.000Z"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"session_usage"` | — |
+| `sessionId` | `string` | Session identifier |
+| `usage` | `SessionUsageSnapshot` | Cumulative usage snapshot (see [SessionUsageSnapshot](#sessionusagesnapshot)) |
+
 
 ---
 

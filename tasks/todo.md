@@ -1835,3 +1835,20 @@
 - `~/.bun/bin/bun run typecheck:desktop` -> pass
 - `~/.bun/bin/bun test --cwd apps/desktop test/ws-protocol-parse.test.ts test/protocol-v2-events.test.ts` -> pass (`30 pass, 0 fail`)
 - `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`196 pass, 0 fail`)
+
+# Task: Keep late reasoning summaries from rendering after the final assistant answer
+
+## Plan
+- [x] Reproduce the MacBook Neo thread ordering bug from the persisted transcript and confirm whether the reversal happens during transcript hydration, live reducer handling, or grouped-trace rendering.
+- [x] Patch desktop feed construction so legacy reasoning summaries that arrive after a raw-backed final-answer stream are anchored before the final assistant message instead of trailing it.
+- [x] Add transcript and live-reducer regressions, then rerun the relevant desktop verification commands.
+
+## Review
+- The persisted transcript for the MacBook Neo thread (`/Users/mweinbach/Library/Application Support/Cowork/transcripts/4affe7fd-a696-4575-855c-76f78fc2e880.jsonl`) was not wrong. It stores the legacy `reasoning` summary at `2026-03-09T17:00:15.987Z` and the fallback `assistant_message` at `2026-03-09T17:00:15.995Z`.
+- The visible reversal came from desktop feed construction on raw-backed turns: the final assistant text was already rendered earlier from `model_stream_raw`, and then the legacy turn-end `reasoning` summary was appended afterward because there was no raw reasoning stream to dedupe it against. So the reasoning card landed below the final assistant bubble even though the persisted tail events themselves were in the expected order.
+- Fixed `apps/desktop/src/app/store.feedMapping.ts` and `apps/desktop/src/app/store.helpers/threadEventReducer.ts` so when a late legacy reasoning summary arrives for a raw-backed turn that already has a streamed assistant message, the summary is inserted immediately before that assistant item instead of being pushed to the end of the feed.
+
+### Verification
+- `~/.bun/bin/bun test --cwd apps/desktop test/store-feed-mapping.test.ts test/protocol-v2-events.test.ts` -> pass (`32 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck:desktop` -> pass
+- `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`198 pass, 0 fail`)

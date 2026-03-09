@@ -8,6 +8,7 @@ import {
 } from "../modelStream";
 import {
   applyModelStreamUpdateToThreadFeed as applyModelStreamUpdateToThreadFeedCore,
+  reasoningInsertBeforeAssistantAfterStreamReplay,
   shouldSkipAssistantMessageAfterStreamReplay,
   shouldSuppressRawDebugLogLine,
   type ThreadModelStreamRuntime,
@@ -67,6 +68,37 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             ...rt,
             feed: rt.feed.map((item) => (item.id === itemId ? update(item) : item)),
           },
+        },
+      };
+    });
+  }
+
+  function insertFeedItemBefore(set: StoreSet, threadId: string, beforeItemId: string, item: FeedItem) {
+    set((s) => {
+      const rt = s.threadRuntimeById[threadId];
+      if (!rt) return {};
+      const beforeIndex = rt.feed.findIndex((entry) => entry.id === beforeItemId);
+      if (beforeIndex < 0) {
+        let nextFeed = [...rt.feed, item];
+        if (nextFeed.length > MAX_FEED_ITEMS) {
+          nextFeed = nextFeed.slice(nextFeed.length - MAX_FEED_ITEMS);
+        }
+        return {
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: { ...rt, feed: nextFeed },
+          },
+        };
+      }
+
+      const nextFeed = [...rt.feed];
+      nextFeed.splice(beforeIndex, 0, item);
+      const trimmedFeed =
+        nextFeed.length > MAX_FEED_ITEMS ? nextFeed.slice(nextFeed.length - MAX_FEED_ITEMS) : nextFeed;
+      return {
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: { ...rt, feed: trimmedFeed },
         },
       };
     });
@@ -429,13 +461,20 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         return;
       }
 
-      pushFeedItem(set, threadId, {
+      const item: FeedItem = {
         id: deps.makeId(),
         kind: "reasoning",
         mode: evt.kind,
         ts: deps.nowIso(),
         text: evt.text,
-      });
+      };
+      const beforeAssistantId = reasoningInsertBeforeAssistantAfterStreamReplay(stream);
+      if (beforeAssistantId) {
+        insertFeedItemBefore(set, threadId, beforeAssistantId, item);
+        return;
+      }
+
+      pushFeedItem(set, threadId, item);
       return;
     }
 

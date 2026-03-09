@@ -1,6 +1,7 @@
 # Lessons
 
 - For desktop renderer wrappers that re-export core protocol/types, prefer direct repo-root relative imports over `@cowork/*` aliases; `electron-vite` can accept the alias in TypeScript but still fail Rollup resolution at renderer build time.
+- For raw-backed desktop turns, do not just append legacy `reasoning` summaries at turn end; if a streamed final assistant message already exists for that turn, anchor the summary before that assistant item or it will render below the final answer.
 - When surfacing provider rate limits in the UI, present remaining capacity (`100% left`) instead of consumed budget (`0% used`); that matches how users reason about available headroom.
 - For Codex OAuth verification, mirror the Codex app contract: trust the Cowork token claims for account/email/plan context and verify backend access with `ChatGPT-Account-Id` against the ChatGPT/Codex usage endpoint, not generic OIDC `userinfo`.
 - When the user asks to “test the API with our logic,” run the real provider-status/runtime entry points against the current auth home; a storage/parser audit alone does not answer whether the live transport can actually make a request.

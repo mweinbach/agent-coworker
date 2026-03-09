@@ -420,4 +420,91 @@ describe("desktop transcript feed mapping", () => {
     expect(assistant).toHaveLength(1);
     expect(assistant[0]?.text).toBe("final answer");
   });
+
+  test("inserts a late legacy reasoning summary before the raw-backed final assistant message", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-late-reasoning",
+          index: 0,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_item.added",
+            item: { type: "message", id: "msg_final", phase: "final_answer", content: [] },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-late-reasoning",
+          index: 1,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.content_part.added",
+            item_id: "msg_final",
+            part: { type: "output_text", text: "" },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-late-reasoning",
+          index: 2,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_text.delta",
+            item_id: "msg_final",
+            delta: "final answer",
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:04.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: { type: "reasoning", kind: "summary", text: "late summary" },
+      },
+      {
+        ts: "2024-01-01T00:00:05.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: { type: "assistant_message", text: "final answer" },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+
+    expect(feed.map((item) => item.kind)).toEqual(["reasoning", "message"]);
+    expect(feed[0]?.kind).toBe("reasoning");
+    expect(feed[1]?.kind).toBe("message");
+    if (feed[0]?.kind !== "reasoning") throw new Error("Expected reasoning item first");
+    if (feed[1]?.kind !== "message") throw new Error("Expected assistant message second");
+    expect(feed[0].text).toBe("late summary");
+    expect(feed[1].role).toBe("assistant");
+    expect(feed[1].text).toBe("final answer");
+  });
 });

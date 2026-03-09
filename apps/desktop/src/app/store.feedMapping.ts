@@ -206,6 +206,19 @@ export function shouldSkipAssistantMessageAfterStreamReplay(
   return false;
 }
 
+export function reasoningInsertBeforeAssistantAfterStreamReplay(
+  stream: ThreadModelStreamRuntime,
+): string | null {
+  const turnId = stream.lastAssistantTurnId;
+  if (!turnId) return null;
+  if (!stream.replay.rawBackedTurns.has(turnId)) return null;
+
+  const assistantKey = stream.lastAssistantStreamKeyByTurn.get(turnId);
+  if (!assistantKey) return null;
+
+  return stream.assistantItemIdByStream.get(assistantKey) ?? null;
+}
+
 function modelStreamSystemLine(update: ModelStreamUpdate): string | null {
   if (update.kind === "turn_abort") {
     const reason = previewValue(update.reason);
@@ -656,13 +669,22 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
           : payload.type === "reasoning"
             ? (payload.kind === "summary" ? "summary" : "reasoning")
             : "reasoning";
-      out.push({
+      const item: FeedItem = {
         id: makeId(),
         kind: "reasoning",
         mode,
         ts: evt.ts,
         text: String(payload.text ?? ""),
-      });
+      };
+      const beforeAssistantId = reasoningInsertBeforeAssistantAfterStreamReplay(stream);
+      if (beforeAssistantId) {
+        const assistantIndex = out.findIndex((entry) => entry.id === beforeAssistantId);
+        if (assistantIndex >= 0) {
+          out.splice(assistantIndex, 0, item);
+          continue;
+        }
+      }
+      out.push(item);
       continue;
     }
 

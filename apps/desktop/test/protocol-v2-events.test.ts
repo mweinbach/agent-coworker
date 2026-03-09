@@ -554,6 +554,8 @@ describe("desktop protocol v2 mapping", () => {
     expect(reasoning[0]?.mode).toBe("summary");
     expect(reasoning[0]?.text).toBe("thinking");
 
+    expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "tool"]);
+
     const tool = feed.find((item) => item.kind === "tool");
     expect(tool?.kind).toBe("tool");
     if (!tool || tool.kind !== "tool") throw new Error("Expected tool feed item");

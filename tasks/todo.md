@@ -1,3 +1,56 @@
+# Task: Harden desktop trace ordering and duplicate suppression
+
+## Plan
+- [x] Audit the desktop feed-mapping and grouped-trace path for duplicate reasoning/tool entries and any accidental reordering between messages and mixed trace content.
+- [x] Add defensive normalization and regression coverage so grouped traces collapse exact duplicate reasoning notes and preserve feed order independent of timestamps.
+- [x] Run the relevant desktop tests, typecheck, and a repo test pass; record any unrelated failures below.
+
+## Review
+- `apps/desktop/src/ui/chat/activityGroups.ts` now defensively collapses only adjacent duplicate reasoning notes in the grouped trace when the mode matches and the text is identical after trimming. This keeps the grouped card from showing the same reasoning summary twice if both a streamed reasoning item and a duplicated final note make it into the same activity block.
+- Added ordering and duplication regression coverage in `apps/desktop/test/chat-activity-groups.test.ts` so grouped chat rendering is pinned to feed order rather than timestamp order, and adjacent duplicate reasoning summaries do not render twice.
+- Added transcript-layer coverage in `apps/desktop/test/store-feed-mapping.test.ts` to verify `mapTranscriptToFeed()` dedupes streamed reasoning against legacy final reasoning events while preserving the original event order, even when timestamps are out of sequence.
+- Strengthened the live desktop reducer regression in `apps/desktop/test/protocol-v2-events.test.ts` so the mixed feed order from streamed assistant/reasoning/tool updates is explicit and any future accidental reordering will fail the test.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/chat-activity-groups.test.ts apps/desktop/test/store-feed-mapping.test.ts apps/desktop/test/protocol-v2-events.test.ts` -> pass
+  - `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`190 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1831 pass, 0 fail`)
+
+# Task: Remove duplicated grouped reasoning disclosure in desktop trace
+
+## Plan
+- [x] Inspect the grouped desktop trace row rendering and confirm why reasoning summaries are duplicated inside the expanded card.
+- [x] Replace the nested reasoning disclosure with a single static compact reasoning note in the mixed trace.
+- [x] Update regression coverage and rerun desktop tests, typecheck, and the repo test suite.
+
+## Review
+- `apps/desktop/src/ui/chat/ActivityGroupCard.tsx` now renders grouped reasoning entries as a single compact static note in the mixed trace instead of nesting another expandable reasoning disclosure inside the already-expanded activity card. The card header still keeps the short preview, but the expanded body no longer shows the same reasoning summary twice.
+- `apps/desktop/test/chat-activity-group-card.test.tsx` now verifies the reasoning entry directly: it renders once, keeps the full summary text, and does not contain its own nested disclosure/button controls. The regression now checks the real bug instead of counting generic `aria-controls` attributes from unrelated collapsibles in the card.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/chat-activity-group-card.test.tsx` -> pass
+  - `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`186 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> 1 unrelated failure in `test/mcp.remote.grep.test.ts` (`remote MCP (mcp.grep.app) > connects, discovers tools, and executes searchGitHub`) returning `Streamable HTTP error ... code: 405`
+
+# Task: Make desktop reasoning/tool trace slimmer and ordered
+
+## Plan
+- [x] Refactor desktop activity grouping to preserve ordered mixed reasoning/tool entries and keep tool merges bounded by reasoning separators.
+- [x] Rebuild the grouped activity card around the shared local `ai-elements` reasoning/tool primitives with a compact trace presentation.
+- [x] Add/update desktop tests for mixed ordering, compact reasoning previews, and trace-mode tool expansion behavior.
+- [x] Run `bun test` and `bun run typecheck`, then record the results below.
+
+## Review
+- `apps/desktop/src/ui/chat/activityGroups.ts` now summarizes grouped activity as an ordered `entries` list instead of separate reasoning/tool buckets. Tool lifecycle merging still dedupes adjacent updates, but only within uninterrupted tool runs, so a reasoning summary now acts as a hard separator and the rendered order matches the original feed chronology.
+- `apps/desktop/src/ui/chat/ActivityGroupCard.tsx` now renders one compact mixed trace list inside the grouped activity card. The card header is smaller, the summary preview is shorter, and the expanded content no longer splits into separate “reasoning” and “trace” sections.
+- `apps/desktop/src/ui/chat/toolCards/ToolCard.tsx`, `apps/desktop/src/components/ai-elements/tool.tsx`, and `apps/desktop/src/components/ai-elements/reasoning.tsx` now support compact trace variants so the grouped card reuses the local `ai-elements` primitives instead of maintaining a bespoke parallel row implementation.
+- Added regression coverage in `apps/desktop/test/chat-activity-groups.test.ts` for mixed ordering and reasoning-boundary merge rules, plus a new SSR UI test in `apps/desktop/test/chat-activity-group-card.test.tsx` that checks chronological rendering, collapsed reasoning previews, and auto-expanded approval rows.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/chat-activity-groups.test.ts apps/desktop/test/chat-activity-group-card.test.tsx apps/desktop/test/chat-reasoning-ui.test.ts` -> pass
+  - `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`186 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1827 pass, 0 fail`)
+
 # Task: Remove the portal app
 
 ## Plan

@@ -17,6 +17,7 @@ type ToolCardProps = {
   name: string;
   result?: unknown;
   state: ToolFeedState;
+  variant?: "default" | "trace";
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -33,7 +34,6 @@ function toJson(value: unknown): string {
 }
 
 export const ToolCard = memo(function ToolCard(props: ToolCardProps) {
-  const [expanded, setExpanded] = useState(false);
   const shouldAutoExpand =
     props.state === "approval-requested" ||
     props.state === "output-error" ||
@@ -46,12 +46,6 @@ export const ToolCard = memo(function ToolCard(props: ToolCardProps) {
     return props.name;
   }, [props.args, props.name]);
 
-  useEffect(() => {
-    if (shouldAutoExpand) {
-      setExpanded(true);
-    }
-  }, [shouldAutoExpand]);
-
   const approvalJson = useMemo(() => toJson(props.approval), [props.approval]);
   const argsJson = useMemo(() => toJson(props.args), [props.args]);
   const resultJson = useMemo(() => toJson(props.result), [props.result]);
@@ -59,27 +53,78 @@ export const ToolCard = memo(function ToolCard(props: ToolCardProps) {
     () => formatToolCard(displayName, props.args, props.result, props.state),
     [displayName, props.args, props.result, props.state],
   );
+  const detailRows = useMemo(
+    () => formatting.details.filter((row) => row.label !== "Status"),
+    [formatting.details],
+  );
+  const hasExpandableContent = props.variant === "trace"
+    ? detailRows.length > 0
+    : Boolean(approvalJson || argsJson || resultJson);
+  const [expanded, setExpanded] = useState(shouldAutoExpand && hasExpandableContent);
+
+  useEffect(() => {
+    if (shouldAutoExpand && hasExpandableContent) {
+      setExpanded(true);
+    }
+  }, [hasExpandableContent, shouldAutoExpand]);
+
+  if (props.variant === "trace") {
+    return (
+      <Tool variant="trace" open={expanded} onOpenChange={setExpanded}>
+        <ToolHeader
+          showChevron={hasExpandableContent}
+          state={props.state}
+          subtitle={formatting.subtitle}
+          title={formatting.title}
+          variant="trace"
+        />
+        {hasExpandableContent ? (
+          <ToolContent variant="trace">
+            <div className="grid gap-2 sm:grid-cols-2">
+              {detailRows.map((row) => (
+                <div key={`${props.name}-${row.label}`} className="rounded-lg border border-border/50 bg-muted/15 px-2.5 py-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                    {row.label}
+                  </div>
+                  <div className="mt-1 break-words text-xs leading-5 text-foreground/85">
+                    {row.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ToolContent>
+        ) : null}
+      </Tool>
+    );
+  }
 
   return (
     <Tool open={expanded} onOpenChange={setExpanded}>
-      <ToolHeader title={formatting.title} subtitle={formatting.subtitle} state={props.state} />
-      <ToolContent>
-        {approvalJson ? (
-          <ToolCodeBlock
-            label="Approval"
-            value={approvalJson}
-            tone={props.state === "output-denied" ? "error" : "default"}
-          />
-        ) : null}
-        {argsJson ? <ToolCodeBlock label="Input" value={argsJson} /> : null}
-        {resultJson ? (
-          <ToolCodeBlock
-            label={props.state === "output-error" || props.state === "output-denied" ? "Issue" : "Output"}
-            value={resultJson}
-            tone={props.state === "output-error" || props.state === "output-denied" ? "error" : "default"}
-          />
-        ) : null}
-      </ToolContent>
+      <ToolHeader
+        showChevron={hasExpandableContent}
+        state={props.state}
+        subtitle={formatting.subtitle}
+        title={formatting.title}
+      />
+      {hasExpandableContent ? (
+        <ToolContent>
+          {approvalJson ? (
+            <ToolCodeBlock
+              label="Approval"
+              value={approvalJson}
+              tone={props.state === "output-denied" ? "error" : "default"}
+            />
+          ) : null}
+          {argsJson ? <ToolCodeBlock label="Input" value={argsJson} /> : null}
+          {resultJson ? (
+            <ToolCodeBlock
+              label={props.state === "output-error" || props.state === "output-denied" ? "Issue" : "Output"}
+              value={resultJson}
+              tone={props.state === "output-error" || props.state === "output-denied" ? "error" : "default"}
+            />
+          ) : null}
+        </ToolContent>
+      ) : null}
     </Tool>
   );
 });

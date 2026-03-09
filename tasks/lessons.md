@@ -11,6 +11,7 @@
 - For desktop UI bugs in the shadcn/ai-elements surface, fix the component composition and spacing locally before adding new state/layout plumbing.
 - For dense desktop agent timelines, collapse reasoning and tool traces into a shared secondary disclosure before trying to restyle dozens of inline cards.
 - For grouped desktop tool traces, do not nest the full `ToolCard` disclosure stack inside the `Thinking` disclosure; use a flat, readable step list and visually verify the expanded state, not just the collapsed summary.
+- For grouped desktop reasoning summaries, do not stack a preview disclosure on top of the full rendered note; render the summary once in the trace and avoid duplicate preview/body text.
 - For grouped desktop trace cleanup, merge adjacent tool rows by lifecycle compatibility and result shape, not just by matching tool name, and verify the header layout inside the real three-column shell because viewport breakpoints alone can hide narrow-panel collisions.
 - When default skills are meant to live in `~/.cowork/skills`, move the bootstrap into shared runtime startup and widen read-only permissions for `skillsDirs`; do not solve it in a desktop-only wrapper or by only changing bundled app assets.
 - For workspace-clutter complaints, inspect the actual user workspace path and generated artifact set first; prevent disposable scaffolding at the prompt/skill layer before considering UI hiding rules.

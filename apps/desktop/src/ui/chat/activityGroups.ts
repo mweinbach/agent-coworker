@@ -4,6 +4,9 @@ import { formatToolCard } from "./toolCards/toolCardFormatting";
 
 export type ActivityFeedItem = Extract<FeedItem, { kind: "reasoning" | "tool" }>;
 export type ToolTraceItem = Extract<FeedItem, { kind: "tool" }> & { sourceIds: string[] };
+export type ActivityTraceEntry =
+  | { kind: "reasoning"; item: Extract<FeedItem, { kind: "reasoning" }> }
+  | { kind: "tool"; item: ToolTraceItem };
 
 export type ChatRenderItem =
   | { kind: "feed-item"; item: FeedItem }
@@ -12,12 +15,13 @@ export type ChatRenderItem =
 export type ActivityGroupStatus = "approval" | "issue" | "running" | "done";
 
 export type ActivityGroupSummary = {
+  entries: ActivityTraceEntry[];
   preview: string;
-  reasoningItems: Extract<FeedItem, { kind: "reasoning" }>[];
+  reasoningCount: number;
   status: ActivityGroupStatus;
   statusLabel: string;
   title: string;
-  toolItems: ToolTraceItem[];
+  toolCount: number;
 };
 
 function truncate(text: string, max = 180): string {
@@ -25,12 +29,20 @@ function truncate(text: string, max = 180): string {
   return `${text.slice(0, max - 1)}…`;
 }
 
-function compactText(text: string): string {
-  return text
+function reasoningPreviewText(text: string, maxLines = 2): string {
+  const lines = text
     .split("\n")
     .map((line) => line.trim())
-    .filter(Boolean)
-    .join(" ");
+    .filter(Boolean);
+
+  if (lines.length === 0) return "";
+
+  const preview = lines.slice(0, maxLines).join(" ");
+  return lines.length > maxLines ? `${preview}…` : preview;
+}
+
+function normalizedReasoningText(text: string): string {
+  return text.trim();
 }
 
 const genericToolSubtitles = new Set([
@@ -209,6 +221,40 @@ function mergeToolTraceItems(toolItems: Extract<FeedItem, { kind: "tool" }>[]): 
   return traceItems;
 }
 
+function buildActivityTraceEntries(items: ActivityFeedItem[]): ActivityTraceEntry[] {
+  const entries: ActivityTraceEntry[] = [];
+  let pendingTools: Extract<FeedItem, { kind: "tool" }>[] = [];
+
+  const flushPendingTools = () => {
+    if (pendingTools.length === 0) return;
+    for (const item of mergeToolTraceItems(pendingTools)) {
+      entries.push({ kind: "tool", item });
+    }
+    pendingTools = [];
+  };
+
+  for (const item of items) {
+    if (item.kind === "reasoning") {
+      flushPendingTools();
+      const previous = entries[entries.length - 1];
+      if (
+        previous?.kind === "reasoning" &&
+        previous.item.mode === item.mode &&
+        normalizedReasoningText(previous.item.text) === normalizedReasoningText(item.text)
+      ) {
+        continue;
+      }
+      entries.push({ kind: "reasoning", item });
+      continue;
+    }
+
+    pendingTools.push(item);
+  }
+
+  flushPendingTools();
+  return entries;
+}
+
 function deriveStatus(toolItems: ToolTraceItem[]): ActivityGroupStatus {
   const states = new Set<ToolFeedState>(toolItems.map((item) => item.state));
   if (states.has("approval-requested")) return "approval";
@@ -256,27 +302,32 @@ export function buildChatRenderItems(feed: FeedItem[]): ChatRenderItem[] {
 }
 
 export function summarizeActivityGroup(items: ActivityFeedItem[]): ActivityGroupSummary {
-  const reasoningItems = items.filter((item): item is Extract<FeedItem, { kind: "reasoning" }> => item.kind === "reasoning");
-  const rawToolItems = items.filter((item): item is Extract<FeedItem, { kind: "tool" }> => item.kind === "tool");
-  const toolItems = mergeToolTraceItems(rawToolItems);
+  const entries = buildActivityTraceEntries(items);
+  const reasoningItems = entries
+    .filter((entry): entry is Extract<ActivityTraceEntry, { kind: "reasoning" }> => entry.kind === "reasoning")
+    .map((entry) => entry.item);
+  const toolItems = entries
+    .filter((entry): entry is Extract<ActivityTraceEntry, { kind: "tool" }> => entry.kind === "tool")
+    .map((entry) => entry.item);
   const primaryReasoning =
-    reasoningItems.find((item) => item.mode === "summary") ??
+    [...reasoningItems].reverse().find((item) => item.mode === "summary") ??
     reasoningItems[reasoningItems.length - 1];
   const latestTool = toolItems[toolItems.length - 1];
   const preview =
     primaryReasoning?.text
-      ? truncate(compactText(primaryReasoning.text))
+      ? truncate(reasoningPreviewText(primaryReasoning.text, 2))
       : latestTool
         ? formatToolCard(latestTool.name, latestTool.args, latestTool.result, latestTool.state).subtitle
         : "Reasoning and tool activity";
   const status = deriveStatus(toolItems);
 
   return {
+    entries,
     preview,
-    reasoningItems,
+    reasoningCount: reasoningItems.length,
     status,
     statusLabel: statusLabel(status, toolItems.length),
     title: "Thinking",
-    toolItems,
+    toolCount: toolItems.length,
   };
 }

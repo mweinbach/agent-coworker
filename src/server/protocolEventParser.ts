@@ -37,12 +37,12 @@ export type ServerEventParseErrorReason = "invalid_json" | "invalid_envelope" | 
 export type ServerEventParseResult =
   | { ok: true; event: ServerEvent }
   | {
-      ok: false;
-      reason: ServerEventParseErrorReason;
-      message: string;
-      eventType?: string;
-      raw: unknown;
-    };
+    ok: false;
+    reason: ServerEventParseErrorReason;
+    message: string;
+    eventType?: string;
+    raw: unknown;
+  };
 
 function normalizeChunkPart(value: unknown): Record<string, unknown> {
   const parsed = recordUnknownSchema.safeParse(value);
@@ -376,6 +376,24 @@ const serverEventSchema = z.discriminatedUnion("type", [
     type: z.literal("pong"),
     sessionId: nonEmptyTrimmedStringSchema,
   }).passthrough(),
+  z.object({
+    type: z.literal("session_usage"),
+    sessionId: nonEmptyTrimmedStringSchema,
+    usage: z.object({
+      sessionId: z.string(),
+      totalTurns: z.number(),
+      totalPromptTokens: z.number(),
+      totalCompletionTokens: z.number(),
+      totalTokens: z.number(),
+      estimatedTotalCostUsd: z.number().nullable(),
+      costTrackingAvailable: z.boolean(),
+      byModel: z.array(z.record(z.string(), z.unknown())),
+      turns: z.array(z.record(z.string(), z.unknown())),
+      budgetStatus: z.record(z.string(), z.unknown()),
+      createdAt: z.string(),
+      updatedAt: z.string(),
+    }).passthrough(),
+  }).passthrough(),
 ]);
 
 const KNOWN_SERVER_EVENT_TYPES = new Set<string>([
@@ -411,6 +429,7 @@ const KNOWN_SERVER_EVENT_TYPES = new Set<string>([
   "observability_status",
   "harness_context",
   "turn_usage",
+  "session_usage",
   "messages",
   "sessions",
   "subagent_created",

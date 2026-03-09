@@ -483,6 +483,8 @@ Returned in `server_hello` and `config_updated`:
 | `totalTokens` | `number` | Cumulative total tokens |
 | `estimatedTotalCostUsd` | `number \| null` | Cumulative estimated cost in USD |
 | `costTrackingAvailable` | `boolean` | Whether cost tracking is active for this session |
+| `byModel` | `ModelUsageSummary[]` | Usage breakdown by model |
+| `turns` | `TurnCostEntry[]` | Detailed log of turns in this session |
 | `budgetStatus` | `BudgetStatus` | Current budget configuration and status |
 | `createdAt` | `string` | ISO 8601 creation timestamp |
 | `updatedAt` | `string` | ISO 8601 last update timestamp |

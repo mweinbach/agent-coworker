@@ -60,23 +60,29 @@ function generateOauthState(): string {
   return toBase64Url(randomBytes(32));
 }
 
+function encodeOauthQueryValue(value: string): string {
+  return encodeURIComponent(value);
+}
+
 export function buildCodexAuthorizeUrl(redirectUri: string, challenge: string, state: string): string {
   // DO NOT TOUCH THIS CONTRACT.
   // These params must stay aligned with the upstream Codex CLI flow:
-  // same client ID, scope, originator, and localhost redirect behavior.
-  const params = new URLSearchParams({
-    response_type: "code",
-    client_id: CODEX_OAUTH_CLIENT_ID,
-    redirect_uri: redirectUri,
-    scope: CODEX_OAUTH_SCOPE,
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    id_token_add_organizations: "true",
-    codex_cli_simplified_flow: "true",
-    state,
-    originator: CODEX_OAUTH_ORIGINATOR,
-  });
-  return `${CODEX_OAUTH_ISSUER}/oauth/authorize?${params.toString()}`;
+  // same client ID, scope, originator, localhost redirect behavior, and raw
+  // query encoding. Do not replace this with URLSearchParams: it serializes
+  // spaces as `+`, while the reference Codex flow percent-encodes them as `%20`.
+  const query = [
+    ["response_type", "code"],
+    ["client_id", CODEX_OAUTH_CLIENT_ID],
+    ["redirect_uri", redirectUri],
+    ["scope", CODEX_OAUTH_SCOPE],
+    ["code_challenge", challenge],
+    ["code_challenge_method", "S256"],
+    ["id_token_add_organizations", "true"],
+    ["codex_cli_simplified_flow", "true"],
+    ["state", state],
+    ["originator", CODEX_OAUTH_ORIGINATOR],
+  ].map(([key, value]) => `${key}=${encodeOauthQueryValue(value)}`).join("&");
+  return `${CODEX_OAUTH_ISSUER}/oauth/authorize?${query}`;
 }
 
 export type CodexBrowserOAuthPending = {

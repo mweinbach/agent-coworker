@@ -17,6 +17,23 @@
   - `~/.bun/bin/bun test` -> pass (`1856 pass, 0 fail, 2 skip`)
   - `~/.bun/bin/bun run desktop:build -- --publish never` -> pass for local unsigned packaging; produced `apps/desktop/release/Cowork-0.1.15-mac-arm64.dmg`, `apps/desktop/release/Cowork-0.1.15-mac-arm64.zip`, blockmaps, and refreshed updater metadata before the dual-stack listener follow-up.
 
+# Task: Fix Codex OAuth authorize URL parity with the Rust reference
+
+## Plan
+- [x] Re-audit the live browser authorize URL emitted by Cowork against the Rust reference implementation, including raw query encoding and parameter ordering rather than only decoded values.
+- [x] Patch the TS Codex OAuth builder so the emitted authorize URL matches the Rust contract byte-for-byte where it matters, and keep the existing immutable-contract warnings in place.
+- [x] Add regression coverage for the raw authorize URL shape, rerun the focused auth tests plus repo validation, and record the outcome below.
+
+## Review
+- Root cause: the browser authorize URL builder was still using `URLSearchParams`, which serialized the Codex `scope` as `openid+profile+...` instead of the Rust reference flow’s percent-encoded `openid%20profile%20...`. The earlier tests only compared decoded `searchParams`, so they incorrectly passed while the live upstream auth page could still reject the raw request before callback with `unknown_error`.
+- Fixed `src/providers/codex-oauth-flows.ts` to build the authorize query manually with percent encoding, preserving the existing parameter order and the explicit immutable-contract warning. The emitted URL now matches the Rust reference shape for `client_id`, `redirect_uri`, `scope`, `originator`, and the rest of the browser-login query.
+- Tightened `test/providers/codex-oauth-flows.test.ts` so it asserts on the raw URL string, specifically that `scope` is emitted with `%20` separators and never with `+`.
+- Verification:
+  - `~/.bun/bin/bun -e 'import { buildCodexAuthorizeUrl } from "./src/providers/codex-oauth-flows"; console.log(buildCodexAuthorizeUrl("http://localhost:1455/auth/callback","challenge_123","state_123"));'` -> emitted `scope=openid%20profile%20email%20offline_access%20api.connectors.read%20api.connectors.invoke`
+  - `~/.bun/bin/bun test test/providers/codex-oauth-flows.test.ts` -> pass (`4 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1856 pass, 0 fail, 2 skip`)
+
 # Task: Ship desktop release v0.1.14
 
 ## Plan

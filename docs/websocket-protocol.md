@@ -468,6 +468,8 @@ Returned in `server_hello` and `config_updated`:
   "totalTokens": 7000,
   "estimatedTotalCostUsd": 0.45,
   "costTrackingAvailable": true,
+  "byModel": [],
+  "turns": [],
   "budgetStatus": { ... },
   "createdAt": "2026-03-09T18:00:00.000Z",
   "updatedAt": "2026-03-09T18:05:00.000Z"
@@ -2356,6 +2358,8 @@ Accumulated session usage and budget status. Sent in response to `get_session_us
     "totalTokens": 7000,
     "estimatedTotalCostUsd": 0.45,
     "costTrackingAvailable": true,
+    "byModel": [],
+    "turns": [],
     "budgetStatus": {
       "configured": true,
       "warnAtUsd": 10.0,
@@ -2374,7 +2378,7 @@ Accumulated session usage and budget status. Sent in response to `get_session_us
 |-------|------|-------------|
 | `type` | `"session_usage"` | — |
 | `sessionId` | `string` | Session identifier |
-| `usage` | `SessionUsageSnapshot` | Cumulative usage snapshot (see [SessionUsageSnapshot](#sessionusagesnapshot)) |
+| `usage` | `SessionUsageSnapshot \| null` | Cumulative usage snapshot (see [SessionUsageSnapshot](#sessionusagesnapshot)), or `null` when tracking is unavailable |
 
 
 ---

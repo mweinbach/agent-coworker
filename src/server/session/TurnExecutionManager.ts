@@ -130,6 +130,15 @@ export class TurnExecutionManager {
       this.context.emitError("busy", "session", "Agent is busy");
       return;
     }
+    if (this.context.state.costTracker?.isBudgetExceeded()) {
+      this.log("[cost] Rejecting new turn because the session hard-stop budget has already been exceeded.");
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "Session hard-stop budget has been exceeded. Raise or clear the stop threshold before sending another message."
+      );
+      return;
+    }
 
     if (this.context.state.persistenceStatus === "closed") {
       this.context.state.persistenceStatus = "active";

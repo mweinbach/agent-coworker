@@ -123,6 +123,11 @@ describe("agent socket parser", () => {
           busy: true,
         },
       },
+      {
+        type: "session_usage",
+        sessionId: "s-1",
+        usage: null,
+      },
     ];
 
     for (const fixture of fixtures) {
@@ -181,5 +186,18 @@ describe("agent socket parser", () => {
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     expect(parsed.event.type).toBe("pong");
+  });
+
+  test("safeParseServerEvent accepts nullable session_usage payloads", () => {
+    const raw = JSON.stringify({
+      type: "session_usage",
+      sessionId: "s-1",
+      usage: null,
+    });
+
+    const parsed = safeParseServerEvent(raw);
+    expect(parsed?.type).toBe("session_usage");
+    if (parsed?.type !== "session_usage") return;
+    expect(parsed.usage).toBeNull();
   });
 });

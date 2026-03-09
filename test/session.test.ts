@@ -3477,6 +3477,49 @@ describe("AgentSession", () => {
     });
   });
 
+  describe("session cost tracking", () => {
+    test("blocks new turns once the hard-stop budget has been exceeded", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "ok",
+        reasoningText: undefined,
+        responseMessages: [],
+        usage: {
+          promptTokens: 1_000_000,
+          completionTokens: 1_000_000,
+          totalTokens: 2_000_000,
+        },
+      }));
+
+      const dir = "/tmp/test-session-budget";
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          provider: "openai",
+          model: "gpt-5.4",
+          subAgentModel: "gpt-5.4",
+        },
+      });
+
+      await session.sendUserMessage("first");
+      expect(mockRunTurn.mock.calls.length).toBe(1);
+
+      const tracker = (session as any).state.costTracker;
+      tracker.setBudget({ stopAtUsd: 0.001 });
+      events.length = 0;
+
+      await session.sendUserMessage("second");
+
+      expect(mockRunTurn.mock.calls.length).toBe(1);
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      if (errorEvt) {
+        expect(errorEvt.code).toBe("validation_failed");
+        expect(errorEvt.source).toBe("session");
+        expect(errorEvt.message).toContain("hard-stop budget");
+      }
+      expect(events.some((e) => e.type === "user_message")).toBe(false);
+    });
+  });
   // =========================================================================
   // extractAssistantTextFromResponseMessages fallback
   // =========================================================================

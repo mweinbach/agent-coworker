@@ -51,7 +51,7 @@ function makeConfig(dir: string, overrides: Partial<AgentConfig> = {}): AgentCon
 function makeCtx(dir: string, overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     config: makeConfig(dir),
-    log: () => { },
+    log: () => {},
     askUser: async () => "",
     approveCommand: async () => true,
     ...overrides,
@@ -2596,7 +2596,7 @@ describe("memory tool", () => {
 describe("createTools", () => {
   test("returns object with all tool names", async () => {
     const dir = await tmpDir();
-    const { tools } = await createTools(makeCtx(dir));
+    const tools = createTools(makeCtx(dir));
     const expected = [
       "bash",
       "read",
@@ -2622,7 +2622,7 @@ describe("createTools", () => {
 
   test("returns exactly 16 tools", async () => {
     const dir = await tmpDir();
-    const { tools } = await createTools(makeCtx(dir));
+    const tools = createTools(makeCtx(dir));
     expect(Object.keys(tools).length).toBe(16);
   });
 

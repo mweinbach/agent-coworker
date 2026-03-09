@@ -392,7 +392,7 @@ const serverEventSchema = z.discriminatedUnion("type", [
       budgetStatus: z.record(z.string(), z.unknown()),
       createdAt: z.string(),
       updatedAt: z.string(),
-    }).passthrough(),
+    }).passthrough().nullable(),
   }).passthrough(),
 ]);
 

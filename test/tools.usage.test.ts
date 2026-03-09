@@ -1,7 +1,9 @@
+import { beforeEach, describe, expect, test } from "bun:test";
+
 import { createUsageTool } from "../src/tools/usage";
 import { SessionCostTracker } from "../src/session/costTracker";
 import type { ToolContext } from "../src/tools/context";
-import { AgentConfig } from "../src/types";
+import type { AgentConfig } from "../src/types";
 
 describe("usage tool", () => {
     let tracker: SessionCostTracker;

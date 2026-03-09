@@ -173,13 +173,13 @@ export class SessionCostTracker {
 
     setBudget(thresholds: BudgetThresholds): void {
         this.budgetThresholds = { ...thresholds };
-        // Reset triggers if thresholds increased
-        if (thresholds.warnAtUsd !== undefined && this.estimatedTotalCostUsd !== null) {
-            this.warningTriggered = this.estimatedTotalCostUsd >= thresholds.warnAtUsd;
-        }
-        if (thresholds.stopAtUsd !== undefined && this.estimatedTotalCostUsd !== null) {
-            this.stopTriggered = this.estimatedTotalCostUsd >= thresholds.stopAtUsd;
-        }
+        const currentCostUsd = this.estimatedTotalCostUsd;
+        this.warningTriggered = thresholds.warnAtUsd !== undefined && currentCostUsd !== null
+            ? currentCostUsd >= thresholds.warnAtUsd
+            : false;
+        this.stopTriggered = thresholds.stopAtUsd !== undefined && currentCostUsd !== null
+            ? currentCostUsd >= thresholds.stopAtUsd
+            : false;
     }
 
     getBudgetStatus(): BudgetStatus {
@@ -274,7 +274,7 @@ export class SessionCostTracker {
         const lines: string[] = [];
         for (const turn of recent) {
             const cost = turn.estimatedCostUsd !== null ? formatCost(turn.estimatedCostUsd) : "n/a";
-            const time = new Date(turn.timestamp).toLocaleTimeString();
+            const time = this.formatTurnTimestamp(turn.timestamp);
             lines.push(`  #${turn.turnIndex + 1} [${time}] ${turn.provider}/${turn.model}: ${formatTokenCount(turn.usage.totalTokens)} tokens, ${cost}`);
         }
         return lines.join("\n");
@@ -349,6 +349,13 @@ export class SessionCostTracker {
         }
     }
 
+    private formatTurnTimestamp(timestamp: string): string {
+        const date = new Date(timestamp);
+        if (Number.isNaN(date.getTime())) {
+            return timestamp;
+        }
+        return `${date.toISOString().slice(11, 19)}Z`;
+    }
     private emit(event: CostTrackerEvent): void {
         for (const listener of this.listeners) {
             try {

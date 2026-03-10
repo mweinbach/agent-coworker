@@ -5,6 +5,7 @@ import {
   extractPiAssistantText,
   extractPiReasoningText,
   mergePiUsage,
+  normalizePiUsage,
   modelMessagesToPiMessages,
   piTurnMessagesToModelMessages,
 } from "../src/runtime/piMessageBridge";
@@ -206,6 +207,47 @@ describe("pi message bridge", () => {
       promptTokens: 13,
       completionTokens: 9,
       totalTokens: 22,
+    });
+  });
+
+  test("normalizes cached raw usage into canonical runtime counters", () => {
+    expect(
+      normalizePiUsage({
+        input: 80,
+        output: 20,
+        totalTokens: 130,
+        cacheRead: 30,
+      }),
+    ).toEqual({
+      promptTokens: 110,
+      completionTokens: 20,
+      totalTokens: 130,
+      cachedPromptTokens: 30,
+    });
+  });
+
+  test("merges cached prompt tokens and estimated cost when present", () => {
+    const usage1 = mergePiUsage(undefined, {
+      input: 80,
+      output: 20,
+      totalTokens: 130,
+      cacheRead: 30,
+      estimatedCostUsd: 0.001,
+    });
+    const usage2 = mergePiUsage(usage1, {
+      promptTokens: 50,
+      completionTokens: 10,
+      totalTokens: 60,
+      cachedPromptTokens: 5,
+      estimatedCostUsd: 0.002,
+    });
+
+    expect(usage2).toEqual({
+      promptTokens: 160,
+      completionTokens: 30,
+      totalTokens: 190,
+      cachedPromptTokens: 35,
+      estimatedCostUsd: 0.003,
     });
   });
 });

@@ -51,6 +51,27 @@ describe("sessionDb", () => {
           },
           todos: [],
           harnessContext: null,
+          costTracker: {
+            sessionId: "s-1",
+            totalTurns: 1,
+            totalPromptTokens: 100,
+            totalCompletionTokens: 40,
+            totalTokens: 140,
+            estimatedTotalCostUsd: 0.0025,
+            costTrackingAvailable: true,
+            byModel: [],
+            turns: [],
+            budgetStatus: {
+              configured: true,
+              warnAtUsd: 5,
+              stopAtUsd: 10,
+              warningTriggered: false,
+              stopTriggered: false,
+              currentCostUsd: 0.0025,
+            },
+            createdAt: now,
+            updatedAt: now,
+          },
         },
       });
 
@@ -70,6 +91,27 @@ describe("sessionDb", () => {
         provider: "openai",
         model: "gpt-5.2",
         responseId: "resp_123",
+        updatedAt: now,
+      });
+      expect(persisted?.costTracker).toEqual({
+        sessionId: "s-1",
+        totalTurns: 1,
+        totalPromptTokens: 100,
+        totalCompletionTokens: 40,
+        totalTokens: 140,
+        estimatedTotalCostUsd: 0.0025,
+        costTrackingAvailable: true,
+        byModel: [],
+        turns: [],
+        budgetStatus: {
+          configured: true,
+          warnAtUsd: 5,
+          stopAtUsd: 10,
+          warningTriggered: false,
+          stopTriggered: false,
+          currentCostUsd: 0.0025,
+        },
+        createdAt: now,
         updatedAt: now,
       });
 
@@ -109,6 +151,7 @@ describe("sessionDb", () => {
           providerState: null,
           todos: [],
           harnessContext: null,
+          costTracker: null,
         },
       });
 
@@ -227,6 +270,7 @@ describe("sessionDb", () => {
           providerState: null,
           todos: [],
           harnessContext: null,
+          costTracker: null,
         },
       });
       db.persistSessionMutation({
@@ -253,6 +297,7 @@ describe("sessionDb", () => {
           providerState: null,
           todos: [],
           harnessContext: null,
+          costTracker: null,
         },
       });
 
@@ -408,6 +453,7 @@ describe("sessionDb", () => {
           providerState: null,
           todos: [],
           harnessContext: null,
+          costTracker: null,
         },
       });
 

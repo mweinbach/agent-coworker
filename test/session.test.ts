@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { SessionCostTracker } from "../src/session/costTracker";
 import type { AgentConfig, TodoItem } from "../src/types";
 import { ASK_SKIP_TOKEN, type ServerEvent } from "../src/server/protocol";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
@@ -340,8 +341,16 @@ describe("AgentSession", () => {
       await flushAsyncWork();
       expect(mockWritePersistedSessionSnapshot).toHaveBeenCalledTimes(1);
       const first = mockWritePersistedSessionSnapshot.mock.calls[0]?.[0] as any;
-      expect(first?.snapshot?.version).toBe(3);
+      expect(first?.snapshot?.version).toBe(4);
       expect(first?.snapshot?.context?.providerState).toBeNull();
+      expect(first?.snapshot?.context?.costTracker).toMatchObject({
+        totalTurns: 0,
+        totalPromptTokens: 0,
+        totalCompletionTokens: 0,
+        totalTokens: 0,
+        estimatedTotalCostUsd: null,
+        costTrackingAvailable: false,
+      });
       expect(first?.snapshot?.session?.title).toBe("New session");
     });
   });
@@ -3295,7 +3304,13 @@ describe("AgentSession", () => {
         text: "done",
         reasoningText: undefined,
         responseMessages: [],
-        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+        usage: {
+          promptTokens: 100,
+          completionTokens: 50,
+          totalTokens: 150,
+          cachedPromptTokens: 25,
+          estimatedCostUsd: 0.1234,
+        },
       }));
 
       const { session, events } = makeSession();
@@ -3308,6 +3323,8 @@ describe("AgentSession", () => {
         expect(usageEvt.usage.promptTokens).toBe(100);
         expect(usageEvt.usage.completionTokens).toBe(50);
         expect(usageEvt.usage.totalTokens).toBe(150);
+        expect(usageEvt.usage.cachedPromptTokens).toBe(25);
+        expect(usageEvt.usage.estimatedCostUsd).toBe(0.1234);
         expect(typeof usageEvt.turnId).toBe("string");
         expect(usageEvt.turnId.length).toBeGreaterThan(0);
       }
@@ -3561,6 +3578,74 @@ describe("AgentSession", () => {
 
       expect(mockRunTurn.mock.calls.length).toBe(2);
       expect(events.some((e) => e.type === "user_message")).toBe(true);
+    });
+
+    test("preserves unspecified budget thresholds when updating session usage budget", async () => {
+      const { session, events } = makeSession();
+      const tracker = (session as any).state.costTracker as SessionCostTracker;
+      tracker.updateBudget({ warnAtUsd: 2, stopAtUsd: 5 });
+
+      session.setSessionUsageBudget(undefined, null);
+
+      const usageEvt = events.find((e) => e.type === "session_usage") as Extract<ServerEvent, { type: "session_usage" }> | undefined;
+      expect(usageEvt?.usage?.budgetStatus).toMatchObject({
+        warnAtUsd: 2,
+        stopAtUsd: null,
+      });
+    });
+
+    test("restores persisted cost tracker state on session resume", () => {
+      const tracker = new SessionCostTracker("persisted-session");
+      tracker.recordTurn({
+        turnId: "turn-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          promptTokens: 100,
+          completionTokens: 25,
+          totalTokens: 125,
+        },
+      });
+      tracker.updateBudget({ warnAtUsd: 3, stopAtUsd: 6 });
+      const { emit, events } = makeEmit();
+
+      const session = AgentSession.fromPersisted({
+        persisted: {
+          sessionId: "persisted-session",
+          sessionKind: "root",
+          parentSessionId: null,
+          agentType: null,
+          title: "Persisted",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "openai",
+          model: "gpt-5.4",
+          workingDirectory: "/tmp/persisted",
+          enableMcp: true,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:01.000Z",
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          messageCount: 1,
+          lastEventSeq: 1,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }] as any,
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: tracker.getSnapshot(),
+        },
+        baseConfig: makeConfig("/tmp/persisted"),
+        emit,
+        sessionBackupFactory: makeSessionBackupFactory(),
+        getProviderStatusesImpl: async () => [],
+      });
+
+      session.getSessionUsage();
+
+      const usageEvt = events.find((e) => e.type === "session_usage") as Extract<ServerEvent, { type: "session_usage" }> | undefined;
+      expect(usageEvt?.usage).toEqual(tracker.getSnapshot());
     });
   });
   // =========================================================================

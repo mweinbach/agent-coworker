@@ -14,7 +14,7 @@ import {
 
 function makeSnapshot(sessionId: string): PersistedSessionSnapshot {
   return {
-    version: 3,
+    version: 4,
     sessionId,
     createdAt: "2026-02-19T00:00:00.000Z",
     updatedAt: "2026-02-19T00:00:01.000Z",
@@ -55,6 +55,27 @@ function makeSnapshot(sessionId: string): PersistedSessionSnapshot {
         acceptanceCriteria: ["A"],
         constraints: ["C"],
         updatedAt: "2026-02-19T00:00:00.000Z",
+      },
+      costTracker: {
+        sessionId,
+        totalTurns: 1,
+        totalPromptTokens: 100,
+        totalCompletionTokens: 25,
+        totalTokens: 125,
+        estimatedTotalCostUsd: 0.0015,
+        costTrackingAvailable: true,
+        byModel: [],
+        turns: [],
+        budgetStatus: {
+          configured: false,
+          warnAtUsd: null,
+          stopAtUsd: null,
+          warningTriggered: false,
+          stopTriggered: false,
+          currentCostUsd: 0.0015,
+        },
+        createdAt: "2026-02-19T00:00:00.000Z",
+        updatedAt: "2026-02-19T00:00:01.000Z",
       },
     },
   };

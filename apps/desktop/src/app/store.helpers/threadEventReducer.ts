@@ -240,6 +240,10 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       deps.persist(get);
 
       void get().applyWorkspaceDefaultsToThread(threadId);
+      RUNTIME.threadSockets.get(threadId)?.send({
+        type: "get_session_usage",
+        sessionId: evt.sessionId,
+      });
 
       if (pendingFirstMessage && pendingFirstMessage.trim()) {
         sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
@@ -453,6 +457,43 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         threads: s.threads.map((t) => (t.id === threadId ? { ...t, lastMessageAt: deps.nowIso() } : t)),
       }));
       void deps.persist(get);
+      return;
+    }
+
+    if (evt.type === "turn_usage") {
+      set((s) => {
+        const rt = s.threadRuntimeById[threadId];
+        if (!rt) return {};
+        return {
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: {
+              ...rt,
+              lastTurnUsage: {
+                turnId: evt.turnId,
+                usage: evt.usage,
+              },
+            },
+          },
+        };
+      });
+      return;
+    }
+
+    if (evt.type === "session_usage") {
+      set((s) => {
+        const rt = s.threadRuntimeById[threadId];
+        if (!rt) return {};
+        return {
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: {
+              ...rt,
+              sessionUsage: evt.usage,
+            },
+          },
+        };
+      });
       return;
     }
 

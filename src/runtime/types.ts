@@ -11,6 +11,8 @@ export type RuntimeUsage = {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  cachedPromptTokens?: number;
+  estimatedCostUsd?: number;
 };
 
 export type RuntimeToolDefinition = {

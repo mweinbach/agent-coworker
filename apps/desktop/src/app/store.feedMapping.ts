@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { parseStructuredToolInput } from "../../../../src/shared/structuredInput";
 
-import type { FeedItem, TranscriptEvent } from "./types";
+import type { FeedItem, ThreadRuntime, TranscriptEvent } from "./types";
 import {
   clearModelStreamReplayRuntime,
   createModelStreamReplayRuntime,
@@ -38,6 +38,8 @@ export type ThreadModelStreamFeedOps = {
   onToolTerminal?: () => void;
 };
 
+export type TranscriptUsageState = Pick<ThreadRuntime, "sessionUsage" | "lastTurnUsage">;
+
 export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
   return {
     assistantItemIdByStream: new Map(),
@@ -72,6 +74,73 @@ export function clearThreadModelStreamRuntime(runtime: ThreadModelStreamRuntime)
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isTurnUsagePayload(payload: unknown): payload is {
+  type: "turn_usage";
+  turnId: string;
+  usage: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    cachedPromptTokens?: number;
+    estimatedCostUsd?: number;
+  };
+} {
+  if (!isRecord(payload)) return false;
+  if (payload.type !== "turn_usage") return false;
+  if (typeof payload.turnId !== "string") return false;
+  if (!isRecord(payload.usage)) return false;
+  const hasCanonicalFields = (
+    typeof payload.usage.promptTokens === "number"
+    && typeof payload.usage.completionTokens === "number"
+    && typeof payload.usage.totalTokens === "number"
+  );
+  if (!hasCanonicalFields) return false;
+  if (
+    payload.usage.cachedPromptTokens !== undefined
+    && typeof payload.usage.cachedPromptTokens !== "number"
+  ) {
+    return false;
+  }
+  if (
+    payload.usage.estimatedCostUsd !== undefined
+    && typeof payload.usage.estimatedCostUsd !== "number"
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isSessionUsagePayload(payload: unknown): payload is {
+  type: "session_usage";
+  usage: ThreadRuntime["sessionUsage"];
+} {
+  if (!isRecord(payload)) return false;
+  if (payload.type !== "session_usage") return false;
+  return payload.usage === null || isRecord(payload.usage);
+}
+
+export function extractUsageStateFromTranscript(transcript: TranscriptEvent[]): TranscriptUsageState {
+  let sessionUsage: ThreadRuntime["sessionUsage"] = null;
+  let lastTurnUsage: ThreadRuntime["lastTurnUsage"] = null;
+
+  for (const evt of transcript) {
+    if (evt.direction !== "server") continue;
+    const payload = evt.payload;
+    if (isSessionUsagePayload(payload)) {
+      sessionUsage = payload.usage;
+      continue;
+    }
+    if (isTurnUsagePayload(payload)) {
+      lastTurnUsage = {
+        turnId: payload.turnId,
+        usage: payload.usage,
+      };
+    }
+  }
+
+  return { sessionUsage, lastTurnUsage };
 }
 
 function previewValue(value: unknown, maxChars = 160): string {

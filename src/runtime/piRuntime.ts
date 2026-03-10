@@ -35,6 +35,7 @@ import {
   extractPiAssistantText,
   extractPiReasoningText,
   mergePiUsage,
+  normalizePiUsage,
   modelMessagesToPiMessages,
   piTurnMessagesToModelMessages,
   toolResultContentFromOutput,
@@ -703,13 +704,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             type: "finish-step",
             stepNumber: step + 1,
             response: { stopReason: assistantRecord.stopReason },
-            usage: assistantRecord.usage
-              ? {
-                  promptTokens: asFiniteNumber((assistantRecord.usage as any).input) ?? 0,
-                  completionTokens: asFiniteNumber((assistantRecord.usage as any).output) ?? 0,
-                  totalTokens: asFiniteNumber((assistantRecord.usage as any).totalTokens) ?? 0,
-                }
-              : undefined,
+            usage: normalizePiUsage(assistantRecord.usage),
             finishReason: assistantRecord.stopReason ?? "unknown",
           });
 

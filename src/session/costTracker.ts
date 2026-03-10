@@ -28,6 +28,8 @@ export type TurnUsage = {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    cachedPromptTokens?: number;
+    estimatedCostUsd?: number;
 };
 
 export type TurnCostEntry = {
@@ -107,7 +109,7 @@ export class SessionCostTracker {
     private warningTriggered = false;
     private stopTriggered = false;
 
-    private readonly createdAt: string;
+    private createdAt: string;
     private updatedAt: string;
 
     constructor(sessionId: string, budget?: BudgetThresholds) {
@@ -115,6 +117,39 @@ export class SessionCostTracker {
         if (budget) this.budgetThresholds = { ...budget };
         this.createdAt = new Date().toISOString();
         this.updatedAt = this.createdAt;
+    }
+
+    static fromSnapshot(snapshot: SessionUsageSnapshot): SessionCostTracker {
+        const tracker = new SessionCostTracker(snapshot.sessionId, {
+            ...(snapshot.budgetStatus.warnAtUsd !== null ? { warnAtUsd: snapshot.budgetStatus.warnAtUsd } : {}),
+            ...(snapshot.budgetStatus.stopAtUsd !== null ? { stopAtUsd: snapshot.budgetStatus.stopAtUsd } : {}),
+        });
+
+        tracker.turns.push(...snapshot.turns.map((entry) => ({
+            ...entry,
+            usage: { ...entry.usage },
+            pricing: entry.pricing ? { ...entry.pricing } : null,
+        })));
+
+        tracker.modelSummaries.clear();
+        for (const summary of snapshot.byModel) {
+            tracker.modelSummaries.set(
+                `${summary.provider}:${summary.model}`,
+                { ...summary },
+            );
+        }
+
+        tracker.totalPromptTokens = snapshot.totalPromptTokens;
+        tracker.totalCompletionTokens = snapshot.totalCompletionTokens;
+        tracker.totalTokens = snapshot.totalTokens;
+        tracker.estimatedTotalCostUsd = snapshot.estimatedTotalCostUsd;
+        tracker.costTrackingAvailable = snapshot.costTrackingAvailable;
+        tracker.warningTriggered = snapshot.budgetStatus.warningTriggered;
+        tracker.stopTriggered = snapshot.budgetStatus.stopTriggered;
+        tracker.createdAt = snapshot.createdAt;
+        tracker.updatedAt = snapshot.updatedAt;
+
+        return tracker;
     }
 
     // ── Core recording method ──────────────────────────────────────────
@@ -131,9 +166,17 @@ export class SessionCostTracker {
     }): TurnCostEntry {
         const { turnId, provider, model, usage } = opts;
         const pricing = resolveModelPricing(provider, model);
-        const costUsd = pricing
-            ? calculateTokenCost(usage.promptTokens, usage.completionTokens, pricing)
-            : null;
+        const costUsd =
+            typeof usage.estimatedCostUsd === "number" && Number.isFinite(usage.estimatedCostUsd)
+                ? usage.estimatedCostUsd
+                : pricing
+                    ? calculateTokenCost(
+                        usage.promptTokens,
+                        usage.completionTokens,
+                        pricing,
+                        usage.cachedPromptTokens ?? 0,
+                    )
+                    : null;
 
         const entry: TurnCostEntry = {
             turnId,
@@ -180,6 +223,21 @@ export class SessionCostTracker {
         this.stopTriggered = thresholds.stopAtUsd !== undefined && currentCostUsd !== null
             ? currentCostUsd >= thresholds.stopAtUsd
             : false;
+    }
+
+    updateBudget(thresholds: {
+        warnAtUsd?: number | null;
+        stopAtUsd?: number | null;
+    }): void {
+        const current = this.getBudgetStatus();
+        this.setBudget({
+            ...(thresholds.warnAtUsd === undefined
+                ? (current.warnAtUsd !== null ? { warnAtUsd: current.warnAtUsd } : {})
+                : (typeof thresholds.warnAtUsd === "number" ? { warnAtUsd: thresholds.warnAtUsd } : {})),
+            ...(thresholds.stopAtUsd === undefined
+                ? (current.stopAtUsd !== null ? { stopAtUsd: current.stopAtUsd } : {})
+                : (typeof thresholds.stopAtUsd === "number" ? { stopAtUsd: thresholds.stopAtUsd } : {})),
+        });
     }
 
     getBudgetStatus(): BudgetStatus {

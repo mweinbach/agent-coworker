@@ -2352,7 +2352,9 @@ Token usage data for a completed turn. Emitted after `assistant_message` when th
   "usage": {
     "promptTokens": 1234,
     "completionTokens": 567,
-    "totalTokens": 1801
+    "totalTokens": 1801,
+    "cachedPromptTokens": 234,
+    "estimatedCostUsd": 0.0042
   }
 }
 ```
@@ -2362,9 +2364,11 @@ Token usage data for a completed turn. Emitted after `assistant_message` when th
 | `type` | `"turn_usage"` | — |
 | `sessionId` | `string` | Session identifier |
 | `turnId` | `string` | Turn this usage belongs to |
-| `usage.promptTokens` | `number` | Input tokens consumed |
+| `usage.promptTokens` | `number` | Total input tokens consumed, including cached prompt tokens when the provider reports them |
 | `usage.completionTokens` | `number` | Output tokens generated |
 | `usage.totalTokens` | `number` | Total tokens |
+| `usage.cachedPromptTokens` | `number` | Cached input tokens reported for the turn, when available |
+| `usage.estimatedCostUsd` | `number` | Turn cost estimate in USD when the runtime can provide one |
 
 ---
 

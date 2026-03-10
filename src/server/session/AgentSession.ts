@@ -355,7 +355,9 @@ export class AgentSession {
     this.historyManager.refreshRuntimeMessagesFromHistory();
 
     // Initialize cost tracker for this session.
-    this.state.costTracker = new SessionCostTracker(this.id);
+    this.state.costTracker = hydrated?.costTracker
+      ? SessionCostTracker.fromSnapshot(hydrated.costTracker)
+      : new SessionCostTracker(this.id);
 
     if (!opts.skipInitialPersist) {
       this.queuePersistSessionSnapshot("session.created");
@@ -444,6 +446,7 @@ export class AgentSession {
         providerState: persisted.providerState,
         todos: persisted.todos,
         harnessContext: persisted.harnessContext,
+        costTracker: persisted.costTracker,
       },
       skipInitialPersist: true,
     });
@@ -766,10 +769,7 @@ export class AgentSession {
       return;
     }
 
-    tracker.setBudget({
-      ...(typeof warnAtUsd === "number" ? { warnAtUsd } : {}),
-      ...(typeof stopAtUsd === "number" ? { stopAtUsd } : {}),
-    });
+    tracker.updateBudget({ warnAtUsd, stopAtUsd });
 
     this.context.emit({
       type: "session_usage",

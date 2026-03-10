@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { persistentSubagentSummarySchema, sessionKindSchema, subagentAgentTypeSchema } from "../../shared/persistentSubagents";
+import type { SessionUsageSnapshot } from "../../session/costTracker";
 import type { HarnessContextState, ModelMessage, TodoItem } from "../../types";
 import { openAiContinuationStateSchema } from "../../shared/openaiContinuation";
 import type { PersistedSessionRecord } from "../sessionDb";
@@ -25,6 +26,10 @@ const todoItemSchema = z.object({
   activeForm: z.string(),
 }).strict();
 const harnessContextSchema = z.record(z.string(), z.unknown());
+const costTrackerSchema = z.custom<SessionUsageSnapshot>(
+  (value) => typeof value === "object" && value !== null,
+  "Invalid cost tracker snapshot",
+);
 
 const summaryRowSchema = z.object({
   session_id: nonEmptyStringSchema,
@@ -74,6 +79,7 @@ const recordRowSchema = z.object({
   provider_state_json: z.union([z.string(), z.null()]),
   todos_json: z.string(),
   harness_context_json: z.union([z.string(), z.null()]),
+  cost_tracker_json: z.union([z.string(), z.null()]),
 }).strict();
 
 export function mapPersistedSessionSummaryRow(row: Record<string, unknown>): PersistedSessionSummary {
@@ -136,6 +142,9 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
         harnessContextSchema.nullable(),
         "harness_context_json",
       );
+  const costTracker = values.cost_tracker_json === null
+    ? null
+    : parseJsonStringWithSchema(values.cost_tracker_json, costTrackerSchema.nullable(), "cost_tracker_json");
 
   return {
     sessionId: values.session_id,
@@ -163,5 +172,6 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
     providerState,
     todos,
     harnessContext: harnessContext as HarnessContextState | null,
+    costTracker,
   };
 }

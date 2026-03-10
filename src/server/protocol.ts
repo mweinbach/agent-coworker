@@ -10,7 +10,7 @@ import type {
   SkillEntry,
   TodoItem,
 } from "../types";
-import type { SessionUsageSnapshot } from "../session/costTracker";
+import type { SessionUsageSnapshot, TurnUsage } from "../session/costTracker";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
 import type { ProviderStatus } from "../providerStatus";
 import { type ProviderAuthMethod, type ProviderAuthChallenge } from "../providers/authRegistry";
@@ -311,7 +311,7 @@ export type ServerEvent =
     type: "turn_usage";
     sessionId: string;
     turnId: string;
-    usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+    usage: TurnUsage;
   }
   | {
     type: "session_usage";

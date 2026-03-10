@@ -25,6 +25,7 @@ import {
   appendThreadTranscript,
   basename,
   buildContextPreamble,
+  extractUsageStateFromTranscript,
   ensureControlSocket,
   ensureServerRunning,
   ensureThreadRuntime,
@@ -47,7 +48,7 @@ import {
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
-export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "removeThread" | "deleteThreadHistory" | "renameThread" | "newThread" | "selectThread" | "reconnectThread" | "sendMessage" | "cancelThread" | "setThreadModel" | "setComposerText" | "setInjectContext" | "answerAsk" | "answerApproval" | "dismissPrompt"> {
+export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "removeThread" | "deleteThreadHistory" | "renameThread" | "newThread" | "selectThread" | "reconnectThread" | "sendMessage" | "cancelThread" | "clearThreadUsageHardCap" | "setThreadModel" | "setComposerText" | "setInjectContext" | "answerAsk" | "answerApproval" | "dismissPrompt"> {
   const closeThreadSession = (threadId: string) => {
     sendThread(get, threadId, (sessionId) => ({ type: "session_close", sessionId }));
   };
@@ -229,10 +230,11 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         try {
           const transcript = await readTranscript({ threadId });
           const feed = mapTranscriptToFeed(transcript);
+          const usageState = extractUsageStateFromTranscript(transcript);
           set((s) => ({
             threadRuntimeById: {
               ...s.threadRuntimeById,
-              [threadId]: { ...s.threadRuntimeById[threadId], feed, transcriptOnly: false },
+              [threadId]: { ...s.threadRuntimeById[threadId], ...usageState, feed, transcriptOnly: false },
             },
           }));
         } catch (error) {
@@ -340,6 +342,32 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
           }),
         }));
       }
+    },
+
+    clearThreadUsageHardCap: (threadId: string) => {
+      const ok = sendThread(get, threadId, (sessionId) => ({
+        type: "set_session_usage_budget",
+        sessionId,
+        stopAtUsd: null,
+      }));
+      if (!ok) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to clear the session hard cap.",
+          }),
+        }));
+        return;
+      }
+
+      appendThreadTranscript(threadId, "client", {
+        type: "set_session_usage_budget",
+        sessionId: get().threadRuntimeById[threadId]?.sessionId,
+        stopAtUsd: null,
+      });
     },
   
 

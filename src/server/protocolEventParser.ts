@@ -318,6 +318,8 @@ const serverEventSchema = z.discriminatedUnion("type", [
       promptTokens: z.number(),
       completionTokens: z.number(),
       totalTokens: z.number(),
+      cachedPromptTokens: z.number().optional(),
+      estimatedCostUsd: z.number().optional(),
     }).passthrough(),
   }).passthrough(),
   z.object({

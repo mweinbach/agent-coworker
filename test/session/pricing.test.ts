@@ -17,11 +17,12 @@ describe("pricing", () => {
             expect(pricing!.outputPerMillion).toBe(15);
         });
 
-        it("resolves exact match for openai model", () => {
-            const pricing = resolveModelPricing("openai", "gpt-5.2");
+        it("resolves exact match for openai gpt-5.4 pricing", () => {
+            const pricing = resolveModelPricing("openai", "gpt-5.4");
             expect(pricing).not.toBeNull();
             expect(pricing!.inputPerMillion).toBe(2.5);
-            expect(pricing!.outputPerMillion).toBe(10);
+            expect(pricing!.outputPerMillion).toBe(15);
+            expect(pricing!.cachedInputPerMillion).toBe(0.25);
         });
 
         it("resolves exact match for google model", () => {
@@ -30,10 +31,12 @@ describe("pricing", () => {
             expect(pricing!.inputPerMillion).toBe(0.15);
         });
 
-        it("resolves exact match for codex-cli model", () => {
-            const pricing = resolveModelPricing("codex-cli", "gpt-5.2-codex");
+        it("resolves exact match for codex-cli gpt-5.4 pricing", () => {
+            const pricing = resolveModelPricing("codex-cli", "gpt-5.4");
             expect(pricing).not.toBeNull();
             expect(pricing!.inputPerMillion).toBe(2.5);
+            expect(pricing!.outputPerMillion).toBe(15);
+            expect(pricing!.cachedInputPerMillion).toBe(0.25);
         });
 
         it("returns null for unknown provider/model", () => {
@@ -63,10 +66,20 @@ describe("pricing", () => {
         });
 
         it("calculates cost for large token counts", () => {
-            const pricing = resolveModelPricing("openai", "gpt-5.2")!;
-            // 1M input + 500K output = (1) * 2.5 + (0.5) * 10 = 2.5 + 5 = 7.5
+            const pricing = resolveModelPricing("openai", "gpt-5.4")!;
+            // 1M input + 500K output = (1) * 2.5 + (0.5) * 15 = 2.5 + 7.5 = 10
             const cost = calculateTokenCost(1_000_000, 500_000, pricing);
-            expect(cost).toBeCloseTo(7.5, 4);
+            expect(cost).toBeCloseTo(10, 4);
+        });
+
+        it("discounts cached prompt tokens when cached pricing is known", () => {
+            const pricing = resolveModelPricing("openai", "gpt-5.4")!;
+            // 1M prompt tokens with 400K cached + 500K output
+            // 600K uncached input @ 2.5 = 1.5
+            // 400K cached input @ 0.25 = 0.1
+            // 500K output @ 15 = 7.5
+            const cost = calculateTokenCost(1_000_000, 500_000, pricing, 400_000);
+            expect(cost).toBeCloseTo(9.1, 4);
         });
     });
 

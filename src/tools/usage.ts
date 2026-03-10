@@ -125,7 +125,7 @@ Use this tool to monitor spending, check costs before expensive operations, or s
                         return "Warning threshold must be less than the hard-stop threshold.";
                     }
 
-                    tracker.setBudget({
+                    tracker.updateBudget({
                         warnAtUsd,
                         stopAtUsd,
                     });

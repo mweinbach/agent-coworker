@@ -62,6 +62,16 @@ describe("usage tool", () => {
         expect(budgetStatus).toContain("Hard-stop threshold: $5.00");
     });
 
+    test("set_budget preserves unspecified thresholds", async () => {
+        const tool = createUsageTool(ctx);
+        await tool.execute({ action: "set_budget", warnAtUsd: 1.0, stopAtUsd: 5.0 });
+        await tool.execute({ action: "set_budget", warnAtUsd: 2.0 });
+
+        const budgetStatus = await tool.execute({ action: "budget" });
+        expect(budgetStatus).toContain("Warning threshold:  $2.00");
+        expect(budgetStatus).toContain("Hard-stop threshold: $5.00");
+    });
+
     test("set_budget rejects invalid configurations", async () => {
         const tool = createUsageTool(ctx);
         const missingBoth = await tool.execute({ action: "set_budget" });

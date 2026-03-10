@@ -186,6 +186,7 @@ describe("thread reconnect", () => {
     const threadSocket = socketByClient("desktop");
     expect(threadSocket.opts.autoReconnect).toBe(true);
     emitServerHello(threadSocket, "thread-session");
+    expect(threadSocket.sent).toContainEqual({ type: "get_session_usage", sessionId: "thread-session" });
 
     const state = useAppStore.getState();
     const thread = state.threads.find((t) => t.id === threadId);
@@ -193,6 +194,169 @@ describe("thread reconnect", () => {
     expect(state.threadRuntimeById[threadId]?.connected).toBe(true);
     expect(state.threadRuntimeById[threadId]?.sessionId).toBe("thread-session");
     expect(state.threadRuntimeById[threadId]?.transcriptOnly).toBe(false);
+  });
+
+  test("hydrates usage from transcript replay before reconnect", async () => {
+    mockedTranscript = [
+      {
+        ts: "2024-01-01T00:00:00.000Z",
+        threadId,
+        direction: "server",
+        payload: {
+          type: "turn_usage",
+          sessionId: "thread-session",
+          turnId: "turn-1",
+          usage: {
+            promptTokens: 120,
+            completionTokens: 30,
+            totalTokens: 150,
+            cachedPromptTokens: 20,
+            estimatedCostUsd: 0.0008,
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId,
+        direction: "server",
+        payload: {
+          type: "session_usage",
+          sessionId: "thread-session",
+          usage: {
+            sessionId: "thread-session",
+            totalTurns: 1,
+            totalPromptTokens: 120,
+            totalCompletionTokens: 30,
+            totalTokens: 150,
+            estimatedTotalCostUsd: 0.001,
+            costTrackingAvailable: true,
+            byModel: [],
+            turns: [],
+            budgetStatus: {
+              configured: false,
+              warnAtUsd: null,
+              stopAtUsd: null,
+              warningTriggered: false,
+              stopTriggered: false,
+              currentCostUsd: 0.001,
+            },
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:01.000Z",
+          },
+        },
+      },
+    ];
+
+    await useAppStore.getState().selectThread(threadId);
+
+    const rt = useAppStore.getState().threadRuntimeById[threadId];
+    expect(rt?.lastTurnUsage).toEqual({
+      turnId: "turn-1",
+      usage: {
+        promptTokens: 120,
+        completionTokens: 30,
+        totalTokens: 150,
+        cachedPromptTokens: 20,
+        estimatedCostUsd: 0.0008,
+      },
+    });
+    expect(rt?.sessionUsage?.totalTokens).toBe(150);
+  });
+
+  test("stores live usage events without adding unhandled feed noise", async () => {
+    await useAppStore.getState().selectThread(threadId);
+
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+    threadSocket.emit({
+      type: "turn_usage",
+      sessionId: "thread-session",
+      turnId: "turn-2",
+      usage: {
+        promptTokens: 200,
+        completionTokens: 50,
+        totalTokens: 250,
+        cachedPromptTokens: 40,
+        estimatedCostUsd: 0.0014,
+      },
+    });
+    threadSocket.emit({
+      type: "session_usage",
+      sessionId: "thread-session",
+      usage: {
+        sessionId: "thread-session",
+        totalTurns: 2,
+        totalPromptTokens: 320,
+        totalCompletionTokens: 80,
+        totalTokens: 400,
+        estimatedTotalCostUsd: 0.002,
+        costTrackingAvailable: true,
+        byModel: [],
+        turns: [],
+        budgetStatus: {
+          configured: true,
+          warnAtUsd: 1,
+          stopAtUsd: 5,
+          warningTriggered: false,
+          stopTriggered: false,
+          currentCostUsd: 0.002,
+        },
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:02.000Z",
+      },
+    });
+
+    const rt = useAppStore.getState().threadRuntimeById[threadId];
+    expect(rt?.lastTurnUsage?.usage.totalTokens).toBe(250);
+    expect(rt?.lastTurnUsage?.usage.cachedPromptTokens).toBe(40);
+    expect(rt?.lastTurnUsage?.usage.estimatedCostUsd).toBe(0.0014);
+    expect(rt?.sessionUsage?.budgetStatus.warnAtUsd).toBe(1);
+    expect(rt?.feed).toEqual([]);
+  });
+
+  test("clearThreadUsageHardCap sends partial budget update for the active thread", async () => {
+    await useAppStore.getState().selectThread(threadId);
+
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+
+    useAppStore.setState((s) => ({
+      threadRuntimeById: {
+        ...s.threadRuntimeById,
+        [threadId]: {
+          ...s.threadRuntimeById[threadId],
+          sessionUsage: {
+            sessionId: "thread-session",
+            totalTurns: 1,
+            totalPromptTokens: 100,
+            totalCompletionTokens: 20,
+            totalTokens: 120,
+            estimatedTotalCostUsd: 5.5,
+            costTrackingAvailable: true,
+            byModel: [],
+            turns: [],
+            budgetStatus: {
+              configured: true,
+              warnAtUsd: 3,
+              stopAtUsd: 5,
+              warningTriggered: true,
+              stopTriggered: true,
+              currentCostUsd: 5.5,
+            },
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:01.000Z",
+          },
+        },
+      },
+    }));
+
+    useAppStore.getState().clearThreadUsageHardCap(threadId);
+
+    expect(threadSocket.sent).toContainEqual({
+      type: "set_session_usage_budget",
+      sessionId: "thread-session",
+      stopAtUsd: null,
+    });
   });
 
   test("sendMessage on a disconnected thread reconnects and sends in-place", async () => {

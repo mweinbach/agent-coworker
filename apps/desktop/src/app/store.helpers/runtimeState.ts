@@ -92,6 +92,8 @@ export function defaultThreadRuntime(): ThreadRuntime {
     sessionId: null,
     config: null,
     sessionConfig: null,
+    sessionUsage: null,
+    lastTurnUsage: null,
     enableMcp: null,
     busy: false,
     busySince: null,

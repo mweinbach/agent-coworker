@@ -116,6 +116,8 @@ export type MCPServersEvent = Extract<ServerEvent, { type: "mcp_servers" }>;
 export type MCPServerValidationEvent = Extract<ServerEvent, { type: "mcp_server_validation" }>;
 export type MCPServerAuthChallengeEvent = Extract<ServerEvent, { type: "mcp_server_auth_challenge" }>;
 export type MCPServerAuthResultEvent = Extract<ServerEvent, { type: "mcp_server_auth_result" }>;
+export type SessionUsageSnapshot = NonNullable<Extract<ServerEvent, { type: "session_usage" }>["usage"]>;
+export type TurnUsageSnapshot = Pick<Extract<ServerEvent, { type: "turn_usage" }>, "turnId" | "usage">;
 
 export type WorkspaceRuntime = {
   serverUrl: string | null;
@@ -143,6 +145,8 @@ export type ThreadRuntime = {
   sessionId: string | null;
   config: ConfigSubset | null;
   sessionConfig: SessionConfigSubset | null;
+  sessionUsage: SessionUsageSnapshot | null;
+  lastTurnUsage: TurnUsageSnapshot | null;
   enableMcp: boolean | null;
   busy: boolean;
   busySince: string | null;

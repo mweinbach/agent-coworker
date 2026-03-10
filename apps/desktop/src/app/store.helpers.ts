@@ -16,7 +16,7 @@ import type {
   WorkspaceRuntime,
   WorkspaceExplorerState,
 } from "./types";
-import { buildContextPreamble, mapTranscriptToFeed } from "./store.feedMapping";
+import { buildContextPreamble, extractUsageStateFromTranscript, mapTranscriptToFeed } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
 import { persist, persistNow } from "./store.helpers/persistence";
 import {
@@ -183,6 +183,7 @@ export type AppStoreState = {
 
   sendMessage: (text: string) => Promise<void>;
   cancelThread: (threadId: string) => void;
+  clearThreadUsageHardCap: (threadId: string) => void;
   setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;
   setComposerText: (text: string) => void;
   setInjectContext: (v: boolean) => void;
@@ -375,6 +376,7 @@ export {
   truncateTitle,
   normalizeThreadTitleSource,
   buildContextPreamble,
+  extractUsageStateFromTranscript,
   isProviderName,
   normalizeProviderChoice,
   providerAuthMethodsFor,

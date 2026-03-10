@@ -57,8 +57,8 @@ const PRICING_TABLE: Record<string, ModelPricing> = {
   // ── OpenAI ───────────────────────────────────────────────────────────
   "openai:gpt-5.4": {
     inputPerMillion: 2.5,
-    outputPerMillion: 10,
-    cachedInputPerMillion: 1.25,
+    outputPerMillion: 15,
+    cachedInputPerMillion: 0.25,
   },
   "openai:gpt-5.2": {
     inputPerMillion: 2.5,
@@ -89,8 +89,8 @@ const PRICING_TABLE: Record<string, ModelPricing> = {
   // ── Codex CLI (same pricing as OpenAI) ───────────────────────────────
   "codex-cli:gpt-5.4": {
     inputPerMillion: 2.5,
-    outputPerMillion: 10,
-    cachedInputPerMillion: 1.25,
+    outputPerMillion: 15,
+    cachedInputPerMillion: 0.25,
   },
   "codex-cli:gpt-5.3-codex": {
     inputPerMillion: 2.5,
@@ -169,10 +169,18 @@ export function calculateTokenCost(
   promptTokens: number,
   completionTokens: number,
   pricing: ModelPricing,
+  cachedPromptTokens = 0,
 ): number {
-  const inputCost = (promptTokens / 1_000_000) * pricing.inputPerMillion;
+  const normalizedCachedPromptTokens = Math.min(
+    Math.max(0, cachedPromptTokens),
+    Math.max(0, promptTokens),
+  );
+  const uncachedPromptTokens = Math.max(0, promptTokens - normalizedCachedPromptTokens);
+  const inputCost = (uncachedPromptTokens / 1_000_000) * pricing.inputPerMillion;
+  const cachedInputCost =
+    (normalizedCachedPromptTokens / 1_000_000) * (pricing.cachedInputPerMillion ?? pricing.inputPerMillion);
   const outputCost = (completionTokens / 1_000_000) * pricing.outputPerMillion;
-  return inputCost + outputCost;
+  return inputCost + cachedInputCost + outputCost;
 }
 
 /**

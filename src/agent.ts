@@ -31,6 +31,8 @@ const usageSchema = z.object({
   promptTokens: z.number(),
   completionTokens: z.number(),
   totalTokens: z.number(),
+  cachedPromptTokens: z.number().optional(),
+  estimatedCostUsd: z.number().optional(),
 });
 const responseMessagesSchema = z.array(z.unknown());
 const stringSchema = z.string();
@@ -205,7 +207,13 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     text: string;
     reasoningText?: string;
     responseMessages: ModelMessage[];
-    usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+    usage?: {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+      cachedPromptTokens?: number;
+      estimatedCostUsd?: number;
+    };
     providerState?: OpenAiContinuationState;
   }> {
     const { config, system, messages, log, askUser, approveCommand, updateTodos, discoveredSkills, abortSignal } = params;
@@ -250,7 +258,13 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       text: string;
       reasoningText?: string;
       responseMessages: ModelMessage[];
-      usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+      usage?: {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+        cachedPromptTokens?: number;
+        estimatedCostUsd?: number;
+      };
     }> => {
       try {
         const telemetry = await buildRuntimeTelemetrySettings(config, {
@@ -346,7 +360,19 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
             text: String(text ?? ""),
             reasoningText: parsedReasoningText.success ? parsedReasoningText.data : undefined,
             responseMessages: (parsedResponseMessages.success ? parsedResponseMessages.data : []) as ModelMessage[],
-            usage: parsedUsage.success ? parsedUsage.data : undefined,
+            usage: parsedUsage.success
+              ? {
+                  promptTokens: parsedUsage.data.promptTokens,
+                  completionTokens: parsedUsage.data.completionTokens,
+                  totalTokens: parsedUsage.data.totalTokens,
+                  ...(typeof parsedUsage.data.cachedPromptTokens === "number"
+                    ? { cachedPromptTokens: parsedUsage.data.cachedPromptTokens }
+                    : {}),
+                  ...(typeof parsedUsage.data.estimatedCostUsd === "number"
+                    ? { estimatedCostUsd: parsedUsage.data.estimatedCostUsd }
+                    : {}),
+                }
+              : undefined,
           };
         }
 
@@ -391,7 +417,13 @@ export async function runTurnWithDeps(
   text: string;
   reasoningText?: string;
   responseMessages: ModelMessage[];
-  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    cachedPromptTokens?: number;
+    estimatedCostUsd?: number;
+  };
   providerState?: OpenAiContinuationState;
 }> {
   return await createRunTurn(overrides)(params);

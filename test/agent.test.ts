@@ -388,7 +388,7 @@ describe("runTurn", () => {
   // Usage
   // -------------------------------------------------------------------------
 
-  test("keeps canonical usage counters when providers include extra usage keys", async () => {
+  test("keeps canonical usage counters and preserves recognized pricing fields", async () => {
     mockStreamText.mockImplementation(async () => ({
       text: "ok",
       reasoningText: undefined,
@@ -399,6 +399,7 @@ describe("runTurn", () => {
           completionTokens: 50,
           totalTokens: 150,
           cachedPromptTokens: 20,
+          estimatedCostUsd: 0.1234,
           reasoningTokens: 5,
         },
       },
@@ -409,6 +410,8 @@ describe("runTurn", () => {
       promptTokens: 100,
       completionTokens: 50,
       totalTokens: 150,
+      cachedPromptTokens: 20,
+      estimatedCostUsd: 0.1234,
     });
   });
 

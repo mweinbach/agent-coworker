@@ -101,7 +101,8 @@ export class SessionDbRepository {
            st.messages_json,
            st.provider_state_json,
            st.todos_json,
-           st.harness_context_json
+           st.harness_context_json,
+           st.cost_tracker_json
          FROM sessions s
          JOIN session_state st ON st.session_id = s.session_id
          WHERE s.session_id = ?
@@ -126,6 +127,8 @@ export class SessionDbRepository {
       const uploadsDirectory = snapshot.uploadsDirectory ?? null;
       const providerStateJson =
         snapshot.providerState === null ? null : toJsonString(snapshot.providerState);
+      const costTrackerJson =
+        snapshot.costTracker === null ? null : toJsonString(snapshot.costTracker);
       const parentSessionId = snapshot.parentSessionId ?? null;
       const agentType = snapshot.agentType ?? null;
       const createdAt = parseRequiredIsoTimestamp(snapshot.createdAt, "snapshot.createdAt");
@@ -209,14 +212,16 @@ export class SessionDbRepository {
              messages_json,
              provider_state_json,
              todos_json,
-             harness_context_json
-           ) VALUES (?, ?, ?, ?, ?, ?)
+             harness_context_json,
+             cost_tracker_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
              system_prompt = excluded.system_prompt,
              messages_json = excluded.messages_json,
              provider_state_json = excluded.provider_state_json,
              todos_json = excluded.todos_json,
-             harness_context_json = excluded.harness_context_json`,
+             harness_context_json = excluded.harness_context_json,
+             cost_tracker_json = excluded.cost_tracker_json`,
         )
         .run(
           input.sessionId,
@@ -225,6 +230,7 @@ export class SessionDbRepository {
           providerStateJson,
           toJsonString(snapshot.todos),
           toJsonString(snapshot.harnessContext),
+          costTrackerJson,
         );
 
       this.db
@@ -344,14 +350,15 @@ export class SessionDbRepository {
     );
 
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS session_state (
-         session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
-         system_prompt TEXT NOT NULL,
-         messages_json TEXT NOT NULL,
-         provider_state_json TEXT NULL,
-         todos_json TEXT NOT NULL,
-         harness_context_json TEXT NULL
-       )`,
+         `CREATE TABLE IF NOT EXISTS session_state (
+             session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+             system_prompt TEXT NOT NULL,
+             messages_json TEXT NOT NULL,
+             provider_state_json TEXT NULL,
+             todos_json TEXT NOT NULL,
+             harness_context_json TEXT NULL,
+             cost_tracker_json TEXT NULL
+           )`,
     );
 
     this.db.exec(
@@ -414,6 +421,11 @@ export class SessionDbRepository {
     this.db.exec("ALTER TABLE session_state ADD COLUMN provider_state_json TEXT NULL");
   }
 
+  addCostTrackerColumn(): void {
+    if (this.hasSessionStateColumn("cost_tracker_json")) return;
+    this.db.exec("ALTER TABLE session_state ADD COLUMN cost_tracker_json TEXT NULL");
+  }
+
   hasSessionsColumn(columnName: string): boolean {
     const rows = this.db.query("PRAGMA table_info(sessions)").all() as Array<Record<string, unknown>>;
     return rows.some((row) => row.name === columnName);
@@ -474,9 +486,12 @@ export class SessionDbRepository {
         : 0;
       const providerState =
         "providerState" in legacy.context ? legacy.context.providerState : null;
-      const sessionKind = legacy.version === 3 ? legacy.session.sessionKind : "root";
-      const parentSessionId = legacy.version === 3 ? legacy.session.parentSessionId : null;
-      const agentType = legacy.version === 3 ? legacy.session.agentType : null;
+      const costTracker =
+        "costTracker" in legacy.context ? legacy.context.costTracker : null;
+      const hasSubagentMetadata = legacy.version === 3 || legacy.version === 4;
+      const sessionKind = hasSubagentMetadata ? legacy.session.sessionKind : "root";
+      const parentSessionId = hasSubagentMetadata ? legacy.session.parentSessionId : null;
+      const agentType = hasSubagentMetadata ? legacy.session.agentType : null;
       const createdAt = parseRequiredIsoTimestamp(legacy.createdAt, "legacy.createdAt");
       const updatedAt = parseRequiredIsoTimestamp(legacy.updatedAt, "legacy.updatedAt");
 
@@ -556,14 +571,16 @@ export class SessionDbRepository {
              messages_json,
              provider_state_json,
              todos_json,
-             harness_context_json
-           ) VALUES (?, ?, ?, ?, ?, ?)
+             harness_context_json,
+             cost_tracker_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
              system_prompt = excluded.system_prompt,
              messages_json = excluded.messages_json,
              provider_state_json = excluded.provider_state_json,
              todos_json = excluded.todos_json,
-             harness_context_json = excluded.harness_context_json`,
+             harness_context_json = excluded.harness_context_json,
+             cost_tracker_json = excluded.cost_tracker_json`,
         )
         .run(
           legacy.sessionId,
@@ -572,6 +589,7 @@ export class SessionDbRepository {
           providerState === null ? null : toJsonString(providerState),
           toJsonString(legacy.context.todos),
           toJsonString(legacy.context.harnessContext),
+          costTracker === null ? null : toJsonString(costTracker),
         );
 
       this.db

@@ -1,5 +1,6 @@
 import type { ProviderName } from "../types";
 import { reasoningModeForProvider } from "../server/modelStream";
+import { normalizePiUsage } from "./piMessageBridge";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -96,18 +97,14 @@ export function mapPiEventToRawParts(
         },
       ];
     }
-    case "done":
+    case "done": {
+      const totalUsage = normalizePiUsage(event.message?.usage);
       return [{
         type: "finish",
         finishReason: event.reason,
-        totalUsage: event.message?.usage
-          ? {
-              promptTokens: event.message.usage.input,
-              completionTokens: event.message.usage.output,
-              totalTokens: event.message.usage.totalTokens,
-            }
-          : undefined,
+        totalUsage,
       }];
+    }
     case "error":
       return [{
         type: "error",

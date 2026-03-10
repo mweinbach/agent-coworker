@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import type { AiCoworkerPaths } from "../connect";
+import type { SessionUsageSnapshot } from "../session/costTracker";
 import { sessionKindSchema, subagentAgentTypeSchema, type SessionKind, type SubagentAgentType } from "../shared/persistentSubagents";
 import { openAiContinuationStateSchema, type OpenAiContinuationState } from "../shared/openaiContinuation";
 import { PROVIDER_NAMES } from "../types";
@@ -109,10 +110,44 @@ export type PersistedSessionSnapshotV3 = {
   };
 };
 
+export type PersistedSessionSnapshotV4 = {
+  version: 4;
+  sessionId: string;
+  createdAt: string;
+  updatedAt: string;
+  session: {
+    title: string;
+    titleSource: SessionTitleSource;
+    titleModel: string | null;
+    provider: AgentConfig["provider"];
+    model: string;
+    sessionKind: SessionKind;
+    parentSessionId: string | null;
+    agentType: SubagentAgentType | null;
+  };
+  config: {
+    provider: AgentConfig["provider"];
+    model: string;
+    enableMcp: boolean;
+    workingDirectory: string;
+    outputDirectory?: string;
+    uploadsDirectory?: string;
+  };
+  context: {
+    system: string;
+    messages: ModelMessage[];
+    providerState: OpenAiContinuationState | null;
+    todos: TodoItem[];
+    harnessContext: HarnessContextState | null;
+    costTracker: SessionUsageSnapshot | null;
+  };
+};
+
 export type PersistedSessionSnapshot =
   | PersistedSessionSnapshotV1
   | PersistedSessionSnapshotV2
-  | PersistedSessionSnapshotV3;
+  | PersistedSessionSnapshotV3
+  | PersistedSessionSnapshotV4;
 
 export type PersistedSessionSummary = {
   sessionId: string;
@@ -145,6 +180,27 @@ const harnessContextStateSchema = z.object({
   acceptanceCriteria: z.array(z.string()),
   constraints: z.array(z.string()),
   metadata: harnessContextMetadataSchema.optional(),
+  updatedAt: isoTimestampSchema,
+}).strict();
+const sessionUsageSnapshotSchema = z.object({
+  sessionId: z.string().trim().min(1),
+  totalTurns: z.number().int().nonnegative(),
+  totalPromptTokens: z.number().int().nonnegative(),
+  totalCompletionTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  estimatedTotalCostUsd: z.number().nullable(),
+  costTrackingAvailable: z.boolean(),
+  byModel: z.array(z.custom((value) => typeof value === "object" && value !== null, "Invalid byModel entry")),
+  turns: z.array(z.custom((value) => typeof value === "object" && value !== null, "Invalid turn entry")),
+  budgetStatus: z.object({
+    configured: z.boolean(),
+    warnAtUsd: z.number().nullable(),
+    stopAtUsd: z.number().nullable(),
+    warningTriggered: z.boolean(),
+    stopTriggered: z.boolean(),
+    currentCostUsd: z.number().nullable(),
+  }).strict(),
+  createdAt: isoTimestampSchema,
   updatedAt: isoTimestampSchema,
 }).strict();
 
@@ -237,10 +293,44 @@ const persistedSessionSnapshotV3Schema = z.object({
   }).strict(),
 }).strict();
 
+const persistedSessionSnapshotV4Schema = z.object({
+  version: z.literal(4),
+  sessionId: z.string().trim().min(1),
+  createdAt: isoTimestampSchema,
+  updatedAt: isoTimestampSchema,
+  session: z.object({
+    title: z.string().trim().min(1),
+    titleSource: sessionTitleSourceSchema,
+    titleModel: z.string().trim().min(1).nullable(),
+    provider: providerNameSchema,
+    model: z.string().trim().min(1),
+    sessionKind: sessionKindSchema,
+    parentSessionId: z.string().trim().min(1).nullable(),
+    agentType: subagentAgentTypeSchema.nullable(),
+  }).strict(),
+  config: z.object({
+    provider: providerNameSchema,
+    model: z.string().trim().min(1),
+    enableMcp: z.boolean(),
+    workingDirectory: z.string().trim().min(1),
+    outputDirectory: z.string().trim().min(1).optional(),
+    uploadsDirectory: z.string().trim().min(1).optional(),
+  }).strict(),
+  context: z.object({
+    system: z.string(),
+    messages: z.array(modelMessageSchema),
+    providerState: openAiContinuationStateSchema.nullable(),
+    todos: z.array(todoItemSchema),
+    harnessContext: harnessContextStateSchema.nullable(),
+    costTracker: sessionUsageSnapshotSchema.nullable(),
+  }).strict(),
+}).strict();
+
 const persistedSessionSnapshotSchema = z.union([
   persistedSessionSnapshotV1Schema,
   persistedSessionSnapshotV2Schema,
   persistedSessionSnapshotV3Schema,
+  persistedSessionSnapshotV4Schema,
 ]);
 
 export function getPersistedSessionFilePath(paths: Pick<AiCoworkerPaths, "sessionsDir">, sessionId: string): string {
@@ -265,6 +355,41 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
   }
 
   const snapshot = parsed.data;
+  if (snapshot.version === 4) {
+    return {
+      version: 4,
+      sessionId: snapshot.sessionId,
+      createdAt: snapshot.createdAt,
+      updatedAt: snapshot.updatedAt,
+      session: {
+        title: snapshot.session.title,
+        titleSource: snapshot.session.titleSource,
+        titleModel: snapshot.session.titleModel,
+        provider: snapshot.session.provider,
+        model: snapshot.session.model,
+        sessionKind: snapshot.session.sessionKind,
+        parentSessionId: snapshot.session.parentSessionId,
+        agentType: snapshot.session.agentType,
+      },
+      config: {
+        provider: snapshot.config.provider,
+        model: snapshot.config.model,
+        enableMcp: snapshot.config.enableMcp,
+        workingDirectory: snapshot.config.workingDirectory,
+        outputDirectory: snapshot.config.outputDirectory,
+        uploadsDirectory: snapshot.config.uploadsDirectory,
+      },
+      context: {
+        system: snapshot.context.system,
+        messages: snapshot.context.messages,
+        providerState: snapshot.context.providerState,
+        todos: snapshot.context.todos,
+        harnessContext: snapshot.context.harnessContext,
+        costTracker: snapshot.context.costTracker as SessionUsageSnapshot | null,
+      },
+    };
+  }
+
   if (snapshot.version === 3) {
     return {
       version: 3,
@@ -454,7 +579,9 @@ export async function listPersistedSessionSnapshots(
       continue;
     }
 
-    const sessionKind = parsed.version === 3 ? parsed.session.sessionKind : "root";
+    const sessionKind = parsed.version === 3 || parsed.version === 4
+      ? parsed.session.sessionKind
+      : "root";
     if (sessionKind !== "root") continue;
 
     summaries.push({

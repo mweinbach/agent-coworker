@@ -40,6 +40,8 @@ import {
 import { MODEL_CHOICES, UI_DISABLED_PROVIDERS } from "../lib/modelChoices";
 import type { ProviderName } from "../lib/wsProtocol";
 import { cn } from "../lib/utils";
+import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
+import type { SessionUsageSnapshot, TurnUsageSnapshot } from "../app/types";
 import { ActivityGroupCard } from "./chat/ActivityGroupCard";
 import { buildChatRenderItems } from "./chat/activityGroups";
 import { normalizeFeedForToolCards } from "./chat/toolCards/legacyToolLogs";
@@ -75,6 +77,126 @@ export function shouldToggleReasoningExpanded(key: string): boolean {
 
 export function filterFeedForDeveloperMode(feed: FeedItem[], developerMode: boolean): FeedItem[] {
   return developerMode ? feed : feed.filter((item) => item.kind !== "system" && item.kind !== "log");
+}
+
+export function formatSessionUsageHeadline(
+  sessionUsage: SessionUsageSnapshot | null,
+  lastTurnUsage: TurnUsageSnapshot | null,
+  opts?: { showTokens?: boolean },
+): string | null {
+  const parts: string[] = [];
+  const showTokens = opts?.showTokens === true;
+
+  if (sessionUsage) {
+    if (showTokens) {
+      parts.push(`${sessionUsage.totalTurns} turn${sessionUsage.totalTurns === 1 ? "" : "s"}`);
+      parts.push(`${formatTokenCount(sessionUsage.totalTokens)} tokens`);
+    }
+    if (sessionUsage.costTrackingAvailable && sessionUsage.estimatedTotalCostUsd !== null) {
+      parts.push(`est. ${formatCost(sessionUsage.estimatedTotalCostUsd)}`);
+    } else if (sessionUsage.totalTurns > 0) {
+      parts.push("est. cost unavailable");
+    }
+  }
+
+  if (showTokens && lastTurnUsage) {
+    parts.push(`last ${formatTokenCount(lastTurnUsage.usage.totalTokens)} tokens`);
+  }
+
+  return parts.length > 0 ? parts.join(" • ") : null;
+}
+
+export function formatSessionBudgetLine(sessionUsage: SessionUsageSnapshot | null): string | null {
+  const budget = sessionUsage?.budgetStatus;
+  if (!budget?.configured) return null;
+
+  if (budget.stopTriggered && budget.stopAtUsd !== null) {
+    return `Hard cap exceeded at ${formatCost(budget.stopAtUsd)}`;
+  }
+  if (budget.warningTriggered && budget.warnAtUsd !== null) {
+    return `Warning threshold reached at ${formatCost(budget.warnAtUsd)}`;
+  }
+
+  const parts: string[] = [];
+  if (budget.warnAtUsd !== null) parts.push(`Warn ${formatCost(budget.warnAtUsd)}`);
+  if (budget.stopAtUsd !== null) parts.push(`Cap ${formatCost(budget.stopAtUsd)}`);
+  return parts.length > 0 ? `Budget ${parts.join(" • ")}` : null;
+}
+
+export function sessionUsageTone(sessionUsage: SessionUsageSnapshot | null): string {
+  const budget = sessionUsage?.budgetStatus;
+  if (budget?.stopTriggered) {
+    return "border-destructive/40 bg-destructive/10 text-destructive";
+  }
+  if (budget?.warningTriggered) {
+    return "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+  }
+  return "border-border/50 bg-background/80 text-muted-foreground";
+}
+
+export function ChatThreadHeader(props: {
+  title: string;
+  sessionUsage: SessionUsageSnapshot | null;
+  usageHeadline: string | null;
+  usageBudgetLine: string | null;
+  canClearHardCap: boolean;
+  onClearHardCap: () => void;
+}) {
+  const {
+    title,
+    sessionUsage,
+    usageHeadline,
+    usageBudgetLine,
+    canClearHardCap,
+    onClearHardCap,
+  } = props;
+  const hasUsageSummary = Boolean(usageHeadline || usageBudgetLine);
+
+  return (
+    <div className="absolute top-0 left-0 right-0 z-10 flex items-start justify-center pointer-events-none p-3 pb-8 bg-gradient-to-b from-panel via-panel/80 to-transparent">
+      <div
+        className={cn(
+          "pointer-events-auto relative flex flex-col items-center outline-none",
+          hasUsageSummary ? "group" : null,
+        )}
+        tabIndex={hasUsageSummary ? 0 : undefined}
+      >
+        <div
+          className={cn(
+            "max-w-lg truncate rounded-full border border-border/50 bg-background/80 px-4 py-1.5 text-sm font-medium text-foreground shadow-sm backdrop-blur-md",
+            hasUsageSummary
+              ? "transition-[border-color,box-shadow,background-color] group-hover:border-border group-focus-within:border-border group-focus-within:ring-2 group-focus-within:ring-ring/40"
+              : null,
+          )}
+        >
+          {title}
+        </div>
+        {hasUsageSummary ? (
+          <div
+            className={cn(
+              "absolute top-full mt-2 flex max-w-3xl flex-wrap items-center justify-center gap-2 rounded-full border px-4 py-1.5 text-xs shadow-sm backdrop-blur-md opacity-0 -translate-y-1 pointer-events-none transition-all duration-150 ease-out group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:opacity-100",
+              sessionUsageTone(sessionUsage),
+            )}
+          >
+            <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Usage</span>
+            {usageHeadline ? <span>{usageHeadline}</span> : null}
+            {usageBudgetLine ? <span className="font-medium">{usageBudgetLine}</span> : null}
+            {canClearHardCap ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 rounded-full px-3 text-[11px]"
+                onClick={onClearHardCap}
+              >
+                Clear hard cap
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
@@ -228,6 +350,7 @@ export function ChatView() {
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
   const cancelThread = useAppStore((s) => s.cancelThread);
+  const clearThreadUsageHardCap = useAppStore((s) => s.clearThreadUsageHardCap);
   const reconnectThread = useAppStore((s) => s.reconnectThread);
   const newThread = useAppStore((s) => s.newThread);
 
@@ -325,6 +448,13 @@ export function ChatView() {
   const transcriptOnly = rt?.transcriptOnly === true;
   const disconnected = !transcriptOnly && thread.status !== "active";
   const modelSelectorConfig = visibleFeed.length === 0 && rt?.config?.provider && rt?.config?.model ? rt.config : null;
+  const usageHeadline = formatSessionUsageHeadline(rt?.sessionUsage ?? null, rt?.lastTurnUsage ?? null, {
+    showTokens: developerMode,
+  });
+  const usageBudgetLine = formatSessionBudgetLine(rt?.sessionUsage ?? null);
+  const hasUsageSummary = Boolean(usageHeadline || usageBudgetLine);
+  const canClearHardCap =
+    rt?.sessionUsage?.budgetStatus.stopTriggered === true && !transcriptOnly && !disconnected;
 
   const placeholder = transcriptOnly
     ? "Continue in a new thread..."
@@ -337,11 +467,14 @@ export function ChatView() {
   return (
     <ChatViewContext.Provider value={contextValue}>
       <div className="flex h-full min-h-0 flex-col bg-panel relative">
-        <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-center pointer-events-none p-3 pb-8 bg-gradient-to-b from-panel via-panel/80 to-transparent">
-          <div className="bg-background/80 backdrop-blur-md px-4 py-1.5 rounded-full border border-border/50 shadow-sm text-sm font-medium text-foreground max-w-lg truncate pointer-events-auto">
-            {thread.title || "New thread"}
-          </div>
-        </div>
+        <ChatThreadHeader
+          title={thread.title || "New thread"}
+          sessionUsage={rt?.sessionUsage ?? null}
+          usageHeadline={usageHeadline}
+          usageBudgetLine={usageBudgetLine}
+          canClearHardCap={canClearHardCap}
+          onClearHardCap={() => clearThreadUsageHardCap(selectedThreadId)}
+        />
         <Conversation className="min-h-0" ref={feedRef}>
           <ConversationContent className="pt-24">
             {transcriptOnly ? (

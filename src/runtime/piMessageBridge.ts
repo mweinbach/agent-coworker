@@ -17,6 +17,10 @@ function asNonEmptyString(value: unknown): string | undefined {
   return text ? text : undefined;
 }
 
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 function assistantTextPhase(record: Record<string, unknown>): string | undefined {
   return asNonEmptyString(record.phase);
 }
@@ -415,29 +419,53 @@ export function extractPiReasoningText(messages: PiMessage[]): string | undefine
   return chunks.join("\n\n");
 }
 
-export function mergePiUsage(into: RuntimeUsage | undefined, usage: unknown): RuntimeUsage | undefined {
+export function normalizePiUsage(usage: unknown): RuntimeUsage | undefined {
   const record = asRecord(usage);
-  if (!record) return into;
+  if (!record) return undefined;
 
-  const input = typeof record.input === "number" && Number.isFinite(record.input) ? record.input : 0;
-  const output = typeof record.output === "number" && Number.isFinite(record.output) ? record.output : 0;
-  const total =
-    typeof record.totalTokens === "number" && Number.isFinite(record.totalTokens)
-      ? record.totalTokens
-      : input + output;
+  const cachedPromptTokens = asFiniteNumber(record.cachedPromptTokens) ?? asFiniteNumber(record.cacheRead) ?? 0;
+  const promptTokens =
+    asFiniteNumber(record.promptTokens) ??
+    ((asFiniteNumber(record.input) ?? 0) + cachedPromptTokens);
+  const completionTokens = asFiniteNumber(record.completionTokens) ?? asFiniteNumber(record.output) ?? 0;
+  const totalTokens = asFiniteNumber(record.totalTokens) ?? (promptTokens + completionTokens);
+  const estimatedCostUsd = asFiniteNumber(record.estimatedCostUsd);
 
-  if (!into) {
-    if (input === 0 && output === 0 && total === 0) return undefined;
-    return {
-      promptTokens: input,
-      completionTokens: output,
-      totalTokens: total,
-    };
+  if (
+    promptTokens === 0
+    && completionTokens === 0
+    && totalTokens === 0
+    && cachedPromptTokens === 0
+    && estimatedCostUsd === undefined
+  ) {
+    return undefined;
   }
 
   return {
-    promptTokens: into.promptTokens + input,
-    completionTokens: into.completionTokens + output,
-    totalTokens: into.totalTokens + total,
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    ...(cachedPromptTokens > 0 ? { cachedPromptTokens } : {}),
+    ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
+  };
+}
+
+export function mergePiUsage(into: RuntimeUsage | undefined, usage: unknown): RuntimeUsage | undefined {
+  const normalized = normalizePiUsage(usage);
+  if (!normalized) return into;
+  if (!into) return normalized;
+
+  const cachedPromptTokens = (into.cachedPromptTokens ?? 0) + (normalized.cachedPromptTokens ?? 0);
+  const estimatedCostUsd =
+    into.estimatedCostUsd !== undefined || normalized.estimatedCostUsd !== undefined
+      ? (into.estimatedCostUsd ?? 0) + (normalized.estimatedCostUsd ?? 0)
+      : undefined;
+
+  return {
+    promptTokens: into.promptTokens + normalized.promptTokens,
+    completionTokens: into.completionTokens + normalized.completionTokens,
+    totalTokens: into.totalTokens + normalized.totalTokens,
+    ...(cachedPromptTokens > 0 ? { cachedPromptTokens } : {}),
+    ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
   };
 }

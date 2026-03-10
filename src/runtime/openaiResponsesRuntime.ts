@@ -15,8 +15,14 @@ import {
   supportsProviderManagedContinuation,
   toolMapToPiTools,
 } from "./piRuntime";
-import { asFiniteNumber, asNonEmptyString, asRecord, asString, extractToolCallsFromAssistant } from "./piRuntimeOptions";
-import { extractPiAssistantText, extractPiReasoningText, mergePiUsage, piTurnMessagesToModelMessages } from "./piMessageBridge";
+import { asNonEmptyString, asRecord, asString, extractToolCallsFromAssistant } from "./piRuntimeOptions";
+import {
+  extractPiAssistantText,
+  extractPiReasoningText,
+  mergePiUsage,
+  normalizePiUsage,
+  piTurnMessagesToModelMessages,
+} from "./piMessageBridge";
 import {
   runOpenAiNativeResponseStep,
   type RunOpenAiNativeResponseStep,
@@ -145,13 +151,7 @@ export function createOpenAiResponsesRuntime(
             type: "finish-step",
             stepNumber: step + 1,
             response: { stopReason: assistantRecord.stopReason },
-            usage: assistantRecord.usage
-              ? {
-                  promptTokens: asFiniteNumber((assistantRecord.usage as any).input) ?? 0,
-                  completionTokens: asFiniteNumber((assistantRecord.usage as any).output) ?? 0,
-                  totalTokens: asFiniteNumber((assistantRecord.usage as any).totalTokens) ?? 0,
-                }
-              : undefined,
+            usage: normalizePiUsage(assistantRecord.usage),
             finishReason: assistantRecord.stopReason ?? "unknown",
           });
 

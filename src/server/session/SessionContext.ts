@@ -1,5 +1,5 @@
 import type { connectProvider as connectModelProvider, ConnectProviderResult, getAiCoworkerPaths } from "../../connect";
-import type { SessionCostTracker } from "../../session/costTracker";
+import type { SessionCostTracker, SessionUsageSnapshot } from "../../session/costTracker";
 import type { runTurn } from "../../agent";
 import type { HarnessContextStore } from "../../harness/contextStore";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
@@ -47,6 +47,7 @@ export type HydratedSessionState = {
   providerState: OpenAiContinuationState | null;
   todos: TodoItem[];
   harnessContext: HarnessContextState | null;
+  costTracker: SessionUsageSnapshot | null;
 };
 
 export type SessionRuntimeState = {

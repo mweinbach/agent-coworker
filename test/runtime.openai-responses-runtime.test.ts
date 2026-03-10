@@ -76,6 +76,35 @@ describe("openai responses runtime", () => {
     ]);
   });
 
+  test("keeps cached prompt tokens in canonical runtime usage", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-cached-usage-"));
+    const runtime = createOpenAiResponsesRuntime({
+      runStepImpl: async () => ({
+        assistant: {
+          role: "assistant",
+          content: [{ type: "text", text: "final answer" }],
+          usage: {
+            input: 80,
+            output: 20,
+            totalTokens: 130,
+            cacheRead: 30,
+          },
+          stopReason: "stop",
+        },
+        responseId: "resp_cached_usage",
+      }),
+    });
+
+    const result = await runtime.runTurn(makeParams(makeConfig(homeDir)));
+
+    expect(result.usage).toEqual({
+      promptTokens: 110,
+      completionTokens: 20,
+      totalTokens: 130,
+      cachedPromptTokens: 30,
+    });
+  });
+
   test("seeds first OpenAI turn from full history when no continuation state exists", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-seed-"));
     const nativeCalls: Array<Record<string, unknown>> = [];

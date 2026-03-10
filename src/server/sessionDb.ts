@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AiCoworkerPaths } from "../connect";
 import type { PersistentSubagentSummary, SessionKind, SubagentAgentType } from "../shared/persistentSubagents";
 import type { OpenAiContinuationState } from "../shared/openaiContinuation";
+import type { SessionUsageSnapshot } from "../session/costTracker";
 import type { ModelStreamRawFormat } from "./modelStream";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../types";
 import type { PersistedSessionSummary } from "./sessionStore";
@@ -46,6 +47,7 @@ export type PersistedSessionRecord = {
   providerState: OpenAiContinuationState | null;
   todos: TodoItem[];
   harnessContext: HarnessContextState | null;
+  costTracker: SessionUsageSnapshot | null;
 };
 
 export type PersistedSessionMutation = {
@@ -77,6 +79,7 @@ export type PersistedSessionMutation = {
     providerState: OpenAiContinuationState | null;
     todos: TodoItem[];
     harnessContext: HarnessContextState | null;
+    costTracker: SessionUsageSnapshot | null;
   };
 };
 

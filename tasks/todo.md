@@ -1,3 +1,57 @@
+# Task: Audit usage payload shape assumptions in tests and websocket docs
+
+## Plan
+- [x] Inspect `test/` for assertions, snapshots, and schema checks that pin usage to `promptTokens`, `completionTokens`, and `totalTokens`.
+- [x] Inspect `docs/websocket-protocol.md` for usage payload examples or field descriptions that would need updates for optional `cachedPromptTokens` or `estimatedCostUsd`.
+- [x] Return a concise file list with why each file matters, and note any assertions likely to reject or ignore the optional fields.
+
+## Review
+- `docs/websocket-protocol.md` still documents `turn_usage.usage` as exactly `promptTokens`, `completionTokens`, and `totalTokens`.
+- The strongest rejector in `test/` is `test/agent.test.ts`, which explicitly proves extra provider usage keys are stripped back to the canonical three-field shape.
+- `test/agent.toolloop.test.ts` also narrows helper fixture types to those three fields at compile time.
+- Coverage in `test/session.test.ts`, `test/server.toolstream.test.ts`, and `test/agentSocket.parse.test.ts` currently checks only the canonical fields or nullability, so those tests would ignore richer optional usage fields unless expanded.
+- Verification: `~/.bun/bin/bun test test/agent.test.ts test/runtime.pi-message-bridge.test.ts test/session.test.ts test/server.toolstream.test.ts` -> pass (`248 pass, 0 fail`)
+
+# Task: Audit usage payload docs/tests for token-only shape assumptions
+
+## Plan
+- [x] Inspect `docs/websocket-protocol.md` for examples or schema text that only documents `promptTokens`, `completionTokens`, and `totalTokens`.
+- [x] Inspect `test/` for assertions, snapshots, or object-shape expectations that lock usage payloads to those three keys or otherwise ignore richer optional fields.
+- [x] Summarize the concrete file list, why each file would need changes, and which assertions would reject vs silently ignore optional `cachedPromptTokens` / `estimatedCostUsd`.
+
+## Review
+- `docs/websocket-protocol.md` currently hard-codes the `turn_usage.usage` payload to `promptTokens`, `completionTokens`, and `totalTokens` in both the JSON example and the field table. `session_usage` docs already cover session-level `estimatedTotalCostUsd`, but there is no mention of optional per-turn `cachedPromptTokens` or `estimatedCostUsd`.
+- The strongest test lock is `test/agent.test.ts`, which explicitly asserts that provider-supplied extra usage keys are dropped and only the canonical three counters survive. If the runtime starts carrying `cachedPromptTokens` or `estimatedCostUsd`, that test will fail until updated.
+- `test/runtime.pi-message-bridge.test.ts` also uses exact object equality for merged usage totals and would fail if merged/runtime usage starts surfacing optional fields. `test/session.test.ts` and `test/server.toolstream.test.ts` only assert the canonical counters individually, so they would likely ignore added optional fields rather than reject them.
+- Verification: `~/.bun/bin/bun test test/agent.test.ts test/session.test.ts test/server.toolstream.test.ts test/runtime.pi-message-bridge.test.ts test/agentSocket.parse.test.ts test/tools.usage.test.ts` -> pass (`265 pass, 0 fail`)
+
+# Task: Audit desktop and TUI usage consumers for fixed token-only assumptions
+
+## Plan
+- [x] Inspect desktop renderer/store/protocol consumer code for any usage handling that assumes only `promptTokens`, `completionTokens`, and `totalTokens`.
+- [x] Inspect TUI client-facing code and tests for the same assumption, including any protocol parsing or fixture assertions that would reject extra usage fields.
+- [x] Record the concrete file list, note why each file would need changes, and call out any validator/parser paths that currently reject richer usage payloads.
+
+## Review
+- Desktop has one actual rejector in client-owned code: `apps/desktop/src/app/store.feedMapping.ts` transcript hydration only accepts `turn_usage` payloads when `usage.promptTokens`, `usage.completionTokens`, and `usage.totalTokens` are all present numbers. Richer payloads with only renamed fields would be dropped during replay, and even additive fields still get narrowed back to the three-field shape there.
+- Desktop live websocket parsing is not the blocker. `apps/desktop/src/lib/wsProtocol.ts` delegates to the shared parser in `src/server/protocolEventParser.ts`, and the `turn_usage` / `session_usage` event schemas there are `.passthrough()`, so extra usage keys are accepted on the wire.
+- TUI is permissive but lossy: `apps/TUI/context/syncModelStreamLifecycle.ts` accepts extra keys via `.passthrough()` and already aliases `promptTokens`/`completionTokens` to `inputTokens`/`outputTokens`, but it normalizes down to `{ inputTokens, outputTokens, totalTokens }`, so any richer usage fields are ignored by design.
+- Desktop protocol-consumer tests that would need fixture updates if usage becomes richer are `apps/desktop/test/thread-reconnect.test.ts` and `apps/desktop/test/chat-reasoning-ui.test.ts`; there are no parallel TUI protocol-consumer tests under `apps/TUI` for usage today.
+- Verification: `~/.bun/bin/bun test apps/desktop/test/ws-protocol-parse.test.ts apps/desktop/test/thread-reconnect.test.ts apps/desktop/test/chat-reasoning-ui.test.ts` passed (`21 pass, 0 fail`).
+
+# Task: Audit usage contract assumptions before adding cachedPromptTokens and estimatedCostUsd
+
+## Plan
+- [x] Locate every shared type/schema/parser that defines turn/session usage and check whether it hard-codes exactly `promptTokens`, `completionTokens`, and `totalTokens`.
+- [x] Trace persistence, protocol, and UI mapping paths to find validators or serializers that could reject or drop the planned optional fields.
+- [x] Review the corresponding tests/docs snapshots and record the concrete file list that must change plus any likely rejectors.
+
+## Review
+- Core type/runtime choke points are `src/runtime/types.ts`, `src/session/costTracker.ts`, `src/server/protocol.ts`, and `src/agent.ts`. The current runtime/session contract only models `promptTokens`, `completionTokens`, and `totalTokens`; the legacy `streamText` compatibility path in `src/agent.ts` also parses usage through a non-`passthrough` Zod object, so additive fields would be silently stripped there.
+- Provider-native data already exposes the needed source values before normalization: `src/runtime/openaiResponsesProjector.ts` computes cached input tokens and total estimated cost, but `src/runtime/piMessageBridge.ts`, `src/runtime/openaiResponsesRuntime.ts`, and `src/runtime/piRuntime.ts` collapse usage back to the three canonical token counters before it reaches `turn_usage` / `session_usage`.
+- Wire parsing is mostly permissive. `src/server/protocolEventParser.ts` uses `.passthrough()` for both `turn_usage.usage` and the outer `session_usage.usage`, so extra fields on the websocket payload will be accepted. The notable persistence strictness is `src/server/sessionStore.ts`: its `sessionUsageSnapshotSchema` is `.strict()` at the snapshot root, so any new top-level `session_usage` snapshot fields would be rejected there unless the schema is updated.
+- Desktop replay/test surfaces pinned to the current shape are `apps/desktop/src/app/store.feedMapping.ts`, `apps/desktop/test/thread-reconnect.test.ts`, and `apps/desktop/test/chat-reasoning-ui.test.ts`. TUI-side model-stream usage parsing (`apps/TUI/context/syncModelStreamLifecycle.ts`, `apps/TUI/context/syncTypes.ts`) is permissive but normalizes usage down to input/output/total only, so richer fields would be dropped unless that path is widened too.
+
 # Task: Rebase PR #30 session usage/cost branch onto main
 
 ## Plan
@@ -2089,3 +2143,96 @@
 - `~/.bun/bin/bun test test/connect.test.ts test/providers/auth-registry.test.ts test/session.test.ts test/protocol.test.ts` -> pass (`354 pass, 0 fail`)
 - `~/.bun/bin/bun test test/providers/codex-oauth-flows.test.ts` -> pass (`3 pass, 0 fail`)
 - `~/.bun/bin/bun run typecheck` -> pass
+
+# Task: Review PR #30 session usage/cost UX and complete desktop wiring
+
+## Plan
+- [x] Inspect the PR diff plus current desktop state flow to confirm whether session usage/cost data is actually surfaced in the desktop app.
+- [x] Fix any missing desktop protocol/state/UI wiring so session usage and budget status are visible and update correctly.
+- [x] Add regression coverage and run the relevant desktop/core verification commands, then record review findings and validated results below.
+
+## Review
+- The original PR was not desktop-complete. `turn_usage` and `session_usage` were added to the shared protocol/runtime, but desktop had no reducer branches or runtime state for them, so normal users saw nothing and developer mode degraded them to generic unhandled events. Desktop now stores live and replayed usage snapshots, requests `get_session_usage` on thread reconnect, and surfaces a session-usage summary in the chat header.
+- The session budget update path had a protocol/implementation mismatch. The websocket contract and docs treat `set_session_usage_budget` as a partial update where omitted fields are preserved and `null` clears a single threshold, but the runtime was replacing the whole threshold object. `SessionCostTracker.updateBudget()` now preserves unspecified thresholds, `AgentSession.setSessionUsageBudget(...)` uses it, and the `usage set_budget` tool now follows the same semantics.
+- Resumed sessions were losing all accumulated usage and budget state because cost tracking was not part of the persisted session snapshot or DB row. Session snapshots now persist `costTracker`, the session DB stores `cost_tracker_json` with a migration, and resumed sessions rebuild `SessionCostTracker` from the persisted snapshot instead of starting from zero.
+
+### Verification
+- `git diff --check` -> pass
+- `~/.bun/bin/bun test apps/desktop/test/thread-reconnect.test.ts apps/desktop/test/chat-reasoning-ui.test.ts test/session.test.ts test/session.costTracker.test.ts test/tools.usage.test.ts test/session-store.test.ts test/session-db.test.ts test/session-db-mappers.test.ts` -> pass (`232 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass
+- `~/.bun/bin/bun test` -> pass (`1900 pass, 2 skip, 0 fail`)
+
+# Task: Reveal desktop usage stats from the thread title on hover
+
+## Plan
+- [x] Inspect the current desktop chat header usage summary and choose the smallest interaction change that hides it by default while keeping it discoverable.
+- [x] Update the desktop chat header so the usage summary appears on title hover/focus instead of rendering persistently.
+- [x] Add a regression around the new reveal behavior and run the relevant desktop verification commands.
+
+## Review
+- The chat header now keeps the thread title visible at all times but hides the usage summary by default. The usage pill is revealed from the title wrapper on hover and keyboard focus, so the UI stays cleaner without losing discoverability.
+- Extracted the title/header markup into `ChatThreadHeader` so the reveal interaction is isolated, reusable, and directly testable without depending on the full desktop store.
+- Reduced the conversation top padding back to the title-only spacing, since usage no longer occupies permanent header space.
+
+### Verification
+- `git diff --check` -> pass
+- `~/.bun/bin/bun test apps/desktop/test/chat-reasoning-ui.test.ts apps/desktop/test/thread-reconnect.test.ts` -> pass (`14 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass
+- `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`207 pass, 0 fail`)
+
+# Task: Make desktop token counts developer-only while keeping cost visible
+
+## Plan
+- [x] Inspect the existing desktop developer-mode toggle and current usage headline formatting.
+- [x] Update the usage header so normal mode shows turns plus estimated cost, while developer mode also exposes token counts.
+- [x] Add regression coverage, rerun desktop verification, and record the validated behavior.
+
+## Review
+- Reused the existing desktop `Developer mode` toggle instead of adding another setting. Normal desktop mode now hides total and last-turn token counts in the usage pill, while developer mode continues to show them.
+- Updated the usage headline copy so cost is explicitly labeled as an estimate (`est. $...`). That makes the default desktop view easier to read and avoids conflating token totals with dollar cost.
+- Added coverage for both paths: normal mode headline formatting, developer-mode headline formatting, and render-level confirmation that the non-developer header does not include token counts.
+
+### Verification
+- `git diff --check` -> pass
+- `~/.bun/bin/bun test apps/desktop/test/chat-reasoning-ui.test.ts apps/desktop/test/thread-reconnect.test.ts` -> pass (`16 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass
+- `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`209 pass, 0 fail`)
+
+# Task: Make normal desktop usage hover cost-only and verify pricing sources
+
+## Plan
+- [x] Update the desktop hover summary so non-developer mode shows only estimated price, not turns or token counts.
+- [x] Inspect the pricing pipeline to confirm whether runtime/provider responses expose direct price data or whether we still rely on local pricing tables.
+- [x] Refresh any verified stale GPT-5.4 pricing entries used for desktop/session cost estimates, then rerun focused verification and record findings.
+
+## Review
+- Normal desktop hover copy is now cost-only. In non-developer mode the usage pill shows just `est. $...` (or `est. cost unavailable`) instead of turns/tokens, while developer mode still shows turns plus token counts for debugging.
+- Session cost estimation is still local-table based, not provider-authoritative. `SessionCostTracker` calculates cost from token counts plus `src/session/pricing.ts`; the shared runtime/session usage shape only carries prompt/completion/total token counts. There is no session-accounting path today that consumes a provider-returned dollar-cost field.
+- Codex CLI does not expose per-model pricing through the provider-status usage endpoint. That endpoint gives account/plan/rate-limit/credits information only, so GPT-5.4 Codex CLI session pricing still depends on the local pricing catalog. Refreshed the verified `openai:gpt-5.4` and `codex-cli:gpt-5.4` entries to current OpenAI pricing.
+
+### Verification
+- `git diff --check` -> pass
+- `~/.bun/bin/bun test apps/desktop/test/chat-reasoning-ui.test.ts apps/desktop/test/thread-reconnect.test.ts test/session/pricing.test.ts` -> pass (`35 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass
+- `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`209 pass, 0 fail`)
+
+# Task: Carry cached-token-aware pricing through raw usage and keep normal desktop hover price-only
+
+## Plan
+- [x] Extend the runtime/session usage contract so raw OpenAI/Codex usage can preserve cached prompt token counts and optional estimated cost instead of collapsing everything to prompt/completion totals.
+- [x] Update session cost estimation to use cached-input pricing when available, keep the desktop hover price-only in normal mode, and document the websocket contract change.
+- [x] Add/update focused regressions, rerun the relevant verification commands, and record what is provider-authoritative versus still locally estimated.
+
+## Review
+- Raw OpenAI/Codex usage now preserves cached input explicitly instead of lying about prompt totals. `normalizePiUsage(...)` converts raw Responses-style usage into canonical `promptTokens`/`completionTokens`/`totalTokens` while carrying `cachedPromptTokens` separately, and both runtimes now emit that richer shape through `turn_usage`.
+- Session cost estimates are now cache-aware. `SessionCostTracker` computes cost from total prompt tokens plus cached-token discounts when the model pricing table includes cached-input pricing, and it will also honor an explicit `estimatedCostUsd` if a runtime/provider starts supplying one.
+- The desktop hover behavior stays price-only for normal users. Developer mode still keeps the fuller token/turn view, but reconnect/transcript replay now preserves the richer per-turn usage fields so raw-backed sessions do not lose cached-token metadata on reopen.
+- Provider-authoritative pricing is still not exposed for GPT-5.4 Codex CLI in Cowork today. We verified the OpenAI GPT-5.4 price points from the official pricing page and now use those rates with cached-token-aware math, but the Codex usage endpoint Cowork consumes still exposes plan/rate-limit/credits state rather than a per-model dollar-cost field.
+
+### Verification
+- `git diff --check` -> pass
+- `~/.bun/bin/bun run docs:check` -> pass
+- `~/.bun/bin/bun run typecheck` -> pass
+- `~/.bun/bin/bun test test/runtime.pi-message-bridge.test.ts test/runtime.openai-responses-runtime.test.ts test/session.costTracker.test.ts test/session/pricing.test.ts test/agent.test.ts test/session.test.ts apps/desktop/test/thread-reconnect.test.ts apps/desktop/test/chat-reasoning-ui.test.ts` -> pass (`300 pass, 0 fail`)
+- `~/.bun/bin/bun test test/agentSocket.parse.test.ts test/server.toolstream.test.ts test/server.model-stream.test.ts test/session.stream-pipeline.test.ts` -> pass (`161 pass, 0 fail`)
+- `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`209 pass, 0 fail`)

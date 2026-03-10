@@ -17,7 +17,7 @@ export class SessionSnapshotBuilder {
 
   buildPersistedSnapshotAt(updatedAt: string): PersistedSessionSnapshot {
     return {
-      version: 3,
+      version: 4,
       sessionId: this.opts.sessionId,
       createdAt: this.opts.state.sessionInfo.createdAt,
       updatedAt,
@@ -45,6 +45,7 @@ export class SessionSnapshotBuilder {
         providerState: this.opts.state.providerState,
         todos: this.opts.state.todos,
         harnessContext: this.opts.harnessContextStore.get(this.opts.sessionId),
+        costTracker: this.opts.state.costTracker?.getSnapshot() ?? null,
       },
     };
   }
@@ -73,6 +74,7 @@ export class SessionSnapshotBuilder {
       providerState: this.opts.state.providerState,
       todos: this.opts.state.todos,
       harnessContext: this.opts.harnessContextStore.get(this.opts.sessionId),
+      costTracker: this.opts.state.costTracker?.getSnapshot() ?? null,
     };
   }
 }

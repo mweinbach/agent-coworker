@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { parseStructuredToolInput } from "../../../../src/shared/structuredInput";
+import { sessionUsageSnapshotSchema } from "../../../../src/session/sessionUsageSchema";
 
 import type { FeedItem, ThreadRuntime, TranscriptEvent } from "./types";
 import {
@@ -118,7 +119,8 @@ function isSessionUsagePayload(payload: unknown): payload is {
 } {
   if (!isRecord(payload)) return false;
   if (payload.type !== "session_usage") return false;
-  return payload.usage === null || isRecord(payload.usage);
+  if (payload.usage === null) return true;
+  return sessionUsageSnapshotSchema.safeParse(payload.usage).success;
 }
 
 export function extractUsageStateFromTranscript(transcript: TranscriptEvent[]): TranscriptUsageState {

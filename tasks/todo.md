@@ -2502,3 +2502,20 @@
 - `test/session.test.ts` now proves a resumed session with ten tracked turns returns only the most recent eight turns on an explicit `getSessionUsage()` request, while preserving the cumulative totals.
 - Verification:
   - `~/.bun/bin/bun test test/session.test.ts apps/desktop/test/thread-reconnect.test.ts` -> pass (`200 pass, 0 fail`)
+
+# Task: Validate transcript session_usage snapshots before desktop hydration
+
+## Plan
+- [x] Reuse the shared strict `sessionUsageSnapshotSchema` in desktop transcript hydration so malformed `session_usage` payloads are ignored instead of accepted as arbitrary objects.
+- [x] Add a regression covering transcript replay/reconnect with an invalid saved `session_usage` payload and prove the thread runtime keeps `sessionUsage` unset.
+- [x] Run focused desktop tests plus repo typecheck, then record the validated outcome below.
+
+## Review
+- `apps/desktop/src/app/store.feedMapping.ts` now reuses the shared `sessionUsageSnapshotSchema` for transcript-only `session_usage` hydration, matching the strict validation already used for live websocket events and persisted session snapshots.
+- Malformed or manually edited transcript `session_usage` objects are now ignored instead of being copied into `threadRuntime.sessionUsage`, so desktop consumers like `apps/desktop/src/ui/settings/pages/UsagePage.tsx` no longer inherit missing `turns[]` / `byModel[]` fields from corrupted replay data.
+- Added focused regressions in `apps/desktop/test/store-feed-mapping.test.ts` and `apps/desktop/test/thread-reconnect.test.ts` proving invalid transcript snapshots are dropped while valid `turn_usage` replay still hydrates normally.
+
+### Verification
+- `~/.bun/bin/bun test --cwd apps/desktop test/store-feed-mapping.test.ts test/thread-reconnect.test.ts test/usage-page.test.ts` -> pass (`19 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass
+- `git diff --check` -> pass

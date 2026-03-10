@@ -288,6 +288,46 @@ describe("thread reconnect", () => {
     expect(rt?.feed).toEqual([]);
   });
 
+  test("ignores malformed transcript session_usage snapshots before reconnect", async () => {
+    mockedTranscript = [
+      {
+        ts: "2024-01-01T00:00:00.000Z",
+        threadId,
+        direction: "server",
+        payload: {
+          type: "turn_usage",
+          sessionId: "thread-session",
+          turnId: "turn-1",
+          usage: {
+            promptTokens: 120,
+            completionTokens: 30,
+            totalTokens: 150,
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId,
+        direction: "server",
+        payload: {
+          type: "session_usage",
+          sessionId: "thread-session",
+          usage: {
+            sessionId: "thread-session",
+            totalTurns: 1,
+          },
+        },
+      },
+    ];
+
+    await useAppStore.getState().selectThread(threadId);
+
+    const rt = useAppStore.getState().threadRuntimeById[threadId];
+    expect(rt?.lastTurnUsage?.usage.totalTokens).toBe(150);
+    expect(rt?.sessionUsage).toBeNull();
+    expect(rt?.feed).toEqual([]);
+  });
+
   test("stores live usage events without adding unhandled feed noise", async () => {
     await useAppStore.getState().selectThread(threadId);
 

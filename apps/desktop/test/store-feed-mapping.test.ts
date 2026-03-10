@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { TranscriptEvent } from "../src/app/types";
-import { mapTranscriptToFeed } from "../src/app/store.feedMapping";
+import { extractUsageStateFromTranscript, mapTranscriptToFeed } from "../src/app/store.feedMapping";
 
 describe("desktop transcript feed mapping", () => {
   test("dedupes streamed reasoning against legacy reasoning finals while preserving trace order", () => {
@@ -251,6 +251,51 @@ describe("desktop transcript feed mapping", () => {
     const feed = mapTranscriptToFeed(transcript);
 
     expect(feed).toEqual([]);
+  });
+
+  test("ignores malformed session_usage snapshots during transcript replay", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "session_usage",
+          sessionId: "thread-session",
+          usage: {
+            sessionId: "thread-session",
+            totalTurns: 1,
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "turn_usage",
+          sessionId: "thread-session",
+          turnId: "turn-1",
+          usage: {
+            promptTokens: 10,
+            completionTokens: 5,
+            totalTokens: 15,
+          },
+        },
+      },
+    ];
+
+    expect(extractUsageStateFromTranscript(transcript)).toEqual({
+      sessionUsage: null,
+      lastTurnUsage: {
+        turnId: "turn-1",
+        usage: {
+          promptTokens: 10,
+          completionTokens: 5,
+          totalTokens: 15,
+        },
+      },
+    });
   });
 
   test("prefers raw final-answer text over a stale merged assistant_message on raw-backed turns", () => {

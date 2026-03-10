@@ -97,6 +97,8 @@ const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<ServerEvent["type"]>([
   "file_uploaded",
   "turn_usage",
   "session_usage",
+  "budget_warning",
+  "budget_exceeded",
   "config_updated",
 ]);
 
@@ -355,9 +357,11 @@ export class AgentSession {
     this.historyManager.refreshRuntimeMessagesFromHistory();
 
     // Initialize cost tracker for this session.
-    this.state.costTracker = hydrated?.costTracker
+    const costTracker = hydrated?.costTracker
       ? SessionCostTracker.fromSnapshot(hydrated.costTracker)
       : new SessionCostTracker(this.id);
+    this.attachCostTrackerListeners(costTracker);
+    this.state.costTracker = costTracker;
 
     if (!opts.skipInitialPersist) {
       this.queuePersistSessionSnapshot("session.created");
@@ -827,6 +831,33 @@ export class AgentSession {
 
   private log(line: string) {
     this.runtimeSupport.log(line);
+  }
+
+  private attachCostTrackerListeners(tracker: SessionCostTracker) {
+    tracker.addListener((event) => {
+      if (event.type === "budget_warning") {
+        this.context.emit({
+          type: "budget_warning",
+          sessionId: this.id,
+          currentCostUsd: event.currentCostUsd,
+          thresholdUsd: event.thresholdUsd,
+          message: event.message,
+        });
+        this.log(`[cost] ${event.message}`);
+        return;
+      }
+
+      if (event.type === "budget_exceeded") {
+        this.context.emit({
+          type: "budget_exceeded",
+          sessionId: this.id,
+          currentCostUsd: event.currentCostUsd,
+          thresholdUsd: event.thresholdUsd,
+          message: event.message,
+        });
+        this.log(`[cost] ${event.message}`);
+      }
+    });
   }
 
   private emitTelemetry(name: string, status: "ok" | "error", attributes?: Record<string, string | number | boolean>, durationMs?: number) {

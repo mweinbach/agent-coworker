@@ -5,6 +5,7 @@ import type { AgentConfig } from "../src/types";
 import type { RunTurnParams } from "../src/agent";
 import { createRunTurn } from "../src/agent";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
+import { SessionCostTracker } from "../src/session/costTracker";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -413,6 +414,20 @@ describe("runTurn", () => {
       cachedPromptTokens: 20,
       estimatedCostUsd: 0.1234,
     });
+  });
+
+  test("passes session budget update callbacks into the tool context", async () => {
+    const costTracker = new SessionCostTracker("session-1");
+    const onSessionUsageBudgetUpdated = mock(() => {});
+
+    await runTurn(makeParams({
+      costTracker,
+      onSessionUsageBudgetUpdated,
+    }));
+
+    const toolCtx = mockCreateTools.mock.calls[0]?.[0] as any;
+    expect(toolCtx.costTracker).toBe(costTracker);
+    expect(toolCtx.onSessionUsageBudgetUpdated).toBe(onSessionUsageBudgetUpdated);
   });
 
   // -------------------------------------------------------------------------

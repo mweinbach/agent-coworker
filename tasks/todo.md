@@ -1,3 +1,40 @@
+# Task: Address session usage design follow-ups
+
+## Plan
+- [x] Confirm which reported concerns are still open in the current tree and note any already-fixed items before patching.
+- [x] Add proactive budget threshold server events, extract a shared strict `session_usage` schema for parser/store reuse, and add configurable pricing overrides.
+- [x] Add focused regression coverage, update websocket docs, run the required verification commands, and record the outcome below.
+
+## Review
+- Initial audit: concern 3 is already fixed in the current tree. `src/server/sessionDb/mappers.ts` now reuses the strict `sessionUsageSnapshotSchema`, so malformed persisted `cost_tracker_json` payloads are rejected during row mapping.
+- Extracted the shared usage schema into `src/session/sessionUsageSchema.ts` and reused it from `src/server/sessionStore.ts`, `src/server/sessionDb/mappers.ts`, and `src/server/protocolEventParser.ts`, so persistence and client-side `session_usage` parsing now validate the same strict nested shape.
+- `src/server/session/AgentSession.ts` now listens to `SessionCostTracker` budget threshold transitions and emits structured `budget_warning` / `budget_exceeded` websocket events, while also logging the same alert text for existing clients that only surface `log` lines. `src/server/protocol.ts`, `src/server/protocolEventParser.ts`, and `docs/websocket-protocol.md` were updated to document the new wire contract (`7.7`).
+- `src/session/pricing.ts` now supports runtime pricing overrides via `COWORK_MODEL_PRICING_OVERRIDES` JSON, so custom or updated `provider:model` entries can be added without another code change.
+- Added focused regressions in `test/session.test.ts`, `test/session.costTracker.test.ts`, `test/session/pricing.test.ts`, and `test/agentSocket.parse.test.ts`.
+- Verification:
+  - `~/.bun/bin/bun test test/session.test.ts test/session.costTracker.test.ts test/session/pricing.test.ts test/agentSocket.parse.test.ts test/session-db-mappers.test.ts test/session-store.test.ts` -> pass (`248 pass, 0 fail`)
+  - `~/.bun/bin/bun run docs:check` -> pass
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1937 pass, 0 fail, 2 skip`)
+  - `git diff --check` -> pass
+
+# Task: Fix PR #30 review findings
+
+## Plan
+- [x] Re-read the live branch state for the four review findings and confirm which code paths were still unresolved.
+- [x] Patch hard-stop recovery, cost-availability accounting, Responses cost normalization, and durable tool-driven budget updates without regressing the existing usage contract.
+- [x] Run focused tests plus typecheck/diff validation, then record the verified outcome below.
+
+## Review
+- Added built-in hard-stop recovery paths for terminal clients: CLI now supports `/clear-hard-cap` via `set_session_usage_budget`, and TUI exposes the same out-of-band reset through its local slash-command registry.
+- `src/session/costTracker.ts` now treats any unknown-cost turn as making the session-level estimate unavailable instead of silently keeping a partial numeric total. Per-model summaries also stay `null` once an unknown-cost turn is mixed into that model bucket.
+- `src/runtime/piMessageBridge.ts` now preserves provider-computed nested cost totals (`usage.cost.total`) during normalization, so OpenAI Responses usage can carry exact `estimatedCostUsd` forward into session tracking.
+- `src/tools/usage.ts` now notifies the session immediately after `set_budget`, and `TurnExecutionManager` persists/emits that updated snapshot right away so budget changes survive later turn failures or aborts.
+- Verification:
+  - `~/.bun/bin/bun test test/session.costTracker.test.ts test/runtime.pi-message-bridge.test.ts test/runtime.openai-responses-runtime.test.ts test/tools.usage.test.ts test/agent.test.ts test/repl.test.ts test/tui.slash-commands.test.ts` -> pass (`177 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `git diff --check` -> pass
+
 # Task: Verify and finish the session usage review-fix follow-up
 
 ## Plan
@@ -33,6 +70,10 @@
   - `~/.bun/bin/bun -e 'import { SessionCostTracker } from "./src/session/costTracker"; const t = new SessionCostTracker("s"); t.recordTurn({ turnId: "1", provider: "openai", model: "unknown-model", usage: { promptTokens: 100, completionTokens: 20, totalTokens: 120 } }); t.recordTurn({ turnId: "2", provider: "openai", model: "gpt-5.4", usage: { promptTokens: 1000, completionTokens: 100, totalTokens: 1100 } }); console.log(JSON.stringify(t.getSnapshot()));'` -> reports `estimatedTotalCostUsd: 0.004` even though the first turn had unknown cost
   - `~/.bun/bin/bun -e 'import { normalizePiUsage } from "./src/runtime/piMessageBridge"; console.log(JSON.stringify(normalizePiUsage({ input: 80, output: 20, totalTokens: 130, cacheRead: 30, cost: { total: 0.00123 } })));'` -> returns `{"promptTokens":110,"completionTokens":20,"totalTokens":130,"cachedPromptTokens":30}` with no `estimatedCostUsd`
   - `~/.bun/bin/bun test test/session.test.ts test/session.costTracker.test.ts apps/desktop/test/thread-reconnect.test.ts apps/desktop/test/usage-page.test.ts` -> 206 pass, 1 unrelated existing failure in `test/session.test.ts` (`logoutProviderAuth emits provider_auth_result and clears provider state`)
+- Current pass:
+  - `src/server/session/TurnExecutionManager.ts` still queues `session.turn_response` persistence before `tracker.recordTurn(...)`, so the newly added cost-tracker state can remain one completed turn behind on resume if the app exits before another session mutation.
+  - `src/runtime/piMessageBridge.ts` still normalizes only top-level `estimatedCostUsd`; nested provider-computed totals such as `usage.cost.total` from `src/runtime/openaiResponsesProjector.ts` are still dropped before `turn_usage` / `session_usage`.
+  - Focused verification rerun: `~/.bun/bin/bun test test/session.test.ts test/runtime.openai-responses-runtime.test.ts test/runtime.pi-message-bridge.test.ts apps/desktop/test/thread-reconnect.test.ts apps/desktop/test/usage-page.test.ts` -> targeted suites pass except the still-failing `test/session.test.ts` case `logoutProviderAuth emits provider_auth_result and clears provider state`.
 
 # Task: Fix session usage budget persistence and persisted cost tracker validation
 

@@ -242,6 +242,14 @@ export class TurnExecutionManager {
           abortSignal: this.context.state.abortController!.signal,
           includeRawChunks,
           costTracker: this.context.state.costTracker ?? undefined,
+          onSessionUsageBudgetUpdated: (snapshot) => {
+            this.context.emit({
+              type: "session_usage",
+              sessionId: this.context.id,
+              usage: snapshot,
+            });
+            this.context.queuePersistSessionSnapshot("session.usage_budget_updated");
+          },
           onModelError: async (error) => {
             lastStreamError = error;
             this.context.emitTelemetry("agent.stream.error", "error", {
@@ -366,11 +374,6 @@ export class TurnExecutionManager {
             sessionId: this.context.id,
             usage: tracker.getSnapshot(),
           });
-
-          // Surface budget alerts as log lines so the agent and client both see them.
-          if (tracker.isBudgetExceeded()) {
-            this.log(`[cost] 🛑 Budget exceeded — session cost has passed the hard cap.`);
-          }
         }
       }
 

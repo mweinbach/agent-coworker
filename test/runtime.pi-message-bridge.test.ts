@@ -210,19 +210,23 @@ describe("pi message bridge", () => {
     });
   });
 
-  test("normalizes cached raw usage into canonical runtime counters", () => {
+  test("normalizes cached raw usage and nested cost totals into runtime counters", () => {
     expect(
       normalizePiUsage({
         input: 80,
         output: 20,
         totalTokens: 130,
         cacheRead: 30,
+        cost: {
+          total: 0.00123,
+        },
       }),
     ).toEqual({
       promptTokens: 110,
       completionTokens: 20,
       totalTokens: 130,
       cachedPromptTokens: 30,
+      estimatedCostUsd: 0.00123,
     });
   });
 

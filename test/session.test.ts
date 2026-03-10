@@ -3580,6 +3580,49 @@ describe("AgentSession", () => {
       expect(events.some((e) => e.type === "user_message")).toBe(true);
     });
 
+    test("emits proactive budget alert events when a turn crosses warning and stop thresholds", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "ok",
+        reasoningText: undefined,
+        responseMessages: [],
+        usage: {
+          promptTokens: 1_000_000,
+          completionTokens: 1_000_000,
+          totalTokens: 2_000_000,
+        },
+      }));
+
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session-budget-alerts"),
+          provider: "openai",
+          model: "gpt-5.4",
+          subAgentModel: "gpt-5.4",
+        },
+      });
+
+      session.setSessionUsageBudget(1, 2);
+      events.length = 0;
+
+      await session.sendUserMessage("first");
+
+      const warningEvt = events.find((e) => e.type === "budget_warning") as Extract<ServerEvent, { type: "budget_warning" }> | undefined;
+      expect(warningEvt).toBeDefined();
+      expect(warningEvt?.currentCostUsd).toBe(17.5);
+      expect(warningEvt?.thresholdUsd).toBe(1);
+
+      const exceededEvt = events.find((e) => e.type === "budget_exceeded") as Extract<ServerEvent, { type: "budget_exceeded" }> | undefined;
+      expect(exceededEvt).toBeDefined();
+      expect(exceededEvt?.currentCostUsd).toBe(17.5);
+      expect(exceededEvt?.thresholdUsd).toBe(2);
+
+      const costLogs = events
+        .filter((e): e is Extract<ServerEvent, { type: "log" }> => e.type === "log")
+        .map((e) => e.line);
+      expect(costLogs.some((line) => line.includes("Budget warning"))).toBe(true);
+      expect(costLogs.some((line) => line.includes("Budget exceeded"))).toBe(true);
+    });
+
     test("persists usage budget updates immediately", async () => {
       const { session } = makeSession();
       const persistedReasons: string[] = [];

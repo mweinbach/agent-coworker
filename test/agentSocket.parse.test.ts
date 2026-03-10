@@ -108,6 +108,13 @@ describe("agent socket parser", () => {
         source: "session",
       },
       {
+        type: "budget_warning",
+        sessionId: "s-1",
+        currentCostUsd: 4.2,
+        thresholdUsd: 4,
+        message: "warning",
+      },
+      {
         type: "subagent_created",
         sessionId: "s-1",
         subagent: {
@@ -199,5 +206,44 @@ describe("agent socket parser", () => {
     expect(parsed?.type).toBe("session_usage");
     if (parsed?.type !== "session_usage") return;
     expect(parsed.usage).toBeNull();
+  });
+
+  test("safeParseServerEvent rejects malformed session_usage payloads", () => {
+    const raw = JSON.stringify({
+      type: "session_usage",
+      sessionId: "s-1",
+      usage: {
+        sessionId: "s-1",
+        totalTurns: 1,
+        totalPromptTokens: 10,
+        totalCompletionTokens: 5,
+        totalTokens: 15,
+        estimatedTotalCostUsd: 0.25,
+        costTrackingAvailable: true,
+        byModel: [
+          {
+            provider: "openai",
+            model: "gpt-5.4",
+            turns: 1,
+            totalPromptTokens: 10,
+            totalCompletionTokens: 5,
+            totalTokens: 15,
+          },
+        ],
+        turns: [],
+        budgetStatus: {
+          configured: true,
+          warnAtUsd: 1,
+          stopAtUsd: 2,
+          warningTriggered: "yes",
+          stopTriggered: false,
+          currentCostUsd: 0.25,
+        },
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:00:01.000Z",
+      },
+    });
+
+    expect(safeParseServerEvent(raw)).toBeNull();
   });
 });

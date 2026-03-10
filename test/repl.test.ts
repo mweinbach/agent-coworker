@@ -257,6 +257,10 @@ describe("REPL command parsing", () => {
     expect(parseReplInput("/sessions")).toEqual({ type: "sessions" });
   });
 
+  test("/clear-hard-cap is parsed as a session command", () => {
+    expect(parseReplInput("/clear-hard-cap")).toEqual({ type: "clear-hard-cap" });
+  });
+
   test("/resume with id is parsed correctly", () => {
     const result = parseReplInput("/resume abc123");
     expect(result.type).toBe("resume");
@@ -440,6 +444,29 @@ describe("REPL slash command routing", () => {
         },
       },
     });
+  });
+
+  test("/clear-hard-cap sends an out-of-band budget clear message", async () => {
+    const trySend = mock(() => true);
+    const activateNextPrompt = mock(() => {});
+    const log = mock(() => {});
+    const ctx = makeCommandContext({ trySend, activateNextPrompt });
+    const originalLog = console.log;
+    console.log = log as any;
+    try {
+      const handled = await handleSlashCommand("/clear-hard-cap", ctx);
+      expect(handled).toBe(true);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(trySend).toHaveBeenCalledWith({
+      type: "set_session_usage_budget",
+      sessionId: "session-1",
+      stopAtUsd: null,
+    });
+    expect(log).toHaveBeenCalledWith("session hard-stop threshold cleared");
+    expect(activateNextPrompt).toHaveBeenCalled();
   });
 
   test("/reasoning-effort refuses non-openai-compatible providers", async () => {

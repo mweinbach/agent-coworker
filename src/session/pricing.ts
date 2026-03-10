@@ -8,6 +8,9 @@
  *   - https://openai.com/api/pricing
  *   - https://ai.google.dev/pricing
  *   - https://www.anthropic.com/pricing
+ *
+ * Override or extend entries at runtime with
+ * `COWORK_MODEL_PRICING_OVERRIDES='{"provider:model":{"inputPerMillion":...,"outputPerMillion":...}}'`.
  */
 
 import type { ProviderName } from "../types";
@@ -27,11 +30,13 @@ export type PricingCatalogEntry = {
   pricing: ModelPricing;
 };
 
+type PricingEnv = Record<string, string | undefined>;
+
 /**
  * Known model pricing. Keys are `provider:model` strings for direct lookup.
  * When an exact match isn't found we fall back to prefix matching.
  */
-const PRICING_TABLE: Record<string, ModelPricing> = {
+const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
   // ── Anthropic ────────────────────────────────────────────────────────
   "anthropic:claude-opus-4-6": {
     inputPerMillion: 15,
@@ -131,6 +136,88 @@ const PRICING_TABLE: Record<string, ModelPricing> = {
   },
 };
 
+const pricingOverrideSchema = {
+  inputPerMillion: (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0,
+  outputPerMillion: (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0,
+  cachedInputPerMillion: (value: unknown) => value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
+};
+
+let cachedPricingOverrideRaw: string | null = null;
+let cachedPricingOverrides: Record<string, ModelPricing> = {};
+
+function isModelPricing(value: unknown): value is ModelPricing {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return pricingOverrideSchema.inputPerMillion(record.inputPerMillion)
+    && pricingOverrideSchema.outputPerMillion(record.outputPerMillion)
+    && pricingOverrideSchema.cachedInputPerMillion(record.cachedInputPerMillion);
+}
+
+function isPricingOverrideKey(value: string): value is `${ProviderName}:${string}` {
+  const separatorIndex = value.indexOf(":");
+  if (separatorIndex <= 0 || separatorIndex === value.length - 1) return false;
+  const provider = value.slice(0, separatorIndex);
+  return provider === "google"
+    || provider === "openai"
+    || provider === "anthropic"
+    || provider === "codex-cli";
+}
+
+function loadPricingOverridesFromEnv(env: PricingEnv = process.env): Record<string, ModelPricing> {
+  const raw = env.COWORK_MODEL_PRICING_OVERRIDES?.trim() ?? "";
+  if (raw === cachedPricingOverrideRaw) {
+    return cachedPricingOverrides;
+  }
+
+  cachedPricingOverrideRaw = raw;
+  if (!raw) {
+    cachedPricingOverrides = {};
+    return cachedPricingOverrides;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    console.warn(`[pricing] Ignoring invalid COWORK_MODEL_PRICING_OVERRIDES JSON: ${String(error)}`);
+    cachedPricingOverrides = {};
+    return cachedPricingOverrides;
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    console.warn("[pricing] Ignoring COWORK_MODEL_PRICING_OVERRIDES because it is not a JSON object.");
+    cachedPricingOverrides = {};
+    return cachedPricingOverrides;
+  }
+
+  const overrides: Record<string, ModelPricing> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!isPricingOverrideKey(key)) {
+      console.warn(`[pricing] Ignoring model pricing override with invalid key "${key}". Expected "provider:model".`);
+      continue;
+    }
+    if (!isModelPricing(value)) {
+      console.warn(`[pricing] Ignoring model pricing override for "${key}" because the pricing payload is invalid.`);
+      continue;
+    }
+    overrides[key] = {
+      inputPerMillion: value.inputPerMillion,
+      outputPerMillion: value.outputPerMillion,
+      ...(value.cachedInputPerMillion !== undefined ? { cachedInputPerMillion: value.cachedInputPerMillion } : {}),
+    };
+  }
+
+  cachedPricingOverrides = overrides;
+  return cachedPricingOverrides;
+}
+
+function getPricingTable(env: PricingEnv = process.env): Record<string, ModelPricing> {
+  return {
+    ...BASE_PRICING_TABLE,
+    ...loadPricingOverridesFromEnv(env),
+  };
+}
+
 /**
  * Resolve pricing for a provider + model pair.
  *
@@ -141,16 +228,18 @@ const PRICING_TABLE: Record<string, ModelPricing> = {
 export function resolveModelPricing(
   provider: ProviderName,
   model: string,
+  env: PricingEnv = process.env,
 ): ModelPricing | null {
+  const pricingTable = getPricingTable(env);
   const exactKey = `${provider}:${model}`;
-  if (PRICING_TABLE[exactKey]) return PRICING_TABLE[exactKey];
+  if (pricingTable[exactKey]) return pricingTable[exactKey];
 
   // Prefix matching: find the most specific (longest) matching key.
   const prefix = `${provider}:`;
   let bestMatch: ModelPricing | null = null;
   let bestMatchLength = 0;
 
-  for (const [key, pricing] of Object.entries(PRICING_TABLE)) {
+  for (const [key, pricing] of Object.entries(pricingTable)) {
     if (!key.startsWith(prefix)) continue;
     const modelPart = key.slice(prefix.length);
     if (model.startsWith(modelPart) && modelPart.length > bestMatchLength) {
@@ -206,8 +295,8 @@ export function formatTokenCount(count: number): string {
 /**
  * List all known pricing entries. Useful for UIs.
  */
-export function listPricingCatalog(): PricingCatalogEntry[] {
-  return Object.entries(PRICING_TABLE).map(([key, pricing]) => {
+export function listPricingCatalog(env: PricingEnv = process.env): PricingCatalogEntry[] {
+  return Object.entries(getPricingTable(env)).map(([key, pricing]) => {
     const [provider, ...modelParts] = key.split(":");
     return {
       provider: provider as ProviderName,

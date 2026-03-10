@@ -424,12 +424,13 @@ export function normalizePiUsage(usage: unknown): RuntimeUsage | undefined {
   if (!record) return undefined;
 
   const cachedPromptTokens = asFiniteNumber(record.cachedPromptTokens) ?? asFiniteNumber(record.cacheRead) ?? 0;
+  const costRecord = asRecord(record.cost);
   const promptTokens =
     asFiniteNumber(record.promptTokens) ??
     ((asFiniteNumber(record.input) ?? 0) + cachedPromptTokens);
   const completionTokens = asFiniteNumber(record.completionTokens) ?? asFiniteNumber(record.output) ?? 0;
   const totalTokens = asFiniteNumber(record.totalTokens) ?? (promptTokens + completionTokens);
-  const estimatedCostUsd = asFiniteNumber(record.estimatedCostUsd);
+  const estimatedCostUsd = asFiniteNumber(record.estimatedCostUsd) ?? asFiniteNumber(costRecord?.total);
 
   if (
     promptTokens === 0

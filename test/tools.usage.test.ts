@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { z } from "zod";
 
 import { createUsageTool } from "../src/tools/usage";
@@ -83,6 +83,23 @@ describe("usage tool", () => {
         const budgetStatus = await tool.execute({ action: "budget" });
         expect(budgetStatus).toContain("Warning threshold:  $1.00");
         expect(budgetStatus).not.toContain("Hard-stop threshold:");
+    });
+
+    test("set_budget notifies the session callback with the updated snapshot", async () => {
+        const onSessionUsageBudgetUpdated = mock(() => {});
+        const tool = createUsageTool({
+            ...ctx,
+            onSessionUsageBudgetUpdated,
+        });
+
+        await tool.execute({ action: "set_budget", stopAtUsd: 5.0 });
+
+        expect(onSessionUsageBudgetUpdated).toHaveBeenCalledTimes(1);
+        expect(onSessionUsageBudgetUpdated.mock.calls[0]?.[0]).toMatchObject({
+            budgetStatus: {
+                stopAtUsd: 5,
+            },
+        });
     });
 
     test("set_budget rejects invalid configurations", async () => {

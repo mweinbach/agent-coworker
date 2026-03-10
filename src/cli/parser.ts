@@ -1,7 +1,7 @@
 import type { ServerEvent } from "../server/protocol";
 
 export type ParsedCommand =
-  | { type: "help" | "exit" | "new" | "restart" | "tools" | "sessions" }
+  | { type: "help" | "exit" | "new" | "restart" | "tools" | "sessions" | "clear-hard-cap" }
   | {
       type: "model" | "provider" | "connect" | "cwd" | "resume" | "verbosity" | "reasoning-effort" | "effort" | "reasoning-summary";
       arg: string;
@@ -27,6 +27,7 @@ export function parseReplInput(input: string): ParsedCommand {
     case "restart":
     case "tools":
     case "sessions":
+    case "clear-hard-cap":
       return { type: cmd };
     case "model":
     case "provider":

@@ -107,6 +107,39 @@ describe("SessionCostTracker", () => {
     expect(tracker.getSnapshot().turns[0]?.estimatedCostUsd).toBe(1.23);
   });
 
+  test("invalidates aggregate cost availability after an uncatalogued turn", () => {
+    const tracker = new SessionCostTracker("session-1");
+
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: {
+        promptTokens: 1000,
+        completionTokens: 100,
+        totalTokens: 1100,
+      },
+    });
+    tracker.recordTurn({
+      turnId: "turn-2",
+      provider: "openai",
+      model: "uncatalogued-model",
+      usage: {
+        promptTokens: 500,
+        completionTokens: 50,
+        totalTokens: 550,
+      },
+    });
+
+    expect(tracker.getSnapshot()).toMatchObject({
+      estimatedTotalCostUsd: null,
+      costTrackingAvailable: false,
+      budgetStatus: {
+        currentCostUsd: null,
+      },
+    });
+  });
+
   test("updateBudget preserves unspecified thresholds and clears explicit nulls", () => {
     const tracker = new SessionCostTracker("session-1");
 
@@ -136,6 +169,38 @@ describe("SessionCostTracker", () => {
       warnAtUsd: 2,
       stopAtUsd: 5,
     });
+  });
+
+  test("emits budget alert events when thresholds are crossed", () => {
+    const tracker = new SessionCostTracker("session-1");
+    const alerts: Array<{ type: string; currentCostUsd: number; thresholdUsd: number }> = [];
+
+    tracker.addListener((event) => {
+      if (event.type === "budget_warning" || event.type === "budget_exceeded") {
+        alerts.push({
+          type: event.type,
+          currentCostUsd: event.currentCostUsd,
+          thresholdUsd: event.thresholdUsd,
+        });
+      }
+    });
+
+    tracker.setBudget({ warnAtUsd: 1, stopAtUsd: 2 });
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: {
+        promptTokens: 1_000_000,
+        completionTokens: 1_000_000,
+        totalTokens: 2_000_000,
+      },
+    });
+
+    expect(alerts).toEqual([
+      { type: "budget_warning", currentCostUsd: 17.5, thresholdUsd: 1 },
+      { type: "budget_exceeded", currentCostUsd: 17.5, thresholdUsd: 2 },
+    ]);
   });
 
   test("getSnapshot returns decoupled copies of mutable state", () => {

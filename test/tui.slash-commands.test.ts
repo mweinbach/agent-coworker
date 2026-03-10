@@ -12,6 +12,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     syncActions: {
       reset: () => {},
       cancel: () => {},
+      clearUsageHardCap: () => true,
       setConfig: () => true,
       setProviderApiKey: () => {},
       requestHarnessContext: () => {},
@@ -78,6 +79,28 @@ describe("local slash command registry", () => {
 
     expect(resetCalls).toBe(1);
     expect(navigateCalls).toBe(1);
+  });
+
+  test("/clear-hard-cap dispatches the hard-cap reset action", async () => {
+    const clearUsageHardCap = mock(() => true);
+    const commands = createLocalSlashCommands(makeDeps({
+      syncActions: {
+        reset: () => {},
+        cancel: () => {},
+        clearUsageHardCap,
+        setConfig: () => true,
+        setProviderApiKey: () => {},
+        requestHarnessContext: () => {},
+        setHarnessContext: () => {},
+      },
+    }));
+
+    const resolved = findLocalSlashCommand(commands, "clear-hard-cap");
+    expect(resolved?.name).toBe("clear-hard-cap");
+
+    await Promise.resolve(resolved?.execute(""));
+
+    expect(clearUsageHardCap).toHaveBeenCalledTimes(1);
   });
 
   test("parseSlashInput extracts name and arguments", () => {

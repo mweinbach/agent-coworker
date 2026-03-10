@@ -49,6 +49,42 @@ describe("pricing", () => {
             expect(pricing).not.toBeNull();
             expect(pricing!.cachedInputPerMillion).toBe(1.875);
         });
+
+        it("applies env overrides for custom pricing entries", () => {
+            const env = {
+                COWORK_MODEL_PRICING_OVERRIDES: JSON.stringify({
+                    "openai:gpt-custom-preview": {
+                        inputPerMillion: 9,
+                        outputPerMillion: 27,
+                        cachedInputPerMillion: 0.9,
+                    },
+                }),
+            };
+
+            const pricing = resolveModelPricing("openai", "gpt-custom-preview", env);
+            expect(pricing).toEqual({
+                inputPerMillion: 9,
+                outputPerMillion: 27,
+                cachedInputPerMillion: 0.9,
+            });
+        });
+
+        it("lets env overrides replace built-in pricing entries", () => {
+            const env = {
+                COWORK_MODEL_PRICING_OVERRIDES: JSON.stringify({
+                    "openai:gpt-5.4": {
+                        inputPerMillion: 7,
+                        outputPerMillion: 14,
+                    },
+                }),
+            };
+
+            const pricing = resolveModelPricing("openai", "gpt-5.4", env);
+            expect(pricing).toEqual({
+                inputPerMillion: 7,
+                outputPerMillion: 14,
+            });
+        });
     });
 
     describe("calculateTokenCost", () => {
@@ -145,6 +181,27 @@ describe("pricing", () => {
             expect(providers.has("openai")).toBe(true);
             expect(providers.has("google")).toBe(true);
             expect(providers.has("codex-cli")).toBe(true);
+        });
+
+        it("includes env-provided pricing entries in the catalog", () => {
+            const env = {
+                COWORK_MODEL_PRICING_OVERRIDES: JSON.stringify({
+                    "google:gemini-special-preview": {
+                        inputPerMillion: 0.5,
+                        outputPerMillion: 1.5,
+                    },
+                }),
+            };
+
+            const catalog = listPricingCatalog(env);
+            expect(catalog).toContainEqual({
+                provider: "google",
+                model: "gemini-special-preview",
+                pricing: {
+                    inputPerMillion: 0.5,
+                    outputPerMillion: 1.5,
+                },
+            });
         });
     });
 });

@@ -132,6 +132,7 @@ Use this tool to monitor spending, check costs before expensive operations, or s
                             warnAtUsd,
                             stopAtUsd,
                         });
+                        ctx.onSessionUsageBudgetUpdated?.(tracker.getSnapshot());
                     } catch (error) {
                         return error instanceof Error ? error.message : String(error);
                     }

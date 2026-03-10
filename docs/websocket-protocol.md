@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.6`
+- Current protocol version: `7.7`
 
 ## Table of Contents
 
@@ -42,12 +42,17 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Provider: [provider_catalog](#provider_catalog) | [provider_auth_methods](#provider_auth_methods) | [provider_auth_challenge](#provider_auth_challenge) | [provider_auth_result](#provider_auth_result) | [provider_status](#provider_status) | [config_updated](#config_updated)
   - Tools & Skills: [tools](#tools) | [commands](#commands) | [skills_list](#skills_list) | [skill_content](#skill_content)
   - MCP: [mcp_servers](#mcp_servers) | [mcp_server_validation](#mcp_server_validation) | [mcp_server_auth_challenge](#mcp_server_auth_challenge) | [mcp_server_auth_result](#mcp_server_auth_result)
-  - Session Data: [messages](#messages) | [sessions](#sessions) | [subagent_created](#subagent_created) | [subagent_sessions](#subagent_sessions) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage) | [session_usage](#session_usage)
+  - Session Data: [messages](#messages) | [sessions](#sessions) | [subagent_created](#subagent_created) | [subagent_sessions](#subagent_sessions) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage) | [session_usage](#session_usage) | [budget_warning](#budget_warning) | [budget_exceeded](#budget_exceeded)
   - Backup & Observability: [session_backup_state](#session_backup_state) | [observability_status](#observability_status)
   - Harness: [harness_context](#harness_context)
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.7`:
+
+- New server events: `budget_warning`, `budget_exceeded`.
+- Session usage events now have dedicated budget-threshold alerts in addition to the aggregate `session_usage` snapshot.
 
 Changes in `7.6`:
 
@@ -2470,7 +2475,7 @@ Token usage data for a completed turn. Emitted after `assistant_message` when th
 
 ### session_usage
 
-Accumulated session usage and budget status. Sent in response to `get_session_usage`, `set_session_usage_budget`, and automatically when tracked usage changes.
+Accumulated session usage and budget status. Sent in response to `get_session_usage`, `set_session_usage_budget`, and automatically when tracked usage changes. Threshold crossings also emit [budget_warning](#budget_warning) and [budget_exceeded](#budget_exceeded) immediately.
 
 ```json
 {
@@ -2505,6 +2510,54 @@ Accumulated session usage and budget status. Sent in response to `get_session_us
 | `type` | `"session_usage"` | — |
 | `sessionId` | `string` | Session identifier |
 | `usage` | `SessionUsageSnapshot \| null` | Cumulative usage snapshot (see [SessionUsageSnapshot](#sessionusagesnapshot)), or `null` when tracking is unavailable |
+
+---
+
+### budget_warning
+
+Structured soft-budget alert emitted when cumulative tracked cost first reaches the configured warning threshold for the current budget configuration.
+
+```json
+{
+  "type": "budget_warning",
+  "sessionId": "...",
+  "currentCostUsd": 4.2,
+  "thresholdUsd": 4.0,
+  "message": "⚠️  Budget warning: session cost $4.20 has reached the warning threshold of $4.00."
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"budget_warning"` | — |
+| `sessionId` | `string` | Session identifier |
+| `currentCostUsd` | `number` | Current cumulative tracked cost in USD when the warning fired |
+| `thresholdUsd` | `number` | Warning threshold that was crossed |
+| `message` | `string` | Human-readable alert message |
+
+---
+
+### budget_exceeded
+
+Structured hard-budget alert emitted when cumulative tracked cost first reaches or exceeds the configured stop threshold for the current budget configuration.
+
+```json
+{
+  "type": "budget_exceeded",
+  "sessionId": "...",
+  "currentCostUsd": 4.2,
+  "thresholdUsd": 4.0,
+  "message": "🛑 Budget exceeded: session cost $4.20 has exceeded the hard cap of $4.00. No further turns will be processed."
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"budget_exceeded"` | — |
+| `sessionId` | `string` | Session identifier |
+| `currentCostUsd` | `number` | Current cumulative tracked cost in USD when the hard stop fired |
+| `thresholdUsd` | `number` | Hard-stop threshold that was crossed |
+| `message` | `string` | Human-readable alert message |
 
 
 ---

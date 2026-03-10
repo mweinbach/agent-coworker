@@ -11,6 +11,7 @@ type LocalSlashDependencies = {
   syncActions: {
     reset: () => void;
     cancel: () => void;
+    clearUsageHardCap: () => boolean;
     setConfig: (config: SyncConfigPatch) => boolean;
     setProviderApiKey: (provider: string, methodId: string, apiKey: string) => void;
     requestHarnessContext: () => void;
@@ -218,6 +219,20 @@ export function createLocalSlashCommands(deps: LocalSlashDependencies): LocalSla
       execute: () => {
         deps.syncActions.reset();
         deps.route.navigate({ route: "home" });
+      },
+    },
+    {
+      name: "clear-hard-cap",
+      aliases: ["clear-hardcap"],
+      description: "Clear the session hard-stop budget",
+      icon: "$",
+      execute: () => {
+        const dispatched = deps.syncActions.clearUsageHardCap();
+        if (!dispatched) {
+          showToast("Not connected — reconnect and try again", "error");
+          return;
+        }
+        showToast("Session hard-stop threshold cleared", "success");
       },
     },
     {

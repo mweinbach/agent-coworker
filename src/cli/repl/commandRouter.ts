@@ -79,6 +79,23 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
     return true;
   }
 
+  if (cmd === "clear-hard-cap") {
+    if (!sessionId()) {
+      console.log("not connected: cannot clear the session hard cap yet");
+      ctx.activateNextPrompt();
+      return true;
+    }
+    const ok = ctx.trySend({
+      type: "set_session_usage_budget",
+      sessionId: sessionId()!,
+      stopAtUsd: null,
+    });
+    if (!ok) return true;
+    console.log("session hard-stop threshold cleared");
+    ctx.activateNextPrompt();
+    return true;
+  }
+
   if (cmd === "model") {
     const id = rest.join(" ").trim();
     if (!id) {

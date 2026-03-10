@@ -136,6 +136,7 @@ export type SyncActions = {
   resumeSession: (sessionId: string) => void;
   reset: () => void;
   cancel: () => void;
+  clearUsageHardCap: () => boolean;
 };
 
 export type SyncContextValue = {

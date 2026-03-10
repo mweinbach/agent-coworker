@@ -10,6 +10,7 @@ import {
   sessionKindSchema,
   subagentAgentTypeSchema,
 } from "../shared/persistentSubagents";
+import { sessionUsageSnapshotSchema } from "../session/sessionUsageSchema";
 import type { ServerEvent } from "./protocol";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
@@ -379,22 +380,23 @@ const serverEventSchema = z.discriminatedUnion("type", [
     sessionId: nonEmptyTrimmedStringSchema,
   }).passthrough(),
   z.object({
+    type: z.literal("budget_warning"),
+    sessionId: nonEmptyTrimmedStringSchema,
+    currentCostUsd: z.number(),
+    thresholdUsd: z.number(),
+    message: z.string(),
+  }).passthrough(),
+  z.object({
+    type: z.literal("budget_exceeded"),
+    sessionId: nonEmptyTrimmedStringSchema,
+    currentCostUsd: z.number(),
+    thresholdUsd: z.number(),
+    message: z.string(),
+  }).passthrough(),
+  z.object({
     type: z.literal("session_usage"),
     sessionId: nonEmptyTrimmedStringSchema,
-    usage: z.object({
-      sessionId: z.string(),
-      totalTurns: z.number(),
-      totalPromptTokens: z.number(),
-      totalCompletionTokens: z.number(),
-      totalTokens: z.number(),
-      estimatedTotalCostUsd: z.number().nullable(),
-      costTrackingAvailable: z.boolean(),
-      byModel: z.array(z.record(z.string(), z.unknown())),
-      turns: z.array(z.record(z.string(), z.unknown())),
-      budgetStatus: z.record(z.string(), z.unknown()),
-      createdAt: z.string(),
-      updatedAt: z.string(),
-    }).passthrough().nullable(),
+    usage: sessionUsageSnapshotSchema.nullable(),
   }).passthrough(),
 ]);
 
@@ -441,6 +443,8 @@ const KNOWN_SERVER_EVENT_TYPES = new Set<string>([
   "file_uploaded",
   "error",
   "pong",
+  "budget_warning",
+  "budget_exceeded",
 ]);
 
 export function safeJsonParse(raw: unknown): unknown | null {

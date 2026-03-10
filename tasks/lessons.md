@@ -1,6 +1,7 @@
 # Lessons
 
 - When fixing immutable snapshot or validation bugs in this repo, audit every parallel export/input surface in the same flow; partial fixes like cloning only `byModel` or loosening only the WebSocket parser can leave the same contract broken through `turns` or tool-schema validation.
+- When session budget state changes at a threshold boundary, do not rely on the next aggregate `session_usage` snapshot to surface it; emit a dedicated websocket event at the transition and keep the client/parser contract strict enough to reject malformed nested usage payloads.
 - For desktop renderer wrappers that re-export core protocol/types, prefer direct repo-root relative imports over `@cowork/*` aliases; `electron-vite` can accept the alias in TypeScript but still fail Rollup resolution at renderer build time.
 - For raw-backed desktop turns, do not just append legacy `reasoning` summaries at turn end; if a streamed final assistant message already exists for that turn, anchor the summary before that assistant item or it will render below the final answer.
 - For collapsed desktop Thinking-card previews, strip standalone markdown heading lines from the summary text; keep the heading only in the expanded reasoning body.

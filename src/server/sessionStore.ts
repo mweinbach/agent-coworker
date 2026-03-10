@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import type { AiCoworkerPaths } from "../connect";
 import type { SessionUsageSnapshot } from "../session/costTracker";
+import { sessionUsageSnapshotSchema } from "../session/sessionUsageSchema";
 import { sessionKindSchema, subagentAgentTypeSchema, type SessionKind, type SubagentAgentType } from "../shared/persistentSubagents";
 import { openAiContinuationStateSchema, type OpenAiContinuationState } from "../shared/openaiContinuation";
 import { PROVIDER_NAMES } from "../types";
@@ -182,58 +183,7 @@ const harnessContextStateSchema = z.object({
   metadata: harnessContextMetadataSchema.optional(),
   updatedAt: isoTimestampSchema,
 }).strict();
-const modelPricingSchema = z.object({
-  inputPerMillion: z.number(),
-  outputPerMillion: z.number(),
-  cachedInputPerMillion: z.number().optional(),
-}).strict();
-const turnUsageSchema = z.object({
-  promptTokens: z.number().int().nonnegative(),
-  completionTokens: z.number().int().nonnegative(),
-  totalTokens: z.number().int().nonnegative(),
-  cachedPromptTokens: z.number().int().nonnegative().optional(),
-  estimatedCostUsd: z.number().optional(),
-}).strict();
-const turnCostEntrySchema = z.object({
-  turnId: z.string().trim().min(1),
-  turnIndex: z.number().int().nonnegative(),
-  timestamp: isoTimestampSchema,
-  provider: providerNameSchema,
-  model: z.string().trim().min(1),
-  usage: turnUsageSchema,
-  estimatedCostUsd: z.number().nullable(),
-  pricing: modelPricingSchema.nullable(),
-}).strict();
-const modelUsageSummarySchema = z.object({
-  provider: providerNameSchema,
-  model: z.string().trim().min(1),
-  turns: z.number().int().nonnegative(),
-  totalPromptTokens: z.number().int().nonnegative(),
-  totalCompletionTokens: z.number().int().nonnegative(),
-  totalTokens: z.number().int().nonnegative(),
-  estimatedCostUsd: z.number().nullable(),
-}).strict();
-export const sessionUsageSnapshotSchema = z.object({
-  sessionId: z.string().trim().min(1),
-  totalTurns: z.number().int().nonnegative(),
-  totalPromptTokens: z.number().int().nonnegative(),
-  totalCompletionTokens: z.number().int().nonnegative(),
-  totalTokens: z.number().int().nonnegative(),
-  estimatedTotalCostUsd: z.number().nullable(),
-  costTrackingAvailable: z.boolean(),
-  byModel: z.array(modelUsageSummarySchema),
-  turns: z.array(turnCostEntrySchema),
-  budgetStatus: z.object({
-    configured: z.boolean(),
-    warnAtUsd: z.number().nullable(),
-    stopAtUsd: z.number().nullable(),
-    warningTriggered: z.boolean(),
-    stopTriggered: z.boolean(),
-    currentCostUsd: z.number().nullable(),
-  }).strict(),
-  createdAt: isoTimestampSchema,
-  updatedAt: isoTimestampSchema,
-}).strict();
+export { sessionUsageSnapshotSchema } from "../session/sessionUsageSchema";
 
 const persistedSessionSnapshotV1Schema = z.object({
   version: z.literal(1),

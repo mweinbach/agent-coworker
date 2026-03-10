@@ -76,7 +76,7 @@ describe("openai responses runtime", () => {
     ]);
   });
 
-  test("keeps cached prompt tokens in canonical runtime usage", async () => {
+  test("keeps cached prompt tokens and provider-computed cost in runtime usage", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-cached-usage-"));
     const runtime = createOpenAiResponsesRuntime({
       runStepImpl: async () => ({
@@ -88,6 +88,9 @@ describe("openai responses runtime", () => {
             output: 20,
             totalTokens: 130,
             cacheRead: 30,
+            cost: {
+              total: 0.00123,
+            },
           },
           stopReason: "stop",
         },
@@ -102,6 +105,7 @@ describe("openai responses runtime", () => {
       completionTokens: 20,
       totalTokens: 130,
       cachedPromptTokens: 30,
+      estimatedCostUsd: 0.00123,
     });
   });
 

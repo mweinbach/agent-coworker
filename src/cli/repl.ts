@@ -189,6 +189,7 @@ export async function runCliRepl(
     console.log("  /cwd <path>           Set working directory for this session");
     console.log("  /sessions             List sessions from the server");
     console.log("  /resume <sessionId>   Reconnect to a specific session");
+    console.log("  /clear-hard-cap       Clear the session hard-stop budget");
     console.log("  /tools                List tool names\n");
   };
 

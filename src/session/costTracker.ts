@@ -109,6 +109,7 @@ export class SessionCostTracker {
     private totalTokens = 0;
     private estimatedTotalCostUsd: number | null = null;
     private costTrackingAvailable = false;
+    private hasUnknownCostTurns = false;
 
     private budgetThresholds: BudgetThresholds = {};
     private warningTriggered = false;
@@ -147,8 +148,13 @@ export class SessionCostTracker {
         tracker.totalPromptTokens = snapshot.totalPromptTokens;
         tracker.totalCompletionTokens = snapshot.totalCompletionTokens;
         tracker.totalTokens = snapshot.totalTokens;
-        tracker.estimatedTotalCostUsd = snapshot.estimatedTotalCostUsd;
-        tracker.costTrackingAvailable = snapshot.costTrackingAvailable;
+        tracker.hasUnknownCostTurns = snapshot.turns.some((entry) => entry.estimatedCostUsd === null);
+        tracker.estimatedTotalCostUsd = tracker.hasUnknownCostTurns ? null : snapshot.estimatedTotalCostUsd;
+        tracker.costTrackingAvailable = (
+            !tracker.hasUnknownCostTurns
+            && snapshot.costTrackingAvailable
+            && snapshot.estimatedTotalCostUsd !== null
+        );
         tracker.warningTriggered = snapshot.budgetStatus.warningTriggered;
         tracker.stopTriggered = snapshot.budgetStatus.stopTriggered;
         tracker.createdAt = snapshot.createdAt;
@@ -198,11 +204,7 @@ export class SessionCostTracker {
         this.totalPromptTokens += usage.promptTokens;
         this.totalCompletionTokens += usage.completionTokens;
         this.totalTokens += usage.totalTokens;
-
-        if (costUsd !== null) {
-            this.costTrackingAvailable = true;
-            this.estimatedTotalCostUsd = (this.estimatedTotalCostUsd ?? 0) + costUsd;
-        }
+        this.recordSessionCost(costUsd);
 
         this.updateModelSummary(provider, model, usage, costUsd);
         this.updatedAt = entry.timestamp;
@@ -229,6 +231,7 @@ export class SessionCostTracker {
         this.stopTriggered = thresholds.stopAtUsd !== undefined && currentCostUsd !== null
             ? currentCostUsd >= thresholds.stopAtUsd
             : false;
+        this.updatedAt = new Date().toISOString();
     }
 
     updateBudget(thresholds: BudgetThresholdUpdate): void {
@@ -364,8 +367,10 @@ export class SessionCostTracker {
             existing.totalPromptTokens += usage.promptTokens;
             existing.totalCompletionTokens += usage.completionTokens;
             existing.totalTokens += usage.totalTokens;
-            if (costUsd !== null) {
-                existing.estimatedCostUsd = (existing.estimatedCostUsd ?? 0) + costUsd;
+            if (existing.estimatedCostUsd === null || costUsd === null) {
+                existing.estimatedCostUsd = null;
+            } else {
+                existing.estimatedCostUsd += costUsd;
             }
         } else {
             this.modelSummaries.set(key, {
@@ -378,6 +383,24 @@ export class SessionCostTracker {
                 estimatedCostUsd: costUsd,
             });
         }
+    }
+
+    private recordSessionCost(costUsd: number | null): void {
+        if (costUsd === null) {
+            this.hasUnknownCostTurns = true;
+            this.costTrackingAvailable = false;
+            this.estimatedTotalCostUsd = null;
+            return;
+        }
+
+        if (this.hasUnknownCostTurns) {
+            this.costTrackingAvailable = false;
+            this.estimatedTotalCostUsd = null;
+            return;
+        }
+
+        this.costTrackingAvailable = true;
+        this.estimatedTotalCostUsd = (this.estimatedTotalCostUsd ?? 0) + costUsd;
     }
 
     private checkBudget(): void {

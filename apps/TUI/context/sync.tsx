@@ -475,6 +475,16 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       if (!sessionId || !socketLifecycle.hasSocket()) return;
       socketLifecycle.send({ type: "cancel", sessionId });
     },
+
+    clearUsageHardCap() {
+      const sessionId = state.sessionId;
+      if (!sessionId || !socketLifecycle.hasSocket()) return false;
+      return socketLifecycle.send({
+        type: "set_session_usage_budget",
+        sessionId,
+        stopAtUsd: null,
+      });
+    },
   };
 
   return (

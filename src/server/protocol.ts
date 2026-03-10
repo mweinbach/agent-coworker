@@ -319,6 +319,20 @@ export type ServerEvent =
     usage: SessionUsageSnapshot | null;
   }
   | {
+    type: "budget_warning";
+    sessionId: string;
+    currentCostUsd: number;
+    thresholdUsd: number;
+    message: string;
+  }
+  | {
+    type: "budget_exceeded";
+    sessionId: string;
+    currentCostUsd: number;
+    thresholdUsd: number;
+    message: string;
+  }
+  | {
     type: "messages";
     sessionId: string;
     messages: unknown[];
@@ -339,7 +353,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.6";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.7";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -427,6 +441,8 @@ export const SERVER_EVENT_TYPES = [
   "harness_context",
   "turn_usage",
   "session_usage",
+  "budget_warning",
+  "budget_exceeded",
   "messages",
   "sessions",
   "subagent_created",

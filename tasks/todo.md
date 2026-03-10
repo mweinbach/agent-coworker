@@ -1,3 +1,39 @@
+# Task: Verify and finish the session usage review-fix follow-up
+
+## Plan
+- [x] Inspect the user-applied fixes in `src/session/costTracker.ts` and `src/server/protocolParser.ts` to confirm whether the original review issues were fully closed.
+- [x] Patch any remaining gaps in the same contract surfaces and add focused regression tests for snapshot isolation and `$0.00` budget validation.
+- [x] Run the required focused test suite, update this review note with verification evidence, and then summarize the outcome.
+
+## Review
+- `src/session/costTracker.ts` now clones `byModel`, but `getSnapshot()` was still returning live `TurnCostEntry` objects through `turns: [...this.turns]`. External snapshot consumers could mutate `turns[n]` or `turns[n].usage` and corrupt tracker state in-place.
+- `src/server/protocolParser.ts` correctly accepts `0`, but `src/tools/usage.ts` still validated `warnAtUsd` / `stopAtUsd` with `.positive()`. Since tool inputs are schema-validated in `src/runtime/piRuntime.ts`, model-driven `usage set_budget` calls still could not set a `$0.00` limit.
+- Patched both remaining gaps and added focused tests in `test/session.costTracker.test.ts`, `test/protocol.test.ts`, and `test/tools.usage.test.ts`.
+- Verification:
+  - `~/.bun/bin/bun -e 'import { SessionCostTracker } from "./src/session/costTracker"; const t=new SessionCostTracker("s"); t.recordTurn({turnId:"1",provider:"openai",model:"gpt-5.4",usage:{promptTokens:10,completionTokens:5,totalTokens:15}}); const snap=t.getSnapshot(); snap.turns[0].model="mutated"; snap.turns[0].usage.totalTokens=999; console.log(JSON.stringify(t.getSnapshot().turns[0]));'` previously reproduced live `turns` mutation through the snapshot boundary; the new regression test now locks that down.
+  - `~/.bun/bin/bun -e 'import { createUsageTool } from "./src/tools/usage"; import { SessionCostTracker } from "./src/session/costTracker"; const tool=createUsageTool({config:{},log(){},askUser:async()=>"",approveCommand:async()=>true,costTracker:new SessionCostTracker("s")}); const schema=tool.inputSchema; console.log(JSON.stringify(schema.safeParse({action:"set_budget",stopAtUsd:0})));'` previously failed schema validation (`expected number to be >0`); the focused tool test now asserts `$0.00` is accepted.
+  - `~/.bun/bin/bun test test/protocol.test.ts test/session.costTracker.test.ts test/tools.usage.test.ts` -> pass (`170 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `git diff --check` -> pass
+
+# Task: Review PR #30 against main
+
+## Plan
+- [x] Inspect `git diff 8452ff10a2268e2b29700513f6ff5ff4393f0cd4` and group the changes into reviewable areas.
+- [x] Validate changed protocol/session/auth/desktop code for correctness regressions with targeted file context and tests where useful.
+- [x] Record the review outcome below and return prioritized findings for the PR.
+
+## Review
+- Confirmed four review-worthy regressions in the patch:
+- `src/server/session/TurnExecutionManager.ts` now hard-blocks every new turn after a hard-stop threshold trips, but only the desktop client learned how to send `set_session_usage_budget`, so CLI/TUI users can lock themselves out of a session with no built-in recovery path.
+- `src/session/costTracker.ts` treats cost tracking as fully available as soon as *any* turn has a known price. If earlier turns had `estimatedCostUsd === null`, they are silently omitted from the running total once a later priced turn arrives, so `session_usage.estimatedTotalCostUsd` and budget enforcement can undercount mixed-model sessions.
+- `src/runtime/piMessageBridge.ts` now preserves cached prompt tokens but still ignores nested `usage.cost.total`, so OpenAI Responses turns lose the exact provider-computed cost coming from `src/runtime/openaiResponsesProjector.ts`.
+- `src/server/session/TurnExecutionManager.ts` emits the full cumulative `session_usage` snapshot after every turn, including `turns[]`; the desktop transcript pipeline persists every server event verbatim, so transcript size grows quadratically with session length and reopen/reconnect work scales badly.
+- Verification:
+  - `~/.bun/bin/bun -e 'import { SessionCostTracker } from "./src/session/costTracker"; const t = new SessionCostTracker("s"); t.recordTurn({ turnId: "1", provider: "openai", model: "unknown-model", usage: { promptTokens: 100, completionTokens: 20, totalTokens: 120 } }); t.recordTurn({ turnId: "2", provider: "openai", model: "gpt-5.4", usage: { promptTokens: 1000, completionTokens: 100, totalTokens: 1100 } }); console.log(JSON.stringify(t.getSnapshot()));'` -> reports `estimatedTotalCostUsd: 0.004` even though the first turn had unknown cost
+  - `~/.bun/bin/bun -e 'import { normalizePiUsage } from "./src/runtime/piMessageBridge"; console.log(JSON.stringify(normalizePiUsage({ input: 80, output: 20, totalTokens: 130, cacheRead: 30, cost: { total: 0.00123 } })));'` -> returns `{"promptTokens":110,"completionTokens":20,"totalTokens":130,"cachedPromptTokens":30}` with no `estimatedCostUsd`
+  - `~/.bun/bin/bun test test/session.test.ts test/session.costTracker.test.ts apps/desktop/test/thread-reconnect.test.ts apps/desktop/test/usage-page.test.ts` -> 206 pass, 1 unrelated existing failure in `test/session.test.ts` (`logoutProviderAuth emits provider_auth_result and clears provider state`)
+
 # Task: Fix session usage budget persistence and persisted cost tracker validation
 
 ## Plan

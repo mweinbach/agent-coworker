@@ -1159,6 +1159,20 @@ describe("safeParseClientMessage", () => {
       }
     });
 
+    test("accepts zero-dollar budget thresholds", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_session_usage_budget",
+          sessionId: "s1",
+          stopAtUsd: 0,
+        }),
+      );
+      expect(msg.type).toBe("set_session_usage_budget");
+      if (msg.type === "set_session_usage_budget") {
+        expect(msg.stopAtUsd).toBe(0);
+      }
+    });
+
     test("requires at least one budget field", () => {
       expect(expectErr(JSON.stringify({ type: "set_session_usage_budget", sessionId: "s1" }))).toBe(
         "set_session_usage_budget requires warnAtUsd and/or stopAtUsd",

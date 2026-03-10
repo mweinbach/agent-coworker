@@ -75,6 +75,11 @@ export type BudgetThresholds = {
     stopAtUsd?: number;
 };
 
+export type BudgetThresholdUpdate = {
+    warnAtUsd?: number | null;
+    stopAtUsd?: number | null;
+};
+
 export type BudgetStatus = {
     configured: boolean;
     warnAtUsd: number | null;
@@ -215,6 +220,7 @@ export class SessionCostTracker {
     // ── Budget management ──────────────────────────────────────────────
 
     setBudget(thresholds: BudgetThresholds): void {
+        this.assertValidBudgetThresholds(thresholds);
         this.budgetThresholds = { ...thresholds };
         const currentCostUsd = this.estimatedTotalCostUsd;
         this.warningTriggered = thresholds.warnAtUsd !== undefined && currentCostUsd !== null
@@ -225,19 +231,8 @@ export class SessionCostTracker {
             : false;
     }
 
-    updateBudget(thresholds: {
-        warnAtUsd?: number | null;
-        stopAtUsd?: number | null;
-    }): void {
-        const current = this.getBudgetStatus();
-        this.setBudget({
-            ...(thresholds.warnAtUsd === undefined
-                ? (current.warnAtUsd !== null ? { warnAtUsd: current.warnAtUsd } : {})
-                : (typeof thresholds.warnAtUsd === "number" ? { warnAtUsd: thresholds.warnAtUsd } : {})),
-            ...(thresholds.stopAtUsd === undefined
-                ? (current.stopAtUsd !== null ? { stopAtUsd: current.stopAtUsd } : {})
-                : (typeof thresholds.stopAtUsd === "number" ? { stopAtUsd: thresholds.stopAtUsd } : {})),
-        });
+    updateBudget(thresholds: BudgetThresholdUpdate): void {
+        this.setBudget(this.resolveUpdatedBudgetThresholds(thresholds));
     }
 
     getBudgetStatus(): BudgetStatus {
@@ -404,6 +399,27 @@ export class SessionCostTracker {
                 thresholdUsd: stopAtUsd,
                 message: `🛑 Budget exceeded: session cost ${formatCost(this.estimatedTotalCostUsd)} has exceeded the hard cap of ${formatCost(stopAtUsd)}. No further turns will be processed.`,
             });
+        }
+    }
+
+    private resolveUpdatedBudgetThresholds(thresholds: BudgetThresholdUpdate): BudgetThresholds {
+        const current = this.getBudgetStatus();
+        const nextWarnAtUsd = thresholds.warnAtUsd === undefined ? current.warnAtUsd : thresholds.warnAtUsd;
+        const nextStopAtUsd = thresholds.stopAtUsd === undefined ? current.stopAtUsd : thresholds.stopAtUsd;
+
+        return {
+            ...(typeof nextWarnAtUsd === "number" ? { warnAtUsd: nextWarnAtUsd } : {}),
+            ...(typeof nextStopAtUsd === "number" ? { stopAtUsd: nextStopAtUsd } : {}),
+        };
+    }
+
+    private assertValidBudgetThresholds(thresholds: BudgetThresholds): void {
+        if (
+            thresholds.warnAtUsd !== undefined
+            && thresholds.stopAtUsd !== undefined
+            && thresholds.warnAtUsd >= thresholds.stopAtUsd
+        ) {
+            throw new Error("Warning threshold must be less than the hard-stop threshold.");
         }
     }
 

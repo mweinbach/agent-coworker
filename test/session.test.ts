@@ -3594,6 +3594,26 @@ describe("AgentSession", () => {
       });
     });
 
+    test("rejects merged budget updates that would invalidate the existing hard stop", async () => {
+      const { session, events } = makeSession();
+      const tracker = (session as any).state.costTracker as SessionCostTracker;
+      tracker.updateBudget({ warnAtUsd: 2, stopAtUsd: 5 });
+
+      session.setSessionUsageBudget(6, undefined);
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt).toBeDefined();
+      expect(errorEvt?.code).toBe("validation_failed");
+      expect(errorEvt?.message).toContain("Warning threshold must be less than the hard-stop threshold.");
+
+      const usageEvt = events.find((e) => e.type === "session_usage");
+      expect(usageEvt).toBeUndefined();
+      expect(tracker.getBudgetStatus()).toMatchObject({
+        warnAtUsd: 2,
+        stopAtUsd: 5,
+      });
+    });
+
     test("restores persisted cost tracker state on session resume", () => {
       const tracker = new SessionCostTracker("persisted-session");
       tracker.recordTurn({

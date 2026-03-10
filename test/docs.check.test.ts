@@ -20,4 +20,13 @@ describe("docs checker parity", () => {
     const wsProtocol = await fs.readFile(path.join(repoRoot(), "docs", "websocket-protocol.md"), "utf-8");
     expect(wsProtocol).toContain(protocolVersionNeedle());
   });
+
+  test("websocket protocol docs describe nested session usage shapes", async () => {
+    const wsProtocol = await fs.readFile(path.join(repoRoot(), "docs", "websocket-protocol.md"), "utf-8");
+    expect(wsProtocol).toContain("### ModelUsageSummary");
+    expect(wsProtocol).toContain("### TurnCostEntry");
+    expect(wsProtocol).toContain("### TurnUsage");
+    expect(wsProtocol).toContain("### ModelPricing");
+    expect(wsProtocol).toContain("| `usage` | `SessionUsageSnapshot \\| null` |");
+  });
 });

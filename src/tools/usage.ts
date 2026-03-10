@@ -36,13 +36,15 @@ Use this tool to monitor spending, check costs before expensive operations, or s
             warnAtUsd: z
                 .number()
                 .positive()
+                .nullable()
                 .optional()
-                .describe("Budget warning threshold in USD (for set_budget)"),
+                .describe("Budget warning threshold in USD, or null to clear it (for set_budget)"),
             stopAtUsd: z
                 .number()
                 .positive()
+                .nullable()
                 .optional()
-                .describe("Budget hard-stop threshold in USD (for set_budget)"),
+                .describe("Budget hard-stop threshold in USD, or null to clear it (for set_budget)"),
             lastN: z
                 .number()
                 .int()
@@ -57,8 +59,8 @@ Use this tool to monitor spending, check costs before expensive operations, or s
             lastN,
         }: {
             action: "summary" | "detail" | "budget" | "set_budget" | "pricing";
-            warnAtUsd?: number;
-            stopAtUsd?: number;
+            warnAtUsd?: number | null;
+            stopAtUsd?: number | null;
             lastN?: number;
         }) => {
             ctx.log(`tool> usage ${JSON.stringify({ action })}`);
@@ -121,18 +123,26 @@ Use this tool to monitor spending, check costs before expensive operations, or s
                         return 'Provide at least one of "warnAtUsd" or "stopAtUsd" to set a budget threshold.';
                     }
 
-                    if (stopAtUsd !== undefined && warnAtUsd !== undefined && warnAtUsd >= stopAtUsd) {
+                    if (typeof stopAtUsd === "number" && typeof warnAtUsd === "number" && warnAtUsd >= stopAtUsd) {
                         return "Warning threshold must be less than the hard-stop threshold.";
                     }
 
-                    tracker.updateBudget({
-                        warnAtUsd,
-                        stopAtUsd,
-                    });
+                    try {
+                        tracker.updateBudget({
+                            warnAtUsd,
+                            stopAtUsd,
+                        });
+                    } catch (error) {
+                        return error instanceof Error ? error.message : String(error);
+                    }
 
                     const parts: string[] = ["Budget updated:"];
-                    if (warnAtUsd !== undefined) parts.push(`  Warning at: ${formatCost(warnAtUsd)}`);
-                    if (stopAtUsd !== undefined) parts.push(`  Hard stop at: ${formatCost(stopAtUsd)}`);
+                    if (warnAtUsd !== undefined) {
+                        parts.push(warnAtUsd === null ? "  Warning cleared" : `  Warning at: ${formatCost(warnAtUsd)}`);
+                    }
+                    if (stopAtUsd !== undefined) {
+                        parts.push(stopAtUsd === null ? "  Hard stop cleared" : `  Hard stop at: ${formatCost(stopAtUsd)}`);
+                    }
 
                     ctx.log(`tool< usage set_budget warn=${warnAtUsd} stop=${stopAtUsd}`);
                     return parts.join("\n");

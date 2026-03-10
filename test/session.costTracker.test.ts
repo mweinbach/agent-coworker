@@ -123,4 +123,18 @@ describe("SessionCostTracker", () => {
       stopAtUsd: null,
     });
   });
+
+  test("updateBudget rejects merged thresholds where warning would exceed the hard stop", () => {
+    const tracker = new SessionCostTracker("session-1");
+
+    tracker.updateBudget({ warnAtUsd: 2, stopAtUsd: 5 });
+
+    expect(() => tracker.updateBudget({ warnAtUsd: 6 })).toThrow(
+      "Warning threshold must be less than the hard-stop threshold.",
+    );
+    expect(tracker.getBudgetStatus()).toMatchObject({
+      warnAtUsd: 2,
+      stopAtUsd: 5,
+    });
+  });
 });

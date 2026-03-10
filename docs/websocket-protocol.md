@@ -496,6 +496,102 @@ Returned in `server_hello` and `config_updated`:
 | `createdAt` | `string` | ISO 8601 creation timestamp |
 | `updatedAt` | `string` | ISO 8601 last update timestamp |
 
+### ModelUsageSummary
+
+```json
+{
+  "provider": "openai",
+  "model": "gpt-5.4",
+  "turns": 4,
+  "totalPromptTokens": 3200,
+  "totalCompletionTokens": 900,
+  "totalTokens": 4100,
+  "estimatedCostUsd": 0.0235
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `provider` | `ProviderName` | Provider identifier used for the turns in this bucket |
+| `model` | `string` | Model identifier used for the turns in this bucket |
+| `turns` | `number` | Number of recorded turns for this provider/model pair |
+| `totalPromptTokens` | `number` | Prompt/input tokens accumulated for this provider/model pair |
+| `totalCompletionTokens` | `number` | Completion/output tokens accumulated for this provider/model pair |
+| `totalTokens` | `number` | Total tokens accumulated for this provider/model pair |
+| `estimatedCostUsd` | `number \| null` | Estimated cumulative cost for this provider/model pair |
+
+### TurnCostEntry
+
+```json
+{
+  "turnId": "turn-1",
+  "turnIndex": 0,
+  "timestamp": "2026-03-09T18:01:00.000Z",
+  "provider": "openai",
+  "model": "gpt-5.4",
+  "usage": {
+    "promptTokens": 1200,
+    "completionTokens": 300,
+    "totalTokens": 1500,
+    "cachedPromptTokens": 200,
+    "estimatedCostUsd": 0.0084
+  },
+  "estimatedCostUsd": 0.0084,
+  "pricing": {
+    "inputPerMillion": 1.25,
+    "outputPerMillion": 10,
+    "cachedInputPerMillion": 0.125
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `turnId` | `string` | Turn identifier |
+| `turnIndex` | `number` | Zero-based turn index inside the session snapshot |
+| `timestamp` | `string` | ISO 8601 timestamp for when the turn usage was recorded |
+| `provider` | `ProviderName` | Provider used for this turn |
+| `model` | `string` | Model used for this turn |
+| `usage` | `TurnUsage` | Raw usage counters and optional turn-level estimate metadata |
+| `estimatedCostUsd` | `number \| null` | Estimated cost for this turn after pricing resolution |
+| `pricing` | `ModelPricing \| null` | Pricing entry used for this estimate, or `null` when unavailable |
+
+### TurnUsage
+
+```json
+{
+  "promptTokens": 1200,
+  "completionTokens": 300,
+  "totalTokens": 1500,
+  "cachedPromptTokens": 200,
+  "estimatedCostUsd": 0.0084
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `promptTokens` | `number` | Prompt/input tokens reported for the turn |
+| `completionTokens` | `number` | Completion/output tokens reported for the turn |
+| `totalTokens` | `number` | Total tokens reported for the turn |
+| `cachedPromptTokens` | `number` | Cached prompt/input tokens when the provider exposes them |
+| `estimatedCostUsd` | `number` | Runtime-provided turn estimate when available |
+
+### ModelPricing
+
+```json
+{
+  "inputPerMillion": 1.25,
+  "outputPerMillion": 10,
+  "cachedInputPerMillion": 0.125
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `inputPerMillion` | `number` | USD cost per 1M prompt/input tokens |
+| `outputPerMillion` | `number` | USD cost per 1M completion/output tokens |
+| `cachedInputPerMillion` | `number` | USD cost per 1M cached prompt/input tokens when discounted pricing exists |
+
 ### BudgetStatus
 
 ```json

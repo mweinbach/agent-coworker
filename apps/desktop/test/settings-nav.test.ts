@@ -109,6 +109,12 @@ describe("settings nav (store)", () => {
     expect(useAppStore.getState().settingsPage).toBe("mcp");
   });
 
+  test("openSettings accepts usage page", () => {
+    useAppStore.getState().openSettings("usage");
+    expect(useAppStore.getState().view).toBe("settings");
+    expect(useAppStore.getState().settingsPage).toBe("usage");
+  });
+
   test("openSettings accepts updates page", () => {
     useAppStore.getState().openSettings("updates");
     expect(useAppStore.getState().view).toBe("settings");

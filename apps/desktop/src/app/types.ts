@@ -109,7 +109,7 @@ export type FeedItem =
 
 export type ViewId = "chat" | "skills" | "settings";
 
-export type SettingsPageId = "providers" | "workspaces" | "mcp" | "updates" | "developer";
+export type SettingsPageId = "providers" | "usage" | "workspaces" | "mcp" | "updates" | "developer";
 
 export type SessionConfigSubset = Extract<ServerEvent, { type: "session_config" }>["config"];
 export type MCPServersEvent = Extract<ServerEvent, { type: "mcp_servers" }>;

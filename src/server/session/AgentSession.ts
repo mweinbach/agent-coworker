@@ -769,7 +769,13 @@ export class AgentSession {
       return;
     }
 
-    tracker.updateBudget({ warnAtUsd, stopAtUsd });
+    try {
+      tracker.updateBudget({ warnAtUsd, stopAtUsd });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.context.emitError("validation_failed", "session", message);
+      return;
+    }
 
     this.context.emit({
       type: "session_usage",

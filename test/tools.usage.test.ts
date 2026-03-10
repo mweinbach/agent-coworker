@@ -72,6 +72,18 @@ describe("usage tool", () => {
         expect(budgetStatus).toContain("Hard-stop threshold: $5.00");
     });
 
+    test("set_budget clears explicit thresholds with null", async () => {
+        const tool = createUsageTool(ctx);
+        await tool.execute({ action: "set_budget", warnAtUsd: 1.0, stopAtUsd: 5.0 });
+
+        const result = await tool.execute({ action: "set_budget", stopAtUsd: null });
+        expect(result).toContain("Hard stop cleared");
+
+        const budgetStatus = await tool.execute({ action: "budget" });
+        expect(budgetStatus).toContain("Warning threshold:  $1.00");
+        expect(budgetStatus).not.toContain("Hard-stop threshold:");
+    });
+
     test("set_budget rejects invalid configurations", async () => {
         const tool = createUsageTool(ctx);
         const missingBoth = await tool.execute({ action: "set_budget" });
@@ -79,6 +91,10 @@ describe("usage tool", () => {
 
         const warnHigherThanStop = await tool.execute({ action: "set_budget", warnAtUsd: 10, stopAtUsd: 5 });
         expect(warnHigherThanStop).toContain("Warning threshold must be less than");
+
+        await tool.execute({ action: "set_budget", stopAtUsd: 5 });
+        const invalidMergedUpdate = await tool.execute({ action: "set_budget", warnAtUsd: 10 });
+        expect(invalidMergedUpdate).toContain("Warning threshold must be less than");
     });
 
     test("pricing action lists the catalog", async () => {

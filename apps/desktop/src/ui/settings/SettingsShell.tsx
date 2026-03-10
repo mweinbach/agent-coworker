@@ -7,6 +7,7 @@ import { Button } from "../../components/ui/button";
 import { cn } from "../../lib/utils";
 import type { SettingsPageId } from "../../app/types";
 import { ProvidersPage } from "./pages/ProvidersPage";
+import { UsagePage } from "./pages/UsagePage";
 import { WorkspacesPage } from "./pages/WorkspacesPage";
 import { McpServersPage } from "./pages/McpServersPage";
 import { UpdatesPage } from "./pages/UpdatesPage";
@@ -20,6 +21,7 @@ type SettingsPageDefinition = {
 
 const SETTINGS_PAGES: SettingsPageDefinition[] = [
   { id: "providers", label: "Providers", render: () => <ProvidersPage /> },
+  { id: "usage", label: "Usage", render: () => <UsagePage /> },
   { id: "workspaces", label: "Workspaces", render: () => <WorkspacesPage /> },
   { id: "mcp", label: "MCP Servers", render: () => <McpServersPage /> },
   { id: "updates", label: "Updates", render: () => <UpdatesPage /> },

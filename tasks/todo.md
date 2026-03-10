@@ -2236,3 +2236,44 @@
 - `~/.bun/bin/bun test test/runtime.pi-message-bridge.test.ts test/runtime.openai-responses-runtime.test.ts test/session.costTracker.test.ts test/session/pricing.test.ts test/agent.test.ts test/session.test.ts apps/desktop/test/thread-reconnect.test.ts apps/desktop/test/chat-reasoning-ui.test.ts` -> pass (`300 pass, 0 fail`)
 - `~/.bun/bin/bun test test/agentSocket.parse.test.ts test/server.toolstream.test.ts test/server.model-stream.test.ts test/session.stream-pipeline.test.ts` -> pass (`161 pass, 0 fail`)
 - `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`209 pass, 0 fail`)
+
+# Task: Triage PR review comments for relevance and fix scope
+
+## Plan
+- [x] Fetch the live PR review comments and inline threads for the current branch.
+- [x] Normalize them into numbered items with file context, author, and thread state.
+- [x] Use subagents to classify each item as relevant, already addressed, or not actionable, and draft a fix plan for anything still relevant.
+- [x] Return the triage summary in-thread without applying code changes.
+
+## Review
+- PR #30 on GitHub points at head commit `d88d6f8aa47e9975e06af98cc2553e8552309915`, while the local `pr/30` checkout is one commit ahead. Triage was done against the GitHub PR head, not the extra local commit.
+- Still relevant: `src/server/session/AgentSession.ts` and `src/tools/usage.ts` both preserve budget thresholds incorrectly because they route partial updates through replace-style `SessionCostTracker.setBudget(...)`; warn-only updates drop an existing hard-stop threshold instead of preserving it.
+- Partially relevant docs follow-up: the websocket docs now cover nullable `session_usage.usage` and the main snapshot fields, but `SessionUsageSnapshot` still references undocumented nested shapes (`ModelUsageSummary[]`, `TurnCostEntry[]`), so the contract is not fully self-describing yet.
+- Already addressed or stale: protocol version/parser support, nullable `session_usage` parsing, missing `bun:test` import, deterministic recent-turn timestamps, trigger reset on threshold removal, hard-stop enforcement, recovery path after lockout, and the outdated `createTools()` / spacing nits.
+
+### Verification
+- `python3 /Users/mweinbach/.codex/skills/gh-address-comments/scripts/fetch_comments.py` could not resolve the PR from local branch metadata because `gh` mapped the checkout to `Diwak4r:pr/30`; fetched PR #30 review data instead via the skill script imported with explicit owner/repo/number.
+- `gh pr view 30 --json headRefOid,commits` -> PR head confirmed as `d88d6f8aa47e9975e06af98cc2553e8552309915`
+- `~/.bun/bin/bun test test/agentSocket.parse.test.ts test/session.costTracker.test.ts test/tools.usage.test.ts test/session.test.ts` in a detached worktree at `d88d6f8...` -> pass (`205 pass, 0 fail`)
+- `~/.bun/bin/bun -e 'import { SessionCostTracker } from "./src/session/costTracker"; const t=new SessionCostTracker("s"); t.setBudget({ warnAtUsd: 2, stopAtUsd: 5 }); console.log("before", JSON.stringify(t.getBudgetStatus())); t.setBudget({ warnAtUsd: 3 }); console.log("after_warn_only", JSON.stringify(t.getBudgetStatus()));'` in the detached worktree -> reproduced the live partial-update bug (`stopAtUsd` dropped to `null`)
+- `~/.bun/bin/bun -e 'import { createUsageTool } from "./src/tools/usage"; import { SessionCostTracker } from "./src/session/costTracker"; const tracker = new SessionCostTracker("s"); const tool = createUsageTool({ config: {} as any, log: ()=>{}, askUser: async ()=>"", approveCommand: async ()=>true, costTracker: tracker }); await tool.execute({ action: "set_budget", warnAtUsd: 2, stopAtUsd: 5 }); console.log("after_both", JSON.stringify(tracker.getBudgetStatus())); await tool.execute({ action: "set_budget", warnAtUsd: 3 }); console.log("after_warn_only", JSON.stringify(tracker.getBudgetStatus()));'` in the detached worktree -> reproduced the same bug through the tool path
+
+# Task: Fix session budget update semantics and add desktop usage settings page
+
+## Plan
+- [x] Fix the remaining budget-threshold update bug so omitted fields are preserved and only explicit `null` clears thresholds across the tracker, websocket handler, and `usage` tool.
+- [x] Complete the websocket protocol docs for nested session-usage shapes and extend docs regression coverage.
+- [x] Add a desktop Settings `Usage` page backed by the selected thread’s `sessionUsage` / `lastTurnUsage`, including model/cost breakdowns and an estimates warning popup.
+- [x] Run focused core + desktop verification and record the validated result.
+
+## Review
+- Budget updates now preserve omitted thresholds, allow explicit `null` clears, and reject merged warn/stop configurations that would become invalid after partial updates.
+- The websocket protocol docs now define nested session-usage payload shapes (`ModelUsageSummary`, `TurnCostEntry`, `TurnUsage`, `ModelPricing`) and the docs check locks those sections in place.
+- Desktop Settings now includes a `Usage` page with per-thread model/cost/token breakdowns, recent turn history, budget status, and an estimates warning dialog that cautions users that billing may vary.
+
+### Verification
+- `~/.bun/bin/bun test test/session.costTracker.test.ts test/session.test.ts test/tools.usage.test.ts test/docs.check.test.ts` -> pass (`209 pass, 0 fail`)
+- `~/.bun/bin/bun test --cwd apps/desktop test/settings-nav.test.ts test/thread-reconnect.test.ts test/usage-page.test.ts` -> pass (`20 pass, 0 fail`)
+- `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`212 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass
+- `~/.bun/bin/bun test` -> pass (`1917 pass, 2 skip, 0 fail`)

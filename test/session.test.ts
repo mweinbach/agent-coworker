@@ -3580,6 +3580,18 @@ describe("AgentSession", () => {
       expect(events.some((e) => e.type === "user_message")).toBe(true);
     });
 
+    test("persists usage budget updates immediately", async () => {
+      const { session } = makeSession();
+      const persistedReasons: string[] = [];
+      (session as any).persistenceManager.queuePersistSessionSnapshot = (reason: string) => {
+        persistedReasons.push(reason);
+      };
+
+      session.setSessionUsageBudget(2, 5);
+
+      expect(persistedReasons).toEqual(["session.usage_budget_updated"]);
+    });
+
     test("preserves unspecified budget thresholds when updating session usage budget", async () => {
       const { session, events } = makeSession();
       const tracker = (session as any).state.costTracker as SessionCostTracker;

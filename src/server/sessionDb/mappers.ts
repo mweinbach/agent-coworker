@@ -5,7 +5,7 @@ import type { SessionUsageSnapshot } from "../../session/costTracker";
 import type { HarnessContextState, ModelMessage, TodoItem } from "../../types";
 import { openAiContinuationStateSchema } from "../../shared/openaiContinuation";
 import type { PersistedSessionRecord } from "../sessionDb";
-import type { PersistedSessionSummary } from "../sessionStore";
+import { sessionUsageSnapshotSchema, type PersistedSessionSummary } from "../sessionStore";
 import {
   isoTimestampSchema,
   nonEmptyStringSchema,
@@ -26,10 +26,7 @@ const todoItemSchema = z.object({
   activeForm: z.string(),
 }).strict();
 const harnessContextSchema = z.record(z.string(), z.unknown());
-const costTrackerSchema = z.custom<SessionUsageSnapshot>(
-  (value) => typeof value === "object" && value !== null,
-  "Invalid cost tracker snapshot",
-);
+const costTrackerSchema: z.ZodType<SessionUsageSnapshot> = sessionUsageSnapshotSchema;
 
 const summaryRowSchema = z.object({
   session_id: nonEmptyStringSchema,

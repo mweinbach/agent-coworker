@@ -182,7 +182,38 @@ const harnessContextStateSchema = z.object({
   metadata: harnessContextMetadataSchema.optional(),
   updatedAt: isoTimestampSchema,
 }).strict();
-const sessionUsageSnapshotSchema = z.object({
+const modelPricingSchema = z.object({
+  inputPerMillion: z.number(),
+  outputPerMillion: z.number(),
+  cachedInputPerMillion: z.number().optional(),
+}).strict();
+const turnUsageSchema = z.object({
+  promptTokens: z.number().int().nonnegative(),
+  completionTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  cachedPromptTokens: z.number().int().nonnegative().optional(),
+  estimatedCostUsd: z.number().optional(),
+}).strict();
+const turnCostEntrySchema = z.object({
+  turnId: z.string().trim().min(1),
+  turnIndex: z.number().int().nonnegative(),
+  timestamp: isoTimestampSchema,
+  provider: providerNameSchema,
+  model: z.string().trim().min(1),
+  usage: turnUsageSchema,
+  estimatedCostUsd: z.number().nullable(),
+  pricing: modelPricingSchema.nullable(),
+}).strict();
+const modelUsageSummarySchema = z.object({
+  provider: providerNameSchema,
+  model: z.string().trim().min(1),
+  turns: z.number().int().nonnegative(),
+  totalPromptTokens: z.number().int().nonnegative(),
+  totalCompletionTokens: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  estimatedCostUsd: z.number().nullable(),
+}).strict();
+export const sessionUsageSnapshotSchema = z.object({
   sessionId: z.string().trim().min(1),
   totalTurns: z.number().int().nonnegative(),
   totalPromptTokens: z.number().int().nonnegative(),
@@ -190,8 +221,8 @@ const sessionUsageSnapshotSchema = z.object({
   totalTokens: z.number().int().nonnegative(),
   estimatedTotalCostUsd: z.number().nullable(),
   costTrackingAvailable: z.boolean(),
-  byModel: z.array(z.custom((value) => typeof value === "object" && value !== null, "Invalid byModel entry")),
-  turns: z.array(z.custom((value) => typeof value === "object" && value !== null, "Invalid turn entry")),
+  byModel: z.array(modelUsageSummarySchema),
+  turns: z.array(turnCostEntrySchema),
   budgetStatus: z.object({
     configured: z.boolean(),
     warnAtUsd: z.number().nullable(),

@@ -192,4 +192,37 @@ describe("sessionDb mappers", () => {
       }),
     ).toThrow("Invalid JSON in messages_json");
   });
+
+  test("mapPersistedSessionRecordRow rejects malformed cost tracker snapshots", () => {
+    expect(() =>
+      mapPersistedSessionRecordRow({
+        session_id: "sess-2",
+        session_kind: "root",
+        parent_session_id: null,
+        agent_type: null,
+        title: "Session Title",
+        provider: "openai",
+        model: "gpt-5",
+        working_directory: "/workspace",
+        system_prompt: "system",
+        created_at: "2026-02-19T00:00:00.000Z",
+        updated_at: "2026-02-19T00:00:01.000Z",
+        output_directory: null,
+        uploads_directory: null,
+        enable_mcp: 1,
+        has_pending_ask: 0,
+        has_pending_approval: 1,
+        message_count: 12,
+        last_event_seq: 9,
+        status: "closed",
+        title_source: "manual",
+        title_model: null,
+        messages_json: "[{\"role\":\"user\",\"content\":\"hello\"}]",
+        provider_state_json: null,
+        todos_json: "[]",
+        harness_context_json: null,
+        cost_tracker_json: "{}",
+      }),
+    ).toThrow("Invalid cost_tracker_json");
+  });
 });

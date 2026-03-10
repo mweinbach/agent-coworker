@@ -782,6 +782,7 @@ export class AgentSession {
       sessionId: this.id,
       usage: tracker.getSnapshot(),
     });
+    this.queuePersistSessionSnapshot("session.usage_budget_updated");
   }
 
   private buildPersistedSnapshotAt(updatedAt: string): PersistedSessionSnapshot {

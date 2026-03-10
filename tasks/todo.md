@@ -1,3 +1,21 @@
+# Task: Fix session usage budget persistence and persisted cost tracker validation
+
+## Plan
+- [x] Inspect the session budget update path, persistence queueing, and persisted cost tracker mapping contract to confirm the two failure modes.
+- [x] Patch `src/server/session/AgentSession.ts` so `setSessionUsageBudget()` queues a persisted snapshot immediately after budget changes.
+- [x] Tighten `src/server/sessionDb/mappers.ts` to reject malformed `cost_tracker_json` payloads before session resume reaches `SessionCostTracker.fromSnapshot()`.
+- [x] Add focused regression tests for both behaviors and run the required verification commands.
+
+## Review
+- `src/server/session/AgentSession.ts` now queues `session.usage_budget_updated` immediately after a successful `setSessionUsageBudget()` mutation, so warn/stop thresholds are persisted without waiting for a later unrelated session change.
+- `src/server/sessionStore.ts` now exports a structured `sessionUsageSnapshotSchema` with strict nested validation for `turns`, `byModel`, `budgetStatus`, and pricing/usage payloads. `src/server/sessionDb/mappers.ts` reuses that schema for `cost_tracker_json`, so malformed persisted snapshots are rejected during row mapping instead of crashing later in `SessionCostTracker.fromSnapshot()`.
+- Added focused regression coverage in `test/session.test.ts` for the budget-persistence queueing behavior and in `test/session-db-mappers.test.ts` for malformed `cost_tracker_json`.
+- Verification:
+  - `~/.bun/bin/bun test test/session.test.ts test/session-db-mappers.test.ts test/session-store.test.ts test/session-db.test.ts` -> pass (`211 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1922 pass, 0 fail, 2 skip`)
+  - `git diff --check` -> pass
+
 # Task: Audit usage payload shape assumptions in tests and websocket docs
 
 ## Plan

@@ -17,6 +17,22 @@
   - `~/.bun/bin/bun test` -> pass (`1856 pass, 0 fail, 2 skip`)
   - `~/.bun/bin/bun run desktop:build -- --publish never` -> pass for local unsigned packaging; produced `apps/desktop/release/Cowork-0.1.15-mac-arm64.dmg`, `apps/desktop/release/Cowork-0.1.15-mac-arm64.zip`, blockmaps, and refreshed updater metadata before the dual-stack listener follow-up.
 
+# Task: Render desktop release notes as formatted content instead of escaped HTML
+
+## Plan
+- [x] Inspect the desktop updates page and updater state shape to confirm why release notes HTML is rendering as literal tags.
+- [x] Route release notes through the existing sanitized markdown/HTML renderer used elsewhere in the desktop app and add regression coverage for HTML-formatted notes.
+- [x] Re-run desktop tests, typecheck, and the full repo suite, then record the result below.
+
+## Review
+- Root cause: `apps/desktop/src/ui/settings/pages/UpdatesPage.tsx` was rendering `updateState.release.releaseNotes` inside a plain text `<div>`, so GitHub/electron-updater release bodies that arrive as HTML were escaped and shown literally in the desktop Updates page.
+- Fixed the release notes panel to use the existing sanitized rich-text path via `MessageResponse`, which already runs the app’s Streamdown + sanitize pipeline. That keeps markdown support, renders trusted HTML release bodies as formatted content, and avoids introducing a second renderer just for updater notes.
+- Added a regression in `apps/desktop/test/updates-page.test.ts` that feeds HTML-formatted release notes through server-side rendering and asserts they show up as actual `<h1>/<p>/<li>` markup rather than escaped `&lt;h1&gt;...`.
+- Verification:
+  - `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`201 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1857 pass, 0 fail, 2 skip`)
+
 # Task: Restore Codex OAuth acquisition parity without prebinding the callback port
 
 ## Plan

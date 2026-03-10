@@ -135,4 +135,30 @@ describe("desktop updates page", () => {
     expect(html).toContain("Bug fixes");
     expect(html).toContain("Open release notes");
   });
+
+  test("renders HTML-formatted release notes as formatted content instead of escaped tags", () => {
+    const html = renderToStaticMarkup(
+      createElement(UpdatesPage, {
+        state: {
+          ...MOCK_UPDATE_STATE,
+          phase: "downloaded",
+          packaged: true,
+          release: {
+            version: "0.1.17",
+            releaseName: "v0.1.17",
+            releaseDate: "2026-03-09T23:29:42.000Z",
+            releaseNotes: "<h1>Cowork 0.1.17</h1><p>This hotfix fixes Codex OAuth sign-in failures.</p><ul><li>OAuth fix</li></ul>",
+            releasePageUrl: "https://github.com/mweinbach/agent-coworker/releases/tag/v0.1.17",
+          },
+        } as any,
+      }),
+    );
+
+    expect(html).toContain("<h1");
+    expect(html).toContain("Cowork 0.1.17</h1>");
+    expect(html).toContain("<p>This hotfix fixes Codex OAuth sign-in failures.</p>");
+    expect(html).toContain("<li");
+    expect(html).toContain("OAuth fix</li>");
+    expect(html).not.toContain("&lt;h1&gt;Cowork 0.1.17&lt;/h1&gt;");
+  });
 });

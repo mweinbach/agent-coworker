@@ -4,6 +4,7 @@ import { DownloadIcon, LoaderCircleIcon, RefreshCwIcon, RotateCcwIcon } from "lu
 
 import type { UpdaterState } from "../../../lib/desktopApi";
 import { useAppStore } from "../../../app/store";
+import { MessageResponse } from "../../../components/ai-elements/message";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
@@ -174,7 +175,9 @@ export function UpdatesPage(props: UpdatesPageProps = {}) {
             {updateState.release.releaseNotes ? (
               <div>
                 <div className="text-xs uppercase tracking-wide text-muted-foreground">Release notes</div>
-                <div className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{updateState.release.releaseNotes}</div>
+                <MessageResponse className="mt-2 max-w-none text-sm leading-6 text-muted-foreground [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_p]:text-muted-foreground [&_ul]:text-muted-foreground">
+                  {updateState.release.releaseNotes}
+                </MessageResponse>
               </div>
             ) : null}
 

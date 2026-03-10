@@ -663,6 +663,13 @@ const transcriptFeedPayloadSchema = z.discriminatedUnion("type", [
   transcriptSessionBusyPayloadSchema,
 ]);
 
+const transcriptFeedSuppressedTypes = new Set([
+  "turn_usage",
+  "session_usage",
+  "budget_warning",
+  "budget_exceeded",
+]);
+
 export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
   const out: FeedItem[] = [];
   const seenUser = new Set<string>();
@@ -674,6 +681,7 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     if (!parsedPayload.success) {
       const parsedTypeOnly = transcriptPayloadTypeSchema.safeParse(evt.payload);
       if (!parsedTypeOnly.success) continue;
+      if (transcriptFeedSuppressedTypes.has(parsedTypeOnly.data.type)) continue;
       out.push({
         id: makeId(),
         kind: "system",

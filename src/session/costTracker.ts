@@ -99,6 +99,7 @@ export type CostTrackerListener = (event: CostTrackerEvent) => void;
 // ── Implementation ─────────────────────────────────────────────────────
 
 export class SessionCostTracker {
+    private static readonly COMPACT_SNAPSHOT_TURNS_LIMIT = 8;
     private readonly sessionId: string;
     private readonly turns: TurnCostEntry[] = [];
     private readonly modelSummaries = new Map<string, ModelUsageSummary>();
@@ -256,6 +257,17 @@ export class SessionCostTracker {
     // ── Snapshot / export ──────────────────────────────────────────────
 
     getSnapshot(): SessionUsageSnapshot {
+        return this.buildSnapshot();
+    }
+
+    getCompactSnapshot(turnsLimit = SessionCostTracker.COMPACT_SNAPSHOT_TURNS_LIMIT): SessionUsageSnapshot {
+        return this.buildSnapshot(turnsLimit);
+    }
+
+    private buildSnapshot(turnsLimit?: number): SessionUsageSnapshot {
+        const turns = typeof turnsLimit === "number"
+            ? this.turns.slice(-Math.max(0, turnsLimit))
+            : this.turns;
         return {
             sessionId: this.sessionId,
             totalTurns: this.turns.length,
@@ -265,7 +277,7 @@ export class SessionCostTracker {
             estimatedTotalCostUsd: this.estimatedTotalCostUsd,
             costTrackingAvailable: this.costTrackingAvailable,
             byModel: Array.from(this.modelSummaries.values()).map(s => ({ ...s })),
-            turns: this.turns.map((entry) => ({
+            turns: turns.map((entry) => ({
                 ...entry,
                 usage: { ...entry.usage },
                 pricing: entry.pricing ? { ...entry.pricing } : null,
@@ -308,13 +320,13 @@ export class SessionCostTracker {
         if (budget.configured) {
             lines.push("  Budget:");
             if (budget.warnAtUsd !== null) {
-                const pct = this.estimatedTotalCostUsd !== null
+                const pct = this.estimatedTotalCostUsd !== null && budget.warnAtUsd > 0
                     ? ` (${((this.estimatedTotalCostUsd / budget.warnAtUsd) * 100).toFixed(0)}%)`
                     : "";
                 lines.push(`    Warning:  ${formatCost(budget.warnAtUsd)}${pct}${budget.warningTriggered ? " ⚠️  TRIGGERED" : ""}`);
             }
             if (budget.stopAtUsd !== null) {
-                const pct = this.estimatedTotalCostUsd !== null
+                const pct = this.estimatedTotalCostUsd !== null && budget.stopAtUsd > 0
                     ? ` (${((this.estimatedTotalCostUsd / budget.stopAtUsd) * 100).toFixed(0)}%)`
                     : "";
                 lines.push(`    Hard cap:  ${formatCost(budget.stopAtUsd)}${pct}${budget.stopTriggered ? " 🛑 EXCEEDED" : ""}`);

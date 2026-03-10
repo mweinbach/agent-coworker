@@ -237,4 +237,50 @@ describe("SessionCostTracker", () => {
       },
     });
   });
+
+  test("getCompactSnapshot keeps totals while truncating turn history", () => {
+    const tracker = new SessionCostTracker("session-1");
+
+    for (let i = 0; i < 10; i += 1) {
+      tracker.recordTurn({
+        turnId: `turn-${i + 1}`,
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          promptTokens: 100 + i,
+          completionTokens: 25,
+          totalTokens: 125 + i,
+        },
+      });
+    }
+
+    const compact = tracker.getCompactSnapshot();
+
+    expect(compact.totalTurns).toBe(10);
+    expect(compact.turns).toHaveLength(8);
+    expect(compact.turns[0]?.turnId).toBe("turn-3");
+    expect(compact.turns.at(-1)?.turnId).toBe("turn-10");
+  });
+
+  test("formatSummary avoids Infinity or NaN for zero-dollar thresholds", () => {
+    const tracker = new SessionCostTracker("session-1");
+
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: {
+        promptTokens: 1000,
+        completionTokens: 100,
+        totalTokens: 1100,
+      },
+    });
+    tracker.setBudget({ stopAtUsd: 0 });
+
+    const summary = tracker.formatSummary();
+
+    expect(summary).toContain("Hard cap:  $0.00");
+    expect(summary).not.toContain("Infinity%");
+    expect(summary).not.toContain("NaN%");
+  });
 });

@@ -1,3 +1,66 @@
+# Task: Fix accepted PR #30 findings
+
+## Plan
+- [x] Replace per-turn `session_usage` emissions with a compact snapshot path that does not resend the full `turns[]` history on every completed turn, and add regressions for replay/transcript consumers plus zero-threshold formatting.
+- [x] Make Codex auth writability probes tolerate cleanup-only failures while preserving the real permission-denied diagnostics.
+- [x] Teach the desktop client to consume the new budget events cleanly in both live reducers and transcript replay without bogus feed rows.
+- [x] Run the focused Bun test suites plus typecheck/doc checks as needed, then record the verified outcome below.
+
+## Review
+- `src/session/costTracker.ts`, `src/server/session/TurnExecutionManager.ts`, and `src/server/session/AgentSession.ts` now keep explicit `getSessionUsage()` responses fully detailed while switching automatic `session_usage` emissions to a compact snapshot capped to the latest eight turns. That removes the per-turn quadratic growth path without changing aggregate totals or the explicit fetch contract.
+- `src/session/costTracker.ts` now skips percentage math when `warnAtUsd` or `stopAtUsd` is `0`, so summaries still render sane budget lines instead of `Infinity%` / `NaN%`.
+- `src/providers/codex-auth.ts` now treats probe-file cleanup as best-effort after a successful write probe, so transient `unlink()` failures no longer block Codex auth setup or get misreported as directory permission failures.
+- `apps/desktop/src/app/store.helpers/threadEventReducer.ts` now maps live `budget_warning` / `budget_exceeded` events to notifications, and `apps/desktop/src/app/store.feedMapping.ts` suppresses replay-only usage/budget protocol events so transcript hydration no longer creates bogus `[turn_usage]`, `[session_usage]`, `[budget_warning]`, or `[budget_exceeded]` feed rows.
+- Added focused regressions in `test/session.costTracker.test.ts`, `test/session.test.ts`, `test/providers/codex-auth.test.ts`, and `apps/desktop/test/thread-reconnect.test.ts`.
+- Verification:
+  - `~/.bun/bin/bun test test/session.costTracker.test.ts test/session.test.ts test/providers/codex-auth.test.ts apps/desktop/test/thread-reconnect.test.ts` -> pass (`224 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `git diff --check` -> pass
+
+# Task: Review server protocol and desktop protocol consumer mapping diff against 8452ff10a2268e2b29700513f6ff5ff4393f0cd4
+
+## Plan
+- [x] Inspect the scoped diff in `src/server/protocol*.ts` plus the touched desktop protocol consumer mapping files against base commit `8452ff10a2268e2b29700513f6ff5ff4393f0cd4`.
+- [x] Trace the new usage/budget protocol events through live desktop reducers, transcript replay, and the surrounding session emission paths so only concrete regressions remain.
+- [x] Return only actionable PR-review findings with exact HEAD line ranges and concise supporting evidence.
+
+## Review
+- `apps/desktop/src/app/store.helpers/threadEventReducer.ts` still falls through to the generic `"Unhandled event"` system-feed path for the newly added `budget_warning` / `budget_exceeded` server events. `src/server/protocol.ts`, `src/server/protocolEventParser.ts`, and `src/server/session/AgentSession.ts` all advertise, parse, buffer, and emit those events, so a real budget threshold crossing now produces desktop feed noise instead of a mapped UX.
+- `apps/desktop/src/app/store.feedMapping.ts` transcript replay still treats `turn_usage`, `session_usage`, and `budget_warning` as unknown payloads because `transcriptFeedPayloadSchema` does not recognize them and the fallback path renders `[type]` system rows. A direct `mapTranscriptToFeed(...)` check during review reproduced `[turn_usage]`, `[session_usage]`, and `[budget_warning]` lines from a minimal transcript.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/thread-reconnect.test.ts test/protocol.test.ts test/agentSocket.parse.test.ts` -> pass (`169 pass, 0 fail`)
+  - `~/.bun/bin/bun -e 'import { mapTranscriptToFeed } from "./apps/desktop/src/app/store.feedMapping"; const transcript=[{ts:"2024-01-01T00:00:00.000Z",threadId:"t1",direction:"server",payload:{type:"turn_usage",sessionId:"s1",turnId:"turn-1",usage:{promptTokens:10,completionTokens:5,totalTokens:15}}},{ts:"2024-01-01T00:00:01.000Z",threadId:"t1",direction:"server",payload:{type:"session_usage",sessionId:"s1",usage:null}},{ts:"2024-01-01T00:00:02.000Z",threadId:"t1",direction:"server",payload:{type:"budget_warning",sessionId:"s1",currentCostUsd:1,thresholdUsd:1,message:"warn"}}]; console.log(JSON.stringify(mapTranscriptToFeed(transcript), null, 2));'` -> reproduces `[turn_usage]`, `[session_usage]`, and `[budget_warning]` system entries on replay
+
+# Task: Review TUI and protocol consumer mapping diff against 8452ff10a2268e2b29700513f6ff5ff4393f0cd4
+
+## Plan
+- [x] Inspect the scoped diff in `apps/TUI/*`, `src/server/protocol*.ts`, and any touched client-side protocol consumer mapping files against base commit `8452ff10a2268e2b29700513f6ff5ff4393f0cd4`.
+- [x] Validate suspected regressions against the surrounding runtime, parser, and TUI state-management code so review findings are concrete.
+- [x] Return only actionable PR-review findings with exact HEAD line ranges and concise supporting evidence.
+
+## Review
+- No actionable `apps/TUI/*` regression found in this patch. The new `/clear-hard-cap` slash command in `apps/TUI/component/prompt/slash-commands.ts` only dispatches the existing out-of-band `set_session_usage_budget` client message with `stopAtUsd: null`, and `apps/TUI/context/sync.tsx` wires that send path through the same socket/session guards used by other local actions.
+- Supporting evidence checked:
+  - `test/tui.slash-commands.test.ts` covers local registration/dispatch for `/clear-hard-cap`.
+  - `test/repl.test.ts` confirms the matching REPL behavior sends the same client message shape.
+  - `test/protocol.test.ts` validates `set_session_usage_budget` accepts `stopAtUsd: null`.
+  - `test/session.test.ts` still contains passing cost-tracking cases proving direct budget updates recover a hard-stop lockout.
+- Verification:
+  - `~/.bun/bin/bun test test/tui.slash-commands.test.ts test/repl.test.ts test/protocol.test.ts` -> pass (`239 pass, 0 fail`)
+  - Broader `test/session.test.ts` runs still show the pre-existing unrelated failure `logoutProviderAuth emits provider_auth_result and clears provider state`; the relevant session cost-tracking tests in that file passed during review.
+
+# Task: Review session usage/protocol diff against 8452ff10a2268e2b29700513f6ff5ff4393f0cd4
+
+## Plan
+- [x] Inspect the scoped diff in `src/session/*`, `src/server/*`, `src/tools/usage.ts`, and the related tests/docs against base commit `8452ff10a2268e2b29700513f6ff5ff4393f0cd4`.
+- [x] Validate any behavior changes that look risky against the surrounding runtime/persistence/protocol code so findings are concrete.
+- [x] Return only normal PR-review findings with exact file paths and minimal lines to inspect.
+
+## Review
+- `src/server/session/TurnExecutionManager.ts` now emits `session_usage` after every completed turn, and `src/session/costTracker.ts` materializes the full `turns[]` history in every snapshot. Because `src/server/session/AgentSession.ts` also buffers `session_usage` for disconnect replay, both live wire traffic and replay memory now grow quadratically with session length.
+- `src/session/costTracker.ts` formats warning/hard-cap progress as `current / threshold`, but the new protocol/tool validators explicitly allow `$0.00` thresholds. A zero-dollar budget therefore renders `Infinity%` in `usage summary`, which is a reachable user-facing regression.
+- `docs/websocket-protocol.md` no longer matches the actual wire contract for the new usage messages: the `server_hello` section still says protocol `7.6` even though the exported version is `7.7`, and the budget message docs say thresholds must be positive even though the parser/tests accept `0`.
+
 # Task: Address session usage design follow-ups
 
 ## Plan

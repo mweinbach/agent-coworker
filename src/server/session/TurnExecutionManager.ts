@@ -246,7 +246,7 @@ export class TurnExecutionManager {
             this.context.emit({
               type: "session_usage",
               sessionId: this.context.id,
-              usage: snapshot,
+              usage: this.context.state.costTracker?.getCompactSnapshot() ?? snapshot,
             });
             this.context.queuePersistSessionSnapshot("session.usage_budget_updated");
           },
@@ -372,7 +372,7 @@ export class TurnExecutionManager {
           this.context.emit({
             type: "session_usage",
             sessionId: this.context.id,
-            usage: tracker.getSnapshot(),
+            usage: tracker.getCompactSnapshot(),
           });
         }
       }

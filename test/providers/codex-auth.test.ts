@@ -228,6 +228,29 @@ describe("codex auth directory writability", () => {
       `Cowork cannot write Codex auth under ${path.join(authDir, "codex-cli")}: permission denied.`,
     );
   });
+
+  test("ensureCodexAuthDirWritable ignores probe cleanup failures after a successful write", async () => {
+    const authDir = await makeTmpAuthDir();
+    const cleanupFailure = new Error("locked") as NodeJS.ErrnoException;
+    cleanupFailure.code = "EPERM";
+
+    await expect(
+      ensureCodexAuthDirWritable(
+        { authDir },
+        {
+          fsImpl: {
+            mkdir: async () => undefined,
+            chmod: async () => undefined,
+            access: async () => undefined,
+            writeFile: async () => undefined,
+            unlink: async () => {
+              throw cleanupFailure;
+            },
+          },
+        },
+      ),
+    ).resolves.toBe(path.join(authDir, "codex-cli"));
+  });
 });
 
 describe("readCodexAuthMaterial fallback behavior", () => {

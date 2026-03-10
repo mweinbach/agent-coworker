@@ -213,6 +213,7 @@ export async function ensureCodexAuthDirWritable(
 ): Promise<string> {
   const fsImpl = deps.fsImpl ?? fs;
   const dir = codexAuthDirPath(paths);
+  let probeCreated = false;
   const probePath = path.join(
     dir,
     `.codex-auth-write-probe.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
@@ -227,18 +228,25 @@ export async function ensureCodexAuthDirWritable(
     }
     await fsImpl.access(dir, fsConstants.W_OK);
     await fsImpl.writeFile(probePath, "ok", { encoding: "utf-8", mode: 0o600 });
+    probeCreated = true;
     try {
       await fsImpl.chmod(probePath, 0o600);
     } catch {
       // best effort only
     }
-    await fsImpl.unlink(probePath);
-    return dir;
-  } catch (error) {
     try {
       await fsImpl.unlink(probePath);
     } catch {
-      // best effort only
+      // best effort only; the directory writability probe already succeeded
+    }
+    return dir;
+  } catch (error) {
+    if (probeCreated) {
+      try {
+        await fsImpl.unlink(probePath);
+      } catch {
+        // best effort only
+      }
     }
     throw wrapCodexAuthWriteError(dir, error);
   }

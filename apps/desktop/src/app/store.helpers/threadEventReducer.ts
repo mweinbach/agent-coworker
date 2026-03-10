@@ -497,6 +497,19 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       return;
     }
 
+    if (evt.type === "budget_warning" || evt.type === "budget_exceeded") {
+      set((s) => ({
+        notifications: deps.pushNotification(s.notifications, {
+          id: deps.makeId(),
+          ts: deps.nowIso(),
+          kind: evt.type === "budget_exceeded" ? "error" : "info",
+          title: evt.type === "budget_exceeded" ? "Session hard cap exceeded" : "Session budget warning",
+          detail: evt.message,
+        }),
+      }));
+      return;
+    }
+
     if (evt.type === "reasoning") {
       if (stream.lastReasoningTurnId && stream.reasoningTurns.has(stream.lastReasoningTurnId)) {
         return;

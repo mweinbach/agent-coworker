@@ -245,6 +245,30 @@ describe("thread reconnect", () => {
           },
         },
       },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId,
+        direction: "server",
+        payload: {
+          type: "budget_warning",
+          sessionId: "thread-session",
+          currentCostUsd: 0.001,
+          thresholdUsd: 0.001,
+          message: "warning threshold crossed",
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId,
+        direction: "server",
+        payload: {
+          type: "budget_exceeded",
+          sessionId: "thread-session",
+          currentCostUsd: 0.001,
+          thresholdUsd: 0.001,
+          message: "hard cap exceeded",
+        },
+      },
     ];
 
     await useAppStore.getState().selectThread(threadId);
@@ -261,6 +285,7 @@ describe("thread reconnect", () => {
       },
     });
     expect(rt?.sessionUsage?.totalTokens).toBe(150);
+    expect(rt?.feed).toEqual([]);
   });
 
   test("stores live usage events without adding unhandled feed noise", async () => {
@@ -305,13 +330,32 @@ describe("thread reconnect", () => {
         updatedAt: "2024-01-01T00:00:02.000Z",
       },
     });
+    threadSocket.emit({
+      type: "budget_warning",
+      sessionId: "thread-session",
+      currentCostUsd: 1.1,
+      thresholdUsd: 1,
+      message: "warning threshold crossed",
+    });
+    threadSocket.emit({
+      type: "budget_exceeded",
+      sessionId: "thread-session",
+      currentCostUsd: 5.1,
+      thresholdUsd: 5,
+      message: "hard cap exceeded",
+    });
 
-    const rt = useAppStore.getState().threadRuntimeById[threadId];
+    const state = useAppStore.getState();
+    const rt = state.threadRuntimeById[threadId];
     expect(rt?.lastTurnUsage?.usage.totalTokens).toBe(250);
     expect(rt?.lastTurnUsage?.usage.cachedPromptTokens).toBe(40);
     expect(rt?.lastTurnUsage?.usage.estimatedCostUsd).toBe(0.0014);
     expect(rt?.sessionUsage?.budgetStatus.warnAtUsd).toBe(1);
     expect(rt?.feed).toEqual([]);
+    expect(state.notifications.map((item) => item.title)).toEqual([
+      "Session budget warning",
+      "Session hard cap exceeded",
+    ]);
   });
 
   test("clearThreadUsageHardCap sends partial budget update for the active thread", async () => {

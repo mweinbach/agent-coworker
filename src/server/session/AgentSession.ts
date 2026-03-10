@@ -784,7 +784,7 @@ export class AgentSession {
     this.context.emit({
       type: "session_usage",
       sessionId: this.id,
-      usage: tracker.getSnapshot(),
+      usage: tracker.getCompactSnapshot(),
     });
     this.queuePersistSessionSnapshot("session.usage_budget_updated");
   }

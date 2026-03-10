@@ -3580,6 +3580,39 @@ describe("AgentSession", () => {
       expect(events.some((e) => e.type === "user_message")).toBe(true);
     });
 
+    test("emits compact session_usage snapshots after completed turns", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "ok",
+        reasoningText: undefined,
+        responseMessages: [],
+        usage: {
+          promptTokens: 1000,
+          completionTokens: 100,
+          totalTokens: 1100,
+        },
+      }));
+
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session-compact-usage"),
+          provider: "openai",
+          model: "gpt-5.4",
+          subAgentModel: "gpt-5.4",
+        },
+      });
+
+      for (let i = 0; i < 10; i += 1) {
+        await session.sendUserMessage(`turn ${i + 1}`);
+      }
+
+      const usageEvt = events.findLast((e) => e.type === "session_usage") as Extract<ServerEvent, { type: "session_usage" }> | undefined;
+      expect(usageEvt).toBeDefined();
+      expect(usageEvt?.usage?.totalTurns).toBe(10);
+      expect(usageEvt?.usage?.turns).toHaveLength(8);
+      expect(usageEvt?.usage?.turns[0]?.turnId).toBeDefined();
+      expect(usageEvt?.usage?.turns.at(-1)?.turnId).toBeDefined();
+    });
+
     test("emits proactive budget alert events when a turn crosses warning and stop thresholds", async () => {
       mockRunTurn.mockImplementation(async () => ({
         text: "ok",

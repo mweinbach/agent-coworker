@@ -54,6 +54,10 @@ function optionalNumberAtLeast(message: string, min: number): z.ZodOptional<z.Zo
   return z.number({ error: message }).finite({ error: message }).min(min, { error: message }).optional();
 }
 
+function optionalNullablePositiveNumber(message: string): z.ZodOptional<z.ZodNullable<z.ZodType<number>>> {
+  return z.number({ error: message }).finite({ error: message }).positive({ error: message }).nullable().optional();
+}
+
 function requiredSessionId(type: string): z.ZodType<string> {
   return requiredNonEmptyTrimmedString(`${type} missing sessionId`);
 }
@@ -516,6 +520,33 @@ const uploadFileSchema = schemaWithType("upload_file", {
   contentBase64: requiredString("upload_file missing/invalid contentBase64"),
 });
 
+const setSessionUsageBudgetSchema = schemaWithType("set_session_usage_budget", {
+  sessionId: requiredSessionId("set_session_usage_budget"),
+  warnAtUsd: optionalNullablePositiveNumber("set_session_usage_budget invalid warnAtUsd"),
+  stopAtUsd: optionalNullablePositiveNumber("set_session_usage_budget invalid stopAtUsd"),
+}).superRefine((value, ctx) => {
+  if (value.warnAtUsd === undefined && value.stopAtUsd === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["warnAtUsd"],
+      message: "set_session_usage_budget requires warnAtUsd and/or stopAtUsd",
+    });
+    return;
+  }
+
+  if (
+    typeof value.warnAtUsd === "number"
+    && typeof value.stopAtUsd === "number"
+    && value.warnAtUsd >= value.stopAtUsd
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["warnAtUsd"],
+      message: "set_session_usage_budget warnAtUsd must be less than stopAtUsd",
+    });
+  }
+});
+
 const clientMessageSchema = z.discriminatedUnion("type", [
   ...sessionOnlySchemaList,
   ...sessionAndSkillNameSchemaList,
@@ -544,6 +575,7 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   subagentCreateSchema,
   setConfigSchema,
   uploadFileSchema,
+  setSessionUsageBudgetSchema,
 ] as unknown as [any, ...any[]]);
 
 type ParsedClientMessage = Record<string, unknown> & { type: ClientMessage["type"] };

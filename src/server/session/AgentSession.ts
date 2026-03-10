@@ -755,6 +755,29 @@ export class AgentSession {
     });
   }
 
+  setSessionUsageBudget(warnAtUsd?: number | null, stopAtUsd?: number | null) {
+    const tracker = this.state.costTracker;
+    if (!tracker) {
+      this.context.emit({
+        type: "session_usage",
+        sessionId: this.id,
+        usage: null,
+      });
+      return;
+    }
+
+    tracker.setBudget({
+      ...(typeof warnAtUsd === "number" ? { warnAtUsd } : {}),
+      ...(typeof stopAtUsd === "number" ? { stopAtUsd } : {}),
+    });
+
+    this.context.emit({
+      type: "session_usage",
+      sessionId: this.id,
+      usage: tracker.getSnapshot(),
+    });
+  }
+
   private buildPersistedSnapshotAt(updatedAt: string): PersistedSessionSnapshot {
     return this.snapshotBuilder.buildPersistedSnapshotAt(updatedAt);
   }

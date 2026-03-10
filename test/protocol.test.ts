@@ -1142,6 +1142,41 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("set_session_usage_budget", () => {
+    test("valid budget update message", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_session_usage_budget",
+          sessionId: "s1",
+          warnAtUsd: 1,
+          stopAtUsd: null,
+        }),
+      );
+      expect(msg.type).toBe("set_session_usage_budget");
+      if (msg.type === "set_session_usage_budget") {
+        expect(msg.warnAtUsd).toBe(1);
+        expect(msg.stopAtUsd).toBeNull();
+      }
+    });
+
+    test("requires at least one budget field", () => {
+      expect(expectErr(JSON.stringify({ type: "set_session_usage_budget", sessionId: "s1" }))).toBe(
+        "set_session_usage_budget requires warnAtUsd and/or stopAtUsd",
+      );
+    });
+
+    test("requires warnAtUsd below stopAtUsd when both are numbers", () => {
+      expect(
+        expectErr(JSON.stringify({
+          type: "set_session_usage_budget",
+          sessionId: "s1",
+          warnAtUsd: 5,
+          stopAtUsd: 5,
+        })),
+      ).toBe("set_session_usage_budget warnAtUsd must be less than stopAtUsd");
+    });
+  });
+
   describe("session backup messages", () => {
     test("session_backup_get parses", () => {
       const msg = expectOk(JSON.stringify({ type: "session_backup_get", sessionId: "s1" }));

@@ -110,7 +110,13 @@ export type ClientMessage =
     config: SessionConfigPatch;
   }
   | { type: "upload_file"; sessionId: string; filename: string; contentBase64: string }
-  | { type: "get_session_usage"; sessionId: string };
+  | { type: "get_session_usage"; sessionId: string }
+  | {
+    type: "set_session_usage_budget";
+    sessionId: string;
+    warnAtUsd?: number | null;
+    stopAtUsd?: number | null;
+  };
 
 export type ServerEvent =
   | {
@@ -333,7 +339,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.5";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.6";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -384,6 +390,7 @@ export const CLIENT_MESSAGE_TYPES = [
   "set_config",
   "upload_file",
   "get_session_usage",
+  "set_session_usage_budget",
 ] as const;
 
 export const SERVER_EVENT_TYPES = [

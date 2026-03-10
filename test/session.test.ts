@@ -3519,6 +3519,49 @@ describe("AgentSession", () => {
       }
       expect(events.some((e) => e.type === "user_message")).toBe(false);
     });
+
+    test("allows direct budget updates to recover after a hard-stop lockout", async () => {
+      mockRunTurn.mockImplementation(async () => ({
+        text: "ok",
+        reasoningText: undefined,
+        responseMessages: [],
+        usage: {
+          promptTokens: 1_000_000,
+          completionTokens: 1_000_000,
+          totalTokens: 2_000_000,
+        },
+      }));
+
+      const dir = "/tmp/test-session-budget-recovery";
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          provider: "openai",
+          model: "gpt-5.4",
+          subAgentModel: "gpt-5.4",
+        },
+      });
+
+      await session.sendUserMessage("first");
+      const tracker = (session as any).state.costTracker;
+      tracker.setBudget({ stopAtUsd: 0.001 });
+
+      events.length = 0;
+      session.setSessionUsageBudget(20, null);
+
+      const usageEvt = events.find((e) => e.type === "session_usage") as Extract<ServerEvent, { type: "session_usage" }> | undefined;
+      expect(usageEvt).toBeDefined();
+      if (usageEvt?.usage) {
+        expect(usageEvt.usage.budgetStatus.stopAtUsd).toBeNull();
+        expect(usageEvt.usage.budgetStatus.warnAtUsd).toBe(20);
+      }
+
+      events.length = 0;
+      await session.sendUserMessage("second");
+
+      expect(mockRunTurn.mock.calls.length).toBe(2);
+      expect(events.some((e) => e.type === "user_message")).toBe(true);
+    });
   });
   // =========================================================================
   // extractAssistantTextFromResponseMessages fallback

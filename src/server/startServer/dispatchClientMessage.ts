@@ -139,5 +139,7 @@ export function dispatchClientMessage({
       return void session.uploadFile(message.filename, message.contentBase64);
     case "get_session_usage":
       return session.getSessionUsage();
+    case "set_session_usage_budget":
+      return session.setSessionUsageBudget(message.warnAtUsd, message.stopAtUsd);
   }
 }

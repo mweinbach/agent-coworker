@@ -1,3 +1,21 @@
+# Task: Rebase PR #30 session usage/cost branch onto main
+
+## Plan
+- [x] Confirm the current PR #30 branch state, review feedback, and merge-base divergence from `main`.
+- [x] Rebase `pr/30` onto the latest `main`, resolving any conflicts without dropping the session usage/cost changes.
+- [x] Run the required verification commands for the rebased branch and record the validated outcome below.
+
+## Review
+- Rebasing `pr/30` onto current `main` required manual conflict resolution in the core runtime protocol surfaces (`src/agent.ts`, `src/tools/context.ts`, `src/server/protocol.ts`, `src/server/session/TurnExecutionManager.ts`) plus the protocol docs/test follow-ups. The branch now sits directly on top of `main` (`git rev-list --left-right --count main...pr/30` -> `0  4`).
+- While replaying the final review-fix commit, the branch still had a real hard-stop lockout bug: once a session crossed `stopAtUsd`, `TurnExecutionManager` rejected every new turn, but the only way to change the budget was still the model-invoked `usage set_budget` tool. That made the advertised recovery path impossible.
+- Added a direct WebSocket control message `set_session_usage_budget`, wired through `src/server/protocol.ts`, `src/server/protocolParser.ts`, `src/server/startServer/dispatchClientMessage.ts`, `src/server/session/AgentSession.ts`, and `docs/websocket-protocol.md`. Clients can now raise or clear usage thresholds without starting another model turn, while the hard-stop ingress guard remains intact.
+- Bumped `WEBSOCKET_PROTOCOL_VERSION` to `7.6` and documented the new control flow, including the new client message and the updated `server_hello.protocolVersion` examples.
+- Verification:
+  - `~/.bun/bin/bun run docs:check` -> pass
+  - `~/.bun/bin/bun test test/protocol.test.ts test/agentSocket.parse.test.ts test/session.test.ts test/session.costTracker.test.ts test/tools.usage.test.ts` -> pass (`356 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1891 pass, 2 skip, 0 fail`)
+
 # Task: Fix Codex OAuth loopback redirect regression
 
 ## Plan
@@ -425,7 +443,6 @@
   - `rg -n -i --hidden --glob '!node_modules' --glob '!.git' --glob '!dist' "claude code|claude-code|claude agent sdk|claude-agent-sdk|@anthropic-ai/claude-agent-sdk|gemini-cli|gemini cli" .` -> no matches
   - `~/.bun/bin/bun test test/types.test.ts apps/desktop/test/protocol-v2-events.test.ts test/providers/codex-oauth-flows.test.ts` -> pass (`62 pass, 0 fail`)
   - `~/.bun/bin/bun test` -> still has an existing nondeterministic failure in `test/providers/codex-oauth-flows.test.ts` when run inside the full-suite parallel load, even though that same file passes in isolation
-
 # Task: Ship desktop release 0.1.9 with robust updater behavior and Windows installer publishing
 
 ## Plan

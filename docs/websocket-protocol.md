@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.5`
+- Current protocol version: `7.6`
 
 ## Table of Contents
 
@@ -31,7 +31,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Tools & Commands: [list_tools](#list_tools) | [list_commands](#list_commands) | [execute_command](#execute_command)
   - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill)
   - MCP: [set_enable_mcp](#set_enable_mcp) | [mcp_servers_get](#mcp_servers_get) | [mcp_server_upsert](#mcp_server_upsert) | [mcp_server_delete](#mcp_server_delete) | [mcp_server_validate](#mcp_server_validate) | [mcp_server_auth_authorize](#mcp_server_auth_authorize) | [mcp_server_auth_callback](#mcp_server_auth_callback) | [mcp_server_auth_set_api_key](#mcp_server_auth_set_api_key) | [mcp_servers_migrate_legacy](#mcp_servers_migrate_legacy)
-  - Session Management: [session_close](#session_close) | [get_messages](#get_messages) | [set_session_title](#set_session_title) | [list_sessions](#list_sessions) | [delete_session](#delete_session) | [subagent_create](#subagent_create) | [subagent_sessions_get](#subagent_sessions_get) | [set_config](#set_config) | [upload_file](#upload_file) | [get_session_usage](#get_session_usage)
+  - Session Management: [session_close](#session_close) | [get_messages](#get_messages) | [set_session_title](#set_session_title) | [list_sessions](#list_sessions) | [delete_session](#delete_session) | [subagent_create](#subagent_create) | [subagent_sessions_get](#subagent_sessions_get) | [set_config](#set_config) | [upload_file](#upload_file) | [get_session_usage](#get_session_usage) | [set_session_usage_budget](#set_session_usage_budget)
   - Backup: [session_backup_get](#session_backup_get) | [session_backup_checkpoint](#session_backup_checkpoint) | [session_backup_restore](#session_backup_restore) | [session_backup_delete_checkpoint](#session_backup_delete_checkpoint)
   - Harness: [harness_context_get](#harness_context_get) | [harness_context_set](#harness_context_set)
   - Keepalive: [ping](#ping)
@@ -48,6 +48,11 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.6`:
+
+- New client message: `set_session_usage_budget`.
+- Over-budget sessions can now raise or clear usage thresholds without starting another model turn.
 
 Changes in `7.5`:
 
@@ -1459,6 +1464,27 @@ Request the accumulated token usage and estimated cost for the current session.
 
 ---
 
+### set_session_usage_budget
+
+Update the session usage warning/hard-stop thresholds without starting a model turn. This is the supported recovery path after a hard-stop threshold has already been exceeded.
+
+```json
+{ "type": "set_session_usage_budget", "sessionId": "...", "warnAtUsd": 5, "stopAtUsd": null }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"set_session_usage_budget"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `warnAtUsd` | `number \| null` | No | Positive warning threshold in USD, or `null` to clear it |
+| `stopAtUsd` | `number \| null` | No | Positive hard-stop threshold in USD, or `null` to clear it |
+
+At least one of `warnAtUsd` or `stopAtUsd` must be present. If both numeric values are present, `warnAtUsd` must be less than `stopAtUsd`.
+
+**Response:** `session_usage`
+
+---
+
 ## Server -> Client Events
 
 ### server_hello
@@ -1469,7 +1495,7 @@ Initial handshake event sent immediately on WebSocket connection.
 {
   "type": "server_hello",
   "sessionId": "abc-123-def",
-  "protocolVersion": "7.3",
+  "protocolVersion": "7.6",
   "capabilities": {
     "modelStreamChunk": "v1"
   },
@@ -1494,7 +1520,7 @@ Initial handshake event sent immediately on WebSocket connection.
 |-------|------|-------------|
 | `type` | `"server_hello"` | — |
 | `sessionId` | `string` | The session identifier. Use this for all subsequent messages |
-| `protocolVersion` | `string?` | Protocol version (currently `"7.3"`) |
+| `protocolVersion` | `string?` | Protocol version (currently `"7.6"`) |
 | `capabilities` | `object?` | Optional capabilities object. Currently: `{ modelStreamChunk: "v1" }` |
 | `config` | `PublicConfig` | Session config: `provider`, `model`, `workingDirectory`, and optionally `outputDirectory` |
 | `sessionKind` | `"root" \| "subagent"` | Session identity. Present for both root and child sessions |
@@ -2344,7 +2370,7 @@ Token usage data for a completed turn. Emitted after `assistant_message` when th
 
 ### session_usage
 
-Accumulated session usage and budget status. Sent in response to `get_session_usage` and automatically when tracked usage changes.
+Accumulated session usage and budget status. Sent in response to `get_session_usage`, `set_session_usage_budget`, and automatically when tracked usage changes.
 
 ```json
 {

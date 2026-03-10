@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
@@ -40,6 +41,8 @@ export type CodexAuthMaterial = {
   updatedAt?: string;
 };
 
+type CodexAuthDirFsLike = Pick<typeof fs, "mkdir" | "chmod" | "access" | "writeFile" | "unlink">;
+
 const nonEmptyStringSchema = z.string().trim().min(1);
 const isoTimestampSchema = z.string().datetime({ offset: true });
 const recordSchema = z.record(z.string(), z.unknown());
@@ -62,6 +65,7 @@ const codexOAuthTokenResponseSchema = z.object({
 }).passthrough();
 const errorWithCodeSchema = z.object({ code: z.string() }).passthrough();
 const jsonStringSchema = z.string();
+const codexAuthPermissionDeniedCodeSchema = z.enum(["EACCES", "EPERM"]);
 
 const codexAuthDocumentSchema = z.object({
   version: z.literal(1),
@@ -183,6 +187,61 @@ export function extractPlanTypeFromClaims(claims: Record<string, unknown>): stri
 
 export function codexAuthFilePath(paths: Pick<CodexAuthPaths, "authDir">): string {
   return path.join(paths.authDir, "codex-cli", "auth.json");
+}
+
+function codexAuthDirPath(paths: Pick<CodexAuthPaths, "authDir">): string {
+  return path.dirname(codexAuthFilePath(paths));
+}
+
+function wrapCodexAuthWriteError(dirPath: string, error: unknown): Error {
+  const parsedCode = errorWithCodeSchema.safeParse(error);
+  const codeRaw = parsedCode.success ? parsedCode.data.code : undefined;
+  const deniedCode = codexAuthPermissionDeniedCodeSchema.safeParse(codeRaw);
+  if (deniedCode.success) {
+    return new Error(
+      `Cowork cannot write Codex auth under ${dirPath}: permission denied. If macOS blocked access, grant the app access to your home directory or Full Disk Access, then retry.`
+    );
+  }
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+export async function ensureCodexAuthDirWritable(
+  paths: Pick<CodexAuthPaths, "authDir">,
+  deps: {
+    fsImpl?: CodexAuthDirFsLike;
+  } = {},
+): Promise<string> {
+  const fsImpl = deps.fsImpl ?? fs;
+  const dir = codexAuthDirPath(paths);
+  const probePath = path.join(
+    dir,
+    `.codex-auth-write-probe.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
+  );
+
+  try {
+    await fsImpl.mkdir(dir, { recursive: true, mode: 0o700 });
+    try {
+      await fsImpl.chmod(dir, 0o700);
+    } catch {
+      // best effort only
+    }
+    await fsImpl.access(dir, fsConstants.W_OK);
+    await fsImpl.writeFile(probePath, "ok", { encoding: "utf-8", mode: 0o600 });
+    try {
+      await fsImpl.chmod(probePath, 0o600);
+    } catch {
+      // best effort only
+    }
+    await fsImpl.unlink(probePath);
+    return dir;
+  } catch (error) {
+    try {
+      await fsImpl.unlink(probePath);
+    } catch {
+      // best effort only
+    }
+    throw wrapCodexAuthWriteError(dir, error);
+  }
 }
 
 function readValueAtPath(root: unknown, keys: string[]): unknown {
@@ -354,13 +413,8 @@ export async function writeCodexAuthMaterial(
   material: Omit<CodexAuthMaterial, "file"> & { file?: string }
 ): Promise<CodexAuthMaterial> {
   const file = material.file ?? codexAuthFilePath(paths);
-  const dir = path.dirname(file);
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  try {
-    await fs.chmod(dir, 0o700);
-  } catch {
-    // best effort only
-  }
+  const dir = codexAuthDirPath(paths);
+  await ensureCodexAuthDirWritable(paths);
 
   const normalized: CodexAuthMaterial = {
     file,
@@ -377,11 +431,15 @@ export async function writeCodexAuthMaterial(
   };
 
   const json = formatAuthJson(normalized);
-  await writeTextFileAtomic(file, JSON.stringify(json, null, 2), { mode: 0o600 });
   try {
-    await fs.chmod(file, 0o600);
-  } catch {
-    // best effort only
+    await writeTextFileAtomic(file, JSON.stringify(json, null, 2), { mode: 0o600 });
+    try {
+      await fs.chmod(file, 0o600);
+    } catch {
+      // best effort only
+    }
+  } catch (error) {
+    throw wrapCodexAuthWriteError(dir, error);
   }
   return normalized;
 }

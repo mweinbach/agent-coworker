@@ -8,6 +8,7 @@ import {
   CODEX_OAUTH_ISSUER,
   codexMaterialFromTokenResponse,
   decodeJwtPayload,
+  ensureCodexAuthDirWritable,
   extractAccountIdFromClaims,
   extractEmailFromClaims,
   extractJwtExpiryMs,
@@ -190,6 +191,42 @@ describe("codex auth token response parsing", () => {
     expect(persisted.account.account_id).toBe("acct-existing");
     expect(persisted.account.email).toBe("existing@example.com");
     expect(persisted.account.plan_type).toBe("enterprise");
+  });
+});
+
+describe("codex auth directory writability", () => {
+  test("ensureCodexAuthDirWritable accepts a normal Cowork auth dir", async () => {
+    const authDir = await makeTmpAuthDir();
+
+    const dir = await ensureCodexAuthDirWritable({ authDir });
+
+    expect(dir).toBe(path.join(authDir, "codex-cli"));
+    await fs.access(dir);
+  });
+
+  test("ensureCodexAuthDirWritable surfaces a clear permission-denied error", async () => {
+    const authDir = await makeTmpAuthDir();
+    const denied = new Error("permission denied") as NodeJS.ErrnoException;
+    denied.code = "EACCES";
+
+    await expect(
+      ensureCodexAuthDirWritable(
+        { authDir },
+        {
+          fsImpl: {
+            mkdir: async () => undefined,
+            chmod: async () => undefined,
+            access: async () => {
+              throw denied;
+            },
+            writeFile: async () => undefined,
+            unlink: async () => undefined,
+          },
+        },
+      ),
+    ).rejects.toThrow(
+      `Cowork cannot write Codex auth under ${path.join(authDir, "codex-cli")}: permission denied.`,
+    );
   });
 });
 

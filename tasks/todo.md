@@ -2277,3 +2277,41 @@
 - `~/.bun/bin/bun test --cwd apps/desktop` -> pass (`212 pass, 0 fail`)
 - `~/.bun/bin/bun run typecheck` -> pass
 - `~/.bun/bin/bun test` -> pass (`1917 pass, 2 skip, 0 fail`)
+
+# Task: Harden Codex auth persistence into ~/.cowork
+
+## Plan
+- [x] Trace the current Codex OAuth connect path and close any boundary where a login can succeed without a durable Cowork auth write.
+- [x] Make the connect/runtime path prove the saved token is written to and read back from `~/.cowork/auth/codex-cli/auth.json`.
+- [x] Add focused regressions for the durable write/read contract and rerun the relevant Bun verification slices.
+
+## Review
+- Root cause: the connect boundary was trusting the OAuth helper to have already persisted credentials. That meant a helper could return “success” and leave Codex auth effectively in-memory or helper-local, while Cowork itself never proved it had written a readable token into `~/.cowork/auth/codex-cli/auth.json`.
+- `src/connect.ts` now owns the durable persistence contract. Both the PI-native browser login and the manual PKCE completion path return raw Codex auth material, then `connectProvider()` forcibly writes it into Cowork’s canonical auth file and immediately re-reads that file before reporting success.
+- The write target is now pinned to Cowork’s own auth store even if an OAuth helper returns some other file path. That prevents split-brain auth locations and makes the returned `oauthCredentialsFile` always resolve to `~/.cowork/auth/codex-cli/auth.json`.
+- `src/providers/codex-oauth-flows.ts` now builds `CodexAuthMaterial` from token responses instead of persisting on its own, so the connect layer is the single place that decides where Codex credentials live.
+- Regression coverage now proves the new contract: `test/connect.test.ts` no longer relies on helper-side file writes, and it includes a new case where the helper reports a non-Cowork file path but Cowork still rewrites the credentials into its own `auth.json`. The existing provider-status/runtime tests continue to verify that downstream readers load Codex auth from Cowork’s auth store.
+
+### Verification
+- `git diff --check` -> pass
+- `~/.bun/bin/bun test test/connect.test.ts test/providers/codex-oauth-flows.test.ts test/providers/codex-auth.test.ts test/providerStatus.test.ts test/runtime.pi-runtime.test.ts` -> pass (`42 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass
+
+# Task: Probe Codex auth directory write permissions before save
+
+## Plan
+- [x] Add an explicit writability probe for `~/.cowork/auth/codex-cli` before Cowork writes Codex auth material.
+- [x] Return a clear permission-denied error when the auth directory is blocked instead of relying on a generic write failure.
+- [x] Add focused tests for the writable probe and rerun the auth-related Bun slices.
+
+## Review
+- Added `ensureCodexAuthDirWritable(...)` in `src/providers/codex-auth.ts`. Before any Codex auth write, Cowork now creates the canonical `~/.cowork/auth/codex-cli` directory if needed, applies best-effort private POSIX perms, checks write access, and performs a temporary probe write/delete in that exact directory.
+- `writeCodexAuthMaterial(...)` now uses that probe and wraps `EACCES`/`EPERM` failures with a user-facing error that explicitly says Cowork cannot write Codex auth there and, on macOS, the user may need to grant home-directory or Full Disk Access and retry.
+- There is no practical runtime API here to pop a real macOS permission prompt for `~/.cowork`; Electron’s permission handler in this app covers browser/web permissions, not filesystem/TCC access for arbitrary dot-directories. The hardened behavior is therefore: probe early, repair normal perms when possible, and fail with a specific system-permission message if the OS still blocks the write.
+- Live probe on this machine succeeded: a direct write/delete check under `/Users/mweinbach/.cowork/auth/codex-cli` confirmed the current process can already write there.
+
+### Verification
+- `node -e 'const fs=require("fs"); const os=require("os"); const path=require("path"); const dir=path.join(os.homedir(), ".cowork", "auth", "codex-cli"); try { fs.mkdirSync(dir,{recursive:true,mode:0o700}); fs.accessSync(dir, fs.constants.W_OK); const probe=path.join(dir, ".perm-probe-"+process.pid+"-"+Date.now()); fs.writeFileSync(probe, "ok", {mode:0o600}); fs.unlinkSync(probe); console.log(JSON.stringify({ok:true, dir, writable:true})); } catch (err) { console.log(JSON.stringify({ok:false, dir, code:err.code||null, message:String(err.message||err)})); process.exitCode=1; }'` -> pass (`{"ok":true,"dir":"/Users/mweinbach/.cowork/auth/codex-cli","writable":true}`)
+- `git diff --check` -> pass
+- `~/.bun/bin/bun test test/connect.test.ts test/providers/codex-auth.test.ts test/providers/codex-oauth-flows.test.ts test/providerStatus.test.ts test/runtime.pi-runtime.test.ts` -> pass (`44 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass

@@ -10,7 +10,9 @@ import {
   CODEX_OAUTH_ISSUER,
   CODEX_OAUTH_ORIGINATOR,
   CODEX_OAUTH_SCOPE,
-  persistCodexAuthFromTokenResponse,
+  codexAuthFilePath,
+  codexMaterialFromTokenResponse,
+  type CodexAuthMaterial,
 } from "./codex-auth";
 
 const finiteNumberFromUnknownSchema = z.preprocess((value) => {
@@ -234,7 +236,7 @@ export async function completeCodexBrowserOAuth(opts: {
   code?: string;
   onLine?: (line: string) => void;
   openUrl?: UrlOpener;
-}): Promise<string> {
+}): Promise<CodexAuthMaterial> {
   const opener = opts.openUrl ?? openExternalUrl;
   try {
     let code = opts.code?.trim() || "";
@@ -253,11 +255,10 @@ export async function completeCodexBrowserOAuth(opts: {
       codeVerifier: opts.pending.codeVerifier,
       fetchImpl: opts.fetchImpl,
     });
-    const material = await persistCodexAuthFromTokenResponse(opts.paths, tokens, {
+    return codexMaterialFromTokenResponse(codexAuthFilePath(opts.paths), tokens, {
       issuer: CODEX_OAUTH_ISSUER,
       clientId: CODEX_OAUTH_CLIENT_ID,
     });
-    return material.file;
   } finally {
     opts.pending.close();
   }
@@ -268,7 +269,7 @@ export async function runCodexBrowserOAuth(opts: {
   fetchImpl: typeof fetch;
   onLine?: (line: string) => void;
   openUrl?: UrlOpener;
-}): Promise<string> {
+}): Promise<CodexAuthMaterial> {
   const pending = await prepareCodexBrowserOAuth();
   return await completeCodexBrowserOAuth({
     paths: opts.paths,
@@ -284,7 +285,7 @@ export async function runCodexDeviceOAuth(opts: {
   fetchImpl: typeof fetch;
   onLine?: (line: string) => void;
   openUrl?: UrlOpener;
-}): Promise<string> {
+}): Promise<CodexAuthMaterial> {
   const opener = opts.openUrl ?? openExternalUrl;
   const verificationUrl = `${CODEX_OAUTH_ISSUER}/codex/device`;
 
@@ -330,11 +331,10 @@ export async function runCodexDeviceOAuth(opts: {
         codeVerifier,
         fetchImpl: opts.fetchImpl,
       });
-      const material = await persistCodexAuthFromTokenResponse(opts.paths, tokens, {
+      return codexMaterialFromTokenResponse(codexAuthFilePath(opts.paths), tokens, {
         issuer: CODEX_OAUTH_ISSUER,
         clientId: CODEX_OAUTH_CLIENT_ID,
       });
-      return material.file;
     }
 
     if (pollResponse.status !== 403 && pollResponse.status !== 404) {

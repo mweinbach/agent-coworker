@@ -5,9 +5,11 @@ import {
   CODEX_OAUTH_ISSUER,
   CODEX_OAUTH_ORIGINATOR,
   clearCodexAuthMaterial,
+  codexAuthFilePath,
   isTokenExpiring,
   readCodexAuthMaterial,
   refreshCodexAuthMaterial,
+  type CodexAuthMaterial,
   writeCodexAuthMaterial,
 } from "./providers/codex-auth";
 import {
@@ -104,7 +106,7 @@ async function runPiNativeCodexLogin(opts: {
   code?: string;
   onOauthLine?: (line: string) => void;
   openUrl?: UrlOpener;
-}): Promise<string> {
+}): Promise<CodexAuthMaterial> {
   const opener = opts.openUrl ?? openExternalUrl;
   const manualCode = opts.code?.trim() || undefined;
   let openUrlTask: Promise<void> | null = null;
@@ -141,7 +143,8 @@ async function runPiNativeCodexLogin(opts: {
     await openUrlTask;
   }
 
-  const material = await writeCodexAuthMaterial(opts.paths, {
+  return {
+    file: codexAuthFilePath(opts.paths),
     issuer: CODEX_OAUTH_ISSUER,
     clientId: CODEX_OAUTH_CLIENT_ID,
     accessToken: credentials.access,
@@ -151,8 +154,25 @@ async function runPiNativeCodexLogin(opts: {
       typeof credentials.accountId === "string" && credentials.accountId.trim()
         ? credentials.accountId.trim()
         : undefined,
+  };
+}
+
+async function persistCoworkCodexAuth(
+  paths: AiCoworkerPaths,
+  material: CodexAuthMaterial,
+): Promise<CodexAuthMaterial> {
+  const persisted = await writeCodexAuthMaterial(paths, {
+    ...material,
+    file: codexAuthFilePath(paths),
   });
-  return material.file;
+  const reloaded = await readCodexAuthMaterial(paths);
+  if (!reloaded?.accessToken) {
+    throw new Error(`Codex auth was not persisted to ${persisted.file}.`);
+  }
+  if (reloaded.accessToken !== persisted.accessToken) {
+    throw new Error(`Codex auth at ${persisted.file} did not round-trip after write.`);
+  }
+  return reloaded;
 }
 
 export async function connectProvider(opts: {
@@ -255,9 +275,9 @@ export async function connectProvider(opts: {
       opts.onOauthLine?.(`[auth] deprecated Codex auth method "${methodId}" requested; using Codex-native browser login.`);
     }
     const code = opts.code?.trim() || "";
-    let oauthCredentialsFile = "";
+    let oauthCredentials: CodexAuthMaterial;
     if (opts.codexBrowserAuthPending && code) {
-      oauthCredentialsFile = await connectOauthDeps.completeCodexBrowserOAuth({
+      oauthCredentials = await connectOauthDeps.completeCodexBrowserOAuth({
         paths,
         pending: opts.codexBrowserAuthPending,
         fetchImpl,
@@ -268,12 +288,13 @@ export async function connectProvider(opts: {
     } else if (code) {
       throw new Error("Authorization code requires an active Codex OAuth challenge. Start authorization first.");
     } else {
-      oauthCredentialsFile = await connectOauthDeps.runCodexLogin({
+      oauthCredentials = await connectOauthDeps.runCodexLogin({
         paths,
         onOauthLine: opts.onOauthLine,
         openUrl: opts.openUrl,
       });
     }
+    const persistedAuth = await persistCoworkCodexAuth(paths, oauthCredentials);
 
     store.services[provider] = {
       service: provider,
@@ -288,7 +309,7 @@ export async function connectProvider(opts: {
       mode: "oauth",
       storageFile: paths.connectionsFile,
       message: "Codex OAuth sign-in completed.",
-      oauthCredentialsFile,
+      oauthCredentialsFile: persistedAuth.file,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

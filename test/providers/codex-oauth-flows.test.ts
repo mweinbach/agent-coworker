@@ -60,7 +60,7 @@ describe("providers/codex-oauth-flows", () => {
     });
     let openedRedirectUri = "";
 
-    const file = await runCodexBrowserOAuth({
+    const material = await runCodexBrowserOAuth({
       paths,
       fetchImpl: async () => new Response(JSON.stringify({
         access_token: accessToken,
@@ -78,7 +78,10 @@ describe("providers/codex-oauth-flows", () => {
       },
     });
 
-    expect(file).toBe(path.join(paths.authDir, "codex-cli", "auth.json"));
+    expect(material.file).toBe(path.join(paths.authDir, "codex-cli", "auth.json"));
+    expect(material.accessToken).toBe(accessToken);
+    expect(material.refreshToken).toBe("refresh-token");
+    expect(material.accountId).toBe("acct-123");
     expect(openedRedirectUri.startsWith(`http://${OAUTH_LOOPBACK_HOST}:`)).toBe(true);
   });
 
@@ -104,7 +107,7 @@ describe("providers/codex-oauth-flows", () => {
     const pending = await prepareCodexBrowserOAuth();
     let requestBody = "";
 
-    const file = await completeCodexBrowserOAuth({
+    const material = await completeCodexBrowserOAuth({
       paths,
       pending,
       code: "manual-auth-code",
@@ -125,6 +128,9 @@ describe("providers/codex-oauth-flows", () => {
     expect(params.get("code")).toBe("manual-auth-code");
     expect(params.get("redirect_uri")).toBe(pending.redirectUri);
     expect(params.get("code_verifier")).toBe(pending.codeVerifier);
-    expect(file).toBe(path.join(paths.authDir, "codex-cli", "auth.json"));
+    expect(material.file).toBe(path.join(paths.authDir, "codex-cli", "auth.json"));
+    expect(material.accessToken).toBe(accessToken);
+    expect(material.refreshToken).toBe("manual-refresh-token");
+    expect(material.accountId).toBe("acct-manual");
   });
 });

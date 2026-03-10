@@ -54,8 +54,8 @@ function optionalNumberAtLeast(message: string, min: number): z.ZodOptional<z.Zo
   return z.number({ error: message }).finite({ error: message }).min(min, { error: message }).optional();
 }
 
-function optionalNullablePositiveNumber(message: string): z.ZodOptional<z.ZodNullable<z.ZodType<number>>> {
-  return z.number({ error: message }).finite({ error: message }).positive({ error: message }).nullable().optional();
+function optionalNullableNonNegativeNumber(message: string): z.ZodOptional<z.ZodNullable<z.ZodType<number>>> {
+  return z.number({ error: message }).finite({ error: message }).nonnegative({ error: message }).nullable().optional();
 }
 
 function requiredSessionId(type: string): z.ZodType<string> {
@@ -522,8 +522,8 @@ const uploadFileSchema = schemaWithType("upload_file", {
 
 const setSessionUsageBudgetSchema = schemaWithType("set_session_usage_budget", {
   sessionId: requiredSessionId("set_session_usage_budget"),
-  warnAtUsd: optionalNullablePositiveNumber("set_session_usage_budget invalid warnAtUsd"),
-  stopAtUsd: optionalNullablePositiveNumber("set_session_usage_budget invalid stopAtUsd"),
+  warnAtUsd: optionalNullableNonNegativeNumber("set_session_usage_budget invalid warnAtUsd"),
+  stopAtUsd: optionalNullableNonNegativeNumber("set_session_usage_budget invalid stopAtUsd"),
 }).superRefine((value, ctx) => {
   if (value.warnAtUsd === undefined && value.stopAtUsd === undefined) {
     ctx.addIssue({

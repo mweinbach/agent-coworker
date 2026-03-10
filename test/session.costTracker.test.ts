@@ -137,4 +137,39 @@ describe("SessionCostTracker", () => {
       stopAtUsd: 5,
     });
   });
+
+  test("getSnapshot returns decoupled copies of mutable state", () => {
+    const tracker = new SessionCostTracker("session-1");
+
+    tracker.recordTurn({
+      turnId: "turn-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: {
+        promptTokens: 1000,
+        completionTokens: 250,
+        totalTokens: 1250,
+      },
+    });
+
+    const snapshot = tracker.getSnapshot();
+    snapshot.byModel[0]!.turns = 99;
+    snapshot.turns[0]!.model = "mutated";
+    snapshot.turns[0]!.usage.totalTokens = 999_999;
+
+    const freshSnapshot = tracker.getSnapshot();
+    expect(freshSnapshot.byModel[0]).toMatchObject({
+      model: "gpt-5.4",
+      turns: 1,
+      totalTokens: 1250,
+    });
+    expect(freshSnapshot.turns[0]).toMatchObject({
+      model: "gpt-5.4",
+      usage: {
+        promptTokens: 1000,
+        completionTokens: 250,
+        totalTokens: 1250,
+      },
+    });
+  });
 });

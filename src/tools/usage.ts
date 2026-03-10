@@ -35,13 +35,13 @@ Use this tool to monitor spending, check costs before expensive operations, or s
                 .describe("The usage query action to perform"),
             warnAtUsd: z
                 .number()
-                .positive()
+                .nonnegative()
                 .nullable()
                 .optional()
                 .describe("Budget warning threshold in USD, or null to clear it (for set_budget)"),
             stopAtUsd: z
                 .number()
-                .positive()
+                .nonnegative()
                 .nullable()
                 .optional()
                 .describe("Budget hard-stop threshold in USD, or null to clear it (for set_budget)"),

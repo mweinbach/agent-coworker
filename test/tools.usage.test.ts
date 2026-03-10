@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { z } from "zod";
 
 import { createUsageTool } from "../src/tools/usage";
 import { SessionCostTracker } from "../src/session/costTracker";
@@ -95,6 +96,18 @@ describe("usage tool", () => {
         await tool.execute({ action: "set_budget", stopAtUsd: 5 });
         const invalidMergedUpdate = await tool.execute({ action: "set_budget", warnAtUsd: 10 });
         expect(invalidMergedUpdate).toContain("Warning threshold must be less than");
+    });
+
+    test("set_budget schema accepts zero-dollar thresholds", async () => {
+        const tool = createUsageTool(ctx);
+        const schema = tool.inputSchema as z.ZodTypeAny;
+        expect(schema.safeParse({ action: "set_budget", stopAtUsd: 0 }).success).toBe(true);
+
+        const result = await tool.execute({ action: "set_budget", stopAtUsd: 0 });
+        expect(result).toContain("Hard stop at: $0.00");
+
+        const budgetStatus = await tool.execute({ action: "budget" });
+        expect(budgetStatus).toContain("Hard-stop threshold: $0.00");
     });
 
     test("pricing action lists the catalog", async () => {

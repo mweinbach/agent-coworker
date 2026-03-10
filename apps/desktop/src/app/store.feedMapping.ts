@@ -3,6 +3,7 @@ import { z } from "zod";
 import { parseStructuredToolInput } from "../../../../src/shared/structuredInput";
 import { sessionUsageSnapshotSchema } from "../../../../src/session/sessionUsageSchema";
 
+import type { ServerEvent } from "../lib/wsProtocol";
 import type { FeedItem, ThreadRuntime, TranscriptEvent } from "./types";
 import {
   clearModelStreamReplayRuntime,
@@ -40,6 +41,109 @@ export type ThreadModelStreamFeedOps = {
 };
 
 export type TranscriptUsageState = Pick<ThreadRuntime, "sessionUsage" | "lastTurnUsage">;
+
+type DeveloperDiagnosticServerEvent = Extract<ServerEvent, {
+  type: "observability_status" | "session_backup_state" | "harness_context";
+}>;
+
+function yesNo(value: boolean): string {
+  return value ? "yes" : "no";
+}
+
+function humanizeUnderscoreLabel(value: string): string {
+  return value.replace(/_/g, " ");
+}
+
+function formatObservabilityDiagnosticLine(evt: {
+  enabled: boolean;
+  health: { status: unknown; reason: unknown; message?: unknown };
+  config?: unknown;
+}): string {
+  const configured = isRecord(evt.config) && typeof evt.config.configured === "boolean" ? evt.config.configured : false;
+  const healthStatus = typeof evt.health.status === "string" ? evt.health.status : "unknown";
+  const healthReason = typeof evt.health.reason === "string" ? evt.health.reason : "unknown";
+  const healthMessage = previewValue(evt.health.message);
+  const healthDetail = healthMessage ? `${healthReason}: ${healthMessage}` : healthReason;
+  return `Observability: enabled=${yesNo(evt.enabled)}, configured=${yesNo(configured)}, health=${healthStatus} (${healthDetail})`;
+}
+
+function formatSessionBackupDiagnosticLine(evt: {
+  reason?: unknown;
+  backup?: unknown;
+}): string {
+  const reason = typeof evt.reason === "string" && evt.reason.trim().length > 0
+    ? humanizeUnderscoreLabel(evt.reason)
+    : "update";
+  const status = isRecord(evt.backup) && typeof evt.backup.status === "string"
+    ? evt.backup.status
+    : "unknown";
+  const checkpointCount = isRecord(evt.backup) && Array.isArray(evt.backup.checkpoints)
+    ? evt.backup.checkpoints.length
+    : null;
+  return checkpointCount === null
+    ? `Session backup (${reason}): status=${status}`
+    : `Session backup (${reason}): status=${status}, checkpoints=${checkpointCount}`;
+}
+
+function formatHarnessContextDiagnosticLine(evt: {
+  context?: unknown;
+}): string {
+  if (evt.context === null || evt.context === undefined) {
+    return "Harness context cleared";
+  }
+  if (!isRecord(evt.context)) {
+    return "Harness context updated";
+  }
+
+  const details: string[] = [];
+  if (typeof evt.context.taskId === "string" && evt.context.taskId.trim().length > 0) {
+    details.push(`taskId=${evt.context.taskId}`);
+  }
+  if (typeof evt.context.runId === "string" && evt.context.runId.trim().length > 0) {
+    details.push(`runId=${evt.context.runId}`);
+  }
+  if (typeof evt.context.objective === "string" && evt.context.objective.trim().length > 0) {
+    details.push(`objective=${previewValue(evt.context.objective, 80)}`);
+  }
+  if (Array.isArray(evt.context.acceptanceCriteria)) {
+    details.push(`acceptanceCriteria=${evt.context.acceptanceCriteria.length}`);
+  }
+  if (Array.isArray(evt.context.constraints)) {
+    details.push(`constraints=${evt.context.constraints.length}`);
+  }
+  return details.length > 0
+    ? `Harness context updated: ${details.join(", ")}`
+    : "Harness context updated";
+}
+
+export function developerDiagnosticSystemLineFromServerEvent(evt: DeveloperDiagnosticServerEvent): string {
+  switch (evt.type) {
+    case "observability_status":
+      return formatObservabilityDiagnosticLine(evt);
+    case "session_backup_state":
+      return formatSessionBackupDiagnosticLine(evt);
+    case "harness_context":
+      return formatHarnessContextDiagnosticLine(evt);
+  }
+}
+
+export function developerDiagnosticSystemLineFromPayload(payload: unknown): string | null {
+  const parsed = transcriptDeveloperDiagnosticPayloadSchema.safeParse(payload);
+  if (!parsed.success) return null;
+
+  switch (parsed.data.type) {
+    case "observability_status":
+      return formatObservabilityDiagnosticLine(parsed.data);
+    case "session_backup_state":
+      return formatSessionBackupDiagnosticLine(parsed.data);
+    case "harness_context":
+      return formatHarnessContextDiagnosticLine(parsed.data);
+  }
+}
+
+export function unhandledEventSystemLine(type: string): string {
+  return `Unhandled event: ${type}`;
+}
 
 export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
   return {
@@ -651,6 +755,34 @@ const transcriptSessionBusyPayloadSchema = z.object({
   busy: z.boolean().optional(),
 }).passthrough();
 
+const transcriptObservabilityStatusPayloadSchema = z.object({
+  type: z.literal("observability_status"),
+  enabled: z.boolean(),
+  health: z.object({
+    status: z.unknown(),
+    reason: z.unknown(),
+    message: z.unknown().optional(),
+  }).passthrough(),
+  config: z.unknown().optional(),
+}).passthrough();
+
+const transcriptSessionBackupStatePayloadSchema = z.object({
+  type: z.literal("session_backup_state"),
+  reason: z.unknown().optional(),
+  backup: z.unknown().optional(),
+}).passthrough();
+
+const transcriptHarnessContextPayloadSchema = z.object({
+  type: z.literal("harness_context"),
+  context: z.unknown().nullable().optional(),
+}).passthrough();
+
+const transcriptDeveloperDiagnosticPayloadSchema = z.discriminatedUnion("type", [
+  transcriptObservabilityStatusPayloadSchema,
+  transcriptSessionBackupStatePayloadSchema,
+  transcriptHarnessContextPayloadSchema,
+]);
+
 const transcriptFeedPayloadSchema = z.discriminatedUnion("type", [
   transcriptUserMessagePayloadSchema,
   transcriptModelStreamPayloadSchema,
@@ -682,6 +814,17 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
   for (const evt of events) {
     const parsedPayload = transcriptFeedPayloadSchema.safeParse(evt.payload);
     if (!parsedPayload.success) {
+      const developerDiagnosticLine = developerDiagnosticSystemLineFromPayload(evt.payload);
+      if (developerDiagnosticLine) {
+        out.push({
+          id: makeId(),
+          kind: "system",
+          ts: evt.ts,
+          line: developerDiagnosticLine,
+        });
+        continue;
+      }
+
       const parsedTypeOnly = transcriptPayloadTypeSchema.safeParse(evt.payload);
       if (!parsedTypeOnly.success) continue;
       if (transcriptFeedSuppressedTypes.has(parsedTypeOnly.data.type)) continue;
@@ -689,7 +832,7 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
         id: makeId(),
         kind: "system",
         ts: evt.ts,
-        line: `[${parsedTypeOnly.data.type}]`,
+        line: unhandledEventSystemLine(parsedTypeOnly.data.type),
       });
       continue;
     }

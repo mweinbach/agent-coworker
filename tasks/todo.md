@@ -1,3 +1,19 @@
+# Task: Improve desktop developer diagnostics for replay/live transcript parity
+
+## Plan
+- [x] Audit the current desktop live reducer, transcript replay mapper, and developer-mode feed filtering for observability, harness, and backup diagnostics.
+- [x] Add a shared developer-diagnostic formatter so live events and replayed transcript events render the same readable system notices while staying hidden outside developer mode.
+- [x] Add focused desktop regressions for replay mapping, live reducer handling, and developer-mode filtering; run the relevant desktop tests and repo typecheck.
+
+## Review
+- `apps/desktop/src/app/store.feedMapping.ts` now owns the shared desktop diagnostic wording for `observability_status`, `session_backup_state`, and `harness_context`, and transcript replay uses that formatter instead of leaking vague `[type]` placeholders. Replay fallback copy for truly unknown event types now matches the live reducer (`Unhandled event: ...`).
+- `apps/desktop/src/app/store.helpers/threadEventReducer.ts` now routes those same three server events into developer-only `system` feed items instead of silently dropping them, so live sessions and replayed transcripts tell the same debugging story while normal desktop usage still hides them through `ChatView` developer-mode filtering.
+- Added focused regressions in `apps/desktop/test/store-feed-mapping.test.ts` and `apps/desktop/test/protocol-v2-events.test.ts`, while keeping the existing `apps/desktop/test/chat-reasoning-ui.test.ts` developer-mode visibility guard as the UI-level hide/show check.
+- Verification:
+  - `~/.bun/bin/bun test --cwd apps/desktop test/store-feed-mapping.test.ts test/protocol-v2-events.test.ts test/chat-reasoning-ui.test.ts` -> pass (`48 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `git diff --check` -> pass
+
 # Task: Fix desktop chat composer send/stop button styling and stop behavior
 
 ## Plan

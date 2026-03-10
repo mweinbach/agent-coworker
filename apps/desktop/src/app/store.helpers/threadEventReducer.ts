@@ -8,9 +8,11 @@ import {
 } from "../modelStream";
 import {
   applyModelStreamUpdateToThreadFeed as applyModelStreamUpdateToThreadFeedCore,
+  developerDiagnosticSystemLineFromServerEvent,
   reasoningInsertBeforeAssistantAfterStreamReplay,
   shouldSkipAssistantMessageAfterStreamReplay,
   shouldSuppressRawDebugLogLine,
+  unhandledEventSystemLine,
   type ThreadModelStreamRuntime,
 } from "../store.feedMapping";
 import type { StoreGet, StoreSet } from "../store.helpers";
@@ -257,6 +259,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     }
 
     if (evt.type === "observability_status") {
+      pushFeedItem(set, threadId, {
+        id: deps.makeId(),
+        kind: "system",
+        ts: deps.nowIso(),
+        line: developerDiagnosticSystemLineFromServerEvent(evt),
+      });
       return;
     }
 
@@ -375,6 +383,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     }
 
     if (evt.type === "session_backup_state" || evt.type === "harness_context") {
+      pushFeedItem(set, threadId, {
+        id: deps.makeId(),
+        kind: "system",
+        ts: deps.nowIso(),
+        line: developerDiagnosticSystemLineFromServerEvent(evt),
+      });
       return;
     }
 
@@ -573,7 +587,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       id: deps.makeId(),
       kind: "system",
       ts: deps.nowIso(),
-      line: `Unhandled event: ${evt.type}`,
+      line: unhandledEventSystemLine(evt.type),
     });
   }
 

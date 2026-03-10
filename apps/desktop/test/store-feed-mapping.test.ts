@@ -253,6 +253,88 @@ describe("desktop transcript feed mapping", () => {
     expect(feed).toEqual([]);
   });
 
+  test("maps developer diagnostics into readable system rows during transcript replay", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "observability_status",
+          sessionId: "thread-session",
+          enabled: true,
+          health: { status: "ready", reason: "runtime_ready" },
+          config: {
+            provider: "langfuse",
+            baseUrl: "https://example.com",
+            otelEndpoint: "https://example.com/otel",
+            hasPublicKey: true,
+            hasSecretKey: true,
+            configured: true,
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "session_backup_state",
+          sessionId: "thread-session",
+          reason: "auto_checkpoint",
+          backup: {
+            status: "ready",
+            checkpoints: [{ id: "cp-1" }, { id: "cp-2" }],
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "harness_context",
+          sessionId: "thread-session",
+          context: {
+            taskId: "task-7",
+            runId: "run-9",
+            objective: "Ship the desktop diagnostic fix.",
+            acceptanceCriteria: ["a"],
+            constraints: ["b", "c"],
+          },
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    const systemLines = feed.map((item) => (item.kind === "system" ? item.line : null)).filter(Boolean);
+
+    expect(systemLines).toEqual([
+      "Observability: enabled=yes, configured=yes, health=ready (runtime_ready)",
+      "Session backup (auto checkpoint): status=ready, checkpoints=2",
+      "Harness context updated: taskId=task-7, runId=run-9, objective=Ship the desktop diagnostic fix., acceptanceCriteria=1, constraints=2",
+    ]);
+  });
+
+  test("uses the same unhandled event copy during transcript replay", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "future_event",
+          payload: true,
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+
+    expect(feed).toHaveLength(1);
+    expect(feed[0]).toMatchObject({ kind: "system", line: "Unhandled event: future_event" });
+  });
+
   test("ignores malformed session_usage snapshots during transcript replay", () => {
     const transcript: TranscriptEvent[] = [
       {

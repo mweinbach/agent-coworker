@@ -939,6 +939,62 @@ describe("desktop protocol v2 mapping", () => {
     expect(feed.some((item) => item.kind === "log")).toBe(false);
   });
 
+  test("developer diagnostics server events become readable system notices", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "observability_status",
+      sessionId: "thread-session",
+      enabled: true,
+      health: { status: "ready", reason: "runtime_ready" },
+      config: {
+        provider: "langfuse",
+        baseUrl: "https://example.com",
+        otelEndpoint: "https://example.com/otel",
+        hasPublicKey: true,
+        hasSecretKey: true,
+        configured: true,
+      },
+    });
+    threadSocket.emit({
+      type: "session_backup_state",
+      sessionId: "thread-session",
+      reason: "auto_checkpoint",
+      backup: {
+        status: "ready",
+        checkpoints: [{ id: "cp-1" }],
+      },
+    });
+    threadSocket.emit({
+      type: "harness_context",
+      sessionId: "thread-session",
+      context: {
+        taskId: "task-1",
+        runId: "run-1",
+        objective: "Ship it.",
+        acceptanceCriteria: ["a"],
+        constraints: ["b", "c"],
+      },
+    });
+
+    const systemLines = (useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [])
+      .filter((item) => item.kind === "system")
+      .map((item) => (item.kind === "system" ? item.line : ""));
+
+    expect(systemLines).toContain("Observability: enabled=yes, configured=yes, health=ready (runtime_ready)");
+    expect(systemLines).toContain("Session backup (auto checkpoint): status=ready, checkpoints=1");
+    expect(systemLines).toContain(
+      "Harness context updated: taskId=task-1, runId=run-1, objective=Ship it., acceptanceCriteria=1, constraints=2",
+    );
+  });
+
   test("manual cancel sends cancel only and does not auto-reset busy state", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const threadId = useAppStore.getState().selectedThreadId;

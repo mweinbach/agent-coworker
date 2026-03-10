@@ -664,6 +664,7 @@ const transcriptFeedPayloadSchema = z.discriminatedUnion("type", [
 ]);
 
 const transcriptFeedSuppressedTypes = new Set([
+  "set_session_usage_budget",
   "turn_usage",
   "session_usage",
   "budget_warning",

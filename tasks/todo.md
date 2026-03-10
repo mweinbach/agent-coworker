@@ -2473,3 +2473,32 @@
 - `git diff --check` -> pass
 - `~/.bun/bin/bun test test/connect.test.ts test/providers/codex-auth.test.ts test/providers/codex-oauth-flows.test.ts test/providerStatus.test.ts test/runtime.pi-runtime.test.ts` -> pass (`44 pass, 0 fail`)
 - `~/.bun/bin/bun run typecheck` -> pass
+
+# Task: Fix desktop PR review regressions from session usage UI
+
+## Plan
+- [x] Hide the chat-header "Clear hard cap" action until the thread has a live connected session ID, matching the existing settings page guard.
+- [x] Keep row-level and recent-turn cost badges visible in the desktop Usage page whenever those specific rows still have numeric estimates, even if the session-wide total is unavailable.
+- [x] Suppress replay-only `set_session_usage_budget` client transcript rows so clearing the hard cap does not reintroduce bogus `[set_session_usage_budget]` system feed noise.
+- [x] Run focused desktop Bun tests, then record the verified outcome below.
+
+## Review
+- `apps/desktop/src/ui/ChatView.tsx` now gates the chat-header hard-cap reset on a live connected session ID, so restored threads no longer expose a button that can only fail with `Not connected` during reconnect.
+- `apps/desktop/src/ui/settings/pages/UsagePage.tsx` now renders row-level model and recent-turn estimate badges whenever those rows still have numeric `estimatedCostUsd` values, even if the session-wide total is unavailable.
+- `apps/desktop/src/app/store.feedMapping.ts` now suppresses transcript replay for client `set_session_usage_budget` events, so clearing the hard cap does not leave bogus `[set_session_usage_budget]` system rows in restored feeds.
+- Added focused regressions in `apps/desktop/test/chat-reasoning-ui.test.ts`, `apps/desktop/test/usage-page.test.ts`, and `apps/desktop/test/store-feed-mapping.test.ts`.
+- Verification:
+  - `~/.bun/bin/bun test --cwd apps/desktop test/chat-reasoning-ui.test.ts test/usage-page.test.ts test/store-feed-mapping.test.ts test/thread-reconnect.test.ts` -> pass (`27 pass, 0 fail`)
+
+# Task: Compact explicit get_session_usage snapshots
+
+## Plan
+- [x] Switch `src/server/session/AgentSession.ts#getSessionUsage()` to emit the compact session usage snapshot instead of the full turn history.
+- [x] Extend the focused session test coverage so an explicit `getSessionUsage()` request proves only the recent compact turn window is returned.
+- [x] Run the targeted Bun tests and record the verified outcome below.
+
+## Review
+- `src/server/session/AgentSession.ts` now answers explicit `get_session_usage` requests with `tracker.getCompactSnapshot()`, matching the already-compact automatic and budget-update `session_usage` emissions.
+- `test/session.test.ts` now proves a resumed session with ten tracked turns returns only the most recent eight turns on an explicit `getSessionUsage()` request, while preserving the cumulative totals.
+- Verification:
+  - `~/.bun/bin/bun test test/session.test.ts apps/desktop/test/thread-reconnect.test.ts` -> pass (`200 pass, 0 fail`)

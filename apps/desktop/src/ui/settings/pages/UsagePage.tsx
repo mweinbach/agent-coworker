@@ -291,7 +291,7 @@ export function UsagePage(props: UsagePageProps = {}) {
                     </div>
                   </div>
                   <Badge variant="outline">
-                    {formatEstimatedCost(summary.estimatedCostUsd, sessionUsage.costTrackingAvailable)}
+                    {formatEstimatedCost(summary.estimatedCostUsd, summary.estimatedCostUsd !== null)}
                   </Badge>
                 </div>
                 <div className="mt-4 grid gap-3 md:grid-cols-3">
@@ -342,7 +342,7 @@ export function UsagePage(props: UsagePageProps = {}) {
                     </div>
                   </div>
                   <Badge variant="outline">
-                    {formatEstimatedCost(turn.estimatedCostUsd, sessionUsage?.costTrackingAvailable === true)}
+                    {formatEstimatedCost(turn.estimatedCostUsd, turn.estimatedCostUsd !== null)}
                   </Badge>
                 </div>
                 <div className="mt-4 grid gap-3 md:grid-cols-4">

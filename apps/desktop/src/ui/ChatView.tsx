@@ -5,7 +5,7 @@ import { AlertTriangleIcon, MessageSquareIcon, RotateCcwIcon } from "lucide-reac
 import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 
 import { useAppStore } from "../app/store";
-import type { FeedItem } from "../app/types";
+import type { FeedItem, ThreadStatus } from "../app/types";
 import {
   Conversation,
   ConversationContent,
@@ -132,6 +132,20 @@ export function sessionUsageTone(sessionUsage: SessionUsageSnapshot | null): str
     return "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300";
   }
   return "border-border/50 bg-background/80 text-muted-foreground";
+}
+
+export function canClearSessionHardCap(opts: {
+  sessionUsage: SessionUsageSnapshot | null;
+  transcriptOnly: boolean;
+  connected: boolean;
+  sessionId: string | null;
+  threadStatus: ThreadStatus;
+}): boolean {
+  return opts.sessionUsage?.budgetStatus.stopTriggered === true
+    && !opts.transcriptOnly
+    && opts.connected
+    && Boolean(opts.sessionId)
+    && opts.threadStatus === "active";
 }
 
 export function ChatThreadHeader(props: {
@@ -453,8 +467,13 @@ export function ChatView() {
   });
   const usageBudgetLine = formatSessionBudgetLine(rt?.sessionUsage ?? null);
   const hasUsageSummary = Boolean(usageHeadline || usageBudgetLine);
-  const canClearHardCap =
-    rt?.sessionUsage?.budgetStatus.stopTriggered === true && !transcriptOnly && !disconnected;
+  const canClearHardCap = canClearSessionHardCap({
+    sessionUsage: rt?.sessionUsage ?? null,
+    transcriptOnly,
+    connected: rt?.connected === true,
+    sessionId: rt?.sessionId ?? null,
+    threadStatus: thread.status,
+  });
 
   const placeholder = transcriptOnly
     ? "Continue in a new thread..."

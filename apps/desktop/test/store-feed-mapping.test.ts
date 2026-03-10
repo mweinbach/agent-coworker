@@ -234,6 +234,25 @@ describe("desktop transcript feed mapping", () => {
     expect(assistant.map((item) => item.text)).toEqual(["First note.", "Second note."]);
   });
 
+  test("suppresses client-side usage budget updates during transcript replay", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "client",
+        payload: {
+          type: "set_session_usage_budget",
+          sessionId: "thread-session",
+          stopAtUsd: null,
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+
+    expect(feed).toEqual([]);
+  });
+
   test("prefers raw final-answer text over a stale merged assistant_message on raw-backed turns", () => {
     const transcript: TranscriptEvent[] = [
       {

@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  canClearSessionHardCap,
   ChatThreadHeader,
   filterFeedForDeveloperMode,
   formatSessionBudgetLine,
@@ -152,6 +153,46 @@ describe("desktop reasoning UI helpers", () => {
         },
       }),
     ).toBe("Hard cap exceeded at $0.02");
+  });
+
+  test("only exposes hard-cap clearing once the thread has reconnected", () => {
+    const stoppedUsage = {
+      sessionId: "session-1",
+      totalTurns: 1,
+      totalPromptTokens: 100,
+      totalCompletionTokens: 20,
+      totalTokens: 120,
+      estimatedTotalCostUsd: 0.02,
+      costTrackingAvailable: true,
+      byModel: [],
+      turns: [],
+      budgetStatus: {
+        configured: true,
+        warnAtUsd: 0.01,
+        stopAtUsd: 0.02,
+        warningTriggered: true,
+        stopTriggered: true,
+        currentCostUsd: 0.02,
+      },
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:01.000Z",
+    };
+
+    expect(canClearSessionHardCap({
+      sessionUsage: stoppedUsage,
+      transcriptOnly: false,
+      connected: false,
+      sessionId: null,
+      threadStatus: "active",
+    })).toBe(false);
+
+    expect(canClearSessionHardCap({
+      sessionUsage: stoppedUsage,
+      transcriptOnly: false,
+      connected: true,
+      sessionId: "session-1",
+      threadStatus: "active",
+    })).toBe(true);
   });
 
   test("renders usage stats as a title hover/focus reveal instead of an always-on header row", () => {

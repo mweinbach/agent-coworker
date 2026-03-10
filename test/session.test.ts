@@ -3702,18 +3702,20 @@ describe("AgentSession", () => {
       });
     });
 
-    test("restores persisted cost tracker state on session resume", () => {
+    test("returns a compact session usage snapshot on explicit request after resume", () => {
       const tracker = new SessionCostTracker("persisted-session");
-      tracker.recordTurn({
-        turnId: "turn-1",
-        provider: "openai",
-        model: "gpt-5.4",
-        usage: {
-          promptTokens: 100,
-          completionTokens: 25,
-          totalTokens: 125,
-        },
-      });
+      for (let i = 0; i < 10; i += 1) {
+        tracker.recordTurn({
+          turnId: `turn-${i + 1}`,
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            promptTokens: 100,
+            completionTokens: 25,
+            totalTokens: 125,
+          },
+        });
+      }
       tracker.updateBudget({ warnAtUsd: 3, stopAtUsd: 6 });
       const { emit, events } = makeEmit();
 
@@ -3753,7 +3755,11 @@ describe("AgentSession", () => {
       session.getSessionUsage();
 
       const usageEvt = events.find((e) => e.type === "session_usage") as Extract<ServerEvent, { type: "session_usage" }> | undefined;
-      expect(usageEvt?.usage).toEqual(tracker.getSnapshot());
+      expect(usageEvt?.usage).toEqual(tracker.getCompactSnapshot());
+      expect(usageEvt?.usage?.totalTurns).toBe(10);
+      expect(usageEvt?.usage?.turns).toHaveLength(8);
+      expect(usageEvt?.usage?.turns[0]?.turnId).toBe("turn-3");
+      expect(usageEvt?.usage?.turns.at(-1)?.turnId).toBe("turn-10");
     });
   });
   // =========================================================================

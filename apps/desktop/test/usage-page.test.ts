@@ -184,4 +184,84 @@ describe("desktop usage page", () => {
     expect(html).toContain("Select a thread in the sidebar to inspect its session usage.");
     expect(html).toContain("Choose a thread first to see its model breakdown.");
   });
+
+  test("keeps model and recent-turn estimates when only the session total is unavailable", () => {
+    const html = renderToStaticMarkup(
+      createElement(UsagePage, {
+        thread: {
+          id: "thread-2",
+          workspaceId: "ws-1",
+          title: "Mixed pricing thread",
+          createdAt: "2026-03-10T00:00:00.000Z",
+          lastMessageAt: "2026-03-10T00:05:00.000Z",
+          status: "active",
+          sessionId: "session-2",
+          lastEventSeq: 5,
+        },
+        runtime: {
+          wsUrl: "ws://mock",
+          connected: true,
+          sessionId: "session-2",
+          config: null,
+          sessionConfig: null,
+          sessionUsage: {
+            sessionId: "session-2",
+            totalTurns: 2,
+            totalPromptTokens: 2000,
+            totalCompletionTokens: 400,
+            totalTokens: 2400,
+            estimatedTotalCostUsd: null,
+            costTrackingAvailable: false,
+            byModel: [
+              {
+                provider: "openai",
+                model: "gpt-5.4",
+                turns: 1,
+                totalPromptTokens: 1000,
+                totalCompletionTokens: 200,
+                totalTokens: 1200,
+                estimatedCostUsd: 0.004,
+              },
+            ],
+            turns: [
+              {
+                turnId: "turn-2",
+                turnIndex: 1,
+                timestamp: "2026-03-10T00:03:00.000Z",
+                provider: "openai",
+                model: "gpt-5.4",
+                usage: {
+                  promptTokens: 1000,
+                  completionTokens: 200,
+                  totalTokens: 1200,
+                },
+                estimatedCostUsd: 0.0012,
+                pricing: null,
+              },
+            ],
+            budgetStatus: {
+              configured: false,
+              warnAtUsd: null,
+              stopAtUsd: null,
+              warningTriggered: false,
+              stopTriggered: false,
+              currentCostUsd: null,
+            },
+            createdAt: "2026-03-10T00:00:00.000Z",
+            updatedAt: "2026-03-10T00:05:00.000Z",
+          },
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: false,
+          busySince: null,
+          feed: [],
+          transcriptOnly: false,
+        },
+      } as any),
+    );
+
+    expect(html).toContain("Estimate unavailable");
+    expect(html).toContain("est. $0.0040");
+    expect(html).toContain("est. $0.0012");
+  });
 });

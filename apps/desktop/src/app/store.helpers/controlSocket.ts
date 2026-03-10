@@ -44,7 +44,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
       url,
       resumeSessionId,
       client: "desktop-control",
-      version: "0.1.17",
+      version: "0.1.18",
       autoReconnect: true,
       onEvent: (evt) => {
         if (evt.type === "server_hello") {

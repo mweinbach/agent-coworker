@@ -1,3 +1,21 @@
+# Task: Merge PR #30 into main and ship the next release
+
+## Plan
+- [x] Confirm the shipped commit range, release workflow expectations, and next version after `v0.1.17`.
+- [x] Merge PR #30 into `main`, bump the versioned release files, and draft release notes from the commits being shipped.
+- [ ] Run the required verification commands, push `main` plus the new tag, publish the release, and record the final evidence below.
+
+## Review
+- GitHub PR #30 was merged into `main` via rebase merge on 2026-03-10, so the shipped commit range for this release is `v0.1.17..main` and includes the release-notes rendering fix plus the full session-usage / auth-persistence stack.
+- Release version was bumped to `0.1.18` in the root package, desktop package, CLI/TUI/desktop socket client version strings, MCP client version string, and the desktop updates-page release fixture so packaged metadata stays aligned.
+- Draft release notes for `v0.1.18` were prepared from the shipped commits with four user-facing themes: rich desktop release notes, session usage tracking and `@usage`, budget persistence/recovery plus snapshot compaction, and persisted Cowork/Codex auth state.
+- Verification:
+  - `~/.bun/bin/bun run docs:check` -> pass
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> pass (`1946 pass, 2 skip, 0 fail`)
+  - `git diff --check` -> pass
+  - `~/.bun/bin/bun run desktop:build -- --publish never` -> pass; local packaging built `Cowork-0.1.18-mac-arm64.dmg`/`.zip` and skipped notarization because Apple notarization credentials were not configured locally
+
 # Task: Fix accepted PR #30 findings
 
 ## Plan

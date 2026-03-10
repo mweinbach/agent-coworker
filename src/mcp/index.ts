@@ -99,7 +99,7 @@ async function createRuntimeMcpClient(opts: {
   name: string;
   transport: RuntimeMcpTransport;
 }): Promise<RuntimeMcpClient> {
-  const client = new McpClient({ name: `agent-coworker/${opts.name}`, version: "0.1.17" });
+  const client = new McpClient({ name: `agent-coworker/${opts.name}`, version: "0.1.18" });
 
   const requestInit = (() => {
     if (opts.transport.type === "stdio") return undefined;

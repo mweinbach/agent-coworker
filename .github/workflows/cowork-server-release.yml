@@ -1,0 +1,129 @@
+name: Cowork Server Release
+
+on:
+  push:
+    tags:
+      - "cowork-server-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cowork-server-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Unit tests
+        run: bun test
+
+      - name: Typecheck
+        run: bun run typecheck
+
+  build:
+    name: Build cowork-server (${{ matrix.label }})
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS
+            artifact_name: cowork-server-macos
+            output_name: cowork-server-macos
+          - os: windows-latest
+            label: Windows
+            artifact_name: cowork-server-windows
+            output_name: cowork-server-windows.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build cowork-server binary
+        run: bun run build:server-binary -- --outfile dist/${{ matrix.output_name }}
+
+      - name: Package macOS binary
+        if: runner.os == 'macOS'
+        run: |
+          cd dist
+          chmod +x ${{ matrix.output_name }}
+          zip -j ${{ matrix.output_name }}.zip ${{ matrix.output_name }}
+
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist\${{ matrix.output_name }}" -DestinationPath "dist\${{ matrix.output_name }}.zip" -Force
+
+      - name: Upload cowork-server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/${{ matrix.output_name }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish cowork-server prerelease
+    if: ${{ startsWith(github.ref, 'refs/tags/cowork-server-v') }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: cowork-server-*
+
+      - name: Collect cowork-server files
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+
+          files=(release-assets/**/*.zip)
+
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No cowork-server zip files were downloaded." >&2
+            exit 1
+          fi
+
+          {
+            echo "files<<EOF"
+            printf '%s\n' "${files[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish cowork-server release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: ${{ steps.collect.outputs.files }}
+          name: cowork-server ${{ github.ref_name }}

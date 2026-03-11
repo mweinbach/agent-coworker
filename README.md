@@ -97,7 +97,16 @@ bun run serve
 bun run serve -- --json
 ```
 
-TUI requires a real terminal. For headless or cloud workflows, prefer `bun run serve` and connect over WebSocket.
+Build a standalone Bun binary (`cowork-server`) that can be bundled into other apps:
+
+```bash
+bun run build:server-binary
+./dist/cowork-server --host 0.0.0.0 --port 7337
+```
+
+On startup, `cowork-server` logs the bound WebSocket URL and, when using `--host 0.0.0.0`, prints reachable LAN IPv4 addresses for easy embedding/debugging.
+
+TUI requires a real terminal. For headless or cloud workflows, prefer `bun run serve` or the compiled `cowork-server` binary and connect over WebSocket.
 
 ## Official clients
 

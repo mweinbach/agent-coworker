@@ -1,3 +1,22 @@
+# Task: Add standalone cowork-server Bun binary release pipeline
+
+## Plan
+- [x] Audit existing server startup/build/release behavior and define the minimal standalone cowork-server packaging contract (no TUI/desktop UI).
+- [x] Implement cowork-server runtime/build updates so the compiled binary starts the websocket harness with clear host/port logging.
+- [x] Add a dedicated GitHub Actions workflow that builds cowork-server binaries for macOS and Windows and publishes them as a separate prerelease stream.
+- [x] Run required verification (`bun test`, targeted checks) and record outcomes in the review section.
+
+## Review
+- Added standalone cowork-server build support via `bun run build:server-binary`, which compiles `src/server/index.ts` into a distributable Bun binary (default output `dist/cowork-server` / `dist/cowork-server.exe`).
+- Extended the server entrypoint to support `--host` in addition to `--port`, and improved startup logging so terminal runs clearly show the bound websocket URL; for `--host 0.0.0.0`, the process also prints reachable LAN IPv4 websocket URLs.
+- Added a dedicated `Cowork Server Release` GitHub Actions workflow that runs validation, builds macOS and Windows cowork-server binaries, and publishes them to a **separate prerelease stream** triggered only by `cowork-server-v*` tags.
+- Updated README docs for binary build/run usage so teams can bundle cowork-server into other surfaces without launching CLI/TUI.
+- Verification:
+  - `bun run build:server-binary -- --outfile dist/cowork-server-test`
+  - `./dist/cowork-server-test --json --port 0`
+  - `bun test`
+  - `bun run typecheck`
+
 # Task: Expand GitHub release notes for v0.1.19
 
 ## Plan

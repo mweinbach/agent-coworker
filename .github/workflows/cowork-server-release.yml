@@ -65,11 +65,24 @@ jobs:
       - name: Build cowork-server binary
         run: bun run build:server-binary -- --outfile dist/${{ matrix.output_name }}
 
+      - name: Package macOS binary
+        if: runner.os == 'macOS'
+        run: |
+          cd dist
+          chmod +x ${{ matrix.output_name }}
+          zip -j ${{ matrix.output_name }}.zip ${{ matrix.output_name }}
+
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist\${{ matrix.output_name }}" -DestinationPath "dist\${{ matrix.output_name }}.zip" -Force
+
       - name: Upload cowork-server artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/${{ matrix.output_name }}
+          path: dist/${{ matrix.output_name }}.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -94,13 +107,10 @@ jobs:
           set -euo pipefail
           shopt -s globstar nullglob
 
-          files=(
-            release-assets/**/cowork-server-macos
-            release-assets/**/cowork-server-windows.exe
-          )
+          files=(release-assets/**/*.zip)
 
           if [ "${#files[@]}" -eq 0 ]; then
-            echo "No cowork-server binaries were downloaded." >&2
+            echo "No cowork-server zip files were downloaded." >&2
             exit 1
           fi
 

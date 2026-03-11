@@ -295,6 +295,23 @@ export function rewriteBareDesktopFilePathsInTree(node: HastNode): void {
       }
     }
 
+    // Convert inlineCode nodes that are entirely a file path into a clickable link
+    if (child.type === "inlineCode" && typeof child.value === "string") {
+      const trimmed = child.value.trim();
+      const matches = findBareDesktopFilePathMatches(trimmed);
+      if (matches.length === 1 && matches[0].start === 0 && matches[0].end === trimmed.length) {
+        const fileUrl = desktopPathToFileUrl(matches[0].path);
+        if (fileUrl) {
+          nextChildren.push({
+            type: "link",
+            url: fileUrl,
+            children: [{ type: "text", value: desktopPathBasename(matches[0].path) }],
+          });
+          continue;
+        }
+      }
+    }
+
     rewriteBareDesktopFilePathsInTree(child);
     nextChildren.push(child);
   }

@@ -108,7 +108,7 @@ export function PromptInputSubmit({ className, disabled, onStop, status, ...prop
       type="submit"
       size="icon"
       className={cn(
-        "rounded-full border border-primary/15 bg-primary text-primary-foreground shadow-none hover:brightness-105 disabled:border-border/50 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
+        "rounded-full border border-primary/15 bg-primary brightness-[0.72] text-primary-foreground shadow-none hover:brightness-[0.78] disabled:brightness-100 disabled:border-border/50 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
         className,
       )}
       disabled={disabled}

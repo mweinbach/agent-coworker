@@ -154,7 +154,7 @@ describe("desktop message local file links", () => {
     expect(html).not.toContain("C:\\Users\\Test\\Desktop\\Cowork Test\\macbook_neo_report_page_1.png");
   });
 
-  test("does not auto-link file paths inside inline code", () => {
+  test("auto-links file paths inside inline code when the entire value is a path", () => {
     const html = renderToStaticMarkup(
       createElement(
         MessageResponse,
@@ -163,8 +163,8 @@ describe("desktop message local file links", () => {
       ),
     );
 
-    expect(html).toContain("<code");
-    expect(html).toContain("C:\\Users\\Test\\Desktop\\Cowork Test\\create_models.py");
-    expect(html).not.toContain("<button");
+    expect(html).toContain("<button");
+    expect(html).toContain("create_models.py");
+    expect(html).not.toContain("C:\\Users\\Test\\Desktop\\Cowork Test\\create_models.py");
   });
 });

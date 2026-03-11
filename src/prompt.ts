@@ -144,7 +144,6 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
 
   const vars: Record<string, string> = {
     workingDirectory: config.workingDirectory,
-    outputDirectory: config.outputDirectory ?? config.workingDirectory,
     currentDate: new Date().toLocaleDateString("en-US", {
       weekday: "long",
       year: "numeric",
@@ -155,7 +154,6 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
     modelName: config.model,
     userName: config.userName || "",
     knowledgeCutoff: config.knowledgeCutoff || "unknown",
-    skillsDirectory: config.skillsDirs[0] || path.join(config.projectAgentDir, "skills"),
     skillNames: skillNames || '"pdf", "doc", "slides", "spreadsheet"',
     skillExamples:
       skillExamples ||

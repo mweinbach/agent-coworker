@@ -17,7 +17,7 @@ export class SessionSnapshotBuilder {
 
   buildPersistedSnapshotAt(updatedAt: string): PersistedSessionSnapshot {
     return {
-      version: 4,
+      version: 5,
       sessionId: this.opts.sessionId,
       createdAt: this.opts.state.sessionInfo.createdAt,
       updatedAt,
@@ -35,6 +35,7 @@ export class SessionSnapshotBuilder {
         provider: this.opts.state.config.provider,
         model: this.opts.state.config.model,
         enableMcp: this.opts.getEnableMcp(),
+        backupsEnabledOverride: this.opts.state.backupsEnabledOverride,
         workingDirectory: this.opts.state.config.workingDirectory,
         ...(this.opts.state.config.outputDirectory ? { outputDirectory: this.opts.state.config.outputDirectory } : {}),
         ...(this.opts.state.config.uploadsDirectory ? { uploadsDirectory: this.opts.state.config.uploadsDirectory } : {}),
@@ -64,6 +65,7 @@ export class SessionSnapshotBuilder {
       ...(this.opts.state.config.outputDirectory ? { outputDirectory: this.opts.state.config.outputDirectory } : {}),
       ...(this.opts.state.config.uploadsDirectory ? { uploadsDirectory: this.opts.state.config.uploadsDirectory } : {}),
       enableMcp: this.opts.getEnableMcp(),
+      backupsEnabledOverride: this.opts.state.backupsEnabledOverride,
       createdAt: this.opts.state.sessionInfo.createdAt,
       updatedAt,
       status: this.opts.state.persistenceStatus,

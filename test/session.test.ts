@@ -103,8 +103,17 @@ function makeEmit(): { emit: (evt: ServerEvent) => void; events: ServerEvent[] }
 
 function makeSessionBackupFactory() {
   return mock(async (opts: SessionBackupInitOptions): Promise<SessionBackupHandle> => {
-    const checkpoints: SessionBackupPublicCheckpoint[] = [];
     const createdAt = new Date().toISOString();
+    const checkpoints: SessionBackupPublicCheckpoint[] = [
+      {
+        id: "cp-0001",
+        index: 1,
+        createdAt,
+        trigger: "initial",
+        changed: false,
+        patchBytes: 0,
+      },
+    ];
 
     const getState = (): SessionBackupPublicState => ({
       status: "ready",
@@ -342,7 +351,7 @@ describe("AgentSession", () => {
       await flushAsyncWork();
       expect(mockWritePersistedSessionSnapshot).toHaveBeenCalledTimes(1);
       const first = mockWritePersistedSessionSnapshot.mock.calls[0]?.[0] as any;
-      expect(first?.snapshot?.version).toBe(4);
+      expect(first?.snapshot?.version).toBe(5);
       expect(first?.snapshot?.context?.providerState).toBeNull();
       expect(first?.snapshot?.context?.costTracker).toMatchObject({
         totalTurns: 0,
@@ -663,6 +672,7 @@ describe("AgentSession", () => {
       expect(evt.type).toBe("session_config");
       expect(evt.config.yolo).toBe(false);
       expect(evt.config.observabilityEnabled).toBe(false);
+      expect(evt.config.backupsEnabled).toBe(true);
       expect(evt.config.subAgentModel).toBe("gemini-2.0-flash");
       expect(evt.config.maxSteps).toBe(100);
     });
@@ -707,13 +717,14 @@ describe("AgentSession", () => {
       expect((evt.config.providerOptions as any)?.google).toBeUndefined();
     });
 
-    test("setConfig emits session_config and persists subAgentModel/observability", async () => {
+    test("setConfig emits session_config and persists subAgentModel/observability/backupsEnabled", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
       await session.setConfig({
         subAgentModel: "gpt-5.2-mini",
         observabilityEnabled: true,
+        backupsEnabled: false,
         maxSteps: 25,
       });
 
@@ -721,11 +732,13 @@ describe("AgentSession", () => {
       expect(cfgEvt).toBeDefined();
       expect(cfgEvt.config.subAgentModel).toBe("gpt-5.2-mini");
       expect(cfgEvt.config.observabilityEnabled).toBe(true);
+      expect(cfgEvt.config.backupsEnabled).toBe(false);
       expect(cfgEvt.config.maxSteps).toBe(25);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
         subAgentModel: "gpt-5.2-mini",
         observabilityEnabled: true,
+        backupsEnabled: false,
       });
     });
 
@@ -2010,8 +2023,17 @@ describe("AgentSession", () => {
 
     test("clears busy and allows follow-up even when auto-checkpoint never resolves", async () => {
       const sessionBackupFactory = mock(async (opts: SessionBackupInitOptions): Promise<SessionBackupHandle> => {
-        const checkpoints: SessionBackupPublicCheckpoint[] = [];
         const createdAt = new Date().toISOString();
+        const checkpoints: SessionBackupPublicCheckpoint[] = [
+          {
+            id: "cp-0001",
+            index: 1,
+            createdAt,
+            trigger: "initial",
+            changed: false,
+            patchBytes: 0,
+          },
+        ];
         const state = (): SessionBackupPublicState => ({
           status: "ready",
           sessionId: opts.sessionId,
@@ -2917,6 +2939,28 @@ describe("AgentSession", () => {
       if (evt && evt.type === "session_backup_state") {
         expect(evt.reason).toBe("requested");
         expect(evt.backup.status).toBe("ready");
+        expect(evt.backup.checkpoints).toHaveLength(1);
+        expect(evt.backup.checkpoints[0]?.trigger).toBe("initial");
+      }
+    });
+
+    test("disabled sessions emit a disabled backup state with no checkpoints", async () => {
+      const dir = path.join(os.tmpdir(), `session-backups-disabled-${Date.now()}`);
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig(dir),
+          backupsEnabled: false,
+        },
+      });
+
+      await session.getSessionBackupState();
+
+      const evt = events.find((event) => event.type === "session_backup_state");
+      expect(evt).toBeDefined();
+      if (evt && evt.type === "session_backup_state") {
+        expect(evt.backup.status).toBe("disabled");
+        expect(evt.backup.backupDirectory).toBeNull();
+        expect(evt.backup.checkpoints).toEqual([]);
       }
     });
 
@@ -2936,8 +2980,9 @@ describe("AgentSession", () => {
       const auto = backupEvents.find((e) => e.reason === "auto_checkpoint");
       expect(auto).toBeDefined();
       if (auto) {
-        expect(auto.backup.checkpoints).toHaveLength(1);
-        expect(auto.backup.checkpoints[0]?.trigger).toBe("auto");
+        expect(auto.backup.checkpoints).toHaveLength(2);
+        expect(auto.backup.checkpoints[0]?.trigger).toBe("initial");
+        expect(auto.backup.checkpoints[1]?.trigger).toBe("auto");
       }
     });
 
@@ -2950,8 +2995,9 @@ describe("AgentSession", () => {
       ) as Extract<ServerEvent, { type: "session_backup_state" }> | undefined;
       expect(manual).toBeDefined();
       if (manual) {
-        expect(manual.backup.checkpoints).toHaveLength(1);
-        expect(manual.backup.checkpoints[0]?.trigger).toBe("manual");
+        expect(manual.backup.checkpoints).toHaveLength(2);
+        expect(manual.backup.checkpoints[0]?.trigger).toBe("initial");
+        expect(manual.backup.checkpoints[1]?.trigger).toBe("manual");
       }
     });
 
@@ -2987,7 +3033,7 @@ describe("AgentSession", () => {
         (e) => e.type === "session_backup_state" && e.reason === "manual_checkpoint"
       ) as Array<Extract<ServerEvent, { type: "session_backup_state" }>>;
       expect(manualEvents.length).toBe(2);
-      expect(manualEvents[1]?.backup.checkpoints.length).toBe(2);
+      expect(manualEvents[1]?.backup.checkpoints.length).toBe(3);
     });
   });
 

@@ -8,6 +8,7 @@ const PROVIDER_STATE_MIGRATION = 3;
 const SUBAGENT_METADATA_MIGRATION = 4;
 const MODEL_STREAM_CHUNKS_MIGRATION = 5;
 const COST_TRACKER_MIGRATION = 6;
+const BACKUPS_ENABLED_OVERRIDE_MIGRATION = 7;
 
 type BootstrapSessionDbOptions = {
   db: Database;
@@ -21,6 +22,7 @@ type BootstrapSessionDbOptions = {
     | "addSubagentMetadataColumns"
     | "addModelStreamChunksTable"
     | "addCostTrackerColumn"
+    | "addBackupsEnabledOverrideColumn"
   >;
   importLegacySnapshots: () => Promise<void>;
 };
@@ -63,6 +65,11 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   if (!appliedMigrations.has(COST_TRACKER_MIGRATION)) {
     opts.repository.addCostTrackerColumn();
     opts.repository.markMigration(COST_TRACKER_MIGRATION);
+  }
+
+  if (!appliedMigrations.has(BACKUPS_ENABLED_OVERRIDE_MIGRATION)) {
+    opts.repository.addBackupsEnabledOverrideColumn();
+    opts.repository.markMigration(BACKUPS_ENABLED_OVERRIDE_MIGRATION);
   }
 
   if (!appliedMigrations.has(LEGACY_IMPORT_MIGRATION)) {

@@ -32,6 +32,7 @@ function makeSessionRecord(sessionId: string, status: PersistedSessionRecord["st
     model: "gpt-5.2",
     workingDirectory: "/unused",
     enableMcp: true,
+    backupsEnabledOverride: null,
     createdAt: "2026-03-10T00:00:00.000Z",
     updatedAt: "2026-03-10T00:10:00.000Z",
     status,
@@ -195,6 +196,49 @@ describe("WorkspaceBackupService", () => {
     await expect(service.deleteCheckpoint(workspaceA, "session-busy", checkpoint.id)).rejects.toThrow("Session is busy");
   });
 
+  test("deleteEntry disables a live session override before removing its backup directory", async () => {
+    const { home, workspaceA } = await makeTmpWorkspaces();
+    await fs.writeFile(path.join(workspaceA, "live.txt"), "one\n", "utf-8");
+
+    const manager = await SessionBackupManager.create({
+      sessionId: "session-live-delete",
+      workingDirectory: workspaceA,
+      homedir: home,
+    });
+    const backupDirectory = manager.getPublicState().backupDirectory;
+    if (!backupDirectory) throw new Error("Expected backup directory");
+
+    const overrideCalls: Array<boolean | null> = [];
+    const service = new WorkspaceBackupService({
+      homedir: home,
+      sessionDb: {
+        getSessionRecord: (sessionId: string) => (
+          sessionId === "session-live-delete" ? makeSessionRecord("session-live-delete", "active") : null
+        ),
+      } as any,
+      getLiveSession: (sessionId: string) => {
+        if (sessionId !== "session-live-delete") return null;
+        return {
+          sessionId,
+          title: "Live delete",
+          provider: "openai",
+          model: "gpt-5.2",
+          updatedAt: "2026-03-10T00:20:00.000Z",
+          status: "active" as const,
+          busy: false,
+          setBackupsEnabledOverride: async (enabled: boolean | null) => {
+            overrideCalls.push(enabled);
+          },
+        };
+      },
+    });
+
+    const entries = await service.deleteEntry(workspaceA, "session-live-delete");
+    expect(overrideCalls).toEqual([false]);
+    expect(entries.find((entry) => entry.targetSessionId === "session-live-delete")).toBeUndefined();
+    await expect(fs.stat(backupDirectory)).rejects.toThrow();
+  });
+
   test("restore creates a safety checkpoint before overwriting the workspace", async () => {
     const { home, workspaceA } = await makeTmpWorkspaces();
     const filePath = path.join(workspaceA, "restore.txt");
@@ -214,7 +258,7 @@ describe("WorkspaceBackupService", () => {
     const restoredEntry = entries.find((entry) => entry.targetSessionId === "session-restore");
 
     expect(await fs.readFile(filePath, "utf-8")).toBe("two\n");
-    expect(restoredEntry?.checkpoints).toHaveLength(2);
+    expect(restoredEntry?.checkpoints).toHaveLength(3);
     expect(restoredEntry?.checkpoints.at(-1)?.trigger).toBe("manual");
   });
 
@@ -242,7 +286,7 @@ describe("WorkspaceBackupService", () => {
     const service = makeService({ home });
     const delta = await service.getCheckpointDelta(workspaceA, "session-delta", checkpoint.id);
 
-    expect(delta.baselineLabel).toBe("Original snapshot");
+    expect(delta.baselineLabel).toBe("cp-0001");
     expect(delta.currentLabel).toBe(checkpoint.id);
     expect(delta.counts).toEqual({ added: 1, modified: 1, deleted: 1 });
     expect(delta.files.map((file) => `${file.change}:${file.path}`)).toEqual([
@@ -278,6 +322,6 @@ describe("WorkspaceBackupService", () => {
     const entry = entries.find((item) => item.targetSessionId === "session-legacy");
 
     expect(updatedMetadata?.originalFingerprint).toBeTruthy();
-    expect(entry?.checkpoints).toHaveLength(1);
+    expect(entry?.checkpoints).toHaveLength(2);
   });
 });

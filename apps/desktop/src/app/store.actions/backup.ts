@@ -2,6 +2,7 @@ import {
   type AppStoreActions,
   type StoreGet,
   type StoreSet,
+  appendThreadTranscript,
   ensureControlSocket,
   ensureServerRunning,
   ensureWorkspaceRuntime,
@@ -9,6 +10,7 @@ import {
   nowIso,
   pushNotification,
   sendControl,
+  sendThread,
 } from "../store.helpers";
 
 function workspaceBackupActionKey(kind: string, targetSessionId: string, checkpointId?: string): string {
@@ -75,6 +77,8 @@ export function createWorkspaceBackupActions(
   | "restoreWorkspaceBackupOriginal"
   | "restoreWorkspaceBackupCheckpoint"
   | "deleteWorkspaceBackupCheckpoint"
+  | "deleteWorkspaceBackupEntry"
+  | "setWorkspaceBackupSessionEnabled"
 > {
   async function ensureWorkspaceControl(workspaceId: string): Promise<boolean> {
     ensureWorkspaceRuntime(get, set, workspaceId);
@@ -208,6 +212,54 @@ export function createWorkspaceBackupActions(
 
       clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
       notifyNotConnected("Unable to delete the selected checkpoint.");
+    },
+
+    deleteWorkspaceBackupEntry: async (workspaceId: string, targetSessionId: string) => {
+      await ensureWorkspaceControl(workspaceId);
+      const actionKey = workspaceBackupActionKey("delete-entry", targetSessionId);
+      addWorkspaceBackupPendingAction(set, workspaceId, actionKey);
+
+      const ok = sendControl(get, workspaceId, (sessionId) => ({
+        type: "workspace_backup_delete_entry",
+        sessionId,
+        targetSessionId,
+      }));
+      if (ok) return;
+
+      clearWorkspaceBackupPendingAction(set, workspaceId, actionKey);
+      notifyNotConnected("Unable to delete the selected backup entry.");
+    },
+
+    setWorkspaceBackupSessionEnabled: async (workspaceId: string, targetSessionId: string, enabled: boolean) => {
+      const thread = get().threads.find((entry) => (
+        entry.workspaceId === workspaceId
+          && get().threadRuntimeById[entry.id]?.sessionId === targetSessionId
+      ));
+      if (!thread) {
+        notifyNotConnected("Connect the selected session to change its backup setting.");
+        return;
+      }
+
+      const runtime = get().threadRuntimeById[thread.id];
+      const ok = sendThread(get, thread.id, (sessionId) => ({
+        type: "set_config",
+        sessionId,
+        config: {
+          backupsEnabled: enabled,
+        },
+      }));
+      if (!ok) {
+        notifyNotConnected("Unable to update the selected session backup setting.");
+        return;
+      }
+
+      appendThreadTranscript(thread.id, "client", {
+        type: "set_config",
+        sessionId: runtime?.sessionId,
+        config: {
+          backupsEnabled: enabled,
+        },
+      });
     },
   };
 }

@@ -88,6 +88,7 @@ const persistedWorkspaceSchema = z.object({
   defaultSubAgentModel: optionalStringWithContentSchema,
   providerOptions: z.unknown().optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
+  defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough().transform((workspace): WorkspaceRecord => {
   const model = workspace.defaultModel ?? defaultModelForProvider(workspace.defaultProvider);
@@ -102,6 +103,7 @@ const persistedWorkspaceSchema = z.object({
     defaultSubAgentModel: workspace.defaultSubAgentModel ?? model,
     providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
     defaultEnableMcp: workspace.defaultEnableMcp,
+    defaultBackupsEnabled: workspace.defaultBackupsEnabled,
     yolo: workspace.yolo,
   };
 });

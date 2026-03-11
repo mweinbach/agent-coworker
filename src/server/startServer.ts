@@ -75,7 +75,7 @@ async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unkn
 
 async function persistProjectConfigPatch(
   projectAgentDir: string,
-  patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">> & {
+  patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled">> & {
     providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
   },
   runtimeProviderOptions?: AgentConfig["providerOptions"],
@@ -124,7 +124,7 @@ async function persistProjectConfigPatch(
 
 function mergeConfigPatch(
   config: AgentConfig,
-  patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">> & {
+  patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled">> & {
     providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
   }
 ): AgentConfig {
@@ -215,6 +215,9 @@ export async function startAgentServer(
         updatedAt: info.updatedAt,
         status: session.persistenceStatus,
         busy: session.isBusy,
+        setBackupsEnabledOverride: async (enabled) => {
+          await session.setBackupsEnabledOverride(enabled);
+        },
         reloadBackupStateFromDisk: async () => {
           await session.reloadSessionBackupStateFromDisk();
         },
@@ -251,7 +254,7 @@ export async function startAgentServer(
         : undefined,
       persistProjectConfigPatchImpl: sessionKind === "root"
         ? async (
-            patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">> & {
+            patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled">> & {
               providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
             }
           ) => {
@@ -289,6 +292,12 @@ export async function startAgentServer(
         checkpointId: string;
       }) =>
         await workspaceBackupService.deleteCheckpoint(opts.workingDirectory, opts.targetSessionId, opts.checkpointId),
+      deleteWorkspaceBackupEntryImpl: async (opts: {
+        requesterSessionId: string;
+        workingDirectory: string;
+        targetSessionId: string;
+      }) =>
+        await workspaceBackupService.deleteEntry(opts.workingDirectory, opts.targetSessionId),
       getWorkspaceBackupDeltaImpl: async (opts: {
         requesterSessionId: string;
         workingDirectory: string;

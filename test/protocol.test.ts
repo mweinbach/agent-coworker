@@ -1013,6 +1013,7 @@ describe("safeParseClientMessage", () => {
           config: {
             yolo: true,
             observabilityEnabled: false,
+            backupsEnabled: true,
             subAgentModel: "gpt-5.4",
             maxSteps: 25,
             providerOptions: {
@@ -1029,6 +1030,7 @@ describe("safeParseClientMessage", () => {
       if (msg.type === "set_config") {
         expect(msg.config.yolo).toBe(true);
         expect(msg.config.observabilityEnabled).toBe(false);
+        expect(msg.config.backupsEnabled).toBe(true);
         expect(msg.config.subAgentModel).toBe("gpt-5.4");
         expect(msg.config.maxSteps).toBe(25);
         expect(msg.config.providerOptions?.openai?.reasoningEffort).toBe("xhigh");
@@ -1052,6 +1054,9 @@ describe("safeParseClientMessage", () => {
           JSON.stringify({ type: "set_config", sessionId: "s1", config: { observabilityEnabled: "no" } }),
         ),
       ).toBe("set_config config.observabilityEnabled must be boolean");
+      expect(
+        expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { backupsEnabled: "no" } })),
+      ).toBe("set_config config.backupsEnabled must be boolean");
       expect(
         expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { subAgentModel: "" } })),
       ).toBe("set_config config.subAgentModel must be non-empty string");
@@ -1342,6 +1347,20 @@ describe("safeParseClientMessage", () => {
       }
     });
 
+    test("workspace_backup_delete_entry parses", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "workspace_backup_delete_entry",
+          sessionId: "s1",
+          targetSessionId: "target-1",
+        }),
+      );
+      expect(msg.type).toBe("workspace_backup_delete_entry");
+      if (msg.type === "workspace_backup_delete_entry") {
+        expect(msg.targetSessionId).toBe("target-1");
+      }
+    });
+
     test("workspace_backup_delta_get parses", () => {
       const msg = expectOk(
         JSON.stringify({
@@ -1364,6 +1383,9 @@ describe("safeParseClientMessage", () => {
       );
       expect(expectErr(JSON.stringify({ type: "workspace_backup_restore", sessionId: "s1" }))).toContain(
         "workspace_backup_restore missing targetSessionId",
+      );
+      expect(expectErr(JSON.stringify({ type: "workspace_backup_delete_entry", sessionId: "s1" }))).toContain(
+        "workspace_backup_delete_entry missing targetSessionId",
       );
       expect(expectErr(
         JSON.stringify({

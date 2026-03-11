@@ -90,6 +90,7 @@ export class SessionDbRepository {
            s.output_directory,
            s.uploads_directory,
            s.enable_mcp,
+           s.backups_enabled_override,
            s.created_at,
            s.updated_at,
            s.status,
@@ -129,6 +130,8 @@ export class SessionDbRepository {
         snapshot.providerState === null ? null : toJsonString(snapshot.providerState);
       const costTrackerJson =
         snapshot.costTracker === null ? null : toJsonString(snapshot.costTracker);
+      const backupsEnabledOverride =
+        snapshot.backupsEnabledOverride === null ? null : snapshot.backupsEnabledOverride ? 1 : 0;
       const parentSessionId = snapshot.parentSessionId ?? null;
       const agentType = snapshot.agentType ?? null;
       const createdAt = parseRequiredIsoTimestamp(snapshot.createdAt, "snapshot.createdAt");
@@ -153,6 +156,7 @@ export class SessionDbRepository {
              output_directory,
              uploads_directory,
              enable_mcp,
+             backups_enabled_override,
              created_at,
              updated_at,
              status,
@@ -160,7 +164,7 @@ export class SessionDbRepository {
              has_pending_approval,
              message_count,
              last_event_seq
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
              session_kind = excluded.session_kind,
              parent_session_id = excluded.parent_session_id,
@@ -174,6 +178,7 @@ export class SessionDbRepository {
              output_directory = excluded.output_directory,
              uploads_directory = excluded.uploads_directory,
              enable_mcp = excluded.enable_mcp,
+             backups_enabled_override = excluded.backups_enabled_override,
              updated_at = excluded.updated_at,
              status = excluded.status,
              has_pending_ask = excluded.has_pending_ask,
@@ -195,6 +200,7 @@ export class SessionDbRepository {
           outputDirectory,
           uploadsDirectory,
           snapshot.enableMcp ? 1 : 0,
+          backupsEnabledOverride,
           createdAt,
           updatedAt,
           snapshot.status,
@@ -339,6 +345,7 @@ export class SessionDbRepository {
          output_directory TEXT NULL,
          uploads_directory TEXT NULL,
          enable_mcp INTEGER NOT NULL,
+         backups_enabled_override INTEGER NULL,
          created_at TEXT NOT NULL,
          updated_at TEXT NOT NULL,
          status TEXT NOT NULL,
@@ -445,6 +452,11 @@ export class SessionDbRepository {
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_parent_updated ON sessions(parent_session_id, updated_at DESC)");
   }
 
+  addBackupsEnabledOverrideColumn(): void {
+    if (this.hasSessionsColumn("backups_enabled_override")) return;
+    this.db.exec("ALTER TABLE sessions ADD COLUMN backups_enabled_override INTEGER NULL");
+  }
+
   addModelStreamChunksTable(): void {
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS session_model_stream_chunks (
@@ -488,7 +500,9 @@ export class SessionDbRepository {
         "providerState" in legacy.context ? legacy.context.providerState : null;
       const costTracker =
         "costTracker" in legacy.context ? legacy.context.costTracker : null;
-      const hasSubagentMetadata = legacy.version === 3 || legacy.version === 4;
+      const backupsEnabledOverride =
+        legacy.version === 5 ? legacy.config.backupsEnabledOverride : null;
+      const hasSubagentMetadata = legacy.version === 3 || legacy.version === 4 || legacy.version === 5;
       const sessionKind = hasSubagentMetadata ? legacy.session.sessionKind : "root";
       const parentSessionId = hasSubagentMetadata ? legacy.session.parentSessionId : null;
       const agentType = hasSubagentMetadata ? legacy.session.agentType : null;
@@ -511,6 +525,7 @@ export class SessionDbRepository {
              output_directory,
              uploads_directory,
              enable_mcp,
+             backups_enabled_override,
              created_at,
              updated_at,
              status,
@@ -518,7 +533,7 @@ export class SessionDbRepository {
              has_pending_approval,
              message_count,
              last_event_seq
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
              session_kind = excluded.session_kind,
              parent_session_id = excluded.parent_session_id,
@@ -532,6 +547,7 @@ export class SessionDbRepository {
              output_directory = excluded.output_directory,
              uploads_directory = excluded.uploads_directory,
              enable_mcp = excluded.enable_mcp,
+             backups_enabled_override = excluded.backups_enabled_override,
              created_at = excluded.created_at,
              updated_at = excluded.updated_at,
              message_count = excluded.message_count,
@@ -554,6 +570,7 @@ export class SessionDbRepository {
           legacy.config.outputDirectory ?? null,
           legacy.config.uploadsDirectory ?? null,
           legacy.config.enableMcp ? 1 : 0,
+          backupsEnabledOverride === null ? null : backupsEnabledOverride ? 1 : 0,
           createdAt,
           updatedAt,
           status,

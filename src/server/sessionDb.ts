@@ -35,6 +35,7 @@ export type PersistedSessionRecord = {
   outputDirectory?: string;
   uploadsDirectory?: string;
   enableMcp: boolean;
+  backupsEnabledOverride: boolean | null;
   createdAt: string;
   updatedAt: string;
   status: SessionPersistenceStatus;
@@ -69,6 +70,7 @@ export type PersistedSessionMutation = {
     outputDirectory?: string;
     uploadsDirectory?: string;
     enableMcp: boolean;
+    backupsEnabledOverride: boolean | null;
     createdAt: string;
     updatedAt: string;
     status: SessionPersistenceStatus;

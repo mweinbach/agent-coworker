@@ -1,3 +1,19 @@
+# Task: Implement backup opt-out, whole-entry delete, and initial checkpoint seeding
+
+## Plan
+- [x] Extend core config/protocol/types for `backupsEnabled`, `workspace_backup_delete_entry`, `initial` checkpoint triggers, and disabled backup state.
+- [x] Implement server/session/workspace-backup behavior for workspace defaults, session overrides, seeded `cp-0001`, whole-entry delete, and re-enable flows.
+- [x] Wire desktop persistence/store/settings/backup UI to the new backup toggle and delete-entry actions.
+- [x] Update focused tests/docs, run the required verification suites, and record the outcome below.
+
+## Review
+- Added `backupsEnabled` as a first-class session/workspace config across `src/types.ts`, `src/config.ts`, `src/server/protocol*.ts`, session persistence, and desktop workspace state. Live `session_config` snapshots now report the effective backup toggle, and the protocol added `workspace_backup_delete_entry` as version `7.10`.
+- Session backups now seed an initial `cp-0001` from the session-start snapshot, surface `trigger: "initial"`, and expose `status: "disabled"` when backups are turned off. Live delete-entry operations disable the target session override before removing its backup folder; re-enabling recreates a fresh seeded backup from current workspace state.
+- Desktop and TUI backup controls now expose the live-session backup toggle, the desktop backup page can delete an entire backup entry, and workspace settings persist `defaultBackupsEnabled` for future sessions.
+- Verification:
+  - `bun test test/session-backup.test.ts test/workspace-backups.test.ts test/protocol.test.ts test/server.test.ts test/session.test.ts test/agentSocket.parse.test.ts apps/desktop/test/backup-page.test.ts apps/desktop/test/protocol-v2-events.test.ts apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/desktop-schemas.test.ts apps/desktop/test/persistence-state-sanitization.test.ts` -> pass (`504 pass, 0 fail`)
+  - `bun run typecheck` -> pass
+
 # Task: Redesign workspace backup settings into a recovery console
 
 ## Plan

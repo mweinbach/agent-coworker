@@ -89,6 +89,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
         defaultModel: defaultModelForProvider("google"),
         defaultSubAgentModel: defaultModelForProvider("google"),
         defaultEnableMcp: true,
+        defaultBackupsEnabled: true,
         yolo: false,
       };
   

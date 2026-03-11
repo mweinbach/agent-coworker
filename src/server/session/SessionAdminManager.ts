@@ -224,6 +224,32 @@ export class SessionAdminManager {
     }
   }
 
+  async deleteWorkspaceBackupEntry(targetSessionId: string) {
+    if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
+      this.context.emitError("validation_failed", "backup", "Only root sessions can manage workspace backups");
+      return;
+    }
+    if (!this.context.deps.deleteWorkspaceBackupEntryImpl) {
+      this.context.emitError("internal_error", "backup", "Workspace backup deletion is unavailable");
+      return;
+    }
+    try {
+      const backups = await this.context.deps.deleteWorkspaceBackupEntryImpl({
+        requesterSessionId: this.context.id,
+        workingDirectory: this.context.state.config.workingDirectory,
+        targetSessionId,
+      });
+      this.context.emit({
+        type: "workspace_backups",
+        sessionId: this.context.id,
+        workspacePath: this.context.state.config.workingDirectory,
+        backups,
+      });
+    } catch (err) {
+      this.context.emitError("backup_error", "backup", `Failed to delete workspace backup: ${String(err)}`);
+    }
+  }
+
   async getWorkspaceBackupDelta(targetSessionId: string, checkpointId: string) {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
       this.context.emitError("validation_failed", "backup", "Only root sessions can inspect workspace backup deltas");

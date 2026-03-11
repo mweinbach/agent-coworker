@@ -213,6 +213,7 @@ export function WorkspacesPage() {
   const model = (ws?.defaultModel ?? "").trim();
   const subAgentModel = (ws?.defaultSubAgentModel ?? ws?.defaultModel ?? "").trim();
   const enableMcp = ws?.defaultEnableMcp ?? true;
+  const backupsEnabled = ws?.defaultBackupsEnabled ?? true;
   const yolo = ws?.yolo ?? false;
 
   const curatedModels = MODEL_CHOICES[provider] ?? [];
@@ -367,6 +368,21 @@ export function WorkspacesPage() {
                   onCheckedChange={(checked) => {
                     if (!ws) return;
                     void updateWorkspaceDefaults(ws.id, { defaultEnableMcp: toBoolean(checked) });
+                  }}
+                />
+              </div>
+
+              <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+                <div>
+                  <div className="text-sm font-medium">Workspace backups</div>
+                  <div className="text-xs text-muted-foreground">Persist a default backup policy for new sessions in this workspace.</div>
+                </div>
+                <Checkbox
+                  checked={backupsEnabled}
+                  aria-label="Enable workspace backups"
+                  onCheckedChange={(checked) => {
+                    if (!ws) return;
+                    void updateWorkspaceDefaults(ws.id, { defaultBackupsEnabled: toBoolean(checked) });
                   }}
                 />
               </div>

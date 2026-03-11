@@ -30,12 +30,14 @@ export class SessionMetadataManager {
 
   getSessionConfigEvent(): Extract<import("../protocol").ServerEvent, { type: "session_config" }> {
     const providerOptions = pickEditableOpenAiCompatibleProviderOptions(this.context.state.config.providerOptions);
+    const backupsEnabled = this.context.state.backupsEnabledOverride ?? this.context.state.config.backupsEnabled ?? true;
     return {
       type: "session_config",
       sessionId: this.context.id,
       config: {
         yolo: this.context.state.yolo,
         observabilityEnabled: this.context.state.config.observabilityEnabled ?? false,
+        backupsEnabled,
         subAgentModel: this.context.state.config.subAgentModel,
         maxSteps: this.context.state.maxSteps,
         ...(providerOptions ? { providerOptions } : {}),
@@ -164,6 +166,9 @@ export class SessionMetadataManager {
     if (patch.observabilityEnabled !== undefined) {
       persistPatch.observabilityEnabled = patch.observabilityEnabled;
     }
+    if (patch.backupsEnabled !== undefined) {
+      persistPatch.backupsEnabled = patch.backupsEnabled;
+    }
     if (patch.providerOptions !== undefined) {
       persistPatch.providerOptions = patch.providerOptions;
     }
@@ -185,6 +190,10 @@ export class SessionMetadataManager {
       this.context.state.config = { ...this.context.state.config, observabilityEnabled: patch.observabilityEnabled };
       this.context.emit(this.getObservabilityStatusEvent());
     }
+    if (patch.backupsEnabled !== undefined) {
+      this.context.state.backupsEnabledOverride = null;
+      this.context.state.config = { ...this.context.state.config, backupsEnabled: patch.backupsEnabled };
+    }
     if (patch.subAgentModel !== undefined) {
       this.context.state.config = { ...this.context.state.config, subAgentModel: patch.subAgentModel };
     }
@@ -200,7 +209,17 @@ export class SessionMetadataManager {
     if (patch.maxSteps !== undefined) this.context.state.maxSteps = patch.maxSteps;
 
     this.context.emit(this.getSessionConfigEvent());
+    if (patch.backupsEnabled !== undefined) {
+      await this.context.syncSessionBackupAvailability?.();
+    }
     this.context.queuePersistSessionSnapshot("session.config_updated");
+  }
+
+  async setBackupsEnabledOverride(backupsEnabledOverride: boolean | null) {
+    this.context.state.backupsEnabledOverride = backupsEnabledOverride;
+    this.context.emit(this.getSessionConfigEvent());
+    await this.context.syncSessionBackupAvailability?.();
+    this.context.queuePersistSessionSnapshot("session.backups_enabled_override_updated");
   }
 
   getHarnessContext() {

@@ -302,6 +302,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.includeRawChunks) ??
     true;
 
+  const backupsEnabled =
+    asBoolean(env.AGENT_BACKUPS_ENABLED) ??
+    asBoolean(projectConfig.backupsEnabled) ??
+    asBoolean(userConfig.backupsEnabled) ??
+    asBoolean(builtInDefaults.backupsEnabled) ??
+    true;
+
   const mergedObservability = parseLayer(observabilityLayerSchema, merged.observability, {});
   const observabilityEnabled =
     asBoolean(env.AGENT_OBSERVABILITY_ENABLED) ??
@@ -380,6 +387,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
     enableMcp,
     includeRawChunks,
+    backupsEnabled,
     observabilityEnabled,
     observability,
     harness,

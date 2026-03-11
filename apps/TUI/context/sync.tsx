@@ -59,6 +59,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     providerAuthChallenge: null,
     providerAuthResult: null,
     observabilityEnabled: false,
+    backupsEnabled: true,
     observabilityConfig: null,
     observabilityHealth: null,
     harnessContext: null,
@@ -138,6 +139,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           syncState.providerAuthChallenge = null;
           syncState.providerAuthResult = null;
           syncState.observabilityEnabled = false;
+          syncState.backupsEnabled = true;
           syncState.observabilityConfig = null;
           syncState.observabilityHealth = null;
           syncState.harnessContext = null;

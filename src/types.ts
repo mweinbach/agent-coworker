@@ -101,6 +101,12 @@ export interface AgentConfig {
   includeRawChunks?: boolean;
 
   /**
+   * Whether workspace/session backups are enabled.
+   * Defaults to true when not specified.
+   */
+  backupsEnabled?: boolean;
+
+  /**
    * Whether Langfuse observability integration is enabled for this session/run.
    * Defaults to false when not specified.
    */

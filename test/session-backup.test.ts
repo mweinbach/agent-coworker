@@ -277,11 +277,12 @@ describe("SessionBackupManager", () => {
 
     await fs.writeFile(path.join(workspace, "a.txt"), "two\n", "utf-8");
     const checkpoint = await manager.createCheckpoint("manual");
-    expect(manager.getPublicState().checkpoints).toHaveLength(1);
+    expect(manager.getPublicState().checkpoints).toHaveLength(2);
 
     const removed = await manager.deleteCheckpoint(checkpoint.id);
     expect(removed).toBe(true);
-    expect(manager.getPublicState().checkpoints).toHaveLength(0);
+    expect(manager.getPublicState().checkpoints).toHaveLength(1);
+    expect(manager.getPublicState().checkpoints[0]?.trigger).toBe("initial");
 
     const removedAgain = await manager.deleteCheckpoint(checkpoint.id);
     expect(removedAgain).toBe(false);

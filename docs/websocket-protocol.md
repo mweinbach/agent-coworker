@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.9`
+- Current protocol version: `7.10`
 
 ## Table of Contents
 
@@ -32,7 +32,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill)
   - MCP: [set_enable_mcp](#set_enable_mcp) | [mcp_servers_get](#mcp_servers_get) | [mcp_server_upsert](#mcp_server_upsert) | [mcp_server_delete](#mcp_server_delete) | [mcp_server_validate](#mcp_server_validate) | [mcp_server_auth_authorize](#mcp_server_auth_authorize) | [mcp_server_auth_callback](#mcp_server_auth_callback) | [mcp_server_auth_set_api_key](#mcp_server_auth_set_api_key) | [mcp_servers_migrate_legacy](#mcp_servers_migrate_legacy)
   - Session Management: [session_close](#session_close) | [get_messages](#get_messages) | [set_session_title](#set_session_title) | [list_sessions](#list_sessions) | [delete_session](#delete_session) | [subagent_create](#subagent_create) | [subagent_sessions_get](#subagent_sessions_get) | [set_config](#set_config) | [upload_file](#upload_file) | [get_session_usage](#get_session_usage) | [set_session_usage_budget](#set_session_usage_budget)
-  - Backup: [session_backup_get](#session_backup_get) | [session_backup_checkpoint](#session_backup_checkpoint) | [session_backup_restore](#session_backup_restore) | [session_backup_delete_checkpoint](#session_backup_delete_checkpoint) | [workspace_backups_get](#workspace_backups_get) | [workspace_backup_checkpoint](#workspace_backup_checkpoint) | [workspace_backup_restore](#workspace_backup_restore) | [workspace_backup_delete_checkpoint](#workspace_backup_delete_checkpoint) | [workspace_backup_delta_get](#workspace_backup_delta_get)
+  - Backup: [session_backup_get](#session_backup_get) | [session_backup_checkpoint](#session_backup_checkpoint) | [session_backup_restore](#session_backup_restore) | [session_backup_delete_checkpoint](#session_backup_delete_checkpoint) | [workspace_backups_get](#workspace_backups_get) | [workspace_backup_checkpoint](#workspace_backup_checkpoint) | [workspace_backup_restore](#workspace_backup_restore) | [workspace_backup_delete_checkpoint](#workspace_backup_delete_checkpoint) | [workspace_backup_delete_entry](#workspace_backup_delete_entry) | [workspace_backup_delta_get](#workspace_backup_delta_get)
   - Harness: [harness_context_get](#harness_context_get) | [harness_context_set](#harness_context_set)
   - Keepalive: [ping](#ping)
 - [Server -> Client Events](#server---client-events)
@@ -48,6 +48,13 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.10`:
+
+- `set_config.config` now accepts `backupsEnabled`, and `session_config.config` now reports the effective live-session backup toggle.
+- New client message: `workspace_backup_delete_entry`.
+- `session_backup_state.backup.status` now includes `"disabled"` when session backups are turned off.
+- Backup checkpoints now seed the session-start snapshot as `cp-0001` with `trigger: "initial"`.
 
 Changes in `7.9`:
 
@@ -145,7 +152,7 @@ When a WebSocket connection opens, the server sends these events in order:
 
 1. `server_hello` — session ID, config, protocol version, capabilities
 2. `session_settings` — current runtime settings (e.g. MCP toggle)
-3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `subAgentModel`, `maxSteps`, `providerOptions`)
+3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `backupsEnabled`, `subAgentModel`, `maxSteps`, `providerOptions`)
 4. `session_info` — session metadata including title
 5. `observability_status` — Langfuse observability state
 6. `provider_catalog` — available providers and models (async)
@@ -389,11 +396,11 @@ Returned in `server_hello` and `config_updated`:
   "checkpoints": [
     {
       "id": "cp-0001",
-      "index": 0,
-      "createdAt": "2026-02-19T18:05:00.000Z",
-      "trigger": "auto",
-      "changed": true,
-      "patchBytes": 1234
+      "index": 1,
+      "createdAt": "2026-02-19T18:00:00.000Z",
+      "trigger": "initial",
+      "changed": false,
+      "patchBytes": 0
     }
   ],
   "failureReason": null
@@ -402,7 +409,7 @@ Returned in `server_hello` and `config_updated`:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `status` | `"initializing" \| "ready" \| "failed"` | Backup system status |
+| `status` | `"initializing" \| "ready" \| "disabled" \| "failed"` | Backup system status |
 | `sessionId` | `string` | Session identifier |
 | `workingDirectory` | `string` | Project working directory |
 | `backupDirectory` | `string \| null` | Backup storage path |
@@ -418,7 +425,7 @@ Returned in `server_hello` and `config_updated`:
 | `id` | `string` | Checkpoint identifier (e.g. `"cp-0001"`) |
 | `index` | `number` | Sequential index |
 | `createdAt` | `string` | ISO 8601 timestamp |
-| `trigger` | `"auto" \| "manual"` | What triggered this checkpoint |
+| `trigger` | `"initial" \| "auto" \| "manual"` | What triggered this checkpoint |
 | `changed` | `boolean` | Whether files changed since last checkpoint |
 | `patchBytes` | `number` | Size of the patch data |
 
@@ -452,7 +459,7 @@ Returned in `server_hello` and `config_updated`:
 | `provider` | `string \| null` | Session provider when known |
 | `model` | `string \| null` | Session model when known |
 | `lifecycle` | `"active" \| "closed" \| "deleted"` | Session lifecycle as seen by the admin/control layer |
-| `status` | `"initializing" \| "ready" \| "failed"` | Backup health status |
+| `status` | `"initializing" \| "ready" \| "disabled" \| "failed"` | Backup health status |
 | `workingDirectory` | `string` | Workspace path this backup belongs to |
 | `backupDirectory` | `string \| null` | Backup storage directory |
 | `originalSnapshotKind` | `"pending" \| "directory" \| "tar_gz"` | Original snapshot storage kind |
@@ -1473,6 +1480,26 @@ Delete a named checkpoint from an existing workspace backup entry.
 
 ---
 
+### workspace_backup_delete_entry
+
+Delete an entire workspace backup entry.
+
+```json
+{ "type": "workspace_backup_delete_entry", "sessionId": "...", "targetSessionId": "..." }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"workspace_backup_delete_entry"` | Yes | — |
+| `sessionId` | `string` | Yes | Control-session identifier |
+| `targetSessionId` | `string` | Yes | Session ID that owns the backup directory |
+
+**Response:** `workspace_backups`
+**Behavior:** for a live idle session, disables backups for that session before removing the stored backup folder.
+**Error:** `busy` when the target live session is running. `backup_error` if the backup is unavailable.
+
+---
+
 ### workspace_backup_delta_get
 
 Request an on-demand changed-file preview for a specific checkpoint in an existing workspace backup entry.
@@ -1684,6 +1711,7 @@ Update runtime configuration values.
   "sessionId": "...",
   "config": {
     "yolo": true,
+    "backupsEnabled": true,
     "maxSteps": 200,
     "providerOptions": {
       "openai": {
@@ -1704,6 +1732,7 @@ Update runtime configuration values.
 | `config` | `object` | Yes | Patch object with optional fields |
 | `config.yolo` | `boolean` | No | Auto-approve all commands |
 | `config.observabilityEnabled` | `boolean` | No | Toggle observability |
+| `config.backupsEnabled` | `boolean` | No | Toggle session backups for the current session and persist the workspace default for future sessions |
 | `config.subAgentModel` | `string` | No | Non-empty sub-agent model ID |
 | `config.maxSteps` | `number` | No | Max steps per turn (1-1000) |
 | `config.providerOptions` | `object` | No | Editable OpenAI-compatible provider option patch. Only `openai` and `codex-cli` are allowed |
@@ -2537,7 +2566,16 @@ Backup/checkpoint state. Sent in response to backup operations and after automat
     "backupDirectory": "/path/to/backup",
     "createdAt": "2026-02-19T18:00:00.000Z",
     "originalSnapshot": { "kind": "directory" },
-    "checkpoints": []
+    "checkpoints": [
+      {
+        "id": "cp-0001",
+        "index": 1,
+        "createdAt": "2026-02-19T18:00:00.000Z",
+        "trigger": "initial",
+        "changed": false,
+        "patchBytes": 0
+      }
+    ]
   }
 }
 ```
@@ -2548,6 +2586,10 @@ Backup/checkpoint state. Sent in response to backup operations and after automat
 | `sessionId` | `string` | Session identifier |
 | `reason` | `"requested" \| "auto_checkpoint" \| "manual_checkpoint" \| "restore" \| "delete"` | What triggered this state emission |
 | `backup` | `SessionBackupPublicState` | Full backup state (see [SessionBackupPublicState](#sessionbackuppublicstate)) |
+
+Notes:
+- New backups seed `cp-0001` immediately from the session-start snapshot with `trigger: "initial"`.
+- When backups are turned off for a live session, `backup.status` is `"disabled"` and both `backupDirectory` and `checkpoints` are empty.
 
 ---
 
@@ -3012,6 +3054,7 @@ Current runtime config. Sent on connection and after `set_config`.
   "config": {
     "yolo": false,
     "observabilityEnabled": true,
+    "backupsEnabled": true,
     "subAgentModel": "gpt-5.4",
     "maxSteps": 100,
     "providerOptions": {
@@ -3036,6 +3079,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `sessionId` | `string` | Session identifier |
 | `config.yolo` | `boolean` | Whether all commands are auto-approved |
 | `config.observabilityEnabled` | `boolean` | Whether observability is enabled |
+| `config.backupsEnabled` | `boolean` | Whether backups are enabled for the live session after applying any session-scoped override |
 | `config.subAgentModel` | `string` | Sub-agent model identifier |
 | `config.maxSteps` | `number` | Maximum steps per turn |
 | `config.providerOptions` | `object?` | Editable OpenAI-compatible provider options when configured |

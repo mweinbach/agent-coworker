@@ -227,6 +227,8 @@ export type AppStoreState = {
   restoreWorkspaceBackupOriginal: (workspaceId: string, targetSessionId: string) => Promise<void>;
   restoreWorkspaceBackupCheckpoint: (workspaceId: string, targetSessionId: string, checkpointId: string) => Promise<void>;
   deleteWorkspaceBackupCheckpoint: (workspaceId: string, targetSessionId: string, checkpointId: string) => Promise<void>;
+  deleteWorkspaceBackupEntry: (workspaceId: string, targetSessionId: string) => Promise<void>;
+  setWorkspaceBackupSessionEnabled: (workspaceId: string, targetSessionId: string, enabled: boolean) => Promise<void>;
 
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
   setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;

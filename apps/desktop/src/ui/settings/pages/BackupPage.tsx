@@ -23,6 +23,7 @@ import type {
 } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import { Checkbox } from "../../../components/ui/checkbox";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
 import {
   Select,
@@ -42,6 +43,8 @@ type BackupPageProps = {
   onRestoreOriginal?: (targetSessionId: string) => Promise<void> | void;
   onRestoreCheckpoint?: (targetSessionId: string, checkpointId: string) => Promise<void> | void;
   onDeleteCheckpoint?: (targetSessionId: string, checkpointId: string) => Promise<void> | void;
+  onDeleteEntry?: (targetSessionId: string) => Promise<void> | void;
+  onSetSessionBackupsEnabled?: (targetSessionId: string, enabled: boolean) => Promise<void> | void;
   onRevealFolder?: (path: string) => Promise<void> | void;
 };
 
@@ -67,6 +70,10 @@ function formatBytes(value: number | null | undefined): string {
 
 function pendingActionKey(kind: string, targetSessionId: string, checkpointId?: string): string {
   return checkpointId ? `${kind}:${targetSessionId}:${checkpointId}` : `${kind}:${targetSessionId}`;
+}
+
+function toBoolean(checked: boolean | "indeterminate"): boolean {
+  return checked === true;
 }
 
 function backupTitle(entry: WorkspaceBackupEntry): string {
@@ -111,6 +118,8 @@ export function BackupPage(props: BackupPageProps = {}) {
   const selectedWorkspaceIdFromStore = useAppStore((s) => s.selectedWorkspaceId);
   const workspacesFromStore = useAppStore((s) => s.workspaces);
   const runtimeByIdFromStore = useAppStore((s) => s.workspaceRuntimeById);
+  const threadsFromStore = useAppStore((s) => s.threads);
+  const threadRuntimeByIdFromStore = useAppStore((s) => s.threadRuntimeById);
   const selectWorkspaceFromStore = useAppStore((s) => s.selectWorkspace);
   const requestWorkspaceBackupsFromStore = useAppStore((s) => s.requestWorkspaceBackups);
   const requestWorkspaceBackupDeltaFromStore = useAppStore((s) => s.requestWorkspaceBackupDelta);
@@ -118,11 +127,15 @@ export function BackupPage(props: BackupPageProps = {}) {
   const restoreWorkspaceBackupOriginalFromStore = useAppStore((s) => s.restoreWorkspaceBackupOriginal);
   const restoreWorkspaceBackupCheckpointFromStore = useAppStore((s) => s.restoreWorkspaceBackupCheckpoint);
   const deleteWorkspaceBackupCheckpointFromStore = useAppStore((s) => s.deleteWorkspaceBackupCheckpoint);
+  const deleteWorkspaceBackupEntryFromStore = useAppStore((s) => s.deleteWorkspaceBackupEntry);
+  const setWorkspaceBackupSessionEnabledFromStore = useAppStore((s) => s.setWorkspaceBackupSessionEnabled);
   const serverState = typeof window === "undefined" ? useAppStore.getState() : null;
 
   const selectedWorkspaceId = serverState?.selectedWorkspaceId ?? selectedWorkspaceIdFromStore;
   const workspaces = serverState?.workspaces ?? workspacesFromStore;
   const workspaceRuntimeById = serverState?.workspaceRuntimeById ?? runtimeByIdFromStore;
+  const threads = serverState?.threads ?? threadsFromStore;
+  const threadRuntimeById = serverState?.threadRuntimeById ?? threadRuntimeByIdFromStore;
 
   const workspaceList = props.workspace !== undefined ? (props.workspace ? [props.workspace] : []) : workspaces;
   const workspace = props.workspace !== undefined
@@ -142,6 +155,10 @@ export function BackupPage(props: BackupPageProps = {}) {
     ?? (workspace ? (targetSessionId: string, checkpointId: string) => restoreWorkspaceBackupCheckpointFromStore(workspace.id, targetSessionId, checkpointId) : undefined);
   const deleteCheckpoint = props.onDeleteCheckpoint
     ?? (workspace ? (targetSessionId: string, checkpointId: string) => deleteWorkspaceBackupCheckpointFromStore(workspace.id, targetSessionId, checkpointId) : undefined);
+  const deleteEntry = props.onDeleteEntry
+    ?? (workspace ? (targetSessionId: string) => deleteWorkspaceBackupEntryFromStore(workspace.id, targetSessionId) : undefined);
+  const setSessionBackupsEnabled = props.onSetSessionBackupsEnabled
+    ?? (workspace ? (targetSessionId: string, enabled: boolean) => setWorkspaceBackupSessionEnabledFromStore(workspace.id, targetSessionId, enabled) : undefined);
   const revealFolder = props.onRevealFolder ?? (async (folderPath: string) => await revealPath({ path: folderPath }));
 
   const [selectedTargetSessionId, setSelectedTargetSessionId] = useState<string | null>(null);
@@ -213,6 +230,19 @@ export function BackupPage(props: BackupPageProps = {}) {
   const selectedEntry = sortedEntries.find((entry) => entry.targetSessionId === activeTargetSessionId);
   const selectedCp = selectedEntry?.checkpoints.find(c => c.id === selectedCheckpointId);
   const activeDelta = activeTargetSessionId && selectedCheckpointId && deltaPreview?.checkpointId === selectedCheckpointId ? deltaPreview : null;
+  const selectedThread = selectedEntry
+    ? threads.find((thread) => (
+        thread.workspaceId === workspace.id
+          && threadRuntimeById[thread.id]?.sessionId === selectedEntry.targetSessionId
+      )) ?? null
+    : null;
+  const selectedThreadRuntime = selectedThread ? threadRuntimeById[selectedThread.id] ?? null : null;
+  const canToggleSelectedEntry = Boolean(
+    selectedEntry
+      && selectedEntry.lifecycle === "active"
+      && selectedThreadRuntime?.sessionId,
+  );
+  const selectedBackupsEnabled = selectedThreadRuntime?.sessionConfig?.backupsEnabled ?? null;
 
   return (
     <div
@@ -226,6 +256,19 @@ export function BackupPage(props: BackupPageProps = {}) {
           <p className="text-sm text-muted-foreground">Manage backup history and restore points for your workspaces.</p>
         </div>
         <div className="flex items-center gap-2">
+          <label className="flex items-center gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-sm">
+            <Checkbox
+              checked={selectedBackupsEnabled ?? false}
+              disabled={!canToggleSelectedEntry}
+              onCheckedChange={(checked) => {
+                if (!selectedEntry) return;
+                void setSessionBackupsEnabled?.(selectedEntry.targetSessionId, toBoolean(checked));
+              }}
+            />
+            <span className={canToggleSelectedEntry ? "text-foreground" : "text-muted-foreground"}>
+              Session backups
+            </span>
+          </label>
           {workspaceList.length > 1 && props.workspace === undefined && (
             <Select value={workspace.id} onValueChange={(val) => { if (val !== workspace.id) void selectWorkspaceFromStore(val); }}>
               <SelectTrigger className="h-9 w-[200px] border-border/70 bg-background">
@@ -413,6 +456,28 @@ export function BackupPage(props: BackupPageProps = {}) {
                         Reveal Folder
                       </Button>
                     )}
+                    <Button
+                      variant="outline"
+                      className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      onClick={async () => {
+                        const confirmed = await confirmAction({
+                          title: "Delete Backup Entry",
+                          message: `Delete all backup history for ${backupTitle(selectedEntry)}?`,
+                          detail: selectedEntry.lifecycle === "active"
+                            ? "The session will stay available, but backups for it will be disabled until you turn them back on."
+                            : "This removes the stored backup folder for this session entry.",
+                          kind: "warning",
+                          confirmLabel: "Delete backup",
+                          cancelLabel: "Cancel",
+                          defaultAction: "cancel",
+                        });
+                        if (confirmed) await deleteEntry?.(selectedEntry.targetSessionId);
+                      }}
+                      disabled={pendingActions[pendingActionKey("delete-entry", selectedEntry.targetSessionId)]}
+                    >
+                      <Trash2Icon className="mr-2 h-4 w-4" />
+                      Delete Backup Entry
+                    </Button>
                   </div>
                 </div>
 

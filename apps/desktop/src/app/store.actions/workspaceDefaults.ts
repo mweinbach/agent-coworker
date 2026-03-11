@@ -92,6 +92,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           type: "set_config",
           sessionId,
           config: {
+            backupsEnabled: ws.defaultBackupsEnabled,
             ...(subAgentModel ? { subAgentModel } : {}),
             ...(providerOptions ? { providerOptions: providerOptions as OpenAiCompatibleProviderOptionsByProvider } : {}),
           },
@@ -101,8 +102,26 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
             type: "set_config",
             sessionId: rt.sessionId,
             config: {
+              backupsEnabled: ws.defaultBackupsEnabled,
               ...(subAgentModel ? { subAgentModel } : {}),
               ...(providerOptions ? { providerOptions } : {}),
+            },
+          });
+        }
+      } else {
+        const okConfig = sendThread(get, threadId, (sessionId) => ({
+          type: "set_config",
+          sessionId,
+          config: {
+            backupsEnabled: ws.defaultBackupsEnabled,
+          },
+        }));
+        if (okConfig) {
+          appendThreadTranscript(threadId, "client", {
+            type: "set_config",
+            sessionId: rt.sessionId,
+            config: {
+              backupsEnabled: ws.defaultBackupsEnabled,
             },
           });
         }
@@ -141,6 +160,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         patch.defaultModel !== undefined ||
         patch.defaultSubAgentModel !== undefined ||
         patch.defaultEnableMcp !== undefined ||
+        patch.defaultBackupsEnabled !== undefined ||
         patch.providerOptions !== undefined;
       if (!shouldSyncCoreSettings) {
         return;
@@ -171,6 +191,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         type: "set_config",
         sessionId,
         config: {
+          backupsEnabled: workspace.defaultBackupsEnabled,
           subAgentModel,
           ...(providerOptions ? { providerOptions: providerOptions as OpenAiCompatibleProviderOptionsByProvider } : {}),
         },

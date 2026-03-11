@@ -49,6 +49,7 @@ describe("desktop persistence state validation", () => {
           lastOpenedAt: TS,
           defaultSubAgentModel: "gpt-5.2-mini",
           defaultEnableMcp: true,
+          defaultBackupsEnabled: false,
           yolo: false,
         },
         {
@@ -92,6 +93,7 @@ describe("desktop persistence state validation", () => {
     const loaded = await persistence.loadState();
     expect(loaded.workspaces).toHaveLength(1);
     expect(loaded.workspaces[0]?.id).toBe("ws_valid");
+    expect(loaded.workspaces[0]?.defaultBackupsEnabled).toBe(false);
     expect(loaded.threads).toHaveLength(1);
     expect(loaded.threads[0]?.id).toBe("thread_valid");
   });

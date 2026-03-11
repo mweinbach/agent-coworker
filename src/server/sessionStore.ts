@@ -144,11 +144,46 @@ export type PersistedSessionSnapshotV4 = {
   };
 };
 
+export type PersistedSessionSnapshotV5 = {
+  version: 5;
+  sessionId: string;
+  createdAt: string;
+  updatedAt: string;
+  session: {
+    title: string;
+    titleSource: SessionTitleSource;
+    titleModel: string | null;
+    provider: AgentConfig["provider"];
+    model: string;
+    sessionKind: SessionKind;
+    parentSessionId: string | null;
+    agentType: SubagentAgentType | null;
+  };
+  config: {
+    provider: AgentConfig["provider"];
+    model: string;
+    enableMcp: boolean;
+    backupsEnabledOverride: boolean | null;
+    workingDirectory: string;
+    outputDirectory?: string;
+    uploadsDirectory?: string;
+  };
+  context: {
+    system: string;
+    messages: ModelMessage[];
+    providerState: OpenAiContinuationState | null;
+    todos: TodoItem[];
+    harnessContext: HarnessContextState | null;
+    costTracker: SessionUsageSnapshot | null;
+  };
+};
+
 export type PersistedSessionSnapshot =
   | PersistedSessionSnapshotV1
   | PersistedSessionSnapshotV2
   | PersistedSessionSnapshotV3
-  | PersistedSessionSnapshotV4;
+  | PersistedSessionSnapshotV4
+  | PersistedSessionSnapshotV5;
 
 export type PersistedSessionSummary = {
   sessionId: string;
@@ -307,11 +342,46 @@ const persistedSessionSnapshotV4Schema = z.object({
   }).strict(),
 }).strict();
 
+const persistedSessionSnapshotV5Schema = z.object({
+  version: z.literal(5),
+  sessionId: z.string().trim().min(1),
+  createdAt: isoTimestampSchema,
+  updatedAt: isoTimestampSchema,
+  session: z.object({
+    title: z.string().trim().min(1),
+    titleSource: sessionTitleSourceSchema,
+    titleModel: z.string().trim().min(1).nullable(),
+    provider: providerNameSchema,
+    model: z.string().trim().min(1),
+    sessionKind: sessionKindSchema,
+    parentSessionId: z.string().trim().min(1).nullable(),
+    agentType: subagentAgentTypeSchema.nullable(),
+  }).strict(),
+  config: z.object({
+    provider: providerNameSchema,
+    model: z.string().trim().min(1),
+    enableMcp: z.boolean(),
+    backupsEnabledOverride: z.boolean().nullable(),
+    workingDirectory: z.string().trim().min(1),
+    outputDirectory: z.string().trim().min(1).optional(),
+    uploadsDirectory: z.string().trim().min(1).optional(),
+  }).strict(),
+  context: z.object({
+    system: z.string(),
+    messages: z.array(modelMessageSchema),
+    providerState: openAiContinuationStateSchema.nullable(),
+    todos: z.array(todoItemSchema),
+    harnessContext: harnessContextStateSchema.nullable(),
+    costTracker: sessionUsageSnapshotSchema.nullable(),
+  }).strict(),
+}).strict();
+
 const persistedSessionSnapshotSchema = z.union([
   persistedSessionSnapshotV1Schema,
   persistedSessionSnapshotV2Schema,
   persistedSessionSnapshotV3Schema,
   persistedSessionSnapshotV4Schema,
+  persistedSessionSnapshotV5Schema,
 ]);
 
 export function getPersistedSessionFilePath(paths: Pick<AiCoworkerPaths, "sessionsDir">, sessionId: string): string {
@@ -336,6 +406,42 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
   }
 
   const snapshot = parsed.data;
+  if (snapshot.version === 5) {
+    return {
+      version: 5,
+      sessionId: snapshot.sessionId,
+      createdAt: snapshot.createdAt,
+      updatedAt: snapshot.updatedAt,
+      session: {
+        title: snapshot.session.title,
+        titleSource: snapshot.session.titleSource,
+        titleModel: snapshot.session.titleModel,
+        provider: snapshot.session.provider,
+        model: snapshot.session.model,
+        sessionKind: snapshot.session.sessionKind,
+        parentSessionId: snapshot.session.parentSessionId,
+        agentType: snapshot.session.agentType,
+      },
+      config: {
+        provider: snapshot.config.provider,
+        model: snapshot.config.model,
+        enableMcp: snapshot.config.enableMcp,
+        backupsEnabledOverride: snapshot.config.backupsEnabledOverride,
+        workingDirectory: snapshot.config.workingDirectory,
+        outputDirectory: snapshot.config.outputDirectory,
+        uploadsDirectory: snapshot.config.uploadsDirectory,
+      },
+      context: {
+        system: snapshot.context.system,
+        messages: snapshot.context.messages,
+        providerState: snapshot.context.providerState,
+        todos: snapshot.context.todos,
+        harnessContext: snapshot.context.harnessContext,
+        costTracker: snapshot.context.costTracker as SessionUsageSnapshot | null,
+      },
+    };
+  }
+
   if (snapshot.version === 4) {
     return {
       version: 4,

@@ -25,6 +25,7 @@ const harnessContextRootErrorMessages: Record<string, string> = {
 const setConfigFieldErrorMessages: Record<string, string> = {
   yolo: "set_config config.yolo must be boolean",
   observabilityEnabled: "set_config config.observabilityEnabled must be boolean",
+  backupsEnabled: "set_config config.backupsEnabled must be boolean",
   subAgentModel: "set_config config.subAgentModel must be non-empty string",
   maxSteps: "set_config config.maxSteps must be number 1-1000",
   providerOptions: "set_config config.providerOptions must be an object",
@@ -85,6 +86,7 @@ const editableOpenAiProviderOptionsByProviderSchema = z.object({
 const setConfigPayloadSchema = z.object({
   yolo: z.boolean().optional(),
   observabilityEnabled: z.boolean().optional(),
+  backupsEnabled: z.boolean().optional(),
   subAgentModel: z.string().trim().min(1).optional(),
   maxSteps: z.number().min(1).max(1000).optional(),
   providerOptions: editableOpenAiProviderOptionsByProviderSchema.optional(),
@@ -484,6 +486,11 @@ const workspaceBackupDeleteCheckpointSchema = schemaWithType("workspace_backup_d
   checkpointId: requiredNonEmptyTrimmedString("workspace_backup_delete_checkpoint missing checkpointId"),
 });
 
+const workspaceBackupDeleteEntrySchema = schemaWithType("workspace_backup_delete_entry", {
+  sessionId: requiredSessionId("workspace_backup_delete_entry"),
+  targetSessionId: requiredNonEmptyTrimmedString("workspace_backup_delete_entry missing targetSessionId"),
+});
+
 const workspaceBackupDeltaGetSchema = schemaWithType("workspace_backup_delta_get", {
   sessionId: requiredSessionId("workspace_backup_delta_get"),
   targetSessionId: requiredNonEmptyTrimmedString("workspace_backup_delta_get missing targetSessionId"),
@@ -596,6 +603,7 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   workspaceBackupCheckpointSchema,
   workspaceBackupRestoreSchema,
   workspaceBackupDeleteCheckpointSchema,
+  workspaceBackupDeleteEntrySchema,
   workspaceBackupDeltaGetSchema,
   getMessagesSchema,
   setSessionTitleSchema,

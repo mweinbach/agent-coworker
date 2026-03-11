@@ -293,7 +293,10 @@ describe("desktop protocol v2 mapping", () => {
     await useAppStore.getState().newThread({ workspaceId });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
     controlSocket.sent = [];
+    threadSocket.sent = [];
 
     await useAppStore.getState().requestWorkspaceBackups(workspaceId);
     await useAppStore.getState().requestWorkspaceBackupDelta(workspaceId, "thread-session", "cp-0001");
@@ -301,6 +304,8 @@ describe("desktop protocol v2 mapping", () => {
     await useAppStore.getState().restoreWorkspaceBackupOriginal(workspaceId, "thread-session");
     await useAppStore.getState().restoreWorkspaceBackupCheckpoint(workspaceId, "thread-session", "cp-0001");
     await useAppStore.getState().deleteWorkspaceBackupCheckpoint(workspaceId, "thread-session", "cp-0001");
+    await useAppStore.getState().deleteWorkspaceBackupEntry(workspaceId, "thread-session");
+    await useAppStore.getState().setWorkspaceBackupSessionEnabled(workspaceId, "thread-session", false);
 
     const sentTypes = controlSocket.sent.map((msg) => msg?.type).filter(Boolean);
     expect(sentTypes).toContain("workspace_backups_get");
@@ -308,6 +313,7 @@ describe("desktop protocol v2 mapping", () => {
     expect(sentTypes).toContain("workspace_backup_checkpoint");
     expect(sentTypes).toContain("workspace_backup_restore");
     expect(sentTypes).toContain("workspace_backup_delete_checkpoint");
+    expect(sentTypes).toContain("workspace_backup_delete_entry");
 
     const checkpointRestore = controlSocket.sent.find(
       (msg) => msg?.type === "workspace_backup_restore" && msg?.checkpointId === "cp-0001",
@@ -318,6 +324,17 @@ describe("desktop protocol v2 mapping", () => {
       (msg) => msg?.type === "workspace_backup_delta_get" && msg?.checkpointId === "cp-0001",
     );
     expect(checkpointDelta?.targetSessionId).toBe("thread-session");
+
+    const deleteEntry = controlSocket.sent.find((msg) => msg?.type === "workspace_backup_delete_entry");
+    expect(deleteEntry?.targetSessionId).toBe("thread-session");
+
+    const toggleBackups = threadSocket.sent.find((msg) => msg?.type === "set_config");
+    expect(toggleBackups).toMatchObject({
+      type: "set_config",
+      config: {
+        backupsEnabled: false,
+      },
+    });
   });
 
   test("connectProvider sends provider_auth_set_api_key for keyed providers", async () => {

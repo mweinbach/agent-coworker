@@ -10,7 +10,7 @@ export type SessionBackupMetadataCheckpoint = {
   id: string;
   index: number;
   createdAt: string;
-  trigger: "auto" | "manual";
+  trigger: "initial" | "auto" | "manual";
   changed: boolean;
   patchBytes: number;
   fingerprint: string;
@@ -39,7 +39,7 @@ const sessionBackupMetadataCheckpointSchema = z
     id: z.string().min(1),
     index: z.number(),
     createdAt: z.string().min(1),
-    trigger: z.enum(["auto", "manual"]),
+    trigger: z.enum(["initial", "auto", "manual"]),
     changed: z.boolean(),
     patchBytes: z.number(),
     fingerprint: z.string().min(1),

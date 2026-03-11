@@ -19,7 +19,7 @@ import {
 } from "./sessionBackup/metadata";
 import { createSnapshotWithTarFallback, restoreSnapshot, snapshotByteSize } from "./sessionBackup/snapshot";
 
-export type SessionBackupCheckpointTrigger = "auto" | "manual";
+export type SessionBackupCheckpointTrigger = "initial" | "auto" | "manual";
 
 export type SessionBackupPublicCheckpoint = {
   id: string;
@@ -31,7 +31,7 @@ export type SessionBackupPublicCheckpoint = {
 };
 
 export type SessionBackupPublicState = {
-  status: "initializing" | "ready" | "failed";
+  status: "initializing" | "ready" | "disabled" | "failed";
   sessionId: string;
   workingDirectory: string;
   backupDirectory: string | null;
@@ -131,6 +131,49 @@ function makeCheckpointId(index: number): string {
   return `cp-${String(index).padStart(4, "0")}`;
 }
 
+function buildInitialCheckpoint(opts: {
+  createdAt: string;
+  fingerprint: string;
+  snapshot: SessionBackupMetadata["originalSnapshot"];
+}): SessionBackupMetadataCheckpoint {
+  return {
+    id: makeCheckpointId(1),
+    index: 1,
+    createdAt: opts.createdAt,
+    trigger: "initial",
+    changed: false,
+    patchBytes: 0,
+    fingerprint: opts.fingerprint,
+    snapshot: {
+      kind: opts.snapshot.kind,
+      path: opts.snapshot.path,
+    },
+  };
+}
+
+function withInitialCheckpoint(
+  metadata: SessionBackupMetadata,
+  originalFingerprint: string,
+): { metadata: SessionBackupMetadata; changed: boolean } {
+  if (metadata.checkpoints.length > 0) {
+    return { metadata, changed: false };
+  }
+
+  return {
+    metadata: {
+      ...metadata,
+      checkpoints: [
+        buildInitialCheckpoint({
+          createdAt: metadata.createdAt,
+          fingerprint: originalFingerprint,
+          snapshot: metadata.originalSnapshot,
+        }),
+      ],
+    },
+    changed: true,
+  };
+}
+
 async function fingerprintSnapshot(sessionDir: string, snapshot: { kind: "directory" | "tar_gz"; path: string }): Promise<string> {
   const fingerprintStageDir = await fs.mkdtemp(path.join(sessionDir, ".fingerprint-stage-"));
   try {
@@ -225,15 +268,22 @@ export class SessionBackupManager implements SessionBackupHandle {
       directoryPath: ORIGINAL_DIR,
     });
 
+    const createdAt = new Date().toISOString();
     const metadata: SessionBackupMetadata = {
       version: 1,
       sessionId: opts.sessionId,
       workingDirectory,
-      createdAt: new Date().toISOString(),
+      createdAt,
       state: "active",
       originalFingerprint,
       originalSnapshot,
-      checkpoints: [],
+      checkpoints: [
+        buildInitialCheckpoint({
+          createdAt,
+          fingerprint: originalFingerprint,
+          snapshot: originalSnapshot,
+        }),
+      ],
     };
     await writeJson(metadataPath, metadata);
 
@@ -249,10 +299,14 @@ export class SessionBackupManager implements SessionBackupHandle {
     }
     const originalFingerprint = metadata.originalFingerprint
       ?? await fingerprintSnapshot(sessionDir, metadata.originalSnapshot);
-    const normalizedMetadata = metadata.originalFingerprint
+    const fingerprintNormalizedMetadata = metadata.originalFingerprint
       ? metadata
       : { ...metadata, originalFingerprint };
-    if (!metadata.originalFingerprint) {
+    const { metadata: normalizedMetadata, changed: addedInitialCheckpoint } = withInitialCheckpoint(
+      fingerprintNormalizedMetadata,
+      originalFingerprint,
+    );
+    if (!metadata.originalFingerprint || addedInitialCheckpoint) {
       await writeJson(metadataPath, normalizedMetadata);
     }
     return new SessionBackupManager({
@@ -384,17 +438,20 @@ export class SessionBackupManager implements SessionBackupHandle {
     if (!metadata) {
       throw new Error(`Missing backup metadata at ${this.metadataPath}`);
     }
-    this.metadata = metadata;
-    if (metadata.originalFingerprint) {
-      this.originalFingerprint = metadata.originalFingerprint;
-      return this.getPublicState();
+    const originalFingerprint = metadata.originalFingerprint
+      ?? await fingerprintSnapshot(this.sessionDir, metadata.originalSnapshot);
+    const fingerprintNormalizedMetadata = metadata.originalFingerprint
+      ? metadata
+      : { ...metadata, originalFingerprint };
+    const { metadata: normalizedMetadata, changed: addedInitialCheckpoint } = withInitialCheckpoint(
+      fingerprintNormalizedMetadata,
+      originalFingerprint,
+    );
+    this.metadata = normalizedMetadata;
+    this.originalFingerprint = originalFingerprint;
+    if (!metadata.originalFingerprint || addedInitialCheckpoint) {
+      await this.persistMetadata();
     }
-    this.originalFingerprint = await fingerprintSnapshot(this.sessionDir, metadata.originalSnapshot);
-    this.metadata = {
-      ...metadata,
-      originalFingerprint: this.originalFingerprint,
-    };
-    await this.persistMetadata();
     return this.getPublicState();
   }
 

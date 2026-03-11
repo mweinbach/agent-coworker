@@ -114,6 +114,7 @@ const persistedWorkspaceSchema = z.object({
   defaultSubAgentModel: optionalNonEmptyStringSchema,
   providerOptions: workspaceProviderOptionsSchema.optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
+  defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough();
 

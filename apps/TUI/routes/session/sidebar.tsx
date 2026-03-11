@@ -1,6 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import { useTheme } from "../../context/theme";
-import { useSyncState } from "../../context/sync";
+import { useSyncActions, useSyncState } from "../../context/sync";
 import { TodoItem } from "../../component/todo-item";
 
 const SIDEBAR_WIDTH = 42;
@@ -22,6 +22,7 @@ function formatBytes(value: number): string {
 export function SessionSidebar() {
   const theme = useTheme();
   const syncState = useSyncState();
+  const syncActions = useSyncActions();
 
   const activeTodos = createMemo(() =>
     syncState.todos.filter((t) => t.status !== "completed")
@@ -123,6 +124,25 @@ export function SessionSidebar() {
               <strong>Backup</strong>
             </text>
             <box paddingLeft={1} flexDirection="column">
+              <box flexDirection="row" gap={1} marginBottom={1}>
+                <text fg={syncState.backupsEnabled ? theme.success : theme.warning}>
+                  {syncState.backupsEnabled ? "enabled" : "disabled"}
+                </text>
+                <box
+                  border
+                  borderStyle="single"
+                  borderColor={theme.border}
+                  paddingLeft={1}
+                  paddingRight={1}
+                  onMouseDown={() => {
+                    syncActions.setConfig({ backupsEnabled: !syncState.backupsEnabled });
+                  }}
+                >
+                  <text fg={theme.text}>
+                    {syncState.backupsEnabled ? "Disable" : "Enable"}
+                  </text>
+                </box>
+              </box>
               <text fg={theme.textMuted}>status: {backupState().status}</text>
               <text fg={theme.textMuted}>checkpoints: {backupState().checkpoints.length}</text>
               <Show when={latestCheckpoint()}>

@@ -152,6 +152,7 @@ describe("workspace settings sync", () => {
           defaultModel: "gpt-5.2",
           defaultSubAgentModel: "gpt-5.2",
           defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
           yolo: false,
         },
       ],
@@ -198,6 +199,7 @@ describe("workspace settings sync", () => {
           defaultProvider: "openai",
           defaultModel: "gpt-5.2",
           defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
           yolo: false,
         },
       ],
@@ -363,7 +365,7 @@ describe("workspace settings sync", () => {
     expect(threadSocket.opts.resumeSessionId).toBe("thread-session-new");
   });
 
-  test("control session_config syncs workspace default subagent model", async () => {
+  test("control session_config syncs workspace default subagent model and backups flag", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
@@ -374,6 +376,7 @@ describe("workspace settings sync", () => {
       config: {
         yolo: false,
         observabilityEnabled: true,
+        backupsEnabled: false,
         subAgentModel: "gpt-5-mini",
         maxSteps: 75,
       },
@@ -382,7 +385,9 @@ describe("workspace settings sync", () => {
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(workspace?.defaultSubAgentModel).toBe("gpt-5-mini");
+    expect(workspace?.defaultBackupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.subAgentModel).toBe("gpt-5-mini");
+    expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
   });
 
   test("control session_config replaces editable providerOptions in workspace defaults", async () => {
@@ -417,6 +422,7 @@ describe("workspace settings sync", () => {
       config: {
         yolo: false,
         observabilityEnabled: true,
+        backupsEnabled: true,
         subAgentModel: "gpt-5.4-mini",
         providerOptions: {
           openai: {
@@ -484,6 +490,7 @@ describe("workspace settings sync", () => {
       config: {
         yolo: false,
         observabilityEnabled: true,
+        backupsEnabled: true,
         subAgentModel: "gpt-5.4-mini",
         maxSteps: 75,
       },
@@ -534,6 +541,7 @@ describe("workspace settings sync", () => {
     expect(threadSocket.sent[1]).toMatchObject({
       type: "set_config",
       config: {
+        backupsEnabled: true,
         subAgentModel: "gpt-5.2",
         providerOptions: {
           openai: {
@@ -592,6 +600,7 @@ describe("workspace settings sync", () => {
       defaultModel: "gpt-5.2",
       defaultSubAgentModel: "gpt-5.2-mini",
       defaultEnableMcp: false,
+      defaultBackupsEnabled: false,
       providerOptions: {
         openai: {
           reasoningSummary: "concise",
@@ -611,6 +620,7 @@ describe("workspace settings sync", () => {
     expect(controlSocket.sent.find((message) => message?.type === "set_config")).toMatchObject({
       type: "set_config",
       config: {
+        backupsEnabled: false,
         subAgentModel: "gpt-5.2-mini",
         providerOptions: {
           openai: {
@@ -634,6 +644,7 @@ describe("workspace settings sync", () => {
     expect(idleThreadSocket.sent.find((message) => message?.type === "set_config")).toMatchObject({
       type: "set_config",
       config: {
+        backupsEnabled: false,
         subAgentModel: "gpt-5.2-mini",
         providerOptions: {
           openai: {
@@ -664,6 +675,7 @@ describe("workspace settings sync", () => {
     expect(busyThreadSocket.sent.find((message) => message?.type === "set_config")).toMatchObject({
       type: "set_config",
       config: {
+        backupsEnabled: false,
         subAgentModel: "gpt-5.2-mini",
         providerOptions: {
           openai: {

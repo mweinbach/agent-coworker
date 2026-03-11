@@ -77,6 +77,7 @@ export type OpenAICompatibleProviderOptions = {
 export type SyncConfigPatch = {
   yolo?: boolean;
   observabilityEnabled?: boolean;
+  backupsEnabled?: boolean;
   subAgentModel?: string;
   maxSteps?: number;
   providerOptions?: Partial<Record<OpenAICompatibleProviderName, OpenAICompatibleProviderOptions>>;
@@ -100,6 +101,7 @@ export type SyncState = {
   providerAuthChallenge: ProviderAuthChallengeState;
   providerAuthResult: ProviderAuthResultState;
   observabilityEnabled: boolean;
+  backupsEnabled: boolean;
   observabilityConfig: Extract<ServerEvent, { type: "observability_status" }>["config"];
   observabilityHealth: Extract<ServerEvent, { type: "observability_status" }>["health"] | null;
   harnessContext: HarnessContextState;

@@ -23,7 +23,7 @@ export class SessionBackupController {
       const didCheckpoint = await this.runInBackupQueue(async () => {
         await this.ensureSessionBackupInitialized();
         if (!this.context.state.sessionBackup) {
-          const reason = this.context.state.sessionBackupState.failureReason ?? "Session backup is unavailable";
+          const reason = this.backupUnavailableReason();
           this.context.emitError("backup_error", "backup", reason);
           return false;
         }
@@ -51,7 +51,7 @@ export class SessionBackupController {
       const didRestore = await this.runInBackupQueue(async () => {
         await this.ensureSessionBackupInitialized();
         if (!this.context.state.sessionBackup) {
-          const reason = this.context.state.sessionBackupState.failureReason ?? "Session backup is unavailable";
+          const reason = this.backupUnavailableReason();
           this.context.emitError("backup_error", "backup", reason);
           return false;
         }
@@ -83,7 +83,7 @@ export class SessionBackupController {
       const didDelete = await this.runInBackupQueue(async () => {
         await this.ensureSessionBackupInitialized();
         if (!this.context.state.sessionBackup) {
-          const reason = this.context.state.sessionBackupState.failureReason ?? "Session backup is unavailable";
+          const reason = this.backupUnavailableReason();
           this.context.emitError("backup_error", "backup", reason);
           return false;
         }
@@ -146,10 +146,34 @@ export class SessionBackupController {
     }
   }
 
+  async syncSessionBackupAvailability() {
+    await this.runInBackupQueue(async () => {
+      if (!this.getBackupsEnabled()) {
+        this.clearSessionBackupState("disabled");
+        return;
+      }
+
+      if (this.context.state.sessionBackup) {
+        this.context.state.sessionBackupState = this.context.state.sessionBackup.getPublicState();
+        return;
+      }
+
+      this.context.state.sessionBackupState = this.buildInitializingState();
+      this.context.state.sessionBackupInit = null;
+      await this.ensureSessionBackupInitialized();
+    });
+    this.emitSessionBackupState("requested");
+  }
+
   async reloadSessionBackupStateFromDisk() {
     await this.runInBackupQueue(async () => {
       await this.ensureSessionBackupInitialized();
-      if (!this.context.state.sessionBackup) return;
+      if (!this.context.state.sessionBackup) {
+        this.context.state.sessionBackupState = this.getBackupsEnabled()
+          ? this.buildInitializingState()
+          : this.buildDisabledState();
+        return;
+      }
       this.context.state.sessionBackupState = await this.context.state.sessionBackup.reloadFromDisk();
     });
   }
@@ -163,7 +187,57 @@ export class SessionBackupController {
     });
   }
 
+  private getBackupsEnabled(): boolean {
+    return this.context.state.backupsEnabledOverride ?? this.context.state.config.backupsEnabled ?? true;
+  }
+
+  private buildInitializingState() {
+    return {
+      status: "initializing" as const,
+      sessionId: this.context.id,
+      workingDirectory: this.context.state.config.workingDirectory,
+      backupDirectory: null,
+      createdAt: this.context.state.sessionInfo.createdAt,
+      originalSnapshot: { kind: "pending" as const },
+      checkpoints: [],
+    };
+  }
+
+  private buildDisabledState() {
+    return {
+      status: "disabled" as const,
+      sessionId: this.context.id,
+      workingDirectory: this.context.state.config.workingDirectory,
+      backupDirectory: null,
+      createdAt: this.context.state.sessionInfo.createdAt,
+      originalSnapshot: { kind: "pending" as const },
+      checkpoints: [],
+    };
+  }
+
+  private backupUnavailableReason(): string {
+    if (this.context.state.sessionBackupState.status === "disabled") {
+      return "Session backups are disabled";
+    }
+    return this.context.state.sessionBackupState.failureReason ?? "Session backup is unavailable";
+  }
+
+  private clearSessionBackupState(mode: "disabled" | "initializing") {
+    this.context.state.sessionBackup = null;
+    this.context.state.sessionBackupInit = null;
+    this.context.state.lastAutoCheckpointAt = 0;
+    this.context.state.sessionBackupState = mode === "disabled"
+      ? this.buildDisabledState()
+      : this.buildInitializingState();
+  }
+
   private async initializeSessionBackup() {
+    if (!this.getBackupsEnabled()) {
+      this.context.state.sessionBackup = null;
+      this.context.state.sessionBackupState = this.buildDisabledState();
+      return;
+    }
+
     const userHome = this.context.state.config.userAgentDir ? path.dirname(this.context.state.config.userAgentDir) : undefined;
     const startedAt = Date.now();
 
@@ -194,7 +268,15 @@ export class SessionBackupController {
   }
 
   private async ensureSessionBackupInitialized() {
+    if (!this.getBackupsEnabled()) {
+      if (this.context.state.sessionBackupState.status !== "disabled" || this.context.state.sessionBackup) {
+        this.clearSessionBackupState("disabled");
+      }
+      return;
+    }
+
     if (!this.context.state.sessionBackupInit) {
+      this.context.state.sessionBackupState = this.buildInitializingState();
       this.context.state.sessionBackupInit = this.initializeSessionBackup();
     }
     await this.context.state.sessionBackupInit;

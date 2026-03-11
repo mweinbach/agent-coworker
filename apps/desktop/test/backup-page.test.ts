@@ -91,6 +91,7 @@ describe("desktop backup page", () => {
           createdAt: "2026-03-10T00:00:00.000Z",
           lastOpenedAt: "2026-03-10T00:00:00.000Z",
           defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
           yolo: false,
         },
         runtime: {
@@ -134,9 +135,9 @@ describe("desktop backup page", () => {
                   id: "cp-0001",
                   index: 1,
                   createdAt: "2026-03-10T00:01:00.000Z",
-                  trigger: "manual",
-                  changed: true,
-                  patchBytes: 4096,
+                  trigger: "initial",
+                  changed: false,
+                  patchBytes: 0,
                 },
               ],
               createdAt: "2026-03-10T00:00:00.000Z",
@@ -167,11 +168,14 @@ describe("desktop backup page", () => {
 
     expect(html).toContain("Workspace Backups");
     expect(html).toContain("Backup History");
+    expect(html).toContain("Session backups");
     expect(html).toContain("Deleted session");
     expect(html).toContain("Broken backup");
+    expect(html).toContain("cp-0001");
     expect(html).toContain("Backup Error:</strong> Invalid backup metadata schema");
     expect(html).toContain("Create Checkpoint");
     expect(html).toContain("Restore Original Workspace");
+    expect(html).toContain("Delete Backup Entry");
     expect(html).toContain("Reveal Folder");
     expect(html).toContain("No checkpoints");
     expect(html).toContain('data-backup-split="true"');

@@ -26,6 +26,7 @@ type LiveWorkspaceBackupSession = {
   updatedAt: string;
   status: SessionPersistenceStatus;
   busy: boolean;
+  setBackupsEnabledOverride?: (enabled: boolean | null) => Promise<void>;
   reloadBackupStateFromDisk?: () => Promise<void>;
 };
 
@@ -184,6 +185,23 @@ export class WorkspaceBackupService {
     return await this.listWorkspaceBackups(workingDirectory);
   }
 
+  async deleteEntry(workingDirectory: string, targetSessionId: string): Promise<WorkspaceBackupPublicEntry[]> {
+    const lookup = await this.findWorkspaceBackup(workingDirectory, targetSessionId);
+    if (!lookup) throw new Error(`Unknown workspace backup: ${targetSessionId}`);
+    await this.guardLiveSession(targetSessionId);
+
+    const liveSession = this.opts.getLiveSession(targetSessionId);
+    if (liveSession) {
+      if (!liveSession.setBackupsEnabledOverride) {
+        throw new Error("Live session backup override is unavailable");
+      }
+      await liveSession.setBackupsEnabledOverride(false);
+    }
+
+    await fs.rm(lookup.sessionDir, { recursive: true, force: true });
+    return await this.listWorkspaceBackups(workingDirectory);
+  }
+
   async getCheckpointDelta(
     workingDirectory: string,
     targetSessionId: string,
@@ -261,7 +279,11 @@ export class WorkspaceBackupService {
     const lifecycle = lifecycleFromState(liveSession?.status ?? sessionRecord?.status ?? null, metadata.state);
 
     const originalSnapshotBytes = await snapshotByteSize(sessionDir, metadata.originalSnapshot);
-    const checkpointBytesTotal = await this.sumCheckpointSnapshotBytes(sessionDir, metadata.checkpoints);
+    const checkpointBytesTotal = await this.sumCheckpointSnapshotBytes(
+      sessionDir,
+      metadata.originalSnapshot,
+      metadata.checkpoints,
+    );
     const updatedAt = maxIsoTimestamp(
       liveSession?.updatedAt,
       sessionRecord?.updatedAt,
@@ -359,9 +381,12 @@ export class WorkspaceBackupService {
 
   private async sumCheckpointSnapshotBytes(
     sessionDir: string,
+    originalSnapshot: SessionBackupMetadata["originalSnapshot"],
     checkpoints: SessionBackupMetadata["checkpoints"],
   ): Promise<number> {
-    const seen = new Set<string>();
+    const seen = new Set<string>([
+      `${originalSnapshot.kind}:${originalSnapshot.path}`,
+    ]);
     let total = 0;
     for (const checkpoint of checkpoints) {
       const key = `${checkpoint.snapshot.kind}:${checkpoint.snapshot.path}`;

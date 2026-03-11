@@ -40,6 +40,7 @@ export type WorkspaceRecord = {
   defaultSubAgentModel?: string;
   providerOptions?: WorkspaceProviderOptions;
   defaultEnableMcp: boolean;
+  defaultBackupsEnabled: boolean;
   yolo: boolean;
 };
 

@@ -170,6 +170,10 @@ export function reduceNonProviderEvent(evt: ServerEvent, deps: SyncEventReducerD
       deps.setState("observabilityHealth", evt.health);
       return true;
 
+    case "session_config":
+      deps.setState("backupsEnabled", evt.config.backupsEnabled);
+      return true;
+
     case "harness_context":
       deps.setState("harnessContext", evt.context);
       return true;

@@ -31,6 +31,7 @@ export type MCPServerAuthMode = "none" | "missing" | "api_key" | "oauth" | "oaut
 export type SessionConfigPatch = {
   yolo?: boolean;
   observabilityEnabled?: boolean;
+  backupsEnabled?: boolean;
   subAgentModel?: string;
   maxSteps?: number;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
@@ -39,6 +40,7 @@ export type SessionConfigPatch = {
 export type SessionConfigState = {
   yolo: boolean;
   observabilityEnabled: boolean;
+  backupsEnabled: boolean;
   subAgentModel: string;
   maxSteps: number;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
@@ -103,6 +105,7 @@ export type ClientMessage =
   | { type: "workspace_backup_checkpoint"; sessionId: string; targetSessionId: string }
   | { type: "workspace_backup_restore"; sessionId: string; targetSessionId: string; checkpointId?: string }
   | { type: "workspace_backup_delete_checkpoint"; sessionId: string; targetSessionId: string; checkpointId: string }
+  | { type: "workspace_backup_delete_entry"; sessionId: string; targetSessionId: string }
   | { type: "workspace_backup_delta_get"; sessionId: string; targetSessionId: string; checkpointId: string }
   | { type: "harness_context_get"; sessionId: string }
   | { type: "harness_context_set"; sessionId: string; context: HarnessContextPayload }
@@ -372,7 +375,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.9";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.10";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -415,6 +418,7 @@ export const CLIENT_MESSAGE_TYPES = [
   "workspace_backup_checkpoint",
   "workspace_backup_restore",
   "workspace_backup_delete_checkpoint",
+  "workspace_backup_delete_entry",
   "workspace_backup_delta_get",
   "harness_context_get",
   "harness_context_set",

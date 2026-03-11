@@ -365,7 +365,7 @@ describe("workspace settings sync", () => {
     expect(threadSocket.opts.resumeSessionId).toBe("thread-session-new");
   });
 
-  test("control session_config syncs workspace default subagent model and backups flag", async () => {
+  test("control session_config keeps workspace backup defaults independent from session overrides", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
@@ -385,7 +385,7 @@ describe("workspace settings sync", () => {
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(workspace?.defaultSubAgentModel).toBe("gpt-5-mini");
-    expect(workspace?.defaultBackupsEnabled).toBe(false);
+    expect(workspace?.defaultBackupsEnabled).toBe(true);
     expect(runtime?.controlSessionConfig?.subAgentModel).toBe("gpt-5-mini");
     expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
   });

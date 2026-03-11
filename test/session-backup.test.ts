@@ -288,6 +288,46 @@ describe("SessionBackupManager", () => {
     expect(removedAgain).toBe(false);
   });
 
+  test("create reopens a closed backup and clears closed metadata", async () => {
+    const { home, workspace } = await makeTmpWorkspace();
+    await fs.writeFile(path.join(workspace, "a.txt"), "one\n", "utf-8");
+
+    const sessionId = crypto.randomUUID();
+    const initialManager = await SessionBackupManager.create({
+      sessionId,
+      workingDirectory: workspace,
+      homedir: home,
+    });
+
+    const backupDir = initialManager.getPublicState().backupDirectory;
+    if (!backupDir) throw new Error("Expected backup directory");
+    const metadataPath = path.join(backupDir, "metadata.json");
+
+    await initialManager.close();
+
+    const closedMetadata = JSON.parse(await fs.readFile(metadataPath, "utf-8")) as {
+      state: string;
+      closedAt?: string;
+    };
+    expect(closedMetadata.state).toBe("closed");
+    expect(typeof closedMetadata.closedAt).toBe("string");
+
+    const reopenedManager = await SessionBackupManager.create({
+      sessionId,
+      workingDirectory: workspace,
+      homedir: home,
+    });
+
+    expect(reopenedManager.getPublicState().backupDirectory).toBe(backupDir);
+
+    const reopenedMetadata = JSON.parse(await fs.readFile(metadataPath, "utf-8")) as {
+      state: string;
+      closedAt?: string;
+    };
+    expect(reopenedMetadata.state).toBe("active");
+    expect("closedAt" in reopenedMetadata).toBe(false);
+  });
+
   test("pruneClosedSessions removes old closed sessions beyond retention", async () => {
     const { home, workspace } = await makeTmpWorkspace();
     const ids: string[] = [];

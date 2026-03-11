@@ -276,7 +276,7 @@ export class SessionBackupManager implements SessionBackupHandle {
       if (path.resolve(existing.workingDirectory) !== workingDirectory) {
         throw new Error(`Refusing to reuse backup with mismatched working directory at ${metadataPath}`);
       }
-      return await SessionBackupManager.openExisting({ sessionDir });
+      return await SessionBackupManager.openExisting({ sessionDir, reopen: true });
     }
     await ensureWorkingDirectory(workingDirectory);
     const originalFingerprint = await workspaceFingerprint(workingDirectory);
@@ -310,7 +310,7 @@ export class SessionBackupManager implements SessionBackupHandle {
     return new SessionBackupManager({ metadata, originalFingerprint, sessionDir, metadataPath });
   }
 
-  static async openExisting(opts: { sessionDir: string }): Promise<SessionBackupManager> {
+  static async openExisting(opts: { sessionDir: string; reopen?: boolean }): Promise<SessionBackupManager> {
     const sessionDir = path.resolve(opts.sessionDir);
     const metadataPath = path.join(sessionDir, METADATA_FILE);
     const metadata = await readMetadata(metadataPath);
@@ -318,8 +318,17 @@ export class SessionBackupManager implements SessionBackupHandle {
       throw new Error(`Missing backup metadata at ${metadataPath}`);
     }
     const normalized = await normalizeMetadataOnLoad(metadata, sessionDir, metadataPath);
+    let resolvedMetadata = normalized.metadata;
+    if (opts.reopen && (resolvedMetadata.state !== "active" || resolvedMetadata.closedAt !== undefined)) {
+      const { closedAt: _closedAt, ...activeMetadata } = resolvedMetadata;
+      resolvedMetadata = {
+        ...activeMetadata,
+        state: "active",
+      };
+      await writeJson(metadataPath, resolvedMetadata);
+    }
     return new SessionBackupManager({
-      metadata: normalized.metadata,
+      metadata: resolvedMetadata,
       originalFingerprint: normalized.originalFingerprint,
       sessionDir,
       metadataPath,

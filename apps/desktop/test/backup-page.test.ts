@@ -409,4 +409,159 @@ describe("desktop backup page", () => {
       restore();
     }
   });
+
+  test("ignores stale delta previews from a different session with the same checkpoint id", async () => {
+    const { dom, restore } = setupJsdom();
+    const previousState = useAppStore.getState();
+    const deltaRequests: Array<{ workspaceId: string; targetSessionId: string; checkpointId: string }> = [];
+
+    useAppStore.setState({
+      selectedWorkspaceId: "ws-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-10T00:00:00.000Z",
+          lastOpenedAt: "2026-03-10T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      threadRuntimeById: {},
+      workspaceRuntimeById: {
+        "ws-1": {
+          serverUrl: "ws://mock",
+          starting: false,
+          error: null,
+          controlSessionId: "control-session",
+          controlConfig: null,
+          controlSessionConfig: null,
+          controlEnableMcp: true,
+          mcpServers: [],
+          mcpLegacy: null,
+          mcpFiles: [],
+          mcpWarnings: [],
+          mcpValidationByName: {},
+          mcpLastAuthChallenge: null,
+          mcpLastAuthResult: null,
+          skills: [],
+          selectedSkillName: null,
+          selectedSkillContent: null,
+          workspaceBackupsPath: "/tmp/workspace",
+          workspaceBackupsLoading: false,
+          workspaceBackupsError: null,
+          workspaceBackupPendingActionKeys: {},
+          workspaceBackups: [
+            {
+              targetSessionId: "session-1",
+              title: "Session 1",
+              provider: "openai",
+              model: "gpt-5.2",
+              lifecycle: "active",
+              status: "ready",
+              workingDirectory: "/tmp/workspace",
+              backupDirectory: "/tmp/home/.cowork/session-backups/session-1",
+              originalSnapshotKind: "directory",
+              originalSnapshotBytes: 8192,
+              checkpointBytesTotal: 4096,
+              totalBytes: 12288,
+              checkpoints: [
+                {
+                  id: "cp-0001",
+                  index: 1,
+                  createdAt: "2026-03-10T00:01:00.000Z",
+                  trigger: "manual",
+                  changed: true,
+                  patchBytes: 4096,
+                },
+              ],
+              createdAt: "2026-03-10T00:00:00.000Z",
+              updatedAt: "2026-03-10T00:03:00.000Z",
+            },
+            {
+              targetSessionId: "session-2",
+              title: "Session 2",
+              provider: "openai",
+              model: "gpt-5.2",
+              lifecycle: "active",
+              status: "ready",
+              workingDirectory: "/tmp/workspace",
+              backupDirectory: "/tmp/home/.cowork/session-backups/session-2",
+              originalSnapshotKind: "directory",
+              originalSnapshotBytes: 4096,
+              checkpointBytesTotal: 2048,
+              totalBytes: 6144,
+              checkpoints: [
+                {
+                  id: "cp-0001",
+                  index: 1,
+                  createdAt: "2026-03-10T00:02:00.000Z",
+                  trigger: "manual",
+                  changed: true,
+                  patchBytes: 2048,
+                },
+              ],
+              createdAt: "2026-03-10T00:00:30.000Z",
+              updatedAt: "2026-03-10T00:02:30.000Z",
+            },
+          ],
+          workspaceBackupDelta: {
+            type: "workspace_backup_delta",
+            sessionId: "control-session",
+            targetSessionId: "session-1",
+            checkpointId: "cp-0001",
+            baselineLabel: "cp-0000",
+            currentLabel: "cp-0001",
+            counts: { added: 1, modified: 0, deleted: 0 },
+            files: [{ path: "stale.txt", change: "added", kind: "file" }],
+            truncated: false,
+          },
+          workspaceBackupDeltaLoading: true,
+          workspaceBackupDeltaError: null,
+        },
+      },
+      requestWorkspaceBackups: async () => {},
+      requestWorkspaceBackupDelta: async (workspaceId: string, targetSessionId: string, checkpointId: string) => {
+        deltaRequests.push({ workspaceId, targetSessionId, checkpointId });
+      },
+    });
+
+    const container = dom.window.document.getElementById("root");
+    if (!container) throw new Error("missing test root");
+    const root = createRoot(container);
+
+    try {
+      await act(async () => {
+        root.render(createElement(BackupPage));
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      const checkpointButtons = Array.from(container.querySelectorAll("button"))
+        .filter((button) => button.textContent?.includes("cp-0001"));
+      expect(checkpointButtons).toHaveLength(2);
+
+      await act(async () => {
+        checkpointButtons[1]?.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(deltaRequests).toEqual([
+        { workspaceId: "ws-1", targetSessionId: "session-2", checkpointId: "cp-0001" },
+      ]);
+      expect(container.textContent).toContain("Loading file changes...");
+      expect(container.textContent).not.toContain("stale.txt");
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      useAppStore.setState(previousState, true);
+      restore();
+    }
+  });
 });

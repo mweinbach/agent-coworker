@@ -2708,3 +2708,43 @@
 - `~/.bun/bin/bun test --cwd apps/desktop test/store-feed-mapping.test.ts test/thread-reconnect.test.ts test/usage-page.test.ts` -> pass (`19 pass, 0 fail`)
 - `~/.bun/bin/bun run typecheck` -> pass
 - `git diff --check` -> pass
+
+# Task: Triage PR #32 review comments for remaining work
+
+## Plan
+- [x] Verify `gh` auth, locate the open PR for the current branch, and fetch the current review comments/threads.
+- [x] Use subagents to inspect each comment against the current `HEAD` state and classify it as still relevant, already addressed, or not actionable.
+- [x] Record the triage result here with any still-needed fixes, without changing unrelated in-flight work.
+
+## Review
+- `gh auth status` is healthy, the current branch `codex/inspect-harness-websocket-ui-gaps` maps to PR `#32` (`Update websocket protocol docs and sync workspace backup helpers`), and the fetched review payload contains 5 inline threads, 3 of them unresolved. There are no separate top-level conversation comments to handle.
+- Already fixed: thread 1 on `src/server/session/SessionBackupController.ts` no longer needs work. Disabling backups now routes through `clearSessionBackupState(...)`, which closes the existing manager before clearing the in-memory handles (`src/server/session/SessionBackupController.ts:213-223`), and the disabled path calls that helper when a live backup exists (`src/server/session/SessionBackupController.ts:262-267`).
+- Already fixed: thread 2 on `src/server/workspaceBackups.ts` no longer needs work. `restoreBackup(...)` now validates `checkpointId` before creating the safety checkpoint (`src/server/workspaceBackups.ts:189-198`), so an invalid restore target does not leave behind a bogus checkpoint.
+- Still relevant: thread 3 on `apps/desktop/src/app/store.helpers/controlSocket.ts` should be fixed. The desktop control-session handler still copies `evt.config.backupsEnabled` into `workspace.defaultBackupsEnabled` (`apps/desktop/src/app/store.helpers/controlSocket.ts:103-123`), but the server still emits that field as the effective session value `backupsEnabledOverride ?? config.backupsEnabled ?? true` (`src/server/session/SessionMetadataManager.ts:31-40`, `src/server/session/SessionMetadataManager.ts:218-223`). That can leak a session override back into workspace defaults, and those defaults are reapplied to threads later (`apps/desktop/src/app/store.helpers/threadEventReducer.ts:242-246`, `apps/desktop/src/app/store.actions/workspaceDefaults.ts:91-98`). The current desktop test locks in the buggy behavior instead of guarding against it (`apps/desktop/test/workspace-settings-sync.test.ts:368-390`).
+- Still relevant: thread 4 on `src/server/sessionBackup.ts` should be fixed. Reusing an existing backup still returns `openExisting()` immediately (`src/server/sessionBackup.ts:271-280`), but `openExisting()` does not flip persisted metadata back to active (`src/server/sessionBackup.ts:313-320`) while `close()` still writes `state: "closed"` and `closedAt` (`src/server/sessionBackup.ts:460-468`). A direct local repro at `HEAD` showed `SessionBackupManager.create(...)->close()->create(...)` leaves `metadata.json` at `state: "closed"` even though the reopened manager reports `status: "ready"`. Coverage does not currently assert a reopen transition.
+- Still relevant: thread 5 on `apps/desktop/src/ui/settings/pages/BackupPage.tsx` should be fixed. The selected delta is still matched only by `checkpointId` (`apps/desktop/src/ui/settings/pages/BackupPage.tsx:596-599`) even though the payload already includes `targetSessionId` (`src/server/sessionBackup.ts:72-82`). Because the store keeps a single workspace-level delta (`apps/desktop/src/app/store.helpers/controlSocket.ts:258-269`) and a new request only sets loading/error without clearing the old delta (`apps/desktop/src/app/store.actions/backup.ts:116-145`), switching between two sessions that both have `cp-0001` can still show the wrong diff or hide the new loading/error state.
+
+### Verification
+- `python3 /Users/mweinbach/.codex/skills/gh-address-comments/scripts/fetch_comments.py > /tmp/pr32_comments.json` -> fetched PR `#32` review threads for the current branch
+- `~/.bun/bin/bun test apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/backup-page.test.ts test/workspace-backups.test.ts test/session-backup.test.ts --bail` -> pass (`28 pass, 0 fail`)
+- `~/.bun/bin/bun -e 'import { SessionBackupManager } from "./src/server/sessionBackup"; ...'` -> reproduced the reopen bug (`metadataState: "closed"` after reopening an existing backup)
+
+# Task: Fix and resolve remaining PR #32 review comments
+
+## Plan
+- [x] Stop copying control-session backup overrides back into workspace defaults, and update desktop coverage to preserve workspace defaults when a single session toggles backups.
+- [x] Reopen persisted session-backup metadata when reusing an existing backup directory, and add regression coverage for the closed-to-active transition.
+- [x] Match backup delta state by target session as well as checkpoint id in the desktop backup page, and add coverage for duplicate checkpoint ids across sessions.
+- [x] Run focused tests, resolve the fixed review threads on GitHub, and record the result below.
+
+## Review
+- `apps/desktop/src/app/store.helpers/controlSocket.ts` no longer copies `session_config.backupsEnabled` into `workspace.defaultBackupsEnabled`; the desktop still records the control session's live config in runtime, but workspace defaults stay independent of per-session overrides. `apps/desktop/test/workspace-settings-sync.test.ts` now asserts that a control-session `backupsEnabled: false` snapshot updates `controlSessionConfig` while leaving the persisted workspace default unchanged.
+- `src/server/sessionBackup.ts` now reopens reused backup directories explicitly. `SessionBackupManager.create(...)` passes `reopen: true` when metadata already exists, and `openExisting(...)` rewrites persisted metadata back to `state: "active"` while clearing stale `closedAt` markers only for that reopen path. `test/session-backup.test.ts` now proves `create() -> close() -> create()` persists the transition from closed back to active.
+- `apps/desktop/src/ui/settings/pages/BackupPage.tsx` now treats a delta preview as active only when both `targetSessionId` and `checkpointId` match the current selection. That prevents a stale delta from one session from leaking into another session that reuses the same checkpoint id. `apps/desktop/test/backup-page.test.ts` now covers the duplicate-`cp-0001` case and asserts the page shows the loading state instead of the stale diff.
+- GitHub review threads `PRRT_kwDORLLhvs5zeq1x`, `PRRT_kwDORLLhvs5ze74T`, and `PRRT_kwDORLLhvs5ze74Z` were resolved after the fixes landed. A follow-up GraphQL fetch confirmed all five PR `#32` review threads are now resolved.
+
+### Verification
+- `~/.bun/bin/bun test apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/backup-page.test.ts test/session-backup.test.ts test/workspace-backups.test.ts --bail` -> pass (`30 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass
+- `gh api graphql ... resolveReviewThread(...)` for thread ids `PRRT_kwDORLLhvs5zeq1x`, `PRRT_kwDORLLhvs5ze74T`, and `PRRT_kwDORLLhvs5ze74Z` -> success (`isResolved: true`)
+- `gh api graphql ... reviewThreads(first: 100)` for PR `#32` -> all 5 threads resolved

@@ -598,7 +598,12 @@ export function BackupPage(props: BackupPageProps = {}) {
 
   const selectedEntry = sortedEntries.find((entry) => entry.targetSessionId === activeTargetSessionId);
   const selectedCp = selectedEntry?.checkpoints.find(c => c.id === selectedCheckpointId);
-  const activeDelta = activeTargetSessionId && selectedCheckpointId && deltaPreview?.checkpointId === selectedCheckpointId ? deltaPreview : null;
+  const activeDelta = activeTargetSessionId
+    && selectedCheckpointId
+    && deltaPreview?.targetSessionId === activeTargetSessionId
+    && deltaPreview?.checkpointId === selectedCheckpointId
+    ? deltaPreview
+    : null;
   const selectedThread = selectedEntry
     ? threads.find((thread) => (
         thread.workspaceId === workspace.id

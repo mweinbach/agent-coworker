@@ -215,6 +215,45 @@
   - `~/.bun/bin/bun test` -> pass (`1937 pass, 0 fail, 2 skip`)
   - `git diff --check` -> pass
 
+# Task: Refine desktop Backup settings page boundaries
+
+## Plan
+- [x] Inspect the backup settings shell spacing and backup-detail panel boundaries to pinpoint where the surfaces visually blend together.
+- [x] Tighten the Backup page layout so the rail/detail split reads as separate sections and the main backup surface reaches the settings window edges cleanly.
+- [x] Add or adjust focused desktop coverage for the updated Backup page structure, then rerun the required checks.
+
+## Review
+- `apps/desktop/src/ui/settings/SettingsShell.tsx` now lets the Backup page own its own spacing by removing the extra shell padding for that page, so the backup console can reach the settings window edges instead of sitting inside a second inset frame.
+- `apps/desktop/src/ui/settings/pages/BackupPage.tsx` now uses a flush split surface with a stronger left rail tier, a clearer detail-pane background, and more obvious header/stat/action separation inside the selected backup view. The detail header also gets a small eyebrow label so the selected backup block reads as its own section instead of blending into the stats row below it.
+- Added stable structural hooks (`data-backup-split`, `data-backup-rail`, `data-backup-detail`) and extended `apps/desktop/test/backup-page.test.ts` to assert that the split layout remains present without pinning brittle utility class strings.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/backup-page.test.ts apps/desktop/test/settings-nav.test.ts --bail` -> pass (`17 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `git diff --check` -> pass
+
+# Task: Soften desktop Backup settings page color intensity
+
+## Plan
+- [x] Recheck which Backup page accents are visually competing with the content after the layout cleanup.
+- [x] Tone down the local status, icon, and destructive-action colors so the page keeps hierarchy without loud badges/buttons.
+- [x] Run focused desktop verification and record the result below.
+
+## Review
+- `apps/desktop/src/ui/settings/pages/BackupPage.tsx` now uses quieter local lifecycle pills instead of the default saturated primary badge, so repeated `Active` labels no longer dominate the list and header.
+- The selected backup and checkpoint icon chips were moved from primary-tinted fills to muted neutral surfaces, and the checkpoint id accent was softened to standard foreground text so the detail header stops pulling focus away from the content.
+- The restore-original action keeps its destructive semantics but now uses a light destructive outline treatment instead of a solid red block; delta counters and file-change pills were also toned down to softer, lower-saturation status colors.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/backup-page.test.ts apps/desktop/test/settings-nav.test.ts --bail` -> pass (`17 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `git diff --check` -> pass
+
+# Task: Rebalance desktop Backup settings page neutral palette
+
+## Plan
+- [ ] Remove the leftover warm/pink local accents that still read as off-tone against the settings shell.
+- [ ] Push the Backup page toward cleaner neutral layering so emphasis comes from borders and contrast, not tinted fills.
+- [ ] Re-run focused desktop verification and record the outcome below.
+
 # Task: Fix PR #30 review findings
 
 ## Plan

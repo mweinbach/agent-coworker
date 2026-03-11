@@ -83,10 +83,20 @@ function sortByUpdated(entries: WorkspaceBackupEntry[]): WorkspaceBackupEntry[] 
   });
 }
 
+function lifecycleBadgeClass(lifecycle: WorkspaceBackupEntry["lifecycle"]): string {
+  if (lifecycle === "active") {
+    return "border-border/50 bg-transparent text-muted-foreground";
+  }
+  if (lifecycle === "deleted") {
+    return "border-border/45 bg-transparent text-muted-foreground";
+  }
+  return "border-border/45 bg-transparent text-muted-foreground";
+}
+
 function StatItem({ label, value, icon: Icon }: { label: string; value: string; icon: React.ComponentType<{ className?: string }> }) {
   return (
     <div className="flex items-center gap-3">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/45 bg-background/50 text-muted-foreground">
         <Icon className="h-4 w-4" />
       </div>
       <div className="min-w-0">
@@ -178,7 +188,7 @@ export function BackupPage(props: BackupPageProps = {}) {
 
   if (!workspace) {
     return (
-      <div className="p-6 space-y-6">
+      <div className="space-y-5 px-6 py-6 max-[960px]:px-4 max-[960px]:py-4">
         <div className="space-y-2">
           <h1 className="text-3xl font-semibold tracking-tight text-foreground">Workspace Backups</h1>
           <p className="text-sm text-muted-foreground">Manage backup history and restore points for your workspaces.</p>
@@ -205,7 +215,10 @@ export function BackupPage(props: BackupPageProps = {}) {
   const activeDelta = activeTargetSessionId && selectedCheckpointId && deltaPreview?.checkpointId === selectedCheckpointId ? deltaPreview : null;
 
   return (
-    <div className="flex h-full min-h-0 flex-col space-y-5 p-6" data-backup-page="true">
+    <div
+      className="flex h-full min-h-0 flex-col gap-5 px-6 pt-6 max-[960px]:gap-4 max-[960px]:px-4 max-[960px]:pt-4"
+      data-backup-page="true"
+    >
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 shrink-0">
         <div className="space-y-1">
@@ -236,17 +249,23 @@ export function BackupPage(props: BackupPageProps = {}) {
       ) : null}
 
       {/* Main Split-Pane Layout - Full Page */}
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+      <div
+        className="mx-[-1.5rem] flex min-h-0 flex-1 overflow-hidden border-y border-border/70 bg-transparent max-[960px]:mx-[-1rem]"
+        data-backup-split="true"
+      >
         {/* Sidebar */}
-        <div className="w-72 shrink-0 border-r border-border/60 bg-muted/20 flex flex-col sm:w-80">
-          <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-4 py-3 shrink-0">
+        <div
+          className="flex w-72 shrink-0 flex-col border-r border-border/80 bg-muted/14 sm:w-80"
+          data-backup-rail="true"
+        >
+          <div className="flex items-center justify-between border-b border-border/70 bg-muted/10 px-4 py-3.5 shrink-0">
             <span className="text-sm font-semibold text-foreground">Backup History</span>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => void refreshBackups?.()} disabled={loading}>
               <RefreshCwIcon className={cn("h-4 w-4 text-muted-foreground", loading ? "animate-spin" : "")} />
             </Button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-3 space-y-1">
+          <div className="flex-1 space-y-1 overflow-y-auto bg-muted/6 p-4">
             {sortedEntries.length === 0 && !loading ? (
               <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
                 <ArchiveIcon className="h-8 w-8 mb-3 text-muted-foreground/30" />
@@ -262,16 +281,16 @@ export function BackupPage(props: BackupPageProps = {}) {
                   <button
                     onClick={() => { setSelectedTargetSessionId(entry.targetSessionId); setSelectedCheckpointId(null); }}
                     className={cn(
-                      "w-full text-left px-3 py-2.5 flex items-center gap-2.5 rounded-lg text-sm transition-all",
+                      "flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-all",
                       isBackupSelected
-                        ? "bg-primary/10 text-primary font-medium ring-1 ring-primary/20"
-                        : "hover:bg-muted/60 text-foreground"
+                        ? "border border-border/65 bg-background/72 font-medium text-foreground"
+                        : "border border-transparent text-foreground hover:bg-background/35"
                     )}
                   >
-                    <FolderOpenIcon className={cn("w-4 h-4 shrink-0", isBackupSelected ? "text-primary" : "text-muted-foreground")} />
+                    <FolderOpenIcon className={cn("h-4 w-4 shrink-0", isBackupSelected ? "text-foreground" : "text-muted-foreground")} />
                     <span className="truncate flex-1">{backupTitle(entry)}</span>
                     {entry.lifecycle === "active" ? (
-                      <Badge variant="default" className="h-5 px-2 text-[10px] font-medium">
+                      <Badge variant="outline" className={cn("h-5 px-2 text-[10px] font-medium", lifecycleBadgeClass(entry.lifecycle))}>
                         Active
                       </Badge>
                     ) : null}
@@ -289,10 +308,10 @@ export function BackupPage(props: BackupPageProps = {}) {
                             key={cp.id}
                             onClick={() => { setSelectedTargetSessionId(entry.targetSessionId); setSelectedCheckpointId(cp.id); }}
                             className={cn(
-                              "w-full text-left px-2.5 py-1.5 flex items-center justify-between rounded-md text-xs transition-all",
+                              "flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs transition-all",
                               isCpSelected
-                                ? "bg-primary/10 text-primary font-medium"
-                                : "hover:bg-muted/40 text-muted-foreground"
+                                ? "border border-border/55 bg-background/60 font-medium text-foreground"
+                                : "border border-transparent text-muted-foreground hover:bg-background/28"
                             )}
                           >
                             <div className="flex items-center gap-2 min-w-0">
@@ -311,9 +330,9 @@ export function BackupPage(props: BackupPageProps = {}) {
         </div>
 
         {/* Content Area */}
-        <div className="flex-1 min-w-0 overflow-hidden">
+        <div className="min-w-0 flex-1 overflow-hidden bg-background/92" data-backup-detail="true">
           {!selectedEntry ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-8 text-center space-y-4 h-full">
+            <div className="flex h-full flex-1 flex-col items-center justify-center space-y-4 bg-background/92 p-8 text-center text-muted-foreground">
               <ArchiveIcon className="h-16 w-16 opacity-20" />
               <p className="text-sm">Select a backup or checkpoint from the sidebar to inspect it.</p>
             </div>
@@ -321,23 +340,24 @@ export function BackupPage(props: BackupPageProps = {}) {
             /* BACKUP DETAILS VIEW */
             <div className="flex flex-col h-full overflow-hidden">
               {/* Backup Header */}
-              <div className="border-b border-border/60 bg-muted/30 p-6">
+              <div className="border-b border-border/70 bg-background/96 px-6 py-5">
                 <div className="flex items-start gap-4">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border/45 bg-background/55 text-muted-foreground">
                     <FolderOpenIcon className="h-5 w-5" />
                   </div>
                   <div className="flex-1 min-w-0">
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Selected backup</div>
                     <h2 className="text-lg font-semibold truncate">{backupTitle(selectedEntry)}</h2>
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
                       <span className="text-sm text-muted-foreground">{selectedEntry.provider || "Unknown"} • {selectedEntry.model || "Unknown model"}</span>
                       <Badge
-                        variant={selectedEntry.lifecycle === "active" ? "default" : "secondary"}
-                        className="h-5 text-[10px]"
+                        variant="outline"
+                        className={cn("h-5 text-[10px]", lifecycleBadgeClass(selectedEntry.lifecycle))}
                       >
                         {selectedEntry.lifecycle}
                       </Badge>
                       {selectedEntry.status === "failed" && (
-                        <Badge variant="destructive" className="h-5 text-[10px]">Failed</Badge>
+                        <Badge variant="outline" className="h-5 border-destructive/25 bg-destructive/5 text-[10px] text-destructive/80">Failed</Badge>
                       )}
                     </div>
                   </div>
@@ -345,7 +365,7 @@ export function BackupPage(props: BackupPageProps = {}) {
               </div>
 
               {/* Stats Row */}
-              <div className="border-b border-border/60 bg-muted/20 px-6 py-4">
+              <div className="border-b border-border/60 bg-background/64 px-6 py-4">
                 <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
                   <StatItem label="Created" value={formatTimestamp(selectedEntry.createdAt)} icon={ClockIcon} />
                   <StatItem label="Last Updated" value={formatTimestamp(selectedEntry.updatedAt)} icon={RefreshCwIcon} />
@@ -355,7 +375,7 @@ export function BackupPage(props: BackupPageProps = {}) {
               </div>
 
               {/* Action Buttons */}
-              <div className="p-6">
+              <div className="flex-1 overflow-auto bg-background/92 p-6">
                 <div className="space-y-3">
                   <div className="text-sm font-medium text-foreground">Backup Actions</div>
                   <div className="flex flex-wrap gap-3">
@@ -368,7 +388,8 @@ export function BackupPage(props: BackupPageProps = {}) {
                       Create Checkpoint
                     </Button>
                     <Button
-                      variant="destructive"
+                      variant="outline"
+                      className="border-border/70 text-foreground hover:border-border hover:bg-muted/30"
                       onClick={async () => {
                         const confirmed = await confirmAction({
                           title: "Restore Original State",
@@ -383,7 +404,7 @@ export function BackupPage(props: BackupPageProps = {}) {
                       }}
                       disabled={selectedEntry.status !== "ready" || pendingActions[pendingActionKey("restore-original", selectedEntry.targetSessionId)]}
                     >
-                      <RotateCcwIcon className="mr-2 h-4 w-4" />
+                      <RotateCcwIcon className="mr-2 h-4 w-4 text-destructive/70" />
                       Restore Original Workspace
                     </Button>
                     {selectedEntry.backupDirectory && (
@@ -406,14 +427,15 @@ export function BackupPage(props: BackupPageProps = {}) {
             /* CHECKPOINT FILE EXPLORER VIEW */
             <div className="flex flex-col h-full overflow-hidden">
               {/* Checkpoint Header */}
-              <div className="flex h-16 items-center justify-between border-b border-border/60 bg-card px-6 shrink-0">
+              <div className="flex items-center justify-between border-b border-border/70 bg-background/96 px-6 py-4 shrink-0">
                 <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/45 bg-background/55 text-muted-foreground">
                     <FileTextIcon className="h-4 w-4" />
                   </div>
                   <div>
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Checkpoint snapshot</div>
                     <div className="flex items-center gap-2">
-                      <h2 className="font-semibold text-sm">Checkpoint <span className="font-mono ml-1 text-primary">{selectedCp.id}</span></h2>
+                      <h2 className="font-semibold text-sm">Checkpoint <span className="ml-1 font-mono text-foreground/80">{selectedCp.id}</span></h2>
                       {selectedCp.trigger !== "manual" && <Badge variant="outline" className="text-[9px] uppercase h-4 py-0">{selectedCp.trigger}</Badge>}
                     </div>
                     <div className="text-xs text-muted-foreground">Captured {formatTimestamp(selectedCp.createdAt)}</div>
@@ -463,16 +485,16 @@ export function BackupPage(props: BackupPageProps = {}) {
 
               {/* File Delta List Area */}
               <div className="flex-1 flex flex-col overflow-hidden">
-                <div className="flex items-center justify-between border-b border-border/40 bg-muted/20 px-6 py-3 text-xs shrink-0">
+                <div className="flex items-center justify-between border-b border-border/40 bg-background/64 px-6 py-3 text-xs shrink-0">
                   <span className="text-muted-foreground flex items-center gap-2">
                     Compared to baseline:
                     <Badge variant="secondary" className="font-mono text-[10px]">{activeDelta?.baselineLabel || "..."}</Badge>
                   </span>
                   {activeDelta && (
                     <div className="flex items-center gap-4 font-medium">
-                      <span className="text-emerald-600">+{activeDelta.counts.added}</span>
-                      <span className="text-amber-600">~{activeDelta.counts.modified}</span>
-                      <span className="text-destructive">-{activeDelta.counts.deleted}</span>
+                      <span className="text-emerald-700/80">+{activeDelta.counts.added}</span>
+                      <span className="text-amber-700/80">~{activeDelta.counts.modified}</span>
+                      <span className="text-destructive/75">-{activeDelta.counts.deleted}</span>
                     </div>
                   )}
                 </div>
@@ -489,7 +511,7 @@ export function BackupPage(props: BackupPageProps = {}) {
                     </div>
                   ) : activeDelta ? (
                     <div className="min-w-[500px]">
-                      <div className="sticky top-0 z-10 flex items-center border-b border-border/40 bg-background px-6 py-2 text-xs font-medium text-muted-foreground">
+                      <div className="sticky top-0 z-10 flex items-center border-b border-border/40 bg-background/95 px-6 py-2 text-xs font-medium text-muted-foreground backdrop-blur">
                         <div className="flex-1">Name</div>
                         <div className="w-24">Kind</div>
                         <div className="w-24 text-right">Status</div>
@@ -498,16 +520,16 @@ export function BackupPage(props: BackupPageProps = {}) {
                         {activeDelta.files.map(f => (
                           <div key={f.path} className="group flex items-center px-6 py-2.5 text-sm transition-colors hover:bg-muted/30">
                             <div className="flex-1 flex items-center gap-3 min-w-0 pr-4">
-                              {f.kind === "directory" ? <FolderOpenIcon className="w-4 h-4 text-blue-400 shrink-0" /> : <FileTextIcon className="w-4 h-4 text-muted-foreground shrink-0" />}
+                              {f.kind === "directory" ? <FolderOpenIcon className="w-4 h-4 text-muted-foreground shrink-0" /> : <FileTextIcon className="w-4 h-4 text-muted-foreground shrink-0" />}
                               <span className="font-mono text-[13px] truncate" title={f.path}>{f.path}</span>
                             </div>
                             <div className="w-24 text-xs text-muted-foreground capitalize shrink-0">{f.kind}</div>
                             <div className="w-24 text-right shrink-0">
                               <Badge variant="outline" className={cn(
                                 "text-[10px] uppercase h-5 py-0",
-                                f.change === "added" ? "text-emerald-600 border-emerald-600/30 bg-emerald-600/5 group-hover:bg-emerald-600/10" :
-                                f.change === "modified" ? "text-amber-600 border-amber-600/30 bg-amber-600/5 group-hover:bg-amber-600/10" :
-                                "text-destructive border-destructive/30 bg-destructive/5 group-hover:bg-destructive/10"
+                                f.change === "added" ? "border-emerald-700/20 bg-emerald-700/[0.04] text-emerald-700/80 group-hover:bg-emerald-700/[0.07]" :
+                                f.change === "modified" ? "border-amber-700/20 bg-amber-700/[0.04] text-amber-700/80 group-hover:bg-amber-700/[0.07]" :
+                                "border-destructive/20 bg-destructive/[0.04] text-destructive/75 group-hover:bg-destructive/[0.07]"
                               )}>
                                 {f.change}
                               </Badge>

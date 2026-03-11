@@ -78,7 +78,7 @@ export function SettingsShell() {
         <div
           className={cn(
             "settings-shell__content w-full max-[960px]:p-4",
-            activePage.id === "backup" ? "h-full p-6" : "mx-auto max-w-5xl p-6"
+            activePage.id === "backup" ? "h-full p-0" : "mx-auto max-w-5xl p-6"
           )}
         >
           {activePage.render()}

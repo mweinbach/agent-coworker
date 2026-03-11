@@ -174,6 +174,9 @@ describe("desktop backup page", () => {
     expect(html).toContain("Restore Original Workspace");
     expect(html).toContain("Reveal Folder");
     expect(html).toContain("No checkpoints");
+    expect(html).toContain('data-backup-split="true"');
+    expect(html).toContain('data-backup-rail="true"');
+    expect(html).toContain('data-backup-detail="true"');
   });
 
   test("auto-refreshes once when the backup page opens", async () => {

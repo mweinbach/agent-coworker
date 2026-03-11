@@ -65,3 +65,5 @@
 - For desktop recovery/admin screens, inspect the live layout before locking the hierarchy, and keep heavyweight diff or filesystem-compare work user-triggered instead of auto-running on page open.
 - For desktop settings pages, do not introduce a second card/window shell inside the main settings canvas; keep the page as one continuous surface under the section header, then use spacing and dividers for structure.
 - For desktop settings pages that act like tools or browsers, do not keep the default centered `max-w-*` content column; let them fill the available canvas and only constrain width when the page is primarily reading text/forms.
+- After a desktop layout polish pass, do one more color-intensity pass before calling it done; repeated high-saturation badges, icon chips, and destructive buttons can overwhelm an otherwise correct structure.
+- On warm-neutral desktop themes, avoid page-local pink/red outline treatments unless the user is actively in a destructive flow; they tend to read as accidental tinting rather than intentional hierarchy.

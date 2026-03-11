@@ -34,6 +34,7 @@ import {
 } from "../../../components/ui/select";
 import { confirmAction, revealPath } from "../../../lib/desktopCommands";
 import { cn } from "../../../lib/utils";
+import { workspaceBackupActionKey } from "../../../app/store.helpers/backupActionKey";
 
 type BackupPageProps = {
   workspace?: WorkspaceRecord | null;
@@ -68,10 +69,6 @@ function formatBytes(value: number | null | undefined): string {
   return `${size.toFixed(size >= 10 ? 0 : 1)} ${unit}`;
 }
 
-function pendingActionKey(kind: string, targetSessionId: string, checkpointId?: string): string {
-  return checkpointId ? `${kind}:${targetSessionId}:${checkpointId}` : `${kind}:${targetSessionId}`;
-}
-
 function toBoolean(checked: boolean | "indeterminate"): boolean {
   return checked === true;
 }
@@ -92,12 +89,12 @@ function sortByUpdated(entries: WorkspaceBackupEntry[]): WorkspaceBackupEntry[] 
 
 function lifecycleBadgeClass(lifecycle: WorkspaceBackupEntry["lifecycle"]): string {
   if (lifecycle === "active") {
-    return "border-border/50 bg-transparent text-muted-foreground";
+    return "border-emerald-700/25 bg-emerald-700/[0.04] text-emerald-700/80";
   }
   if (lifecycle === "deleted") {
-    return "border-border/45 bg-transparent text-muted-foreground";
+    return "border-destructive/25 bg-destructive/[0.04] text-destructive/75";
   }
-  return "border-border/45 bg-transparent text-muted-foreground";
+  return "border-border/50 bg-transparent text-muted-foreground";
 }
 
 function StatItem({ label, value, icon: Icon }: { label: string; value: string; icon: React.ComponentType<{ className?: string }> }) {
@@ -270,7 +267,7 @@ function BackupDetailView({
             <Button
               variant="outline"
               onClick={() => onCreateCheckpoint?.(entry.targetSessionId)}
-              disabled={entry.status !== "ready" || pendingActions[pendingActionKey("checkpoint", entry.targetSessionId)]}
+              disabled={entry.status !== "ready" || pendingActions[workspaceBackupActionKey("checkpoint", entry.targetSessionId)]}
             >
               <SaveIcon className="mr-2 h-4 w-4" />
               Create Checkpoint
@@ -290,7 +287,7 @@ function BackupDetailView({
                 });
                 if (confirmed) onRestoreOriginal?.(entry.targetSessionId);
               }}
-              disabled={entry.status !== "ready" || pendingActions[pendingActionKey("restore-original", entry.targetSessionId)]}
+              disabled={entry.status !== "ready" || pendingActions[workspaceBackupActionKey("restore-original", entry.targetSessionId)]}
             >
               <RotateCcwIcon className="mr-2 h-4 w-4 text-destructive/70" />
               Restore Original Workspace
@@ -318,7 +315,7 @@ function BackupDetailView({
                 });
                 if (confirmed) onDeleteEntry?.(entry.targetSessionId);
               }}
-              disabled={pendingActions[pendingActionKey("delete-entry", entry.targetSessionId)]}
+              disabled={pendingActions[workspaceBackupActionKey("delete-entry", entry.targetSessionId)]}
             >
               <Trash2Icon className="mr-2 h-4 w-4" />
               Delete Backup Entry
@@ -388,7 +385,7 @@ function CheckpointDeltaView({
               });
               if (confirmed) onRestoreCheckpoint?.(entry.targetSessionId, checkpoint.id);
             }}
-            disabled={entry.status !== "ready" || pendingActions[pendingActionKey("restore-checkpoint", entry.targetSessionId, checkpoint.id)]}
+            disabled={entry.status !== "ready" || pendingActions[workspaceBackupActionKey("restore-checkpoint", entry.targetSessionId, checkpoint.id)]}
           >
             <RotateCcwIcon className="mr-2 h-3.5 w-3.5" />
             Restore
@@ -408,7 +405,7 @@ function CheckpointDeltaView({
               });
               if (confirmed) onDeleteCheckpoint?.(entry.targetSessionId, checkpoint.id);
             }}
-            disabled={entry.status !== "ready" || pendingActions[pendingActionKey("delete-checkpoint", entry.targetSessionId, checkpoint.id)]}
+            disabled={entry.status !== "ready" || pendingActions[workspaceBackupActionKey("delete-checkpoint", entry.targetSessionId, checkpoint.id)]}
           >
             <Trash2Icon className="h-4 w-4" />
           </Button>

@@ -2748,3 +2748,20 @@
 - `~/.bun/bin/bun run typecheck` -> pass
 - `gh api graphql ... resolveReviewThread(...)` for thread ids `PRRT_kwDORLLhvs5zeq1x`, `PRRT_kwDORLLhvs5ze74T`, and `PRRT_kwDORLLhvs5ze74Z` -> success (`isResolved: true`)
 - `gh api graphql ... reviewThreads(first: 100)` for PR `#32` -> all 5 threads resolved
+
+# Task: Commit remaining backup follow-up changes
+
+## Plan
+- [x] Verify the remaining unstaged backup/page/server/test changes form a coherent slice and identify the minimal validation set.
+- [x] Run the focused backup/desktop tests plus typecheck for this remaining diff and record the outcome.
+- [x] Stage only the remaining backup follow-up files and commit them without altering unrelated history.
+
+## Review
+- Extracted the repeated backup-action key builder into `apps/desktop/src/app/store.helpers/backupActionKey.ts`, and updated both `apps/desktop/src/app/store.actions/backup.ts` and `apps/desktop/src/ui/settings/pages/BackupPage.tsx` to use the shared helper instead of duplicating the string format in two places.
+- Kept the existing Backup page behavior while polishing the local visual treatment for lifecycle badges in `apps/desktop/src/ui/settings/pages/BackupPage.tsx`, so active/deleted rows read more distinctly without changing the page structure.
+- `src/server/workspaceBackups.ts` now derives lifecycle strictly from live/session persistence state, not from backup metadata, and guards `findWorkspaceBackup(...)` with an `isPathWithin(...)` check before reading a target session directory under each configured backup root.
+- `test/session-backup-delta.test.ts` and `test/workspace-backups.test.ts` now track their temp roots and clean them up in `afterAll(...)`, so repeated runs do not leak scratch directories into the OS temp area.
+
+### Verification
+- `~/.bun/bin/bun test test/session-backup-delta.test.ts test/workspace-backups.test.ts apps/desktop/test/backup-page.test.ts --bail` -> pass (`18 pass, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass

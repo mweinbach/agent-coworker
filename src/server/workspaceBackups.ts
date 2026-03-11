@@ -18,6 +18,12 @@ import { snapshotByteSize } from "./sessionBackup/snapshot";
 
 const METADATA_FILE = "metadata.json";
 
+function isPathWithin(child: string, parent: string): boolean {
+  const resolved = path.resolve(child);
+  const resolvedParent = path.resolve(parent) + path.sep;
+  return resolved.startsWith(resolvedParent) || resolved === path.resolve(parent);
+}
+
 type LiveWorkspaceBackupSession = {
   sessionId: string;
   title: string;
@@ -65,7 +71,6 @@ function maxIsoTimestamp(...values: Array<string | undefined>): string {
 
 function lifecycleFromState(
   sessionStatus: SessionPersistenceStatus | null,
-  metadataState: SessionBackupMetadata["state"] | undefined,
 ): WorkspaceBackupLifecycle {
   if (sessionStatus === "active") return "active";
   if (sessionStatus === "closed") return "closed";
@@ -309,7 +314,7 @@ export class WorkspaceBackupService {
   ): Promise<WorkspaceBackupPublicEntry> {
     const sessionRecord = this.opts.sessionDb?.getSessionRecord(metadata.sessionId) ?? null;
     const liveSession = this.opts.getLiveSession(metadata.sessionId);
-    const lifecycle = lifecycleFromState(liveSession?.status ?? sessionRecord?.status ?? null, metadata.state);
+    const lifecycle = lifecycleFromState(liveSession?.status ?? sessionRecord?.status ?? null);
 
     const originalSnapshotBytes = await snapshotByteSize(sessionDir, metadata.originalSnapshot);
     const checkpointBytesTotal = await this.sumCheckpointSnapshotBytes(
@@ -370,7 +375,7 @@ export class WorkspaceBackupService {
       title: liveSession?.title ?? sessionRecord?.title ?? null,
       provider: liveSession?.provider ?? sessionRecord?.provider ?? null,
       model: liveSession?.model ?? sessionRecord?.model ?? null,
-      lifecycle: lifecycleFromState(liveSession?.status ?? sessionRecord?.status ?? null, hint.state),
+      lifecycle: lifecycleFromState(liveSession?.status ?? sessionRecord?.status ?? null),
       status: "failed",
       workingDirectory: hint.workingDirectory ?? "",
       backupDirectory: sessionDir,
@@ -393,6 +398,7 @@ export class WorkspaceBackupService {
     const workingDirectory = path.resolve(workingDirectoryRaw);
     for (const rootDir of getSessionBackupsRootDirs({ homedir: this.opts.homedir })) {
       const sessionDir = path.join(rootDir, targetSessionId);
+      if (!isPathWithin(sessionDir, rootDir)) continue;
       const metadataPath = path.join(sessionDir, METADATA_FILE);
       try {
         const metadata = await readMetadata(metadataPath);

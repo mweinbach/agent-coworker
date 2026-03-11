@@ -12,10 +12,7 @@ import {
   sendControl,
   sendThread,
 } from "../store.helpers";
-
-function workspaceBackupActionKey(kind: string, targetSessionId: string, checkpointId?: string): string {
-  return checkpointId ? `${kind}:${targetSessionId}:${checkpointId}` : `${kind}:${targetSessionId}`;
-}
+import { workspaceBackupActionKey } from "../store.helpers/backupActionKey";
 
 function setWorkspaceBackupsLoading(
   set: StoreSet,

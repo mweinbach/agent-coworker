@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,8 +8,11 @@ import { SessionBackupManager } from "../src/server/sessionBackup";
 import { readMetadata } from "../src/server/sessionBackup/metadata";
 import { WorkspaceBackupService } from "../src/server/workspaceBackups";
 
+const tmpRoots: string[] = [];
+
 async function makeTmpWorkspaces() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-backups-test-"));
+  tmpRoots.push(root);
   const home = path.join(root, "home");
   const workspaceA = path.join(root, "workspace-a");
   const workspaceB = path.join(root, "workspace-b");
@@ -74,6 +77,10 @@ function makeService(opts: {
     },
   });
 }
+
+afterAll(async () => {
+  await Promise.all(tmpRoots.map((root) => fs.rm(root, { recursive: true, force: true }).catch(() => {})));
+});
 
 describe("WorkspaceBackupService", () => {
   test("filters by workingDirectory and includes active, closed, deleted, and failed backups", async () => {

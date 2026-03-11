@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,10 +6,17 @@ import path from "node:path";
 import { summarizeSnapshotDelta } from "../src/server/sessionBackup/delta";
 import type { SessionBackupMetadataSnapshot } from "../src/server/sessionBackup/metadata";
 
+const tmpRoots: string[] = [];
+
 async function makeTmpSessionDir() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "delta-test-"));
+  tmpRoots.push(root);
   return root;
 }
+
+afterAll(async () => {
+  await Promise.all(tmpRoots.map((root) => fs.rm(root, { recursive: true, force: true }).catch(() => {})));
+});
 
 async function writeDirectorySnapshot(
   sessionDir: string,

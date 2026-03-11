@@ -537,11 +537,16 @@ describe("workspace settings sync", () => {
     await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
 
     const sentTypes = threadSocket.sent.map((message) => message?.type);
-    expect(sentTypes).toEqual(["set_model", "set_config", "set_enable_mcp"]);
-    expect(threadSocket.sent[1]).toMatchObject({
+    expect(sentTypes).toEqual(["set_config", "set_model", "set_config", "set_enable_mcp"]);
+    // First set_config is the immediate backupsEnabled-only message
+    expect(threadSocket.sent[0]).toMatchObject({
+      type: "set_config",
+      config: { backupsEnabled: true },
+    });
+    // Second set_config carries the rest of the config patch
+    expect(threadSocket.sent[2]).toMatchObject({
       type: "set_config",
       config: {
-        backupsEnabled: true,
         subAgentModel: "gpt-5.2",
         providerOptions: {
           openai: {
@@ -637,14 +642,20 @@ describe("workspace settings sync", () => {
     });
 
     expect(idleThreadSocket.sent.map((message) => message?.type)).toEqual([
+      "set_config",
       "set_model",
       "set_config",
       "set_enable_mcp",
     ]);
-    expect(idleThreadSocket.sent.find((message) => message?.type === "set_config")).toMatchObject({
+    // First set_config is the immediate backupsEnabled-only message
+    expect(idleThreadSocket.sent[0]).toMatchObject({
+      type: "set_config",
+      config: { backupsEnabled: false },
+    });
+    // Second set_config carries the rest of the config patch
+    expect(idleThreadSocket.sent[2]).toMatchObject({
       type: "set_config",
       config: {
-        backupsEnabled: false,
         subAgentModel: "gpt-5.2-mini",
         providerOptions: {
           openai: {
@@ -659,23 +670,32 @@ describe("workspace settings sync", () => {
         },
       },
     });
-    expect(busyThreadSocket.sent).toHaveLength(0);
+    // Busy thread still gets the immediate backupsEnabled config
+    expect(busyThreadSocket.sent.map((message) => message?.type)).toEqual([
+      "set_config",
+    ]);
+    expect(busyThreadSocket.sent[0]).toMatchObject({
+      type: "set_config",
+      config: { backupsEnabled: false },
+    });
 
+    busyThreadSocket.sent = [];
     busyThreadSocket.emit({
       type: "session_busy",
       sessionId: "thread-busy",
       busy: false,
     });
 
+    // After becoming idle, the deferred model/config/mcp messages are sent
     expect(busyThreadSocket.sent.map((message) => message?.type)).toEqual([
+      "set_config",
       "set_model",
       "set_config",
       "set_enable_mcp",
     ]);
-    expect(busyThreadSocket.sent.find((message) => message?.type === "set_config")).toMatchObject({
+    expect(busyThreadSocket.sent[2]).toMatchObject({
       type: "set_config",
       config: {
-        backupsEnabled: false,
         subAgentModel: "gpt-5.2-mini",
         providerOptions: {
           openai: {

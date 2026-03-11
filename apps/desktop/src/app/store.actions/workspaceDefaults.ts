@@ -58,25 +58,46 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       if (!ws) return;
       const rt = get().threadRuntimeById[threadId];
       if (!rt?.sessionId) return;
+
+      // Always send backupsEnabled immediately — this is safe even while
+      // the session is busy and must arrive before any turn triggers an
+      // automatic checkpoint.
+      {
+        const okBackups = sendThread(get, threadId, (sessionId) => ({
+          type: "set_config",
+          sessionId,
+          config: { backupsEnabled: ws.defaultBackupsEnabled },
+        }));
+        if (okBackups) {
+          appendThreadTranscript(threadId, "client", {
+            type: "set_config",
+            sessionId: rt.sessionId,
+            config: { backupsEnabled: ws.defaultBackupsEnabled },
+          });
+        }
+      }
+
+      // Defer model / provider / other config changes when the session is
+      // busy — changing the model mid-turn is not safe.
       if (rt.busy) {
         RUNTIME.pendingWorkspaceDefaultApplyThreadIds.add(threadId);
         return;
       }
       RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
-  
+
       const inferredProvider =
         ws.defaultProvider && isProviderName(ws.defaultProvider)
           ? ws.defaultProvider
           : isProviderName((rt.config as any)?.provider)
             ? ((rt.config as any).provider as ProviderName)
             : "google";
-  
+
       const provider = normalizeProviderChoice(inferredProvider);
       const model = (ws.defaultModel?.trim() || rt.config?.model?.trim() || "") || undefined;
       const subAgentModel =
         (ws.defaultSubAgentModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.subAgentModel?.trim() || "") || undefined;
       const providerOptions = ws.providerOptions;
-  
+
       if (provider && model) {
         const ok = sendThread(get, threadId, (sessionId) => ({
           type: "set_model",
@@ -92,7 +113,6 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           type: "set_config",
           sessionId,
           config: {
-            backupsEnabled: ws.defaultBackupsEnabled,
             ...(subAgentModel ? { subAgentModel } : {}),
             ...(providerOptions ? { providerOptions: providerOptions as OpenAiCompatibleProviderOptionsByProvider } : {}),
           },
@@ -102,31 +122,13 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
             type: "set_config",
             sessionId: rt.sessionId,
             config: {
-              backupsEnabled: ws.defaultBackupsEnabled,
               ...(subAgentModel ? { subAgentModel } : {}),
               ...(providerOptions ? { providerOptions } : {}),
             },
           });
         }
-      } else {
-        const okConfig = sendThread(get, threadId, (sessionId) => ({
-          type: "set_config",
-          sessionId,
-          config: {
-            backupsEnabled: ws.defaultBackupsEnabled,
-          },
-        }));
-        if (okConfig) {
-          appendThreadTranscript(threadId, "client", {
-            type: "set_config",
-            sessionId: rt.sessionId,
-            config: {
-              backupsEnabled: ws.defaultBackupsEnabled,
-            },
-          });
-        }
       }
-  
+
       const okMcp = sendThread(get, threadId, (sessionId) => ({
         type: "set_enable_mcp",
         sessionId,

@@ -99,6 +99,26 @@ bun run serve -- --json
 
 TUI requires a real terminal. For headless or cloud workflows, prefer `bun run serve` and connect over WebSocket.
 
+### 4. Build the standalone websocket binary
+
+Compile just the core harness (no TUI/desktop UI) into a Bun binary bundle:
+
+```bash
+bun run build:server-binary
+./release/cowork-server-<target-triple>/cowork-server
+```
+
+The generated bundle contains:
+
+- `cowork-server` / `cowork-server.exe`
+- `dist/config`
+- `dist/prompts`
+- `dist/docs`
+
+When launched from that extracted bundle, the binary automatically finds its sibling `dist/` directory and starts the same WebSocket server used by the desktop app. Human mode logs the listening URL; `--json` prints a single machine-readable `server_listening` event for embedders.
+
+Prebuilt standalone bundles are published under `server-v*` prereleases. They stay separate from the desktop app’s main GitHub release stream, but remain available from the repository’s full releases list.
+
 ## Official clients
 
 ### TUI

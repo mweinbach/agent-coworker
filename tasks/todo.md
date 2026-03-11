@@ -2896,3 +2896,24 @@
 - `~/.bun/bin/bun run typecheck` -> pass
 - `~/.bun/bin/bun test` -> pass (`1998 pass, 2 skip, 0 fail`)
 - `git diff --check` -> pass
+
+# Task: Ship standalone cowork-server Bun binaries
+
+## Plan
+- [x] Inspect the existing server sidecar build, runtime resource loading, and release workflows to identify the minimum path for a standalone binary release.
+- [x] Extract or add a standalone server binary build path that compiles the websocket harness and stages the runtime resources it needs outside the desktop app.
+- [x] Update the standalone server runtime/docs/tests so an extracted release bundle can launch cleanly and the GitHub automation stays separate from desktop releases.
+- [x] Run focused verification, including a compiled-binary smoke test, then record the results below.
+
+## Review
+- Added shared server-artifact helpers in `src/server/binaryArtifact.ts` and `scripts/lib/serverBuild.ts`, then reused them from both `scripts/build_desktop_resources.ts` and the new `scripts/build_server_binary.ts`. Desktop sidecar naming stays consistent, while `bun run build:server-binary` now emits a standalone `release/cowork-server-<target-triple>/` bundle with `cowork-server`, `dist/config`, `dist/prompts`, `dist/docs`, and `cowork-server-manifest.json`.
+- Updated `src/server/index.ts` so compiled binaries auto-discover a sibling or parent `dist/` directory and continue to support the existing `--json` startup contract. In human mode the binary now logs a clearer `[cowork-server] listening on ...` line for terminal use.
+- Added `.github/workflows/server-release.yml` for `server-v*` tags. It validates the repo, builds standalone macOS/Windows bundles, uploads zipped artifacts, and publishes them as `cowork-server` prereleases so they stay separate from the desktop app’s main release stream.
+- Documented the standalone binary path in `README.md` and added focused tests in `test/server.args.test.ts` and `test/server-release.workflow.test.ts`.
+
+### Verification
+- `bun test test/server.args.test.ts test/server-release.workflow.test.ts test/desktop-release.workflow.test.ts apps/desktop/test/sidecar.test.ts test/docs.check.test.ts --bail` -> pass (`18 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- `bun run build:desktop-resources` -> pass
+- `bun run build:server-binary` -> pass
+- Compiled binary smoke test -> pass; `release/cowork-server-x86_64-unknown-linux-gnu/cowork-server --dir /workspace --port 0 --json` emitted `server_listening`, and a separate websocket probe received `server_hello` from that URL.

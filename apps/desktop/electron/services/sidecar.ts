@@ -1,56 +1,39 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const SIDECAR_BASE_NAME = "cowork-server";
-export const SIDECAR_MANIFEST_NAME = "cowork-server-manifest.json";
+import {
+  buildServerBinaryManifest,
+  resolveServerBinaryFilename,
+  resolveServerTargetTriple,
+  SERVER_BINARY_BASE_NAME,
+  SERVER_BINARY_MANIFEST_NAME,
+  type ServerBinaryManifest,
+} from "../../../../src/server/binaryArtifact";
 
-export type SidecarManifest = {
-  filename: string;
-  targetTriple: string;
-  platform: NodeJS.Platform;
-  arch: string;
-};
+export const SIDECAR_BASE_NAME = SERVER_BINARY_BASE_NAME;
+export const SIDECAR_MANIFEST_NAME = SERVER_BINARY_MANIFEST_NAME;
+
+export type SidecarManifest = ServerBinaryManifest;
 
 export function resolveDesktopTargetTriple(
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch
 ): string {
-  if (platform === "win32") {
-    if (arch === "x64") return "x86_64-pc-windows-msvc";
-    if (arch === "arm64") return "aarch64-pc-windows-msvc";
-  }
-
-  if (platform === "darwin") {
-    if (arch === "x64") return "x86_64-apple-darwin";
-    if (arch === "arm64") return "aarch64-apple-darwin";
-  }
-
-  if (platform === "linux") {
-    if (arch === "x64") return "x86_64-unknown-linux-gnu";
-    if (arch === "arm64") return "aarch64-unknown-linux-gnu";
-  }
-
-  throw new Error(`Unsupported platform/arch for desktop sidecar: ${platform}/${arch}`);
+  return resolveServerTargetTriple(platform, arch);
 }
 
 export function resolvePackagedSidecarFilename(
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch
 ): string {
-  const ext = platform === "win32" ? ".exe" : "";
-  return `${SIDECAR_BASE_NAME}-${resolveDesktopTargetTriple(platform, arch)}${ext}`;
+  return resolveServerBinaryFilename({ platform, arch });
 }
 
 export function buildSidecarManifest(
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch
 ): SidecarManifest {
-  return {
-    filename: resolvePackagedSidecarFilename(platform, arch),
-    targetTriple: resolveDesktopTargetTriple(platform, arch),
-    platform,
-    arch,
-  };
+  return buildServerBinaryManifest({ platform, arch });
 }
 
 function isSidecarManifest(value: unknown): value is SidecarManifest {

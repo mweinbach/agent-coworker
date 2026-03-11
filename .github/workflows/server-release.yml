@@ -1,0 +1,144 @@
+name: Cowork Server Release
+
+on:
+  push:
+    tags:
+      - "server-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Docs consistency check
+        run: bun run docs:check
+
+      - name: Unit tests
+        run: bun test
+
+      - name: Typecheck
+        run: bun run typecheck
+
+  package:
+    name: Package (${{ matrix.label }})
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS
+            artifact_name: cowork-server-release-macos
+          - os: windows-latest
+            label: Windows
+            artifact_name: cowork-server-release-windows
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build standalone cowork-server bundle
+        run: bun run build:server-binary -- --outdir release/cowork-server
+
+      - name: Read release metadata
+        id: release-metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target_triple="$(bun -e 'const manifest = await Bun.file("release/cowork-server/cowork-server-manifest.json").json(); console.log(manifest.targetTriple)')"
+          if [ -z "$target_triple" ]; then
+            echo "Unable to determine target triple from release manifest." >&2
+            exit 1
+          fi
+
+          echo "target_triple=$target_triple" >> "$GITHUB_OUTPUT"
+          echo "archive_base=cowork-server-$target_triple" >> "$GITHUB_OUTPUT"
+
+      - name: Archive macOS bundle
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release
+          ditto -c -k --sequesterRsrc --keepParent "cowork-server" "${{ steps.release-metadata.outputs.archive_base }}.zip"
+
+      - name: Archive Windows bundle
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "release/cowork-server" -DestinationPath "release/${{ steps.release-metadata.outputs.archive_base }}.zip" -Force
+
+      - name: Upload standalone cowork-server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: release/${{ steps.release-metadata.outputs.archive_base }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: cowork-server-release-*
+
+      - name: Collect release asset list
+        id: collect-release-assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+
+          files=(release-assets/**/*.zip)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No standalone cowork-server release assets were downloaded." >&2
+            exit 1
+          fi
+
+          {
+            echo "files<<EOF"
+            printf '%s\n' "${files[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish standalone cowork-server release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: cowork-server ${{ github.ref_name }}
+          files: ${{ steps.collect-release-assets.outputs.files }}
+          prerelease: true
+          generate_release_notes: true

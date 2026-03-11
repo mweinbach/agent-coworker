@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -11,7 +12,7 @@ const globalSettings = globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS?:
 globalSettings.AI_SDK_LOG_WARNINGS = false;
 
 function printUsage() {
-  console.log("Usage: bun src/server/index.ts [--dir <directory_path>] [--port <port>] [--yolo] [--json]");
+  console.log("Usage: cowork-server [--dir <directory_path>] [--port <port>] [--yolo] [--json]");
 }
 
 async function resolveAndValidateDir(dirArg: string): Promise<string> {
@@ -21,7 +22,7 @@ async function resolveAndValidateDir(dirArg: string): Promise<string> {
   return resolved;
 }
 
-function parseArgs(argv: string[]): { dir?: string; port: number; yolo: boolean; json: boolean } {
+export function parseArgs(argv: string[]): { dir?: string; port: number; yolo: boolean; json: boolean } {
   let dir: string | undefined;
   let port = 7337;
   let yolo = false;
@@ -64,17 +65,48 @@ function parseArgs(argv: string[]): { dir?: string; port: number; yolo: boolean;
   return { dir, port, yolo, json };
 }
 
+export function resolveBundledBuiltInDir(options: {
+  execPath?: string;
+  existsSync?: (candidate: string) => boolean;
+} = {}): string | undefined {
+  const execPath = options.execPath ?? process.execPath;
+  const existsSync = options.existsSync ?? fsSync.existsSync;
+  const execDir = path.dirname(path.resolve(execPath));
+  const candidates = [
+    path.join(execDir, "dist"),
+    path.join(execDir, "..", "dist"),
+  ];
+
+  for (const candidate of candidates) {
+    const hasConfig = existsSync(path.join(candidate, "config", "defaults.json"));
+    const hasPrompts = existsSync(path.join(candidate, "prompts", "system.md"));
+    if (hasConfig && hasPrompts) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
 async function main() {
   const { dir, port, yolo, json } = parseArgs(process.argv.slice(2));
 
   const cwd = dir ? await resolveAndValidateDir(dir) : process.cwd();
   if (dir) process.chdir(cwd);
+  const bundledBuiltInDir =
+    typeof process.env.COWORK_BUILTIN_DIR === "string" && process.env.COWORK_BUILTIN_DIR.trim()
+      ? process.env.COWORK_BUILTIN_DIR
+      : resolveBundledBuiltInDir();
 
   const { server, config, url } = await startAgentServer({
     cwd,
     hostname: "127.0.0.1",
     port,
-    env: { ...process.env, AGENT_WORKING_DIR: cwd },
+    env: {
+      ...process.env,
+      AGENT_WORKING_DIR: cwd,
+      ...(bundledBuiltInDir ? { COWORK_BUILTIN_DIR: bundledBuiltInDir } : {}),
+    },
     providerOptions: DEFAULT_PROVIDER_OPTIONS,
     yolo,
   });
@@ -115,7 +147,7 @@ async function main() {
     return;
   }
 
-  console.log(`[server] ${url} (cwd=${config.workingDirectory})`);
+  console.log(`[cowork-server] listening on ${url} (cwd=${config.workingDirectory})`);
 }
 
 if (import.meta.main) {

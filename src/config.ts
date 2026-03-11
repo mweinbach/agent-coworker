@@ -139,9 +139,22 @@ function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
   return parsedRaw.data;
 }
 
-function resolveBuiltInDir(): string {
+function resolveBuiltInDir(env: Record<string, string | undefined> = process.env): string {
+  const candidates: string[] = [];
+  if (env.COWORK_BUILTIN_DIR) candidates.push(path.resolve(env.COWORK_BUILTIN_DIR));
+
   const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(here, "..");
+  candidates.push(path.resolve(here, ".."));
+
+  // Bun-compiled binaries execute from bunfs virtual paths. In that mode,
+  // colocated resources should be resolved relative to the binary on disk.
+  candidates.push(path.dirname(process.execPath));
+
+  for (const candidate of candidates) {
+    if (fsSync.existsSync(path.join(candidate, "prompts", "system.md"))) return candidate;
+  }
+
+  return candidates[0] ?? path.resolve(here, "..");
 }
 
 function parseLayer<T>(schema: z.ZodType<T>, raw: unknown, fallback: T): T {
@@ -216,8 +229,8 @@ export function getSavedProviderApiKey(config: AgentConfig, provider: ProviderNa
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<AgentConfig> {
   const cwd = options.cwd ?? process.cwd();
   const homedir = options.homedir ?? os.homedir();
-  const builtInDir = options.builtInDir ?? resolveBuiltInDir();
   const env = options.env ?? process.env;
+  const builtInDir = options.builtInDir ?? resolveBuiltInDir(env);
 
   const projectAgentDir = path.join(cwd, ".agent");
   const userAgentDir = path.join(homedir, ".agent");

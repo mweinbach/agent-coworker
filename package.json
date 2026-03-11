@@ -12,6 +12,7 @@
     "cli": "bun src/index.ts --cli",
     "dev": "bun --watch src/index.ts",
     "serve": "bun src/server/index.ts",
+    "build:server-binary": "bun scripts/build_cowork_server_binary.ts",
     "tui": "bun --preload @opentui/solid/preload src/tui/index.tsx",
     "desktop:dev": "cd apps/desktop && bun run dev",
     "desktop:build": "cd apps/desktop && bun run build",

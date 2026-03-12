@@ -400,4 +400,55 @@ describe("desktop providers page", () => {
     expect(html).toContain("OpenCode Zen");
     expect(html).toContain("Use OpenCode Go key");
   });
+
+  test("opencode sibling provider card hides saved-key reuse when the target already has a key", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerStatusByName: {
+        "opencode-go": {
+          provider: "opencode-go",
+          authorized: true,
+          verified: false,
+          mode: "api_key",
+          account: null,
+          message: "API key saved.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+          savedApiKeyMasks: {
+            api_key: "open...1234",
+          },
+        },
+        "opencode-zen": {
+          provider: "opencode-zen",
+          authorized: true,
+          verified: false,
+          mode: "api_key",
+          account: null,
+          message: "API key saved.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+          savedApiKeyMasks: {
+            api_key: "zen...5678",
+          },
+        },
+      } as any,
+      providerCatalog: [
+        { id: "opencode-go", name: "OpenCode Go" },
+        { id: "opencode-zen", name: "OpenCode Zen" },
+      ] as any,
+      providerAuthMethodsByProvider: {
+        "opencode-go": [{ id: "api_key", type: "api", label: "API key" }],
+        "opencode-zen": [{ id: "api_key", type: "api", label: "API key" }],
+      } as any,
+      providerLastAuthChallenge: null,
+      providerLastAuthResult: null,
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:opencode-zen",
+      }),
+    );
+
+    expect(html).toContain("OpenCode Zen");
+    expect(html).not.toContain("Use OpenCode Go key");
+  });
 });

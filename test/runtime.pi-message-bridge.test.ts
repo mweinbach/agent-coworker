@@ -230,6 +230,22 @@ describe("pi message bridge", () => {
     });
   });
 
+  test("keeps cached usage counters without synthesizing cost when pricing is absent", () => {
+    expect(
+      normalizePiUsage({
+        input: 80,
+        output: 20,
+        totalTokens: 130,
+        cacheRead: 30,
+      }),
+    ).toEqual({
+      promptTokens: 110,
+      completionTokens: 20,
+      totalTokens: 130,
+      cachedPromptTokens: 30,
+    });
+  });
+
   test("merges cached prompt tokens and estimated cost when present", () => {
     const usage1 = mergePiUsage(undefined, {
       input: 80,

@@ -1,3 +1,23 @@
+# Task: Fix desktop provider key reuse, workspace overflow persistence, and OpenCode pricing contract
+
+## Plan
+- [x] Hide the OpenCode sibling key-copy action when the target provider already has its own saved API key, and add focused UI coverage.
+- [x] Round-trip `defaultToolOutputOverflowChars` through Electron persistence/load/save and verify the desktop workspace-default setting remains persistent across restart-equivalent flows.
+- [x] Remove local pricing data/estimation for OpenCode Go while keeping OpenCode Zen pricing intact, update the affected runtime/pricing tests, and run the requested verification commands.
+
+## Review
+- `apps/desktop/src/ui/settings/pages/ProvidersPage.tsx` now suppresses the OpenCode sibling key-copy button when the target provider already has its own saved API key, and `apps/desktop/test/providers-page.test.ts` covers both the visible and hidden cases.
+- Audited the full desktop persistence path for the workspace overflow setting: renderer state building, Electron IPC schema validation, main-process `PersistenceService`, bootstrap rehydration, and workspace-default sync to the harness. The only missing round-trip was `apps/desktop/electron/services/persistence.ts`, which now preserves `defaultToolOutputOverflowChars`; `apps/desktop/test/persistence-state-sanitization.test.ts` locks in custom and `null` values across save/load.
+- OpenCode Go no longer exposes local pricing data. `src/session/pricing.ts` drops Go pricing entries and override support, `src/providers/opencodeShared.ts` now keeps shared model capabilities separate from Zen-only pricing metadata, and `src/runtime/piRuntime.ts`/`src/runtime/openaiResponsesProjector.ts` stop synthesizing estimated cost for Go sessions while preserving Zen pricing.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/providers-page.test.ts apps/desktop/test/persistence-state-sanitization.test.ts apps/desktop/test/workspace-settings-sync.test.ts test/session/pricing.test.ts test/runtime.pi-runtime.test.ts test/runtime.pi-message-bridge.test.ts --bail` -> pass (`83 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> fails in the existing remote MCP coverage only: `remote MCP (mcp.grep.app) > connects, discovers tools, and executes searchGitHub` returned `Streamable HTTP error ... 500: Internal Server Error`
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `git diff --check` -> pass
+
 # Task: Repo-wide test audit and coverage hardening
 
 ## Plan

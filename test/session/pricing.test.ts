@@ -31,18 +31,9 @@ describe("pricing", () => {
             expect(pricing!.inputPerMillion).toBe(0.15);
         });
 
-        it("resolves exact match for opencode-go models", () => {
-            const glm = resolveModelPricing("opencode-go", "glm-5");
-            expect(glm).not.toBeNull();
-            expect(glm!.inputPerMillion).toBe(1);
-            expect(glm!.outputPerMillion).toBe(3.2);
-            expect(glm!.cachedInputPerMillion).toBe(0.2);
-
-            const kimi = resolveModelPricing("opencode-go", "kimi-k2.5");
-            expect(kimi).not.toBeNull();
-            expect(kimi!.inputPerMillion).toBe(0.6);
-            expect(kimi!.outputPerMillion).toBe(3);
-            expect(kimi!.cachedInputPerMillion).toBe(0.1);
+        it("returns null for opencode-go models without local pricing", () => {
+            expect(resolveModelPricing("opencode-go", "glm-5")).toBeNull();
+            expect(resolveModelPricing("opencode-go", "kimi-k2.5")).toBeNull();
         });
 
         it("resolves exact match for opencode-zen models", () => {
@@ -234,7 +225,6 @@ describe("pricing", () => {
             expect(providers.has("anthropic")).toBe(true);
             expect(providers.has("openai")).toBe(true);
             expect(providers.has("google")).toBe(true);
-            expect(providers.has("opencode-go")).toBe(true);
             expect(providers.has("opencode-zen")).toBe(true);
             expect(providers.has("codex-cli")).toBe(true);
         });

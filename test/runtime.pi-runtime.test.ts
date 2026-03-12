@@ -165,13 +165,8 @@ describe("pi runtime regressions", () => {
       reasoning: true,
       contextWindow: 204800,
       maxTokens: 131072,
-      cost: {
-        input: 1,
-        output: 3.2,
-        cacheRead: 0.2,
-        cacheWrite: 0,
-      },
     });
+    expect(resolved.model.cost).toBeUndefined();
   });
 
   test("opencode-go runtime model resolution returns explicit Kimi K2.5 PI metadata", async () => {
@@ -193,14 +188,9 @@ describe("pi runtime regressions", () => {
       reasoning: true,
       contextWindow: 262144,
       maxTokens: 65536,
-      cost: {
-        input: 0.6,
-        output: 3,
-        cacheRead: 0.08,
-        cacheWrite: 0,
-      },
     });
     expect(resolved.model.input).toEqual(["text", "image"]);
+    expect(resolved.model.cost).toBeUndefined();
   });
 
   test("opencode-zen runtime model resolution returns explicit GLM-5 PI metadata and env-key fallback", async () => {

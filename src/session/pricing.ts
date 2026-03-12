@@ -59,17 +59,7 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     cachedInputPerMillion: 0.08,
   },
 
-  // ── OpenCode Go ──────────────────────────────────────────────────────
-  "opencode-go:glm-5": {
-    inputPerMillion: 1,
-    outputPerMillion: 3.2,
-    cachedInputPerMillion: 0.2,
-  },
-  "opencode-go:kimi-k2.5": {
-    inputPerMillion: 0.6,
-    outputPerMillion: 3,
-    cachedInputPerMillion: 0.1,
-  },
+  // OpenCode Go is intentionally excluded from local pricing estimates.
   "opencode-zen:glm-5": {
     inputPerMillion: 1,
     outputPerMillion: 3.2,
@@ -203,7 +193,6 @@ function isPricingOverrideKey(value: string): value is `${ProviderName}:${string
   return provider === "google"
     || provider === "openai"
     || provider === "anthropic"
-    || provider === "opencode-go"
     || provider === "opencode-zen"
     || provider === "codex-cli";
 }

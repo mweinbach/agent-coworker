@@ -270,7 +270,8 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const canCopySiblingApiKey =
       Boolean(siblingProvider)
       && typeof siblingSavedApiKeyMask === "string"
-      && siblingSavedApiKeyMask.trim().length > 0;
+      && siblingSavedApiKeyMask.trim().length > 0
+      && !hasSavedApiKey;
 
     return (
       <div key={stateKey} className="space-y-2 border-t border-border/70 pt-4 first:border-t-0 first:pt-0">

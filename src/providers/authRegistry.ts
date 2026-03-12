@@ -170,6 +170,15 @@ export async function copyProviderApiKey(opts: {
 
   const paths = opts.paths ?? getAiCoworkerPaths();
   const store = await readConnectionStore(paths);
+  const targetEntry = store.services[opts.provider];
+  const targetApiKey = targetEntry?.mode === "api_key" ? targetEntry.apiKey?.trim() ?? "" : "";
+  if (targetApiKey) {
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `${opts.provider} already has a saved API key.`,
+    };
+  }
   const sourceEntry = store.services[opts.sourceProvider];
   const apiKey = sourceEntry?.mode === "api_key" ? sourceEntry.apiKey?.trim() ?? "" : "";
   if (!apiKey) {

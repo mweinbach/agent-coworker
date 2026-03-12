@@ -290,6 +290,54 @@ describe("providers/authRegistry", () => {
     expect(connect).toHaveBeenCalledTimes(0);
   });
 
+  test("copyProviderApiKey refuses to overwrite an existing target api key", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-registry-copy-target-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const now = new Date().toISOString();
+    await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
+    await fs.writeFile(paths.connectionsFile, JSON.stringify({
+      version: 1,
+      updatedAt: now,
+      services: {
+        "opencode-go": {
+          service: "opencode-go",
+          mode: "api_key",
+          apiKey: "opencode-go-key-1234",
+          updatedAt: now,
+        },
+        "opencode-zen": {
+          service: "opencode-zen",
+          mode: "api_key",
+          apiKey: "opencode-zen-key-5678",
+          updatedAt: now,
+        },
+      },
+    }), "utf-8");
+
+    const connect = mock(async (opts: any) => ({
+      ok: true as const,
+      provider: opts.provider,
+      mode: "api_key" as const,
+      storageFile: paths.connectionsFile,
+      message: "saved",
+      maskedApiKey: "masked",
+    }));
+
+    const result = await copyProviderApiKey({
+      provider: "opencode-zen",
+      sourceProvider: "opencode-go",
+      methodId: "api_key",
+      paths,
+      connect,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe("opencode-zen already has a saved API key.");
+    }
+    expect(connect).toHaveBeenCalledTimes(0);
+  });
+
   test("logoutProviderAuth calls disconnect handler", async () => {
     const disconnect = mock(async (opts: any) => ({
       ok: true as const,

@@ -28,7 +28,6 @@ import type {
 } from "./desktopApi";
 import type { PersistedState } from "../app/types";
 import { workspaceProviderOptionsSchema } from "../app/openaiCompatibleProviderOptions";
-import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./wsProtocol";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const invalidPathSegmentPattern = /[/\\\0]/;
@@ -114,12 +113,13 @@ const persistedWorkspaceSchema = z.object({
   defaultModel: optionalNonEmptyStringSchema,
   defaultSubAgentModel: optionalNonEmptyStringSchema,
   defaultToolOutputOverflowChars: z.preprocess((value) => {
+    if (value === undefined) return undefined;
     if (value === null) return null;
     if (typeof value === "number" && Number.isFinite(value)) {
       return Math.max(0, Math.floor(value));
     }
-    return DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS;
-  }, z.number().int().nonnegative().nullable()),
+    return undefined;
+  }, z.number().int().nonnegative().nullable().optional()),
   providerOptions: workspaceProviderOptionsSchema.optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),

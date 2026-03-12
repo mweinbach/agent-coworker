@@ -24,6 +24,7 @@ import {
   refreshCodexAuthMaterialCoalesced,
 } from "../providers/codex-auth";
 import {
+  getOpenCodeModelPricing,
   getOpenCodeModelSpec,
   getOpenCodeProviderConfig,
   isOpenCodeModelSupportedByProvider,
@@ -171,6 +172,7 @@ function getOpenCodePiModel(provider: OpenCodeProviderName, modelId: string): Pi
   if (!isOpenCodeModelSupportedByProvider(provider, modelId)) return null;
   const modelSpec = getOpenCodeModelSpec(modelId);
   if (!modelSpec) return null;
+  const pricing = getOpenCodeModelPricing(provider, modelId);
 
   const providerConfig = getOpenCodeProviderConfig(provider);
   return {
@@ -181,12 +183,16 @@ function getOpenCodePiModel(provider: OpenCodeProviderName, modelId: string): Pi
     baseUrl: providerConfig.baseUrl,
     reasoning: modelSpec.reasoning,
     input: [...modelSpec.input],
-    cost: {
-      input: modelSpec.cost.input,
-      output: modelSpec.cost.output,
-      cacheRead: modelSpec.cost.cacheRead,
-      cacheWrite: modelSpec.cost.cacheWrite,
-    },
+    ...(pricing
+      ? {
+          cost: {
+            input: pricing.input,
+            output: pricing.output,
+            cacheRead: pricing.cacheRead,
+            cacheWrite: pricing.cacheWrite,
+          },
+        }
+      : {}),
     contextWindow: modelSpec.contextWindow,
     maxTokens: modelSpec.maxTokens,
   };

@@ -1,6 +1,9 @@
 # Lessons
 
+- When the user clarifies a provider contract, follow the repo’s intended behavior instead of extrapolating from public pricing/model docs; for OpenCode specifically, Go can intentionally have no local pricing data even if Zen does.
+- When adding a new desktop workspace setting, audit the full renderer-to-Electron persistence round trip in the same pass; updating store state and schemas without `PersistenceService.sanitizeWorkspaces()` will silently drop the field on save/load.
 - When moving `webFetch` page extraction to Exa contents, keep high-value extras like page links and image links in the returned payload; stripping them leaves the model without navigation context for follow-up fetches.
+- When the user corrects provider pricing/catalog scope, treat that repo contract as authoritative: do not add local pricing entries or “missing model” follow-ups for a provider family unless the product path in this repo is explicitly meant to surface them.
 - When a user explicitly wants a release pushed for CI/tag-driven packaging, stop local artifact builds after core validation and push the release/tag instead of spending time on local packaging smoke tests.
 - When fixing immutable snapshot or validation bugs in this repo, audit every parallel export/input surface in the same flow; partial fixes like cloning only `byModel` or loosening only the WebSocket parser can leave the same contract broken through `turns` or tool-schema validation.
 - When session budget state changes at a threshold boundary, do not rely on the next aggregate `session_usage` snapshot to surface it; emit a dedicated websocket event at the transition and keep the client/parser contract strict enough to reject malformed nested usage payloads.

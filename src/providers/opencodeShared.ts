@@ -22,12 +22,13 @@ export type OpenCodeModelSpec = {
   input: readonly ("text" | "image")[];
   contextWindow: number;
   maxTokens: number;
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-  };
+};
+
+export type OpenCodeModelPricing = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
 };
 
 type OpenCodeProviderConfig = {
@@ -58,12 +59,6 @@ export const OPENCODE_MODEL_SPECS: Record<OpenCodeModelId, OpenCodeModelSpec> = 
     name: "GLM-5",
     reasoning: true,
     input: ["text"],
-    cost: {
-      input: 1,
-      output: 3.2,
-      cacheRead: 0.2,
-      cacheWrite: 0,
-    },
     contextWindow: 204800,
     maxTokens: 131072,
   },
@@ -72,12 +67,6 @@ export const OPENCODE_MODEL_SPECS: Record<OpenCodeModelId, OpenCodeModelSpec> = 
     name: "Kimi K2.5",
     reasoning: true,
     input: ["text", "image"],
-    cost: {
-      input: 0.6,
-      output: 3,
-      cacheRead: 0.08,
-      cacheWrite: 0,
-    },
     contextWindow: 262144,
     maxTokens: 65536,
   },
@@ -86,59 +75,74 @@ export const OPENCODE_MODEL_SPECS: Record<OpenCodeModelId, OpenCodeModelSpec> = 
     name: "Nemotron 3 Super Free",
     ...DEFAULT_OPENCODE_TEXT_MODEL_LIMITS,
     contextWindow: 1_000_000,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
   },
   "mimo-v2-flash-free": {
     id: "mimo-v2-flash-free",
     name: "Mimo V2 Flash Free",
     ...DEFAULT_OPENCODE_TEXT_MODEL_LIMITS,
     contextWindow: 256000,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
   },
   "big-pickle": {
     id: "big-pickle",
     name: "Big Pickle",
     ...DEFAULT_OPENCODE_TEXT_MODEL_LIMITS,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
   },
   "minimax-m2.5-free": {
     id: "minimax-m2.5-free",
     name: "MiniMax M2.5 Free",
     ...DEFAULT_OPENCODE_TEXT_MODEL_LIMITS,
     contextWindow: 204800,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
   },
   "minimax-m2.5": {
     id: "minimax-m2.5",
     name: "MiniMax M2.5",
     ...DEFAULT_OPENCODE_TEXT_MODEL_LIMITS,
     contextWindow: 204800,
-    cost: {
-      input: 0.3,
-      output: 1.2,
-      cacheRead: 0.06,
-      cacheWrite: 0.375,
-    },
+  },
+};
+
+const OPENCODE_ZEN_MODEL_PRICING: Partial<Record<OpenCodeModelId, OpenCodeModelPricing>> = {
+  "glm-5": {
+    input: 1,
+    output: 3.2,
+    cacheRead: 0.2,
+    cacheWrite: 0,
+  },
+  "kimi-k2.5": {
+    input: 0.6,
+    output: 3,
+    cacheRead: 0.08,
+    cacheWrite: 0,
+  },
+  "nemotron-3-super-free": {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
+  "mimo-v2-flash-free": {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
+  "big-pickle": {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
+  "minimax-m2.5-free": {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
+  "minimax-m2.5": {
+    input: 0.3,
+    output: 1.2,
+    cacheRead: 0.06,
+    cacheWrite: 0.375,
   },
 };
 
@@ -192,6 +196,16 @@ export function isOpenCodeModelSupportedByProvider(
 
 export function getOpenCodeModelSpec(modelId: string): OpenCodeModelSpec | null {
   return OPENCODE_MODEL_SPECS[modelId as OpenCodeModelId] ?? null;
+}
+
+export function getOpenCodeModelPricing(
+  provider: OpenCodeProviderName,
+  modelId: string,
+): OpenCodeModelPricing | null {
+  if (provider !== "opencode-zen") {
+    return null;
+  }
+  return OPENCODE_ZEN_MODEL_PRICING[modelId as OpenCodeModelId] ?? null;
 }
 
 export function resolveOpenCodeApiKey(

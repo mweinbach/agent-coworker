@@ -142,6 +142,62 @@ describe("desktop persistence state validation", () => {
     expect(loaded.providerState?.statusByName?.["codex-cli"]?.account?.email).toBe("max@example.com");
   });
 
+  test("saveState preserves workspace tool output overflow defaults", async () => {
+    const persistence = new PersistenceService();
+    const customWorkspace = path.join(userDataDir, "workspace-overflow-custom");
+    const disabledWorkspace = path.join(userDataDir, "workspace-overflow-disabled");
+    const inheritedWorkspace = path.join(userDataDir, "workspace-overflow-inherited");
+    await fs.mkdir(customWorkspace, { recursive: true });
+    await fs.mkdir(disabledWorkspace, { recursive: true });
+    await fs.mkdir(inheritedWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_overflow_custom",
+          name: "Custom overflow workspace",
+          path: customWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultToolOutputOverflowChars: 12000,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "ws_overflow_disabled",
+          name: "Disabled overflow workspace",
+          path: disabledWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultToolOutputOverflowChars: null,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "ws_overflow_inherited",
+          name: "Inherited overflow workspace",
+          path: inheritedWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.workspaces.find((workspace) => workspace.id === "ws_overflow_custom")?.defaultToolOutputOverflowChars).toBe(12000);
+    expect(loaded.workspaces.find((workspace) => workspace.id === "ws_overflow_disabled")?.defaultToolOutputOverflowChars).toBeNull();
+    expect(loaded.workspaces.find((workspace) => workspace.id === "ws_overflow_inherited")?.defaultToolOutputOverflowChars).toBeUndefined();
+  });
+
   test("saveState drops recoverable expired codex status snapshots that would look disconnected on restart", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-provider-recoverable");

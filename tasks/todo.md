@@ -1,3 +1,25 @@
+# Task: Fix review findings for webFetch, webSearch, and scratchpad backups
+
+## Plan
+- [x] Restrict `.ModelScratchpad` exclusions to the workspace root in backup copy, size, and fingerprint paths, and add regression coverage for nested directories.
+- [x] Fix `webFetch` binary classification so octet-stream image attachments can be recognized from `Content-Disposition` filenames and downloaded names are normalized to the classified MIME.
+- [x] Remove Brave-backed `webSearch` behavior and update tests to the Exa-only contract.
+- [x] Run focused tests plus the required repo verification commands, then record results here.
+
+## Review
+- `src/server/sessionBackup/fileSystem.ts` and `src/server/sessionBackup/fingerprint.ts` now exclude only the workspace-root `.ModelScratchpad`, so nested directories with the same name are preserved in directory snapshots, counted in snapshot sizing, and included in workspace fingerprints.
+- `src/tools/webFetch.ts` now recognizes octet-stream image attachments from `Content-Disposition` filenames and normalizes saved download extensions to the MIME that classified the response, preventing misnamed binary files from being re-read as plain text later.
+- `src/tools/webSearch.ts` no longer advertises or uses Brave-backed search; the tool is now Exa-only across providers, and the affected `webSearch` contract tests were updated accordingly.
+- Added focused regressions in `test/session-backup.test.ts` for nested `.ModelScratchpad` fingerprinting, sizing, and restore behavior, plus `test/tools.test.ts` coverage for MIME-normalized document downloads and octet-stream image attachments named via `Content-Disposition`.
+- Verification:
+  - `~/.bun/bin/bun test test/tools.test.ts test/session-backup.test.ts --bail` -> pass (`178 pass, 0 fail`)
+  - `~/.bun/bin/bun test` -> pass (`2171 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `~/.bun/bin/bun run desktop:build` -> pass
+
 # Task: Fix desktop provider key reuse, workspace overflow persistence, and OpenCode pricing contract
 
 ## Plan

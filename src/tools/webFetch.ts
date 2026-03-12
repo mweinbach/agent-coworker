@@ -90,12 +90,12 @@ function normalizeSupportedImageMimeType(contentType: string | null): string | n
   return normalized === "image/jpg" ? "image/jpeg" : normalized;
 }
 
-function supportedImageMimeTypeFromUrl(url: string): string | null {
-  const pathname = safeUrlPathname(url)?.toLowerCase() ?? "";
-  if (pathname.endsWith(".png")) return "image/png";
-  if (pathname.endsWith(".jpg") || pathname.endsWith(".jpeg")) return "image/jpeg";
-  if (pathname.endsWith(".webp")) return "image/webp";
-  if (pathname.endsWith(".gif")) return "image/gif";
+function supportedImageMimeTypeFromFileName(fileName: string | null): string | null {
+  const extension = extensionFromName(fileName);
+  if (extension === ".png") return "image/png";
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".gif") return "image/gif";
   return null;
 }
 
@@ -180,6 +180,16 @@ function sanitizeDownloadFileName(fileName: string): string {
   return sanitized && sanitized !== "." && sanitized !== ".." ? sanitized : "download";
 }
 
+function normalizeDownloadFileNameExtension(fileName: string, mimeExtension: string | null): string {
+  if (!mimeExtension) return fileName;
+
+  const currentExtension = extensionFromName(fileName);
+  if (!currentExtension) return `${fileName}${mimeExtension}`;
+  if (currentExtension === mimeExtension) return fileName;
+
+  return `${path.basename(fileName, currentExtension)}${mimeExtension}`;
+}
+
 function chooseDownloadFileName(opts: {
   contentType: string | null;
   resolvedUrl: string;
@@ -190,9 +200,7 @@ function chooseDownloadFileName(opts: {
   const mimeExtension = fileExtensionFromMimeType(opts.contentType);
 
   let fileName = sanitizeDownloadFileName(contentDispositionName ?? urlBaseName ?? "download");
-  if (!extensionFromName(fileName) && mimeExtension) {
-    fileName += mimeExtension;
-  }
+  fileName = normalizeDownloadFileNameExtension(fileName, mimeExtension);
 
   return fileName;
 }
@@ -219,6 +227,8 @@ function classifyResponseContent(
   contentDisposition: string | null
 ): ClassifiedResponse {
   const normalized = normalizeMimeType(contentType);
+  const contentDispositionName = extractContentDispositionFilename(contentDisposition);
+  const urlBaseName = baseNameFromUrl(resolvedUrl);
   const supportedImageMimeType = normalizeSupportedImageMimeType(contentType);
   if (supportedImageMimeType) {
     return {
@@ -228,7 +238,8 @@ function classifyResponseContent(
     };
   }
 
-  const inferredImageMimeType = supportedImageMimeTypeFromUrl(resolvedUrl);
+  const inferredImageMimeType =
+    supportedImageMimeTypeFromFileName(contentDispositionName) ?? supportedImageMimeTypeFromFileName(urlBaseName);
   if ((!normalized || normalized === "application/octet-stream") && inferredImageMimeType) {
     return {
       kind: "download",
@@ -237,8 +248,6 @@ function classifyResponseContent(
     };
   }
 
-  const contentDispositionName = extractContentDispositionFilename(contentDisposition);
-  const urlBaseName = baseNameFromUrl(resolvedUrl);
   const downloadableByMime = documentExtensionFromMimeType(contentType);
   const downloadableByName =
     isDownloadableDocumentFilename(contentDispositionName) || isDownloadableDocumentFilename(urlBaseName);

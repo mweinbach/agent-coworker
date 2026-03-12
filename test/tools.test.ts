@@ -1130,7 +1130,7 @@ describe("webSearch tool", () => {
     expect(t.description).toContain("type/category");
   });
 
-  test("openai/codex-style search advertises BRAVE or EXA keys", async () => {
+  test("openai/codex-style search advertises Exa key requirements", async () => {
     const dir = await tmpDir();
     const t: any = createWebSearchTool(
       makeCtx(dir, {
@@ -1142,8 +1142,8 @@ describe("webSearch tool", () => {
       })
     );
 
-    expect(t.description).toContain("BRAVE_API_KEY");
     expect(t.description).toContain("EXA_API_KEY");
+    expect(t.description).not.toContain("BRAVE_API_KEY");
   });
 
   test("web search requires EXA_API_KEY", async () => {
@@ -1184,7 +1184,7 @@ describe("webSearch tool", () => {
     }
   });
 
-  test("uses Brave search when BRAVE_API_KEY is set", async () => {
+  test("ignores BRAVE_API_KEY without Exa credentials", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;
     const oldBrave = process.env.BRAVE_API_KEY;
@@ -1193,31 +1193,15 @@ describe("webSearch tool", () => {
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
-      return new Response(
-        JSON.stringify({
-          web: {
-            results: [
-              {
-                title: "RFC 2324",
-                url: "https://www.rfc-editor.org/rfc/rfc2324",
-                description: "Hyper Text Coffee Pot Control Protocol",
-              },
-            ],
-          },
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      throw new Error("should not call Brave");
     }) as any;
 
     try {
       const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
       const out: string = await t.execute({ q: "HTTP 418 RFC 2324", maxResults: 1 });
-      expect(out).toContain("RFC 2324");
-      expect(out).toContain("rfc2324");
-      expect((globalThis.fetch as any).mock.calls[0][0]).toContain("api.search.brave.com");
+      expect(out).toContain("webSearch disabled");
+      expect(out).toContain("EXA_API_KEY");
+      expect((globalThis.fetch as any).mock.calls).toHaveLength(0);
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;
@@ -1272,7 +1256,7 @@ describe("webSearch tool", () => {
     }
   });
 
-  test("uses Exa when category or type controls are provided even if Brave is configured", async () => {
+  test("uses Exa even when BRAVE_API_KEY is configured", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;
     const oldBrave = process.env.BRAVE_API_KEY;
@@ -1281,10 +1265,6 @@ describe("webSearch tool", () => {
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async (url: string, init?: RequestInit) => {
-      if (url.includes("api.search.brave.com")) {
-        throw new Error("should not call Brave when Exa controls are present");
-      }
-
       const body = JSON.parse(String(init?.body));
       expect(body.query).toBe("latest nvidia news");
       expect(body.numResults).toBe(5);
@@ -1721,6 +1701,33 @@ describe("webFetch tool", () => {
     }
   });
 
+  test("normalizes downloaded document filenames to the classified MIME type", async () => {
+    const dir = await tmpDir();
+    const pdfBytes = Buffer.from("%PDF-1.7\nmismatch\n");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response(pdfBytes, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": 'attachment; filename="report.txt"',
+        },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      const out: string = await t.execute({ url: "https://example.com/download", maxLength: 50000 });
+      const downloadedPath = path.join(dir, "Downloads", "report.pdf");
+
+      expect(out).toBe(`File downloaded ${downloadedPath}`);
+      expect(await fs.readFile(downloadedPath)).toEqual(pdfBytes);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("avoids overwriting an existing download by suffixing the filename", async () => {
     const dir = await tmpDir();
     let requestCount = 0;
@@ -1813,6 +1820,33 @@ describe("webFetch tool", () => {
 
       expect(out).toBe(`File downloaded ${downloadedPath}`);
       expect(await fs.readFile(downloadedPath)).toEqual(Buffer.from(jpegBase64, "base64"));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("downloads octet-stream image attachments using content-disposition filenames", async () => {
+    const dir = await tmpDir();
+    const jpegBytes = Buffer.from("attachment-jpeg");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response(jpegBytes, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Content-Disposition": 'attachment; filename="photo.jpg"',
+        },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      const out = await t.execute({ url: "https://example.com/download?id=1", maxLength: 50000 });
+      const downloadedPath = path.join(dir, "Downloads", "photo.jpg");
+
+      expect(out).toBe(`File downloaded ${downloadedPath}`);
+      expect(await fs.readFile(downloadedPath)).toEqual(jpegBytes);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -3016,7 +3050,7 @@ describe("createTools", () => {
 
     expect((tools.webSearch as any).type).toBeUndefined();
     expect(typeof (tools.webSearch as any).execute).toBe("function");
-    expect((tools.webSearch as any).description).toContain("BRAVE_API_KEY");
+    expect((tools.webSearch as any).description).toContain("EXA_API_KEY");
   });
 
   test("each tool is executable or provider-native", async () => {

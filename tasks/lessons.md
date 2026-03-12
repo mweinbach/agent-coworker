@@ -1,5 +1,6 @@
 # Lessons
 
+- When a user turns a review finding into an explicit product direction, implement the requested contract rather than the literal review recommendation; update the affected tests and tool descriptions to match that new source of truth.
 - When the user clarifies a provider contract, follow the repo’s intended behavior instead of extrapolating from public pricing/model docs; for OpenCode specifically, Go can intentionally have no local pricing data even if Zen does.
 - When adding a new desktop workspace setting, audit the full renderer-to-Electron persistence round trip in the same pass; updating store state and schemas without `PersistenceService.sanitizeWorkspaces()` will silently drop the field on save/load.
 - When moving `webFetch` page extraction to Exa contents, keep high-value extras like page links and image links in the returned payload; stripping them leaves the model without navigation context for follow-up fetches.

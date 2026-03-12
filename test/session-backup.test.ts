@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { SessionBackupManager } from "../src/server/sessionBackup";
+import { directoryByteSize } from "../src/server/sessionBackup/fileSystem";
 import { extractTarGz } from "../src/server/sessionBackup/tar";
 import { MODEL_SCRATCHPAD_DIRNAME } from "../src/shared/toolOutputOverflow";
 import { workspaceFingerprint } from "../src/server/sessionBackup/fingerprint";
@@ -160,6 +161,34 @@ describe("SessionBackupManager", () => {
     expect(after).toBe(before);
   });
 
+  test("workspace fingerprint tracks nested .ModelScratchpad changes", async () => {
+    const { workspace } = await makeTmpWorkspace();
+    const nestedScratchpadDir = path.join(workspace, "subdir", MODEL_SCRATCHPAD_DIRNAME);
+    await fs.mkdir(nestedScratchpadDir, { recursive: true });
+    await fs.writeFile(path.join(workspace, "tracked.txt"), "alpha\n", "utf-8");
+    await fs.writeFile(path.join(nestedScratchpadDir, "spill.txt"), "first\n", "utf-8");
+
+    const before = await workspaceFingerprint(workspace);
+
+    await fs.writeFile(path.join(nestedScratchpadDir, "spill.txt"), "second\n", "utf-8");
+
+    const after = await workspaceFingerprint(workspace);
+    expect(after).not.toBe(before);
+  });
+
+  test("directoryByteSize excludes only the root .ModelScratchpad", async () => {
+    const { workspace } = await makeTmpWorkspace();
+    await fs.writeFile(path.join(workspace, "tracked.txt"), "track\n", "utf-8");
+    await fs.mkdir(path.join(workspace, MODEL_SCRATCHPAD_DIRNAME), { recursive: true });
+    await fs.writeFile(path.join(workspace, MODEL_SCRATCHPAD_DIRNAME, "root.txt"), "ignore\n", "utf-8");
+
+    const nestedScratchpadDir = path.join(workspace, "subdir", MODEL_SCRATCHPAD_DIRNAME);
+    await fs.mkdir(nestedScratchpadDir, { recursive: true });
+    await fs.writeFile(path.join(nestedScratchpadDir, "nested.txt"), "count-me\n", "utf-8");
+
+    expect(await directoryByteSize(workspace)).toBe(Buffer.byteLength("track\ncount-me\n"));
+  });
+
   test("restoreOriginal preserves .ModelScratchpad contents and excludes them from directory snapshots", async () => {
     const { home, workspace } = await makeTmpWorkspace();
     await fs.writeFile(path.join(workspace, "tracked.txt"), "original\n", "utf-8");
@@ -189,6 +218,48 @@ describe("SessionBackupManager", () => {
 
       expect(await fs.readFile(path.join(workspace, "tracked.txt"), "utf-8")).toBe("original\n");
       expect(await fs.readFile(path.join(workspace, ".ModelScratchpad", "spill.txt"), "utf-8")).toBe("scratch-v2\n");
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env[pathKey];
+      } else {
+        process.env[pathKey] = previousPath;
+      }
+    }
+  });
+
+  test("directory snapshots preserve nested .ModelScratchpad directories", async () => {
+    const { home, workspace } = await makeTmpWorkspace();
+    const nestedScratchpadDir = path.join(workspace, "subdir", MODEL_SCRATCHPAD_DIRNAME);
+    const nestedScratchpadFile = path.join(nestedScratchpadDir, "spill.txt");
+    await fs.writeFile(path.join(workspace, "tracked.txt"), "original\n", "utf-8");
+    await fs.mkdir(nestedScratchpadDir, { recursive: true });
+    await fs.writeFile(nestedScratchpadFile, "nested-v1\n", "utf-8");
+
+    const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+    const previousPath = process.env[pathKey];
+    process.env[pathKey] = path.join(workspace, ".missing-bin");
+
+    try {
+      const manager = await SessionBackupManager.create({
+        sessionId: crypto.randomUUID(),
+        workingDirectory: workspace,
+        homedir: home,
+      });
+
+      const backupDir = manager.getPublicState().backupDirectory;
+      if (!backupDir) throw new Error("Expected backup directory");
+
+      expect(await fs.readFile(path.join(backupDir, "original", "subdir", MODEL_SCRATCHPAD_DIRNAME, "spill.txt"), "utf-8")).toBe(
+        "nested-v1\n"
+      );
+
+      await fs.writeFile(path.join(workspace, "tracked.txt"), "mutated\n", "utf-8");
+      await fs.writeFile(nestedScratchpadFile, "nested-v2\n", "utf-8");
+
+      await manager.restoreOriginal();
+
+      expect(await fs.readFile(path.join(workspace, "tracked.txt"), "utf-8")).toBe("original\n");
+      expect(await fs.readFile(nestedScratchpadFile, "utf-8")).toBe("nested-v1\n");
     } finally {
       if (previousPath === undefined) {
         delete process.env[pathKey];

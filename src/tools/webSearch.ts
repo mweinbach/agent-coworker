@@ -4,10 +4,6 @@ import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 import { EXA_MISSING_KEY_MESSAGE, postExaJson, resolveExaApiKey } from "./exa";
 
-interface CustomWebSearchToolOptions {
-  exaOnly?: boolean;
-}
-
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const stringSchema = z.string();
 const recordSchema = z.record(z.string(), z.unknown());
@@ -24,16 +20,6 @@ const exaSearchCategorySchema = z.enum([
   "people",
 ]);
 const exaSearchCategoryInputSchema = z.union([exaSearchCategorySchema, z.literal("news article")]);
-const braveResultSchema = z.object({
-  title: stringSchema.optional(),
-  url: stringSchema.optional(),
-  description: stringSchema.optional(),
-}).passthrough();
-const braveResponseSchema = z.object({
-  web: z.object({
-    results: z.array(braveResultSchema).optional(),
-  }).passthrough().optional(),
-}).passthrough();
 const exaResultSchema = z.object({
   title: stringSchema.optional(),
   url: stringSchema.optional(),
@@ -109,8 +95,7 @@ function normalizeExaCategory(value: z.infer<typeof exaSearchCategoryInputSchema
   return value === "news article" ? "news" : value;
 }
 
-function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToolOptions = {}) {
-  const exaOnly = options.exaOnly ?? false;
+function createCustomWebSearchTool(ctx: ToolContext) {
   const webSearchInputSchema = z.object({
     query: z.string().min(1).optional().describe("Search query"),
     q: z.string().min(1).optional(),
@@ -127,9 +112,8 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
   }).passthrough();
 
   return defineTool({
-    description: exaOnly
-      ? "Search the web for current information using Exa. Requires EXA_API_KEY. Supports optional Exa search type/category controls and returns titles, URLs, and snippets/highlights."
-      : "Search the web for current information. Supports BRAVE_API_KEY or EXA_API_KEY; Exa-backed searches support optional type/category controls and return titles, URLs, and snippets/highlights.",
+    description:
+      "Search the web for current information using Exa. Requires EXA_API_KEY. Supports optional Exa search type/category controls and returns titles, URLs, and snippets/highlights.",
     inputSchema: webSearchInputSchema,
     execute: async (input) => {
       const parsedInput = webSearchInputSchema.safeParse(input);
@@ -164,46 +148,8 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
       const maxResults = parsedInput.data.maxResults ?? 10;
       const exaType = parsedInput.data.type ?? "auto";
       const exaCategory = normalizeExaCategory(parsedInput.data.category);
-      const requiresExaSearch = parsedInput.data.type !== undefined || exaCategory !== undefined;
 
       ctx.log(`tool> webSearch ${JSON.stringify({ query: safeQuery, maxResults, exaType, exaCategory })}`);
-
-      if (!exaOnly && !requiresExaSearch && process.env.BRAVE_API_KEY?.trim()) {
-        const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(
-          safeQuery
-        )}&count=${maxResults}`;
-        try {
-          const res = await fetch(url, {
-            headers: {
-              Accept: "application/json",
-              "X-Subscription-Token": process.env.BRAVE_API_KEY.trim(),
-            },
-          });
-          if (!res.ok) {
-            const text = await res.text();
-            const msg = `Brave search failed: ${res.status} ${res.statusText}: ${text.slice(0, 500)}`;
-            ctx.log(`tool< webSearch ${JSON.stringify({ ok: false })}`);
-            return msg;
-          }
-
-          const data = await res.json();
-          const parsedData = braveResponseSchema.safeParse(data);
-          const braveResults = parsedData.success ? (parsedData.data.web?.results ?? []) : [];
-          const results = braveResults.map((r) => ({
-            title: r.title,
-            url: r.url,
-            description: r.description,
-          }));
-
-          const out = formatResults(results);
-          ctx.log(`tool< webSearch ${JSON.stringify({ provider: "brave" })}`);
-          return out;
-        } catch (error) {
-          const msg = `Brave search failed: ${error instanceof Error ? error.message : String(error)}`;
-          ctx.log(`tool< webSearch ${JSON.stringify({ ok: false })}`);
-          return msg;
-        }
-      }
 
       const exaApiKey = await resolveExaApiKey(ctx);
       if (exaApiKey) {
@@ -249,9 +195,7 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
         }
       }
 
-      const out = exaOnly
-        ? `webSearch disabled: ${EXA_MISSING_KEY_MESSAGE}`
-        : "webSearch disabled: set BRAVE_API_KEY or EXA_API_KEY";
+      const out = `webSearch disabled: ${EXA_MISSING_KEY_MESSAGE}`;
       ctx.log(`tool< webSearch ${JSON.stringify({ disabled: true })}`);
       return out;
     },
@@ -259,9 +203,5 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
 }
 
 export function createWebSearchTool(ctx: ToolContext) {
-  if (ctx.config.provider === "google") {
-    return createCustomWebSearchTool(ctx, { exaOnly: true });
-  }
-
   return createCustomWebSearchTool(ctx);
 }

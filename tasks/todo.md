@@ -1,3 +1,27 @@
+# Task: Fix latest Desktop Release CI failure from leaked AgentSocket mock
+
+## Plan
+- [x] Inspect the latest failing GitHub Actions run and identify the concrete failing tests plus their shared failure signature.
+- [x] Remove the cross-file `AgentSocket` module mock leak by switching the TUI socket lifecycle test to dependency injection instead of a top-level global `mock.module(...)`.
+- [x] Re-run the failing websocket/REPL test slice, then the required full test/build commands, and record the results here.
+
+## Review
+- Latest failing GitHub Actions run was `Desktop Release` run `23028363643` on tag `v0.1.20`. It did not fail in packaging; it failed in the `Validate` job during `bun test` with 7 websocket/REPL regressions: `test/repl.restart-failure.test.ts`, `test/repl.disconnect-send.test.ts`, and five cases in `test/agentSocket.runtime.test.ts`.
+- The shared CI signature was that no fake socket instance was created at all (`socketCount: 0`, `Received: undefined`), which matched cross-file module contamination rather than a broken websocket implementation. `test/tui.socketLifecycle.test.ts` had a top-level `mock.module("../src/client/agentSocket", ...)` that could leak into unrelated files under Bun's parallel runner.
+- `apps/TUI/context/socketLifecycle.ts` now accepts an optional `createSocket` factory for tests while preserving the production `new AgentSocket(...)` path.
+- `test/tui.socketLifecycle.test.ts` now injects `MockAgentSocket` directly and no longer installs a process-wide module mock for `../src/client/agentSocket`, removing the contamination path that could poison REPL/runtime websocket tests.
+- Verification:
+  - `gh run view 23028363643 --log` -> confirmed the latest failure was 7 websocket/REPL tests in the `Validate` job, not the packaging steps.
+  - `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test test/tui.socketLifecycle.test.ts test/repl.restart-failure.test.ts test/repl.disconnect-send.test.ts test/agentSocket.runtime.test.ts --rerun-each 20` -> pass (`220 pass, 0 fail`)
+  - `/tmp/codex-bun-1.3.10/bun-darwin-aarch64/bun test /Users/mweinbach/Projects/agent-coworker/test/tui.socketLifecycle.test.ts /Users/mweinbach/Projects/agent-coworker/test/repl.restart-failure.test.ts /Users/mweinbach/Projects/agent-coworker/test/repl.disconnect-send.test.ts /Users/mweinbach/Projects/agent-coworker/test/agentSocket.runtime.test.ts --rerun-each 20` -> pass under Bun `1.3.10` (`220 pass, 0 fail`)
+  - `bun run docs:check` -> pass
+  - `bun test` -> pass (`2187 pass, 2 skip, 0 fail`)
+  - `bun run typecheck` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `bun run build:server-binary` -> pass
+  - `bun run build:desktop-resources` -> pass
+  - `bun run desktop:build` -> pass
+
 # Task: Use effective overflow default when workspace override is unset
 
 ## Plan

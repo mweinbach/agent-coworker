@@ -6,6 +6,10 @@ type SocketLifecycleOptions = {
   onEvent: (evt: ServerEvent) => void;
   onOpen: () => void;
   onClose: () => void;
+  createSocket?: (options: ConstructorParameters<typeof AgentSocket>[0]) => Pick<
+    AgentSocket,
+    "connect" | "send" | "close"
+  >;
 };
 
 type DisconnectOptions = {
@@ -15,7 +19,7 @@ type DisconnectOptions = {
 export type SocketLifecycle = ReturnType<typeof createSocketLifecycle>;
 
 export function createSocketLifecycle(options: SocketLifecycleOptions) {
-  let socket: AgentSocket | null = null;
+  let socket: Pick<AgentSocket, "connect" | "send" | "close"> | null = null;
   let latestSessionId: string | null = null;
   let socketGeneration = 0;
 
@@ -33,7 +37,7 @@ export function createSocketLifecycle(options: SocketLifecycleOptions) {
 
   function connect(resumeSessionId?: string) {
     const generation = ++socketGeneration;
-    const sock = new AgentSocket({
+    const socketOptions: ConstructorParameters<typeof AgentSocket>[0] = {
       url: options.serverUrl,
       resumeSessionId: resumeSessionId?.trim() || latestSessionId || undefined,
       client: "tui",
@@ -51,7 +55,8 @@ export function createSocketLifecycle(options: SocketLifecycleOptions) {
         options.onOpen();
       },
       autoReconnect: true,
-    });
+    };
+    const sock = options.createSocket?.(socketOptions) ?? new AgentSocket(socketOptions);
 
     socket = sock;
     sock.connect();

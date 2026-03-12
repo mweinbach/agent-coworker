@@ -1,4 +1,6 @@
-import { describe, expect, mock, test, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+
+import { createSocketLifecycle } from "../apps/TUI/context/socketLifecycle";
 
 const mockSockets: Array<{ options: any; sent: unknown[]; closed?: boolean; connected?: boolean }> = [];
 
@@ -36,12 +38,6 @@ class MockAgentSocket {
   }
 }
 
-mock.module("../src/client/agentSocket", () => ({
-  AgentSocket: MockAgentSocket,
-}));
-
-const { createSocketLifecycle } = await import("../apps/TUI/context/socketLifecycle");
-
 beforeEach(() => {
   mockSockets.length = 0;
 });
@@ -53,6 +49,7 @@ describe("socketLifecycle", () => {
       onEvent: () => {},
       onOpen: () => {},
       onClose: () => {},
+      createSocket: (options) => new MockAgentSocket(options),
     });
 
     lifecycle.setLatestSessionId("saved-id");
@@ -71,6 +68,7 @@ describe("socketLifecycle", () => {
       onEvent: () => {},
       onOpen: () => {},
       onClose: () => {},
+      createSocket: (options) => new MockAgentSocket(options),
     });
 
     lifecycle.connect();
@@ -89,6 +87,7 @@ describe("socketLifecycle", () => {
       onEvent: () => {},
       onOpen: () => {},
       onClose: () => {},
+      createSocket: (options) => new MockAgentSocket(options),
     });
 
     lifecycle.setLatestSessionId("keep-me");
@@ -104,6 +103,7 @@ describe("socketLifecycle", () => {
       onEvent: (evt) => events.push(evt),
       onOpen: () => {},
       onClose: () => {},
+      createSocket: (options) => new MockAgentSocket(options),
     });
 
     lifecycle.connect();

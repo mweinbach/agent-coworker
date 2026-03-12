@@ -2,6 +2,7 @@ import { getAiCoworkerPaths, readConnectionStore, type AiCoworkerPaths } from ".
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { PROVIDER_MODEL_CATALOG } from "./catalog";
 import { readCodexAuthMaterial } from "./codex-auth";
+import { getOpenCodeDisplayName } from "./opencodeShared";
 
 export type ProviderCatalogEntry = {
   id: ProviderName;
@@ -20,6 +21,8 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   google: "Google",
   openai: "OpenAI",
   anthropic: "Anthropic",
+  "opencode-go": getOpenCodeDisplayName("opencode-go"),
+  "opencode-zen": getOpenCodeDisplayName("opencode-zen"),
   "codex-cli": "Codex CLI",
 };
 

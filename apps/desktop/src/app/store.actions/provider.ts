@@ -47,7 +47,7 @@ import {
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
-export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus"> {
+export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "copyProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus"> {
   return {
     connectProvider: async (provider, apiKey) => {
       const methods = providerAuthMethodsFor(get(), provider);
@@ -126,6 +126,48 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
       if (!ok) {
         set((s) => ({
           notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to send provider_auth_set_api_key." }),
+        }));
+      }
+    },
+
+    copyProviderApiKey: async (provider, sourceProvider) => {
+      const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+      if (!workspaceId) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "info",
+            title: "Workspace required",
+            detail: "Add or select a workspace first.",
+          }),
+        }));
+        return;
+      }
+
+      await ensureServerRunning(get, set, workspaceId);
+      ensureControlSocket(get, set, workspaceId);
+
+      set(() => ({
+        providerLastAuthChallenge: null,
+        providerLastAuthResult: null,
+      }));
+
+      const ok = sendControl(get, workspaceId, (sessionId) => ({
+        type: "provider_auth_copy_api_key",
+        sessionId,
+        provider,
+        sourceProvider,
+      }));
+      if (!ok) {
+        set((s) => ({
+          notifications: pushNotification(s.notifications, {
+            id: makeId(),
+            ts: nowIso(),
+            kind: "error",
+            title: "Not connected",
+            detail: "Unable to send provider_auth_copy_api_key.",
+          }),
         }));
       }
     },

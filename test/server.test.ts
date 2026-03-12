@@ -504,6 +504,8 @@ describe("WebSocket Lifecycle", () => {
       expect(typeof configEvt.config.yolo).toBe("boolean");
       expect(typeof configEvt.config.observabilityEnabled).toBe("boolean");
       expect(typeof configEvt.config.defaultBackupsEnabled).toBe("boolean");
+      expect(typeof configEvt.config.toolOutputOverflowChars).toBe("number");
+      expect("defaultToolOutputOverflowChars" in configEvt.config).toBe(false);
       expect(typeof configEvt.config.subAgentModel).toBe("string");
       expect(typeof configEvt.config.maxSteps).toBe("number");
     } finally {
@@ -1143,13 +1145,14 @@ describe("WebSocket Lifecycle", () => {
       const { hello, responses } = await sendAndCollect(
         url,
         (sessionId) => ({ type: "reset", sessionId }),
-        1,
+        2,
         2000
       );
-      // reset emits a "todos" event with empty array
       expect(hello.type).toBe("server_hello");
-      expect(responses[0].type).toBe("todos");
-      expect(responses[0].todos).toEqual([]);
+      const todosEvt = responses.find((msg) => msg.type === "todos");
+      const resetEvt = responses.find((msg) => msg.type === "reset_done");
+      expect(todosEvt?.todos).toEqual([]);
+      expect(resetEvt).toMatchObject({ type: "reset_done", sessionId: hello.sessionId });
     } finally {
       server.stop();
     }
@@ -2628,4 +2631,81 @@ describe("Protocol Doc Parity", () => {
       server.stop();
     }
   });
+
+  test("set_config persists toolOutputOverflowChars null and new sessions inherit it", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const event = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({
+          type: "set_config",
+          sessionId,
+          config: {
+            toolOutputOverflowChars: null,
+          },
+        }),
+        (message) => message.type === "session_config" && message.config?.toolOutputOverflowChars === null,
+      );
+
+      expect(event.config.toolOutputOverflowChars).toBeNull();
+      expect(event.config.defaultToolOutputOverflowChars).toBeNull();
+
+      const persistedConfig = JSON.parse(
+        await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),
+      ) as any;
+      expect(persistedConfig.toolOutputOverflowChars).toBeNull();
+
+      const nextMessages = await collectMessages(url, 4);
+      const nextConfigEvt = nextMessages.find((msg: any) => msg.type === "session_config");
+      expect(nextConfigEvt?.config.toolOutputOverflowChars).toBeNull();
+      expect(nextConfigEvt?.config.defaultToolOutputOverflowChars).toBeNull();
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("set_config can clear toolOutputOverflowChars and restore inherited defaults", async () => {
+    const tmpDir = await makeTmpProject();
+    const homeDir = path.join(tmpDir, "home");
+    await fs.mkdir(homeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, ".agent", "config.json"),
+      `${JSON.stringify({ toolOutputOverflowChars: 12000 }, null, 2)}\n`,
+      "utf-8",
+    );
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, { homedir: homeDir }));
+    try {
+      const event = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({
+          type: "set_config",
+          sessionId,
+          config: {
+            clearToolOutputOverflowChars: true,
+          },
+        }),
+        (message) =>
+          message.type === "session_config"
+          && message.config?.toolOutputOverflowChars === 25000
+          && message.config?.defaultToolOutputOverflowChars === undefined,
+        10_000,
+      );
+
+      expect(event.config.toolOutputOverflowChars).toBe(25000);
+      expect("defaultToolOutputOverflowChars" in event.config).toBe(false);
+
+      const persistedConfig = JSON.parse(
+        await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),
+      ) as any;
+      expect("toolOutputOverflowChars" in persistedConfig).toBe(false);
+
+      const nextMessages = await collectMessages(url, 4);
+      const nextConfigEvt = nextMessages.find((msg: any) => msg.type === "session_config");
+      expect(nextConfigEvt?.config.toolOutputOverflowChars).toBe(25000);
+      expect("defaultToolOutputOverflowChars" in (nextConfigEvt?.config ?? {})).toBe(false);
+    } finally {
+      server.stop();
+    }
+  }, 15_000);
 });

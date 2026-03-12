@@ -4,6 +4,7 @@ import {
   type ServerEvent as CoreServerEvent,
 } from "../../../../src/server/protocol";
 export { ASK_SKIP_TOKEN } from "../../../../src/shared/ask";
+export { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "../../../../src/shared/toolOutputOverflow";
 
 export { PROVIDER_NAMES } from "../../../../src/types";
 export type {

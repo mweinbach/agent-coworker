@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.11`
+- Current protocol version: `7.15`
 
 ## Table of Contents
 
@@ -27,7 +27,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 - [Client -> Server Messages](#client---server-messages)
   - Handshake: [client_hello](#client_hello)
   - Conversation: [user_message](#user_message) | [ask_response](#ask_response) | [approval_response](#approval_response) | [cancel](#cancel) | [reset](#reset)
-  - Model & Provider: [set_model](#set_model) | [refresh_provider_status](#refresh_provider_status) | [provider_catalog_get](#provider_catalog_get) | [provider_auth_methods_get](#provider_auth_methods_get) | [provider_auth_authorize](#provider_auth_authorize) | [provider_auth_logout](#provider_auth_logout) | [provider_auth_callback](#provider_auth_callback) | [provider_auth_set_api_key](#provider_auth_set_api_key)
+  - Model & Provider: [set_model](#set_model) | [refresh_provider_status](#refresh_provider_status) | [provider_catalog_get](#provider_catalog_get) | [provider_auth_methods_get](#provider_auth_methods_get) | [provider_auth_authorize](#provider_auth_authorize) | [provider_auth_logout](#provider_auth_logout) | [provider_auth_callback](#provider_auth_callback) | [provider_auth_set_api_key](#provider_auth_set_api_key) | [provider_auth_copy_api_key](#provider_auth_copy_api_key)
   - Tools & Commands: [list_tools](#list_tools) | [list_commands](#list_commands) | [execute_command](#execute_command)
   - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill)
   - MCP: [set_enable_mcp](#set_enable_mcp) | [mcp_servers_get](#mcp_servers_get) | [mcp_server_upsert](#mcp_server_upsert) | [mcp_server_delete](#mcp_server_delete) | [mcp_server_validate](#mcp_server_validate) | [mcp_server_auth_authorize](#mcp_server_auth_authorize) | [mcp_server_auth_callback](#mcp_server_auth_callback) | [mcp_server_auth_set_api_key](#mcp_server_auth_set_api_key) | [mcp_servers_migrate_legacy](#mcp_servers_migrate_legacy)
@@ -48,6 +48,26 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.15`:
+
+- `set_config.config` now accepts `clearToolOutputOverflowChars: true` to remove a persisted workspace overflow override and resume inheriting the built-in or user-level default.
+- `clearToolOutputOverflowChars` is mutually exclusive with `toolOutputOverflowChars`; use `null` to disable spill files explicitly and the clear flag to inherit again.
+
+Changes in `7.14`:
+
+- `session_config.config` now includes optional `defaultToolOutputOverflowChars`, the persisted workspace overflow default when one is explicitly configured.
+- Clients should use `defaultToolOutputOverflowChars` as the source of truth for future sessions; `toolOutputOverflowChars` remains the live effective spill threshold and may reflect the built-in default even when no workspace override exists.
+
+Changes in `7.13`:
+
+- `set_config.config` now accepts `toolOutputOverflowChars` as a workspace-scoped overflow spill threshold, and `null` disables spill files. This threshold controls when spilling starts; it does not change the fixed inline preview length.
+- `session_config.config` now reports the effective `toolOutputOverflowChars` value for the live session.
+
+Changes in `7.12`:
+
+- New client message: `provider_auth_copy_api_key`.
+- Added `opencode-zen` as a first-class provider alongside `opencode-go`.
 
 Changes in `7.11`:
 
@@ -157,7 +177,7 @@ When a WebSocket connection opens, the server sends these events in order:
 
 1. `server_hello` — session ID, config, protocol version, capabilities
 2. `session_settings` — current runtime settings (e.g. MCP toggle)
-3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `backupsEnabled`, `defaultBackupsEnabled`, `subAgentModel`, `maxSteps`, `providerOptions`)
+3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `backupsEnabled`, `defaultBackupsEnabled`, `toolOutputOverflowChars`, `defaultToolOutputOverflowChars`, `subAgentModel`, `maxSteps`, `providerOptions`)
 4. `session_info` — session metadata including title
 5. `observability_status` — Langfuse observability state
 6. `provider_catalog` — available providers and models (async)
@@ -193,7 +213,7 @@ Types referenced across multiple messages.
 ### ProviderName
 
 ```
-"google" | "openai" | "anthropic" | "codex-cli"
+"google" | "openai" | "anthropic" | "opencode-go" | "opencode-zen" | "codex-cli"
 ```
 
 ### PublicConfig
@@ -214,10 +234,10 @@ Returned in `server_hello` and `config_updated`:
 
 ```json
 {
-  "id": "openai",
-  "name": "OpenAI",
-  "models": ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex"],
-  "defaultModel": "gpt-5.4"
+  "id": "opencode-zen",
+  "name": "OpenCode Zen",
+  "models": ["glm-5", "kimi-k2.5", "nemotron-3-super-free", "mimo-v2-flash-free", "big-pickle", "minimax-m2.5-free", "minimax-m2.5"],
+  "defaultModel": "glm-5"
 }
 ```
 
@@ -958,6 +978,25 @@ Set a provider API key.
 | `provider` | `ProviderName` | Yes | Must be a valid provider |
 | `methodId` | `string` | Yes | Non-empty. Must be a registered auth method for the given provider |
 | `apiKey` | `string` | Yes | Non-empty API key value |
+
+**Response:** `provider_auth_result`, then `provider_status` and `provider_catalog` on success.
+
+---
+
+### provider_auth_copy_api_key
+
+Copy a saved API key from one provider entry to another without exposing the secret to the client. Currently this is only supported between `opencode-go` and `opencode-zen`.
+
+```json
+{ "type": "provider_auth_copy_api_key", "sessionId": "...", "provider": "opencode-zen", "sourceProvider": "opencode-go" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"provider_auth_copy_api_key"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `provider` | `ProviderName` | Yes | Target provider that will receive the copied saved API key |
+| `sourceProvider` | `ProviderName` | Yes | Source provider whose saved API key should be copied |
 
 **Response:** `provider_auth_result`, then `provider_status` and `provider_catalog` on success.
 
@@ -1718,6 +1757,7 @@ Update runtime configuration values.
   "config": {
     "yolo": true,
     "backupsEnabled": true,
+    "toolOutputOverflowChars": 25000,
     "maxSteps": 200,
     "providerOptions": {
       "openai": {
@@ -1739,6 +1779,8 @@ Update runtime configuration values.
 | `config.yolo` | `boolean` | No | Auto-approve all commands |
 | `config.observabilityEnabled` | `boolean` | No | Toggle observability |
 | `config.backupsEnabled` | `boolean` | No | Toggle session backups for the current session and persist the workspace default for future sessions |
+| `config.toolOutputOverflowChars` | `number \| null` | No | Workspace-scoped character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
+| `config.clearToolOutputOverflowChars` | `boolean` | No | When `true`, delete the persisted workspace overflow override and resume inheriting the built-in or user-level default. Cannot be combined with `config.toolOutputOverflowChars`. |
 | `config.subAgentModel` | `string` | No | Non-empty sub-agent model ID |
 | `config.maxSteps` | `number` | No | Max steps per turn (1-1000) |
 | `config.providerOptions` | `object` | No | Editable OpenAI-compatible provider option patch. Only `openai` and `codex-cli` are allowed |
@@ -1754,6 +1796,7 @@ Update runtime configuration values.
 Notes:
 - `providerOptions` is a deep-merged patch against the workspace config. Unrelated provider settings outside this editable subset are preserved.
 - Only `openai` and `codex-cli` are editable through this message. Other provider option trees remain internal.
+- `toolOutputOverflowChars: null` disables spill files explicitly. `clearToolOutputOverflowChars: true` removes the persisted override so future sessions inherit the default again.
 
 ---
 
@@ -1825,7 +1868,7 @@ Initial handshake event sent immediately on WebSocket connection.
 {
   "type": "server_hello",
   "sessionId": "abc-123-def",
-  "protocolVersion": "7.6",
+  "protocolVersion": "7.14",
   "capabilities": {
     "modelStreamChunk": "v1"
   },
@@ -1850,7 +1893,7 @@ Initial handshake event sent immediately on WebSocket connection.
 |-------|------|-------------|
 | `type` | `"server_hello"` | — |
 | `sessionId` | `string` | The session identifier. Use this for all subsequent messages |
-| `protocolVersion` | `string?` | Protocol version (currently `"7.6"`) |
+| `protocolVersion` | `string?` | Protocol version (currently `"7.14"`) |
 | `capabilities` | `object?` | Optional capabilities object. Currently: `{ modelStreamChunk: "v1" }` |
 | `config` | `PublicConfig` | Session config: `provider`, `model`, `workingDirectory`, and optionally `outputDirectory` |
 | `sessionKind` | `"root" \| "subagent"` | Session identity. Present for both root and child sessions |
@@ -2063,10 +2106,12 @@ Provider catalog metadata. Sent on connection and after model changes.
   "type": "provider_catalog",
   "sessionId": "...",
   "all": [
-    { "id": "openai", "name": "OpenAI", "models": ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex"], "defaultModel": "gpt-5.4" }
+    { "id": "openai", "name": "OpenAI", "models": ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex"], "defaultModel": "gpt-5.4" },
+    { "id": "opencode-go", "name": "OpenCode Go", "models": ["glm-5", "kimi-k2.5"], "defaultModel": "glm-5" },
+    { "id": "opencode-zen", "name": "OpenCode Zen", "models": ["glm-5", "kimi-k2.5", "nemotron-3-super-free", "mimo-v2-flash-free", "big-pickle", "minimax-m2.5-free", "minimax-m2.5"], "defaultModel": "glm-5" }
   ],
-  "default": { "openai": "gpt-5.4", "google": "gemini-2.5-pro" },
-  "connected": ["openai"]
+  "default": { "openai": "gpt-5.4", "opencode-go": "glm-5", "opencode-zen": "glm-5", "google": "gemini-3.1-pro-preview-customtools" },
+  "connected": ["openai", "opencode-go", "opencode-zen"]
 }
 ```
 
@@ -2089,10 +2134,12 @@ Auth method registry for all providers.
   "type": "provider_auth_methods",
   "sessionId": "...",
   "methods": {
-    "openai": [{ "id": "api_key", "type": "api", "label": "API Key" }],
+    "openai": [{ "id": "api_key", "type": "api", "label": "API key" }],
+    "opencode-go": [{ "id": "api_key", "type": "api", "label": "API key" }],
+    "opencode-zen": [{ "id": "api_key", "type": "api", "label": "API key" }],
     "codex-cli": [
-      { "id": "oauth_cli", "type": "oauth", "label": "OAuth (CLI)", "oauthMode": "auto" },
-      { "id": "api_key", "type": "api", "label": "API Key" }
+      { "id": "oauth_cli", "type": "oauth", "label": "Sign in with ChatGPT (browser)", "oauthMode": "auto" },
+      { "id": "api_key", "type": "api", "label": "API key" }
     ]
   }
 }
@@ -2137,7 +2184,7 @@ Auth challenge payload returned after `provider_auth_authorize`.
 
 ### provider_auth_result
 
-Auth completion result after `provider_auth_callback`, `provider_auth_set_api_key`, or `provider_auth_logout`.
+Auth completion result after `provider_auth_callback`, `provider_auth_set_api_key`, `provider_auth_copy_api_key`, or `provider_auth_logout`.
 
 ```json
 {
@@ -2268,6 +2315,11 @@ Incremental model stream chunk. Emitted during a turn for each streaming part fr
 | `partType` | `ModelStreamPartType` | Part type (see [ModelStreamPartType](#modelstreamparttype)) |
 | `part` | `object` | Normalized part payload. Shape varies by `partType`. If a non-object part is received, it is normalized to `{ "value": <original> }` |
 | `rawPart` | `unknown?` | Optional raw provider/runtime part (present when `includeRawChunks` is enabled). Default mode is sanitized; set `COWORK_MODEL_STREAM_RAW_MODE=full` to increase payload detail |
+
+Notes:
+- When an oversized non-image tool result is spilled to `.ModelScratchpad`, the `tool_result` chunk carries compact overflow metadata (`overflow`, `filePath`, `chars`, `preview`) instead of the full text payload.
+- `preview` is a fixed inline preview of the first 5,000 characters plus a truncation note when additional content was written to disk.
+- The runtime emits a companion `file` chunk with `{ "kind": "tool-output-overflow", "toolName": "...", "toolCallId": "...", "path": "...", "chars": 12345, "preview": "..." }`.
 
 ---
 
@@ -3062,6 +3114,8 @@ Current runtime config. Sent on connection and after `set_config`.
     "observabilityEnabled": true,
     "backupsEnabled": true,
     "defaultBackupsEnabled": true,
+    "toolOutputOverflowChars": 25000,
+    "defaultToolOutputOverflowChars": 25000,
     "subAgentModel": "gpt-5.4",
     "maxSteps": 100,
     "providerOptions": {
@@ -3088,6 +3142,8 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.observabilityEnabled` | `boolean` | Whether observability is enabled |
 | `config.backupsEnabled` | `boolean` | Whether backups are enabled for the live session after applying any session-scoped override |
 | `config.defaultBackupsEnabled` | `boolean` | The persisted workspace backup default from the harness/core config, before any live session override is applied |
+| `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
+| `config.defaultToolOutputOverflowChars` | `number \| null` | Persisted workspace overflow default when explicitly configured; omitted when the session is inheriting the built-in or user-level default |
 | `config.subAgentModel` | `string` | Sub-agent model identifier |
 | `config.maxSteps` | `number` | Maximum steps per turn |
 | `config.providerOptions` | `object?` | Editable OpenAI-compatible provider options when configured |

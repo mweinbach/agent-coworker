@@ -1,6 +1,12 @@
 import { getAiCoworkerPaths } from "../connect";
 import type { AgentConfig } from "../types";
 import {
+  getOpenCodeProviderConfig,
+  isOpenCodeModelSupportedByProvider,
+  resolveOpenCodeApiKey,
+  type OpenCodeProviderName,
+} from "./opencodeShared";
+import {
   isTokenExpiring,
   readCodexAuthMaterial,
   refreshCodexAuthMaterialCoalesced,
@@ -77,6 +83,33 @@ export function createAnthropicModelAdapter(modelId: string, savedKey?: string):
     }
     return headers;
   });
+}
+
+function createOpenCodeModelAdapter(
+  provider: OpenCodeProviderName,
+  modelId: string,
+  savedKey?: string,
+): ProviderModelAdapter {
+  if (!isOpenCodeModelSupportedByProvider(provider, modelId)) {
+    throw new Error(`${provider} does not support model ${modelId}.`);
+  }
+  const providerConfig = getOpenCodeProviderConfig(provider);
+  return createModelAdapter(modelId, providerConfig.adapterProvider, async () => {
+    const key = resolveOpenCodeApiKey(provider, { savedKey });
+    const headers: HeaderMap = {};
+    if (key) {
+      headers.authorization = `Bearer ${key}`;
+    }
+    return headers;
+  });
+}
+
+export function createOpenCodeGoModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
+  return createOpenCodeModelAdapter("opencode-go", modelId, savedKey);
+}
+
+export function createOpenCodeZenModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
+  return createOpenCodeModelAdapter("opencode-zen", modelId, savedKey);
 }
 
 async function resolveCodexAuthHeaders(config: AgentConfig): Promise<HeaderMap> {

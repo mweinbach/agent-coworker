@@ -131,6 +131,41 @@ describe("loadConfig", () => {
     expect(cfg.knowledgeCutoff).toBe("End of May 2025");
     expect(cfg.userName).toBe("");
     expect(cfg.observabilityEnabled).toBe(true);
+    expect(cfg.toolOutputOverflowChars).toBe(25000);
+  });
+
+  test("project config can override toolOutputOverflowChars", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      toolOutputOverflowChars: 4096,
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.toolOutputOverflowChars).toBe(4096);
+  });
+
+  test("project config can disable toolOutputOverflowChars with null", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      toolOutputOverflowChars: null,
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.toolOutputOverflowChars).toBeNull();
   });
 
   test("user config from homedir/.agent/config.json overrides defaults", async () => {

@@ -151,6 +151,7 @@ describe("workspace settings sync", () => {
           defaultProvider: "openai",
           defaultModel: "gpt-5.2",
           defaultSubAgentModel: "gpt-5.2",
+          defaultToolOutputOverflowChars: 25000,
           defaultEnableMcp: true,
           defaultBackupsEnabled: true,
           yolo: false,
@@ -213,6 +214,62 @@ describe("workspace settings sync", () => {
     const loaded = useAppStore.getState().workspaces[0];
     expect(loaded?.defaultModel).toBe("gpt-5.2");
     expect(loaded?.defaultSubAgentModel).toBe("gpt-5.2");
+  });
+
+  test("init preserves persisted workspace overflow defaults during rehydration", async () => {
+    mockedLoadedState = {
+      version: 2,
+      workspaces: [
+        {
+          id: "ws-null",
+          name: "Null overflow",
+          path: "/tmp/workspace-null",
+          createdAt: "2026-02-19T00:00:00.000Z",
+          lastOpenedAt: "2026-02-19T00:00:00.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.2",
+          defaultToolOutputOverflowChars: null,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "ws-default",
+          name: "Default overflow",
+          path: "/tmp/workspace-default",
+          createdAt: "2026-02-19T00:00:00.000Z",
+          lastOpenedAt: "2026-02-19T00:00:01.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.2",
+          defaultToolOutputOverflowChars: 25000,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "ws-missing",
+          name: "Missing overflow",
+          path: "/tmp/workspace-missing",
+          createdAt: "2026-02-19T00:00:00.000Z",
+          lastOpenedAt: "2026-02-19T00:00:02.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.2",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+    };
+
+    await useAppStore.getState().init();
+
+    const workspaces = useAppStore.getState().workspaces;
+    expect(workspaces.find((workspace) => workspace.id === "ws-null")?.defaultToolOutputOverflowChars).toBeNull();
+    expect(workspaces.find((workspace) => workspace.id === "ws-default")?.defaultToolOutputOverflowChars).toBe(25000);
+    expect(workspaces.find((workspace) => workspace.id === "ws-missing")?.defaultToolOutputOverflowChars).toBeUndefined();
   });
 
   test("init hydrates persisted provider status snapshots before the first refresh completes", async () => {
@@ -365,7 +422,7 @@ describe("workspace settings sync", () => {
     expect(threadSocket.opts.resumeSessionId).toBe("thread-session-new");
   });
 
-  test("control session_config hydrates the workspace backup default from the harness", async () => {
+  test("control session_config hydrates the workspace defaults from the harness", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
@@ -378,6 +435,8 @@ describe("workspace settings sync", () => {
         observabilityEnabled: true,
         backupsEnabled: false,
         defaultBackupsEnabled: false,
+        toolOutputOverflowChars: 12000,
+        defaultToolOutputOverflowChars: 12000,
         subAgentModel: "gpt-5-mini",
         maxSteps: 75,
       },
@@ -387,9 +446,11 @@ describe("workspace settings sync", () => {
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(workspace?.defaultSubAgentModel).toBe("gpt-5-mini");
     expect(workspace?.defaultBackupsEnabled).toBe(false);
+    expect(workspace?.defaultToolOutputOverflowChars).toBe(12000);
     expect(runtime?.controlSessionConfig?.subAgentModel).toBe("gpt-5-mini");
     expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultBackupsEnabled).toBe(false);
+    expect(runtime?.controlSessionConfig?.toolOutputOverflowChars).toBe(12000);
   });
 
   test("control session_config keeps session backup overrides separate from the workspace default", async () => {
@@ -405,6 +466,7 @@ describe("workspace settings sync", () => {
         observabilityEnabled: true,
         backupsEnabled: false,
         defaultBackupsEnabled: true,
+        toolOutputOverflowChars: 25000,
         subAgentModel: "gpt-5-mini",
         maxSteps: 75,
       },
@@ -413,8 +475,10 @@ describe("workspace settings sync", () => {
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(workspace?.defaultBackupsEnabled).toBe(true);
+    expect(workspace?.defaultToolOutputOverflowChars).toBeUndefined();
     expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultBackupsEnabled).toBe(true);
+    expect(runtime?.controlSessionConfig?.toolOutputOverflowChars).toBe(25000);
   });
 
   test("control session_config replaces editable providerOptions in workspace defaults", async () => {
@@ -451,6 +515,7 @@ describe("workspace settings sync", () => {
         observabilityEnabled: true,
         backupsEnabled: true,
         defaultBackupsEnabled: true,
+        toolOutputOverflowChars: 25000,
         subAgentModel: "gpt-5.4-mini",
         providerOptions: {
           openai: {
@@ -520,6 +585,7 @@ describe("workspace settings sync", () => {
         observabilityEnabled: true,
         backupsEnabled: true,
         defaultBackupsEnabled: true,
+        toolOutputOverflowChars: 25000,
         subAgentModel: "gpt-5.4-mini",
         maxSteps: 75,
       },
@@ -567,10 +633,13 @@ describe("workspace settings sync", () => {
 
     const sentTypes = threadSocket.sent.map((message) => message?.type);
     expect(sentTypes).toEqual(["set_config", "set_model", "set_config", "set_enable_mcp"]);
-    // First set_config is the immediate backupsEnabled-only message
+    // First set_config carries immediate safe runtime defaults.
     expect(threadSocket.sent[0]).toMatchObject({
       type: "set_config",
-      config: { backupsEnabled: true },
+      config: {
+        backupsEnabled: true,
+        toolOutputOverflowChars: 25000,
+      },
     });
     // Second set_config carries the rest of the config patch
     expect(threadSocket.sent[2]).toMatchObject({
@@ -606,7 +675,7 @@ describe("workspace settings sync", () => {
     ).toBe(false);
   });
 
-  test("thread connect uses the harness backup default once the control session is hydrated", async () => {
+  test("thread connect only replays explicit harness overflow defaults after control-session hydration", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
@@ -618,6 +687,7 @@ describe("workspace settings sync", () => {
         observabilityEnabled: true,
         backupsEnabled: false,
         defaultBackupsEnabled: false,
+        toolOutputOverflowChars: 25000,
         subAgentModel: "gpt-5.2",
         maxSteps: 75,
       },
@@ -629,8 +699,127 @@ describe("workspace settings sync", () => {
 
     expect(threadSocket.sent[0]).toMatchObject({
       type: "set_config",
-      config: { backupsEnabled: false },
+      config: {
+        backupsEnabled: false,
+      },
     });
+    expect(threadSocket.sent[0]?.config?.toolOutputOverflowChars).toBeUndefined();
+  });
+
+  test("thread connect replays the explicit harness overflow default when one is configured", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.emit({
+      type: "session_config",
+      sessionId: "control-session",
+      config: {
+        yolo: false,
+        observabilityEnabled: true,
+        backupsEnabled: false,
+        defaultBackupsEnabled: false,
+        toolOutputOverflowChars: 12000,
+        defaultToolOutputOverflowChars: 12000,
+        subAgentModel: "gpt-5.2",
+        maxSteps: 75,
+      },
+    });
+
+    const threadSocket = socketByClient("desktop");
+    threadSocket.sent = [];
+    emitServerHello(threadSocket, "thread-session");
+
+    expect(threadSocket.sent[0]).toMatchObject({
+      type: "set_config",
+      config: {
+        backupsEnabled: false,
+        toolOutputOverflowChars: 12000,
+      },
+    });
+  });
+
+  test("updateWorkspaceDefaults clears the persisted overflow override and tells live threads to inherit again", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultToolOutputOverflowChars: 12000,
+            }
+          : workspace,
+      ),
+    }));
+
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.emit({
+      type: "session_config",
+      sessionId: "control-session",
+      config: {
+        yolo: false,
+        observabilityEnabled: true,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        toolOutputOverflowChars: 12000,
+        defaultToolOutputOverflowChars: 12000,
+        subAgentModel: "gpt-5.2",
+        maxSteps: 75,
+      },
+    });
+
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+    threadSocket.emit({
+      type: "session_config",
+      sessionId: "thread-session",
+      config: {
+        yolo: false,
+        observabilityEnabled: true,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        toolOutputOverflowChars: 12000,
+        defaultToolOutputOverflowChars: 12000,
+        subAgentModel: "gpt-5.2",
+        maxSteps: 75,
+      },
+    });
+
+    controlSocket.sent = [];
+    threadSocket.sent = [];
+
+    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      clearDefaultToolOutputOverflowChars: true,
+    });
+
+    const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
+    expect(workspace?.defaultToolOutputOverflowChars).toBeUndefined();
+
+    expect(controlSocket.sent.find((message) => message?.type === "set_config")).toMatchObject({
+      type: "set_config",
+      config: {
+        backupsEnabled: true,
+        subAgentModel: "gpt-5.2",
+        clearToolOutputOverflowChars: true,
+      },
+    });
+    expect(controlSocket.sent.find((message) => message?.type === "set_config")?.config?.toolOutputOverflowChars).toBeUndefined();
+
+    expect(threadSocket.sent.map((message) => message?.type)).toEqual([
+      "set_config",
+      "set_model",
+      "set_config",
+      "set_enable_mcp",
+    ]);
+    expect(threadSocket.sent[0]).toMatchObject({
+      type: "set_config",
+      config: {
+        backupsEnabled: true,
+        clearToolOutputOverflowChars: true,
+      },
+    });
+    expect(threadSocket.sent[0]?.config?.toolOutputOverflowChars).toBeUndefined();
   });
 
   test("updateWorkspaceDefaults applies to all live threads and retries queued busy thread", async () => {
@@ -674,6 +863,7 @@ describe("workspace settings sync", () => {
       defaultProvider: "openai",
       defaultModel: "gpt-5.2",
       defaultSubAgentModel: "gpt-5.2-mini",
+      defaultToolOutputOverflowChars: 12000,
       defaultEnableMcp: false,
       defaultBackupsEnabled: false,
       providerOptions: {
@@ -697,6 +887,7 @@ describe("workspace settings sync", () => {
       config: {
         backupsEnabled: false,
         subAgentModel: "gpt-5.2-mini",
+        toolOutputOverflowChars: 12000,
         providerOptions: {
           openai: {
             reasoningEffort: "high",
@@ -717,10 +908,13 @@ describe("workspace settings sync", () => {
       "set_config",
       "set_enable_mcp",
     ]);
-    // First set_config is the immediate backupsEnabled-only message
+    // First set_config carries immediate safe runtime defaults.
     expect(idleThreadSocket.sent[0]).toMatchObject({
       type: "set_config",
-      config: { backupsEnabled: false },
+      config: {
+        backupsEnabled: false,
+        toolOutputOverflowChars: 12000,
+      },
     });
     // Second set_config carries the rest of the config patch
     expect(idleThreadSocket.sent[2]).toMatchObject({
@@ -740,13 +934,16 @@ describe("workspace settings sync", () => {
         },
       },
     });
-    // Busy thread still gets the immediate backupsEnabled config
+    // Busy thread still gets the immediate safe runtime config
     expect(busyThreadSocket.sent.map((message) => message?.type)).toEqual([
       "set_config",
     ]);
     expect(busyThreadSocket.sent[0]).toMatchObject({
       type: "set_config",
-      config: { backupsEnabled: false },
+      config: {
+        backupsEnabled: false,
+        toolOutputOverflowChars: 12000,
+      },
     });
 
     busyThreadSocket.sent = [];

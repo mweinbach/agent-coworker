@@ -92,6 +92,13 @@ function asNonNegativeInteger(value: unknown, fallback = 0): number {
   return Math.max(0, Math.floor(value));
 }
 
+function asOptionalNullableNonNegativeInteger(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.max(0, Math.floor(value));
+}
+
 function asThreadStatus(value: unknown): ThreadRecord["status"] {
   return value === "active" || value === "disconnected" ? value : "disconnected";
 }
@@ -163,6 +170,7 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       defaultProvider: asOptionalString(item.defaultProvider) as WorkspaceRecord["defaultProvider"],
       defaultModel: asOptionalString(item.defaultModel),
       defaultSubAgentModel: asOptionalString(item.defaultSubAgentModel),
+      defaultToolOutputOverflowChars: asOptionalNullableNonNegativeInteger(item.defaultToolOutputOverflowChars),
       providerOptions: normalizeWorkspaceProviderOptions(item.providerOptions),
       defaultEnableMcp: typeof item.defaultEnableMcp === "boolean" ? item.defaultEnableMcp : true,
       defaultBackupsEnabled: typeof item.defaultBackupsEnabled === "boolean" ? item.defaultBackupsEnabled : true,

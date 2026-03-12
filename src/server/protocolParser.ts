@@ -28,6 +28,8 @@ const setConfigFieldErrorMessages: Record<string, string> = {
   backupsEnabled: "set_config config.backupsEnabled must be boolean",
   subAgentModel: "set_config config.subAgentModel must be non-empty string",
   maxSteps: "set_config config.maxSteps must be number 1-1000",
+  toolOutputOverflowChars: "set_config config.toolOutputOverflowChars must be null or non-negative integer",
+  clearToolOutputOverflowChars: "set_config config.clearToolOutputOverflowChars must be boolean",
   providerOptions: "set_config config.providerOptions must be an object",
 };
 
@@ -89,6 +91,8 @@ const setConfigPayloadSchema = z.object({
   backupsEnabled: z.boolean().optional(),
   subAgentModel: z.string().trim().min(1).optional(),
   maxSteps: z.number().min(1).max(1000).optional(),
+  toolOutputOverflowChars: z.number().int().nonnegative().nullable().optional(),
+  clearToolOutputOverflowChars: z.boolean().optional(),
   providerOptions: editableOpenAiProviderOptionsByProviderSchema.optional(),
 }).passthrough();
 
@@ -374,6 +378,28 @@ const providerAuthSetApiKeySchema = schemaWithType("provider_auth_set_api_key", 
   }
 });
 
+const providerAuthCopyApiKeySchema = schemaWithType("provider_auth_copy_api_key", {
+  sessionId: requiredSessionId("provider_auth_copy_api_key"),
+  provider: z.unknown(),
+  sourceProvider: z.unknown(),
+}).superRefine((value, ctx) => {
+  if (!isProviderName(value.provider)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["provider"],
+      message: "provider_auth_copy_api_key missing/invalid provider",
+    });
+  }
+
+  if (!isProviderName(value.sourceProvider)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["sourceProvider"],
+      message: "provider_auth_copy_api_key missing/invalid sourceProvider",
+    });
+  }
+});
+
 const setEnableMcpSchema = schemaWithType("set_enable_mcp", {
   sessionId: requiredSessionId("set_enable_mcp"),
   enableMcp: requiredBoolean("set_enable_mcp missing/invalid enableMcp"),
@@ -533,7 +559,19 @@ const setConfigSchema = schemaWithType("set_config", {
   }
 
   const parsedConfig = setConfigPayloadSchema.safeParse(value.config);
-  if (parsedConfig.success) return;
+  if (parsedConfig.success) {
+    if (
+      parsedConfig.data.toolOutputOverflowChars !== undefined
+      && parsedConfig.data.clearToolOutputOverflowChars === true
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["config"],
+        message: "set_config config.toolOutputOverflowChars cannot be combined with clearToolOutputOverflowChars",
+      });
+    }
+    return;
+  }
 
   const issue = parsedConfig.error.issues[0];
   const message = issue ? setConfigIssueMessage(issue) : "set_config missing/invalid config";
@@ -592,6 +630,7 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   providerAuthLogoutSchema,
   providerAuthCallbackSchema,
   providerAuthSetApiKeySchema,
+  providerAuthCopyApiKeySchema,
   setEnableMcpSchema,
   mcpServerUpsertSchema,
   mcpServerAuthCallbackSchema,
@@ -698,6 +737,21 @@ function normalizeClientMessage(parsed: ParsedClientMessage): ClientMessage {
         provider: parsed.provider,
         methodId,
         apiKey,
+      };
+    }
+    case "provider_auth_copy_api_key": {
+      const sessionId = parsed.sessionId as string;
+      if (!isProviderName(parsed.provider)) {
+        throw new Error("provider_auth_copy_api_key missing/invalid provider");
+      }
+      if (!isProviderName(parsed.sourceProvider)) {
+        throw new Error("provider_auth_copy_api_key missing/invalid sourceProvider");
+      }
+      return {
+        type: "provider_auth_copy_api_key",
+        sessionId,
+        provider: parsed.provider,
+        sourceProvider: parsed.sourceProvider,
       };
     }
     case "mcp_server_upsert": {

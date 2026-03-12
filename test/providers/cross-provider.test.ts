@@ -14,6 +14,8 @@ describe("Cross-provider model creation", () => {
     { name: "anthropic", providerPrefix: "anthropic.messages" },
     { name: "openai", providerPrefix: "openai.responses" },
     { name: "google", providerPrefix: "google.generative-ai" },
+    { name: "opencode-go", providerPrefix: "opencode-go.completions" },
+    { name: "opencode-zen", providerPrefix: "opencode-zen.completions" },
     { name: "codex-cli", providerPrefix: "codex-cli.responses" },
   ];
 
@@ -72,6 +74,14 @@ describe("Session reasoning kind mapping", () => {
 
   test("google provider maps to 'reasoning' kind", () => {
     expect(reasoningModeForProvider("google")).toBe("reasoning");
+  });
+
+  test("opencode-go provider maps to 'reasoning' kind", () => {
+    expect(reasoningModeForProvider("opencode-go")).toBe("reasoning");
+  });
+
+  test("opencode-zen provider maps to 'reasoning' kind", () => {
+    expect(reasoningModeForProvider("opencode-zen")).toBe("reasoning");
   });
 
   test("codex-cli provider maps to 'summary' reasoning kind", () => {

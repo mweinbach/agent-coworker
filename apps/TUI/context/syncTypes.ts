@@ -80,6 +80,7 @@ export type SyncConfigPatch = {
   backupsEnabled?: boolean;
   subAgentModel?: string;
   maxSteps?: number;
+  toolOutputOverflowChars?: number | null;
   providerOptions?: Partial<Record<OpenAICompatibleProviderName, OpenAICompatibleProviderOptions>>;
 };
 

@@ -76,6 +76,54 @@ describe("getProviderStatuses", () => {
     expect(google?.savedApiKeyMasks?.exa_api_key).toBe("exa-...5678");
   });
 
+  test("includes opencode-go api key masks in provider status", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeConnectionStore(paths, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        "opencode-go": {
+          service: "opencode-go",
+          mode: "api_key",
+          apiKey: "opencode-secret-1234",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const statuses = await getProviderStatuses({ paths });
+    const opencode = statuses.find((s) => s.provider === "opencode-go");
+    expect(opencode).toBeDefined();
+    expect(opencode?.authorized).toBe(true);
+    expect(opencode?.mode).toBe("api_key");
+    expect(opencode?.savedApiKeyMasks?.api_key).toBe("open...1234");
+  });
+
+  test("includes opencode-zen api key masks in provider status", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+    await writeConnectionStore(paths, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        "opencode-zen": {
+          service: "opencode-zen",
+          mode: "api_key",
+          apiKey: "opencode-zen-secret-1234",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const statuses = await getProviderStatuses({ paths });
+    const opencodeZen = statuses.find((s) => s.provider === "opencode-zen");
+    expect(opencodeZen).toBeDefined();
+    expect(opencodeZen?.authorized).toBe(true);
+    expect(opencodeZen?.mode).toBe("api_key");
+    expect(opencodeZen?.savedApiKeyMasks?.api_key).toBe("open...1234");
+  });
+
   test("includes masked Exa key even when google provider key is not connected", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });

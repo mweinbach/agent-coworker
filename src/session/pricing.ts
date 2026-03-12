@@ -4,6 +4,10 @@
  * Prices are in USD per 1 million tokens.
  * Updated regularly to reflect current provider pricing.
  *
+ * Note: `opencode-go` is intentionally excluded from local pricing and pricing
+ * override support in this repo. Its billing is usage-based, so Cowork does not
+ * attempt local per-model cost estimation for that provider.
+ *
  * Sources:
  *   - https://openai.com/api/pricing
  *   - https://ai.google.dev/pricing
@@ -57,6 +61,39 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     inputPerMillion: 0.8,
     outputPerMillion: 4,
     cachedInputPerMillion: 0.08,
+  },
+
+  // OpenCode Go is intentionally excluded from local pricing estimates.
+  "opencode-zen:glm-5": {
+    inputPerMillion: 1,
+    outputPerMillion: 3.2,
+    cachedInputPerMillion: 0.2,
+  },
+  "opencode-zen:kimi-k2.5": {
+    inputPerMillion: 0.6,
+    outputPerMillion: 3,
+    cachedInputPerMillion: 0.08,
+  },
+  "opencode-zen:nemotron-3-super-free": {
+    inputPerMillion: 0,
+    outputPerMillion: 0,
+  },
+  "opencode-zen:mimo-v2-flash-free": {
+    inputPerMillion: 0,
+    outputPerMillion: 0,
+  },
+  "opencode-zen:big-pickle": {
+    inputPerMillion: 0,
+    outputPerMillion: 0,
+  },
+  "opencode-zen:minimax-m2.5-free": {
+    inputPerMillion: 0,
+    outputPerMillion: 0,
+  },
+  "opencode-zen:minimax-m2.5": {
+    inputPerMillion: 0.3,
+    outputPerMillion: 1.2,
+    cachedInputPerMillion: 0.06,
   },
 
   // ── OpenAI ───────────────────────────────────────────────────────────
@@ -157,9 +194,11 @@ function isPricingOverrideKey(value: string): value is `${ProviderName}:${string
   const separatorIndex = value.indexOf(":");
   if (separatorIndex <= 0 || separatorIndex === value.length - 1) return false;
   const provider = value.slice(0, separatorIndex);
+  // `opencode-go` intentionally has no local pricing or override support.
   return provider === "google"
     || provider === "openai"
     || provider === "anthropic"
+    || provider === "opencode-zen"
     || provider === "codex-cli";
 }
 

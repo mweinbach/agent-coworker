@@ -86,6 +86,8 @@ describe("agent socket parser", () => {
           observabilityEnabled: true,
           backupsEnabled: true,
           defaultBackupsEnabled: true,
+          toolOutputOverflowChars: 25000,
+          defaultToolOutputOverflowChars: 25000,
           subAgentModel: "gpt-5.4",
           maxSteps: 100,
           providerOptions: {
@@ -187,6 +189,14 @@ describe("agent socket parser", () => {
     expect(parsed.eventType).toBe("future_event");
   });
 
+  test("safeParseServerEventDetailed reports invalid envelopes before schema validation", () => {
+    const parsed = safeParseServerEventDetailed(["not-an-object"]);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.reason).toBe("invalid_envelope");
+    expect(parsed.message).toContain("expected record");
+  });
+
   test("safeParseServerEventDetailed accepts object input", () => {
     const parsed = safeParseServerEventDetailed({
       type: "pong",
@@ -247,5 +257,40 @@ describe("agent socket parser", () => {
     });
 
     expect(safeParseServerEvent(raw)).toBeNull();
+  });
+
+  test("safeParseServerEventDetailed preserves known eventType for invalid_event failures", () => {
+    const raw = JSON.stringify({
+      type: "session_usage",
+      sessionId: "s-1",
+      usage: {
+        sessionId: "s-1",
+        totalTurns: 1,
+        totalPromptTokens: 10,
+        totalCompletionTokens: 5,
+        totalTokens: 15,
+        estimatedTotalCostUsd: 0.25,
+        costTrackingAvailable: true,
+        byModel: [],
+        turns: [],
+        budgetStatus: {
+          configured: true,
+          warnAtUsd: 1,
+          stopAtUsd: 2,
+          warningTriggered: "yes",
+          stopTriggered: false,
+          currentCostUsd: 0.25,
+        },
+        createdAt: "2026-03-10T00:00:00.000Z",
+        updatedAt: "2026-03-10T00:00:01.000Z",
+      },
+    });
+
+    const parsed = safeParseServerEventDetailed(raw);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.reason).toBe("invalid_event");
+    expect(parsed.eventType).toBe("session_usage");
+    expect(parsed.message).toContain("expected boolean");
   });
 });

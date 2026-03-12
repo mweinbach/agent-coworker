@@ -60,6 +60,8 @@ export function dispatchClientMessage({
       return void session.callbackProviderAuth(message.provider, message.methodId, message.code);
     case "provider_auth_set_api_key":
       return void session.setProviderApiKey(message.provider, message.methodId, message.apiKey);
+    case "provider_auth_copy_api_key":
+      return void session.copyProviderApiKey(message.provider, message.sourceProvider);
     case "cancel":
       return session.cancel();
     case "session_close":

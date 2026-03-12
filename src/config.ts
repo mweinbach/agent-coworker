@@ -8,6 +8,7 @@ import { z } from "zod";
 import { getAiCoworkerPaths } from "./connect";
 import { parseConnectionStoreJson } from "./store/connections";
 import { defaultModelForProvider, getModelForProvider, getProviderKeyCandidates } from "./providers";
+import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
 import { resolveProviderName, resolveRuntimeName as resolveRuntimeNameFromValue } from "./types";
 import type { AgentConfig, CommandTemplateConfig, ProviderName, RuntimeName } from "./types";
 import { resolveCoworkHomedir } from "./utils/coworkHome";
@@ -197,6 +198,11 @@ function normalizeNonNegativeInt(v: unknown): number | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+function normalizeNullableNonNegativeInt(v: unknown): number | null | undefined {
+  if (v === null) return null;
+  return normalizeNonNegativeInt(v);
+}
+
 function resolveUserHomeFromConfig(config: AgentConfig): string {
   return resolveCoworkHomedir(config.userAgentDir);
 }
@@ -241,6 +247,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const userConfig = await loadJsonSafe(path.join(userAgentDir, "config.json"));
   const projectConfig = await loadJsonSafe(path.join(projectAgentDir, "config.json"));
 
+  const inheritedMerged = deepMerge(builtInDefaults, userConfig);
   const merged = deepMerge(deepMerge(builtInDefaults, userConfig), projectConfig);
 
   const provider =
@@ -270,6 +277,22 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asNonEmptyString(userConfig.subAgentModel) ||
     asNonEmptyString(builtInDefaults.subAgentModel) ||
     model;
+
+  const parsedToolOutputOverflowChars = normalizeNullableNonNegativeInt(
+    (merged as Record<string, unknown>).toolOutputOverflowChars
+  );
+  const inheritedToolOutputOverflowCharsRaw = normalizeNullableNonNegativeInt(
+    (inheritedMerged as Record<string, unknown>).toolOutputOverflowChars
+  );
+  const projectToolOutputOverflowChars = normalizeNullableNonNegativeInt(projectConfig.toolOutputOverflowChars);
+  const inheritedToolOutputOverflowChars =
+    inheritedToolOutputOverflowCharsRaw === undefined
+      ? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS
+      : inheritedToolOutputOverflowCharsRaw;
+  const toolOutputOverflowChars =
+    parsedToolOutputOverflowChars === undefined
+      ? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS
+      : parsedToolOutputOverflowChars;
 
   // Persistent, user-visible directories should be relative to the project (cwd) by default,
   // not the (potentially temporary) workingDirectory.
@@ -378,6 +401,15 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     runtime,
     model,
     subAgentModel,
+    toolOutputOverflowChars,
+    inheritedToolOutputOverflowChars,
+    ...(projectToolOutputOverflowChars !== undefined
+      ? {
+          projectConfigOverrides: {
+            toolOutputOverflowChars: projectToolOutputOverflowChars,
+          },
+        }
+      : {}),
     workingDirectory,
     outputDirectory,
     uploadsDirectory,

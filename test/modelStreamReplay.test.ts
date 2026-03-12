@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  clearModelStreamReplayRuntime,
   createModelStreamReplayRuntime,
   replayModelStreamRawEvent,
   shouldIgnoreNormalizedChunkForRawBackedTurn,
@@ -73,5 +74,105 @@ describe("modelStreamReplay", () => {
         text: "stale normalized reasoning",
       },
     })).toBe(true);
+  });
+
+  test("clearing runtime resets raw-backed tracking", () => {
+    const runtime = createModelStreamReplayRuntime();
+    const turnId = "turn-clear";
+    replayModelStreamRawEvent(runtime, {
+      type: "model_stream_raw",
+      sessionId: "session-1",
+      turnId,
+      index: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      format: "openai-responses-v1",
+      normalizerVersion: 1,
+      event: {
+        type: "response.output_item.added",
+        item: { type: "reasoning", id: "rs_clear", summary: [] },
+      },
+    });
+
+    expect(runtime.rawBackedTurns.has(turnId)).toBe(true);
+    expect(runtime.projectorByTurn.has(turnId)).toBe(true);
+
+    clearModelStreamReplayRuntime(runtime);
+
+    expect(runtime.rawBackedTurns.size).toBe(0);
+    expect(runtime.projectorByTurn.size).toBe(0);
+    expect(shouldIgnoreNormalizedChunkForRawBackedTurn(runtime, {
+      type: "model_stream_chunk",
+      sessionId: "session-1",
+      turnId,
+      index: 1,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "reasoning_delta",
+      part: { id: "reasoning-3", mode: "summary", text: "post-clear chunk" },
+    })).toBe(false);
+  });
+
+  test("reuses projector instances across multiple raw events for the same turn", () => {
+    const runtime = createModelStreamReplayRuntime();
+    const turnId = "turn-reuse";
+    const event = {
+      type: "model_stream_raw" as const,
+      sessionId: "session-1",
+      turnId,
+      index: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      format: "openai-responses-v1",
+      normalizerVersion: 1,
+      event: {
+        type: "response.output_item.added",
+        item: { type: "reasoning", id: "rs_reuse", summary: [] },
+      },
+    };
+
+    replayModelStreamRawEvent(runtime, event);
+    const firstProjector = runtime.projectorByTurn.get(turnId);
+    expect(firstProjector).toBeDefined();
+    replayModelStreamRawEvent(runtime, {
+      ...event,
+      event: {
+        type: "response.output_item.added",
+        item: { type: "finish", id: "finish-1", text: "done" },
+      },
+    });
+    const secondProjector = runtime.projectorByTurn.get(turnId);
+    expect(secondProjector).toBe(firstProjector);
+    expect(runtime.projectorByTurn.size).toBe(1);
+  });
+
+  test("only ignores normalized chunks for the configured part types", () => {
+    const runtime = createModelStreamReplayRuntime();
+    const turnId = "turn-selective";
+    replayModelStreamRawEvent(runtime, {
+      type: "model_stream_raw",
+      sessionId: "session-2",
+      turnId,
+      index: 0,
+      provider: "openai",
+      model: "gpt-5.2",
+      format: "openai-responses-v1",
+      normalizerVersion: 1,
+      event: {
+        type: "response.output_item.added",
+        item: { type: "reasoning", id: "rs_selective", summary: [] },
+      },
+    });
+
+    expect(shouldIgnoreNormalizedChunkForRawBackedTurn(runtime, {
+      type: "model_stream_chunk",
+      sessionId: "session-2",
+      turnId,
+      index: 1,
+      provider: "openai",
+      model: "gpt-5.2",
+      partType: "finish",
+      part: { id: "finish-1" },
+    })).toBe(false);
   });
 });

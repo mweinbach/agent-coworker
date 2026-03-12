@@ -75,13 +75,20 @@ async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unkn
 
 async function persistProjectConfigPatch(
   projectAgentDir: string,
-  patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled">> & {
+  patch: Partial<
+    Pick<
+      AgentConfig,
+      "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+    >
+  > & {
+    clearToolOutputOverflowChars?: boolean;
     providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
   },
   runtimeProviderOptions?: AgentConfig["providerOptions"],
 ): Promise<void> {
-  const entries = Object.entries(patch).filter(([, value]) => value !== undefined);
-  if (entries.length === 0) return;
+  const entries = Object.entries(patch).filter(([key, value]) => key !== "clearToolOutputOverflowChars" && value !== undefined);
+  const shouldClearToolOutputOverflowChars = patch.clearToolOutputOverflowChars === true;
+  if (entries.length === 0 && !shouldClearToolOutputOverflowChars) return;
   const configPath = path.join(projectAgentDir, "config.json");
   const current = await loadJsonObjectSafe(configPath);
   const next: Record<string, unknown> = { ...current };
@@ -117,6 +124,9 @@ async function persistProjectConfigPatch(
     }
     next[key] = value;
   }
+  if (shouldClearToolOutputOverflowChars) {
+    delete next.toolOutputOverflowChars;
+  }
   await fs.mkdir(projectAgentDir, { recursive: true });
   const payload = `${JSON.stringify(next, null, 2)}\n`;
   await writeTextFileAtomic(configPath, payload);
@@ -124,11 +134,29 @@ async function persistProjectConfigPatch(
 
 function mergeConfigPatch(
   config: AgentConfig,
-  patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled">> & {
+  patch: Partial<
+    Pick<
+      AgentConfig,
+      "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+    >
+  > & {
+    clearToolOutputOverflowChars?: boolean;
     providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
   }
 ): AgentConfig {
-  const next: AgentConfig = { ...config, ...patch };
+  const { clearToolOutputOverflowChars: _clearToolOutputOverflowChars, ...configPatch } = patch;
+  const next: AgentConfig = { ...config, ...configPatch };
+  if (patch.toolOutputOverflowChars !== undefined) {
+    next.projectConfigOverrides = {
+      ...config.projectConfigOverrides,
+      toolOutputOverflowChars: patch.toolOutputOverflowChars,
+    };
+  }
+  if (patch.clearToolOutputOverflowChars) {
+    const { toolOutputOverflowChars: _ignored, ...remainingOverrides } = config.projectConfigOverrides ?? {};
+    next.toolOutputOverflowChars = config.inheritedToolOutputOverflowChars;
+    next.projectConfigOverrides = Object.keys(remainingOverrides).length > 0 ? remainingOverrides : undefined;
+  }
   if (patch.providerOptions !== undefined) {
     next.providerOptions = mergeEditableOpenAiCompatibleProviderOptions(config.providerOptions, patch.providerOptions);
   }
@@ -254,10 +282,16 @@ export async function startAgentServer(
         : undefined,
       persistProjectConfigPatchImpl: sessionKind === "root"
         ? async (
-            patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled">> & {
-              providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
-            }
-          ) => {
+          patch: Partial<
+            Pick<
+              AgentConfig,
+              "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+            >
+          > & {
+            clearToolOutputOverflowChars?: boolean;
+            providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
+          }
+        ) => {
             await persistProjectConfigPatch(config.projectAgentDir, patch, config.providerOptions);
             config = mergeConfigPatch(config, patch);
           }

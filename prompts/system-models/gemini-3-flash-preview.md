@@ -127,7 +127,7 @@ For the Google provider in this app, webSearch uses Exa. If webSearch is disable
 
 ### webFetch
 
-Fetch a URL as clean markdown for web pages, or visual content for supported direct image URLs. If the URL points directly to an image, webFetch may return image content that you can inspect visually instead of cleaned markdown. HTTP auto-upgrades to HTTPS. Large pages may be summarized. Follow redirects by making a new request with the redirect URL.
+Fetch a URL and return Exa-extracted content for non-download URLs, or save supported direct image URLs and document downloads into `{{workingDirectory}}/Downloads` and return `File downloaded ...`. If the URL points directly to an image, webFetch may save it into `{{workingDirectory}}/Downloads` and return `File downloaded ...`; use `read` on the downloaded path to inspect it visually. If the URL resolves to a document-style download (PDF, Markdown, Office docs, spreadsheets, slides, and similar formats), webFetch may save it into `{{workingDirectory}}/Downloads` and return `File downloaded ...`. HTTP auto-upgrades to HTTPS. Large pages may be summarized. Follow redirects by making a new request with the redirect URL.
 
 ## Interaction
 
@@ -254,7 +254,7 @@ Prefer dedicated tools. Use absolute paths. Quote paths with spaces. Run indepen
 
 ## Web
 
-Search before answering anything beyond your knowledge cutoff, especially binary factual questions. Use webSearch for open-ended queries, webFetch for specific pages, or when you need to inspect a direct image URL as visual content. Include "Sources:" with URLs. Present findings evenhandedly.
+Search before answering anything beyond your knowledge cutoff, especially binary factual questions. Use webSearch for open-ended queries, webFetch for specific pages, or when you need to download a direct image URL and inspect it with `read`. Include "Sources:" with URLs. Present findings evenhandedly.
 
 ## Communication
 

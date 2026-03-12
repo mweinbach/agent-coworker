@@ -3,7 +3,6 @@ import { execFile } from "node:child_process";
 
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
-import { truncateText } from "../utils/paths";
 
 type ExecResult = { stdout: string; stderr: string; exitCode: number; errorCode?: string };
 
@@ -101,7 +100,7 @@ IMPORTANT: Prefer dedicated tools over bash equivalents:
 Rules:
 - Always quote file paths containing spaces with double quotes
 - Prefer absolute paths; avoid cd
-- Output is truncated`,
+- Large text output may be saved to the workspace scratchpad when overflow protection is enabled`,
     inputSchema: z.object({
       command: z.string().describe("The shell command to execute"),
     }),
@@ -128,8 +127,8 @@ Rules:
           abortSignal: ctx.abortSignal,
         }).then(({ stdout, stderr, exitCode }) => {
           const res = {
-            stdout: truncateText(String(stdout ?? ""), 30000),
-            stderr: truncateText(String(stderr ?? ""), 10000),
+            stdout: String(stdout ?? ""),
+            stderr: String(stderr ?? ""),
             exitCode,
           };
           ctx.log(`tool< bash ${JSON.stringify(res)}`);

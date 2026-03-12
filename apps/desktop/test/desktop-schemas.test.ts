@@ -22,6 +22,7 @@ describe("desktop persisted-state schema defaults", () => {
 
     expect(parsed.workspaces[0]?.defaultEnableMcp).toBe(true);
     expect(parsed.workspaces[0]?.defaultBackupsEnabled).toBe(true);
+    expect(parsed.workspaces[0]?.defaultToolOutputOverflowChars).toBeUndefined();
     expect(parsed.workspaces[0]?.yolo).toBe(false);
     expect(parsed.developerMode).toBe(false);
     expect(parsed.showHiddenFiles).toBe(false);
@@ -39,6 +40,7 @@ describe("desktop persisted-state schema defaults", () => {
           lastOpenedAt: TS,
           defaultEnableMcp: false,
           defaultBackupsEnabled: false,
+          defaultToolOutputOverflowChars: null,
           yolo: true,
         },
       ],
@@ -49,6 +51,7 @@ describe("desktop persisted-state schema defaults", () => {
 
     expect(parsed.workspaces[0]?.defaultEnableMcp).toBe(false);
     expect(parsed.workspaces[0]?.defaultBackupsEnabled).toBe(false);
+    expect(parsed.workspaces[0]?.defaultToolOutputOverflowChars).toBeNull();
     expect(parsed.workspaces[0]?.yolo).toBe(true);
     expect(parsed.developerMode).toBe(true);
     expect(parsed.showHiddenFiles).toBe(true);

@@ -15,7 +15,7 @@ import {
   renamePath,
   trashPath,
 } from "../../lib/desktopCommands";
-import type { ProviderName } from "../../lib/wsProtocol";
+import { type ProviderName } from "../../lib/wsProtocol";
 
 import {
   type AppStoreActions,

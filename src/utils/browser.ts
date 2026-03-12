@@ -22,12 +22,17 @@ function buildOpenExternalCommand(platform: NodeJS.Platform, url: string): Exter
   return { cmd: "xdg-open", args: [url], detached: true };
 }
 
+type SpawnFn = typeof spawn;
+
+const defaultSpawnImpl: SpawnFn = spawn;
+let spawnImpl: SpawnFn = defaultSpawnImpl;
+
 export async function openExternalUrl(url: string): Promise<boolean> {
   try {
     const command = buildOpenExternalCommand(process.platform, url);
 
     const exitCode = await new Promise<number | null>((resolve, reject) => {
-      const child = spawn(command.cmd, command.args, {
+      const child = spawnImpl(command.cmd, command.args, {
         stdio: ["ignore", "ignore", "ignore"],
         detached: command.detached,
       });
@@ -43,4 +48,10 @@ export async function openExternalUrl(url: string): Promise<boolean> {
 
 export const __internal = {
   buildOpenExternalCommand,
+  setSpawnImpl: (impl: SpawnFn) => {
+    spawnImpl = impl;
+  },
+  resetSpawnImpl: () => {
+    spawnImpl = defaultSpawnImpl;
+  },
 };

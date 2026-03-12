@@ -34,6 +34,7 @@ export function parseStreamingJson(partialJson: string): Record<string, unknown>
 }
 
 function calculateCost(model: PiModel, usage: Record<string, any>) {
+  if (!model.cost) return undefined;
   usage.cost.input = (model.cost.input / 1_000_000) * usage.input;
   usage.cost.output = (model.cost.output / 1_000_000) * usage.output;
   usage.cost.cacheRead = (model.cost.cacheRead / 1_000_000) * usage.cacheRead;
@@ -288,9 +289,9 @@ export function projectResponsesStreamEvent(
         cacheRead: cachedTokens,
         cacheWrite: 0,
         totalTokens: response.usage.total_tokens || 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       };
-      if (projector.model) {
+      if (projector.model?.cost) {
+        output.usage.cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
         calculateCost(projector.model, output.usage);
       }
     }

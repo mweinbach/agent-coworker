@@ -63,6 +63,14 @@ describe("reasoningModeForProvider", () => {
   test('returns "reasoning" for anthropic', () => {
     expect(reasoningModeForProvider("anthropic")).toBe("reasoning");
   });
+
+  test('returns "reasoning" for opencode-go', () => {
+    expect(reasoningModeForProvider("opencode-go")).toBe("reasoning");
+  });
+
+  test('returns "reasoning" for opencode-zen', () => {
+    expect(reasoningModeForProvider("opencode-zen")).toBe("reasoning");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -690,6 +698,33 @@ describe("normalizeModelStreamPart branches", () => {
         defaultOpts
       );
       expect(result.part.output).toEqual({ nested: { deep: true } });
+    });
+
+    test("preserves overflow metadata on compact tool results", () => {
+      const result = normalizeModelStreamPart(
+        {
+          type: "tool-result",
+          toolCallId: "tr-overflow",
+          toolName: "bash",
+          output: {
+            type: "text",
+            value: "Tool output overflowed. Saved to /tmp/workspace/.ModelScratchpad/spill.txt",
+            overflow: true,
+            filePath: "/tmp/workspace/.ModelScratchpad/spill.txt",
+            chars: 30000,
+            preview: "preview",
+          },
+        },
+        defaultOpts
+      );
+      expect(result.part.output).toEqual({
+        type: "text",
+        value: "Tool output overflowed. Saved to /tmp/workspace/.ModelScratchpad/spill.txt",
+        overflow: true,
+        filePath: "/tmp/workspace/.ModelScratchpad/spill.txt",
+        chars: 30000,
+        preview: "preview",
+      });
     });
   });
 

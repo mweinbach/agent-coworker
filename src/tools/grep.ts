@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
-import { resolveMaybeRelative, truncateText } from "../utils/paths";
+import { resolveMaybeRelative } from "../utils/paths";
 import { ensureRipgrep } from "../utils/ripgrep";
 import { assertReadPathAllowed } from "../utils/permissions";
 
@@ -84,7 +84,7 @@ export function createGrepTool(
         });
       });
 
-      const res = truncateText(output, 30000);
+      const res = output;
       ctx.log(`tool< grep ${JSON.stringify({ chars: res.length })}`);
       return res;
     },

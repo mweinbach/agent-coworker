@@ -359,23 +359,48 @@ export function shouldSuppressRawDebugLogLine(line: string): boolean {
   return false;
 }
 
+function recentAssistantTextSinceLastUser(feed: FeedItem[]): string {
+  const assistantTexts: string[] = [];
+  for (let i = feed.length - 1; i >= 0; i -= 1) {
+    const item = feed[i];
+    if (item.kind !== "message") continue;
+    if (item.role === "user") break;
+    const text = item.text.trim();
+    if (item.role === "assistant" && text) {
+      assistantTexts.push(text);
+    }
+  }
+
+  if (assistantTexts.length === 0) return "";
+  return assistantTexts.reverse().join("\n\n").trim();
+}
+
 export function shouldSkipAssistantMessageAfterStreamReplay(
   stream: ThreadModelStreamRuntime,
   assistantText: string,
+  feed: FeedItem[] = [],
 ): boolean {
-  if (!stream.lastAssistantTurnId) return false;
-
-  const assistantKey = stream.lastAssistantStreamKeyByTurn.get(stream.lastAssistantTurnId);
-  const streamed = (assistantKey ? stream.assistantTextByStream.get(assistantKey) ?? "" : "").trim();
-  if (!streamed) return false;
-
   const normalizedAssistantText = assistantText.trim();
   if (!normalizedAssistantText) return false;
 
-  if (normalizedAssistantText === streamed) return true;
+  if (stream.lastAssistantTurnId) {
+    const assistantKey = stream.lastAssistantStreamKeyByTurn.get(stream.lastAssistantTurnId);
+    const streamed = (assistantKey ? stream.assistantTextByStream.get(assistantKey) ?? "" : "").trim();
+    if (streamed) {
+      if (normalizedAssistantText === streamed) return true;
 
-  if (stream.replay.rawBackedTurns.has(stream.lastAssistantTurnId)) {
-    return normalizedAssistantText.endsWith(streamed);
+      if (stream.replay.rawBackedTurns.has(stream.lastAssistantTurnId)) {
+        return normalizedAssistantText.endsWith(streamed);
+      }
+    }
+  }
+
+  const aggregatedAssistantText = recentAssistantTextSinceLastUser(feed);
+  if (!aggregatedAssistantText) return false;
+  if (normalizedAssistantText === aggregatedAssistantText) return true;
+
+  if (stream.lastAssistantTurnId && stream.replay.rawBackedTurns.has(stream.lastAssistantTurnId)) {
+    return normalizedAssistantText.endsWith(aggregatedAssistantText);
   }
 
   return false;
@@ -873,7 +898,7 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
 
     if (payload.type === "assistant_message") {
       const text = String(payload.text ?? "");
-      if (shouldSkipAssistantMessageAfterStreamReplay(stream, text)) continue;
+      if (shouldSkipAssistantMessageAfterStreamReplay(stream, text, out)) continue;
       out.push({
         id: makeId(),
         kind: "message",

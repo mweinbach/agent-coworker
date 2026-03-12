@@ -4,6 +4,8 @@ export const PROVIDER_NAMES = [
   "google",
   "openai",
   "anthropic",
+  "opencode-go",
+  "opencode-zen",
   "codex-cli",
 ] as const;
 
@@ -61,6 +63,19 @@ export interface AgentConfig {
   runtime?: RuntimeName;
   model: string;
   subAgentModel: string;
+  toolOutputOverflowChars?: number | null;
+  /**
+   * Effective non-project fallback for tool overflow spilling after built-in
+   * and user config layers are merged, before workspace overrides apply.
+   */
+  inheritedToolOutputOverflowChars?: number | null;
+  /**
+   * Raw workspace-scoped overrides that were explicitly present in the
+   * project `.agent/config.json`, before built-in defaults were materialized.
+   */
+  projectConfigOverrides?: {
+    toolOutputOverflowChars?: number | null;
+  };
 
   workingDirectory: string;
   outputDirectory?: string;

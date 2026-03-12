@@ -3,6 +3,7 @@ import {
   mergeEditableOpenAiCompatibleProviderOptions,
   pickEditableOpenAiCompatibleProviderOptions,
 } from "../../shared/openaiCompatibleOptions";
+import { effectiveToolOutputOverflowChars } from "../../shared/toolOutputOverflow";
 import type { AgentConfig, HarnessContextPayload } from "../../types";
 import type { SessionConfigPatch } from "../protocol";
 import { DEFAULT_SESSION_TITLE, heuristicTitleFromQuery, type SessionTitleSource } from "../sessionTitleService";
@@ -32,6 +33,8 @@ export class SessionMetadataManager {
     const providerOptions = pickEditableOpenAiCompatibleProviderOptions(this.context.state.config.providerOptions);
     const defaultBackupsEnabled = this.context.state.config.backupsEnabled ?? true;
     const backupsEnabled = this.context.state.backupsEnabledOverride ?? defaultBackupsEnabled;
+    const defaultToolOutputOverflowChars = this.context.state.config.projectConfigOverrides?.toolOutputOverflowChars;
+    const toolOutputOverflowChars = effectiveToolOutputOverflowChars(this.context.state.config.toolOutputOverflowChars);
     return {
       type: "session_config",
       sessionId: this.context.id,
@@ -42,6 +45,8 @@ export class SessionMetadataManager {
         defaultBackupsEnabled,
         subAgentModel: this.context.state.config.subAgentModel,
         maxSteps: this.context.state.maxSteps,
+        toolOutputOverflowChars,
+        ...(defaultToolOutputOverflowChars !== undefined ? { defaultToolOutputOverflowChars } : {}),
         ...(providerOptions ? { providerOptions } : {}),
       },
     };
@@ -161,6 +166,15 @@ export class SessionMetadataManager {
   }
 
   async setConfig(patch: SessionConfigPatch) {
+    if (patch.toolOutputOverflowChars !== undefined && patch.clearToolOutputOverflowChars) {
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "toolOutputOverflowChars cannot be combined with clearToolOutputOverflowChars"
+      );
+      return;
+    }
+
     const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
     if (patch.subAgentModel !== undefined) {
       persistPatch.subAgentModel = patch.subAgentModel;
@@ -170,6 +184,12 @@ export class SessionMetadataManager {
     }
     if (patch.backupsEnabled !== undefined) {
       persistPatch.backupsEnabled = patch.backupsEnabled;
+    }
+    if (patch.toolOutputOverflowChars !== undefined) {
+      persistPatch.toolOutputOverflowChars = patch.toolOutputOverflowChars;
+    }
+    if (patch.clearToolOutputOverflowChars) {
+      persistPatch.clearToolOutputOverflowChars = true;
     }
     if (patch.providerOptions !== undefined) {
       persistPatch.providerOptions = patch.providerOptions;
@@ -198,6 +218,27 @@ export class SessionMetadataManager {
     }
     if (patch.subAgentModel !== undefined) {
       this.context.state.config = { ...this.context.state.config, subAgentModel: patch.subAgentModel };
+    }
+    if (patch.toolOutputOverflowChars !== undefined) {
+      this.context.state.config = {
+        ...this.context.state.config,
+        toolOutputOverflowChars: patch.toolOutputOverflowChars,
+        projectConfigOverrides: {
+          ...this.context.state.config.projectConfigOverrides,
+          toolOutputOverflowChars: patch.toolOutputOverflowChars,
+        },
+      };
+    }
+    if (patch.clearToolOutputOverflowChars) {
+      const { toolOutputOverflowChars: _ignored, ...remainingOverrides } =
+        this.context.state.config.projectConfigOverrides ?? {};
+      this.context.state.config = {
+        ...this.context.state.config,
+        toolOutputOverflowChars: effectiveToolOutputOverflowChars(
+          this.context.state.config.inheritedToolOutputOverflowChars
+        ),
+        projectConfigOverrides: Object.keys(remainingOverrides).length > 0 ? remainingOverrides : undefined,
+      };
     }
     if (patch.providerOptions !== undefined) {
       this.context.state.config = {

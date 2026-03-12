@@ -23,6 +23,15 @@ import {
   readCodexAuthMaterial,
   refreshCodexAuthMaterialCoalesced,
 } from "../providers/codex-auth";
+import {
+  getOpenCodeModelPricing,
+  getOpenCodeModelSpec,
+  getOpenCodeProviderConfig,
+  isOpenCodeModelSupportedByProvider,
+  isOpenCodeProviderName,
+  resolveOpenCodeApiKey,
+  type OpenCodeProviderName,
+} from "../providers/opencodeShared";
 import type { AgentConfig, ModelMessage, ProviderName } from "../types";
 import type { TelemetrySettings } from "../observability/runtime";
 import {
@@ -40,6 +49,7 @@ import {
   piTurnMessagesToModelMessages,
   toolResultContentFromOutput,
 } from "./piMessageBridge";
+import { maybeSpillToolOutputToWorkspace } from "./toolOutputOverflow";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeStepOverride, RuntimeToolDefinition } from "./types";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
 
@@ -158,6 +168,36 @@ type ResolvedCodexAuth = {
   accountId?: string;
 };
 
+function getOpenCodePiModel(provider: OpenCodeProviderName, modelId: string): PiModel | null {
+  if (!isOpenCodeModelSupportedByProvider(provider, modelId)) return null;
+  const modelSpec = getOpenCodeModelSpec(modelId);
+  if (!modelSpec) return null;
+  const pricing = getOpenCodeModelPricing(provider, modelId);
+
+  const providerConfig = getOpenCodeProviderConfig(provider);
+  return {
+    id: modelSpec.id,
+    name: modelSpec.name,
+    api: "openai-completions",
+    provider: "opencode",
+    baseUrl: providerConfig.baseUrl,
+    reasoning: modelSpec.reasoning,
+    input: [...modelSpec.input],
+    ...(pricing
+      ? {
+          cost: {
+            input: pricing.input,
+            output: pricing.output,
+            cacheRead: pricing.cacheRead,
+            cacheWrite: pricing.cacheWrite,
+          },
+        }
+      : {}),
+    contextWindow: modelSpec.contextWindow,
+    maxTokens: modelSpec.maxTokens,
+  };
+}
+
 type RuntimeStepOverrides = RuntimeStepOverride;
 
 type RuntimeStepState = {
@@ -229,6 +269,17 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
     return {
       model,
       apiKey: getSavedProviderApiKey(params.config, "anthropic"),
+    };
+  }
+
+  if (isOpenCodeProviderName(provider)) {
+    const model = getOpenCodePiModel(provider, modelId);
+    if (!model) throw new Error(`No PI model metadata available for provider ${provider} (model: ${modelId}).`);
+    return {
+      model,
+      apiKey: resolveOpenCodeApiKey(provider, {
+        savedKey: getSavedProviderApiKey(params.config, provider),
+      }),
     };
   }
 
@@ -373,11 +424,16 @@ export function markModelCallSpanError(span: Span | null, error: unknown): void 
 }
 
 export function toolMapToPiTools(tools: RuntimeRunTurnParams["tools"]): Array<Record<string, unknown>> {
-  return Object.entries(tools).map(([name, def]) => ({
-    name,
-    description: def.description ?? name,
-    parameters: toPiJsonSchema(def.inputSchema),
-  }));
+  return Object.entries(tools).flatMap(([name, def]) => {
+    const toolRecord = asRecord(def);
+    if (!toolRecord) return [];
+
+    return [{
+      name,
+      description: asNonEmptyString(toolRecord.description) ?? name,
+      parameters: toPiJsonSchema(toolRecord.inputSchema),
+    }];
+  });
 }
 
 function validateToolInput(def: RuntimeToolDefinition, input: unknown): unknown {
@@ -547,19 +603,34 @@ export async function executeToolCall(
       };
     }
 
-    const content = toolResultContentFromOutput(result);
+    const overflow = await maybeSpillToolOutputToWorkspace({
+      output: result,
+      toolName: toolCall.name,
+      toolCallId: toolCall.id,
+      workingDirectory: params.config.workingDirectory,
+      toolOutputOverflowChars: params.config.toolOutputOverflowChars,
+      log: params.log,
+    });
+    const emittedOutput = overflow?.output ?? result;
+    const content = toolResultContentFromOutput(emittedOutput);
     await emitPart({
       type: "tool-result",
       toolCallId: toolCall.id,
       toolName: toolCall.name,
-      output: result,
+      output: emittedOutput,
     });
+    if (overflow) {
+      await emitPart({
+        type: "file",
+        file: overflow.file,
+      });
+    }
     return {
       role: "toolResult",
       toolCallId: toolCall.id,
       toolName: toolCall.name,
       content,
-      details: asRecord(result) ?? result,
+      details: asRecord(emittedOutput) ?? emittedOutput,
       isError: false,
       timestamp: Date.now(),
     };

@@ -1,5 +1,7 @@
 import {
+  getAiCoworkerPaths,
   disconnectProvider,
+  readConnectionStore,
   writeToolApiKey,
   type AiCoworkerPaths,
   type ConnectProviderResult,
@@ -49,6 +51,8 @@ const PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> = {
   ],
   openai: [{ id: "api_key", type: "api", label: "API key" }],
   anthropic: [{ id: "api_key", type: "api", label: "API key" }],
+  "opencode-go": [{ id: "api_key", type: "api", label: "API key" }],
+  "opencode-zen": [{ id: "api_key", type: "api", label: "API key" }],
   "codex-cli": [
     { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
     { id: "api_key", type: "api", label: "API key" },
@@ -145,6 +149,51 @@ export async function setProviderApiKey(opts: {
     apiKey,
     cwd: opts.cwd,
     paths: opts.paths,
+  });
+}
+
+export async function copyProviderApiKey(opts: {
+  provider: ProviderName;
+  sourceProvider: ProviderName;
+  methodId: string;
+  cwd?: string;
+  paths?: AiCoworkerPaths;
+  connect: ConnectProviderHandler;
+}): Promise<ConnectProviderResult> {
+  const method = resolveProviderAuthMethod(opts.provider, opts.methodId);
+  if (!method) {
+    return { ok: false, provider: opts.provider, message: `Unsupported auth method "${opts.methodId}".` };
+  }
+  if (method.type !== "api") {
+    return { ok: false, provider: opts.provider, message: `Method "${opts.methodId}" is not an API key method.` };
+  }
+
+  const paths = opts.paths ?? getAiCoworkerPaths();
+  const store = await readConnectionStore(paths);
+  const targetEntry = store.services[opts.provider];
+  const targetApiKey = targetEntry?.mode === "api_key" ? targetEntry.apiKey?.trim() ?? "" : "";
+  if (targetApiKey) {
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `${opts.provider} already has a saved API key.`,
+    };
+  }
+  const sourceEntry = store.services[opts.sourceProvider];
+  const apiKey = sourceEntry?.mode === "api_key" ? sourceEntry.apiKey?.trim() ?? "" : "";
+  if (!apiKey) {
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `No saved API key found for ${opts.sourceProvider}.`,
+    };
+  }
+
+  return await opts.connect({
+    provider: opts.provider,
+    apiKey,
+    cwd: opts.cwd,
+    paths,
   });
 }
 

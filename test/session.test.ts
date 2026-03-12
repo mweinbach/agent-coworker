@@ -180,7 +180,14 @@ function makeSession(
       subAgentModel: string;
     }) => Promise<void> | void;
     persistProjectConfigPatchImpl: (
-      patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">>
+      patch: Partial<
+        Pick<
+          AgentConfig,
+          "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+        >
+      > & {
+        clearToolOutputOverflowChars?: boolean;
+      }
     ) => Promise<void> | void;
     generateSessionTitleImpl: (opts: { config: AgentConfig; query: string }) => Promise<{
       title: string;
@@ -674,6 +681,8 @@ describe("AgentSession", () => {
       expect(evt.config.observabilityEnabled).toBe(false);
       expect(evt.config.backupsEnabled).toBe(true);
       expect(evt.config.defaultBackupsEnabled).toBe(true);
+      expect(evt.config.toolOutputOverflowChars).toBe(25000);
+      expect("defaultToolOutputOverflowChars" in evt.config).toBe(false);
       expect(evt.config.subAgentModel).toBe("gemini-2.0-flash");
       expect(evt.config.maxSteps).toBe(100);
     });
@@ -718,7 +727,7 @@ describe("AgentSession", () => {
       expect((evt.config.providerOptions as any)?.google).toBeUndefined();
     });
 
-    test("setConfig emits session_config and persists subAgentModel/observability/backupsEnabled", async () => {
+    test("setConfig emits session_config and persists subAgentModel/observability/backupsEnabled/toolOutputOverflowChars", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
@@ -726,6 +735,7 @@ describe("AgentSession", () => {
         subAgentModel: "gpt-5.2-mini",
         observabilityEnabled: true,
         backupsEnabled: false,
+        toolOutputOverflowChars: null,
         maxSteps: 25,
       });
 
@@ -735,12 +745,42 @@ describe("AgentSession", () => {
       expect(cfgEvt.config.observabilityEnabled).toBe(true);
       expect(cfgEvt.config.backupsEnabled).toBe(false);
       expect(cfgEvt.config.defaultBackupsEnabled).toBe(false);
+      expect(cfgEvt.config.toolOutputOverflowChars).toBeNull();
+      expect(cfgEvt.config.defaultToolOutputOverflowChars).toBeNull();
       expect(cfgEvt.config.maxSteps).toBe(25);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
         subAgentModel: "gpt-5.2-mini",
         observabilityEnabled: true,
         backupsEnabled: false,
+        toolOutputOverflowChars: null,
+      });
+    });
+
+    test("setConfig can clear the persisted toolOutputOverflowChars override and restore inheritance", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session, events } = makeSession({
+        config: makeConfig("/tmp/test-session", {
+          toolOutputOverflowChars: 12000,
+          inheritedToolOutputOverflowChars: 25000,
+          projectConfigOverrides: {
+            toolOutputOverflowChars: 12000,
+          },
+        }),
+        persistProjectConfigPatchImpl,
+      });
+
+      await session.setConfig({
+        clearToolOutputOverflowChars: true,
+      });
+
+      const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
+      expect(cfgEvt).toBeDefined();
+      expect(cfgEvt.config.toolOutputOverflowChars).toBe(25000);
+      expect("defaultToolOutputOverflowChars" in cfgEvt.config).toBe(false);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        clearToolOutputOverflowChars: true,
       });
     });
 
@@ -1240,6 +1280,101 @@ describe("AgentSession", () => {
       expect((session as any).state.providerState).toBeNull();
     });
 
+    test("copyProviderApiKey emits provider_auth_result and refreshes status/catalog", async () => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "session-copy-provider-key-"));
+      const connectionsFile = path.join(home, ".cowork", "auth", "connections.json");
+      await fs.mkdir(path.dirname(connectionsFile), { recursive: true });
+      await fs.writeFile(connectionsFile, JSON.stringify({
+        version: 1,
+        updatedAt: "2026-03-11T00:00:00.000Z",
+        services: {
+          "opencode-go": {
+            service: "opencode-go",
+            mode: "api_key",
+            apiKey: "opencode-go-key-1234",
+            updatedAt: "2026-03-11T00:00:00.000Z",
+          },
+        },
+      }), "utf-8");
+
+      const statuses = [
+        {
+          provider: "opencode-zen",
+          authorized: true,
+          verified: false,
+          mode: "api_key",
+          account: null,
+          message: "API key saved.",
+          checkedAt: "2026-03-11T00:00:00.000Z",
+          savedApiKeyMasks: { api_key: "open...1234" },
+        },
+      ];
+      const getProviderCatalogImpl = mock(async () => ({
+        all: [
+          { id: "opencode-go", name: "OpenCode Go", models: ["glm-5", "kimi-k2.5"], defaultModel: "glm-5" },
+          {
+            id: "opencode-zen",
+            name: "OpenCode Zen",
+            models: [
+              "glm-5",
+              "kimi-k2.5",
+              "nemotron-3-super-free",
+              "mimo-v2-flash-free",
+              "big-pickle",
+              "minimax-m2.5-free",
+              "minimax-m2.5",
+            ],
+            defaultModel: "glm-5",
+          },
+        ],
+        default: { "opencode-go": "glm-5", "opencode-zen": "glm-5" },
+        connected: ["opencode-go", "opencode-zen"],
+      }));
+      const getProviderStatusesImpl = mock(async () => statuses);
+      const connectProviderImpl = mock(async (opts: any) => ({
+        ok: true,
+        provider: opts.provider,
+        mode: "api_key",
+        storageFile: connectionsFile,
+        message: "Provider key saved.",
+        maskedApiKey: "open...1234",
+      }));
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          userAgentDir: path.join(home, ".agent"),
+        },
+        connectProviderImpl: connectProviderImpl as any,
+        getAiCoworkerPathsImpl: mock(({ homedir }: { homedir?: string } = {}) => ({
+          rootDir: path.join(homedir ?? home, ".cowork"),
+          authDir: path.join(homedir ?? home, ".cowork", "auth"),
+          configDir: path.join(homedir ?? home, ".cowork", "config"),
+          sessionsDir: path.join(homedir ?? home, ".cowork", "sessions"),
+          logsDir: path.join(homedir ?? home, ".cowork", "logs"),
+          skillsDir: path.join(homedir ?? home, ".cowork", "skills"),
+          connectionsFile,
+        })),
+        getProviderCatalogImpl: getProviderCatalogImpl as any,
+        getProviderStatusesImpl: getProviderStatusesImpl as any,
+      });
+
+      await session.copyProviderApiKey("opencode-zen", "opencode-go");
+
+      const authEvt = events.find((e) => e.type === "provider_auth_result");
+      expect(authEvt).toBeDefined();
+      if (authEvt && authEvt.type === "provider_auth_result") {
+        expect(authEvt.ok).toBe(true);
+        expect(authEvt.provider).toBe("opencode-zen");
+        expect(authEvt.methodId).toBe("api_key");
+        expect(authEvt.message).toContain("Copied OpenCode Go API key");
+      }
+      expect(connectProviderImpl).toHaveBeenCalledTimes(1);
+      expect(connectProviderImpl.mock.calls[0]?.[0]?.provider).toBe("opencode-zen");
+      expect(connectProviderImpl.mock.calls[0]?.[0]?.apiKey).toBe("opencode-go-key-1234");
+      expect(events.some((e) => e.type === "provider_status")).toBe(true);
+      expect(events.some((e) => e.type === "provider_catalog")).toBe(true);
+    });
+
     test("callbackProviderAuth emits provider_auth_result for oauth method", async () => {
       const getProviderCatalogImpl = mock(async () => ({
         all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.4"], defaultModel: "gpt-5.4" }],
@@ -1635,18 +1770,33 @@ describe("AgentSession", () => {
       const askEvt = events.find((e) => e.type === "ask") as any;
       session.handleAskResponse(askEvt.requestId, "answer");
 
-      expect(() => session.handleAskResponse(askEvt.requestId, "other")).not.toThrow();
+      session.handleAskResponse(askEvt.requestId, "other");
+      const warnEvt = events.findLast((evt) => evt.type === "log");
+      expect(warnEvt).toMatchObject({
+        type: "log",
+        line: `[warn] ask_response for unknown requestId: ${askEvt.requestId}`,
+      });
       await sendPromise;
     });
 
-    test("ignores unknown requestId without crashing", () => {
-      const { session } = makeSession();
-      expect(() => session.handleAskResponse("nonexistent-id", "test")).not.toThrow();
+    test("logs and ignores unknown requestId", () => {
+      const { session, events } = makeSession();
+      session.handleAskResponse("nonexistent-id", "test");
+      expect(events).toContainEqual({
+        type: "log",
+        sessionId: (session as any).id,
+        line: "[warn] ask_response for unknown requestId: nonexistent-id",
+      });
     });
 
-    test("ignores empty requestId without crashing", () => {
-      const { session } = makeSession();
-      expect(() => session.handleAskResponse("", "test")).not.toThrow();
+    test("logs and ignores empty requestId", () => {
+      const { session, events } = makeSession();
+      session.handleAskResponse("", "test");
+      expect(events).toContainEqual({
+        type: "log",
+        sessionId: (session as any).id,
+        line: "[warn] ask_response for unknown requestId: ",
+      });
     });
 
     test("cleans pending ask replay cache when prompt wait rejects", async () => {
@@ -1730,18 +1880,33 @@ describe("AgentSession", () => {
       const approvalEvt = events.find((e) => e.type === "approval") as any;
       session.handleApprovalResponse(approvalEvt.requestId, true);
 
-      expect(() => session.handleApprovalResponse(approvalEvt.requestId, false)).not.toThrow();
+      session.handleApprovalResponse(approvalEvt.requestId, false);
+      const warnEvt = events.findLast((evt) => evt.type === "log");
+      expect(warnEvt).toMatchObject({
+        type: "log",
+        line: `[warn] approval_response for unknown requestId: ${approvalEvt.requestId}`,
+      });
       await sendPromise;
     });
 
-    test("ignores unknown requestId without crashing", () => {
-      const { session } = makeSession();
-      expect(() => session.handleApprovalResponse("nonexistent-id", true)).not.toThrow();
+    test("logs and ignores unknown requestId", () => {
+      const { session, events } = makeSession();
+      session.handleApprovalResponse("nonexistent-id", true);
+      expect(events).toContainEqual({
+        type: "log",
+        sessionId: (session as any).id,
+        line: "[warn] approval_response for unknown requestId: nonexistent-id",
+      });
     });
 
-    test("ignores empty requestId without crashing", () => {
-      const { session } = makeSession();
-      expect(() => session.handleApprovalResponse("", false)).not.toThrow();
+    test("logs and ignores empty requestId", () => {
+      const { session, events } = makeSession();
+      session.handleApprovalResponse("", false);
+      expect(events).toContainEqual({
+        type: "log",
+        sessionId: (session as any).id,
+        line: "[warn] approval_response for unknown requestId: ",
+      });
     });
 
     test("cleans pending approval replay cache when prompt wait rejects", async () => {
@@ -3014,16 +3179,73 @@ describe("AgentSession", () => {
       }
     });
 
-    test("restoreSessionBackup supports restoring to original and checkpoint id", async () => {
-      const { session, events } = makeSession();
+    test("restoreSessionBackup routes original and checkpoint restores to the backup handle", async () => {
+      let restoreOriginalCalls = 0;
+      const restoreCheckpointCalls: string[] = [];
+      const backupFactory = mock(async (opts: SessionBackupInitOptions): Promise<SessionBackupHandle> => {
+        const createdAt = new Date().toISOString();
+        const checkpoints: SessionBackupPublicCheckpoint[] = [
+          {
+            id: "cp-0001",
+            index: 1,
+            createdAt,
+            trigger: "initial",
+            changed: false,
+            patchBytes: 0,
+          },
+        ];
+
+        const getState = (): SessionBackupPublicState => ({
+          status: "ready",
+          sessionId: opts.sessionId,
+          workingDirectory: opts.workingDirectory,
+          backupDirectory: `/tmp/mock-backups/${opts.sessionId}`,
+          createdAt,
+          originalSnapshot: { kind: "directory" },
+          checkpoints: [...checkpoints],
+        });
+
+        return {
+          getPublicState: () => getState(),
+          createCheckpoint: async (trigger) => {
+            const checkpoint: SessionBackupPublicCheckpoint = {
+              id: `cp-${String(checkpoints.length + 1).padStart(4, "0")}`,
+              index: checkpoints.length + 1,
+              createdAt: new Date().toISOString(),
+              trigger,
+              changed: true,
+              patchBytes: 42,
+            };
+            checkpoints.push(checkpoint);
+            return checkpoint;
+          },
+          restoreOriginal: async () => {
+            restoreOriginalCalls += 1;
+          },
+          restoreCheckpoint: async (checkpointId) => {
+            restoreCheckpointCalls.push(checkpointId);
+            if (!checkpoints.some((cp) => cp.id === checkpointId)) {
+              throw new Error(`Unknown checkpoint: ${checkpointId}`);
+            }
+          },
+          deleteCheckpoint: async () => false,
+          reloadFromDisk: async () => getState(),
+          close: async () => {},
+        };
+      });
+
+      const { session, events } = makeSession({ sessionBackupFactory: backupFactory });
       await session.createManualSessionCheckpoint();
       await session.restoreSessionBackup();
       await session.restoreSessionBackup("cp-0001");
 
+      expect(restoreOriginalCalls).toBe(1);
+      expect(restoreCheckpointCalls).toEqual(["cp-0001"]);
       const restoreEvents = events.filter(
         (e) => e.type === "session_backup_state" && e.reason === "restore"
       ) as Array<Extract<ServerEvent, { type: "session_backup_state" }>>;
-      expect(restoreEvents.length).toBeGreaterThanOrEqual(2);
+      expect(restoreEvents).toHaveLength(2);
+      expect(restoreEvents.every((evt) => evt.backup.status === "ready")).toBe(true);
     });
 
     test("deleteSessionCheckpoint emits error when checkpoint does not exist", async () => {

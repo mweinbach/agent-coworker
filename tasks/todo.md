@@ -1,3 +1,287 @@
+# Task: Use effective overflow default when workspace override is unset
+
+## Plan
+- [x] Audit the Developer page overflow state derivation against workspace runtime session config so inherited defaults render from the effective value.
+- [x] Patch the desktop Developer page to use the effective runtime overflow threshold and enabled state whenever `defaultToolOutputOverflowChars` is unset, without changing explicit override behavior.
+- [x] Add regression coverage for inherited numeric and inherited `null` defaults, run the required test/build commands, and record the results here.
+
+## Review
+- `apps/desktop/src/ui/settings/pages/DeveloperPage.tsx` now resolves the displayed spill-file enabled state and threshold from `workspaceRuntimeById[workspace.id].controlSessionConfig.toolOutputOverflowChars` whenever `defaultToolOutputOverflowChars` is unset, so inherited user-level or built-in defaults render correctly instead of falling back to `25000`.
+- The same Developer page now treats enable actions against an inherited disabled default (`toolOutputOverflowChars: null`) as an explicit built-in-threshold restore (`25000`) instead of sending another clear/inherit no-op. Existing explicit-override behavior is unchanged: numeric overrides can still revert to inherit, and disabled explicit overrides still restore inherited numeric defaults when one exists.
+- `apps/desktop/test/developer-page.test.tsx` now covers both missing-override inherited paths: inherited numeric thresholds render from runtime session config, and inherited disabled defaults allow `Enable default` to persist the built-in threshold.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/developer-page.test.tsx apps/desktop/test/workspace-settings-sync.test.ts --bail` -> pass (`20 pass, 0 fail`)
+  - `OPENCODE_API_KEY='' OPENCODE_ZEN_API_KEY='' ~/.bun/bin/bun test` -> pass (`2187 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> fails in unchanged desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345`)
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `git diff --check` -> pass
+
+# Task: Make MCP OAuth tests headless-safe and stabilize GitHub execution
+
+## Plan
+- [x] Audit the MCP OAuth provider/browser-open path and identify the minimal injection seam that keeps runtime behavior unchanged.
+- [x] Update the MCP OAuth provider tests to use a stubbed opener instead of the real external browser command, and tighten any related assertions around auto/code flows.
+- [x] Reproduce GitHub-sensitive failures or skips locally where possible, fix any deterministic CI assumptions uncovered by this task, and keep unrelated env-only failures called out separately.
+- [x] Run focused test coverage first, then the required broader verification/build commands, and record results here.
+
+## Review
+- `src/mcp/oauthProvider.ts` now accepts an optional injected `openUrl` dependency in `authorizeMCPServerOAuth()`. Production callers still default to `openExternalUrl`, but tests can stop the real OS/browser launch path entirely.
+- `test/mcp.oauth-provider.test.ts` now stubs the opener in auto mode and routes both authorize-path tests through the same local metadata/token server used by the exchange tests, so the file is fully headless and no longer depends on external OAuth discovery.
+- GitHub Actions PR check inspection (`gh` on PR `#35`, failing run `23019023411`) showed the active `Docs + Tests` failures were not MCP OAuth. The concrete failures were seven flaking websocket/REPL tests: `test/repl.restart-failure.test.ts`, `test/repl.disconnect-send.test.ts`, and `test/agentSocket.runtime.test.ts`.
+- `test/repl.restart-failure.test.ts` and `test/repl.disconnect-send.test.ts` no longer sleep for a fixed `5ms`; both now poll until the fake readline + fake websocket are actually connected, which removes the slow-runner race seen on GitHub.
+- `test/agentSocket.runtime.test.ts` now marks the shared-global websocket/timer cases as `test.serial(...)`, preventing Bun from interleaving tests that reset shared fake websocket state or patch global timers.
+- `.github/workflows/ci.yml` now enables `RUN_REMOTE_MCP_TESTS=1` in the `Docs + Tests` job and passes `OPENCODE_API_KEY` into both the unit-test job and the testing-environment harness job, so GitHub executes the remote MCP coverage instead of silently skipping it.
+- `test/runtime.pi-runtime.test.ts` now explicitly clears `OPENCODE_API_KEY` around the `opencode-go` metadata assertions so those tests stay deterministic even when CI exports a real key for remote integration coverage.
+- Verification:
+  - `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test test/mcp.oauth-provider.test.ts test/repl.restart-failure.test.ts test/repl.disconnect-send.test.ts test/agentSocket.runtime.test.ts --rerun-each 20` -> pass (`240 pass, 0 fail`)
+  - `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test test/mcp.oauth-provider.test.ts test/repl.restart-failure.test.ts test/repl.disconnect-send.test.ts test/agentSocket.runtime.test.ts --bail` -> pass
+  - `RUN_REMOTE_MCP_TESTS=1 OPENCODE_API_KEY='<redacted>' ~/.bun/bin/bun test test/mcp.remote.grep.test.ts test/agent.remote-mcp.grep.test.ts --bail` -> pass (`2 pass, 0 fail`)
+  - `OPENCODE_API_KEY='<redacted>' ~/.bun/bin/bun test test/runtime.pi-runtime.test.ts --test-name-pattern 'opencode-go runtime model resolution' --bail` -> pass (`2 pass, 0 fail`)
+  - `RUN_REMOTE_MCP_TESTS=1 OPENCODE_API_KEY='<redacted>' OPENCODE_ZEN_API_KEY='' CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test` -> pass (`2187 pass, 0 fail`)
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `~/.bun/bin/bun run typecheck` -> fails in unchanged desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345`)
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `git diff --check` -> pass
+
+# Task: Fix review follow-ups for download finalization, spill-file privacy, and overflow inheritance
+
+## Plan
+- [x] Replace `webFetch`’s access-then-rename download finalize path with an exclusive finalize flow that retries on late collisions, and add regression coverage for the late-`EEXIST` case.
+- [x] Harden `.ModelScratchpad` spill directories/files to private permissions (`0700`/`0600`) and add permission assertions to overflow runtime coverage.
+- [x] Add an explicit clear/inherit path for workspace overflow defaults across desktop store actions, websocket `set_config`, server config persistence, and the Developer settings UI.
+- [x] Update focused desktop/server/protocol regressions plus docs for the new inherit-default contract, then run targeted tests, full tests, typechecks, required builds, and record results here.
+
+## Review
+- `src/tools/webFetch.ts` no longer relies on access-time name reservation. Direct downloads now stream into a temp file inside `Downloads`, then finalize with `copyFile(..., COPYFILE_EXCL)` plus retry-on-`EEXIST`, so a file created after reservation cannot be atomically replaced by a blind `rename`. `test/tools.test.ts` covers the late-collision path and asserts the original file survives.
+- `src/runtime/toolOutputOverflow.ts` now creates `.ModelScratchpad` with `0700` and spill files with `0600`, plus best-effort `chmod` hardening after creation. `test/runtime.pi-runtime.test.ts` now checks the resulting directory/file modes.
+- Overflow-default reset now has a real inherit path instead of pinning `25000`: desktop workspace defaults can send `clearDefaultToolOutputOverflowChars`, websocket `set_config` accepts `clearToolOutputOverflowChars`, the server removes the persisted override from `.agent/config.json`, and live sessions reset to `inheritedToolOutputOverflowChars`. The UI copy/button now says `Inherit default` to match behavior.
+- Added regression coverage across `test/protocol.test.ts`, `test/session.test.ts`, `test/server.test.ts`, `apps/desktop/test/developer-page.test.tsx`, `apps/desktop/test/workspace-settings-sync.test.ts`, and `apps/desktop/test/workspace-startup.test.ts`, and updated `docs/websocket-protocol.md` with protocol version `7.15`.
+- Verification:
+  - `OPENCODE_API_KEY='' OPENCODE_ZEN_API_KEY='' ~/.bun/bin/bun test` -> pass (`2185 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> fails in unchanged desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345`)
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `git diff --check` -> pass
+
+# Task: Implement review follow-ups for webFetch, Exa key precedence, and overflow preview behavior
+
+## Plan
+- [x] Keep `opencode-go` intentionally unpriced, add an explicit in-code note, and lock that contract with pricing tests.
+- [x] Flip Exa key resolution so the saved Cowork Exa key overrides `EXA_API_KEY`, with env fallback only when no saved key is available.
+- [x] Tighten `webFetch` so supported document filenames always download even under text MIME, and replace buffered downloads with bounded streaming plus cleanup/limit coverage.
+- [x] Increase overflow previews to 5,000 characters, update runtime/docs/Desktop copy to describe threshold-vs-preview behavior accurately, and add focused regressions.
+- [x] Run focused tests first, then required broader verification/build commands, and record results here.
+
+## Review
+- `src/session/pricing.ts` now documents that `opencode-go` is intentionally usage-based and excluded from local pricing / pricing overrides, and `test/session/pricing.test.ts` locks that behavior so override env vars are ignored for `opencode-go` models.
+- `src/tools/exa.ts` now prefers the saved Cowork Exa key over ambient `EXA_API_KEY`, falling back to the env var only when no saved key is available; `test/tools.exa.test.ts` covers both precedence directions.
+- `src/tools/webFetch.ts` now treats supported document filenames as downloadable even under text MIME, preserves the filename source that actually triggered a document download, streams normal direct-download bodies to disk with cleanup on overflow, and rejects body-less direct downloads unless `Content-Length` makes the fallback bounded. `test/tools.test.ts` adds regressions for text/plain markdown downloads, conflicting URL-vs-`Content-Disposition` names, streamed overflow cleanup, and body-less fallback behavior.
+- Overflow spill behavior now keeps a fixed 5,000-character inline preview while saving the full payload to disk: `src/shared/toolOutputOverflow.ts`, `src/runtime/toolOutputOverflow.ts`, `test/runtime.pi-runtime.test.ts`, and `test/runtime.openai-responses-runtime.test.ts` now align on that contract.
+- Desktop settings copy and protocol docs now match runtime semantics: `apps/desktop/src/ui/settings/pages/DeveloperPage.tsx`, `apps/desktop/test/developer-page.test.tsx`, and `docs/websocket-protocol.md` describe `toolOutputOverflowChars` as the spill trigger threshold while the inline preview remains fixed at the first 5,000 characters.
+- Verification:
+  - `~/.bun/bin/bun test test/tools.test.ts test/tools.exa.test.ts test/session/pricing.test.ts apps/desktop/test/developer-page.test.tsx test/docs.check.test.ts test/runtime.openai-responses-runtime.test.ts --bail && ~/.bun/bin/bun test test/runtime.pi-runtime.test.ts --test-name-pattern "overflow|short tool output inline|spills oversized" --bail` -> pass (`220 pass, 0 fail` across the two commands)
+  - `~/.bun/bin/bun test` -> fails only in existing env-sensitive OpenCode Go runtime tests because ambient `OPENCODE_API_KEY` populates `resolved.apiKey` (`test/runtime.pi-runtime.test.ts:159` and `:182`); otherwise passes (`2176 pass, 2 skip, 2 fail`)
+  - `~/.bun/bin/bun run typecheck` -> fails in unchanged desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345`)
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `git diff --check` -> pass
+
+# Task: Stop auto-sync from persisting the inherited tool overflow default
+
+## Plan
+- [x] Split the `session_config` overflow contract so the harness reports the explicit persisted default separately from the live effective threshold.
+- [x] Update desktop control-session hydration and auto-sync so thread connect only replays an explicit overflow default, not the inherited built-in value.
+- [x] Add regression coverage, run the relevant tests/builds, and record the results here.
+
+## Review
+- `session_config` now separates the live effective overflow threshold from the explicit project-scoped default: `toolOutputOverflowChars` stays the runtime value, while optional `defaultToolOutputOverflowChars` is emitted only when `.agent/config.json` explicitly set an override. The server tracks that explicitness through `AgentConfig.projectConfigOverrides` so built-in or user-level defaults do not masquerade as workspace defaults.
+- Desktop control-session hydration now mirrors `defaultToolOutputOverflowChars` into workspace state and leaves the live effective threshold in `workspaceRuntime.controlSessionConfig`, so reconnects clear stale local overflow defaults when the harness is inheriting the built-in setting.
+- Automatic thread-connect sync now replays only explicit harness overflow defaults. A control session that merely reports the effective built-in `25000` threshold no longer causes later `set_config` writes to pin that value into `.agent/config.json`.
+- Added regressions across `test/session.test.ts`, `test/server.test.ts`, `test/agentSocket.parse.test.ts`, and `apps/desktop/test/workspace-settings-sync.test.ts`, plus protocol docs/version updates in `docs/websocket-protocol.md`.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/workspace-settings-sync.test.ts test/session.test.ts test/server.test.ts test/agentSocket.parse.test.ts test/docs.check.test.ts --bail` -> pass (`300 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> fails in unchanged desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345`)
+  - `~/.bun/bin/bun test` -> fails in existing env-sensitive OpenCode Go runtime tests because `resolved.apiKey` is set from local environment instead of `undefined` (`test/runtime.pi-runtime.test.ts:159` and `:182`); all new overflow regressions passed
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `~/.bun/bin/bun run desktop:build` -> pass after approved networked Electron download
+  - `git diff --check` -> pass
+
+# Task: Fix webFetch markdown attachment download classification
+
+## Plan
+- [x] Add markdown filename extensions to the `webFetch` downloadable document classifier.
+- [x] Add a focused regression that covers octet-stream markdown attachments named only via `Content-Disposition`.
+- [x] Run focused tests plus repo verification commands, then record the results here.
+
+## Review
+- `src/tools/webFetch.ts` now treats `.md` and `.markdown` filenames as downloadable documents, so markdown attachments served as `application/octet-stream` no longer fall through to the blocked binary path.
+- `test/tools.test.ts` now covers markdown downloads where the only filename signal comes from `Content-Disposition`, which is the specific regression path surfaced in review.
+- Verification:
+  - `~/.bun/bin/bun test test/tools.test.ts --bail` -> pass (`163 pass, 0 fail`)
+  - `~/.bun/bin/bun test` -> pass (`2172 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `git diff --check` -> pass
+
+# Task: Fix review findings for webFetch, webSearch, and scratchpad backups
+
+## Plan
+- [x] Restrict `.ModelScratchpad` exclusions to the workspace root in backup copy, size, and fingerprint paths, and add regression coverage for nested directories.
+- [x] Fix `webFetch` binary classification so octet-stream image attachments can be recognized from `Content-Disposition` filenames and downloaded names are normalized to the classified MIME.
+- [x] Remove Brave-backed `webSearch` behavior and update tests to the Exa-only contract.
+- [x] Run focused tests plus the required repo verification commands, then record results here.
+
+## Review
+- `src/server/sessionBackup/fileSystem.ts` and `src/server/sessionBackup/fingerprint.ts` now exclude only the workspace-root `.ModelScratchpad`, so nested directories with the same name are preserved in directory snapshots, counted in snapshot sizing, and included in workspace fingerprints.
+- `src/tools/webFetch.ts` now recognizes octet-stream image attachments from `Content-Disposition` filenames and normalizes saved download extensions to the MIME that classified the response, preventing misnamed binary files from being re-read as plain text later.
+- `src/tools/webSearch.ts` no longer advertises or uses Brave-backed search; the tool is now Exa-only across providers, and the affected `webSearch` contract tests were updated accordingly.
+- Added focused regressions in `test/session-backup.test.ts` for nested `.ModelScratchpad` fingerprinting, sizing, and restore behavior, plus `test/tools.test.ts` coverage for MIME-normalized document downloads and octet-stream image attachments named via `Content-Disposition`.
+- Verification:
+  - `~/.bun/bin/bun test test/tools.test.ts test/session-backup.test.ts --bail` -> pass (`178 pass, 0 fail`)
+  - `~/.bun/bin/bun test` -> pass (`2171 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `~/.bun/bin/bun run desktop:build` -> pass
+
+# Task: Fix desktop provider key reuse, workspace overflow persistence, and OpenCode pricing contract
+
+## Plan
+- [x] Hide the OpenCode sibling key-copy action when the target provider already has its own saved API key, and add focused UI coverage.
+- [x] Round-trip `defaultToolOutputOverflowChars` through Electron persistence/load/save and verify the desktop workspace-default setting remains persistent across restart-equivalent flows.
+- [x] Remove local pricing data/estimation for OpenCode Go while keeping OpenCode Zen pricing intact, update the affected runtime/pricing tests, and run the requested verification commands.
+
+## Review
+- `apps/desktop/src/ui/settings/pages/ProvidersPage.tsx` now suppresses the OpenCode sibling key-copy button when the target provider already has its own saved API key, and `apps/desktop/test/providers-page.test.ts` covers both the visible and hidden cases.
+- Audited the full desktop persistence path for the workspace overflow setting: renderer state building, Electron IPC schema validation, main-process `PersistenceService`, bootstrap rehydration, and workspace-default sync to the harness. The only missing round-trip was `apps/desktop/electron/services/persistence.ts`, which now preserves `defaultToolOutputOverflowChars`; `apps/desktop/test/persistence-state-sanitization.test.ts` locks in custom and `null` values across save/load.
+- OpenCode Go no longer exposes local pricing data. `src/session/pricing.ts` drops Go pricing entries and override support, `src/providers/opencodeShared.ts` now keeps shared model capabilities separate from Zen-only pricing metadata, and `src/runtime/piRuntime.ts`/`src/runtime/openaiResponsesProjector.ts` stop synthesizing estimated cost for Go sessions while preserving Zen pricing.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/providers-page.test.ts apps/desktop/test/persistence-state-sanitization.test.ts apps/desktop/test/workspace-settings-sync.test.ts test/session/pricing.test.ts test/runtime.pi-runtime.test.ts test/runtime.pi-message-bridge.test.ts --bail` -> pass (`83 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> fails in the existing remote MCP coverage only: `remote MCP (mcp.grep.app) > connects, discovers tools, and executes searchGitHub` returned `Streamable HTTP error ... 500: Internal Server Error`
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `git diff --check` -> pass
+
+# Task: Repo-wide test audit and coverage hardening
+
+## Plan
+- [x] Audit the major harness, provider, tool, TUI, and desktop surfaces with subagents plus local heuristics to identify missing or weak tests that would not catch real regressions.
+- [x] Add or strengthen the highest-value tests, favoring harness-level contract coverage when UI behavior depends on shared core logic.
+- [x] Run focused suites for changed areas, then run repo verification (`bun test`, `bun run typecheck`, `bun run build:server-binary`, `bun run build:desktop-resources`, `bun run desktop:build`) and record outcomes here.
+
+## Review
+- `apps/desktop/src/app/store.actions/bootstrap.ts` now preserves the persisted `defaultToolOutputOverflowChars` shape during init: explicit `null` stays `null`, explicit numeric values stay numeric, and omitted values remain omitted instead of being synthesized to `25000` during desktop rehydration.
+- `src/shared/persistentSubagents.ts` now derives persistent subagent provider validation from shared `PROVIDER_NAMES`, so schema acceptance stays aligned with the main provider source of truth as providers are added or removed.
+- Added focused regressions in `apps/desktop/test/workspace-settings-sync.test.ts` for bootstrap overflow rehydration and in `test/shared/persistentSubagents.test.ts` for provider coverage across the shared provider list.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/workspace-settings-sync.test.ts test/shared/persistentSubagents.test.ts` -> pass (`15 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> fails in existing remote MCP coverage: `remote MCP (mcp.grep.app) > connects, discovers tools, and executes searchGitHub` returned `Streamable HTTP error ... 500: Internal Server Error`
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in existing TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`); no standalone TUI build script is defined in the repo root scripts
+  - `git diff --check` -> pass
+- Added `test/tui.syncEventReducer.test.ts` with reset, dedupe, tool-log pairing, ask/approval, backup, and tool-list normalization scenarios plus targeted assertions on state mutations.
+- Added `test/tui.socketLifecycle.test.ts` with a mocked `AgentSocket` to cover resume semantics, restart trimming, clearing `latestSessionId`, and ignoring stale events after disconnect.
+- Ran `bun test test/tui.syncEventReducer.test.ts test/tui.socketLifecycle.test.ts` (10 pass, 0 fail).
+- Ran `bun test` (fails because `ensureRipgrep` still resolves a pre-installed `rg` binary despite `disableDownload: true` and the expectation for a rejection); other verification commands (`bun run typecheck`, `bun run build:server-binary`, `bun run build:desktop-resources`, `bun run desktop:build`) succeeded.
+- Added targeted coverage for `utils/browser`, `atomicFile`, `createTools` persistent agent wiring, and `tools/exa` plus the supporting spawn-injection shim.
+- Verification: `bun test test/utils.browser.test.ts test/atomicFile.test.ts test/tools.test.ts test/tools.exa.test.ts`.
+
+# Task: Add desktop Developer settings for tool output overflow spill files
+
+## Plan
+- [x] Extend desktop workspace state/persistence so `toolOutputOverflowChars` can be stored as a workspace developer setting.
+- [x] Wire desktop control-session sync and workspace-default application so the selected workspace can push `toolOutputOverflowChars` to control/thread sessions.
+- [x] Add a Developer settings UI for the active workspace with enable/disable, threshold editing, and reset-to-default controls.
+- [x] Add focused desktop tests for state sync/UI coverage, then run verification and record results.
+
+## Review
+- Added a workspace-scoped desktop default for tool output overflow thresholds across `apps/desktop/src/app/types.ts`, desktop persistence/schema normalization, new-workspace defaults, control-session hydration, and workspace-default propagation to control sessions and live threads.
+- Updated the desktop workspace-default sync path so `set_config` now carries `toolOutputOverflowChars` alongside the existing safe runtime defaults, while preserving the deferred model/sub-agent/provider-option behavior for busy threads.
+- Built the control into `apps/desktop/src/ui/settings/pages/DeveloperPage.tsx` under Developer settings. The new card targets the selected workspace, supports enable/disable via `null`, editable numeric thresholds, and a reset-to-default action for `25000`.
+- Added desktop coverage for the new state and UI in `apps/desktop/test/workspace-settings-sync.test.ts`, `apps/desktop/test/desktop-schemas.test.ts`, and `apps/desktop/test/developer-page.test.tsx`.
+- Verification:
+  - `bun test apps/desktop/test/developer-page.test.tsx apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/desktop-schemas.test.ts --bail` -> pass
+  - `bun test` -> pass (`2106 pass, 0 fail`)
+  - `bun run typecheck` -> pass
+  - `git diff --check` -> pass
+
+# Task: Add tool output overflow spill files
+
+## Plan
+- [x] Extend config/protocol/session state for `toolOutputOverflowChars` persistence and websocket exposure.
+- [x] Implement runtime spill-file handling in `executeToolCall()` and remove unconditional `bash`/`grep` truncation.
+- [x] Exclude `.ModelScratchpad` from git noise and session/workspace backup snapshots.
+- [x] Add focused tests for config/protocol/runtime/stream/backup behavior and run verification.
+
+## Review
+- Added a workspace-scoped `toolOutputOverflowChars` config defaulting to `25000` through `AgentConfig`, `config/defaults.json`, config loading, websocket `set_config` parsing, `session_config` emission, persisted project config patches, and desktop/TUI sync types.
+- Added shared overflow helpers in `src/shared/toolOutputOverflow.ts` and `src/runtime/toolOutputOverflow.ts`, then wired `src/runtime/piRuntime.ts` so oversized non-image tool results spill into `<workingDirectory>/.ModelScratchpad/*.txt`, emit a compact pointer/preview payload for the model, and send a companion `file` stream part for clients.
+- Removed unconditional post-exec truncation from `src/tools/bash.ts` and `src/tools/grep.ts` so the runtime spill layer receives full buffered output. Updated `test/tools.test.ts` to assert the new bash contract.
+- Hardened backup handling so `.ModelScratchpad` stays out of git, backup fingerprints, tar/directory snapshots, byte-size accounting, restore copies, and workspace clearing during restore. The tar snapshot path now stages a filtered copy before archiving so scratchpad files never enter tar snapshots.
+- Updated websocket docs and added focused regressions for config parsing, session snapshots, overflow runtime behavior, OpenAI continuation pointer text, model-stream/file chunks, backup exclusions, and desktop workspace sync.
+- Verification:
+  - `bun test test/config.test.ts test/runtime.pi-runtime.test.ts test/runtime.openai-responses-runtime.test.ts test/session.stream-pipeline.test.ts test/server.model-stream.test.ts test/session-backup.test.ts apps/desktop/test/workspace-settings-sync.test.ts test/protocol.test.ts test/agentSocket.parse.test.ts --bail` -> pass
+  - `bun test test/agent.remote-mcp.grep.test.ts --bail` -> pass
+  - `bun test` -> pass (`2076 pass, 0 fail`)
+  - `bun run typecheck` -> pass
+  - `git diff --check` -> pass
+
+# Task: Add Exa links and image links to webFetch output
+
+## Plan
+- [x] Audit the Exa contents helper and current `webFetch` formatting to identify where link/image-link extras are being dropped.
+- [x] Update the shared Exa contents request/parse path so `webFetch` requests highlights plus `extras.links` and `extras.imageLinks`, then include those sections in the returned text.
+- [x] Add focused `webFetch` regressions for links/image-links output and run targeted verification.
+
+## Review
+- `src/tools/exa.ts` now requests richer Exa contents for `webFetch`: `text: true`, `highlights.maxCharacters = 4000`, and `extras` for up to 10 page links plus 5 image links. The parser now preserves those extras and falls back to highlights when Exa omits full text but still returns useful content.
+- `src/tools/webFetch.ts` now formats Exa-backed page fetches as extracted text followed by `Links:` and `Image Links:` sections when available, then applies the existing `maxLength` truncation to the combined output. Local direct-image and document download behavior is unchanged.
+- Updated `test/tools.test.ts` with regressions that assert the Exa contents request shape and verify the returned `webFetch` output includes links/image-links, including a highlights-only fallback case.
+- Fixed the stale README contract so it no longer claims that `webFetch` returns inline image content; it now describes link/image-link extras plus download-to-`Downloads` behavior.
+- Verification:
+  - `bun test test/tools.test.ts --test-name-pattern "webFetch tool"` -> pass (`23 pass, 0 fail`)
+  - `bunx tsc --noEmit` -> pass
+  - `git diff --check` -> pass
+
+# Task: Add document-download handling to webFetch
+
+## Plan
+- [x] Audit the current `webFetch` response classification and choose the minimal harness-level contract for downloadable document types.
+- [x] Implement document-like fetch handling so supported binary/text docs are saved into `<workingDirectory>/Downloads` and the tool returns a local file path message.
+- [x] Update prompt/docs guidance and add focused regression coverage for supported doc content types, naming, and fallback behavior.
+- [x] Run targeted verification and record outcomes in the review section.
+
+## Review
+- `src/tools/webFetch.ts` now classifies a third response mode for document-style downloads. PDFs, Markdown documents, Office files, spreadsheets, slide decks, and similar supported types are saved into `<workingDirectory>/Downloads`, with filename selection derived from `Content-Disposition`, URL basename, and MIME fallback, plus `-2`/`-3` suffixing to avoid overwriting existing files.
+- The `webFetch` tool now returns plain text in the form `File downloaded /absolute/path/...`, which keeps the runtime/tool-result contract unchanged while giving the model a stable workspace path it can use in follow-up tool calls.
+- Updated the shipped README and system prompt templates so the documented `webFetch` contract now mentions inline image handling and `Downloads/` file saves for document-like responses.
+- Added focused regressions in `test/tools.test.ts` for PDF downloads, Markdown-by-extension downloads, Office MIME downloads with `Content-Disposition` filenames, octet-stream extension fallback, and collision-safe renaming. Added prompt coverage in `test/prompt.test.ts` for the new `File downloaded ...` guidance across shipped prompt files.
+- Verification:
+  - `bun test test/tools.test.ts test/prompt.test.ts` -> pass (`201 pass, 0 fail`)
+  - `./node_modules/.bin/tsc --noEmit` -> pass
+  - `git diff --check` -> pass
+  - `bun run typecheck` -> fails in existing desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345` in `observability_status` typing); unrelated to this `webFetch` change.
+
 # Task: Add standalone cowork-server Bun binary release pipeline
 
 ## Plan
@@ -127,6 +411,15 @@
 - Desktop and TUI backup controls now expose the live-session backup toggle, the desktop backup page can delete an entire backup entry, and workspace settings persist `defaultBackupsEnabled` for future sessions.
 - Verification:
   - `bun test test/session-backup.test.ts test/workspace-backups.test.ts test/protocol.test.ts test/server.test.ts test/session.test.ts test/agentSocket.parse.test.ts apps/desktop/test/backup-page.test.ts apps/desktop/test/protocol-v2-events.test.ts apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/desktop-schemas.test.ts apps/desktop/test/persistence-state-sanitization.test.ts` -> pass (`504 pass, 0 fail`)
+
+# Task: Preserve desktop overflow defaults on bootstrap and align persistent subagent provider validation
+
+## Plan
+- [ ] Update desktop bootstrap hydration so persisted `defaultToolOutputOverflowChars` values, including explicit `null`, survive rehydration instead of being reset to the default.
+- [ ] Replace the hard-coded provider enum in `src/shared/persistentSubagents.ts` with the shared provider source of truth from `src/types.ts`.
+- [ ] Add or update focused tests for desktop bootstrap hydration and persistent subagent provider parsing, then run verification and record the results.
+
+## Review
   - `bun run typecheck` -> pass
 
 # Task: Redesign workspace backup settings into a recovery console
@@ -161,6 +454,28 @@
 - Verification:
   - `~/.bun/bin/bun test apps/desktop/test/backup-page.test.ts apps/desktop/test/settings-nav.test.ts apps/desktop/test/protocol-v2-events.test.ts --bail` -> pass (`44 pass, 0 fail`)
   - `~/.bun/bin/bun run typecheck` -> pass
+
+# Task: Audit repo-wide test coverage for missing or ineffective assertions
+
+## Plan
+- [x] Inventory the current test surface and identify concrete weak or missing coverage areas across harness, providers, and UI/client code.
+- [x] Add or strengthen the highest-signal regressions without rewriting unrelated production behavior.
+- [x] Run targeted verification for each touched area, then run broader repo validation and record any remaining gaps or pre-existing issues.
+
+## Review
+- Strengthened `test/decode-client-message.test.ts` so websocket decode coverage now proves all protocol error-code mappings that matter in production: unsupported raw payloads, non-object JSON envelopes, missing `type`, and known-message validation failures.
+- Strengthened `test/agentSocket.runtime.test.ts` so `AgentSocket` no longer relies on smoke coverage for reconnect behavior. The tests now prove resume URL construction, deferred send-queue flushing until `server_hello`, and keepalive pings only after a session is established.
+- Strengthened `test/agentSocket.parse.test.ts` so the client parser proves `safeParseServerEventDetailed(...)` preserves `unknown_type`, `invalid_envelope`, and `invalid_event` distinctions instead of only falling back to null-ish parse failures.
+- Strengthened `test/providers/auth-registry.test.ts` so provider auth coverage now checks trimmed API-key forwarding, blank-key rejection before side effects, full OAuth callback context forwarding, and missing-source-key copy failures instead of mostly asserting `ok`/mock-call counts.
+- Strengthened `test/server.commands.test.ts` so command resolution proves real outcomes: skill front matter is stripped before execution, config commands override built-ins, and quoted placeholder arguments stay grouped correctly.
+- Verification:
+  - `~/.bun/bin/bun test test/decode-client-message.test.ts test/providers/auth-registry.test.ts test/agentSocket.runtime.test.ts test/agentSocket.parse.test.ts test/server.commands.test.ts --bail` -> pass (`50 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` in the default environment -> fails for pre-existing environment-sensitive reasons unrelated to this patch set:
+    - remote MCP tests attempted live `mcp.grep.app` access because `RUN_REMOTE_MCP_TESTS` was enabled in the shell
+    - CLI REPL tests hit `EPERM` writing under `/Users/mweinbach/.cowork/state`
+    - `test/mcp.oauth-provider.test.ts` hit a pre-existing `EADDRINUSE` failure while binding an auto-OAuth callback server on `127.0.0.1:0`
+  - `HOME=/tmp/agent-coworker-test-home RUN_REMOTE_MCP_TESTS=0 ~/.bun/bin/bun test` -> remote MCP and CLI-home failures were removed, but the suite still stopped on the same pre-existing `test/mcp.oauth-provider.test.ts` `EADDRINUSE` callback-capture failure.
 
 # Task: Implement workspace backup settings page
 
@@ -2915,3 +3230,294 @@
 - `~/.bun/bin/bun run typecheck` -> pass
 - `~/.bun/bin/bun test` -> pass (`1998 pass, 2 skip, 0 fail`)
 - `git diff --check` -> pass
+
+# Task: Add OpenCode Go provider support for GLM-5 and Kimi K2.5
+
+## Plan
+- [x] Extend provider identity, catalogs, auth, pricing, and runtime wiring to add a first-class `opencode-go` provider routed through the PI runtime.
+- [x] Update thin CLI/desktop/protocol/docs surfaces so `opencode-go` appears as a normal provider with the two allowed models only.
+- [x] Add focused regression coverage for provider parsing/catalog/auth/status, PI model resolution, runtime selection, pricing, and reasoning-mode behavior.
+- [x] Run focused verification, then full `bun test`, and record the outcome below.
+
+## Review
+- Added a first-class `opencode-go` provider across the harness core. `ProviderName`, provider/auth registries, model catalog, connection catalog, pricing, and provider model adapters now all understand `opencode-go`, with a dedicated `src/providers/opencode-go.ts` entry and API-key auth only.
+- Routed `opencode-go` through the PI runtime with explicit custom `openai-completions` metadata in `src/runtime/piRuntime.ts`. `glm-5` and `kimi-k2.5` now resolve to `https://opencode.ai/zen/go/v1` with the requested context windows, token limits, and pricing, while keeping `provider: "opencode"` so runtime env fallback still honors `OPENCODE_API_KEY`.
+- Kept the existing OpenAI-compatible settings scope unchanged. `opencode-go` does not enter the editable `providerOptions` path, does not use OpenAI/Codex continuation, and continues to stream with the existing `"reasoning"` mode rather than the Responses `"summary"` mode.
+- Updated thin presentation surfaces only where needed: desktop provider labels in `ChatView.tsx`, `ProvidersPage.tsx`, and `WorkspacesPage.tsx`, plus websocket protocol documentation examples for `ProviderName`, `provider_catalog`, and `provider_auth_methods`.
+- Added focused regressions for provider parsing, auth methods, connection catalog, saved-key/env precedence, connect/provider-status behavior, provider model creation, PI model resolution, runtime selection, pricing, and reasoning mode.
+- Fixed one typecheck-only exhaustiveness hole in `src/server/sessionTitleService.ts` by adding `opencode-go` to the title-model map and defaulting it to `glm-5`.
+
+### Verification
+- `bun test test/types.test.ts test/providers/auth-registry.test.ts test/providers/index.test.ts test/providers/cross-provider.test.ts test/providers/saved-keys.test.ts test/providers/connection-catalog.test.ts test/connect.test.ts test/providerStatus.test.ts test/runtime.selection.test.ts test/runtime.pi-runtime.test.ts test/server.model-stream.test.ts test/session/pricing.test.ts` -> pass (`280 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- `bun test` -> pass (`2019 pass, 2 skip, 0 fail`)
+- Live OpenCode Go smoke using `OPENCODE_API_KEY` from `.env` via the real PI runtime:
+  - `glm-5` -> `pong`, usage `{ promptTokens: 15, completionTokens: 48, totalTokens: 63, estimatedCostUsd: 0.00016860000000000003 }`
+  - `kimi-k2.5` -> `pong`, usage `{ promptTokens: 20, completionTokens: 206, totalTokens: 226, estimatedCostUsd: 0.00063 }`
+- `git diff --check` -> pass
+
+# Task: Fix OpenCode Go webSearch tool crash in PI runtime
+
+## Plan
+- [x] Reproduce and trace the `def.description` crash path from desktop/server error output into the runtime tool registry.
+- [x] Fix the missing `opencode-go` webSearch tool wiring and harden PI tool mapping against undefined tool definitions.
+- [x] Add focused regression coverage, run the relevant tests/typecheck, and record the verified outcome below.
+
+## Review
+- Root cause was in `src/tools/webSearch.ts`: `createWebSearchTool(...)` only returned a tool for `google`, `openai`, `anthropic`, and `codex-cli`. After adding `opencode-go`, the factory fell off the end and `createTools(...)` produced `webSearch: undefined`, which then crashed `toolMapToPiTools(...)` at `def.description`.
+- Fixed the provider wiring by making `createWebSearchTool(...)` use the Google-specific Exa-only branch only for `google`, and return the standard BRAVE/EXA-backed tool for every other provider, including `opencode-go`.
+- Hardened `src/runtime/piRuntime.ts` so `toolMapToPiTools(...)` skips malformed or undefined tool definitions instead of crashing the entire turn. That keeps this class of provider-wiring bug from surfacing as a fatal runtime exception.
+- Added focused regressions in `test/tools.test.ts` and `test/runtime.pi-runtime.test.ts` to prove `createTools(...)` returns an executable `webSearch` tool for `opencode-go` and that PI tool mapping ignores undefined tool entries.
+
+### Verification
+- `bun test test/tools.test.ts test/runtime.pi-runtime.test.ts` -> pass (`162 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- Live OpenCode Go smoke using the real `OPENCODE_API_KEY` from `.env` with prompt `can you research the macbook neo reviews and create me a review summary`:
+  - completed without the `def.description` crash
+  - returned model text beginning with `I'll search for information about "MacBook Neo"...`
+  - emitted reasoning stream parts instead of failing before the turn started
+
+# Task: Fix duplicate final assistant response after multi-step PI streaming
+
+## Plan
+- [x] Inspect the local desktop transcript for the affected thread to confirm whether the duplicate final response is stored twice or rendered twice.
+- [x] Trace the desktop replay/live assistant-message dedupe path for PI multi-step turns and identify why the merged fallback `assistant_message` still renders after streamed assistant text.
+- [x] Implement the shared desktop dedupe fix, add focused regression coverage, and run the relevant desktop tests/typecheck.
+
+## Review
+- Checked the real desktop transcript at `/Users/mweinbach/Library/Application Support/Cowork/transcripts/9d31b90b-f5b0-40ad-b41c-a61692fd504f.jsonl`. The duplicate was not two persisted final messages. The transcript contained five streamed assistant step messages plus one fallback `assistant_message` whose text was the merged concatenation of those same five messages.
+- Root cause was in desktop dedupe, not storage. `apps/desktop/src/app/store.feedMapping.ts` only skipped a fallback `assistant_message` when it matched the last streamed assistant chunk (or ended with it for raw-backed turns). For PI multi-step turns, the fallback matched the concatenation of all assistant messages since the last user turn, so it still rendered as a sixth duplicate item.
+- Fixed the shared dedupe helper so it also compares the fallback `assistant_message` against the concatenated assistant feed text since the last user message. That shared helper is used by both transcript replay and the live thread reducer, so the same fix now applies in both paths.
+- Added a focused desktop regression proving that a normalized multi-step streamed turn keeps the two streamed assistant messages and suppresses the merged fallback assistant message.
+
+### Verification
+- `bun test --cwd apps/desktop test/store-feed-mapping.test.ts test/thread-reconnect.test.ts` -> pass (`19 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- `git diff --check` -> pass
+- Real transcript sanity check with the patched mapper:
+  - before fix, the affected thread mapped to `assistantCount: 6`
+  - after fix, the same transcript maps to `assistantCount: 5`
+  - the extra merged fallback item is gone, leaving only the streamed step messages plus the final streamed answer
+
+# Task: Add `opencode-zen` as a sibling provider to `opencode-go`
+
+## Plan
+- [x] Refactor the current OpenCode provider metadata into shared helpers and add `opencode-zen` across provider/runtime/catalog/pricing surfaces while keeping `opencode-go` stable.
+- [x] Add a harness-level `provider_auth_copy_api_key` flow that copies a saved API key between the two OpenCode providers without exposing the raw secret to clients.
+- [x] Wire the desktop Providers page and provider actions to surface `OpenCode Zen`, keep labels distinct, and offer one-click sibling key reuse only for saved keys.
+- [x] Add focused provider/runtime/protocol/desktop regressions, update websocket docs, and run the required verification.
+
+## Review
+- Added a shared OpenCode provider definition layer in `src/providers/opencodeShared.ts` so `opencode-go` and `opencode-zen` now derive their labels, model catalog, pricing metadata, adapter ids, base URLs, and provider-specific env vars from one place. `opencode-go` stays on `https://opencode.ai/zen/go/v1` with `OPENCODE_API_KEY`; `opencode-zen` uses `https://opencode.ai/zen/v1` with `OPENCODE_ZEN_API_KEY`.
+- Extended the harness/provider surfaces to treat `opencode-zen` as a first-class provider everywhere `ProviderName` participates: catalogs, auth registry, pricing, runtime selection, PI model resolution, session-title defaults, protocol parsing, and provider/model labels in desktop chat and workspace settings.
+- Added a new websocket client message, `provider_auth_copy_api_key`, and implemented the copy on the server in `ProviderAuthManager`/`authRegistry`. The copy only works between the two OpenCode siblings, only for saved connection-store API keys, and reuses the existing `provider_auth_result`, `provider_status`, and `provider_catalog` refresh flow so no raw key ever leaves the harness.
+- Updated the desktop Providers page to render both `OpenCode Go` and `OpenCode Zen` and to show a one-click `Use OpenCode Go key` / `Use OpenCode Zen key` action only when the sibling provider has a saved masked API key. Env-only keys do not surface a copy action.
+- Updated the websocket protocol docs to version `7.12`, documented the new client message, and refreshed provider/auth catalog examples so both OpenCode providers appear in the public contract.
+
+### Verification
+- `bun test test/types.test.ts test/providers/auth-registry.test.ts test/providers/index.test.ts test/providers/cross-provider.test.ts test/providers/saved-keys.test.ts test/providers/connection-catalog.test.ts test/connect.test.ts test/providerStatus.test.ts test/runtime.selection.test.ts test/runtime.pi-runtime.test.ts test/server.model-stream.test.ts test/protocol.test.ts test/session.test.ts test/session/pricing.test.ts apps/desktop/test/protocol-v2-events.test.ts apps/desktop/test/providers-page.test.ts` -> pass (`695 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- `bun test` -> pass (`2046 pass, 2 skip, 0 fail`)
+
+# Task: Add more OpenCode Zen models
+
+## Plan
+- [x] Refactor the shared OpenCode model catalog so Zen can expose additional models without changing the Go provider catalog.
+- [x] Add the requested OpenCode Zen model ids, runtime metadata, and pricing entries, using OpenCode Zen docs for pricing and conservative capability defaults where the Zen API does not publish limits.
+- [x] Update focused provider/runtime/pricing tests, run verification, and record outcomes below.
+
+## Review
+- Split the OpenCode model catalog in `src/providers/opencodeShared.ts` so `opencode-go` keeps `["glm-5", "kimi-k2.5"]` while `opencode-zen` now additionally exposes `nemotron-3-super-free`, `mimo-v2-flash-free`, `big-pickle`, `minimax-m2.5-free`, and `minimax-m2.5`.
+- Added pricing for the five new Zen-only models in `src/session/pricing.ts` using the published OpenCode Zen docs rates. The free models are estimated at zero input/output cost; `big-pickle` is `2 / 8` USD per 1M input/output tokens; `minimax-m2.5` is `0.4 / 2.2`.
+- Tightened provider validation so Zen-only model ids do not silently work on `opencode-go`. `src/runtime/piRuntime.ts` now checks provider support before resolving PI metadata, and `src/providers/modelAdapter.ts` throws if a Zen-only model is requested through the Go provider adapter path.
+- Added conservative runtime metadata for the new Zen-only models in `src/providers/opencodeShared.ts`. OpenCode Zen’s public `/models` endpoint currently exposes ids but not authoritative capability limits, so the new entries use conservative text/multimodal defaults while keeping the exact Zen pricing and the live model ids.
+- Updated protocol examples and focused regressions so the provider catalog, runtime resolution, pricing, and session/provider catalog flows all reflect the larger Zen model list.
+
+### Verification
+- `bun test test/providers/index.test.ts test/providers/connection-catalog.test.ts test/runtime.pi-runtime.test.ts test/session/pricing.test.ts test/session.test.ts` -> pass (`253 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- `bun test` -> pass (`2049 pass, 2 skip, 0 fail`)
+- Public Zen model-list sanity check:
+  - `bun -e 'fetch("https://opencode.ai/zen/v1/models") ...'` -> `status: 200`, `missing: []` for `nemotron-3-super-free`, `mimo-v2-flash-free`, `big-pickle`, `minimax-m2.5-free`, `minimax-m2.5`
+
+# Task: Refresh OpenCode Zen metadata from current official sources
+
+## Plan
+- [x] Re-check the harness compaction path so current OpenCode context-window metadata is not misrepresented as automatic token compaction.
+- [x] Replace stale OpenCode Zen pricing/capability assumptions with values confirmed from current official provider docs or live endpoints where available.
+- [x] Rerun focused verification, then record exactly what remains conservative or unpublished upstream.
+
+## Review
+- Confirmed the harness is not doing token-aware compaction for OpenCode Zen through PI. Runtime history is still capped only by `MAX_MESSAGE_HISTORY = 200` in `src/server/session/HistoryManager.ts`, while `contextWindow` on the PI model is metadata passed through to the transport.
+- Refreshed the OpenCode model metadata in `src/providers/opencodeShared.ts` and `src/session/pricing.ts` using current official provider information instead of the older bundled PI assumptions. That corrected `kimi-k2.5` cached-read pricing, made `big-pickle` free, updated `minimax-m2.5` pricing, and tightened the published context windows for `nemotron-3-super-free`, `mimo-v2-flash-free`, and the `minimax-m2.5*` entries.
+- Left unpublished upstream limits conservative on purpose. OpenCode Zen currently exposes model ids and pricing, but not authoritative max-output limits for several of these models, and `big-pickle` still does not have a public context-window/max-output spec.
+
+### Verification
+- `bun test test/runtime.pi-runtime.test.ts test/session/pricing.test.ts test/session.test.ts` -> pass (`235 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- `git diff --check` -> pass
+
+# Task: Review `webFetch` tool architecture and Exa-style scraper tradeoffs
+
+## Plan
+- [x] Inspect `src/tools/webFetch.ts`, related safety helpers, and existing `webFetch` tests to understand the current contract and failure modes.
+- [x] Compare the current implementation against likely improvements for reliability, extraction quality, and tool ergonomics.
+- [x] Check current Exa documentation for its content/scraping capabilities and decide whether replacing `webFetch` is warranted versus augmenting it.
+
+## Review
+- The current `webFetch` implementation is intentionally minimal and harness-safe: SSRF-aware URL resolution, manual redirect validation, direct image passthrough, document download handling into the workspace, and HTML-to-Markdown extraction via Readability plus Turndown.
+- The largest implementation gap is unbounded body handling. `maxLength` limits returned text only after the entire response body is read and converted, while image and download paths buffer the full body in memory before returning or writing. That means a large HTML page, image, or download can still consume excessive memory or disk before any guardrail applies.
+- A second reliability gap is that IP pinning always uses only the first resolved address. If the first A/AAAA record is unhealthy but later public records are valid, `webFetch` fails immediately instead of retrying across the resolved address set.
+- Extraction quality is serviceable for static pages but intentionally shallow. It does not execute JavaScript, preserve page metadata, expose structured fields like title/byline/published date, or distinguish article extraction from generic DOM conversion in the return shape.
+- Based on current Exa docs, Exa’s search/content stack is useful as an optional higher-quality extraction backend, but it is not a clean replacement for this tool’s full contract. `webFetch` today handles direct binary/image/document flows inside the workspace and does not require a third-party API key; Exa is better suited for remote content extraction and summarization, not for replacing local-download semantics.
+
+### Verification
+- `bun test test/tools.test.ts --test-name-pattern "webFetch tool"` -> pass (`20 pass, 0 fail`)
+- Reviewed current official Exa docs for search/content capabilities and repo-local notes around existing Exa usage.
+
+# Task: Route `webFetch` through Exa contents while keeping local downloads
+
+## Plan
+- [x] Extract shared Exa auth/request helpers and update `webSearch` to consume them without changing its behavior.
+- [x] Rewrite `webFetch` so non-download URLs use Exa contents, while documents and direct image responses still save into `Downloads`.
+- [x] Update prompt/docs text and focused regressions for the new image/download contract and Exa-backed `webFetch` behavior.
+- [x] Run targeted verification (`bun test` on tools/prompts, typecheck, diff check) and record outcomes below.
+
+## Review
+- Added a shared Exa helper in `src/tools/exa.ts` for Exa API key resolution and JSON POST requests. `src/tools/webSearch.ts` now uses that shared helper, keeping its current behavior while removing duplicated Exa auth/request wiring.
+- Rewrote `src/tools/webFetch.ts` so the local safe-fetch path now only handles SSRF-safe URL validation, redirect resolution, response classification, and file downloads. Non-download URLs are handed to Exa Contents, and the old Readability/Turndown HTML conversion path is gone.
+- Direct image URLs now follow the same workspace-file contract as document downloads. Supported image responses are saved into `<workingDirectory>/Downloads`, get filename/extension inference from `Content-Disposition`, URL basename, or MIME type, and return `File downloaded /absolute/path/...` so the model can inspect them via `read`.
+- Updated the shipped prompt templates so they no longer claim `webFetch` may return inline image content. They now describe the new Exa-backed text extraction behavior and tell models to use `read` on downloaded image paths.
+- Expanded the focused regressions in `test/tools.test.ts` and `test/prompt.test.ts` to cover Exa Contents usage, fail-closed missing-key and Exa-error paths, canonical redirect URLs passed to Exa, image downloads plus `read` inspection, and the new prompt wording.
+- Removed the now-unused `@mozilla/readability`, `jsdom`, `turndown`, and related type packages from `package.json`, then refreshed `bun.lock`.
+
+### Verification
+- `bun test test/tools.test.ts test/prompt.test.ts` -> pass (`203 pass, 0 fail`)
+- `bunx tsc --noEmit` -> pass
+- `bun install` -> pass after rerunning outside the sandbox to allow Bun tempdir writes; refreshed `bun.lock`
+- `git diff --check` -> pass
+- `bun run typecheck` -> still fails in existing desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` with the pre-existing `observability_status` typing error; unrelated to this `webFetch`/Exa change
+
+# Task: Add Exa search type/category controls and highlights to `webSearch`
+
+## Plan
+- [x] Extend `webSearch` Exa input handling to support optional Exa `type` and `category` controls while preserving default behavior when they are omitted.
+- [x] Enable Exa highlights with `maxCharacters: 2500`, prefer highlights in formatted output, and ensure Exa-specific controls bypass Brave so they actually take effect.
+- [x] Add focused `webSearch` regressions, rerun verification, and record outcomes below.
+
+## Review
+- Updated `src/tools/webSearch.ts` so Exa-backed searches now accept optional `type` and `category` inputs. `category` stays unset by default, while `type` defaults to `auto` whenever the Exa path is used.
+- Added Exa-specific normalization for the `news article` alias to the API’s current `news` category, matching the Exa UI wording while still sending the documented API value.
+- Exa search requests now always include `contents.highlights.maxCharacters = 2500`, and the formatted search output now prefers returned `highlights` over fallback snippet text when highlights are available.
+- Preserved the existing provider behavior by default: Brave still serves ordinary non-google searches first when no Exa-only controls are requested. If the model supplies Exa-specific `type` or `category`, `webSearch` now bypasses Brave and uses Exa so those options are honored.
+- Expanded `test/tools.test.ts` to cover the new description/schema intent, the default Exa payload shape (`type: "auto"` plus highlights), Exa-over-Brave routing when advanced controls are present, and the `news article` alias normalization.
+
+### Verification
+- `bun test test/tools.test.ts --test-name-pattern "webSearch tool"` -> pass (`9 pass, 0 fail`)
+- `bun test test/tools.test.ts` -> pass (`159 pass, 0 fail`)
+- `bunx tsc --noEmit` -> pass
+- `git diff --check` -> pass
+- `bun run typecheck` -> still fails in existing desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` with the pre-existing `observability_status` typing error; unrelated to this `webSearch` change
+
+# Task: Remove legacy compatibility extras from the model-facing `webSearch` schema
+
+## Plan
+- [x] Remove `mode` and `dynamicThreshold` from the explicit `webSearch` input schema so they are no longer exposed as model-callable options.
+- [x] Update the focused `webSearch` regression to stop sending those legacy extras.
+- [x] Rerun focused validation and record the outcome below.
+
+## Review
+- Removed `mode` and `dynamicThreshold` from the explicit `webSearch` Zod schema in `src/tools/webSearch.ts`, so they no longer appear as model-facing tool arguments.
+- Kept the rest of the Exa search controls unchanged: optional `type`/`category`, default `type: "auto"` on the Exa request, and highlights with `maxCharacters: 2500`.
+- Updated the alias-query regression in `test/tools.test.ts` so it validates the current intended tool surface instead of locking in those legacy compatibility extras.
+
+### Verification
+- `bun test test/tools.test.ts --test-name-pattern "webSearch tool"` -> pass (`9 pass, 0 fail`)
+- `bunx tsc --noEmit` -> pass
+- `git diff --check` -> pass
+
+# Task: 2026-03-12 repo-wide test audit follow-up
+
+## Plan
+- [x] Audit the current test surface for weak assertions or missing coverage across provider/auth, client/replay, REPL, and catalog code.
+- [x] Add focused regressions in clean test files without disturbing unrelated in-flight runtime edits.
+- [x] Run targeted validation for the touched files, then widen verification and record any pre-existing environment blockers.
+
+## Review
+- Strengthened `test/connect.test.ts` with direct `parseConnectionStoreJson(...)` coverage so the Cowork auth-store parser now proves unknown providers are ignored, mismatched service keys fail schema validation, and invalid tool API key shapes are rejected.
+- Strengthened `test/providers/auth-registry.test.ts` so provider auth helpers now prove trimmed API-key forwarding, blank-key rejection, OAuth-method rejection on API-key paths, full callback-context forwarding, and copy failures for both missing and non-API-key source entries.
+- Strengthened `test/providers/connection-catalog.test.ts` so the provider catalog now proves `all` and `default` stay aligned with `PROVIDER_NAMES`, and `codex-cli` is not duplicated when both Cowork OAuth material and `connections.json` report it as connected.
+- Strengthened `test/modelStreamReplay.test.ts` so replay runtime behavior now proves `clearModelStreamReplayRuntime(...)` resets both projector/raw-backed state, projector instances are reused across multiple raw events for the same turn, and the duplicate-suppression filter does not wrongly drop non-configured chunk types like `finish`.
+- Strengthened `test/agentSocket.runtime.test.ts` so client transport coverage now proves reconnect resume URLs, deferred send-queue flushing only after `server_hello`, and keepalive pings only after a session ID exists.
+- Added `test/repl.prompt-controller.test.ts` so the CLI prompt controller now proves approval prompts take precedence over asks, queues drain in order, and the prompt mode returns to `you> ` when no prompts remain.
+
+### Verification
+- `~/.bun/bin/bun test test/connect.test.ts test/providers/auth-registry.test.ts test/providers/connection-catalog.test.ts test/modelStreamReplay.test.ts test/repl.prompt-controller.test.ts test/agentSocket.runtime.test.ts --bail` -> pass (`52 pass, 0 fail`)
+- `~/.bun/bin/bun test --bail` -> fails outside this patch set because remote MCP tests tried live `mcp.grep.app` access when `RUN_REMOTE_MCP_TESTS` was enabled.
+- `HOME=/tmp/agent-coworker-test-home RUN_REMOTE_MCP_TESTS=0 ~/.bun/bin/bun test --bail` -> gets past the remote MCP and CLI-home issues, but still stops on the pre-existing `test/mcp.oauth-provider.test.ts` callback-capture bind failure (`EADDRINUSE` at `src/mcp/oauthProvider.ts:127`).
+- `HOME=/tmp/agent-coworker-test-home RUN_REMOTE_MCP_TESTS=0 ~/.bun/bin/bun test test/mcp.oauth-provider.test.ts --bail` -> reproduces the same pre-existing `EADDRINUSE` failure in isolation.
+
+# Task: 2026-03-12 scoped review for tool/runtime diff
+
+## Plan
+- [x] Diff the current branch against merge base `1b7f5201bdde92fea664225f9445cf811b54c1ec` for `src/tools/*`, `src/runtime/*`, `src/shared/toolOutputOverflow.ts`, and `src/session/pricing.ts`.
+- [x] Validate changed behavior against surrounding code/tests to isolate concrete regressions introduced by the patch.
+- [x] Record review findings only if they are actionable bugs with precise file/line references.
+
+## Review
+- `src/tools/webFetch.ts`: non-download fetches now discard the already-fetched response body and hard-depend on Exa contents, so plain web pages regress from working locally to failing whenever Exa credentials are absent or the Exa fetch fails.
+- `src/tools/webFetch.ts`: raw text documents such as `.md`, `.csv`, and `.tsv` URLs are now classified as downloads instead of inline text, which regresses one-step `webFetch` reads for textual remote resources.
+- `src/tools/bash.ts` with `src/runtime/piRuntime.ts`: stdout/stderr truncation was removed before `ctx.log(...)`, but overflow spilling only happens later in the runtime after the tool returns, so large shell output still floods the log stream even when scratchpad overflow protection is enabled.
+# Task: Fix review findings for Opencode/webFetch/desktop persistence
+
+## Plan
+- [x] Restore or replace the removed `jsdom` dependency based on current usage, and update tests only if the dependency is truly unused.
+- [x] Rework `webFetch` so ordinary HTML/text reads still work without Exa, while keeping Exa enrichments only where they improve the response without replacing the original content.
+- [x] Fix desktop workspace rehydration so persisted user settings, especially `defaultToolOutputOverflowChars: null`, are never overwritten outside explicit user actions or protocol-linked migrations.
+- [x] Remove hard-coded provider validation for persistent subagent summaries and derive it from the shared provider source of truth.
+- [x] Run focused verification for changed areas, then repo verification (`bun test`, `bun run build:server-binary`, `bun run build:desktop-resources`, `bun run desktop:build`) and record outcomes.
+
+## Review
+- Restored the `jsdom` install path and the supporting HTML-cleaning dependencies (`@mozilla/readability`, `turndown`, and matching type packages) because the desktop tests still import `JSDOM` and `webFetch` again uses the readability pipeline for local page cleanup.
+- Reworked `src/tools/webFetch.ts` so direct text responses now return the original body, HTML pages are cleaned locally into markdown, Exa is optional best-effort enrichment for HTML links/images instead of a hard dependency, and text-like remote files such as markdown are no longer forced into `Downloads/`.
+- Fixed desktop bootstrap hydration so persisted `defaultToolOutputOverflowChars` values round-trip exactly, including explicit `null`, instead of being rewritten to the default during restart.
+- Replaced the hard-coded persistent-subagent provider enum with the shared `PROVIDER_NAMES` source of truth and added `test/shared/persistentSubagents.test.ts` to keep parser coverage aligned with the live provider list.
+
+### Verification
+- `bun install` -> pass
+- `bun test test/tools.test.ts apps/desktop/test/workspace-settings-sync.test.ts test/shared/persistentSubagents.test.ts --bail` -> pass (`175 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- `bun test` -> pass (`2162 pass, 0 fail`)
+- `bun run build:server-binary` -> pass
+- `bun run build:desktop-resources` -> pass
+- `bun run desktop:build` -> pass
+
+# Task: Stabilize CI timer-sensitive websocket and REPL tests
+
+## Plan
+- [x] Remove global timer monkeypatching from `AgentSocket`-related tests by injecting timer hooks into the runtime/client helper instead of mutating `globalThis`.
+- [x] Rework any remaining timer-acceleration tests that still patch `globalThis.setTimeout` so they stay isolated under parallel Bun execution.
+- [x] Run focused CI-sensitive reruns first, then the full required verification/build commands, and record results here.
+
+## Review
+- `src/client/agentSocket.ts` now accepts an internal `timers` scheduler hook and routes reconnect/keepalive timers through it, so tests can drive those code paths without mutating shared globals.
+- `test/agentSocket.runtime.test.ts` now uses injected manual timers for reconnect and keepalive coverage instead of overriding `globalThis.setTimeout` / `setInterval`, and its microtask waits no longer depend on global timer state.
+- `test/repl.restart-failure.test.ts` and `test/repl.disconnect-send.test.ts` now wait for CLI readiness with `setImmediate`, which still yields the event loop for async REPL/bootstrap work but no longer couples those tests to any patched global timeout implementation.
+- `apps/desktop/test/protocol-v2-events.test.ts` no longer monkeypatches `globalThis.setTimeout` for the `session_busy` assertion, removing the remaining cross-file timer mutation in the desktop suite.
+- `test/shared/failureDiagnostics.ts` adds failure-only CI diagnostics, and the remaining flaky tests now log fake socket lifecycle events, timer scheduling, console output, and REPL readiness snapshots only when they fail under CI.
+- `gh pr checks 35` now reports a fresh failing `Docs + Tests` run at `https://github.com/mweinbach/agent-coworker/actions/runs/23020196010/job/66854235167`; the new diagnostic logging is local-only until these changes are pushed.
+
+### Verification
+- `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test test/repl.restart-failure.test.ts test/repl.disconnect-send.test.ts test/agentSocket.runtime.test.ts apps/desktop/test/protocol-v2-events.test.ts --rerun-each 50 --bail` -> pass (`1900 pass, 0 fail`)
+- `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test --bail` -> pass (`2185 pass, 2 skip, 0 fail`)
+- `bun run typecheck` -> fails in unchanged desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345`)
+- `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+- `bun run build:server-binary` -> pass
+- `bun run build:desktop-resources` -> pass
+- `bun run desktop:build` -> pass
+- `git diff --check` -> pass
+- `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test test/agentSocket.runtime.test.ts test/repl.restart-failure.test.ts test/repl.disconnect-send.test.ts --rerun-each 20 --bail` -> pass (`140 pass, 0 fail`)
+- `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test --bail` -> pass again after diagnostic instrumentation (`2185 pass, 2 skip, 0 fail`)
+- `bun run build:server-binary` -> pass again after diagnostic instrumentation
+- `bun run build:desktop-resources` -> pass again after diagnostic instrumentation
+- `bun run desktop:build` -> pass again after diagnostic instrumentation

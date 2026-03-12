@@ -1,0 +1,121 @@
+import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import {
+  createAnthropicModelAdapter,
+  createCodexCliModelAdapter,
+  createGoogleModelAdapter,
+  createOpenAiModelAdapter,
+} from "../../src/providers/modelAdapter";
+import { makeConfig, makeTmpDirs, withEnv, writeJson } from "./helpers";
+
+async function writeCodexAuth(home: string, overrides: Partial<{
+  accessToken: string;
+  accountId: string;
+  expiresAtMs: number;
+}> = {}) {
+  const authFile = path.join(home, ".cowork", "auth", "codex-cli", "auth.json");
+  await writeJson(authFile, {
+    version: 1,
+    auth_mode: "chatgpt",
+    issuer: "https://auth.openai.com",
+    client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+      tokens: {
+        access_token: overrides.accessToken ?? "codex-token",
+        refresh_token: "refresh-token",
+        expires_at: overrides.expiresAtMs ?? Date.now() + 3_600_000,
+      },
+    account: {
+      account_id: overrides.accountId ?? "acct-123",
+    },
+  });
+}
+
+describe("provider model adapters", () => {
+  test("OpenAI adapter prefers saved key over env", async () => {
+    await withEnv("OPENAI_API_KEY", "env-key", async () => {
+      const adapter = createOpenAiModelAdapter("gpt-5.4", "saved-key");
+      const headers = await adapter.config.headers();
+      expect(headers.authorization).toBe("Bearer saved-key");
+    });
+  });
+
+  test("OpenAI adapter falls back to env key", async () => {
+    await withEnv("OPENAI_API_KEY", "env-key", async () => {
+      const adapter = createOpenAiModelAdapter("gpt-5.4");
+      const headers = await adapter.config.headers();
+      expect(headers.authorization).toBe("Bearer env-key");
+    });
+  });
+
+  test("Google adapter wires x-goog-api-key header", async () => {
+    await withEnv("GOOGLE_GENERATIVE_AI_API_KEY", "gkey", async () => {
+      const adapter = createGoogleModelAdapter("gemini-3.1");
+      const headers = await adapter.config.headers();
+      expect(headers["x-goog-api-key"]).toBe("gkey");
+    });
+  });
+
+  test("Google adapter falls back to GOOGLE_API_KEY", async () => {
+    await withEnv("GOOGLE_GENERATIVE_AI_API_KEY", undefined, async () => {
+      await withEnv("GOOGLE_API_KEY", "alias-key", async () => {
+        const adapter = createGoogleModelAdapter("gemini-3.1");
+        const headers = await adapter.config.headers();
+        expect(headers["x-goog-api-key"]).toBe("alias-key");
+      });
+    });
+  });
+
+  test("Anthropic adapter wires x-api-key header", async () => {
+    await withEnv("ANTHROPIC_API_KEY", "akey", async () => {
+      const adapter = createAnthropicModelAdapter("claude-opus-4-6");
+      const headers = await adapter.config.headers();
+      expect(headers["x-api-key"]).toBe("akey");
+    });
+  });
+
+  test("adapters omit auth headers when no key source is available", async () => {
+    await withEnv("OPENAI_API_KEY", undefined, async () => {
+      await withEnv("GOOGLE_GENERATIVE_AI_API_KEY", undefined, async () => {
+        await withEnv("GOOGLE_API_KEY", undefined, async () => {
+          await withEnv("ANTHROPIC_API_KEY", undefined, async () => {
+            const openAiHeaders = await createOpenAiModelAdapter("gpt-5.4").config.headers();
+            const googleHeaders = await createGoogleModelAdapter("gemini-3.1").config.headers();
+            const anthropicHeaders = await createAnthropicModelAdapter("claude-opus-4-6").config.headers();
+
+            expect(openAiHeaders).toEqual({});
+            expect(googleHeaders).toEqual({});
+            expect(anthropicHeaders).toEqual({});
+          });
+        });
+      });
+    });
+  });
+
+  test("Codex adapter honors saved key before disk material", async () => {
+    const config = makeConfig({ provider: "codex-cli" });
+    const adapter = createCodexCliModelAdapter(config, "gpt-5.4", "sk-abc");
+    const headers = await adapter.config.headers();
+    expect(headers.authorization).toBe("Bearer sk-abc");
+  });
+
+  test("Codex adapter falls back to Cowork auth and propagates ChatGPT-Account-ID", async () => {
+    const { home, tmp } = await makeTmpDirs();
+    try {
+      await writeCodexAuth(home);
+      const config = makeConfig({
+        provider: "codex-cli",
+        userAgentDir: path.join(home, ".agent"),
+      });
+
+      const adapter = createCodexCliModelAdapter(config, "gpt-5.4");
+      const headers = await adapter.config.headers();
+
+      expect(headers.authorization).toBe("Bearer codex-token");
+      expect(headers["ChatGPT-Account-ID"]).toBe("acct-123");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+});

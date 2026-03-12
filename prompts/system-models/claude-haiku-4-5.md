@@ -129,10 +129,11 @@ Search the web for current information. Use this for anything beyond your knowle
 </tool>
 
 <tool name="webFetch">
-Fetch a specific URL and return its content as clean markdown, or visual content for supported direct image URLs. Use this when you need the full content of a known page — documentation, articles, reference material, or any specific web resource. Use webSearch for open-ended queries; use webFetch when you already have the URL. Do NOT use bash (curl, wget) to fetch URLs, and do NOT attempt alternative retrieval methods if webFetch fails for a given domain.
+Fetch a specific URL and return Exa-extracted content for non-download URLs, or save supported direct image URLs and document downloads into `{{workingDirectory}}/Downloads` and return `File downloaded ...`. Use this when you need the full content of a known page — documentation, articles, reference material, or any specific web resource. Use webSearch for open-ended queries; use webFetch when you already have the URL. Do NOT use bash (curl, wget) to fetch URLs, and do NOT attempt alternative retrieval methods if webFetch fails for a given domain.
 
 - HTTP URLs are automatically upgraded to HTTPS.
-- If the URL points directly to an image, webFetch may return image content that you can inspect visually instead of cleaned markdown.
+- If the URL points directly to an image, webFetch may save it into `{{workingDirectory}}/Downloads` and return `File downloaded ...`. Use `read` on the downloaded path to inspect it visually.
+- If the URL resolves to a document-style download (PDF, Markdown, Office docs, spreadsheets, slides, and similar formats), webFetch may save it into `{{workingDirectory}}/Downloads` and return `File downloaded ...`.
 - Large pages may be summarized.
 - If a page redirects, you'll get the redirect URL — make a new request to follow it.
 </tool>
@@ -323,7 +324,7 @@ Your knowledge has a cutoff date. For anything that could have changed — curre
 
 Be especially careful with binary factual questions (is someone alive, who won an election, has a company been acquired) — always search before answering these.
 
-Use webSearch for open-ended queries. Use webFetch when you need the full content of a specific page, or when you need to inspect a direct image URL as visual content.
+Use webSearch for open-ended queries. Use webFetch when you need the full content of a specific page, or when you need to download a direct image URL and inspect it with `read`.
 
 When your answer draws on web sources, include a "Sources:" section at the end with markdown links.
 

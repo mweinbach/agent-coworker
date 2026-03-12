@@ -191,6 +191,43 @@ describe("AgentSession stream pipeline", () => {
     expect(chunks[0].part.output).toBe("file contents here");
   });
 
+  test("tool-result overflow companion file emits adjacent tool_result and file chunks", async () => {
+    const { session, events } = makeSession();
+    await sendWithStreamParts(session, [
+      {
+        type: "tool-result",
+        toolCallId: "tc-overflow",
+        toolName: "bash",
+        output: {
+          type: "text",
+          value: "Tool output overflowed. Saved to /tmp/workspace/.ModelScratchpad/spill.txt",
+          overflow: true,
+          filePath: "/tmp/workspace/.ModelScratchpad/spill.txt",
+          chars: 30000,
+          preview: "preview",
+        },
+      },
+      {
+        type: "file",
+        file: {
+          kind: "tool-output-overflow",
+          toolName: "bash",
+          toolCallId: "tc-overflow",
+          path: "/tmp/workspace/.ModelScratchpad/spill.txt",
+          chars: 30000,
+          preview: "preview",
+        },
+      },
+    ]);
+
+    const chunks = getStreamChunks(events);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0].partType).toBe("tool_result");
+    expect((chunks[0].part.output as Record<string, unknown>).overflow).toBe(true);
+    expect(chunks[1].partType).toBe("file");
+    expect((chunks[1].part.file as Record<string, unknown>).kind).toBe("tool-output-overflow");
+  });
+
   // =========================================================================
   // 3. tool-error
   // =========================================================================
@@ -522,6 +559,7 @@ describe("AgentSession stream pipeline", () => {
     const chunks = getStreamChunks(events);
     expect(chunks).toHaveLength(1);
     expect(chunks[0].partType).toBe("file");
+    expect(chunks[0].part.file).toEqual({ name: "output.png", mimeType: "image/png" });
   });
 
   // =========================================================================

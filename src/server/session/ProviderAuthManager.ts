@@ -4,10 +4,12 @@ import {
   type ConnectProviderHandler,
   authorizeProviderAuth,
   callbackProviderAuth as callbackProviderAuthMethod,
+  copyProviderApiKey as copyProviderApiKeyMethod,
   logoutProviderAuth as logoutProviderAuthMethod,
   resolveProviderAuthMethod,
   setProviderApiKey as setProviderApiKeyMethod,
 } from "../../providers/authRegistry";
+import { getOpenCodeDisplayName, isOpenCodeProviderName, isOpenCodeSiblingPair } from "../../providers/opencodeShared";
 import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
 import { isProviderName } from "../../types";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
@@ -402,6 +404,103 @@ export class ProviderAuthManager {
           error: this.opts.formatError(err),
         },
         Date.now() - startedAt
+      );
+    } finally {
+      this.opts.setConnecting(false);
+    }
+  }
+
+  async copyProviderApiKey(providerRaw: AgentConfig["provider"], sourceProviderRaw: AgentConfig["provider"]) {
+    if (!this.opts.guardBusy()) return;
+    if (!isProviderName(providerRaw)) {
+      this.opts.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
+      return;
+    }
+    if (!isProviderName(sourceProviderRaw)) {
+      this.opts.emitError("validation_failed", "provider", `Unsupported source provider: ${String(sourceProviderRaw)}`);
+      return;
+    }
+    if (!isOpenCodeSiblingPair(providerRaw, sourceProviderRaw)) {
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        "provider_auth_copy_api_key only supports copying between OpenCode Go and OpenCode Zen.",
+      );
+      return;
+    }
+    if (!isOpenCodeProviderName(sourceProviderRaw)) {
+      this.opts.emitError(
+        "validation_failed",
+        "provider",
+        "provider_auth_copy_api_key sourceProvider must be an OpenCode provider.",
+      );
+      return;
+    }
+
+    const methodId = "api_key";
+    if (!resolveProviderAuthMethod(providerRaw, methodId)) {
+      this.opts.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
+      return;
+    }
+
+    this.opts.setConnecting(true);
+    const startedAt = Date.now();
+    try {
+      const config = this.opts.getConfig();
+      const result = await copyProviderApiKeyMethod({
+        provider: providerRaw,
+        sourceProvider: sourceProviderRaw,
+        methodId,
+        cwd: config.workingDirectory,
+        paths: this.opts.getCoworkPaths(),
+        connect: async (opts) => await this.opts.runProviderConnect(opts),
+      });
+
+      this.opts.emit({
+        type: "provider_auth_result",
+        sessionId: this.opts.sessionId,
+        provider: providerRaw,
+        methodId,
+        ok: result.ok,
+        mode: result.ok ? result.mode : undefined,
+        message: result.ok
+          ? `Copied ${getOpenCodeDisplayName(sourceProviderRaw)} API key. ${result.message}`
+          : result.message,
+      });
+
+      if (result.ok) {
+        if (supportsOpenAiContinuation(providerRaw)) {
+          this.opts.clearProviderState();
+        }
+        this.opts.queuePersistSessionSnapshot("provider.auth.api_key_copy");
+        await this.opts.refreshProviderStatus();
+        await this.opts.emitProviderCatalog();
+      }
+      this.opts.emitTelemetry(
+        "provider.auth.api_key_copy",
+        result.ok ? "ok" : "error",
+        {
+          sessionId: this.opts.sessionId,
+          provider: providerRaw,
+          sourceProvider: sourceProviderRaw,
+          methodId,
+          mode: result.ok ? result.mode : "unknown",
+        },
+        Date.now() - startedAt,
+      );
+    } catch (err) {
+      this.opts.emitError("provider_error", "provider", `Copying provider API key failed: ${String(err)}`);
+      this.opts.emitTelemetry(
+        "provider.auth.api_key_copy",
+        "error",
+        {
+          sessionId: this.opts.sessionId,
+          provider: providerRaw,
+          sourceProvider: sourceProviderRaw,
+          methodId,
+          error: this.opts.formatError(err),
+        },
+        Date.now() - startedAt,
       );
     } finally {
       this.opts.setConnecting(false);

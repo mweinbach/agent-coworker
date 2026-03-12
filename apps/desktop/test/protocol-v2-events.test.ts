@@ -352,6 +352,20 @@ describe("desktop protocol v2 mapping", () => {
     expect(sent?.apiKey).toBe("sk-test");
   });
 
+  test("copyProviderApiKey sends provider_auth_copy_api_key", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.sent = [];
+
+    await useAppStore.getState().copyProviderApiKey("opencode-zen", "opencode-go");
+
+    const sent = controlSocket.sent.find((msg) => msg?.type === "provider_auth_copy_api_key");
+    expect(sent).toBeDefined();
+    expect(sent?.provider).toBe("opencode-zen");
+    expect(sent?.sourceProvider).toBe("opencode-go");
+  });
+
   test("connectProvider sends oauth authorize+callback for oauth providers", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const controlSocket = socketByClient("desktop-control");
@@ -1145,7 +1159,7 @@ describe("desktop protocol v2 mapping", () => {
     expect(useAppStore.getState().threadRuntimeById[threadId]?.busy).toBe(true);
   });
 
-  test("session_busy does not trigger automatic cancel even with accelerated timers", async () => {
+  test("session_busy does not trigger automatic cancel", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const threadId = useAppStore.getState().selectedThreadId;
     if (!threadId) throw new Error("Expected selected thread");
@@ -1156,22 +1170,15 @@ describe("desktop protocol v2 mapping", () => {
     emitServerHello(threadSocket, "thread-session");
     threadSocket.sent = [];
 
-    const originalSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = ((fn: Function) => originalSetTimeout(fn, 0)) as any;
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-2",
+      cause: "user_message",
+    });
 
-    try {
-      threadSocket.emit({
-        type: "session_busy",
-        sessionId: "thread-session",
-        busy: true,
-        turnId: "turn-2",
-        cause: "user_message",
-      });
-
-      await new Promise((resolve) => originalSetTimeout(resolve, 5));
-    } finally {
-      globalThis.setTimeout = originalSetTimeout;
-    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
 
     expect(threadSocket.sent.some((msg) => msg?.type === "cancel")).toBe(false);
     expect(

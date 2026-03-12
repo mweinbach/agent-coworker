@@ -424,6 +424,23 @@ describe("safeParseClientMessage", () => {
         apiKey: "",
       }))).toBe("provider_auth_set_api_key missing/invalid apiKey");
     });
+
+    test("provider_auth_copy_api_key validation", () => {
+      const msg = expectOk(JSON.stringify({
+        type: "provider_auth_copy_api_key",
+        sessionId: "s1",
+        provider: "opencode-zen",
+        sourceProvider: "opencode-go",
+      }));
+      expect(msg.type).toBe("provider_auth_copy_api_key");
+
+      expect(expectErr(JSON.stringify({
+        type: "provider_auth_copy_api_key",
+        sessionId: "s1",
+        provider: "opencode-zen",
+        sourceProvider: "nope",
+      }))).toBe("provider_auth_copy_api_key missing/invalid sourceProvider");
+    });
   });
 
   describe("list_skills", () => {
@@ -1014,6 +1031,7 @@ describe("safeParseClientMessage", () => {
             yolo: true,
             observabilityEnabled: false,
             backupsEnabled: true,
+            toolOutputOverflowChars: null,
             subAgentModel: "gpt-5.4",
             maxSteps: 25,
             providerOptions: {
@@ -1031,11 +1049,28 @@ describe("safeParseClientMessage", () => {
         expect(msg.config.yolo).toBe(true);
         expect(msg.config.observabilityEnabled).toBe(false);
         expect(msg.config.backupsEnabled).toBe(true);
+        expect(msg.config.toolOutputOverflowChars).toBeNull();
         expect(msg.config.subAgentModel).toBe("gpt-5.4");
         expect(msg.config.maxSteps).toBe(25);
         expect(msg.config.providerOptions?.openai?.reasoningEffort).toBe("xhigh");
         expect(msg.config.providerOptions?.openai?.reasoningSummary).toBe("concise");
         expect(msg.config.providerOptions?.openai?.textVerbosity).toBe("medium");
+      }
+    });
+
+    test("valid set_config accepts clearToolOutputOverflowChars", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_config",
+          sessionId: "s1",
+          config: {
+            clearToolOutputOverflowChars: true,
+          },
+        }),
+      );
+      expect(msg.type).toBe("set_config");
+      if (msg.type === "set_config") {
+        expect(msg.config.clearToolOutputOverflowChars).toBe(true);
       }
     });
 
@@ -1057,6 +1092,25 @@ describe("safeParseClientMessage", () => {
       expect(
         expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { backupsEnabled: "no" } })),
       ).toBe("set_config config.backupsEnabled must be boolean");
+      expect(
+        expectErr(
+          JSON.stringify({ type: "set_config", sessionId: "s1", config: { toolOutputOverflowChars: -1 } }),
+        ),
+      ).toBe("set_config config.toolOutputOverflowChars must be null or non-negative integer");
+      expect(
+        expectErr(
+          JSON.stringify({ type: "set_config", sessionId: "s1", config: { clearToolOutputOverflowChars: "yes" } }),
+        ),
+      ).toBe("set_config config.clearToolOutputOverflowChars must be boolean");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { toolOutputOverflowChars: 25000, clearToolOutputOverflowChars: true },
+          }),
+        ),
+      ).toBe("set_config config.toolOutputOverflowChars cannot be combined with clearToolOutputOverflowChars");
       expect(
         expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { subAgentModel: "" } })),
       ).toBe("set_config config.subAgentModel must be non-empty string");
@@ -1148,6 +1202,18 @@ describe("safeParseClientMessage", () => {
   });
 
   describe("set_session_usage_budget", () => {
+    test("get_session_usage parses as a session-scoped request", () => {
+      const msg = expectOk(JSON.stringify({ type: "get_session_usage", sessionId: "s1" }));
+      expect(msg.type).toBe("get_session_usage");
+      if (msg.type === "get_session_usage") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("get_session_usage validates required sessionId", () => {
+      expect(expectErr(JSON.stringify({ type: "get_session_usage" }))).toBe("get_session_usage missing sessionId");
+    });
+
     test("valid budget update message", () => {
       const msg = expectOk(
         JSON.stringify({
@@ -1634,6 +1700,7 @@ describe("safeParseClientMessage", () => {
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_logout")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_callback")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_set_api_key")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_copy_api_key")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("mcp_servers_get")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("mcp_server_upsert")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("mcp_server_delete")).toBe(true);

@@ -112,6 +112,14 @@ const persistedWorkspaceSchema = z.object({
   defaultProvider: optionalNonEmptyStringSchema,
   defaultModel: optionalNonEmptyStringSchema,
   defaultSubAgentModel: optionalNonEmptyStringSchema,
+  defaultToolOutputOverflowChars: z.preprocess((value) => {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.max(0, Math.floor(value));
+    }
+    return undefined;
+  }, z.number().int().nonnegative().nullable().optional()),
   providerOptions: workspaceProviderOptionsSchema.optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),

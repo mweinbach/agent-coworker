@@ -4,12 +4,14 @@ import os from "node:os";
 import path from "node:path";
 
 import { getModels as getPiModels } from "@mariozechner/pi-ai";
+import { z } from "zod";
 
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../src/types";
 import { getAiCoworkerPaths } from "../src/connect";
 import { CODEX_BACKEND_BASE_URL, writeCodexAuthMaterial } from "../src/providers/codex-auth";
 import { __internal as piRuntimeInternal, createPiRuntime } from "../src/runtime/piRuntime";
+import { MODEL_SCRATCHPAD_DIRNAME, TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS } from "../src/shared/toolOutputOverflow";
 
 function b64url(input: string): string {
   return Buffer.from(input, "utf8").toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
@@ -56,6 +58,23 @@ function makeParams(config: AgentConfig, overrides: Partial<RuntimeRunTurnParams
 function pickCodexModelId(): string {
   const models = (getPiModels("openai-codex" as any) as Array<{ id?: string }> | undefined) ?? [];
   return models[0]?.id ?? "codex-mini-latest";
+}
+
+async function withEnv<T>(
+  key: string,
+  value: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = process.env[key];
+  if (typeof value === "string") process.env[key] = value;
+  else delete process.env[key];
+
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
 }
 
 describe("pi runtime regressions", () => {
@@ -142,6 +161,141 @@ describe("pi runtime regressions", () => {
     const imported = JSON.parse(importedRaw) as Record<string, any>;
     expect(imported.tokens?.access_token).toBe("legacy-access-token");
     expect(imported.tokens?.refresh_token).toBe("legacy-refresh-token");
+  });
+
+  test("opencode-go runtime model resolution returns explicit GLM-5 PI metadata", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-glm-"));
+    const config = makeConfig(homeDir, {
+      provider: "opencode-go",
+      model: "glm-5",
+      subAgentModel: "glm-5",
+    });
+
+    const resolved = await withEnv("OPENCODE_API_KEY", undefined, async () => (
+      await piRuntimeInternal.resolvePiModel(makeParams(config))
+    ));
+
+    expect(resolved.apiKey).toBeUndefined();
+    expect(resolved.model).toMatchObject({
+      id: "glm-5",
+      api: "openai-completions",
+      provider: "opencode",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      reasoning: true,
+      contextWindow: 204800,
+      maxTokens: 131072,
+    });
+    expect(resolved.model.cost).toBeUndefined();
+  });
+
+  test("opencode-go runtime model resolution returns explicit Kimi K2.5 PI metadata", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-kimi-"));
+    const config = makeConfig(homeDir, {
+      provider: "opencode-go",
+      model: "kimi-k2.5",
+      subAgentModel: "kimi-k2.5",
+    });
+
+    const resolved = await withEnv("OPENCODE_API_KEY", undefined, async () => (
+      await piRuntimeInternal.resolvePiModel(makeParams(config))
+    ));
+
+    expect(resolved.apiKey).toBeUndefined();
+    expect(resolved.model).toMatchObject({
+      id: "kimi-k2.5",
+      api: "openai-completions",
+      provider: "opencode",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      reasoning: true,
+      contextWindow: 262144,
+      maxTokens: 65536,
+    });
+    expect(resolved.model.input).toEqual(["text", "image"]);
+    expect(resolved.model.cost).toBeUndefined();
+  });
+
+  test("opencode-zen runtime model resolution returns explicit GLM-5 PI metadata and env-key fallback", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-zen-"));
+    const config = makeConfig(homeDir, {
+      provider: "opencode-zen",
+      model: "glm-5",
+      subAgentModel: "glm-5",
+    });
+
+    const previous = process.env.OPENCODE_ZEN_API_KEY;
+    process.env.OPENCODE_ZEN_API_KEY = "env-opencode-zen-key";
+    try {
+      const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+
+      expect(resolved.apiKey).toBe("env-opencode-zen-key");
+      expect(resolved.model).toMatchObject({
+        id: "glm-5",
+        api: "openai-completions",
+        provider: "opencode",
+        baseUrl: "https://opencode.ai/zen/v1",
+        reasoning: true,
+        contextWindow: 204800,
+        maxTokens: 131072,
+        cost: {
+          input: 1,
+          output: 3.2,
+          cacheRead: 0.2,
+          cacheWrite: 0,
+        },
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCODE_ZEN_API_KEY;
+      } else {
+        process.env.OPENCODE_ZEN_API_KEY = previous;
+      }
+    }
+  });
+
+  test("opencode-zen runtime model resolution returns explicit MiniMax M2.5 PI metadata", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-zen-minimax-"));
+    const config = makeConfig(homeDir, {
+      provider: "opencode-zen",
+      model: "minimax-m2.5",
+      subAgentModel: "glm-5",
+    });
+
+    const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+
+    expect(resolved.apiKey).toBeUndefined();
+    expect(resolved.model).toMatchObject({
+      id: "minimax-m2.5",
+      api: "openai-completions",
+      provider: "opencode",
+      baseUrl: "https://opencode.ai/zen/v1",
+      reasoning: true,
+      contextWindow: 204800,
+      maxTokens: 65536,
+      cost: {
+        input: 0.3,
+        output: 1.2,
+        cacheRead: 0.06,
+        cacheWrite: 0.375,
+      },
+    });
+    expect(resolved.model.input).toEqual(["text"]);
+  });
+
+  test("toolMapToPiTools skips undefined tool definitions", () => {
+    const mapped = piRuntimeInternal.toolMapToPiTools({
+      read: {
+        description: "Read files from disk.",
+        inputSchema: z.object({ filePath: z.string() }),
+        execute: async () => "",
+      },
+      webSearch: undefined,
+    } as any);
+
+    expect(mapped).toHaveLength(1);
+    expect(mapped[0]).toMatchObject({
+      name: "read",
+      description: "Read files from disk.",
+    });
   });
 
   test("telemetry parsing keeps supported metadata and drops invalid values", () => {
@@ -261,6 +415,115 @@ describe("pi runtime regressions", () => {
     expect(result.content).toEqual([{ type: "text", text: "permission denied" }]);
   });
 
+  test("executeToolCall leaves short tool output inline when under the overflow threshold", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-tool-inline-"));
+    const emitted: Array<Record<string, unknown>> = [];
+
+    const result = await piRuntimeInternal.executeToolCall(
+      { id: "call-short", name: "lookup", arguments: {} },
+      makeParams(makeConfig(homeDir, { toolOutputOverflowChars: 100 }), {
+        tools: {
+          lookup: {
+            execute: async () => "short output",
+          },
+        },
+      }),
+      async (part) => {
+        emitted.push(part as Record<string, unknown>);
+      }
+    );
+
+    expect(emitted).toEqual([
+      {
+        type: "tool-result",
+        toolCallId: "call-short",
+        toolName: "lookup",
+        output: "short output",
+      },
+    ]);
+    expect(result.content).toEqual([{ type: "text", text: "short output" }]);
+    await expect(fs.readdir(path.join(homeDir, MODEL_SCRATCHPAD_DIRNAME))).rejects.toThrow();
+  });
+
+  test("executeToolCall spills oversized tool output to .ModelScratchpad and emits a companion file part", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-tool-overflow-"));
+    const emitted: Array<Record<string, unknown>> = [];
+    const toolOutput = {
+      type: "json",
+      value: {
+        payload: "0123456789abcdef".repeat(32),
+      },
+      exitCode: 0,
+      ok: true,
+      count: 1,
+      provider: "mock-provider",
+    };
+
+    const result = await piRuntimeInternal.executeToolCall(
+      { id: "call-overflow", name: "lookup", arguments: {} },
+      makeParams(makeConfig(homeDir, { toolOutputOverflowChars: 80 }), {
+        tools: {
+          lookup: {
+            execute: async () => toolOutput,
+          },
+        },
+      }),
+      async (part) => {
+        emitted.push(part as Record<string, unknown>);
+      }
+    );
+
+    expect(emitted).toHaveLength(2);
+    expect(emitted[0]).toMatchObject({
+      type: "tool-result",
+      toolCallId: "call-overflow",
+      toolName: "lookup",
+      output: {
+        type: "text",
+        overflow: true,
+        exitCode: 0,
+        ok: true,
+        count: 1,
+        provider: "mock-provider",
+      },
+    });
+    expect(emitted[1]).toMatchObject({
+      type: "file",
+      file: {
+        kind: "tool-output-overflow",
+        toolName: "lookup",
+        toolCallId: "call-overflow",
+      },
+    });
+
+    const overflowOutput = emitted[0]?.output as Record<string, unknown>;
+    const fileEvent = emitted[1]?.file as Record<string, unknown>;
+    const spillPath = String(overflowOutput.filePath);
+    expect(spillPath).toContain(`/${MODEL_SCRATCHPAD_DIRNAME}/`);
+    expect(String(overflowOutput.value)).toContain("Tool output overflowed");
+    expect(String(overflowOutput.value)).toContain(spillPath);
+    expect(Number(overflowOutput.chars)).toBeGreaterThan(80);
+    expect(fileEvent.path).toBe(spillPath);
+    expect(fileEvent.chars).toBe(overflowOutput.chars);
+    expect(fileEvent.preview).toBe(overflowOutput.preview);
+
+    const saved = await fs.readFile(spillPath, "utf-8");
+    expect(saved).toBe(JSON.stringify(toolOutput, null, 2));
+    const spillStat = await fs.stat(spillPath);
+    const scratchStat = await fs.stat(path.dirname(spillPath));
+    if (process.platform === "win32") {
+      expect(spillStat.mode & 0o200).toBe(0o200);
+      expect(scratchStat.mode & 0o200).toBe(0o200);
+    } else {
+      expect(spillStat.mode & 0o777).toBe(0o600);
+      expect(scratchStat.mode & 0o777).toBe(0o700);
+    }
+
+    expect(result.isError).toBe(false);
+    expect(result.details).toEqual(overflowOutput);
+    expect(result.content).toEqual([{ type: "text", text: String(overflowOutput.value) }]);
+  });
+
   test("executeToolCall preserves multimodal image tool results", async () => {
     const emitted: Array<Record<string, unknown>> = [];
     const imageResult = {
@@ -295,6 +558,61 @@ describe("pi runtime regressions", () => {
     ]);
     expect(result.isError).toBe(false);
     expect(result.content).toEqual(imageResult.content);
+  });
+
+  test("executeToolCall spills oversized string results verbatim to .ModelScratchpad and emits a companion file part", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-overflow-tool-"));
+    const emitted: Array<Record<string, unknown>> = [];
+    const oversized = "overflow-result-".repeat(400);
+
+    const result = await piRuntimeInternal.executeToolCall(
+      { id: "call-overflow", name: "lookup", arguments: {} },
+      makeParams(makeConfig(homeDir, { toolOutputOverflowChars: 120 }), {
+        tools: {
+          lookup: {
+            execute: async () => oversized,
+          },
+        },
+      }),
+      async (part) => {
+        emitted.push(part as Record<string, unknown>);
+      }
+    );
+
+    expect(emitted).toHaveLength(2);
+    expect(emitted[0]?.type).toBe("tool-result");
+    expect(emitted[1]?.type).toBe("file");
+
+    const toolResultOutput = emitted[0]?.output as Record<string, unknown>;
+    expect(toolResultOutput.type).toBe("text");
+    expect(toolResultOutput.overflow).toBe(true);
+    expect(toolResultOutput.chars).toBe(oversized.length);
+    expect(typeof toolResultOutput.filePath).toBe("string");
+    expect((toolResultOutput.filePath as string)).toContain(path.join(homeDir, ".ModelScratchpad"));
+    expect((toolResultOutput.value as string).length).toBeLessThan(oversized.length);
+    expect(toolResultOutput.value).toContain(toolResultOutput.filePath as string);
+    expect(toolResultOutput.value).toContain(`Preview (first ${TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS.toLocaleString()} chars):`);
+    expect(String(toolResultOutput.preview).startsWith(oversized.slice(0, TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS))).toBe(true);
+    expect(String(toolResultOutput.preview)).toContain(
+      `preview truncated ${oversized.length - TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS} chars`
+    );
+    expect(String(toolResultOutput.preview).length).toBeGreaterThan(120);
+
+    const spillPath = toolResultOutput.filePath as string;
+    expect(await fs.readFile(spillPath, "utf-8")).toBe(oversized);
+
+    expect(emitted[1]?.file).toEqual({
+      kind: "tool-output-overflow",
+      toolName: "lookup",
+      toolCallId: "call-overflow",
+      path: spillPath,
+      chars: oversized.length,
+      preview: toolResultOutput.preview,
+    });
+
+    expect(result.isError).toBe(false);
+    expect(result.details).toEqual(toolResultOutput);
+    expect(result.content).toEqual([{ type: "text", text: toolResultOutput.value }]);
   });
 
 });

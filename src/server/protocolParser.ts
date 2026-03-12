@@ -28,6 +28,7 @@ const setConfigFieldErrorMessages: Record<string, string> = {
   backupsEnabled: "set_config config.backupsEnabled must be boolean",
   subAgentModel: "set_config config.subAgentModel must be non-empty string",
   maxSteps: "set_config config.maxSteps must be number 1-1000",
+  toolOutputOverflowChars: "set_config config.toolOutputOverflowChars must be null or non-negative integer",
   providerOptions: "set_config config.providerOptions must be an object",
 };
 
@@ -89,6 +90,7 @@ const setConfigPayloadSchema = z.object({
   backupsEnabled: z.boolean().optional(),
   subAgentModel: z.string().trim().min(1).optional(),
   maxSteps: z.number().min(1).max(1000).optional(),
+  toolOutputOverflowChars: z.number().int().nonnegative().nullable().optional(),
   providerOptions: editableOpenAiProviderOptionsByProviderSchema.optional(),
 }).passthrough();
 

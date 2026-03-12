@@ -11,6 +11,7 @@ import type { AgentConfig, ModelMessage } from "../src/types";
 import { getAiCoworkerPaths } from "../src/connect";
 import { CODEX_BACKEND_BASE_URL, writeCodexAuthMaterial } from "../src/providers/codex-auth";
 import { __internal as piRuntimeInternal, createPiRuntime } from "../src/runtime/piRuntime";
+import { MODEL_SCRATCHPAD_DIRNAME } from "../src/shared/toolOutputOverflow";
 
 function b64url(input: string): string {
   return Buffer.from(input, "utf8").toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
@@ -403,6 +404,106 @@ describe("pi runtime regressions", () => {
     expect(result.content).toEqual([{ type: "text", text: "permission denied" }]);
   });
 
+  test("executeToolCall leaves short tool output inline when under the overflow threshold", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-tool-inline-"));
+    const emitted: Array<Record<string, unknown>> = [];
+
+    const result = await piRuntimeInternal.executeToolCall(
+      { id: "call-short", name: "lookup", arguments: {} },
+      makeParams(makeConfig(homeDir, { toolOutputOverflowChars: 100 }), {
+        tools: {
+          lookup: {
+            execute: async () => "short output",
+          },
+        },
+      }),
+      async (part) => {
+        emitted.push(part as Record<string, unknown>);
+      }
+    );
+
+    expect(emitted).toEqual([
+      {
+        type: "tool-result",
+        toolCallId: "call-short",
+        toolName: "lookup",
+        output: "short output",
+      },
+    ]);
+    expect(result.content).toEqual([{ type: "text", text: "short output" }]);
+    await expect(fs.readdir(path.join(homeDir, MODEL_SCRATCHPAD_DIRNAME))).rejects.toThrow();
+  });
+
+  test("executeToolCall spills oversized tool output to .ModelScratchpad and emits a companion file part", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-tool-overflow-"));
+    const emitted: Array<Record<string, unknown>> = [];
+    const toolOutput = {
+      type: "json",
+      value: {
+        payload: "0123456789abcdef".repeat(32),
+      },
+      exitCode: 0,
+      ok: true,
+      count: 1,
+      provider: "mock-provider",
+    };
+
+    const result = await piRuntimeInternal.executeToolCall(
+      { id: "call-overflow", name: "lookup", arguments: {} },
+      makeParams(makeConfig(homeDir, { toolOutputOverflowChars: 80 }), {
+        tools: {
+          lookup: {
+            execute: async () => toolOutput,
+          },
+        },
+      }),
+      async (part) => {
+        emitted.push(part as Record<string, unknown>);
+      }
+    );
+
+    expect(emitted).toHaveLength(2);
+    expect(emitted[0]).toMatchObject({
+      type: "tool-result",
+      toolCallId: "call-overflow",
+      toolName: "lookup",
+      output: {
+        type: "text",
+        overflow: true,
+        exitCode: 0,
+        ok: true,
+        count: 1,
+        provider: "mock-provider",
+      },
+    });
+    expect(emitted[1]).toMatchObject({
+      type: "file",
+      file: {
+        kind: "tool-output-overflow",
+        toolName: "lookup",
+        toolCallId: "call-overflow",
+      },
+    });
+
+    const overflowOutput = emitted[0]?.output as Record<string, unknown>;
+    const fileEvent = emitted[1]?.file as Record<string, unknown>;
+    const spillPath = String(overflowOutput.filePath);
+    expect(spillPath).toContain(`/${MODEL_SCRATCHPAD_DIRNAME}/`);
+    expect(String(overflowOutput.value)).toContain("Tool output overflowed");
+    expect(String(overflowOutput.value)).toContain(spillPath);
+    expect(Number(overflowOutput.chars)).toBeGreaterThan(80);
+    expect(fileEvent.path).toBe(spillPath);
+    expect(fileEvent.chars).toBe(overflowOutput.chars);
+    expect(fileEvent.preview).toBe(overflowOutput.preview);
+
+    const saved = await fs.readFile(spillPath, "utf-8");
+    expect(saved).toBe(JSON.stringify(toolOutput, null, 2));
+
+    expect(result.isError).toBe(false);
+    expect(result.details).toEqual(overflowOutput);
+    expect(result.content).toEqual([{ type: "text", text: String(overflowOutput.value) }]);
+  });
+
   test("executeToolCall preserves multimodal image tool results", async () => {
     const emitted: Array<Record<string, unknown>> = [];
     const imageResult = {
@@ -437,6 +538,55 @@ describe("pi runtime regressions", () => {
     ]);
     expect(result.isError).toBe(false);
     expect(result.content).toEqual(imageResult.content);
+  });
+
+  test("executeToolCall spills oversized string results verbatim to .ModelScratchpad and emits a companion file part", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-overflow-tool-"));
+    const emitted: Array<Record<string, unknown>> = [];
+    const oversized = "overflow-result-".repeat(400);
+
+    const result = await piRuntimeInternal.executeToolCall(
+      { id: "call-overflow", name: "lookup", arguments: {} },
+      makeParams(makeConfig(homeDir, { toolOutputOverflowChars: 120 }), {
+        tools: {
+          lookup: {
+            execute: async () => oversized,
+          },
+        },
+      }),
+      async (part) => {
+        emitted.push(part as Record<string, unknown>);
+      }
+    );
+
+    expect(emitted).toHaveLength(2);
+    expect(emitted[0]?.type).toBe("tool-result");
+    expect(emitted[1]?.type).toBe("file");
+
+    const toolResultOutput = emitted[0]?.output as Record<string, unknown>;
+    expect(toolResultOutput.type).toBe("text");
+    expect(toolResultOutput.overflow).toBe(true);
+    expect(toolResultOutput.chars).toBe(oversized.length);
+    expect(typeof toolResultOutput.filePath).toBe("string");
+    expect((toolResultOutput.filePath as string)).toContain(path.join(homeDir, ".ModelScratchpad"));
+    expect((toolResultOutput.value as string).length).toBeLessThan(oversized.length);
+    expect(toolResultOutput.value).toContain(toolResultOutput.filePath as string);
+
+    const spillPath = toolResultOutput.filePath as string;
+    expect(await fs.readFile(spillPath, "utf-8")).toBe(oversized);
+
+    expect(emitted[1]?.file).toEqual({
+      kind: "tool-output-overflow",
+      toolName: "lookup",
+      toolCallId: "call-overflow",
+      path: spillPath,
+      chars: oversized.length,
+      preview: toolResultOutput.preview,
+    });
+
+    expect(result.isError).toBe(false);
+    expect(result.details).toEqual(toolResultOutput);
+    expect(result.content).toEqual([{ type: "text", text: toolResultOutput.value }]);
   });
 
 });

@@ -48,6 +48,7 @@ import {
   piTurnMessagesToModelMessages,
   toolResultContentFromOutput,
 } from "./piMessageBridge";
+import { maybeSpillToolOutputToWorkspace } from "./toolOutputOverflow";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeStepOverride, RuntimeToolDefinition } from "./types";
 import { resolveCoworkHomedir } from "../utils/coworkHome";
 
@@ -596,19 +597,34 @@ export async function executeToolCall(
       };
     }
 
-    const content = toolResultContentFromOutput(result);
+    const overflow = await maybeSpillToolOutputToWorkspace({
+      output: result,
+      toolName: toolCall.name,
+      toolCallId: toolCall.id,
+      workingDirectory: params.config.workingDirectory,
+      toolOutputOverflowChars: params.config.toolOutputOverflowChars,
+      log: params.log,
+    });
+    const emittedOutput = overflow?.output ?? result;
+    const content = toolResultContentFromOutput(emittedOutput);
     await emitPart({
       type: "tool-result",
       toolCallId: toolCall.id,
       toolName: toolCall.name,
-      output: result,
+      output: emittedOutput,
     });
+    if (overflow) {
+      await emitPart({
+        type: "file",
+        file: overflow.file,
+      });
+    }
     return {
       role: "toolResult",
       toolCallId: toolCall.id,
       toolName: toolCall.name,
       content,
-      details: asRecord(result) ?? result,
+      details: asRecord(emittedOutput) ?? emittedOutput,
       isError: false,
       timestamp: Date.now(),
     };

@@ -75,7 +75,12 @@ async function loadJsonObjectSafe(filePath: string): Promise<Record<string, unkn
 
 async function persistProjectConfigPatch(
   projectAgentDir: string,
-  patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled">> & {
+  patch: Partial<
+    Pick<
+      AgentConfig,
+      "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+    >
+  > & {
     providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
   },
   runtimeProviderOptions?: AgentConfig["providerOptions"],
@@ -124,7 +129,12 @@ async function persistProjectConfigPatch(
 
 function mergeConfigPatch(
   config: AgentConfig,
-  patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled">> & {
+  patch: Partial<
+    Pick<
+      AgentConfig,
+      "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+    >
+  > & {
     providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
   }
 ): AgentConfig {
@@ -254,7 +264,12 @@ export async function startAgentServer(
         : undefined,
       persistProjectConfigPatchImpl: sessionKind === "root"
         ? async (
-            patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled">> & {
+            patch: Partial<
+              Pick<
+                AgentConfig,
+                "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+              >
+            > & {
               providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
             }
           ) => {

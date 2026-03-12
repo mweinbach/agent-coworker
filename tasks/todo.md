@@ -1,3 +1,24 @@
+# Task: Add tool output overflow spill files
+
+## Plan
+- [x] Extend config/protocol/session state for `toolOutputOverflowChars` persistence and websocket exposure.
+- [x] Implement runtime spill-file handling in `executeToolCall()` and remove unconditional `bash`/`grep` truncation.
+- [x] Exclude `.ModelScratchpad` from git noise and session/workspace backup snapshots.
+- [x] Add focused tests for config/protocol/runtime/stream/backup behavior and run verification.
+
+## Review
+- Added a workspace-scoped `toolOutputOverflowChars` config defaulting to `25000` through `AgentConfig`, `config/defaults.json`, config loading, websocket `set_config` parsing, `session_config` emission, persisted project config patches, and desktop/TUI sync types.
+- Added shared overflow helpers in `src/shared/toolOutputOverflow.ts` and `src/runtime/toolOutputOverflow.ts`, then wired `src/runtime/piRuntime.ts` so oversized non-image tool results spill into `<workingDirectory>/.ModelScratchpad/*.txt`, emit a compact pointer/preview payload for the model, and send a companion `file` stream part for clients.
+- Removed unconditional post-exec truncation from `src/tools/bash.ts` and `src/tools/grep.ts` so the runtime spill layer receives full buffered output. Updated `test/tools.test.ts` to assert the new bash contract.
+- Hardened backup handling so `.ModelScratchpad` stays out of git, backup fingerprints, tar/directory snapshots, byte-size accounting, restore copies, and workspace clearing during restore. The tar snapshot path now stages a filtered copy before archiving so scratchpad files never enter tar snapshots.
+- Updated websocket docs and added focused regressions for config parsing, session snapshots, overflow runtime behavior, OpenAI continuation pointer text, model-stream/file chunks, backup exclusions, and desktop workspace sync.
+- Verification:
+  - `bun test test/config.test.ts test/runtime.pi-runtime.test.ts test/runtime.openai-responses-runtime.test.ts test/session.stream-pipeline.test.ts test/server.model-stream.test.ts test/session-backup.test.ts apps/desktop/test/workspace-settings-sync.test.ts test/protocol.test.ts test/agentSocket.parse.test.ts --bail` -> pass
+  - `bun test test/agent.remote-mcp.grep.test.ts --bail` -> pass
+  - `bun test` -> pass (`2076 pass, 0 fail`)
+  - `bun run typecheck` -> pass
+  - `git diff --check` -> pass
+
 # Task: Add Exa links and image links to webFetch output
 
 ## Plan
@@ -197,6 +218,16 @@
 - Verification:
   - `~/.bun/bin/bun test apps/desktop/test/backup-page.test.ts apps/desktop/test/settings-nav.test.ts apps/desktop/test/protocol-v2-events.test.ts --bail` -> pass (`44 pass, 0 fail`)
   - `~/.bun/bin/bun run typecheck` -> pass
+
+# Task: Audit repo-wide test coverage for missing or ineffective assertions
+
+## Plan
+- [ ] Inventory the current test surface and identify concrete weak or missing coverage areas across harness, providers, and UI/client code.
+- [ ] Add or strengthen the highest-signal regressions without rewriting unrelated production behavior.
+- [ ] Run targeted verification for each touched area, then run broader repo validation and record any remaining gaps or pre-existing issues.
+
+## Review
+- In progress.
 
 # Task: Implement workspace backup settings page
 

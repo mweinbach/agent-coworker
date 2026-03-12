@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.12`
+- Current protocol version: `7.13`
 
 ## Table of Contents
 
@@ -48,6 +48,11 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.13`:
+
+- `set_config.config` now accepts `toolOutputOverflowChars` as a workspace-scoped overflow spill threshold, and `null` disables spill files.
+- `session_config.config` now reports the effective `toolOutputOverflowChars` value for the live session.
 
 Changes in `7.12`:
 
@@ -162,7 +167,7 @@ When a WebSocket connection opens, the server sends these events in order:
 
 1. `server_hello` — session ID, config, protocol version, capabilities
 2. `session_settings` — current runtime settings (e.g. MCP toggle)
-3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `backupsEnabled`, `defaultBackupsEnabled`, `subAgentModel`, `maxSteps`, `providerOptions`)
+3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `backupsEnabled`, `defaultBackupsEnabled`, `toolOutputOverflowChars`, `subAgentModel`, `maxSteps`, `providerOptions`)
 4. `session_info` — session metadata including title
 5. `observability_status` — Langfuse observability state
 6. `provider_catalog` — available providers and models (async)
@@ -1742,6 +1747,7 @@ Update runtime configuration values.
   "config": {
     "yolo": true,
     "backupsEnabled": true,
+    "toolOutputOverflowChars": 25000,
     "maxSteps": 200,
     "providerOptions": {
       "openai": {
@@ -1763,6 +1769,7 @@ Update runtime configuration values.
 | `config.yolo` | `boolean` | No | Auto-approve all commands |
 | `config.observabilityEnabled` | `boolean` | No | Toggle observability |
 | `config.backupsEnabled` | `boolean` | No | Toggle session backups for the current session and persist the workspace default for future sessions |
+| `config.toolOutputOverflowChars` | `number \| null` | No | Workspace-scoped character threshold for spilling oversized tool outputs into `.ModelScratchpad`; `null` disables spill files |
 | `config.subAgentModel` | `string` | No | Non-empty sub-agent model ID |
 | `config.maxSteps` | `number` | No | Max steps per turn (1-1000) |
 | `config.providerOptions` | `object` | No | Editable OpenAI-compatible provider option patch. Only `openai` and `codex-cli` are allowed |
@@ -2296,6 +2303,10 @@ Incremental model stream chunk. Emitted during a turn for each streaming part fr
 | `partType` | `ModelStreamPartType` | Part type (see [ModelStreamPartType](#modelstreamparttype)) |
 | `part` | `object` | Normalized part payload. Shape varies by `partType`. If a non-object part is received, it is normalized to `{ "value": <original> }` |
 | `rawPart` | `unknown?` | Optional raw provider/runtime part (present when `includeRawChunks` is enabled). Default mode is sanitized; set `COWORK_MODEL_STREAM_RAW_MODE=full` to increase payload detail |
+
+Notes:
+- When an oversized non-image tool result is spilled to `.ModelScratchpad`, the `tool_result` chunk carries compact overflow metadata (`overflow`, `filePath`, `chars`, `preview`) instead of the full text payload.
+- The runtime emits a companion `file` chunk with `{ "kind": "tool-output-overflow", "toolName": "...", "toolCallId": "...", "path": "...", "chars": 12345, "preview": "..." }`.
 
 ---
 
@@ -3090,6 +3101,7 @@ Current runtime config. Sent on connection and after `set_config`.
     "observabilityEnabled": true,
     "backupsEnabled": true,
     "defaultBackupsEnabled": true,
+    "toolOutputOverflowChars": 25000,
     "subAgentModel": "gpt-5.4",
     "maxSteps": 100,
     "providerOptions": {
@@ -3116,6 +3128,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.observabilityEnabled` | `boolean` | Whether observability is enabled |
 | `config.backupsEnabled` | `boolean` | Whether backups are enabled for the live session after applying any session-scoped override |
 | `config.defaultBackupsEnabled` | `boolean` | The persisted workspace backup default from the harness/core config, before any live session override is applied |
+| `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for spilling oversized tool outputs into `.ModelScratchpad`; `null` disables spill files |
 | `config.subAgentModel` | `string` | Sub-agent model identifier |
 | `config.maxSteps` | `number` | Maximum steps per turn |
 | `config.providerOptions` | `object?` | Editable OpenAI-compatible provider options when configured |

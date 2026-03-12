@@ -12,13 +12,19 @@ export async function createSnapshotWithTarFallback(opts: {
   directoryPath: string;
 }): Promise<SessionBackupMetadataSnapshot> {
   const archivePath = path.join(opts.sessionDir, opts.tarPath);
+  const tarStageDir = await fs.mkdtemp(path.join(opts.sessionDir, ".snapshot-stage-"));
   try {
-    await createTarGz(opts.sourceDir, archivePath);
+    // Stage a filtered copy so scratchpad state never enters tar snapshots.
+    await copyDirectoryContents(opts.sourceDir, tarStageDir);
+    await createTarGz(tarStageDir, archivePath);
     return { kind: "tar_gz", path: opts.tarPath };
   } catch {
+    await fs.rm(archivePath, { force: true }).catch(() => {});
     const directoryPath = path.join(opts.sessionDir, opts.directoryPath);
     await copyDirectory(opts.sourceDir, directoryPath);
     return { kind: "directory", path: opts.directoryPath };
+  } finally {
+    await fs.rm(tarStageDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

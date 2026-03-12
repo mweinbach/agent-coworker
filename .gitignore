@@ -16,6 +16,7 @@ coverage/
 # Agent runtime dirs
 output/
 uploads/
+.ModelScratchpad/
 .agent/
 .cowork/
 

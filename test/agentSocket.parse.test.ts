@@ -86,6 +86,7 @@ describe("agent socket parser", () => {
           observabilityEnabled: true,
           backupsEnabled: true,
           defaultBackupsEnabled: true,
+          toolOutputOverflowChars: 25000,
           subAgentModel: "gpt-5.4",
           maxSteps: 100,
           providerOptions: {

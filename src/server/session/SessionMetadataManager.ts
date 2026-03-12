@@ -3,6 +3,7 @@ import {
   mergeEditableOpenAiCompatibleProviderOptions,
   pickEditableOpenAiCompatibleProviderOptions,
 } from "../../shared/openaiCompatibleOptions";
+import { effectiveToolOutputOverflowChars } from "../../shared/toolOutputOverflow";
 import type { AgentConfig, HarnessContextPayload } from "../../types";
 import type { SessionConfigPatch } from "../protocol";
 import { DEFAULT_SESSION_TITLE, heuristicTitleFromQuery, type SessionTitleSource } from "../sessionTitleService";
@@ -32,6 +33,7 @@ export class SessionMetadataManager {
     const providerOptions = pickEditableOpenAiCompatibleProviderOptions(this.context.state.config.providerOptions);
     const defaultBackupsEnabled = this.context.state.config.backupsEnabled ?? true;
     const backupsEnabled = this.context.state.backupsEnabledOverride ?? defaultBackupsEnabled;
+    const toolOutputOverflowChars = effectiveToolOutputOverflowChars(this.context.state.config.toolOutputOverflowChars);
     return {
       type: "session_config",
       sessionId: this.context.id,
@@ -42,6 +44,7 @@ export class SessionMetadataManager {
         defaultBackupsEnabled,
         subAgentModel: this.context.state.config.subAgentModel,
         maxSteps: this.context.state.maxSteps,
+        toolOutputOverflowChars,
         ...(providerOptions ? { providerOptions } : {}),
       },
     };
@@ -171,6 +174,9 @@ export class SessionMetadataManager {
     if (patch.backupsEnabled !== undefined) {
       persistPatch.backupsEnabled = patch.backupsEnabled;
     }
+    if (patch.toolOutputOverflowChars !== undefined) {
+      persistPatch.toolOutputOverflowChars = patch.toolOutputOverflowChars;
+    }
     if (patch.providerOptions !== undefined) {
       persistPatch.providerOptions = patch.providerOptions;
     }
@@ -198,6 +204,9 @@ export class SessionMetadataManager {
     }
     if (patch.subAgentModel !== undefined) {
       this.context.state.config = { ...this.context.state.config, subAgentModel: patch.subAgentModel };
+    }
+    if (patch.toolOutputOverflowChars !== undefined) {
+      this.context.state.config = { ...this.context.state.config, toolOutputOverflowChars: patch.toolOutputOverflowChars };
     }
     if (patch.providerOptions !== undefined) {
       this.context.state.config = {

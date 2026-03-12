@@ -180,7 +180,12 @@ function makeSession(
       subAgentModel: string;
     }) => Promise<void> | void;
     persistProjectConfigPatchImpl: (
-      patch: Partial<Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled">>
+      patch: Partial<
+        Pick<
+          AgentConfig,
+          "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+        >
+      >
     ) => Promise<void> | void;
     generateSessionTitleImpl: (opts: { config: AgentConfig; query: string }) => Promise<{
       title: string;
@@ -674,6 +679,7 @@ describe("AgentSession", () => {
       expect(evt.config.observabilityEnabled).toBe(false);
       expect(evt.config.backupsEnabled).toBe(true);
       expect(evt.config.defaultBackupsEnabled).toBe(true);
+      expect(evt.config.toolOutputOverflowChars).toBe(25000);
       expect(evt.config.subAgentModel).toBe("gemini-2.0-flash");
       expect(evt.config.maxSteps).toBe(100);
     });
@@ -718,7 +724,7 @@ describe("AgentSession", () => {
       expect((evt.config.providerOptions as any)?.google).toBeUndefined();
     });
 
-    test("setConfig emits session_config and persists subAgentModel/observability/backupsEnabled", async () => {
+    test("setConfig emits session_config and persists subAgentModel/observability/backupsEnabled/toolOutputOverflowChars", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
@@ -726,6 +732,7 @@ describe("AgentSession", () => {
         subAgentModel: "gpt-5.2-mini",
         observabilityEnabled: true,
         backupsEnabled: false,
+        toolOutputOverflowChars: null,
         maxSteps: 25,
       });
 
@@ -735,12 +742,14 @@ describe("AgentSession", () => {
       expect(cfgEvt.config.observabilityEnabled).toBe(true);
       expect(cfgEvt.config.backupsEnabled).toBe(false);
       expect(cfgEvt.config.defaultBackupsEnabled).toBe(false);
+      expect(cfgEvt.config.toolOutputOverflowChars).toBeNull();
       expect(cfgEvt.config.maxSteps).toBe(25);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
         subAgentModel: "gpt-5.2-mini",
         observabilityEnabled: true,
         backupsEnabled: false,
+        toolOutputOverflowChars: null,
       });
     });
 

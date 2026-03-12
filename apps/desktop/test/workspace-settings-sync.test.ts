@@ -378,6 +378,7 @@ describe("workspace settings sync", () => {
         observabilityEnabled: true,
         backupsEnabled: false,
         defaultBackupsEnabled: false,
+        toolOutputOverflowChars: 12000,
         subAgentModel: "gpt-5-mini",
         maxSteps: 75,
       },
@@ -390,6 +391,7 @@ describe("workspace settings sync", () => {
     expect(runtime?.controlSessionConfig?.subAgentModel).toBe("gpt-5-mini");
     expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultBackupsEnabled).toBe(false);
+    expect(runtime?.controlSessionConfig?.toolOutputOverflowChars).toBe(12000);
   });
 
   test("control session_config keeps session backup overrides separate from the workspace default", async () => {
@@ -405,6 +407,7 @@ describe("workspace settings sync", () => {
         observabilityEnabled: true,
         backupsEnabled: false,
         defaultBackupsEnabled: true,
+        toolOutputOverflowChars: 25000,
         subAgentModel: "gpt-5-mini",
         maxSteps: 75,
       },
@@ -451,6 +454,7 @@ describe("workspace settings sync", () => {
         observabilityEnabled: true,
         backupsEnabled: true,
         defaultBackupsEnabled: true,
+        toolOutputOverflowChars: 25000,
         subAgentModel: "gpt-5.4-mini",
         providerOptions: {
           openai: {
@@ -520,6 +524,7 @@ describe("workspace settings sync", () => {
         observabilityEnabled: true,
         backupsEnabled: true,
         defaultBackupsEnabled: true,
+        toolOutputOverflowChars: 25000,
         subAgentModel: "gpt-5.4-mini",
         maxSteps: 75,
       },
@@ -618,6 +623,7 @@ describe("workspace settings sync", () => {
         observabilityEnabled: true,
         backupsEnabled: false,
         defaultBackupsEnabled: false,
+        toolOutputOverflowChars: 25000,
         subAgentModel: "gpt-5.2",
         maxSteps: 75,
       },

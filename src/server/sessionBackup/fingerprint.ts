@@ -3,6 +3,8 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { isModelScratchpadPathSegment } from "../../shared/toolOutputOverflow";
+
 async function updateHashWithFileContent(hash: ReturnType<typeof createHash>, filePath: string): Promise<void> {
   const stream = createReadStream(filePath);
   for await (const chunk of stream) {
@@ -19,6 +21,7 @@ async function updateHashWithDirectory(
   entries.sort((a, b) => a.name.localeCompare(b.name));
 
   for (const entry of entries) {
+    if (isModelScratchpadPathSegment(entry.name)) continue;
     const absolutePath = path.join(currentDir, entry.name);
     const relativePath = path.relative(rootDir, absolutePath).split(path.sep).join("/");
     if (entry.isDirectory()) {

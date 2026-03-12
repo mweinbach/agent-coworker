@@ -153,12 +153,26 @@ describe("TUI model stream mapper", () => {
       args: {},
     });
 
-    expect(mapModelStreamChunk(chunk("tool_result", { toolCallId: "tool_1", toolName: "read", output: { chars: 120 } }, 4))).toEqual({
+    expect(mapModelStreamChunk(chunk("tool_result", {
+      toolCallId: "tool_1",
+      toolName: "read",
+      output: {
+        overflow: true,
+        filePath: "/tmp/.ModelScratchpad/overflow.txt",
+        chars: 120,
+        preview: "Preview text",
+      },
+    }, 4))).toEqual({
       kind: "tool_result",
       turnId: "t1",
       key: "tool_1",
       name: "read",
-      result: { chars: 120 },
+      result: {
+        overflow: true,
+        filePath: "/tmp/.ModelScratchpad/overflow.txt",
+        chars: 120,
+        preview: "Preview text",
+      },
     });
 
     expect(mapModelStreamChunk(chunk("tool_error", { toolCallId: "tool_1", toolName: "read", error: "boom" }, 5))).toEqual({
@@ -192,10 +206,20 @@ describe("TUI model stream mapper", () => {
       source: { type: "url", url: "https://example.com" },
     });
 
-    expect(mapModelStreamChunk(chunk("file", { file: { path: "/tmp/a.txt" } }, 1))).toEqual({
+    expect(mapModelStreamChunk(chunk("file", {
+      file: {
+        kind: "tool-output-overflow",
+        path: "/tmp/.ModelScratchpad/overflow.txt",
+        chars: 120,
+      },
+    }, 1))).toEqual({
       kind: "file",
       turnId: "t1",
-      file: { path: "/tmp/a.txt" },
+      file: {
+        kind: "tool-output-overflow",
+        path: "/tmp/.ModelScratchpad/overflow.txt",
+        chars: 120,
+      },
     });
 
     expect(mapModelStreamChunk(chunk("raw", { raw: { hello: "world" } }, 2))).toEqual({

@@ -699,6 +699,33 @@ describe("normalizeModelStreamPart branches", () => {
       );
       expect(result.part.output).toEqual({ nested: { deep: true } });
     });
+
+    test("preserves overflow metadata on compact tool results", () => {
+      const result = normalizeModelStreamPart(
+        {
+          type: "tool-result",
+          toolCallId: "tr-overflow",
+          toolName: "bash",
+          output: {
+            type: "text",
+            value: "Tool output overflowed. Saved to /tmp/workspace/.ModelScratchpad/spill.txt",
+            overflow: true,
+            filePath: "/tmp/workspace/.ModelScratchpad/spill.txt",
+            chars: 30000,
+            preview: "preview",
+          },
+        },
+        defaultOpts
+      );
+      expect(result.part.output).toEqual({
+        type: "text",
+        value: "Tool output overflowed. Saved to /tmp/workspace/.ModelScratchpad/spill.txt",
+        overflow: true,
+        filePath: "/tmp/workspace/.ModelScratchpad/spill.txt",
+        chars: 30000,
+        preview: "preview",
+      });
+    });
   });
 
   // 16. tool-error

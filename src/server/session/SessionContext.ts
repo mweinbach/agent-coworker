@@ -37,7 +37,10 @@ export type PersistedModelSelection = {
 };
 
 export type PersistedProjectConfigPatch = Partial<
-  Pick<AgentConfig, "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled">
+  Pick<
+    AgentConfig,
+    "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+  >
 > & {
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
 };

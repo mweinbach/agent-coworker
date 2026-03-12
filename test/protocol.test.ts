@@ -1031,6 +1031,7 @@ describe("safeParseClientMessage", () => {
             yolo: true,
             observabilityEnabled: false,
             backupsEnabled: true,
+            toolOutputOverflowChars: null,
             subAgentModel: "gpt-5.4",
             maxSteps: 25,
             providerOptions: {
@@ -1048,6 +1049,7 @@ describe("safeParseClientMessage", () => {
         expect(msg.config.yolo).toBe(true);
         expect(msg.config.observabilityEnabled).toBe(false);
         expect(msg.config.backupsEnabled).toBe(true);
+        expect(msg.config.toolOutputOverflowChars).toBeNull();
         expect(msg.config.subAgentModel).toBe("gpt-5.4");
         expect(msg.config.maxSteps).toBe(25);
         expect(msg.config.providerOptions?.openai?.reasoningEffort).toBe("xhigh");
@@ -1074,6 +1076,11 @@ describe("safeParseClientMessage", () => {
       expect(
         expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { backupsEnabled: "no" } })),
       ).toBe("set_config config.backupsEnabled must be boolean");
+      expect(
+        expectErr(
+          JSON.stringify({ type: "set_config", sessionId: "s1", config: { toolOutputOverflowChars: -1 } }),
+        ),
+      ).toBe("set_config config.toolOutputOverflowChars must be null or non-negative integer");
       expect(
         expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { subAgentModel: "" } })),
       ).toBe("set_config config.subAgentModel must be non-empty string");

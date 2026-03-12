@@ -63,6 +63,7 @@ export interface AgentConfig {
   runtime?: RuntimeName;
   model: string;
   subAgentModel: string;
+  toolOutputOverflowChars?: number | null;
 
   workingDirectory: string;
   outputDirectory?: string;

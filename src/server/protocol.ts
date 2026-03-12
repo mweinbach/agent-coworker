@@ -34,6 +34,7 @@ export type SessionConfigPatch = {
   backupsEnabled?: boolean;
   subAgentModel?: string;
   maxSteps?: number;
+  toolOutputOverflowChars?: number | null;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
 };
 
@@ -44,6 +45,7 @@ export type SessionConfigState = {
   defaultBackupsEnabled: boolean;
   subAgentModel: string;
   maxSteps: number;
+  toolOutputOverflowChars: number | null;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
 };
 
@@ -382,7 +384,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.12";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.13";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",

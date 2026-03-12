@@ -504,6 +504,7 @@ describe("WebSocket Lifecycle", () => {
       expect(typeof configEvt.config.yolo).toBe("boolean");
       expect(typeof configEvt.config.observabilityEnabled).toBe("boolean");
       expect(typeof configEvt.config.defaultBackupsEnabled).toBe("boolean");
+      expect(typeof configEvt.config.toolOutputOverflowChars).toBe("number");
       expect(typeof configEvt.config.subAgentModel).toBe("string");
       expect(typeof configEvt.config.maxSteps).toBe("number");
     } finally {
@@ -2624,6 +2625,37 @@ describe("Protocol Doc Parity", () => {
       expect(persistedConfig.providerOptions["codex-cli"].reasoningEffort).toBe("xhigh");
       expect(persistedConfig.providerOptions["codex-cli"].reasoningSummary).toBe("detailed");
       expect(persistedConfig.providerOptions["codex-cli"].textVerbosity).toBe("medium");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("set_config persists toolOutputOverflowChars null and new sessions inherit it", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const event = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({
+          type: "set_config",
+          sessionId,
+          config: {
+            toolOutputOverflowChars: null,
+          },
+        }),
+        (message) => message.type === "session_config" && message.config?.toolOutputOverflowChars === null,
+      );
+
+      expect(event.config.toolOutputOverflowChars).toBeNull();
+
+      const persistedConfig = JSON.parse(
+        await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),
+      ) as any;
+      expect(persistedConfig.toolOutputOverflowChars).toBeNull();
+
+      const nextMessages = await collectMessages(url, 4);
+      const nextConfigEvt = nextMessages.find((msg: any) => msg.type === "session_config");
+      expect(nextConfigEvt?.config.toolOutputOverflowChars).toBeNull();
     } finally {
       server.stop();
     }

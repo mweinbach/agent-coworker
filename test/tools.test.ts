@@ -529,13 +529,13 @@ describe("bash tool", () => {
     expect(normalizedStdout).toBe(normalizedDir);
   });
 
-  test("truncates large stdout", async () => {
+  test("returns full large stdout so the runtime spill layer can handle overflow", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
     const res = await t.execute({
       command: `bun -e "process.stdout.write('x'.repeat(50000))"`,
     });
-    expect(res.stdout.length).toBeLessThanOrEqual(30000);
+    expect(res.stdout).toHaveLength(50000);
   });
 
   test("returns stdout and stderr together", async () => {

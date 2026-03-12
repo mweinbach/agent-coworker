@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { SessionBackupManager } from "../src/server/sessionBackup";
+import { extractTarGz } from "../src/server/sessionBackup/tar";
+import { MODEL_SCRATCHPAD_DIRNAME } from "../src/shared/toolOutputOverflow";
+import { workspaceFingerprint } from "../src/server/sessionBackup/fingerprint";
 
 async function makeTmpWorkspace() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "session-backup-test-"));
@@ -142,6 +145,85 @@ describe("SessionBackupManager", () => {
     }
   });
 
+  test("workspace fingerprint ignores .ModelScratchpad changes", async () => {
+    const { workspace } = await makeTmpWorkspace();
+    await fs.writeFile(path.join(workspace, "tracked.txt"), "alpha\n", "utf-8");
+    await fs.mkdir(path.join(workspace, ".ModelScratchpad"), { recursive: true });
+    await fs.writeFile(path.join(workspace, ".ModelScratchpad", "spill.txt"), "first\n", "utf-8");
+
+    const before = await workspaceFingerprint(workspace);
+
+    await fs.writeFile(path.join(workspace, ".ModelScratchpad", "spill.txt"), "second\n", "utf-8");
+    await fs.writeFile(path.join(workspace, ".ModelScratchpad", "extra.txt"), "extra\n", "utf-8");
+
+    const after = await workspaceFingerprint(workspace);
+    expect(after).toBe(before);
+  });
+
+  test("restoreOriginal preserves .ModelScratchpad contents and excludes them from directory snapshots", async () => {
+    const { home, workspace } = await makeTmpWorkspace();
+    await fs.writeFile(path.join(workspace, "tracked.txt"), "original\n", "utf-8");
+    await fs.mkdir(path.join(workspace, ".ModelScratchpad"), { recursive: true });
+    await fs.writeFile(path.join(workspace, ".ModelScratchpad", "spill.txt"), "scratch-v1\n", "utf-8");
+
+    const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+    const previousPath = process.env[pathKey];
+    process.env[pathKey] = path.join(workspace, ".missing-bin");
+
+    try {
+      const manager = await SessionBackupManager.create({
+        sessionId: crypto.randomUUID(),
+        workingDirectory: workspace,
+        homedir: home,
+      });
+
+      const backupDir = manager.getPublicState().backupDirectory;
+      if (!backupDir) throw new Error("Expected backup directory");
+
+      expect(await fileExists(path.join(backupDir, "original", ".ModelScratchpad"))).toBe(false);
+
+      await fs.writeFile(path.join(workspace, "tracked.txt"), "mutated\n", "utf-8");
+      await fs.writeFile(path.join(workspace, ".ModelScratchpad", "spill.txt"), "scratch-v2\n", "utf-8");
+
+      await manager.restoreOriginal();
+
+      expect(await fs.readFile(path.join(workspace, "tracked.txt"), "utf-8")).toBe("original\n");
+      expect(await fs.readFile(path.join(workspace, ".ModelScratchpad", "spill.txt"), "utf-8")).toBe("scratch-v2\n");
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env[pathKey];
+      } else {
+        process.env[pathKey] = previousPath;
+      }
+    }
+  });
+
+  test("tar snapshots exclude .ModelScratchpad from archived workspace state", async () => {
+    const { home, workspace } = await makeTmpWorkspace();
+    await fs.writeFile(path.join(workspace, "tracked.txt"), "original\n", "utf-8");
+    await fs.mkdir(path.join(workspace, MODEL_SCRATCHPAD_DIRNAME), { recursive: true });
+    await fs.writeFile(path.join(workspace, MODEL_SCRATCHPAD_DIRNAME, "spill.txt"), "scratch\n", "utf-8");
+
+    const manager = await SessionBackupManager.create({
+      sessionId: crypto.randomUUID(),
+      workingDirectory: workspace,
+      homedir: home,
+    });
+
+    const backupState = manager.getPublicState();
+    if (backupState.originalSnapshot.kind !== "tar_gz") return;
+    if (!backupState.backupDirectory) throw new Error("Expected backup directory");
+
+    const extractedDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-backup-tar-inspect-"));
+    try {
+      await extractTarGz(path.join(backupState.backupDirectory, "original.tar.gz"), extractedDir);
+      expect(await fileExists(path.join(extractedDir, MODEL_SCRATCHPAD_DIRNAME))).toBe(false);
+      expect(await fs.readFile(path.join(extractedDir, "tracked.txt"), "utf-8")).toBe("original\n");
+    } finally {
+      await fs.rm(extractedDir, { recursive: true, force: true });
+    }
+  });
+
   test("createCheckpoint skips snapshot creation when workspace is unchanged", async () => {
     const { home, workspace } = await makeTmpWorkspace();
     await fs.writeFile(path.join(workspace, "a.txt"), "one\n", "utf-8");
@@ -164,6 +246,30 @@ describe("SessionBackupManager", () => {
     await fs.writeFile(path.join(workspace, "a.txt"), "mutated\n", "utf-8");
     await manager.restoreCheckpoint(checkpoint.id);
     expect(await fs.readFile(path.join(workspace, "a.txt"), "utf-8")).toBe("one\n");
+  });
+
+  test("ignores .ModelScratchpad in fingerprints and restore snapshots", async () => {
+    const { home, workspace } = await makeTmpWorkspace();
+    const scratchpadDir = path.join(workspace, MODEL_SCRATCHPAD_DIRNAME);
+    const scratchpadFile = path.join(scratchpadDir, "overflow.txt");
+    await fs.writeFile(path.join(workspace, "a.txt"), "one\n", "utf-8");
+    await fs.mkdir(scratchpadDir, { recursive: true });
+    await fs.writeFile(scratchpadFile, "snapshot-only\n", "utf-8");
+
+    const manager = await SessionBackupManager.create({
+      sessionId: crypto.randomUUID(),
+      workingDirectory: workspace,
+      homedir: home,
+    });
+
+    await fs.rm(scratchpadDir, { recursive: true, force: true });
+    const checkpoint = await manager.createCheckpoint("auto");
+    expect(checkpoint.changed).toBe(false);
+    expect(checkpoint.patchBytes).toBe(0);
+
+    await manager.restoreOriginal();
+    expect(await fs.readFile(path.join(workspace, "a.txt"), "utf-8")).toBe("one\n");
+    expect(await fileExists(scratchpadFile)).toBe(false);
   });
 
   test("deleteCheckpoint preserves shared snapshot artifacts until last reference is removed", async () => {

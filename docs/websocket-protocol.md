@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.13`
+- Current protocol version: `7.14`
 
 ## Table of Contents
 
@@ -48,6 +48,11 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.14`:
+
+- `session_config.config` now includes optional `defaultToolOutputOverflowChars`, the persisted workspace overflow default when one is explicitly configured.
+- Clients should use `defaultToolOutputOverflowChars` as the source of truth for future sessions; `toolOutputOverflowChars` remains the live effective spill threshold and may reflect the built-in default even when no workspace override exists.
 
 Changes in `7.13`:
 
@@ -167,7 +172,7 @@ When a WebSocket connection opens, the server sends these events in order:
 
 1. `server_hello` — session ID, config, protocol version, capabilities
 2. `session_settings` — current runtime settings (e.g. MCP toggle)
-3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `backupsEnabled`, `defaultBackupsEnabled`, `toolOutputOverflowChars`, `subAgentModel`, `maxSteps`, `providerOptions`)
+3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `backupsEnabled`, `defaultBackupsEnabled`, `toolOutputOverflowChars`, `defaultToolOutputOverflowChars`, `subAgentModel`, `maxSteps`, `providerOptions`)
 4. `session_info` — session metadata including title
 5. `observability_status` — Langfuse observability state
 6. `provider_catalog` — available providers and models (async)
@@ -3102,6 +3107,7 @@ Current runtime config. Sent on connection and after `set_config`.
     "backupsEnabled": true,
     "defaultBackupsEnabled": true,
     "toolOutputOverflowChars": 25000,
+    "defaultToolOutputOverflowChars": 25000,
     "subAgentModel": "gpt-5.4",
     "maxSteps": 100,
     "providerOptions": {
@@ -3129,6 +3135,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.backupsEnabled` | `boolean` | Whether backups are enabled for the live session after applying any session-scoped override |
 | `config.defaultBackupsEnabled` | `boolean` | The persisted workspace backup default from the harness/core config, before any live session override is applied |
 | `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for spilling oversized tool outputs into `.ModelScratchpad`; `null` disables spill files |
+| `config.defaultToolOutputOverflowChars` | `number \| null` | Persisted workspace overflow default when explicitly configured; omitted when the session is inheriting the built-in threshold |
 | `config.subAgentModel` | `string` | Sub-agent model identifier |
 | `config.maxSteps` | `number` | Maximum steps per turn |
 | `config.providerOptions` | `object?` | Editable OpenAI-compatible provider options when configured |

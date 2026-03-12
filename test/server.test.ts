@@ -505,6 +505,7 @@ describe("WebSocket Lifecycle", () => {
       expect(typeof configEvt.config.observabilityEnabled).toBe("boolean");
       expect(typeof configEvt.config.defaultBackupsEnabled).toBe("boolean");
       expect(typeof configEvt.config.toolOutputOverflowChars).toBe("number");
+      expect("defaultToolOutputOverflowChars" in configEvt.config).toBe(false);
       expect(typeof configEvt.config.subAgentModel).toBe("string");
       expect(typeof configEvt.config.maxSteps).toBe("number");
     } finally {
@@ -2648,6 +2649,7 @@ describe("Protocol Doc Parity", () => {
       );
 
       expect(event.config.toolOutputOverflowChars).toBeNull();
+      expect(event.config.defaultToolOutputOverflowChars).toBeNull();
 
       const persistedConfig = JSON.parse(
         await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),
@@ -2657,6 +2659,7 @@ describe("Protocol Doc Parity", () => {
       const nextMessages = await collectMessages(url, 4);
       const nextConfigEvt = nextMessages.find((msg: any) => msg.type === "session_config");
       expect(nextConfigEvt?.config.toolOutputOverflowChars).toBeNull();
+      expect(nextConfigEvt?.config.defaultToolOutputOverflowChars).toBeNull();
     } finally {
       server.stop();
     }

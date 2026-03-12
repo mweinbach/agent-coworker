@@ -280,6 +280,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const parsedToolOutputOverflowChars = normalizeNullableNonNegativeInt(
     (merged as Record<string, unknown>).toolOutputOverflowChars
   );
+  const projectToolOutputOverflowChars = normalizeNullableNonNegativeInt(projectConfig.toolOutputOverflowChars);
   const toolOutputOverflowChars =
     parsedToolOutputOverflowChars === undefined
       ? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS
@@ -393,6 +394,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     model,
     subAgentModel,
     toolOutputOverflowChars,
+    ...(projectToolOutputOverflowChars !== undefined
+      ? {
+          projectConfigOverrides: {
+            toolOutputOverflowChars: projectToolOutputOverflowChars,
+          },
+        }
+      : {}),
     workingDirectory,
     outputDirectory,
     uploadsDirectory,

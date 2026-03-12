@@ -1,3 +1,25 @@
+# Task: Stop auto-sync from persisting the inherited tool overflow default
+
+## Plan
+- [x] Split the `session_config` overflow contract so the harness reports the explicit persisted default separately from the live effective threshold.
+- [x] Update desktop control-session hydration and auto-sync so thread connect only replays an explicit overflow default, not the inherited built-in value.
+- [x] Add regression coverage, run the relevant tests/builds, and record the results here.
+
+## Review
+- `session_config` now separates the live effective overflow threshold from the explicit project-scoped default: `toolOutputOverflowChars` stays the runtime value, while optional `defaultToolOutputOverflowChars` is emitted only when `.agent/config.json` explicitly set an override. The server tracks that explicitness through `AgentConfig.projectConfigOverrides` so built-in or user-level defaults do not masquerade as workspace defaults.
+- Desktop control-session hydration now mirrors `defaultToolOutputOverflowChars` into workspace state and leaves the live effective threshold in `workspaceRuntime.controlSessionConfig`, so reconnects clear stale local overflow defaults when the harness is inheriting the built-in setting.
+- Automatic thread-connect sync now replays only explicit harness overflow defaults. A control session that merely reports the effective built-in `25000` threshold no longer causes later `set_config` writes to pin that value into `.agent/config.json`.
+- Added regressions across `test/session.test.ts`, `test/server.test.ts`, `test/agentSocket.parse.test.ts`, and `apps/desktop/test/workspace-settings-sync.test.ts`, plus protocol docs/version updates in `docs/websocket-protocol.md`.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/workspace-settings-sync.test.ts test/session.test.ts test/server.test.ts test/agentSocket.parse.test.ts test/docs.check.test.ts --bail` -> pass (`300 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> fails in unchanged desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345`)
+  - `~/.bun/bin/bun test` -> fails in existing env-sensitive OpenCode Go runtime tests because `resolved.apiKey` is set from local environment instead of `undefined` (`test/runtime.pi-runtime.test.ts:159` and `:182`); all new overflow regressions passed
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `~/.bun/bin/bun run desktop:build` -> pass after approved networked Electron download
+  - `git diff --check` -> pass
+
 # Task: Fix webFetch markdown attachment download classification
 
 ## Plan

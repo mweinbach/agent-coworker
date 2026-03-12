@@ -139,6 +139,12 @@ function mergeConfigPatch(
   }
 ): AgentConfig {
   const next: AgentConfig = { ...config, ...patch };
+  if (patch.toolOutputOverflowChars !== undefined) {
+    next.projectConfigOverrides = {
+      ...config.projectConfigOverrides,
+      toolOutputOverflowChars: patch.toolOutputOverflowChars,
+    };
+  }
   if (patch.providerOptions !== undefined) {
     next.providerOptions = mergeEditableOpenAiCompatibleProviderOptions(config.providerOptions, patch.providerOptions);
   }

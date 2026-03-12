@@ -64,6 +64,13 @@ export interface AgentConfig {
   model: string;
   subAgentModel: string;
   toolOutputOverflowChars?: number | null;
+  /**
+   * Raw workspace-scoped overrides that were explicitly present in the
+   * project `.agent/config.json`, before built-in defaults were materialized.
+   */
+  projectConfigOverrides?: {
+    toolOutputOverflowChars?: number | null;
+  };
 
   workingDirectory: string;
   outputDirectory?: string;

@@ -33,6 +33,7 @@ export class SessionMetadataManager {
     const providerOptions = pickEditableOpenAiCompatibleProviderOptions(this.context.state.config.providerOptions);
     const defaultBackupsEnabled = this.context.state.config.backupsEnabled ?? true;
     const backupsEnabled = this.context.state.backupsEnabledOverride ?? defaultBackupsEnabled;
+    const defaultToolOutputOverflowChars = this.context.state.config.projectConfigOverrides?.toolOutputOverflowChars;
     const toolOutputOverflowChars = effectiveToolOutputOverflowChars(this.context.state.config.toolOutputOverflowChars);
     return {
       type: "session_config",
@@ -45,6 +46,7 @@ export class SessionMetadataManager {
         subAgentModel: this.context.state.config.subAgentModel,
         maxSteps: this.context.state.maxSteps,
         toolOutputOverflowChars,
+        ...(defaultToolOutputOverflowChars !== undefined ? { defaultToolOutputOverflowChars } : {}),
         ...(providerOptions ? { providerOptions } : {}),
       },
     };
@@ -206,7 +208,14 @@ export class SessionMetadataManager {
       this.context.state.config = { ...this.context.state.config, subAgentModel: patch.subAgentModel };
     }
     if (patch.toolOutputOverflowChars !== undefined) {
-      this.context.state.config = { ...this.context.state.config, toolOutputOverflowChars: patch.toolOutputOverflowChars };
+      this.context.state.config = {
+        ...this.context.state.config,
+        toolOutputOverflowChars: patch.toolOutputOverflowChars,
+        projectConfigOverrides: {
+          ...this.context.state.config.projectConfigOverrides,
+          toolOutputOverflowChars: patch.toolOutputOverflowChars,
+        },
+      };
     }
     if (patch.providerOptions !== undefined) {
       this.context.state.config = {

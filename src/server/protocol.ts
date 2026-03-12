@@ -46,6 +46,7 @@ export type SessionConfigState = {
   subAgentModel: string;
   maxSteps: number;
   toolOutputOverflowChars: number | null;
+  defaultToolOutputOverflowChars?: number | null;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
 };
 
@@ -384,7 +385,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.13";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.14";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",

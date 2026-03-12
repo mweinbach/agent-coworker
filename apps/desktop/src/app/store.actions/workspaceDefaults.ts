@@ -60,7 +60,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       if (!rt?.sessionId) return;
       const workspaceRuntime = get().workspaceRuntimeById[thread.workspaceId];
       const harnessBackupsDefault = workspaceRuntime?.controlSessionConfig?.defaultBackupsEnabled;
-      const harnessToolOutputOverflowChars = workspaceRuntime?.controlSessionConfig?.toolOutputOverflowChars;
+      const harnessToolOutputOverflowChars = workspaceRuntime?.controlSessionConfig?.defaultToolOutputOverflowChars;
       const backupsEnabled = mode === "explicit" ? ws.defaultBackupsEnabled : harnessBackupsDefault;
       const toolOutputOverflowChars = mode === "explicit" ? ws.defaultToolOutputOverflowChars : harnessToolOutputOverflowChars;
 

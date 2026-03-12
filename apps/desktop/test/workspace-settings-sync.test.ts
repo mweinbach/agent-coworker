@@ -422,7 +422,7 @@ describe("workspace settings sync", () => {
     expect(threadSocket.opts.resumeSessionId).toBe("thread-session-new");
   });
 
-  test("control session_config hydrates the workspace backup default from the harness", async () => {
+  test("control session_config hydrates the workspace defaults from the harness", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
@@ -436,6 +436,7 @@ describe("workspace settings sync", () => {
         backupsEnabled: false,
         defaultBackupsEnabled: false,
         toolOutputOverflowChars: 12000,
+        defaultToolOutputOverflowChars: 12000,
         subAgentModel: "gpt-5-mini",
         maxSteps: 75,
       },
@@ -474,8 +475,10 @@ describe("workspace settings sync", () => {
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(workspace?.defaultBackupsEnabled).toBe(true);
+    expect(workspace?.defaultToolOutputOverflowChars).toBeUndefined();
     expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultBackupsEnabled).toBe(true);
+    expect(runtime?.controlSessionConfig?.toolOutputOverflowChars).toBe(25000);
   });
 
   test("control session_config replaces editable providerOptions in workspace defaults", async () => {
@@ -672,7 +675,7 @@ describe("workspace settings sync", () => {
     ).toBe(false);
   });
 
-  test("thread connect uses the harness backup default once the control session is hydrated", async () => {
+  test("thread connect only replays explicit harness overflow defaults after control-session hydration", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
@@ -698,7 +701,39 @@ describe("workspace settings sync", () => {
       type: "set_config",
       config: {
         backupsEnabled: false,
-        toolOutputOverflowChars: 25000,
+      },
+    });
+    expect(threadSocket.sent[0]?.config?.toolOutputOverflowChars).toBeUndefined();
+  });
+
+  test("thread connect replays the explicit harness overflow default when one is configured", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.emit({
+      type: "session_config",
+      sessionId: "control-session",
+      config: {
+        yolo: false,
+        observabilityEnabled: true,
+        backupsEnabled: false,
+        defaultBackupsEnabled: false,
+        toolOutputOverflowChars: 12000,
+        defaultToolOutputOverflowChars: 12000,
+        subAgentModel: "gpt-5.2",
+        maxSteps: 75,
+      },
+    });
+
+    const threadSocket = socketByClient("desktop");
+    threadSocket.sent = [];
+    emitServerHello(threadSocket, "thread-session");
+
+    expect(threadSocket.sent[0]).toMatchObject({
+      type: "set_config",
+      config: {
+        backupsEnabled: false,
+        toolOutputOverflowChars: 12000,
       },
     });
   });

@@ -680,6 +680,7 @@ describe("AgentSession", () => {
       expect(evt.config.backupsEnabled).toBe(true);
       expect(evt.config.defaultBackupsEnabled).toBe(true);
       expect(evt.config.toolOutputOverflowChars).toBe(25000);
+      expect("defaultToolOutputOverflowChars" in evt.config).toBe(false);
       expect(evt.config.subAgentModel).toBe("gemini-2.0-flash");
       expect(evt.config.maxSteps).toBe(100);
     });
@@ -743,6 +744,7 @@ describe("AgentSession", () => {
       expect(cfgEvt.config.backupsEnabled).toBe(false);
       expect(cfgEvt.config.defaultBackupsEnabled).toBe(false);
       expect(cfgEvt.config.toolOutputOverflowChars).toBeNull();
+      expect(cfgEvt.config.defaultToolOutputOverflowChars).toBeNull();
       expect(cfgEvt.config.maxSteps).toBe(25);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({

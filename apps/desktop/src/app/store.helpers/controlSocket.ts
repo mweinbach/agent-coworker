@@ -109,7 +109,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
                     ...workspace,
                     defaultBackupsEnabled: evt.config.defaultBackupsEnabled,
                     defaultSubAgentModel: evt.config.subAgentModel,
-                    defaultToolOutputOverflowChars: evt.config.toolOutputOverflowChars,
+                    defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
                     providerOptions,
                   }
                 : workspace,

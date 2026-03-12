@@ -383,6 +383,7 @@ const serverEventSchema = z.discriminatedUnion("type", [
       subAgentModel: z.string(),
       maxSteps: z.number(),
       toolOutputOverflowChars: z.number().int().nonnegative().nullable(),
+      defaultToolOutputOverflowChars: z.number().int().nonnegative().nullable().optional(),
       providerOptions: editableOpenAiProviderOptionsByProviderSchema.optional(),
     }).passthrough(),
   }).passthrough(),

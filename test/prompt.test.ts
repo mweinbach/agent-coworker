@@ -85,18 +85,16 @@ function expectImageInspectionGuidance(prompt: string) {
 
   expect(hasReadImageGuidance).toBe(true);
   expect(normalized).toContain("do not ask the user to re-upload it just because it is visual");
-  expect(normalized).toContain(
-    "webfetch may return image content that you can inspect visually instead of cleaned markdown"
-  );
-  expect(normalized).toContain(
-    "inspect a direct image url as visual content"
-  );
+  expect(normalized).toContain("if the url points directly to an image, webfetch may save it into");
+  expect(normalized).toContain("use `read` on the downloaded path to inspect it visually");
+  expect(normalized).toContain("download a direct image url and inspect it with `read`");
 }
 
 function expectWebFetchDownloadGuidance(prompt: string) {
   const normalized = prompt.toLowerCase();
   expect(normalized).toContain("file downloaded");
   expect(normalized).toContain("downloads");
+  expect(normalized).toContain("image");
   expect(normalized).toContain("pdf");
   expect(normalized).toContain("markdown");
 }

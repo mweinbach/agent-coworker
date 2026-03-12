@@ -123,9 +123,9 @@ After answering with search results, include a Sources section with URLs. For th
 </webSearch>
 
 <webFetch>
-Fetch a URL and return its content as clean markdown for web pages, visual content for supported direct image URLs, or save supported document downloads into `{{workingDirectory}}/Downloads` and return `File downloaded ...`. HTTP URLs are automatically upgraded to HTTPS. Large pages may be summarized. Follow redirects by making a new request to the redirect URL.
+Fetch a URL and return Exa-extracted content for non-download URLs, or save supported direct image URLs and document downloads into `{{workingDirectory}}/Downloads` and return `File downloaded ...`. HTTP URLs are automatically upgraded to HTTPS. Large pages may be summarized. Follow redirects by making a new request to the redirect URL.
 
-- If the URL points directly to an image, webFetch may return image content that you can inspect visually instead of cleaned markdown.
+- If the URL points directly to an image, webFetch may save it into `{{workingDirectory}}/Downloads` and return `File downloaded ...`. Use `read` on the downloaded path to inspect it visually.
 - If the URL resolves to a document-style download (PDF, Markdown, Office docs, spreadsheets, slides, and similar formats), webFetch may save it into `{{workingDirectory}}/Downloads` and return `File downloaded ...`.
 
 Use webFetch liberally after webSearch. When a search returns relevant-looking results, fetch 2-3 of the most promising pages to read their full content. If the first pages do not fully answer the question, fetch more. If the fetched content reveals new angles or terminology, run a new webSearch with refined queries and fetch those results too.

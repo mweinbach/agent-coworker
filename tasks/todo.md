@@ -1,3 +1,20 @@
+# Task: Add Exa links and image links to webFetch output
+
+## Plan
+- [x] Audit the Exa contents helper and current `webFetch` formatting to identify where link/image-link extras are being dropped.
+- [x] Update the shared Exa contents request/parse path so `webFetch` requests highlights plus `extras.links` and `extras.imageLinks`, then include those sections in the returned text.
+- [x] Add focused `webFetch` regressions for links/image-links output and run targeted verification.
+
+## Review
+- `src/tools/exa.ts` now requests richer Exa contents for `webFetch`: `text: true`, `highlights.maxCharacters = 4000`, and `extras` for up to 10 page links plus 5 image links. The parser now preserves those extras and falls back to highlights when Exa omits full text but still returns useful content.
+- `src/tools/webFetch.ts` now formats Exa-backed page fetches as extracted text followed by `Links:` and `Image Links:` sections when available, then applies the existing `maxLength` truncation to the combined output. Local direct-image and document download behavior is unchanged.
+- Updated `test/tools.test.ts` with regressions that assert the Exa contents request shape and verify the returned `webFetch` output includes links/image-links, including a highlights-only fallback case.
+- Fixed the stale README contract so it no longer claims that `webFetch` returns inline image content; it now describes link/image-link extras plus download-to-`Downloads` behavior.
+- Verification:
+  - `bun test test/tools.test.ts --test-name-pattern "webFetch tool"` -> pass (`23 pass, 0 fail`)
+  - `bunx tsc --noEmit` -> pass
+  - `git diff --check` -> pass
+
 # Task: Add document-download handling to webFetch
 
 ## Plan
@@ -3059,4 +3076,83 @@
 ### Verification
 - `bun test test/runtime.pi-runtime.test.ts test/session/pricing.test.ts test/session.test.ts` -> pass (`235 pass, 0 fail`)
 - `bun run typecheck` -> pass
+- `git diff --check` -> pass
+
+# Task: Review `webFetch` tool architecture and Exa-style scraper tradeoffs
+
+## Plan
+- [x] Inspect `src/tools/webFetch.ts`, related safety helpers, and existing `webFetch` tests to understand the current contract and failure modes.
+- [x] Compare the current implementation against likely improvements for reliability, extraction quality, and tool ergonomics.
+- [x] Check current Exa documentation for its content/scraping capabilities and decide whether replacing `webFetch` is warranted versus augmenting it.
+
+## Review
+- The current `webFetch` implementation is intentionally minimal and harness-safe: SSRF-aware URL resolution, manual redirect validation, direct image passthrough, document download handling into the workspace, and HTML-to-Markdown extraction via Readability plus Turndown.
+- The largest implementation gap is unbounded body handling. `maxLength` limits returned text only after the entire response body is read and converted, while image and download paths buffer the full body in memory before returning or writing. That means a large HTML page, image, or download can still consume excessive memory or disk before any guardrail applies.
+- A second reliability gap is that IP pinning always uses only the first resolved address. If the first A/AAAA record is unhealthy but later public records are valid, `webFetch` fails immediately instead of retrying across the resolved address set.
+- Extraction quality is serviceable for static pages but intentionally shallow. It does not execute JavaScript, preserve page metadata, expose structured fields like title/byline/published date, or distinguish article extraction from generic DOM conversion in the return shape.
+- Based on current Exa docs, Exa’s search/content stack is useful as an optional higher-quality extraction backend, but it is not a clean replacement for this tool’s full contract. `webFetch` today handles direct binary/image/document flows inside the workspace and does not require a third-party API key; Exa is better suited for remote content extraction and summarization, not for replacing local-download semantics.
+
+### Verification
+- `bun test test/tools.test.ts --test-name-pattern "webFetch tool"` -> pass (`20 pass, 0 fail`)
+- Reviewed current official Exa docs for search/content capabilities and repo-local notes around existing Exa usage.
+
+# Task: Route `webFetch` through Exa contents while keeping local downloads
+
+## Plan
+- [x] Extract shared Exa auth/request helpers and update `webSearch` to consume them without changing its behavior.
+- [x] Rewrite `webFetch` so non-download URLs use Exa contents, while documents and direct image responses still save into `Downloads`.
+- [x] Update prompt/docs text and focused regressions for the new image/download contract and Exa-backed `webFetch` behavior.
+- [x] Run targeted verification (`bun test` on tools/prompts, typecheck, diff check) and record outcomes below.
+
+## Review
+- Added a shared Exa helper in `src/tools/exa.ts` for Exa API key resolution and JSON POST requests. `src/tools/webSearch.ts` now uses that shared helper, keeping its current behavior while removing duplicated Exa auth/request wiring.
+- Rewrote `src/tools/webFetch.ts` so the local safe-fetch path now only handles SSRF-safe URL validation, redirect resolution, response classification, and file downloads. Non-download URLs are handed to Exa Contents, and the old Readability/Turndown HTML conversion path is gone.
+- Direct image URLs now follow the same workspace-file contract as document downloads. Supported image responses are saved into `<workingDirectory>/Downloads`, get filename/extension inference from `Content-Disposition`, URL basename, or MIME type, and return `File downloaded /absolute/path/...` so the model can inspect them via `read`.
+- Updated the shipped prompt templates so they no longer claim `webFetch` may return inline image content. They now describe the new Exa-backed text extraction behavior and tell models to use `read` on downloaded image paths.
+- Expanded the focused regressions in `test/tools.test.ts` and `test/prompt.test.ts` to cover Exa Contents usage, fail-closed missing-key and Exa-error paths, canonical redirect URLs passed to Exa, image downloads plus `read` inspection, and the new prompt wording.
+- Removed the now-unused `@mozilla/readability`, `jsdom`, `turndown`, and related type packages from `package.json`, then refreshed `bun.lock`.
+
+### Verification
+- `bun test test/tools.test.ts test/prompt.test.ts` -> pass (`203 pass, 0 fail`)
+- `bunx tsc --noEmit` -> pass
+- `bun install` -> pass after rerunning outside the sandbox to allow Bun tempdir writes; refreshed `bun.lock`
+- `git diff --check` -> pass
+- `bun run typecheck` -> still fails in existing desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` with the pre-existing `observability_status` typing error; unrelated to this `webFetch`/Exa change
+
+# Task: Add Exa search type/category controls and highlights to `webSearch`
+
+## Plan
+- [x] Extend `webSearch` Exa input handling to support optional Exa `type` and `category` controls while preserving default behavior when they are omitted.
+- [x] Enable Exa highlights with `maxCharacters: 2500`, prefer highlights in formatted output, and ensure Exa-specific controls bypass Brave so they actually take effect.
+- [x] Add focused `webSearch` regressions, rerun verification, and record outcomes below.
+
+## Review
+- Updated `src/tools/webSearch.ts` so Exa-backed searches now accept optional `type` and `category` inputs. `category` stays unset by default, while `type` defaults to `auto` whenever the Exa path is used.
+- Added Exa-specific normalization for the `news article` alias to the API’s current `news` category, matching the Exa UI wording while still sending the documented API value.
+- Exa search requests now always include `contents.highlights.maxCharacters = 2500`, and the formatted search output now prefers returned `highlights` over fallback snippet text when highlights are available.
+- Preserved the existing provider behavior by default: Brave still serves ordinary non-google searches first when no Exa-only controls are requested. If the model supplies Exa-specific `type` or `category`, `webSearch` now bypasses Brave and uses Exa so those options are honored.
+- Expanded `test/tools.test.ts` to cover the new description/schema intent, the default Exa payload shape (`type: "auto"` plus highlights), Exa-over-Brave routing when advanced controls are present, and the `news article` alias normalization.
+
+### Verification
+- `bun test test/tools.test.ts --test-name-pattern "webSearch tool"` -> pass (`9 pass, 0 fail`)
+- `bun test test/tools.test.ts` -> pass (`159 pass, 0 fail`)
+- `bunx tsc --noEmit` -> pass
+- `git diff --check` -> pass
+- `bun run typecheck` -> still fails in existing desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` with the pre-existing `observability_status` typing error; unrelated to this `webSearch` change
+
+# Task: Remove legacy compatibility extras from the model-facing `webSearch` schema
+
+## Plan
+- [x] Remove `mode` and `dynamicThreshold` from the explicit `webSearch` input schema so they are no longer exposed as model-callable options.
+- [x] Update the focused `webSearch` regression to stop sending those legacy extras.
+- [x] Rerun focused validation and record the outcome below.
+
+## Review
+- Removed `mode` and `dynamicThreshold` from the explicit `webSearch` Zod schema in `src/tools/webSearch.ts`, so they no longer appear as model-facing tool arguments.
+- Kept the rest of the Exa search controls unchanged: optional `type`/`category`, default `type: "auto"` on the Exa request, and highlights with `maxCharacters: 2500`.
+- Updated the alias-query regression in `test/tools.test.ts` so it validates the current intended tool surface instead of locking in those legacy compatibility extras.
+
+### Verification
+- `bun test test/tools.test.ts --test-name-pattern "webSearch tool"` -> pass (`9 pass, 0 fail`)
+- `bunx tsc --noEmit` -> pass
 - `git diff --check` -> pass

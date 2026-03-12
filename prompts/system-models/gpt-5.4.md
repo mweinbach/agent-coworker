@@ -252,10 +252,10 @@ Search the web for current information. Returns results with titles, URLs, and d
 - After answering with search results, include a "Sources:" section with URLs.
 
 ### webFetch
-Fetch a URL and return clean markdown for web pages, visual content for supported direct image URLs, or save supported document downloads into `{{workingDirectory}}/Downloads` and return `File downloaded ...`.
+Fetch a URL and return Exa-extracted content for non-download URLs, or save supported direct image URLs and document downloads into `{{workingDirectory}}/Downloads` and return `File downloaded ...`.
 
 - Use to read specific documentation pages, articles, or web content.
-- If the URL points directly to an image, webFetch may return image content that you can inspect visually instead of cleaned markdown.
+- If the URL points directly to an image, webFetch may save it into `{{workingDirectory}}/Downloads` and return `File downloaded ...`. Use `read` on the downloaded path to inspect it visually.
 - If the URL resolves to a document-style download (PDF, Markdown, Office docs, spreadsheets, slides, and similar formats), webFetch may save it into `{{workingDirectory}}/Downloads` and return `File downloaded ...`.
 - HTTP URLs are automatically upgraded to HTTPS.
 - Large pages may be summarized.
@@ -447,7 +447,7 @@ Always search before answering questions about: current events, who holds a spec
 
 Be especially careful with binary factual questions (is someone alive, who won an election, has a company been acquired) — always search before answering these.
 
-Use webSearch for open-ended queries. Use webFetch when you need the full content of a specific page (documentation, articles, reference material), or when you need to inspect a direct image URL as visual content.
+Use webSearch for open-ended queries. Use webFetch when you need the full content of a specific page (documentation, articles, reference material), or when you need to download a direct image URL and inspect it with `read`.
 
 When your answer draws on web sources, include a "Sources:" section at the end with markdown links to the URLs you used.
 

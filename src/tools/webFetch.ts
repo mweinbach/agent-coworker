@@ -3,22 +3,21 @@ import path from "node:path";
 
 import { z } from "zod";
 
-import TurndownService from "turndown";
-
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
+import { EXA_MISSING_KEY_MESSAGE, fetchExaContents, resolveExaApiKey } from "./exa";
 import { resolveMaybeRelative, truncateText } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 import { resolveSafeWebUrl } from "../utils/webSafety";
 
 const MAX_REDIRECTS = 5;
 let responseTimeoutMs = 5_000;
-const SUPPORTED_IMAGE_MIME_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-  "image/webp",
-  "image/gif",
+const SUPPORTED_IMAGE_MIME_TYPES = new Map<string, string>([
+  ["image/png", ".png"],
+  ["image/jpeg", ".jpg"],
+  ["image/jpg", ".jpg"],
+  ["image/webp", ".webp"],
+  ["image/gif", ".gif"],
 ]);
 const DOWNLOADABLE_DOCUMENT_EXTENSIONS = new Set([
   ".csv",
@@ -63,17 +62,13 @@ const DOWNLOADABLE_DOCUMENT_MIME_TYPES = new Map<string, string>([
   ["text/tab-separated-values", ".tsv"],
   ["text/x-markdown", ".md"],
 ]);
-let readabilityDepsPromise: Promise<{
-  Readability: typeof import("@mozilla/readability").Readability;
-  JSDOM: typeof import("jsdom").JSDOM;
-}> | null = null;
+
+type ClassifiedResponse =
+  | { kind: "text" }
+  | { kind: "download"; category: "document" | "image"; fileName: string };
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
-}
-
-function isDesktopBundleRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.COWORK_DESKTOP_BUNDLE === "1";
 }
 
 function normalizeMimeType(contentType: string | null): string | null {
@@ -81,6 +76,13 @@ function normalizeMimeType(contentType: string | null): string | null {
   const [rawMimeType] = contentType.split(";", 1);
   const normalized = rawMimeType?.trim().toLowerCase();
   return normalized || null;
+}
+
+function normalizeSupportedImageMimeType(contentType: string | null): string | null {
+  const normalized = normalizeMimeType(contentType);
+  if (!normalized) return null;
+  if (!SUPPORTED_IMAGE_MIME_TYPES.has(normalized)) return null;
+  return normalized === "image/jpg" ? "image/jpeg" : normalized;
 }
 
 function supportedImageMimeTypeFromUrl(url: string): string | null {
@@ -129,7 +131,7 @@ function extractContentDispositionFilename(contentDisposition: string | null): s
     if (decoded.trim()) return decoded;
   }
 
-  const basicMatch = contentDisposition.match(/filename\s*=\s*("(?:[^"]*)"|[^;]+)/i);
+  const basicMatch = contentDisposition.match(/filename\s*=\s*("(?:[^\"]*)"|[^;]+)/i);
   if (!basicMatch?.[1]) return null;
   const unquoted = basicMatch[1].trim().replace(/^"(.*)"$/, "$1");
   return unquoted.trim() ? unquoted : null;
@@ -141,10 +143,20 @@ function extensionFromName(fileName: string | null): string | null {
   return ext || null;
 }
 
+function imageExtensionFromMimeType(contentType: string | null): string | null {
+  const normalized = normalizeSupportedImageMimeType(contentType);
+  if (!normalized) return null;
+  return SUPPORTED_IMAGE_MIME_TYPES.get(normalized) ?? null;
+}
+
 function documentExtensionFromMimeType(contentType: string | null): string | null {
   const normalized = normalizeMimeType(contentType);
   if (!normalized) return null;
   return DOWNLOADABLE_DOCUMENT_MIME_TYPES.get(normalized) ?? null;
+}
+
+function fileExtensionFromMimeType(contentType: string | null): string | null {
+  return imageExtensionFromMimeType(contentType) ?? documentExtensionFromMimeType(contentType);
 }
 
 function isDownloadableDocumentFilename(fileName: string | null): boolean {
@@ -170,7 +182,7 @@ function chooseDownloadFileName(opts: {
 }): string {
   const contentDispositionName = extractContentDispositionFilename(opts.contentDisposition);
   const urlBaseName = baseNameFromUrl(opts.resolvedUrl);
-  const mimeExtension = documentExtensionFromMimeType(opts.contentType);
+  const mimeExtension = fileExtensionFromMimeType(opts.contentType);
 
   let fileName = sanitizeDownloadFileName(contentDispositionName ?? urlBaseName ?? "download");
   if (!extensionFromName(fileName) && mimeExtension) {
@@ -200,18 +212,24 @@ function classifyResponseContent(
   contentType: string | null,
   resolvedUrl: string,
   contentDisposition: string | null
-): { kind: "text" } | { kind: "image"; mimeType: string } | { kind: "download"; fileName: string } {
+): ClassifiedResponse {
   const normalized = normalizeMimeType(contentType);
-  if (normalized && SUPPORTED_IMAGE_MIME_TYPES.has(normalized)) {
+  const supportedImageMimeType = normalizeSupportedImageMimeType(contentType);
+  if (supportedImageMimeType) {
     return {
-      kind: "image",
-      mimeType: normalized === "image/jpg" ? "image/jpeg" : normalized,
+      kind: "download",
+      category: "image",
+      fileName: chooseDownloadFileName({ contentType: supportedImageMimeType, resolvedUrl, contentDisposition }),
     };
   }
 
   const inferredImageMimeType = supportedImageMimeTypeFromUrl(resolvedUrl);
   if ((!normalized || normalized === "application/octet-stream") && inferredImageMimeType) {
-    return { kind: "image", mimeType: inferredImageMimeType };
+    return {
+      kind: "download",
+      category: "image",
+      fileName: chooseDownloadFileName({ contentType: inferredImageMimeType, resolvedUrl, contentDisposition }),
+    };
   }
 
   const contentDispositionName = extractContentDispositionFilename(contentDisposition);
@@ -223,6 +241,7 @@ function classifyResponseContent(
   if (downloadableByMime || ((!normalized || normalized === "application/octet-stream" || normalized === "text/plain") && downloadableByName)) {
     return {
       kind: "download",
+      category: "document",
       fileName: chooseDownloadFileName({ contentType, resolvedUrl, contentDisposition }),
     };
   }
@@ -248,52 +267,73 @@ function buildPinnedUrl(resolved: { url: URL; addresses: { address: string; fami
   return { pinnedUrl, hostHeader };
 }
 
-async function fetchWithSafeRedirects(url: string, abortSignal?: AbortSignal): Promise<Response> {
+async function fetchWithInitialResponseTimeout(
+  input: string | URL,
+  init: RequestInit,
+  abortSignal?: AbortSignal
+): Promise<Response> {
+  const timeoutController = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    timeoutController.abort();
+  }, responseTimeoutMs);
+  const onAbort = () => {
+    timeoutController.abort();
+  };
+
+  if (abortSignal) {
+    if (abortSignal.aborted) {
+      onAbort();
+    } else {
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+    }
+  }
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: timeoutController.signal,
+    });
+  } catch (error) {
+    if (timedOut) {
+      throw new Error(`webFetch timed out waiting for an initial response after ${responseTimeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    abortSignal?.removeEventListener("abort", onAbort);
+  }
+}
+
+async function fetchWithSafeRedirects(
+  url: string,
+  abortSignal?: AbortSignal
+): Promise<{ response: Response; finalUrl: string }> {
   let current = await resolveSafeWebUrl(url);
 
   for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
     const { pinnedUrl, hostHeader } = buildPinnedUrl(current);
-    const timeoutController = new AbortController();
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      timeoutController.abort();
-    }, responseTimeoutMs);
-    const onAbort = () => {
-      timeoutController.abort();
-    };
-
-    if (abortSignal) {
-      if (abortSignal.aborted) {
-        onAbort();
-      } else {
-        abortSignal.addEventListener("abort", onAbort, { once: true });
-      }
-    }
-
-    let res: Response;
-    try {
-      res = await fetch(pinnedUrl, {
+    const response = await fetchWithInitialResponseTimeout(
+      pinnedUrl,
+      {
         redirect: "manual",
         headers: {
           "User-Agent": "agent-coworker/0.1",
           Host: hostHeader,
         },
-        signal: timeoutController.signal,
-      });
-    } catch (error) {
-      if (timedOut) {
-        throw new Error(`webFetch timed out waiting for an initial response after ${responseTimeoutMs}ms`);
-      }
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-      abortSignal?.removeEventListener("abort", onAbort);
+      },
+      abortSignal
+    );
+
+    if (!isRedirectStatus(response.status)) {
+      return {
+        response,
+        finalUrl: current.url.toString(),
+      };
     }
 
-    if (!isRedirectStatus(res.status)) return res;
-
-    const location = res.headers.get("location");
+    const location = response.headers.get("location");
     if (!location) {
       throw new Error(`Redirect missing location header: ${current.url.toString()}`);
     }
@@ -305,45 +345,34 @@ async function fetchWithSafeRedirects(url: string, abortSignal?: AbortSignal): P
   throw new Error(`Too many redirects while fetching URL: ${url}`);
 }
 
-async function loadReadabilityDeps(): Promise<{
-  Readability: typeof import("@mozilla/readability").Readability;
-  JSDOM: typeof import("jsdom").JSDOM;
-}> {
-  if (!readabilityDepsPromise) {
-    readabilityDepsPromise = Promise.all([import("@mozilla/readability"), import("jsdom")]).then(
-      ([readabilityMod, jsdomMod]) => ({
-        Readability: readabilityMod.Readability,
-        JSDOM: jsdomMod.JSDOM,
-      })
-    );
-  }
-
-  return readabilityDepsPromise;
-}
-
-async function htmlToMarkdown(html: string, finalUrl: string, ctx: ToolContext): Promise<string> {
-  const turndown = new TurndownService();
-
-  // Bun-compiled desktop sidecars cannot reliably load jsdom's stylesheet asset at
-  // startup, so skip the readability pass there and degrade to direct HTML->Markdown.
-  if (isDesktopBundleRuntime()) {
-    return turndown.turndown(html);
-  }
+async function maybeCancelResponseBody(response: Response): Promise<void> {
+  if (!response.body) return;
 
   try {
-    const { Readability, JSDOM } = await loadReadabilityDeps();
-    const dom = new JSDOM(html, { url: finalUrl });
-    const article = new Readability(dom.window.document).parse();
-    return article?.content ? turndown.turndown(article.content) : turndown.turndown(html);
-  } catch (error) {
-    ctx.log(`tool! webFetch readability fallback ${JSON.stringify({ reason: String(error) })}`);
-    return turndown.turndown(html);
+    await response.body.cancel();
+  } catch {
+    // Ignore cancellation failures for mocked or already-consumed streams.
   }
+}
+
+function formatExaContent(exaContent: { text: string; links: string[]; imageLinks: string[] }): string {
+  const sections: string[] = [];
+
+  if (exaContent.text.trim()) {
+    sections.push(exaContent.text.trim());
+  }
+  if (exaContent.links.length > 0) {
+    sections.push(`Links:\n${exaContent.links.map(link => `- ${link}`).join("\n")}`);
+  }
+  if (exaContent.imageLinks.length > 0) {
+    sections.push(`Image Links:\n${exaContent.imageLinks.map(link => `- ${link}`).join("\n")}`);
+  }
+
+  return sections.join("\n\n").trim();
 }
 
 export const __internal = {
   getResponseTimeoutMs: () => responseTimeoutMs,
-  isDesktopBundleRuntime,
   setResponseTimeoutMs: (ms: number) => {
     responseTimeoutMs = ms;
   },
@@ -352,7 +381,7 @@ export const __internal = {
 export function createWebFetchTool(ctx: ToolContext) {
   return defineTool({
     description:
-      "Fetch a URL and return clean markdown for web pages, visual content for supported direct image URLs, or save supported document downloads into the workspace Downloads folder and return the local path.",
+      "Fetch a URL and return Exa-extracted content for non-download URLs, including page links and image links when available, or save supported direct image URLs and document downloads into the workspace Downloads folder and return the local path.",
     inputSchema: z.object({
       url: z.string().url().describe("URL to fetch"),
       maxLength: z.number().int().min(1000).max(200000).optional().default(50000),
@@ -360,47 +389,30 @@ export function createWebFetchTool(ctx: ToolContext) {
     execute: async ({ url, maxLength }: { url: string; maxLength: number }) => {
       ctx.log(`tool> webFetch ${JSON.stringify({ url, maxLength })}`);
 
-      const res = await fetchWithSafeRedirects(url, ctx.abortSignal);
-      if (!res.ok) {
-        throw new Error(`webFetch failed: ${res.status} ${res.statusText}`);
+      const { response, finalUrl } = await fetchWithSafeRedirects(url, ctx.abortSignal);
+      if (!response.ok) {
+        throw new Error(`webFetch failed: ${response.status} ${response.statusText}`);
       }
-      const finalUrl = (await resolveSafeWebUrl(res.url || url)).url.toString();
+
       const contentKind = classifyResponseContent(
-        res.headers.get("content-type"),
+        response.headers.get("content-type"),
         finalUrl,
-        res.headers.get("content-disposition")
+        response.headers.get("content-disposition")
       );
-      if (contentKind.kind === "image") {
-        const bytes = Buffer.from(await res.arrayBuffer());
-        const result = {
-          type: "content",
-          content: [
-            { type: "text", text: `Image URL: ${finalUrl}` },
-            { type: "image", data: bytes.toString("base64"), mimeType: contentKind.mimeType },
-          ],
-        };
-        ctx.log(
-          `tool< webFetch ${JSON.stringify({
-            image: true,
-            mimeType: contentKind.mimeType,
-            bytes: bytes.length,
-          })}`
-        );
-        return result;
-      }
 
       if (contentKind.kind === "download") {
         const downloadDir = resolveMaybeRelative("Downloads", ctx.config.workingDirectory);
         const targetPath = await ensureUniqueDownloadPath(downloadDir, contentKind.fileName);
         const allowedTargetPath = await assertWritePathAllowed(targetPath, ctx.config, "write");
         await fs.mkdir(path.dirname(allowedTargetPath), { recursive: true });
-        const bytes = Buffer.from(await res.arrayBuffer());
+        const bytes = Buffer.from(await response.arrayBuffer());
         await fs.writeFile(allowedTargetPath, bytes);
 
         const out = `File downloaded ${allowedTargetPath}`;
         ctx.log(
           `tool< webFetch ${JSON.stringify({
             download: true,
+            category: contentKind.category,
             path: allowedTargetPath,
             bytes: bytes.length,
           })}`
@@ -408,11 +420,29 @@ export function createWebFetchTool(ctx: ToolContext) {
         return out;
       }
 
-      const html = await res.text();
-      const md = await htmlToMarkdown(html, finalUrl, ctx);
+      await maybeCancelResponseBody(response);
 
-      const out = truncateText(md, maxLength);
-      ctx.log(`tool< webFetch ${JSON.stringify({ chars: out.length })}`);
+      const exaApiKey = await resolveExaApiKey(ctx);
+      if (!exaApiKey) {
+        throw new Error(`webFetch disabled: ${EXA_MISSING_KEY_MESSAGE}`);
+      }
+
+      const exaContent = await fetchExaContents({
+        apiKey: exaApiKey,
+        url: finalUrl,
+        abortSignal: ctx.abortSignal,
+      });
+
+      const out = truncateText(formatExaContent(exaContent), maxLength);
+      ctx.log(
+        `tool< webFetch ${JSON.stringify({
+          chars: out.length,
+          provider: "exa",
+          finalUrl: exaContent.url ?? finalUrl,
+          links: exaContent.links.length,
+          imageLinks: exaContent.imageLinks.length,
+        })}`
+      );
       return out;
     },
   });

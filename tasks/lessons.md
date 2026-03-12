@@ -1,5 +1,6 @@
 # Lessons
 
+- When moving `webFetch` page extraction to Exa contents, keep high-value extras like page links and image links in the returned payload; stripping them leaves the model without navigation context for follow-up fetches.
 - When a user explicitly wants a release pushed for CI/tag-driven packaging, stop local artifact builds after core validation and push the release/tag instead of spending time on local packaging smoke tests.
 - When fixing immutable snapshot or validation bugs in this repo, audit every parallel export/input surface in the same flow; partial fixes like cloning only `byModel` or loosening only the WebSocket parser can leave the same contract broken through `turns` or tool-schema validation.
 - When session budget state changes at a threshold boundary, do not rely on the next aggregate `session_usage` snapshot to surface it; emit a dedicated websocket event at the transition and keep the client/parser contract strict enough to reject malformed nested usage payloads.
@@ -38,6 +39,7 @@
 - When changing release workflow behavior that already has regression coverage, update the workflow tests in the same commit before tagging a release or CI will fail in `Validate` before packaging starts.
 - For provider/model support assertions in reviews, verify current official docs before claiming a setting is invalid; local SDK typings and bundled adapters may lag behind current OpenAI model support.
 - When a merge commit becomes the next release, do not repoint the prior release tag; bump the package version to the next patch and create a new `v0.1.x` tag for that commit instead.
+- When adding compatibility passthrough for a tool, do not expose those legacy fields as explicit schema properties if the user does not want the model to see or call them; keep hidden compatibility separate from model-facing tool params.
 - When a user reframes a provider implementation into an architecture question, answer the exact refactor scope and coupling points directly instead of only defending the current pragmatic path.
 - When refactoring provider runtimes, carry both one-shot and durable subagent flows through the design up front and verify them separately; it is easy to preserve the main turn path while quietly regressing child-session behavior.
 - When a bug report spans both Codex and OpenAI “Responses-like” paths, identify the exact transport behind each screenshot first; the ChatGPT-backed Codex endpoint and the OpenAI Responses API accept different request fields and require different fixes.

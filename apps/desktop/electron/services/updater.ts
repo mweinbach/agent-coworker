@@ -16,6 +16,7 @@ export interface UpdaterClient {
   autoDownload: boolean;
   autoInstallOnAppQuit: boolean;
   allowPrerelease: boolean;
+  disableDifferentialDownload?: boolean;
   on(event: string, handler: UpdaterEventHandler): this;
   checkForUpdates(): Promise<unknown>;
   quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
@@ -71,6 +72,7 @@ type DesktopUpdaterServiceOptions = {
   onStateChange?: (state: UpdaterState) => void;
   notifyUpdateReady?: (state: UpdaterState) => void;
   updater?: UpdaterClient;
+  platform?: NodeJS.Platform;
   now?: () => string;
   setIntervalFn?: typeof setInterval;
   clearIntervalFn?: typeof clearInterval;
@@ -152,6 +154,7 @@ export class DesktopUpdaterService {
   private readonly onStateChange?: (state: UpdaterState) => void;
   private readonly notifyUpdateReady?: (state: UpdaterState) => void;
   private readonly updater: UpdaterClient;
+  private readonly platform: NodeJS.Platform;
   private readonly now: () => string;
   private readonly setIntervalFn: typeof setInterval;
   private readonly clearIntervalFn: typeof clearInterval;
@@ -169,6 +172,7 @@ export class DesktopUpdaterService {
     this.onStateChange = options.onStateChange;
     this.notifyUpdateReady = options.notifyUpdateReady;
     this.updater = options.updater ?? getDefaultUpdaterClient();
+    this.platform = options.platform ?? process.platform;
     this.now = options.now ?? (() => new Date().toISOString());
     this.setIntervalFn = options.setIntervalFn ?? setInterval;
     this.clearIntervalFn = options.clearIntervalFn ?? clearInterval;
@@ -180,6 +184,11 @@ export class DesktopUpdaterService {
       this.updater.autoDownload = true;
       this.updater.autoInstallOnAppQuit = false;
       this.updater.allowPrerelease = false;
+      if (this.platform === "darwin") {
+        // ShipIt can reject a differential-patched app even when the published zip
+        // is validly signed and notarized. Prefer the known-good full zip path.
+        this.updater.disableDifferentialDownload = true;
+      }
       this.registerListeners();
     }
   }

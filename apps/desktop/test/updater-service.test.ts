@@ -8,6 +8,7 @@ class FakeUpdater implements UpdaterClient {
   autoDownload = false;
   autoInstallOnAppQuit = true;
   allowPrerelease = true;
+  disableDifferentialDownload = false;
   private readonly handlers = new Map<string, Handler[]>();
 
   on(event: string, handler: Handler): this {
@@ -107,6 +108,32 @@ describe("desktop updater service", () => {
     expect(state.release?.version).toBe("0.2.0");
     expect(state.progress?.percent).toBe(100);
     expect(state.message).toContain("Restart Cowork");
+  });
+
+  test("disables differential downloads for packaged macOS builds", () => {
+    const updater = new FakeUpdater();
+
+    new DesktopUpdaterService({
+      currentVersion: "0.1.20",
+      isPackaged: true,
+      updater,
+      platform: "darwin",
+    });
+
+    expect(updater.disableDifferentialDownload).toBe(true);
+  });
+
+  test("leaves differential downloads unchanged on non-mac packaged builds", () => {
+    const updater = new FakeUpdater();
+
+    new DesktopUpdaterService({
+      currentVersion: "0.1.20",
+      isPackaged: true,
+      updater,
+      platform: "win32",
+    });
+
+    expect(updater.disableDifferentialDownload).toBe(false);
   });
 
   test("records updater errors without throwing", async () => {

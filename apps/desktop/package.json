@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "0.1.20",
+  "version": "0.1.21",
   "description": "Cowork desktop app",
   "author": "Cowork",
   "type": "module",

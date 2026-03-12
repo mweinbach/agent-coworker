@@ -165,4 +165,108 @@ describe("desktop developer page", () => {
       harness.restore();
     }
   });
+
+  test("inherit default clears the persisted overflow override instead of pinning 25000", async () => {
+    const updateWorkspaceDefaults = mock(async () => {});
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+          defaultSubAgentModel: "gpt-5.4",
+          defaultToolOutputOverflowChars: 12000,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      updateWorkspaceDefaults,
+    });
+
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(DeveloperPage));
+      });
+
+      const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.includes("Inherit default"));
+      if (!button) throw new Error("missing inherit default button");
+
+      await act(async () => {
+        button.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(updateWorkspaceDefaults).toHaveBeenCalledWith("ws-1", {
+        clearDefaultToolOutputOverflowChars: true,
+      });
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("enable default restores inherited overflow behavior from a disabled workspace override", async () => {
+    const updateWorkspaceDefaults = mock(async () => {});
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+          defaultSubAgentModel: "gpt-5.4",
+          defaultToolOutputOverflowChars: null,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      updateWorkspaceDefaults,
+    });
+
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(DeveloperPage));
+      });
+
+      const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.includes("Enable default"));
+      if (!button) throw new Error("missing enable default button");
+
+      await act(async () => {
+        button.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(updateWorkspaceDefaults).toHaveBeenCalledWith("ws-1", {
+        clearDefaultToolOutputOverflowChars: true,
+      });
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

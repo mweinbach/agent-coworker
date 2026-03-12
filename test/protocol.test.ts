@@ -1058,6 +1058,22 @@ describe("safeParseClientMessage", () => {
       }
     });
 
+    test("valid set_config accepts clearToolOutputOverflowChars", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_config",
+          sessionId: "s1",
+          config: {
+            clearToolOutputOverflowChars: true,
+          },
+        }),
+      );
+      expect(msg.type).toBe("set_config");
+      if (msg.type === "set_config") {
+        expect(msg.config.clearToolOutputOverflowChars).toBe(true);
+      }
+    });
+
     test("set_config validates field types and ranges", () => {
       expect(expectErr(JSON.stringify({ type: "set_config", config: {} }))).toBe(
         "set_config missing sessionId",
@@ -1081,6 +1097,20 @@ describe("safeParseClientMessage", () => {
           JSON.stringify({ type: "set_config", sessionId: "s1", config: { toolOutputOverflowChars: -1 } }),
         ),
       ).toBe("set_config config.toolOutputOverflowChars must be null or non-negative integer");
+      expect(
+        expectErr(
+          JSON.stringify({ type: "set_config", sessionId: "s1", config: { clearToolOutputOverflowChars: "yes" } }),
+        ),
+      ).toBe("set_config config.clearToolOutputOverflowChars must be boolean");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { toolOutputOverflowChars: 25000, clearToolOutputOverflowChars: true },
+          }),
+        ),
+      ).toBe("set_config config.toolOutputOverflowChars cannot be combined with clearToolOutputOverflowChars");
       expect(
         expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { subAgentModel: "" } })),
       ).toBe("set_config config.subAgentModel must be non-empty string");

@@ -65,6 +65,11 @@ export interface AgentConfig {
   subAgentModel: string;
   toolOutputOverflowChars?: number | null;
   /**
+   * Effective non-project fallback for tool overflow spilling after built-in
+   * and user config layers are merged, before workspace overrides apply.
+   */
+  inheritedToolOutputOverflowChars?: number | null;
+  /**
    * Raw workspace-scoped overrides that were explicitly present in the
    * project `.agent/config.json`, before built-in defaults were materialized.
    */

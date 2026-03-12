@@ -12,6 +12,8 @@ import {
 type OverflowSummaryField = "exitCode" | "ok" | "count" | "provider";
 
 const SUMMARY_FIELDS: OverflowSummaryField[] = ["exitCode", "ok", "count", "provider"];
+const PRIVATE_SCRATCHPAD_DIR_MODE = 0o700;
+const PRIVATE_SCRATCHPAD_FILE_MODE = 0o600;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -141,8 +143,10 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
   const filePath = path.join(scratchDir, fileName);
 
   try {
-    await fs.mkdir(scratchDir, { recursive: true });
-    await fs.writeFile(filePath, spillText, "utf-8");
+    await fs.mkdir(scratchDir, { recursive: true, mode: PRIVATE_SCRATCHPAD_DIR_MODE });
+    await fs.chmod(scratchDir, PRIVATE_SCRATCHPAD_DIR_MODE).catch(() => {});
+    await fs.writeFile(filePath, spillText, { encoding: "utf-8", mode: PRIVATE_SCRATCHPAD_FILE_MODE });
+    await fs.chmod(filePath, PRIVATE_SCRATCHPAD_FILE_MODE).catch(() => {});
   } catch (error) {
     opts.log?.(
       `[warn] Failed to write tool overflow spill file for ${opts.toolName}: ${error instanceof Error ? error.message : String(error)}`

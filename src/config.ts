@@ -247,6 +247,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const userConfig = await loadJsonSafe(path.join(userAgentDir, "config.json"));
   const projectConfig = await loadJsonSafe(path.join(projectAgentDir, "config.json"));
 
+  const inheritedMerged = deepMerge(builtInDefaults, userConfig);
   const merged = deepMerge(deepMerge(builtInDefaults, userConfig), projectConfig);
 
   const provider =
@@ -280,7 +281,14 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   const parsedToolOutputOverflowChars = normalizeNullableNonNegativeInt(
     (merged as Record<string, unknown>).toolOutputOverflowChars
   );
+  const inheritedToolOutputOverflowCharsRaw = normalizeNullableNonNegativeInt(
+    (inheritedMerged as Record<string, unknown>).toolOutputOverflowChars
+  );
   const projectToolOutputOverflowChars = normalizeNullableNonNegativeInt(projectConfig.toolOutputOverflowChars);
+  const inheritedToolOutputOverflowChars =
+    inheritedToolOutputOverflowCharsRaw === undefined
+      ? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS
+      : inheritedToolOutputOverflowCharsRaw;
   const toolOutputOverflowChars =
     parsedToolOutputOverflowChars === undefined
       ? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS
@@ -394,6 +402,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     model,
     subAgentModel,
     toolOutputOverflowChars,
+    inheritedToolOutputOverflowChars,
     ...(projectToolOutputOverflowChars !== undefined
       ? {
           projectConfigOverrides: {

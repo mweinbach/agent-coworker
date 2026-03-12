@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -229,17 +230,24 @@ function chooseDownloadFileName(opts: {
   return fileName;
 }
 
-async function ensureUniqueDownloadPath(downloadDir: string, fileName: string): Promise<string> {
+function downloadCandidatePath(downloadDir: string, fileName: string, suffix: number): string {
   const ext = path.extname(fileName);
   const baseName = path.basename(fileName, ext) || "download";
+  const candidateName = suffix === 1 ? `${baseName}${ext}` : `${baseName}-${suffix}${ext}`;
+  return path.join(downloadDir, candidateName);
+}
 
+async function finalizeDownloadedFile(tempPath: string, downloadDir: string, fileName: string): Promise<string> {
+  // Claim the final path exclusively at finalize time so a late writer cannot
+  // be overwritten by an atomic rename onto an existing destination.
   for (let suffix = 1; ; suffix += 1) {
-    const candidateName = suffix === 1 ? `${baseName}${ext}` : `${baseName}-${suffix}${ext}`;
-    const candidatePath = path.join(downloadDir, candidateName);
+    const candidatePath = downloadCandidatePath(downloadDir, fileName, suffix);
     try {
-      await fs.access(candidatePath);
+      await fs.copyFile(tempPath, candidatePath, fsConstants.COPYFILE_EXCL);
+      await removeTemporaryDownloadFile(tempPath);
+      return candidatePath;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return candidatePath;
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
       throw error;
     }
   }
@@ -272,8 +280,16 @@ function parseContentLength(response: Response): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
-function temporaryDownloadPath(finalPath: string): string {
-  return `${finalPath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.part`;
+function temporaryDownloadPath(downloadDir: string, fileName: string): string {
+  const ext = path.extname(fileName);
+  const baseName = path.basename(fileName, ext) || "download";
+  const tempName = [
+    `.${baseName}`,
+    process.pid,
+    Date.now(),
+    Math.random().toString(16).slice(2),
+  ].join(".") + `${ext}.part`;
+  return path.join(downloadDir, tempName);
 }
 
 async function removeTemporaryDownloadFile(filePath: string): Promise<void> {
@@ -282,10 +298,11 @@ async function removeTemporaryDownloadFile(filePath: string): Promise<void> {
 
 async function downloadResponseToFile(opts: {
   response: Response;
-  finalPath: string;
+  downloadDir: string;
+  fileName: string;
   tempPath: string;
   maxBytes: number;
-}): Promise<{ bytesWritten: number }> {
+}): Promise<{ bytesWritten: number; finalPath: string }> {
   const declaredLength = parseContentLength(opts.response);
   if (declaredLength !== null && declaredLength > opts.maxBytes) {
     await opts.response.body?.cancel().catch(() => {});
@@ -305,8 +322,8 @@ async function downloadResponseToFile(opts: {
         throw new DownloadSizeLimitError(opts.maxBytes);
       }
       await fs.writeFile(opts.tempPath, bytes);
-      await fs.rename(opts.tempPath, opts.finalPath);
-      return { bytesWritten: bytes.length };
+      const finalPath = await finalizeDownloadedFile(opts.tempPath, opts.downloadDir, opts.fileName);
+      return { bytesWritten: bytes.length, finalPath };
     }
 
     const fileHandle = await fs.open(opts.tempPath, "w");
@@ -338,8 +355,8 @@ async function downloadResponseToFile(opts: {
       await fileHandle.close().catch(() => {});
     }
 
-    await fs.rename(opts.tempPath, opts.finalPath);
-    return { bytesWritten };
+    const finalPath = await finalizeDownloadedFile(opts.tempPath, opts.downloadDir, opts.fileName);
+    return { bytesWritten, finalPath };
   } catch (error) {
     await removeTemporaryDownloadFile(opts.tempPath);
     throw error;
@@ -628,6 +645,7 @@ function formatFetchedText(
 }
 
 export const __internal = {
+  finalizeDownloadedFile,
   getMaxDownloadBytes: () => maxDownloadBytes,
   getResponseTimeoutMs: () => responseTimeoutMs,
   isDesktopBundleRuntime,
@@ -663,23 +681,29 @@ export function createWebFetchTool(ctx: ToolContext) {
 
       if (contentKind.kind === "download") {
         const downloadDir = resolveMaybeRelative("Downloads", ctx.config.workingDirectory);
-        const targetPath = await ensureUniqueDownloadPath(downloadDir, contentKind.fileName);
+        const targetPath = path.join(downloadDir, contentKind.fileName);
         const allowedTargetPath = await assertWritePathAllowed(targetPath, ctx.config, "write");
-        const allowedTempPath = await assertWritePathAllowed(temporaryDownloadPath(allowedTargetPath), ctx.config, "write");
-        await fs.mkdir(path.dirname(allowedTargetPath), { recursive: true });
-        const { bytesWritten } = await downloadResponseToFile({
+        const allowedDownloadDir = path.dirname(allowedTargetPath);
+        const allowedTempPath = await assertWritePathAllowed(
+          temporaryDownloadPath(allowedDownloadDir, path.basename(allowedTargetPath)),
+          ctx.config,
+          "write"
+        );
+        await fs.mkdir(allowedDownloadDir, { recursive: true });
+        const { bytesWritten, finalPath } = await downloadResponseToFile({
           response,
-          finalPath: allowedTargetPath,
+          downloadDir: allowedDownloadDir,
+          fileName: path.basename(allowedTargetPath),
           tempPath: allowedTempPath,
           maxBytes: maxDownloadBytes,
         });
 
-        const out = `File downloaded ${allowedTargetPath}`;
+        const out = `File downloaded ${finalPath}`;
         ctx.log(
           `tool< webFetch ${JSON.stringify({
             download: true,
             category: contentKind.category,
-            path: allowedTargetPath,
+            path: finalPath,
             bytes: bytesWritten,
           })}`
         );

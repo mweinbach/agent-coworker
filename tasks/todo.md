@@ -1,3 +1,25 @@
+# Task: Fix review follow-ups for download finalization, spill-file privacy, and overflow inheritance
+
+## Plan
+- [x] Replace `webFetch`’s access-then-rename download finalize path with an exclusive finalize flow that retries on late collisions, and add regression coverage for the late-`EEXIST` case.
+- [x] Harden `.ModelScratchpad` spill directories/files to private permissions (`0700`/`0600`) and add permission assertions to overflow runtime coverage.
+- [x] Add an explicit clear/inherit path for workspace overflow defaults across desktop store actions, websocket `set_config`, server config persistence, and the Developer settings UI.
+- [x] Update focused desktop/server/protocol regressions plus docs for the new inherit-default contract, then run targeted tests, full tests, typechecks, required builds, and record results here.
+
+## Review
+- `src/tools/webFetch.ts` no longer relies on access-time name reservation. Direct downloads now stream into a temp file inside `Downloads`, then finalize with `copyFile(..., COPYFILE_EXCL)` plus retry-on-`EEXIST`, so a file created after reservation cannot be atomically replaced by a blind `rename`. `test/tools.test.ts` covers the late-collision path and asserts the original file survives.
+- `src/runtime/toolOutputOverflow.ts` now creates `.ModelScratchpad` with `0700` and spill files with `0600`, plus best-effort `chmod` hardening after creation. `test/runtime.pi-runtime.test.ts` now checks the resulting directory/file modes.
+- Overflow-default reset now has a real inherit path instead of pinning `25000`: desktop workspace defaults can send `clearDefaultToolOutputOverflowChars`, websocket `set_config` accepts `clearToolOutputOverflowChars`, the server removes the persisted override from `.agent/config.json`, and live sessions reset to `inheritedToolOutputOverflowChars`. The UI copy/button now says `Inherit default` to match behavior.
+- Added regression coverage across `test/protocol.test.ts`, `test/session.test.ts`, `test/server.test.ts`, `apps/desktop/test/developer-page.test.tsx`, `apps/desktop/test/workspace-settings-sync.test.ts`, and `apps/desktop/test/workspace-startup.test.ts`, and updated `docs/websocket-protocol.md` with protocol version `7.15`.
+- Verification:
+  - `OPENCODE_API_KEY='' OPENCODE_ZEN_API_KEY='' ~/.bun/bin/bun test` -> pass (`2185 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> fails in unchanged desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345`)
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `git diff --check` -> pass
+
 # Task: Implement review follow-ups for webFetch, Exa key precedence, and overflow preview behavior
 
 ## Plan

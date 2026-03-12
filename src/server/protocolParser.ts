@@ -29,6 +29,7 @@ const setConfigFieldErrorMessages: Record<string, string> = {
   subAgentModel: "set_config config.subAgentModel must be non-empty string",
   maxSteps: "set_config config.maxSteps must be number 1-1000",
   toolOutputOverflowChars: "set_config config.toolOutputOverflowChars must be null or non-negative integer",
+  clearToolOutputOverflowChars: "set_config config.clearToolOutputOverflowChars must be boolean",
   providerOptions: "set_config config.providerOptions must be an object",
 };
 
@@ -91,6 +92,7 @@ const setConfigPayloadSchema = z.object({
   subAgentModel: z.string().trim().min(1).optional(),
   maxSteps: z.number().min(1).max(1000).optional(),
   toolOutputOverflowChars: z.number().int().nonnegative().nullable().optional(),
+  clearToolOutputOverflowChars: z.boolean().optional(),
   providerOptions: editableOpenAiProviderOptionsByProviderSchema.optional(),
 }).passthrough();
 
@@ -557,7 +559,19 @@ const setConfigSchema = schemaWithType("set_config", {
   }
 
   const parsedConfig = setConfigPayloadSchema.safeParse(value.config);
-  if (parsedConfig.success) return;
+  if (parsedConfig.success) {
+    if (
+      parsedConfig.data.toolOutputOverflowChars !== undefined
+      && parsedConfig.data.clearToolOutputOverflowChars === true
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["config"],
+        message: "set_config config.toolOutputOverflowChars cannot be combined with clearToolOutputOverflowChars",
+      });
+    }
+    return;
+  }
 
   const issue = parsedConfig.error.issues[0];
   const message = issue ? setConfigIssueMessage(issue) : "set_config missing/invalid config";

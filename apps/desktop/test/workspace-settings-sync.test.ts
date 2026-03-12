@@ -738,6 +738,90 @@ describe("workspace settings sync", () => {
     });
   });
 
+  test("updateWorkspaceDefaults clears the persisted overflow override and tells live threads to inherit again", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultToolOutputOverflowChars: 12000,
+            }
+          : workspace,
+      ),
+    }));
+
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.emit({
+      type: "session_config",
+      sessionId: "control-session",
+      config: {
+        yolo: false,
+        observabilityEnabled: true,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        toolOutputOverflowChars: 12000,
+        defaultToolOutputOverflowChars: 12000,
+        subAgentModel: "gpt-5.2",
+        maxSteps: 75,
+      },
+    });
+
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+    threadSocket.emit({
+      type: "session_config",
+      sessionId: "thread-session",
+      config: {
+        yolo: false,
+        observabilityEnabled: true,
+        backupsEnabled: true,
+        defaultBackupsEnabled: true,
+        toolOutputOverflowChars: 12000,
+        defaultToolOutputOverflowChars: 12000,
+        subAgentModel: "gpt-5.2",
+        maxSteps: 75,
+      },
+    });
+
+    controlSocket.sent = [];
+    threadSocket.sent = [];
+
+    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      clearDefaultToolOutputOverflowChars: true,
+    });
+
+    const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
+    expect(workspace?.defaultToolOutputOverflowChars).toBeUndefined();
+
+    expect(controlSocket.sent.find((message) => message?.type === "set_config")).toMatchObject({
+      type: "set_config",
+      config: {
+        backupsEnabled: true,
+        subAgentModel: "gpt-5.2",
+        clearToolOutputOverflowChars: true,
+      },
+    });
+    expect(controlSocket.sent.find((message) => message?.type === "set_config")?.config?.toolOutputOverflowChars).toBeUndefined();
+
+    expect(threadSocket.sent.map((message) => message?.type)).toEqual([
+      "set_config",
+      "set_model",
+      "set_config",
+      "set_enable_mcp",
+    ]);
+    expect(threadSocket.sent[0]).toMatchObject({
+      type: "set_config",
+      config: {
+        backupsEnabled: true,
+        clearToolOutputOverflowChars: true,
+      },
+    });
+    expect(threadSocket.sent[0]?.config?.toolOutputOverflowChars).toBeUndefined();
+  });
+
   test("updateWorkspaceDefaults applies to all live threads and retries queued busy thread", async () => {
     useAppStore.setState((state) => ({
       ...state,

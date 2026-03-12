@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.14`
+- Current protocol version: `7.15`
 
 ## Table of Contents
 
@@ -48,6 +48,11 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.15`:
+
+- `set_config.config` now accepts `clearToolOutputOverflowChars: true` to remove a persisted workspace overflow override and resume inheriting the built-in or user-level default.
+- `clearToolOutputOverflowChars` is mutually exclusive with `toolOutputOverflowChars`; use `null` to disable spill files explicitly and the clear flag to inherit again.
 
 Changes in `7.14`:
 
@@ -1775,6 +1780,7 @@ Update runtime configuration values.
 | `config.observabilityEnabled` | `boolean` | No | Toggle observability |
 | `config.backupsEnabled` | `boolean` | No | Toggle session backups for the current session and persist the workspace default for future sessions |
 | `config.toolOutputOverflowChars` | `number \| null` | No | Workspace-scoped character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
+| `config.clearToolOutputOverflowChars` | `boolean` | No | When `true`, delete the persisted workspace overflow override and resume inheriting the built-in or user-level default. Cannot be combined with `config.toolOutputOverflowChars`. |
 | `config.subAgentModel` | `string` | No | Non-empty sub-agent model ID |
 | `config.maxSteps` | `number` | No | Max steps per turn (1-1000) |
 | `config.providerOptions` | `object` | No | Editable OpenAI-compatible provider option patch. Only `openai` and `codex-cli` are allowed |
@@ -1790,6 +1796,7 @@ Update runtime configuration values.
 Notes:
 - `providerOptions` is a deep-merged patch against the workspace config. Unrelated provider settings outside this editable subset are preserved.
 - Only `openai` and `codex-cli` are editable through this message. Other provider option trees remain internal.
+- `toolOutputOverflowChars: null` disables spill files explicitly. `clearToolOutputOverflowChars: true` removes the persisted override so future sessions inherit the default again.
 
 ---
 
@@ -1861,7 +1868,7 @@ Initial handshake event sent immediately on WebSocket connection.
 {
   "type": "server_hello",
   "sessionId": "abc-123-def",
-  "protocolVersion": "7.6",
+  "protocolVersion": "7.14",
   "capabilities": {
     "modelStreamChunk": "v1"
   },
@@ -1886,7 +1893,7 @@ Initial handshake event sent immediately on WebSocket connection.
 |-------|------|-------------|
 | `type` | `"server_hello"` | — |
 | `sessionId` | `string` | The session identifier. Use this for all subsequent messages |
-| `protocolVersion` | `string?` | Protocol version (currently `"7.6"`) |
+| `protocolVersion` | `string?` | Protocol version (currently `"7.14"`) |
 | `capabilities` | `object?` | Optional capabilities object. Currently: `{ modelStreamChunk: "v1" }` |
 | `config` | `PublicConfig` | Session config: `provider`, `model`, `workingDirectory`, and optionally `outputDirectory` |
 | `sessionKind` | `"root" \| "subagent"` | Session identity. Present for both root and child sessions |
@@ -3136,7 +3143,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.backupsEnabled` | `boolean` | Whether backups are enabled for the live session after applying any session-scoped override |
 | `config.defaultBackupsEnabled` | `boolean` | The persisted workspace backup default from the harness/core config, before any live session override is applied |
 | `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
-| `config.defaultToolOutputOverflowChars` | `number \| null` | Persisted workspace overflow default when explicitly configured; omitted when the session is inheriting the built-in threshold |
+| `config.defaultToolOutputOverflowChars` | `number \| null` | Persisted workspace overflow default when explicitly configured; omitted when the session is inheriting the built-in or user-level default |
 | `config.subAgentModel` | `string` | Sub-agent model identifier |
 | `config.maxSteps` | `number` | Maximum steps per turn |
 | `config.providerOptions` | `object?` | Editable OpenAI-compatible provider options when configured |

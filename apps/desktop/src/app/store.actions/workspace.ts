@@ -15,7 +15,7 @@ import {
   renamePath,
   trashPath,
 } from "../../lib/desktopCommands";
-import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS, type ProviderName } from "../../lib/wsProtocol";
+import { type ProviderName } from "../../lib/wsProtocol";
 
 import {
   type AppStoreActions,
@@ -88,7 +88,6 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
         defaultProvider: "google",
         defaultModel: defaultModelForProvider("google"),
         defaultSubAgentModel: defaultModelForProvider("google"),
-        defaultToolOutputOverflowChars: DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS,
         defaultEnableMcp: true,
         defaultBackupsEnabled: true,
         yolo: false,

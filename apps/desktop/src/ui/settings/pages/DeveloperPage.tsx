@@ -42,6 +42,7 @@ export function DeveloperPage() {
     [selectedWorkspaceId, workspaces],
   );
   const persistedOverflowThreshold = workspace?.defaultToolOutputOverflowChars ?? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS;
+  const overflowUsesInheritedDefault = workspace?.defaultToolOutputOverflowChars === undefined;
   const overflowEnabled = workspace ? workspace.defaultToolOutputOverflowChars !== null : false;
   const [overflowThresholdDraft, setOverflowThresholdDraft] = useState(String(persistedOverflowThreshold));
 
@@ -154,13 +155,13 @@ export function DeveloperPage() {
                   aria-label="Enable tool output overflow spill files"
                   onCheckedChange={(checked) => {
                     const nextEnabled = toBoolean(checked);
-                    const nextThreshold = nextEnabled
-                      ? workspace.defaultToolOutputOverflowChars ?? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS
-                      : null;
-                    setOverflowThresholdDraft(String(nextThreshold ?? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS));
-                    void updateWorkspaceDefaults(workspace.id, {
-                      defaultToolOutputOverflowChars: nextThreshold,
-                    });
+                    setOverflowThresholdDraft(String(workspace.defaultToolOutputOverflowChars ?? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS));
+                    void updateWorkspaceDefaults(
+                      workspace.id,
+                      nextEnabled
+                        ? { clearDefaultToolOutputOverflowChars: true }
+                        : { defaultToolOutputOverflowChars: null },
+                    );
                   }}
                 />
               </div>
@@ -208,15 +209,15 @@ export function DeveloperPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={overflowEnabled && persistedOverflowThreshold === DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS}
+                  disabled={overflowEnabled && overflowUsesInheritedDefault}
                   onClick={() => {
                     setOverflowThresholdDraft(String(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS));
                     void updateWorkspaceDefaults(workspace.id, {
-                      defaultToolOutputOverflowChars: DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS,
+                      clearDefaultToolOutputOverflowChars: true,
                     });
                   }}
                 >
-                  {overflowEnabled ? "Reset to default" : "Enable default"}
+                  {overflowEnabled ? "Inherit default" : "Enable default"}
                 </Button>
               </div>
             </>

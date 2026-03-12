@@ -12,6 +12,7 @@ import type {
   ThreadRuntime,
   ThreadTitleSource,
   ViewId,
+  WorkspaceDefaultsPatch,
   WorkspaceRecord,
   WorkspaceRuntime,
   WorkspaceExplorerState,
@@ -201,7 +202,7 @@ export type AppStoreState = {
   deleteSkill: (skillName: string) => Promise<void>;
 
   applyWorkspaceDefaultsToThread: (threadId: string, mode?: "auto" | "explicit") => Promise<void>;
-  updateWorkspaceDefaults: (workspaceId: string, patch: Partial<WorkspaceRecord>) => Promise<void>;
+  updateWorkspaceDefaults: (workspaceId: string, patch: WorkspaceDefaultsPatch) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
   requestWorkspaceMcpServers: (workspaceId: string) => Promise<void>;
   upsertWorkspaceMcpServer: (

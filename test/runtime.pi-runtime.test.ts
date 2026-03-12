@@ -488,6 +488,15 @@ describe("pi runtime regressions", () => {
 
     const saved = await fs.readFile(spillPath, "utf-8");
     expect(saved).toBe(JSON.stringify(toolOutput, null, 2));
+    const spillStat = await fs.stat(spillPath);
+    const scratchStat = await fs.stat(path.dirname(spillPath));
+    if (process.platform === "win32") {
+      expect(spillStat.mode & 0o200).toBe(0o200);
+      expect(scratchStat.mode & 0o200).toBe(0o200);
+    } else {
+      expect(spillStat.mode & 0o777).toBe(0o600);
+      expect(scratchStat.mode & 0o777).toBe(0o700);
+    }
 
     expect(result.isError).toBe(false);
     expect(result.details).toEqual(overflowOutput);

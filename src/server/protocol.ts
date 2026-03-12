@@ -35,6 +35,7 @@ export type SessionConfigPatch = {
   subAgentModel?: string;
   maxSteps?: number;
   toolOutputOverflowChars?: number | null;
+  clearToolOutputOverflowChars?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
 };
 
@@ -385,7 +386,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.14";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.15";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",

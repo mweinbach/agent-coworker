@@ -185,7 +185,9 @@ function makeSession(
           AgentConfig,
           "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
         >
-      >
+      > & {
+        clearToolOutputOverflowChars?: boolean;
+      }
     ) => Promise<void> | void;
     generateSessionTitleImpl: (opts: { config: AgentConfig; query: string }) => Promise<{
       title: string;
@@ -752,6 +754,33 @@ describe("AgentSession", () => {
         observabilityEnabled: true,
         backupsEnabled: false,
         toolOutputOverflowChars: null,
+      });
+    });
+
+    test("setConfig can clear the persisted toolOutputOverflowChars override and restore inheritance", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session, events } = makeSession({
+        config: makeConfig("/tmp/test-session", {
+          toolOutputOverflowChars: 12000,
+          inheritedToolOutputOverflowChars: 25000,
+          projectConfigOverrides: {
+            toolOutputOverflowChars: 12000,
+          },
+        }),
+        persistProjectConfigPatchImpl,
+      });
+
+      await session.setConfig({
+        clearToolOutputOverflowChars: true,
+      });
+
+      const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
+      expect(cfgEvt).toBeDefined();
+      expect(cfgEvt.config.toolOutputOverflowChars).toBe(25000);
+      expect("defaultToolOutputOverflowChars" in cfgEvt.config).toBe(false);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        clearToolOutputOverflowChars: true,
       });
     });
 

@@ -45,6 +45,10 @@ export type WorkspaceRecord = {
   yolo: boolean;
 };
 
+export type WorkspaceDefaultsPatch = Partial<WorkspaceRecord> & {
+  clearDefaultToolOutputOverflowChars?: boolean;
+};
+
 export type ThreadStatus = "active" | "disconnected";
 
 export type ThreadTitleSource = "default" | "model" | "heuristic" | "manual";

@@ -166,6 +166,15 @@ export class SessionMetadataManager {
   }
 
   async setConfig(patch: SessionConfigPatch) {
+    if (patch.toolOutputOverflowChars !== undefined && patch.clearToolOutputOverflowChars) {
+      this.context.emitError(
+        "validation_failed",
+        "session",
+        "toolOutputOverflowChars cannot be combined with clearToolOutputOverflowChars"
+      );
+      return;
+    }
+
     const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
     if (patch.subAgentModel !== undefined) {
       persistPatch.subAgentModel = patch.subAgentModel;
@@ -178,6 +187,9 @@ export class SessionMetadataManager {
     }
     if (patch.toolOutputOverflowChars !== undefined) {
       persistPatch.toolOutputOverflowChars = patch.toolOutputOverflowChars;
+    }
+    if (patch.clearToolOutputOverflowChars) {
+      persistPatch.clearToolOutputOverflowChars = true;
     }
     if (patch.providerOptions !== undefined) {
       persistPatch.providerOptions = patch.providerOptions;
@@ -215,6 +227,17 @@ export class SessionMetadataManager {
           ...this.context.state.config.projectConfigOverrides,
           toolOutputOverflowChars: patch.toolOutputOverflowChars,
         },
+      };
+    }
+    if (patch.clearToolOutputOverflowChars) {
+      const { toolOutputOverflowChars: _ignored, ...remainingOverrides } =
+        this.context.state.config.projectConfigOverrides ?? {};
+      this.context.state.config = {
+        ...this.context.state.config,
+        toolOutputOverflowChars: effectiveToolOutputOverflowChars(
+          this.context.state.config.inheritedToolOutputOverflowChars
+        ),
+        projectConfigOverrides: Object.keys(remainingOverrides).length > 0 ? remainingOverrides : undefined,
       };
     }
     if (patch.providerOptions !== undefined) {

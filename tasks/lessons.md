@@ -1,5 +1,6 @@
 # Lessons
 
+- For settings that can be explicitly set, explicitly disabled, or inherited, never overload `undefined` for both “no-op” and “inherit”; add a dedicated clear/inherit path end-to-end so reset-to-default actions delete persisted overrides instead of pinning the current built-in value.
 - When the user narrows a protocol or compatibility requirement, apply that exact direction to the fix; do not keep broader backward-compat or provider-scope assumptions alive in the implementation.
 - When a user turns a review finding into an explicit product direction, implement the requested contract rather than the literal review recommendation; update the affected tests and tool descriptions to match that new source of truth.
 - When the user clarifies a provider contract, follow the repo’s intended behavior instead of extrapolating from public pricing/model docs; for OpenCode specifically, Go can intentionally have no local pricing data even if Zen does.

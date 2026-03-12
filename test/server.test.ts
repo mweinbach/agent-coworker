@@ -2664,4 +2664,48 @@ describe("Protocol Doc Parity", () => {
       server.stop();
     }
   });
+
+  test("set_config can clear toolOutputOverflowChars and restore inherited defaults", async () => {
+    const tmpDir = await makeTmpProject();
+    const homeDir = path.join(tmpDir, "home");
+    await fs.mkdir(homeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, ".agent", "config.json"),
+      `${JSON.stringify({ toolOutputOverflowChars: 12000 }, null, 2)}\n`,
+      "utf-8",
+    );
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, { homedir: homeDir }));
+    try {
+      const event = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({
+          type: "set_config",
+          sessionId,
+          config: {
+            clearToolOutputOverflowChars: true,
+          },
+        }),
+        (message) =>
+          message.type === "session_config"
+          && message.config?.toolOutputOverflowChars === 25000
+          && message.config?.defaultToolOutputOverflowChars === undefined,
+        10_000,
+      );
+
+      expect(event.config.toolOutputOverflowChars).toBe(25000);
+      expect("defaultToolOutputOverflowChars" in event.config).toBe(false);
+
+      const persistedConfig = JSON.parse(
+        await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),
+      ) as any;
+      expect("toolOutputOverflowChars" in persistedConfig).toBe(false);
+
+      const nextMessages = await collectMessages(url, 4);
+      const nextConfigEvt = nextMessages.find((msg: any) => msg.type === "session_config");
+      expect(nextConfigEvt?.config.toolOutputOverflowChars).toBe(25000);
+      expect("defaultToolOutputOverflowChars" in (nextConfigEvt?.config ?? {})).toBe(false);
+    } finally {
+      server.stop();
+    }
+  }, 15_000);
 });

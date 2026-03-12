@@ -47,7 +47,7 @@ import {
   truncateTitle,
 } from "../store.helpers";
 import { mergeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
-import type { ThreadRecord, WorkspaceRecord } from "../types";
+import type { ThreadRecord, WorkspaceDefaultsPatch, WorkspaceRecord } from "../types";
 
 export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "applyWorkspaceDefaultsToThread" | "updateWorkspaceDefaults"> {
   return {
@@ -63,14 +63,22 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const harnessToolOutputOverflowChars = workspaceRuntime?.controlSessionConfig?.defaultToolOutputOverflowChars;
       const backupsEnabled = mode === "explicit" ? ws.defaultBackupsEnabled : harnessBackupsDefault;
       const toolOutputOverflowChars = mode === "explicit" ? ws.defaultToolOutputOverflowChars : harnessToolOutputOverflowChars;
+      const clearToolOutputOverflowChars =
+        mode === "explicit"
+        && ws.defaultToolOutputOverflowChars === undefined
+        && rt.sessionConfig?.defaultToolOutputOverflowChars !== undefined;
 
       // Explicit user-driven default changes should still hit live sessions
       // immediately. Automatic connect-time sync only trusts the harness-
       // sourced default once the control session has provided it.
-      if (typeof backupsEnabled === "boolean" || toolOutputOverflowChars !== undefined) {
+      if (typeof backupsEnabled === "boolean" || toolOutputOverflowChars !== undefined || clearToolOutputOverflowChars) {
         const configPatch = {
           ...(typeof backupsEnabled === "boolean" ? { backupsEnabled } : {}),
-          ...(toolOutputOverflowChars !== undefined ? { toolOutputOverflowChars } : {}),
+          ...(toolOutputOverflowChars !== undefined
+            ? { toolOutputOverflowChars }
+            : clearToolOutputOverflowChars
+              ? { clearToolOutputOverflowChars: true }
+              : {}),
         };
         const okBackups = sendThread(get, threadId, (sessionId) => ({
           type: "set_config",
@@ -149,16 +157,18 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     },
   
 
-    updateWorkspaceDefaults: async (workspaceId, patch) => {
+    updateWorkspaceDefaults: async (workspaceId, patch: WorkspaceDefaultsPatch) => {
+      const { clearDefaultToolOutputOverflowChars, ...workspacePatch } = patch;
       set((s) => ({
         workspaces: s.workspaces.map((w) => {
           if (w.id !== workspaceId) return w;
           return {
             ...w,
-            ...patch,
-            ...(patch.providerOptions !== undefined
+            ...workspacePatch,
+            ...(clearDefaultToolOutputOverflowChars ? { defaultToolOutputOverflowChars: undefined } : {}),
+            ...(workspacePatch.providerOptions !== undefined
               ? {
-                  providerOptions: mergeWorkspaceProviderOptions(w.providerOptions, patch.providerOptions),
+                  providerOptions: mergeWorkspaceProviderOptions(w.providerOptions, workspacePatch.providerOptions),
                 }
               : {}),
           };
@@ -167,13 +177,14 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       await persistNow(get);
 
       const shouldSyncCoreSettings =
-        patch.defaultProvider !== undefined ||
-        patch.defaultModel !== undefined ||
-        patch.defaultSubAgentModel !== undefined ||
-        patch.defaultToolOutputOverflowChars !== undefined ||
-        patch.defaultEnableMcp !== undefined ||
-        patch.defaultBackupsEnabled !== undefined ||
-        patch.providerOptions !== undefined;
+        workspacePatch.defaultProvider !== undefined ||
+        workspacePatch.defaultModel !== undefined ||
+        workspacePatch.defaultSubAgentModel !== undefined ||
+        workspacePatch.defaultToolOutputOverflowChars !== undefined ||
+        clearDefaultToolOutputOverflowChars === true ||
+        workspacePatch.defaultEnableMcp !== undefined ||
+        workspacePatch.defaultBackupsEnabled !== undefined ||
+        workspacePatch.providerOptions !== undefined;
       if (!shouldSyncCoreSettings) {
         return;
       }
@@ -193,6 +204,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const subAgentModel = workspace.defaultSubAgentModel?.trim() || model;
       const toolOutputOverflowChars = workspace.defaultToolOutputOverflowChars;
       const providerOptions = workspace.providerOptions;
+      const clearToolOutputOverflowChars = clearDefaultToolOutputOverflowChars === true;
 
       const modelPersisted = sendControl(get, workspaceId, (sessionId) => ({
         type: "set_model",
@@ -206,7 +218,11 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         config: {
           backupsEnabled: workspace.defaultBackupsEnabled,
           subAgentModel,
-          ...(toolOutputOverflowChars !== undefined ? { toolOutputOverflowChars } : {}),
+          ...(toolOutputOverflowChars !== undefined
+            ? { toolOutputOverflowChars }
+            : clearToolOutputOverflowChars
+              ? { clearToolOutputOverflowChars: true }
+              : {}),
           ...(providerOptions ? { providerOptions: providerOptions as OpenAiCompatibleProviderOptionsByProvider } : {}),
         },
       }));

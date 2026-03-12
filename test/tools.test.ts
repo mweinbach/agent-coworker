@@ -1984,6 +1984,39 @@ describe("webFetch tool", () => {
     }
   });
 
+  test("retries download finalization when the first destination appears during finalize", async () => {
+    const dir = await tmpDir();
+    const downloadDir = path.join(dir, "Downloads");
+    const tempPath = path.join(downloadDir, "report.pdf.part");
+    await fs.mkdir(downloadDir, { recursive: true });
+    await fs.writeFile(tempPath, "fresh payload", "utf-8");
+
+    const originalCopyFile = fs.copyFile;
+    let firstAttempt = true;
+    (fs as typeof fs & { copyFile: typeof fs.copyFile }).copyFile = mock(
+      async (source: string | Buffer | URL, destination: string | Buffer | URL, mode?: number) => {
+        if (firstAttempt && String(destination) === path.join(downloadDir, "report.pdf")) {
+          firstAttempt = false;
+          await fs.writeFile(path.join(downloadDir, "report.pdf"), "existing payload", "utf-8");
+          const error = new Error("exists") as NodeJS.ErrnoException;
+          error.code = "EEXIST";
+          throw error;
+        }
+        return await originalCopyFile(source, destination, mode);
+      },
+    );
+
+    try {
+      const finalPath = await webFetchInternal.finalizeDownloadedFile(tempPath, downloadDir, "report.pdf");
+      expect(finalPath).toBe(path.join(downloadDir, "report-2.pdf"));
+      expect(await fs.readFile(path.join(downloadDir, "report.pdf"), "utf-8")).toBe("existing payload");
+      expect(await fs.readFile(finalPath, "utf-8")).toBe("fresh payload");
+      await expect(fs.stat(tempPath)).rejects.toThrow();
+    } finally {
+      (fs as typeof fs & { copyFile: typeof fs.copyFile }).copyFile = originalCopyFile;
+    }
+  });
+
   test("rejects non-text content types", async () => {
     const dir = await tmpDir();
 

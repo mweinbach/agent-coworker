@@ -42,6 +42,7 @@ export type PersistedProjectConfigPatch = Partial<
     "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
   >
 > & {
+  clearToolOutputOverflowChars?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
 };
 

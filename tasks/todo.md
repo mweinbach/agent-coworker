@@ -1,3 +1,23 @@
+# Task: Fix webFetch markdown attachment download classification
+
+## Plan
+- [x] Add markdown filename extensions to the `webFetch` downloadable document classifier.
+- [x] Add a focused regression that covers octet-stream markdown attachments named only via `Content-Disposition`.
+- [x] Run focused tests plus repo verification commands, then record the results here.
+
+## Review
+- `src/tools/webFetch.ts` now treats `.md` and `.markdown` filenames as downloadable documents, so markdown attachments served as `application/octet-stream` no longer fall through to the blocked binary path.
+- `test/tools.test.ts` now covers markdown downloads where the only filename signal comes from `Content-Disposition`, which is the specific regression path surfaced in review.
+- Verification:
+  - `~/.bun/bin/bun test test/tools.test.ts --bail` -> pass (`163 pass, 0 fail`)
+  - `~/.bun/bin/bun test` -> pass (`2172 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `git diff --check` -> pass
+
 # Task: Fix review findings for webFetch, webSearch, and scratchpad backups
 
 ## Plan

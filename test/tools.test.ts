@@ -1701,6 +1701,37 @@ describe("webFetch tool", () => {
     }
   });
 
+  test("downloads markdown attachments when octet-stream filenames come from content-disposition", async () => {
+    const dir = await tmpDir();
+    const cases = ["README.md", "release-notes.markdown"] as const;
+
+    const originalFetch = globalThis.fetch;
+
+    try {
+      for (const fileName of cases) {
+        const bytes = Buffer.from(`bytes:${fileName}`);
+        globalThis.fetch = mock(async () => {
+          return new Response(bytes, {
+            status: 200,
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "Content-Disposition": `attachment; filename="${fileName}"`,
+            },
+          });
+        }) as any;
+
+        const t: any = createWebFetchTool(makeCtx(dir));
+        const out: string = await t.execute({ url: "https://example.com/download", maxLength: 50000 });
+        const downloadedPath = path.join(dir, "Downloads", fileName);
+
+        expect(out).toBe(`File downloaded ${downloadedPath}`);
+        expect(await fs.readFile(downloadedPath)).toEqual(bytes);
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("normalizes downloaded document filenames to the classified MIME type", async () => {
     const dir = await tmpDir();
     const pdfBytes = Buffer.from("%PDF-1.7\nmismatch\n");

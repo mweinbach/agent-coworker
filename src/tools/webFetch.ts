@@ -25,6 +25,8 @@ const DOWNLOADABLE_DOCUMENT_EXTENSIONS = new Set([
   ".docm",
   ".docx",
   ".epub",
+  ".markdown",
+  ".md",
   ".odp",
   ".ods",
   ".odt",

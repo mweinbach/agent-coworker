@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
 import type { ClientMessage, ServerEvent } from "../src/server/protocol";
+import { createFailureDiagnostics } from "./shared/failureDiagnostics";
+
+type FailureDiagnostics = ReturnType<typeof createFailureDiagnostics>;
 
 let rlRef: FakeReadline | null = null;
+let activeDiagnostics: FailureDiagnostics | null = null;
 
 class FakeReadline {
   private handlers = new Map<string, Array<(...args: any[]) => any>>();
@@ -11,6 +15,7 @@ class FakeReadline {
 
   setPrompt(_p: string) {
     this.lastPrompt = _p;
+    activeDiagnostics?.log("fake-readline.set-prompt", { prompt: _p });
   }
 
   prompt() {
@@ -27,11 +32,13 @@ class FakeReadline {
   close() {
     if (this.closed) return;
     this.closed = true;
+    activeDiagnostics?.log("fake-readline.close");
     const list = this.handlers.get("close") ?? [];
     for (const cb of list) cb();
   }
 
   async emitLine(line: string) {
+    activeDiagnostics?.log("fake-readline.emit-line", { line });
     const list = this.handlers.get("line") ?? [];
     for (const cb of list) await cb(line);
   }
@@ -66,14 +73,22 @@ class FakeWebSocket {
 
   constructor(_url: string) {
     FakeWebSocket.instances.push(this);
+    activeDiagnostics?.log("fake-socket.construct", {
+      instanceCount: FakeWebSocket.instances.length,
+    });
     queueMicrotask(() => {
       this.readyState = FakeWebSocket.OPEN;
+      activeDiagnostics?.log("fake-socket.open", { readyState: this.readyState });
       this.onopen?.();
     });
   }
 
   send(data: string) {
     this.sent.push(String(data));
+    activeDiagnostics?.log("fake-socket.send", {
+      readyState: this.readyState,
+      data,
+    });
     let parsed: ClientMessage | null = null;
     try {
       parsed = JSON.parse(String(data));
@@ -91,83 +106,148 @@ class FakeWebSocket {
           outputDirectory: "/tmp/output",
         },
       };
-      queueMicrotask(() => this.onmessage?.({ data: JSON.stringify(hello) }));
+      activeDiagnostics?.log("fake-socket.schedule-server-hello");
+      queueMicrotask(() => {
+        activeDiagnostics?.log("fake-socket.emit-server-hello", hello);
+        this.onmessage?.({ data: JSON.stringify(hello) });
+      });
     }
   }
 
   close() {
     this.readyState = FakeWebSocket.CLOSED;
-    queueMicrotask(() => this.onclose?.());
+    activeDiagnostics?.log("fake-socket.close", { readyState: this.readyState });
+    queueMicrotask(() => {
+      activeDiagnostics?.log("fake-socket.emit-close");
+      this.onclose?.();
+    });
   }
+}
+
+function getHarnessSnapshot() {
+  return {
+    hasReadline: !!rlRef,
+    socketCount: FakeWebSocket.instances.length,
+    readyStates: FakeWebSocket.instances.map((ws) => ws.readyState),
+    sentMessages: FakeWebSocket.instances.map((ws) => ws.sent),
+  };
 }
 
 async function waitForCliReady(timeoutMs = 1_000) {
   const startedAt = Date.now();
+  activeDiagnostics?.log("wait-for-cli-ready.start", getHarnessSnapshot());
   while (Date.now() - startedAt < timeoutMs) {
-    if (rlRef && FakeWebSocket.instances[0]) return;
+    if (rlRef && FakeWebSocket.instances[0]) {
+      activeDiagnostics?.log("wait-for-cli-ready.ready", getHarnessSnapshot());
+      return;
+    }
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
-  throw new Error("Timed out waiting for CLI test harness to connect.");
+  const snapshot = getHarnessSnapshot();
+  activeDiagnostics?.log("wait-for-cli-ready.timeout", snapshot);
+  throw new Error(`Timed out waiting for CLI test harness to connect: ${JSON.stringify(snapshot)}`);
+}
+
+async function withReplDiagnostics(name: string, run: (diagnostics: FailureDiagnostics) => Promise<void>) {
+  const diagnostics = createFailureDiagnostics(name);
+  activeDiagnostics = diagnostics;
+  try {
+    await run(diagnostics);
+  } catch (error) {
+    diagnostics.flush(error);
+    throw error;
+  } finally {
+    activeDiagnostics = null;
+  }
 }
 
 describe("CLI REPL websocket send failures", () => {
   test("surfaces an error and does not silently drop a user_message when ws is not OPEN", async () => {
-    rlRef = null;
-    FakeWebSocket.instances = [];
-    const realLog = console.log;
-    const realErr = console.error;
+    await withReplDiagnostics(
+      "surfaces an error and does not silently drop a user_message when ws is not OPEN",
+      async (diagnostics) => {
+        rlRef = null;
+        FakeWebSocket.instances = [];
+        const realLog = console.log;
+        const realErr = console.error;
 
-    try {
-      const logs: string[] = [];
-      console.log = (...args: any[]) => logs.push(args.join(" "));
-      console.error = (...args: any[]) => logs.push(args.join(" "));
+        try {
+          const logs: string[] = [];
+          console.log = (...args: any[]) => {
+            const line = args.join(" ");
+            logs.push(line);
+            diagnostics.log("console.log", { line });
+          };
+          console.error = (...args: any[]) => {
+            const line = args.join(" ");
+            logs.push(line);
+            diagnostics.log("console.error", { line });
+          };
 
-      const { runCliRepl } = await import("../src/cli/repl");
+          const { runCliRepl } = await import("../src/cli/repl");
 
-      const replPromise = runCliRepl({
-        __internal: {
-          startAgentServer: startAgentServerStub as any,
-          WebSocket: FakeWebSocket as any,
-          createReadlineInterface: () => {
-            rlRef = new FakeReadline();
-            return rlRef as any;
-          },
-        },
-      });
+          const replPromise = runCliRepl({
+            __internal: {
+              startAgentServer: startAgentServerStub as any,
+              WebSocket: FakeWebSocket as any,
+              createReadlineInterface: () => {
+                rlRef = new FakeReadline();
+                diagnostics.log("create-readline", getHarnessSnapshot());
+                return rlRef as any;
+              },
+            },
+          });
 
-      await waitForCliReady();
+          diagnostics.log("after runCliRepl", getHarnessSnapshot());
+          await waitForCliReady();
 
-      const ws = FakeWebSocket.instances[0];
-      expect(ws).toBeDefined();
-      expect(rlRef).toBeDefined();
+          const ws = FakeWebSocket.instances[0];
+          diagnostics.log("after waitForCliReady", {
+            harness: getHarnessSnapshot(),
+            logs,
+          });
+          expect(ws).toBeDefined();
+          expect(rlRef).toBeDefined();
 
-      // Simulate a dropped socket where readyState is no longer OPEN, but no close
-      // event has fired yet (the edge case that previously silently dropped input).
-      ws.readyState = FakeWebSocket.CLOSED;
+          // Simulate a dropped socket where readyState is no longer OPEN, but no close
+          // event has fired yet (the edge case that previously silently dropped input).
+          ws.readyState = FakeWebSocket.CLOSED;
+          diagnostics.log("forced-socket-closed", {
+            readyState: ws.readyState,
+            sent: ws.sent,
+          });
 
-      await rlRef!.emitLine("hello");
+          await rlRef!.emitLine("hello");
 
-      expect(logs.join("\n")).toContain("disconnected:");
-      expect(logs.join("\n")).toContain("unable to send (not connected)");
-      expect(logs.join("\n")).toContain("/restart");
-      expect(rlRef!.lastPrompt).toBe("you> ");
+          diagnostics.log("after hello", {
+            logs,
+            harness: getHarnessSnapshot(),
+            prompt: rlRef?.lastPrompt ?? null,
+          });
+          expect(logs.join("\n")).toContain("disconnected:");
+          expect(logs.join("\n")).toContain("unable to send (not connected)");
+          expect(logs.join("\n")).toContain("/restart");
+          expect(rlRef!.lastPrompt).toBe("you> ");
 
-      const sentTypes = ws.sent
-        .map((raw) => {
-          try {
-            return JSON.parse(raw)?.type;
-          } catch {
-            return null;
-          }
-        })
-        .filter(Boolean);
-      expect(sentTypes).not.toContain("user_message");
+          const sentTypes = ws.sent
+            .map((raw) => {
+              try {
+                return JSON.parse(raw)?.type;
+              } catch {
+                return null;
+              }
+            })
+            .filter(Boolean);
+          diagnostics.log("after sent-types", { sentTypes });
+          expect(sentTypes).not.toContain("user_message");
 
-      rlRef!.close();
-      await replPromise;
-    } finally {
-      console.log = realLog;
-      console.error = realErr;
-    }
+          rlRef!.close();
+          await replPromise;
+        } finally {
+          console.log = realLog;
+          console.error = realErr;
+        }
+      },
+    );
   });
 });

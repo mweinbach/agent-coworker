@@ -3483,7 +3483,8 @@
 - `test/agentSocket.runtime.test.ts` now uses injected manual timers for reconnect and keepalive coverage instead of overriding `globalThis.setTimeout` / `setInterval`, and its microtask waits no longer depend on global timer state.
 - `test/repl.restart-failure.test.ts` and `test/repl.disconnect-send.test.ts` now wait for CLI readiness with `setImmediate`, which still yields the event loop for async REPL/bootstrap work but no longer couples those tests to any patched global timeout implementation.
 - `apps/desktop/test/protocol-v2-events.test.ts` no longer monkeypatches `globalThis.setTimeout` for the `session_busy` assertion, removing the remaining cross-file timer mutation in the desktop suite.
-- `gh pr checks 35` still reports the pre-existing failing `Docs + Tests` run from `https://github.com/mweinbach/agent-coworker/actions/runs/23019673901/job/66852385608`; the check has not been rerun because these local fixes have not been pushed yet.
+- `test/shared/failureDiagnostics.ts` adds failure-only CI diagnostics, and the remaining flaky tests now log fake socket lifecycle events, timer scheduling, console output, and REPL readiness snapshots only when they fail under CI.
+- `gh pr checks 35` now reports a fresh failing `Docs + Tests` run at `https://github.com/mweinbach/agent-coworker/actions/runs/23020196010/job/66854235167`; the new diagnostic logging is local-only until these changes are pushed.
 
 ### Verification
 - `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test test/repl.restart-failure.test.ts test/repl.disconnect-send.test.ts test/agentSocket.runtime.test.ts apps/desktop/test/protocol-v2-events.test.ts --rerun-each 50 --bail` -> pass (`1900 pass, 0 fail`)
@@ -3494,3 +3495,8 @@
 - `bun run build:desktop-resources` -> pass
 - `bun run desktop:build` -> pass
 - `git diff --check` -> pass
+- `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test test/agentSocket.runtime.test.ts test/repl.restart-failure.test.ts test/repl.disconnect-send.test.ts --rerun-each 20 --bail` -> pass (`140 pass, 0 fail`)
+- `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test --bail` -> pass again after diagnostic instrumentation (`2185 pass, 2 skip, 0 fail`)
+- `bun run build:server-binary` -> pass again after diagnostic instrumentation
+- `bun run build:desktop-resources` -> pass again after diagnostic instrumentation
+- `bun run desktop:build` -> pass again after diagnostic instrumentation

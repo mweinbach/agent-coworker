@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import TurndownService from "turndown";
 import { z } from "zod";
 
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
-import { EXA_MISSING_KEY_MESSAGE, fetchExaContents, resolveExaApiKey } from "./exa";
+import { fetchExaContents, resolveExaApiKey } from "./exa";
 import { resolveMaybeRelative, truncateText } from "../utils/paths";
 import { assertWritePathAllowed } from "../utils/permissions";
 import { resolveSafeWebUrl } from "../utils/webSafety";
@@ -20,13 +21,10 @@ const SUPPORTED_IMAGE_MIME_TYPES = new Map<string, string>([
   ["image/gif", ".gif"],
 ]);
 const DOWNLOADABLE_DOCUMENT_EXTENSIONS = new Set([
-  ".csv",
   ".doc",
   ".docm",
   ".docx",
   ".epub",
-  ".md",
-  ".markdown",
   ".odp",
   ".ods",
   ".odt",
@@ -34,8 +32,6 @@ const DOWNLOADABLE_DOCUMENT_EXTENSIONS = new Set([
   ".ppt",
   ".pptm",
   ".pptx",
-  ".rtf",
-  ".tsv",
   ".xls",
   ".xlsm",
   ".xlsx",
@@ -50,25 +46,29 @@ const DOWNLOADABLE_DOCUMENT_MIME_TYPES = new Map<string, string>([
   ["application/vnd.ms-powerpoint", ".ppt"],
   ["application/vnd.ms-powerpoint.presentation.macroenabled.12", ".pptm"],
   ["application/vnd.ms-word.document.macroenabled.12", ".docm"],
-  ["application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx"],
-  ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"],
-  ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx"],
   ["application/vnd.oasis.opendocument.presentation", ".odp"],
   ["application/vnd.oasis.opendocument.spreadsheet", ".ods"],
   ["application/vnd.oasis.opendocument.text", ".odt"],
-  ["text/csv", ".csv"],
-  ["text/markdown", ".md"],
-  ["text/rtf", ".rtf"],
-  ["text/tab-separated-values", ".tsv"],
-  ["text/x-markdown", ".md"],
+  ["application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx"],
+  ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"],
+  ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx"],
 ]);
+const HTML_EXTENSIONS = new Set([".htm", ".html", ".xhtml"]);
+let readabilityDepsPromise: Promise<{
+  Readability: typeof import("@mozilla/readability").Readability;
+  JSDOM: typeof import("jsdom").JSDOM;
+}> | null = null;
 
 type ClassifiedResponse =
-  | { kind: "text" }
+  | { kind: "inline" }
   | { kind: "download"; category: "document" | "image"; fileName: string };
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function isDesktopBundleRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.COWORK_DESKTOP_BUNDLE === "1";
 }
 
 function normalizeMimeType(contentType: string | null): string | null {
@@ -76,6 +76,11 @@ function normalizeMimeType(contentType: string | null): string | null {
   const [rawMimeType] = contentType.split(";", 1);
   const normalized = rawMimeType?.trim().toLowerCase();
   return normalized || null;
+}
+
+function isHtmlMimeType(contentType: string | null): boolean {
+  const normalized = normalizeMimeType(contentType);
+  return normalized === "text/html" || normalized === "application/xhtml+xml";
 }
 
 function normalizeSupportedImageMimeType(contentType: string | null): string | null {
@@ -238,7 +243,7 @@ function classifyResponseContent(
   const downloadableByName =
     isDownloadableDocumentFilename(contentDispositionName) || isDownloadableDocumentFilename(urlBaseName);
 
-  if (downloadableByMime || ((!normalized || normalized === "application/octet-stream" || normalized === "text/plain") && downloadableByName)) {
+  if (downloadableByMime || ((!normalized || normalized === "application/octet-stream") && downloadableByName)) {
     return {
       kind: "download",
       category: "document",
@@ -246,11 +251,12 @@ function classifyResponseContent(
     };
   }
 
-  if (!normalized) return { kind: "text" };
-  if (normalized.startsWith("text/")) return { kind: "text" };
-  if (normalized.includes("json")) return { kind: "text" };
-  if (normalized.includes("xml")) return { kind: "text" };
-  if (normalized.includes("javascript")) return { kind: "text" };
+  if (!normalized) return { kind: "inline" };
+  if (isHtmlMimeType(contentType)) return { kind: "inline" };
+  if (normalized.startsWith("text/")) return { kind: "inline" };
+  if (normalized.includes("json")) return { kind: "inline" };
+  if (normalized.includes("xml")) return { kind: "inline" };
+  if (normalized.includes("javascript")) return { kind: "inline" };
   throw new Error(`Blocked non-text content type: ${contentType}`);
 }
 
@@ -345,27 +351,129 @@ async function fetchWithSafeRedirects(
   throw new Error(`Too many redirects while fetching URL: ${url}`);
 }
 
-async function maybeCancelResponseBody(response: Response): Promise<void> {
-  if (!response.body) return;
+function createTurndownService(): TurndownService {
+  const service = new TurndownService({
+    headingStyle: "atx",
+    codeBlockStyle: "fenced",
+  });
+  service.remove(["script", "style", "noscript", "template", "canvas"]);
+  return service;
+}
+
+function stripHtmlNoise(html: string): string {
+  return html
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<script\b[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, "")
+    .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, "")
+    .replace(/<template\b[\s\S]*?<\/template>/gi, "")
+    .replace(/<svg\b[\s\S]*?<\/svg>/gi, "");
+}
+
+function extractLikelyContentFragment(html: string): string {
+  return (
+    html.match(/<main\b[\s\S]*?<\/main>/i)?.[0]
+    ?? html.match(/<article\b[\s\S]*?<\/article>/i)?.[0]
+    ?? html.match(/<body\b[\s\S]*?<\/body>/i)?.[0]
+    ?? html
+  );
+}
+
+function fallbackHtmlToMarkdown(html: string): string {
+  const turndown = createTurndownService();
+  const cleanedHtml = stripHtmlNoise(extractLikelyContentFragment(html));
+  return turndown.turndown(cleanedHtml).trim();
+}
+
+async function loadReadabilityDeps(): Promise<{
+  Readability: typeof import("@mozilla/readability").Readability;
+  JSDOM: typeof import("jsdom").JSDOM;
+}> {
+  if (!readabilityDepsPromise) {
+    readabilityDepsPromise = Promise.all([import("@mozilla/readability"), import("jsdom")]).then(
+      ([readabilityMod, jsdomMod]) => ({
+        Readability: readabilityMod.Readability,
+        JSDOM: jsdomMod.JSDOM,
+      })
+    );
+  }
+
+  return readabilityDepsPromise;
+}
+
+async function htmlToMarkdown(html: string, finalUrl: string, ctx: ToolContext): Promise<string> {
+  if (isDesktopBundleRuntime()) {
+    return fallbackHtmlToMarkdown(html);
+  }
 
   try {
-    await response.body.cancel();
-  } catch {
-    // Ignore cancellation failures for mocked or already-consumed streams.
+    const { Readability, JSDOM } = await loadReadabilityDeps();
+    const dom = new JSDOM(html, { url: finalUrl });
+    const article = new Readability(dom.window.document).parse();
+    if (article?.content) {
+      const articleMarkdown = fallbackHtmlToMarkdown(article.content);
+      if (articleMarkdown) {
+        if (article.title && !articleMarkdown.includes(article.title)) {
+          return `# ${article.title}\n\n${articleMarkdown}`.trim();
+        }
+        return articleMarkdown;
+      }
+    }
+  } catch (error) {
+    ctx.log(`tool! webFetch readability fallback ${JSON.stringify({ reason: String(error) })}`);
+  }
+
+  return fallbackHtmlToMarkdown(html);
+}
+
+function looksLikeHtmlDocument(text: string): boolean {
+  const trimmed = text.trimStart();
+  return /^<(?:!doctype\s+html|html\b|head\b|body\b|article\b|main\b|section\b|div\b|p\b)/i.test(trimmed);
+}
+
+function shouldTreatAsHtml(contentType: string | null, resolvedUrl: string, body: string): boolean {
+  if (isHtmlMimeType(contentType)) return true;
+  if (HTML_EXTENSIONS.has(extensionFromName(baseNameFromUrl(resolvedUrl)) ?? "")) return true;
+  return looksLikeHtmlDocument(body);
+}
+
+async function maybeFetchExaEnrichment(ctx: ToolContext, finalUrl: string): Promise<{
+  text: string;
+  links: string[];
+  imageLinks: string[];
+} | null> {
+  const exaApiKey = await resolveExaApiKey(ctx);
+  if (!exaApiKey) return null;
+
+  try {
+    return await fetchExaContents({
+      apiKey: exaApiKey,
+      url: finalUrl,
+      abortSignal: ctx.abortSignal,
+    });
+  } catch (error) {
+    ctx.log(`tool! webFetch exa enrichment skipped ${JSON.stringify({ reason: String(error) })}`);
+    return null;
   }
 }
 
-function formatExaContent(exaContent: { text: string; links: string[]; imageLinks: string[] }): string {
+function formatFetchedText(
+  baseText: string,
+  exaContent: { text: string; links: string[]; imageLinks: string[] } | null
+): string {
   const sections: string[] = [];
-
-  if (exaContent.text.trim()) {
+  const trimmedBase = baseText.trim();
+  if (trimmedBase) {
+    sections.push(trimmedBase);
+  } else if (exaContent?.text.trim()) {
     sections.push(exaContent.text.trim());
   }
-  if (exaContent.links.length > 0) {
-    sections.push(`Links:\n${exaContent.links.map(link => `- ${link}`).join("\n")}`);
+
+  if (exaContent?.links.length) {
+    sections.push(`Links:\n${exaContent.links.map((link) => `- ${link}`).join("\n")}`);
   }
-  if (exaContent.imageLinks.length > 0) {
-    sections.push(`Image Links:\n${exaContent.imageLinks.map(link => `- ${link}`).join("\n")}`);
+  if (exaContent?.imageLinks.length) {
+    sections.push(`Image Links:\n${exaContent.imageLinks.map((link) => `- ${link}`).join("\n")}`);
   }
 
   return sections.join("\n\n").trim();
@@ -373,6 +481,7 @@ function formatExaContent(exaContent: { text: string; links: string[]; imageLink
 
 export const __internal = {
   getResponseTimeoutMs: () => responseTimeoutMs,
+  isDesktopBundleRuntime,
   setResponseTimeoutMs: (ms: number) => {
     responseTimeoutMs = ms;
   },
@@ -381,7 +490,7 @@ export const __internal = {
 export function createWebFetchTool(ctx: ToolContext) {
   return defineTool({
     description:
-      "Fetch a URL and return Exa-extracted content for non-download URLs, including page links and image links when available, or save supported direct image URLs and document downloads into the workspace Downloads folder and return the local path.",
+      "Fetch a URL and return clean markdown for HTML pages, preserve direct text responses, or save supported image and binary document downloads into the workspace Downloads folder.",
     inputSchema: z.object({
       url: z.string().url().describe("URL to fetch"),
       maxLength: z.number().int().min(1000).max(200000).optional().default(50000),
@@ -420,27 +529,20 @@ export function createWebFetchTool(ctx: ToolContext) {
         return out;
       }
 
-      await maybeCancelResponseBody(response);
+      const bodyText = await response.text();
+      const isHtml = shouldTreatAsHtml(response.headers.get("content-type"), finalUrl, bodyText);
+      const baseText = isHtml ? await htmlToMarkdown(bodyText, finalUrl, ctx) : bodyText;
+      const exaContent = isHtml ? await maybeFetchExaEnrichment(ctx, finalUrl) : null;
+      const out = truncateText(formatFetchedText(baseText, exaContent), maxLength);
 
-      const exaApiKey = await resolveExaApiKey(ctx);
-      if (!exaApiKey) {
-        throw new Error(`webFetch disabled: ${EXA_MISSING_KEY_MESSAGE}`);
-      }
-
-      const exaContent = await fetchExaContents({
-        apiKey: exaApiKey,
-        url: finalUrl,
-        abortSignal: ctx.abortSignal,
-      });
-
-      const out = truncateText(formatExaContent(exaContent), maxLength);
       ctx.log(
         `tool< webFetch ${JSON.stringify({
           chars: out.length,
-          provider: "exa",
-          finalUrl: exaContent.url ?? finalUrl,
-          links: exaContent.links.length,
-          imageLinks: exaContent.imageLinks.length,
+          finalUrl,
+          kind: isHtml ? "html" : "text",
+          exa: Boolean(exaContent),
+          links: exaContent?.links.length ?? 0,
+          imageLinks: exaContent?.imageLinks.length ?? 0,
         })}`
       );
       return out;

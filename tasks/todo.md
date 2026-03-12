@@ -1,3 +1,30 @@
+# Task: Repo-wide test audit and coverage hardening
+
+## Plan
+- [x] Audit the major harness, provider, tool, TUI, and desktop surfaces with subagents plus local heuristics to identify missing or weak tests that would not catch real regressions.
+- [x] Add or strengthen the highest-value tests, favoring harness-level contract coverage when UI behavior depends on shared core logic.
+- [x] Run focused suites for changed areas, then run repo verification (`bun test`, `bun run typecheck`, `bun run build:server-binary`, `bun run build:desktop-resources`, `bun run desktop:build`) and record outcomes here.
+
+## Review
+- `apps/desktop/src/app/store.actions/bootstrap.ts` now preserves the persisted `defaultToolOutputOverflowChars` shape during init: explicit `null` stays `null`, explicit numeric values stay numeric, and omitted values remain omitted instead of being synthesized to `25000` during desktop rehydration.
+- `src/shared/persistentSubagents.ts` now derives persistent subagent provider validation from shared `PROVIDER_NAMES`, so schema acceptance stays aligned with the main provider source of truth as providers are added or removed.
+- Added focused regressions in `apps/desktop/test/workspace-settings-sync.test.ts` for bootstrap overflow rehydration and in `test/shared/persistentSubagents.test.ts` for provider coverage across the shared provider list.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/workspace-settings-sync.test.ts test/shared/persistentSubagents.test.ts` -> pass (`15 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` -> fails in existing remote MCP coverage: `remote MCP (mcp.grep.app) > connects, discovers tools, and executes searchGitHub` returned `Streamable HTTP error ... 500: Internal Server Error`
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in existing TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`); no standalone TUI build script is defined in the repo root scripts
+  - `git diff --check` -> pass
+- Added `test/tui.syncEventReducer.test.ts` with reset, dedupe, tool-log pairing, ask/approval, backup, and tool-list normalization scenarios plus targeted assertions on state mutations.
+- Added `test/tui.socketLifecycle.test.ts` with a mocked `AgentSocket` to cover resume semantics, restart trimming, clearing `latestSessionId`, and ignoring stale events after disconnect.
+- Ran `bun test test/tui.syncEventReducer.test.ts test/tui.socketLifecycle.test.ts` (10 pass, 0 fail).
+- Ran `bun test` (fails because `ensureRipgrep` still resolves a pre-installed `rg` binary despite `disableDownload: true` and the expectation for a rejection); other verification commands (`bun run typecheck`, `bun run build:server-binary`, `bun run build:desktop-resources`, `bun run desktop:build`) succeeded.
+- Added targeted coverage for `utils/browser`, `atomicFile`, `createTools` persistent agent wiring, and `tools/exa` plus the supporting spawn-injection shim.
+- Verification: `bun test test/utils.browser.test.ts test/atomicFile.test.ts test/tools.test.ts test/tools.exa.test.ts`.
+
 # Task: Add desktop Developer settings for tool output overflow spill files
 
 ## Plan
@@ -203,6 +230,15 @@
 - Desktop and TUI backup controls now expose the live-session backup toggle, the desktop backup page can delete an entire backup entry, and workspace settings persist `defaultBackupsEnabled` for future sessions.
 - Verification:
   - `bun test test/session-backup.test.ts test/workspace-backups.test.ts test/protocol.test.ts test/server.test.ts test/session.test.ts test/agentSocket.parse.test.ts apps/desktop/test/backup-page.test.ts apps/desktop/test/protocol-v2-events.test.ts apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/desktop-schemas.test.ts apps/desktop/test/persistence-state-sanitization.test.ts` -> pass (`504 pass, 0 fail`)
+
+# Task: Preserve desktop overflow defaults on bootstrap and align persistent subagent provider validation
+
+## Plan
+- [ ] Update desktop bootstrap hydration so persisted `defaultToolOutputOverflowChars` values, including explicit `null`, survive rehydration instead of being reset to the default.
+- [ ] Replace the hard-coded provider enum in `src/shared/persistentSubagents.ts` with the shared provider source of truth from `src/types.ts`.
+- [ ] Add or update focused tests for desktop bootstrap hydration and persistent subagent provider parsing, then run verification and record the results.
+
+## Review
   - `bun run typecheck` -> pass
 
 # Task: Redesign workspace backup settings into a recovery console
@@ -3239,3 +3275,38 @@
 - `~/.bun/bin/bun test --bail` -> fails outside this patch set because remote MCP tests tried live `mcp.grep.app` access when `RUN_REMOTE_MCP_TESTS` was enabled.
 - `HOME=/tmp/agent-coworker-test-home RUN_REMOTE_MCP_TESTS=0 ~/.bun/bin/bun test --bail` -> gets past the remote MCP and CLI-home issues, but still stops on the pre-existing `test/mcp.oauth-provider.test.ts` callback-capture bind failure (`EADDRINUSE` at `src/mcp/oauthProvider.ts:127`).
 - `HOME=/tmp/agent-coworker-test-home RUN_REMOTE_MCP_TESTS=0 ~/.bun/bin/bun test test/mcp.oauth-provider.test.ts --bail` -> reproduces the same pre-existing `EADDRINUSE` failure in isolation.
+
+# Task: 2026-03-12 scoped review for tool/runtime diff
+
+## Plan
+- [x] Diff the current branch against merge base `1b7f5201bdde92fea664225f9445cf811b54c1ec` for `src/tools/*`, `src/runtime/*`, `src/shared/toolOutputOverflow.ts`, and `src/session/pricing.ts`.
+- [x] Validate changed behavior against surrounding code/tests to isolate concrete regressions introduced by the patch.
+- [x] Record review findings only if they are actionable bugs with precise file/line references.
+
+## Review
+- `src/tools/webFetch.ts`: non-download fetches now discard the already-fetched response body and hard-depend on Exa contents, so plain web pages regress from working locally to failing whenever Exa credentials are absent or the Exa fetch fails.
+- `src/tools/webFetch.ts`: raw text documents such as `.md`, `.csv`, and `.tsv` URLs are now classified as downloads instead of inline text, which regresses one-step `webFetch` reads for textual remote resources.
+- `src/tools/bash.ts` with `src/runtime/piRuntime.ts`: stdout/stderr truncation was removed before `ctx.log(...)`, but overflow spilling only happens later in the runtime after the tool returns, so large shell output still floods the log stream even when scratchpad overflow protection is enabled.
+# Task: Fix review findings for Opencode/webFetch/desktop persistence
+
+## Plan
+- [x] Restore or replace the removed `jsdom` dependency based on current usage, and update tests only if the dependency is truly unused.
+- [x] Rework `webFetch` so ordinary HTML/text reads still work without Exa, while keeping Exa enrichments only where they improve the response without replacing the original content.
+- [x] Fix desktop workspace rehydration so persisted user settings, especially `defaultToolOutputOverflowChars: null`, are never overwritten outside explicit user actions or protocol-linked migrations.
+- [x] Remove hard-coded provider validation for persistent subagent summaries and derive it from the shared provider source of truth.
+- [x] Run focused verification for changed areas, then repo verification (`bun test`, `bun run build:server-binary`, `bun run build:desktop-resources`, `bun run desktop:build`) and record outcomes.
+
+## Review
+- Restored the `jsdom` install path and the supporting HTML-cleaning dependencies (`@mozilla/readability`, `turndown`, and matching type packages) because the desktop tests still import `JSDOM` and `webFetch` again uses the readability pipeline for local page cleanup.
+- Reworked `src/tools/webFetch.ts` so direct text responses now return the original body, HTML pages are cleaned locally into markdown, Exa is optional best-effort enrichment for HTML links/images instead of a hard dependency, and text-like remote files such as markdown are no longer forced into `Downloads/`.
+- Fixed desktop bootstrap hydration so persisted `defaultToolOutputOverflowChars` values round-trip exactly, including explicit `null`, instead of being rewritten to the default during restart.
+- Replaced the hard-coded persistent-subagent provider enum with the shared `PROVIDER_NAMES` source of truth and added `test/shared/persistentSubagents.test.ts` to keep parser coverage aligned with the live provider list.
+
+### Verification
+- `bun install` -> pass
+- `bun test test/tools.test.ts apps/desktop/test/workspace-settings-sync.test.ts test/shared/persistentSubagents.test.ts --bail` -> pass (`175 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- `bun test` -> pass (`2162 pass, 0 fail`)
+- `bun run build:server-binary` -> pass
+- `bun run build:desktop-resources` -> pass
+- `bun run desktop:build` -> pass

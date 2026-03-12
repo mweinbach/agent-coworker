@@ -1379,7 +1379,7 @@ describe("webFetch tool", () => {
     webFetchInternal.setResponseTimeoutMs(5_000);
   });
 
-  test("fetches non-download URLs through Exa contents", async () => {
+  test("returns cleaned local HTML and appends Exa links when available", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "exa_test_key";
@@ -1390,10 +1390,6 @@ describe("webFetch tool", () => {
       if (fetchUrl.includes("api.exa.ai/contents")) {
         const body = JSON.parse(String(init?.body));
         expect(body.urls).toEqual(["https://example.com/"]);
-        expect(body.text).toBe(true);
-        expect(body.highlights?.maxCharacters).toBe(4000);
-        expect(body.extras?.links).toBe(10);
-        expect(body.extras?.imageLinks).toBe(5);
         return new Response(
           JSON.stringify({
             results: [
@@ -1414,17 +1410,23 @@ describe("webFetch tool", () => {
         );
       }
 
-      return new Response("<html><body><p>Local HTML should not be parsed</p></body></html>", {
+      return new Response(
+        "<!doctype html><html><head><style>.bad{display:none}</style><script>window.hacked = true</script></head><body><main><article><h1>Hello world</h1><p>Local HTML should win.</p></article></main></body></html>",
+        {
         status: 200,
         headers: { "Content-Type": "text/html" },
-      });
+      }
+      );
     }) as any;
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
       const out: string = await t.execute({ url: "https://example.com", maxLength: 50000 });
-      expect(out).toContain("Hello from Exa");
-      expect(out).not.toContain("Local HTML should not be parsed");
+      expect(out).toContain("Hello world");
+      expect(out).toContain("Local HTML should win.");
+      expect(out).not.toContain("Hello from Exa");
+      expect(out).not.toContain("window.hacked");
+      expect(out).not.toContain(".bad");
       expect(out).toContain("Links:");
       expect(out).toContain("https://example.com/about");
       expect(out).toContain("Image Links:");
@@ -1436,45 +1438,30 @@ describe("webFetch tool", () => {
     }
   });
 
-  test("uses Exa highlights as a fallback and still returns links when text is empty", async () => {
+  test("returns cleaned local HTML without Exa credentials", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;
-    process.env.EXA_API_KEY = "exa_test_key";
+    delete process.env.EXA_API_KEY;
+    let exaCalls = 0;
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async (input: string | URL | Request) => {
-      const fetchUrl = toFetchUrl(input);
-      if (fetchUrl.includes("api.exa.ai/contents")) {
-        return new Response(
-          JSON.stringify({
-            results: [
-              {
-                highlights: ["Fallback highlight"],
-                extras: {
-                  links: ["https://example.com/docs"],
-                  imageLinks: ["https://example.com/image.png"],
-                },
-              },
-            ],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
+      if (toFetchUrl(input).includes("api.exa.ai/contents")) {
+        exaCalls += 1;
       }
 
-      return new Response("ignored", {
+      return new Response("<html><body><article><h1>Offline page</h1><p>Rendered locally.</p></article></body></html>", {
         status: 200,
-        headers: { "Content-Type": "text/plain" },
+        headers: { "Content-Type": "text/html" },
       });
     }) as any;
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
       const out: string = await t.execute({ url: "https://example.com/fallback", maxLength: 50000 });
-      expect(out).toContain("Fallback highlight");
-      expect(out).toContain("Links:");
-      expect(out).toContain("https://example.com/docs");
-      expect(out).toContain("Image Links:");
-      expect(out).toContain("https://example.com/image.png");
+      expect(out).toContain("Offline page");
+      expect(out).toContain("Rendered locally.");
+      expect(exaCalls).toBe(0);
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;
@@ -1482,7 +1469,7 @@ describe("webFetch tool", () => {
     }
   });
 
-  test("truncates Exa content to maxLength", async () => {
+  test("falls back to local HTML when Exa enrichment fails", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "exa_test_key";
@@ -1491,15 +1478,69 @@ describe("webFetch tool", () => {
     globalThis.fetch = mock(async (input: string | URL | Request) => {
       const fetchUrl = toFetchUrl(input);
       if (fetchUrl.includes("api.exa.ai/contents")) {
-        return new Response(
-          JSON.stringify({
-            results: [{ text: "x".repeat(10_000) }],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
+        return new Response("upstream unavailable", {
+          status: 502,
+          statusText: "Bad Gateway",
+          headers: { "Content-Type": "text/plain" },
+        });
       }
 
-      return new Response("ignored", {
+      return new Response("<html><body><article><h1>Fallback page</h1><p>Use local content.</p></article></body></html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      const out: string = await t.execute({ url: "https://example.com/page", maxLength: 50000 });
+      expect(out).toContain("Fallback page");
+      expect(out).toContain("Use local content.");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+    }
+  });
+
+  test("preserves direct text responses instead of routing them through Exa", async () => {
+    const dir = await tmpDir();
+    const oldExa = process.env.EXA_API_KEY;
+    process.env.EXA_API_KEY = "exa_test_key";
+    let exaCalls = 0;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
+      if (toFetchUrl(input).includes("api.exa.ai/contents")) {
+        exaCalls += 1;
+        throw new Error("should not call Exa for direct text");
+      }
+
+      return new Response('{"ok":true,"source":"origin"}', {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      const out: string = await t.execute({ url: "https://example.com/data.json", maxLength: 50000 });
+      expect(out).toBe('{"ok":true,"source":"origin"}');
+      expect(exaCalls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+    }
+  });
+
+  test("returns markdown documents inline when served as text", async () => {
+    const dir = await tmpDir();
+    const markdown = "# Release Notes\n\n- item\n";
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response(markdown, {
         status: 200,
         headers: { "Content-Type": "text/plain" },
       });
@@ -1507,12 +1548,30 @@ describe("webFetch tool", () => {
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
-      const out: string = await t.execute({ url: "https://example.com", maxLength: 1000 });
+      const out: string = await t.execute({ url: "https://example.com/docs/README.md", maxLength: 50000 });
+      expect(out.trim()).toBe(markdown.trim());
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("truncates inline content to maxLength", async () => {
+    const dir = await tmpDir();
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response("x".repeat(10_000), {
+        status: 200,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      const out: string = await t.execute({ url: "https://example.com/notes.txt", maxLength: 1000 });
       expect(out.length).toBeLessThanOrEqual(1000);
     } finally {
       globalThis.fetch = originalFetch;
-      if (oldExa) process.env.EXA_API_KEY = oldExa;
-      else delete process.env.EXA_API_KEY;
     }
   });
 
@@ -1582,30 +1641,6 @@ describe("webFetch tool", () => {
 
       expect(out).toBe(`File downloaded ${downloadedPath}`);
       expect(await fs.readFile(downloadedPath)).toEqual(pdfBytes);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  test("downloads markdown files when the URL extension indicates a document", async () => {
-    const dir = await tmpDir();
-    const markdown = Buffer.from("# Release Notes\n\n- item\n");
-
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async () => {
-      return new Response(markdown, {
-        status: 200,
-        headers: { "Content-Type": "text/plain" },
-      });
-    }) as any;
-
-    try {
-      const t: any = createWebFetchTool(makeCtx(dir));
-      const out: string = await t.execute({ url: "https://example.com/docs/README.md", maxLength: 50000 });
-      const downloadedPath = path.join(dir, "Downloads", "README.md");
-
-      expect(out).toBe(`File downloaded ${downloadedPath}`);
-      expect(await fs.readFile(downloadedPath, "utf-8")).toBe(markdown.toString("utf-8"));
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1841,7 +1876,7 @@ describe("webFetch tool", () => {
     }
   });
 
-  test("uses the canonical redirected URL for Exa contents", async () => {
+  test("uses the canonical redirected URL for Exa enrichment", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "exa_test_key";
@@ -1867,23 +1902,17 @@ describe("webFetch tool", () => {
         });
       }
 
-      return {
-        ok: true,
+      return new Response("<html><body><article><h1>Redirected page</h1><p>Final local HTML.</p></article></body></html>", {
         status: 200,
-        statusText: "OK",
-        headers: new Headers({ "Content-Type": "text/html" }),
-        body: { cancel: mock(async () => {}) },
-        arrayBuffer: async () => {
-          throw new Error("should not download local HTML body");
-        },
-      } as Response;
+        headers: { "Content-Type": "text/html" },
+      });
     }) as any;
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
       await expect(
         t.execute({ url: "https://example.com/start", maxLength: 50000 })
-      ).resolves.toContain("Redirected content");
+      ).resolves.toContain("Redirected page");
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;
@@ -1891,81 +1920,8 @@ describe("webFetch tool", () => {
     }
   });
 
-  test("fails closed for non-download URLs without Exa credentials", async () => {
+  test("DNS-pinning: initial fetch is called with an IP-addressed URL", async () => {
     const dir = await tmpDir();
-    const oldExa = process.env.EXA_API_KEY;
-    delete process.env.EXA_API_KEY;
-
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async () => {
-      return {
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: new Headers({ "Content-Type": "text/html" }),
-        body: { cancel: mock(async () => {}) },
-        arrayBuffer: async () => {
-          throw new Error("should not download local HTML body");
-        },
-      } as Response;
-    }) as any;
-
-    try {
-      const t: any = createWebFetchTool(makeCtx(dir));
-      await expect(
-        t.execute({ url: "https://example.com/page", maxLength: 50000 })
-      ).rejects.toThrow(/webFetch disabled: set EXA_API_KEY/i);
-    } finally {
-      globalThis.fetch = originalFetch;
-      if (oldExa) process.env.EXA_API_KEY = oldExa;
-      else delete process.env.EXA_API_KEY;
-    }
-  });
-
-  test("fails closed when Exa contents returns an error", async () => {
-    const dir = await tmpDir();
-    const oldExa = process.env.EXA_API_KEY;
-    process.env.EXA_API_KEY = "exa_test_key";
-
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async (input: string | URL | Request) => {
-      const fetchUrl = toFetchUrl(input);
-      if (fetchUrl.includes("api.exa.ai/contents")) {
-        return new Response("upstream unavailable", {
-          status: 502,
-          statusText: "Bad Gateway",
-          headers: { "Content-Type": "text/plain" },
-        });
-      }
-
-      return {
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: new Headers({ "Content-Type": "text/html" }),
-        body: { cancel: mock(async () => {}) },
-        arrayBuffer: async () => {
-          throw new Error("should not download local HTML body");
-        },
-      } as Response;
-    }) as any;
-
-    try {
-      const t: any = createWebFetchTool(makeCtx(dir));
-      await expect(
-        t.execute({ url: "https://example.com/page", maxLength: 50000 })
-      ).rejects.toThrow(/Exa contents failed: 502 Bad Gateway/i);
-    } finally {
-      globalThis.fetch = originalFetch;
-      if (oldExa) process.env.EXA_API_KEY = oldExa;
-      else delete process.env.EXA_API_KEY;
-    }
-  });
-
-  test("DNS-pinning: classification fetch is called with an IP-addressed URL", async () => {
-    const dir = await tmpDir();
-    const oldExa = process.env.EXA_API_KEY;
-    process.env.EXA_API_KEY = "exa_test_key";
 
     // Set up DNS mock to return a known public IP
     const { __internal: webSafetyInternal } = await import("../src/utils/webSafety");
@@ -1973,28 +1929,13 @@ describe("webFetch tool", () => {
 
     const originalFetch = globalThis.fetch;
     const fetchCalls: string[] = [];
-    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
       const fetchUrl = toFetchUrl(input);
       fetchCalls.push(fetchUrl);
-      if (fetchUrl.includes("api.exa.ai/contents")) {
-        const body = JSON.parse(String(init?.body));
-        expect(body.urls).toEqual(["https://example.com/page"]);
-        return new Response(
-          JSON.stringify({ results: [{ text: "Pinned via Exa" }] }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      }
-
-      return {
-        ok: true,
+      return new Response("<html><body><article><p>Pinned locally</p></article></body></html>", {
         status: 200,
-        statusText: "OK",
-        headers: new Headers({ "Content-Type": "text/html" }),
-        body: { cancel: mock(async () => {}) },
-        arrayBuffer: async () => {
-          throw new Error("should not download local HTML body");
-        },
-      } as Response;
+        headers: { "Content-Type": "text/html" },
+      });
     }) as any;
 
     try {
@@ -2008,8 +1949,6 @@ describe("webFetch tool", () => {
       expect(calledUrl).not.toContain("example.com");
     } finally {
       globalThis.fetch = originalFetch;
-      if (oldExa) process.env.EXA_API_KEY = oldExa;
-      else delete process.env.EXA_API_KEY;
       webSafetyInternal.resetDnsLookup();
     }
   });
@@ -2060,47 +1999,6 @@ describe("webFetch tool", () => {
     }
   });
 
-  test("does not read the local body for non-download URLs before calling Exa", async () => {
-    const dir = await tmpDir();
-    const oldExa = process.env.EXA_API_KEY;
-    process.env.EXA_API_KEY = "exa_test_key";
-    const cancelMock = mock(async () => {});
-
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = mock(async (input: string | URL | Request) => {
-      const fetchUrl = toFetchUrl(input);
-      if (fetchUrl.includes("api.exa.ai/contents")) {
-        return new Response(
-          JSON.stringify({ results: [{ text: "Exa text" }] }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        );
-      }
-
-      return {
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: new Headers({ "Content-Type": "text/html" }),
-        body: { cancel: cancelMock },
-        arrayBuffer: async () => {
-          throw new Error("should not download local HTML body");
-        },
-      } as Response;
-    }) as typeof fetch;
-
-    try {
-      const t: any = createWebFetchTool(makeCtx(dir));
-      await expect(
-        t.execute({ url: "https://example.com/slow-body", maxLength: 50000 })
-      ).resolves.toContain("Exa text");
-      expect(cancelMock).toHaveBeenCalled();
-    } finally {
-      globalThis.fetch = originalFetch;
-      if (oldExa) process.env.EXA_API_KEY = oldExa;
-      else delete process.env.EXA_API_KEY;
-      webFetchInternal.setResponseTimeoutMs(5_000);
-    }
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -3138,5 +3036,93 @@ describe("createTools", () => {
     const tools = createTools(makeCtx(dir));
     expect(tools).not.toHaveProperty("unknown");
     expect(tools).not.toHaveProperty("foo");
+  });
+
+  test("exposes persistent agent tools when control handlers exist", async () => {
+    const dir = await tmpDir();
+    const spawn = mock(async () => ({
+      sessionId: "child",
+      parentSessionId: "root",
+      agentType: "general" as const,
+      title: "child",
+      provider: "openai" as const,
+      model: "gpt-5.2",
+      createdAt: "2026-03-08T00:00:00.000Z",
+      updatedAt: "2026-03-08T00:00:00.000Z",
+      status: "active" as const,
+      busy: true,
+    }));
+    const list = mock(async () => [
+      {
+        sessionId: "child",
+        parentSessionId: "root",
+        agentType: "general" as const,
+        title: "child",
+        provider: "openai" as const,
+        model: "gpt-5.2",
+        createdAt: "2026-03-08T00:00:00.000Z",
+        updatedAt: "2026-03-08T00:00:00.000Z",
+        status: "closed" as const,
+        busy: false,
+      },
+    ]);
+    const sendInput = mock(async () => ({ queued: true }));
+    const wait = mock(async () => ({
+      agentId: "child",
+      sessionId: "child",
+      status: "completed" as const,
+      busy: false,
+      text: "done",
+    }));
+    const close = mock(async () => ({
+      sessionId: "child",
+      parentSessionId: "root",
+      agentType: "general" as const,
+      title: "child",
+      provider: "openai" as const,
+      model: "gpt-5.2",
+      createdAt: "2026-03-08T00:00:00.000Z",
+      updatedAt: "2026-03-08T00:00:00.000Z",
+      status: "closed" as const,
+      busy: false,
+    }));
+
+    const ctx = makeCtx(dir, {
+      persistentAgentControl: {
+        spawn,
+        list,
+        sendInput,
+        wait,
+        close,
+      },
+    });
+    const tools = createTools(ctx);
+
+    expect(tools.spawnPersistentAgent).toBeDefined();
+    const spawnTool: any = tools.spawnPersistentAgent;
+    const listTool: any = tools.listPersistentAgents;
+    const sendTool: any = tools.sendAgentInput;
+    const waitTool: any = tools.waitForAgent;
+    const closeTool: any = tools.closeAgent;
+
+    await expect(spawnTool.execute({ task: "Inspect" })).resolves.toMatchObject({ sessionId: "child" });
+    expect(spawn).toHaveBeenCalled();
+
+    await expect(listTool.execute({})).resolves.toHaveLength(1);
+    await expect(sendTool.execute({ agentId: "child", task: "next" })).resolves.toEqual({
+      agentId: "child",
+      queued: true,
+    });
+    await expect(waitTool.execute({ agentId: "child", timeoutMs: 10 })).resolves.toEqual({
+      agentId: "child",
+      sessionId: "child",
+      status: "completed",
+      busy: false,
+      text: "done",
+    });
+    await expect(closeTool.execute({ agentId: "child" })).resolves.toMatchObject({
+      sessionId: "child",
+      status: "closed",
+    });
   });
 });

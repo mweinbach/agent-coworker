@@ -216,6 +216,62 @@ describe("workspace settings sync", () => {
     expect(loaded?.defaultSubAgentModel).toBe("gpt-5.2");
   });
 
+  test("init preserves persisted workspace overflow defaults during rehydration", async () => {
+    mockedLoadedState = {
+      version: 2,
+      workspaces: [
+        {
+          id: "ws-null",
+          name: "Null overflow",
+          path: "/tmp/workspace-null",
+          createdAt: "2026-02-19T00:00:00.000Z",
+          lastOpenedAt: "2026-02-19T00:00:00.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.2",
+          defaultToolOutputOverflowChars: null,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "ws-default",
+          name: "Default overflow",
+          path: "/tmp/workspace-default",
+          createdAt: "2026-02-19T00:00:00.000Z",
+          lastOpenedAt: "2026-02-19T00:00:01.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.2",
+          defaultToolOutputOverflowChars: 25000,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+        {
+          id: "ws-missing",
+          name: "Missing overflow",
+          path: "/tmp/workspace-missing",
+          createdAt: "2026-02-19T00:00:00.000Z",
+          lastOpenedAt: "2026-02-19T00:00:02.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.2",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+    };
+
+    await useAppStore.getState().init();
+
+    const workspaces = useAppStore.getState().workspaces;
+    expect(workspaces.find((workspace) => workspace.id === "ws-null")?.defaultToolOutputOverflowChars).toBeNull();
+    expect(workspaces.find((workspace) => workspace.id === "ws-default")?.defaultToolOutputOverflowChars).toBe(25000);
+    expect(workspaces.find((workspace) => workspace.id === "ws-missing")?.defaultToolOutputOverflowChars).toBeUndefined();
+  });
+
   test("init hydrates persisted provider status snapshots before the first refresh completes", async () => {
     mockedLoadedState = {
       version: 2,

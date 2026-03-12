@@ -52,4 +52,3 @@ describe("remote MCP (mcp.grep.app)", () => {
     30_000
   );
 });
-

@@ -1172,6 +1172,18 @@ describe("safeParseClientMessage", () => {
   });
 
   describe("set_session_usage_budget", () => {
+    test("get_session_usage parses as a session-scoped request", () => {
+      const msg = expectOk(JSON.stringify({ type: "get_session_usage", sessionId: "s1" }));
+      expect(msg.type).toBe("get_session_usage");
+      if (msg.type === "get_session_usage") {
+        expect(msg.sessionId).toBe("s1");
+      }
+    });
+
+    test("get_session_usage validates required sessionId", () => {
+      expect(expectErr(JSON.stringify({ type: "get_session_usage" }))).toBe("get_session_usage missing sessionId");
+    });
+
     test("valid budget update message", () => {
       const msg = expectOk(
         JSON.stringify({

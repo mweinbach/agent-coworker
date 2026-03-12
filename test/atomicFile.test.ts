@@ -70,6 +70,104 @@ describe("writeTextFileAtomic", () => {
     expect(sleepCalls).toBe(2);
   });
 
+  test("honors mode option when writing temp file", async () => {
+    const dir = await makeTmpDir();
+    const target = path.join(dir, "config.json");
+    let seenOptions: any = undefined;
+
+    const fsImpl = {
+      mkdir: fs.mkdir.bind(fs),
+      writeFile: async (path: string, payload: string, opts?: any) => {
+        seenOptions = opts;
+        return fs.writeFile(path, payload, "utf-8");
+      },
+      unlink: fs.unlink.bind(fs),
+      rename: fs.rename.bind(fs),
+    };
+
+    await writeTextFileAtomic(
+      target,
+      "{\"model\":\"gpt-5.2\"}\n",
+      { mode: 0o600 },
+      { fsImpl }
+    );
+
+    expect(seenOptions?.mode).toBe(0o600);
+  });
+
+  test("retries Windows EACCES and EBUSY rename codes", async () => {
+    for (const code of ["EACCES", "EBUSY"]) {
+      const dir = await makeTmpDir();
+      const target = path.join(dir, "config.json");
+      let renameCalls = 0;
+
+      await writeTextFileAtomic(
+        target,
+        "{\"model\":\"gpt-5.2\"}\n",
+        {},
+        {
+          platform: "win32",
+          fsImpl: {
+            mkdir: fs.mkdir.bind(fs),
+            writeFile: fs.writeFile.bind(fs),
+            unlink: fs.unlink.bind(fs),
+            rename: async (from: string, to: string) => {
+              renameCalls += 1;
+              if (renameCalls < 3) {
+                const err = new Error("busy") as NodeJS.ErrnoException;
+                err.code = code;
+                throw err;
+              }
+              await fs.rename(from, to);
+            },
+          },
+          sleepImpl: async () => {},
+        }
+      );
+
+      expect(renameCalls).toBe(3);
+    }
+  });
+
+  test("honors maxRenameAttempts and cleans up temp file even when unlink fails ENOENT", async () => {
+    const dir = await makeTmpDir();
+    const target = path.join(dir, "config.json");
+    const tmpCalls: string[] = [];
+    let renameCalls = 0;
+
+    const error = new Error("rename fail") as NodeJS.ErrnoException;
+    error.code = "EBUSY";
+
+    await expect(
+      writeTextFileAtomic(
+        target,
+        "{\"model\":\"gpt-5.2\"}\n",
+        { maxRenameAttempts: 2 },
+        {
+          platform: "win32",
+          fsImpl: {
+            mkdir: fs.mkdir.bind(fs),
+            writeFile: async (filePath: string, payload: string, opts?: any) => {
+              tmpCalls.push(filePath);
+              return fs.writeFile(filePath, payload, "utf-8");
+            },
+            rename: async () => {
+              renameCalls += 1;
+              throw error;
+            },
+            unlink: async () => {
+              throw Object.assign(new Error("not found"), { code: "ENOENT" });
+            },
+          },
+          sleepImpl: async () => {},
+        }
+      )
+    ).rejects.toThrow("rename fail");
+
+    expect(renameCalls).toBe(2);
+    expect(tmpCalls.length).toBeGreaterThan(0);
+  });
+
   test("does not retry EPERM on non-Windows platforms", async () => {
     const dir = await makeTmpDir();
     const target = path.join(dir, "config.json");

@@ -1739,18 +1739,33 @@ describe("AgentSession", () => {
       const askEvt = events.find((e) => e.type === "ask") as any;
       session.handleAskResponse(askEvt.requestId, "answer");
 
-      expect(() => session.handleAskResponse(askEvt.requestId, "other")).not.toThrow();
+      session.handleAskResponse(askEvt.requestId, "other");
+      const warnEvt = events.findLast((evt) => evt.type === "log");
+      expect(warnEvt).toMatchObject({
+        type: "log",
+        line: `[warn] ask_response for unknown requestId: ${askEvt.requestId}`,
+      });
       await sendPromise;
     });
 
-    test("ignores unknown requestId without crashing", () => {
-      const { session } = makeSession();
-      expect(() => session.handleAskResponse("nonexistent-id", "test")).not.toThrow();
+    test("logs and ignores unknown requestId", () => {
+      const { session, events } = makeSession();
+      session.handleAskResponse("nonexistent-id", "test");
+      expect(events).toContainEqual({
+        type: "log",
+        sessionId: (session as any).id,
+        line: "[warn] ask_response for unknown requestId: nonexistent-id",
+      });
     });
 
-    test("ignores empty requestId without crashing", () => {
-      const { session } = makeSession();
-      expect(() => session.handleAskResponse("", "test")).not.toThrow();
+    test("logs and ignores empty requestId", () => {
+      const { session, events } = makeSession();
+      session.handleAskResponse("", "test");
+      expect(events).toContainEqual({
+        type: "log",
+        sessionId: (session as any).id,
+        line: "[warn] ask_response for unknown requestId: ",
+      });
     });
 
     test("cleans pending ask replay cache when prompt wait rejects", async () => {
@@ -1834,18 +1849,33 @@ describe("AgentSession", () => {
       const approvalEvt = events.find((e) => e.type === "approval") as any;
       session.handleApprovalResponse(approvalEvt.requestId, true);
 
-      expect(() => session.handleApprovalResponse(approvalEvt.requestId, false)).not.toThrow();
+      session.handleApprovalResponse(approvalEvt.requestId, false);
+      const warnEvt = events.findLast((evt) => evt.type === "log");
+      expect(warnEvt).toMatchObject({
+        type: "log",
+        line: `[warn] approval_response for unknown requestId: ${approvalEvt.requestId}`,
+      });
       await sendPromise;
     });
 
-    test("ignores unknown requestId without crashing", () => {
-      const { session } = makeSession();
-      expect(() => session.handleApprovalResponse("nonexistent-id", true)).not.toThrow();
+    test("logs and ignores unknown requestId", () => {
+      const { session, events } = makeSession();
+      session.handleApprovalResponse("nonexistent-id", true);
+      expect(events).toContainEqual({
+        type: "log",
+        sessionId: (session as any).id,
+        line: "[warn] approval_response for unknown requestId: nonexistent-id",
+      });
     });
 
-    test("ignores empty requestId without crashing", () => {
-      const { session } = makeSession();
-      expect(() => session.handleApprovalResponse("", false)).not.toThrow();
+    test("logs and ignores empty requestId", () => {
+      const { session, events } = makeSession();
+      session.handleApprovalResponse("", false);
+      expect(events).toContainEqual({
+        type: "log",
+        sessionId: (session as any).id,
+        line: "[warn] approval_response for unknown requestId: ",
+      });
     });
 
     test("cleans pending approval replay cache when prompt wait rejects", async () => {
@@ -3118,16 +3148,73 @@ describe("AgentSession", () => {
       }
     });
 
-    test("restoreSessionBackup supports restoring to original and checkpoint id", async () => {
-      const { session, events } = makeSession();
+    test("restoreSessionBackup routes original and checkpoint restores to the backup handle", async () => {
+      let restoreOriginalCalls = 0;
+      const restoreCheckpointCalls: string[] = [];
+      const backupFactory = mock(async (opts: SessionBackupInitOptions): Promise<SessionBackupHandle> => {
+        const createdAt = new Date().toISOString();
+        const checkpoints: SessionBackupPublicCheckpoint[] = [
+          {
+            id: "cp-0001",
+            index: 1,
+            createdAt,
+            trigger: "initial",
+            changed: false,
+            patchBytes: 0,
+          },
+        ];
+
+        const getState = (): SessionBackupPublicState => ({
+          status: "ready",
+          sessionId: opts.sessionId,
+          workingDirectory: opts.workingDirectory,
+          backupDirectory: `/tmp/mock-backups/${opts.sessionId}`,
+          createdAt,
+          originalSnapshot: { kind: "directory" },
+          checkpoints: [...checkpoints],
+        });
+
+        return {
+          getPublicState: () => getState(),
+          createCheckpoint: async (trigger) => {
+            const checkpoint: SessionBackupPublicCheckpoint = {
+              id: `cp-${String(checkpoints.length + 1).padStart(4, "0")}`,
+              index: checkpoints.length + 1,
+              createdAt: new Date().toISOString(),
+              trigger,
+              changed: true,
+              patchBytes: 42,
+            };
+            checkpoints.push(checkpoint);
+            return checkpoint;
+          },
+          restoreOriginal: async () => {
+            restoreOriginalCalls += 1;
+          },
+          restoreCheckpoint: async (checkpointId) => {
+            restoreCheckpointCalls.push(checkpointId);
+            if (!checkpoints.some((cp) => cp.id === checkpointId)) {
+              throw new Error(`Unknown checkpoint: ${checkpointId}`);
+            }
+          },
+          deleteCheckpoint: async () => false,
+          reloadFromDisk: async () => getState(),
+          close: async () => {},
+        };
+      });
+
+      const { session, events } = makeSession({ sessionBackupFactory: backupFactory });
       await session.createManualSessionCheckpoint();
       await session.restoreSessionBackup();
       await session.restoreSessionBackup("cp-0001");
 
+      expect(restoreOriginalCalls).toBe(1);
+      expect(restoreCheckpointCalls).toEqual(["cp-0001"]);
       const restoreEvents = events.filter(
         (e) => e.type === "session_backup_state" && e.reason === "restore"
       ) as Array<Extract<ServerEvent, { type: "session_backup_state" }>>;
-      expect(restoreEvents.length).toBeGreaterThanOrEqual(2);
+      expect(restoreEvents).toHaveLength(2);
+      expect(restoreEvents.every((evt) => evt.backup.status === "ready")).toBe(true);
     });
 
     test("deleteSessionCheckpoint emits error when checkpoint does not exist", async () => {

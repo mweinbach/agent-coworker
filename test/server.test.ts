@@ -1144,13 +1144,14 @@ describe("WebSocket Lifecycle", () => {
       const { hello, responses } = await sendAndCollect(
         url,
         (sessionId) => ({ type: "reset", sessionId }),
-        1,
+        2,
         2000
       );
-      // reset emits a "todos" event with empty array
       expect(hello.type).toBe("server_hello");
-      expect(responses[0].type).toBe("todos");
-      expect(responses[0].todos).toEqual([]);
+      const todosEvt = responses.find((msg) => msg.type === "todos");
+      const resetEvt = responses.find((msg) => msg.type === "reset_done");
+      expect(todosEvt?.todos).toEqual([]);
+      expect(resetEvt).toMatchObject({ type: "reset_done", sessionId: hello.sessionId });
     } finally {
       server.stop();
     }

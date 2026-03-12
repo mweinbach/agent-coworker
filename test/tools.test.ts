@@ -1356,8 +1356,49 @@ describe("webFetch tool", () => {
     typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 
   beforeEach(() => {
+    webFetchInternal.setMaxDownloadBytes(50 * 1024 * 1024);
     webFetchInternal.setResponseTimeoutMs(5_000);
   });
+
+  const createStreamingResponse = (bytes: Uint8Array, init: ResponseInit, chunkSize = 4) => {
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+          controller.enqueue(bytes.slice(offset, offset + chunkSize));
+        }
+        controller.close();
+      },
+    }), init);
+    Object.defineProperty(response, "arrayBuffer", {
+      value: async () => {
+        throw new Error("should not buffer direct downloads");
+      },
+    });
+    return response;
+  };
+
+  const createBodylessDownloadResponse = (
+    bytes: Uint8Array,
+    init: ResponseInit,
+    options: { includeContentLength?: boolean } = {},
+  ) => {
+    const headers = new Headers(init.headers);
+    if (options.includeContentLength !== false) {
+      headers.set("Content-Length", String(bytes.length));
+    }
+
+    const response = new Response(null, {
+      ...init,
+      headers,
+    });
+    Object.defineProperty(response, "body", {
+      value: null,
+    });
+    Object.defineProperty(response, "arrayBuffer", {
+      value: async () => Uint8Array.from(bytes).buffer,
+    });
+    return response;
+  };
 
   test("returns cleaned local HTML and appends Exa links when available", async () => {
     const dir = await tmpDir();
@@ -1514,22 +1555,149 @@ describe("webFetch tool", () => {
     }
   });
 
-  test("returns markdown documents inline when served as text", async () => {
+  test("downloads markdown documents when served with text MIME and a supported document filename", async () => {
     const dir = await tmpDir();
-    const markdown = "# Release Notes\n\n- item\n";
+    const cases = [
+      {
+        url: "https://example.com/docs/README.md",
+        fileName: "README.md",
+        contentType: "text/plain",
+        contentDisposition: null,
+        body: "# Release Notes\n\n- item\n",
+      },
+      {
+        url: "https://example.com/download",
+        fileName: "release-notes.markdown",
+        contentType: "text/markdown",
+        contentDisposition: 'attachment; filename="release-notes.markdown"',
+        body: "# Changelog\n\n- shipped\n",
+      },
+    ] as const;
+
+    const originalFetch = globalThis.fetch;
+    try {
+      for (const testCase of cases) {
+        globalThis.fetch = mock(async () => {
+          return new Response(testCase.body, {
+            status: 200,
+            headers: {
+              "Content-Type": testCase.contentType,
+              ...(testCase.contentDisposition ? { "Content-Disposition": testCase.contentDisposition } : {}),
+            },
+          });
+        }) as any;
+
+        const t: any = createWebFetchTool(makeCtx(dir));
+        const out: string = await t.execute({ url: testCase.url, maxLength: 50000 });
+        const downloadedPath = path.join(dir, "Downloads", testCase.fileName);
+
+        expect(out).toBe(`File downloaded ${downloadedPath}`);
+        expect(await fs.readFile(downloadedPath, "utf-8")).toBe(testCase.body);
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("downloads CSV documents from text/csv MIME even without a filename extension", async () => {
+    const dir = await tmpDir();
+    const csv = "month,amount\nJan,10\n";
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response(csv, {
+        status: 200,
+        headers: { "Content-Type": "text/csv" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      const out: string = await t.execute({ url: "https://example.com/export", maxLength: 50000 });
+      const downloadedPath = path.join(dir, "Downloads", "export.csv");
+
+      expect(out).toBe(`File downloaded ${downloadedPath}`);
+      expect(await fs.readFile(downloadedPath, "utf-8")).toBe(csv);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("keeps the supported URL document extension when content-disposition uses a non-document filename", async () => {
+    const dir = await tmpDir();
+    const markdown = "# Read me\n";
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
       return new Response(markdown, {
         status: 200,
-        headers: { "Content-Type": "text/plain" },
+        headers: {
+          "Content-Type": "text/plain",
+          "Content-Disposition": 'attachment; filename="README.txt"',
+        },
       });
     }) as any;
 
     try {
       const t: any = createWebFetchTool(makeCtx(dir));
       const out: string = await t.execute({ url: "https://example.com/docs/README.md", maxLength: 50000 });
-      expect(out.trim()).toBe(markdown.trim());
+      const downloadedPath = path.join(dir, "Downloads", "README.md");
+
+      expect(out).toBe(`File downloaded ${downloadedPath}`);
+      expect(await fs.readFile(downloadedPath, "utf-8")).toBe(markdown);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("downloads body-less direct downloads when content-length is declared", async () => {
+    const dir = await tmpDir();
+    const markdownBytes = Buffer.from("# Cached README\n");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return createBodylessDownloadResponse(markdownBytes, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/plain",
+          "Content-Disposition": 'attachment; filename="README.md"',
+        },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      const out: string = await t.execute({ url: "https://example.com/download", maxLength: 50000 });
+      const downloadedPath = path.join(dir, "Downloads", "README.md");
+
+      expect(out).toBe(`File downloaded ${downloadedPath}`);
+      expect(await fs.readFile(downloadedPath)).toEqual(markdownBytes);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("rejects body-less direct downloads without a content-length header", async () => {
+    const dir = await tmpDir();
+    const pdfBytes = Buffer.from("%PDF-1.7\nbodyless\n");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return createBodylessDownloadResponse(
+        pdfBytes,
+        {
+          status: 200,
+          headers: { "Content-Type": "application/pdf" },
+        },
+        { includeContentLength: false },
+      );
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      await expect(
+        t.execute({ url: "https://example.com/reports/bodyless.pdf", maxLength: 50000 })
+      ).rejects.toThrow(/without a readable body or content-length header/i);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1608,7 +1776,7 @@ describe("webFetch tool", () => {
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mock(async () => {
-      return new Response(pdfBytes, {
+      return createStreamingResponse(pdfBytes, {
         status: 200,
         headers: { "Content-Type": "application/pdf" },
       });
@@ -1623,6 +1791,36 @@ describe("webFetch tool", () => {
       expect(await fs.readFile(downloadedPath)).toEqual(pdfBytes);
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("cleans up partial downloads when a streamed response exceeds the size limit", async () => {
+    const dir = await tmpDir();
+    webFetchInternal.setMaxDownloadBytes(8);
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(Buffer.from("12345"));
+          controller.enqueue(Buffer.from("67890"));
+          controller.close();
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      await expect(
+        t.execute({ url: "https://example.com/reports/too-large.pdf", maxLength: 50000 })
+      ).rejects.toThrow(/8 bytes limit/i);
+      expect(await fs.readdir(path.join(dir, "Downloads"))).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      webFetchInternal.setMaxDownloadBytes(50 * 1024 * 1024);
     }
   });
 

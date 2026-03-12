@@ -81,7 +81,7 @@ function buildOverflowPointerText(filePath: string, chars: number, preview: stri
     "Use the read tool to inspect the saved file if you need the full result.",
   ];
   if (preview.trim()) {
-    sections.push(`Preview:\n${preview}`);
+    sections.push(`Preview (first ${TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS.toLocaleString()} chars):\n${preview}`);
   }
   return sections.join("\n\n");
 }

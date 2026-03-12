@@ -36,6 +36,19 @@ describe("pricing", () => {
             expect(resolveModelPricing("opencode-go", "kimi-k2.5")).toBeNull();
         });
 
+        it("ignores env pricing overrides for opencode-go because local pricing is intentionally unsupported", () => {
+            const env = {
+                COWORK_MODEL_PRICING_OVERRIDES: JSON.stringify({
+                    "opencode-go:glm-5": {
+                        inputPerMillion: 1,
+                        outputPerMillion: 2,
+                    },
+                }),
+            };
+
+            expect(resolveModelPricing("opencode-go", "glm-5", env)).toBeNull();
+        });
+
         it("resolves exact match for opencode-zen models", () => {
             const glm = resolveModelPricing("opencode-zen", "glm-5");
             expect(glm).not.toBeNull();

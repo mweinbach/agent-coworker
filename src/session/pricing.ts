@@ -4,6 +4,10 @@
  * Prices are in USD per 1 million tokens.
  * Updated regularly to reflect current provider pricing.
  *
+ * Note: `opencode-go` is intentionally excluded from local pricing and pricing
+ * override support in this repo. Its billing is usage-based, so Cowork does not
+ * attempt local per-model cost estimation for that provider.
+ *
  * Sources:
  *   - https://openai.com/api/pricing
  *   - https://ai.google.dev/pricing
@@ -190,6 +194,7 @@ function isPricingOverrideKey(value: string): value is `${ProviderName}:${string
   const separatorIndex = value.indexOf(":");
   if (separatorIndex <= 0 || separatorIndex === value.length - 1) return false;
   const provider = value.slice(0, separatorIndex);
+  // `opencode-go` intentionally has no local pricing or override support.
   return provider === "google"
     || provider === "openai"
     || provider === "anthropic"

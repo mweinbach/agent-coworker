@@ -7,7 +7,10 @@ import { createOpenAiResponsesRuntime } from "../src/runtime/openaiResponsesRunt
 import { writeCodexAuthMaterial } from "../src/providers/codex-auth";
 import { getModels as getPiModels } from "@mariozechner/pi-ai";
 import { __internal as openAiNativeInternal } from "../src/runtime/openaiNativeResponses";
-import { MODEL_SCRATCHPAD_DIRNAME } from "../src/shared/toolOutputOverflow";
+import {
+  MODEL_SCRATCHPAD_DIRNAME,
+  TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS,
+} from "../src/shared/toolOutputOverflow";
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../src/types";
 
@@ -210,7 +213,9 @@ describe("openai responses runtime", () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-overflow-"));
     const nativeCalls: Array<Record<string, unknown>> = [];
     const hugeTailMarker = "__TAIL_MARKER__";
-    const hugeToolOutput = `${"0123456789abcdef".repeat(90)}${hugeTailMarker}`;
+    const hugeToolOutput = `${"0123456789abcdef".repeat(
+      Math.ceil((TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS + 256) / 16),
+    )}${hugeTailMarker}`;
     let step = 0;
     const runtime = createOpenAiResponsesRuntime({
       runStepImpl: async (opts) => {

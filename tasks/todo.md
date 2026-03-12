@@ -1,3 +1,28 @@
+# Task: Implement review follow-ups for webFetch, Exa key precedence, and overflow preview behavior
+
+## Plan
+- [x] Keep `opencode-go` intentionally unpriced, add an explicit in-code note, and lock that contract with pricing tests.
+- [x] Flip Exa key resolution so the saved Cowork Exa key overrides `EXA_API_KEY`, with env fallback only when no saved key is available.
+- [x] Tighten `webFetch` so supported document filenames always download even under text MIME, and replace buffered downloads with bounded streaming plus cleanup/limit coverage.
+- [x] Increase overflow previews to 5,000 characters, update runtime/docs/Desktop copy to describe threshold-vs-preview behavior accurately, and add focused regressions.
+- [x] Run focused tests first, then required broader verification/build commands, and record results here.
+
+## Review
+- `src/session/pricing.ts` now documents that `opencode-go` is intentionally usage-based and excluded from local pricing / pricing overrides, and `test/session/pricing.test.ts` locks that behavior so override env vars are ignored for `opencode-go` models.
+- `src/tools/exa.ts` now prefers the saved Cowork Exa key over ambient `EXA_API_KEY`, falling back to the env var only when no saved key is available; `test/tools.exa.test.ts` covers both precedence directions.
+- `src/tools/webFetch.ts` now treats supported document filenames as downloadable even under text MIME, preserves the filename source that actually triggered a document download, streams normal direct-download bodies to disk with cleanup on overflow, and rejects body-less direct downloads unless `Content-Length` makes the fallback bounded. `test/tools.test.ts` adds regressions for text/plain markdown downloads, conflicting URL-vs-`Content-Disposition` names, streamed overflow cleanup, and body-less fallback behavior.
+- Overflow spill behavior now keeps a fixed 5,000-character inline preview while saving the full payload to disk: `src/shared/toolOutputOverflow.ts`, `src/runtime/toolOutputOverflow.ts`, `test/runtime.pi-runtime.test.ts`, and `test/runtime.openai-responses-runtime.test.ts` now align on that contract.
+- Desktop settings copy and protocol docs now match runtime semantics: `apps/desktop/src/ui/settings/pages/DeveloperPage.tsx`, `apps/desktop/test/developer-page.test.tsx`, and `docs/websocket-protocol.md` describe `toolOutputOverflowChars` as the spill trigger threshold while the inline preview remains fixed at the first 5,000 characters.
+- Verification:
+  - `~/.bun/bin/bun test test/tools.test.ts test/tools.exa.test.ts test/session/pricing.test.ts apps/desktop/test/developer-page.test.tsx test/docs.check.test.ts test/runtime.openai-responses-runtime.test.ts --bail && ~/.bun/bin/bun test test/runtime.pi-runtime.test.ts --test-name-pattern "overflow|short tool output inline|spills oversized" --bail` -> pass (`220 pass, 0 fail` across the two commands)
+  - `~/.bun/bin/bun test` -> fails only in existing env-sensitive OpenCode Go runtime tests because ambient `OPENCODE_API_KEY` populates `resolved.apiKey` (`test/runtime.pi-runtime.test.ts:159` and `:182`); otherwise passes (`2176 pass, 2 skip, 2 fail`)
+  - `~/.bun/bin/bun run typecheck` -> fails in unchanged desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345`)
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `git diff --check` -> pass
+
 # Task: Stop auto-sync from persisting the inherited tool overflow default
 
 ## Plan

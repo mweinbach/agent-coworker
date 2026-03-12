@@ -12,7 +12,9 @@ import { assertWritePathAllowed } from "../utils/permissions";
 import { resolveSafeWebUrl } from "../utils/webSafety";
 
 const MAX_REDIRECTS = 5;
+const DEFAULT_MAX_WEBFETCH_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 let responseTimeoutMs = 5_000;
+let maxDownloadBytes = DEFAULT_MAX_WEBFETCH_DOWNLOAD_BYTES;
 const SUPPORTED_IMAGE_MIME_TYPES = new Map<string, string>([
   ["image/png", ".png"],
   ["image/jpeg", ".jpg"],
@@ -21,6 +23,7 @@ const SUPPORTED_IMAGE_MIME_TYPES = new Map<string, string>([
   ["image/gif", ".gif"],
 ]);
 const DOWNLOADABLE_DOCUMENT_EXTENSIONS = new Set([
+  ".csv",
   ".doc",
   ".docm",
   ".docx",
@@ -34,6 +37,8 @@ const DOWNLOADABLE_DOCUMENT_EXTENSIONS = new Set([
   ".ppt",
   ".pptm",
   ".pptx",
+  ".rtf",
+  ".tsv",
   ".xls",
   ".xlsm",
   ".xlsx",
@@ -54,6 +59,11 @@ const DOWNLOADABLE_DOCUMENT_MIME_TYPES = new Map<string, string>([
   ["application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx"],
   ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"],
   ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx"],
+  ["text/csv", ".csv"],
+  ["text/markdown", ".md"],
+  ["text/rtf", ".rtf"],
+  ["text/tab-separated-values", ".tsv"],
+  ["text/x-markdown", ".md"],
 ]);
 const HTML_EXTENSIONS = new Set([".htm", ".html", ".xhtml"]);
 let readabilityDepsPromise: Promise<{
@@ -166,6 +176,15 @@ function fileExtensionFromMimeType(contentType: string | null): string | null {
   return imageExtensionFromMimeType(contentType) ?? documentExtensionFromMimeType(contentType);
 }
 
+function isStructuredInlineMimeType(contentType: string | null): boolean {
+  const normalized = normalizeMimeType(contentType);
+  if (!normalized) return false;
+  return isHtmlMimeType(contentType)
+    || normalized.includes("json")
+    || normalized.includes("xml")
+    || normalized.includes("javascript");
+}
+
 function isDownloadableDocumentFilename(fileName: string | null): boolean {
   const ext = extensionFromName(fileName);
   return ext ? DOWNLOADABLE_DOCUMENT_EXTENSIONS.has(ext) : false;
@@ -196,12 +215,15 @@ function chooseDownloadFileName(opts: {
   contentType: string | null;
   resolvedUrl: string;
   contentDisposition: string | null;
+  preferredFileName?: string | null;
 }): string {
   const contentDispositionName = extractContentDispositionFilename(opts.contentDisposition);
   const urlBaseName = baseNameFromUrl(opts.resolvedUrl);
   const mimeExtension = fileExtensionFromMimeType(opts.contentType);
 
-  let fileName = sanitizeDownloadFileName(contentDispositionName ?? urlBaseName ?? "download");
+  let fileName = sanitizeDownloadFileName(
+    opts.preferredFileName ?? contentDispositionName ?? urlBaseName ?? "download"
+  );
   fileName = normalizeDownloadFileNameExtension(fileName, mimeExtension);
 
   return fileName;
@@ -220,6 +242,107 @@ async function ensureUniqueDownloadPath(downloadDir: string, fileName: string): 
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return candidatePath;
       throw error;
     }
+  }
+}
+
+function formatByteLimit(limitBytes: number): string {
+  if (limitBytes >= 1024 * 1024 && limitBytes % (1024 * 1024) === 0) {
+    return `${limitBytes / (1024 * 1024)} MiB`;
+  }
+  if (limitBytes >= 1024 && limitBytes % 1024 === 0) {
+    return `${limitBytes / 1024} KiB`;
+  }
+  return `${limitBytes} bytes`;
+}
+
+class DownloadSizeLimitError extends Error {
+  readonly limitBytes: number;
+
+  constructor(limitBytes: number) {
+    super(`webFetch download exceeded ${formatByteLimit(limitBytes)} limit`);
+    this.name = "DownloadSizeLimitError";
+    this.limitBytes = limitBytes;
+  }
+}
+
+function parseContentLength(response: Response): number | null {
+  const raw = response.headers.get("content-length");
+  if (!raw) return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function temporaryDownloadPath(finalPath: string): string {
+  return `${finalPath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.part`;
+}
+
+async function removeTemporaryDownloadFile(filePath: string): Promise<void> {
+  await fs.rm(filePath, { force: true }).catch(() => {});
+}
+
+async function downloadResponseToFile(opts: {
+  response: Response;
+  finalPath: string;
+  tempPath: string;
+  maxBytes: number;
+}): Promise<{ bytesWritten: number }> {
+  const declaredLength = parseContentLength(opts.response);
+  if (declaredLength !== null && declaredLength > opts.maxBytes) {
+    await opts.response.body?.cancel().catch(() => {});
+    throw new DownloadSizeLimitError(opts.maxBytes);
+  }
+
+  try {
+    if (!opts.response.body) {
+      if (declaredLength === null) {
+        throw new Error(
+          "webFetch cannot safely download a direct-download response without a readable body or content-length header"
+        );
+      }
+
+      const bytes = Buffer.from(await opts.response.arrayBuffer());
+      if (bytes.length > opts.maxBytes) {
+        throw new DownloadSizeLimitError(opts.maxBytes);
+      }
+      await fs.writeFile(opts.tempPath, bytes);
+      await fs.rename(opts.tempPath, opts.finalPath);
+      return { bytesWritten: bytes.length };
+    }
+
+    const fileHandle = await fs.open(opts.tempPath, "w");
+    const reader = opts.response.body.getReader();
+    let bytesWritten = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value?.byteLength) continue;
+
+        bytesWritten += value.byteLength;
+        if (bytesWritten > opts.maxBytes) {
+          throw new DownloadSizeLimitError(opts.maxBytes);
+        }
+
+        await fileHandle.write(value);
+      }
+    } catch (error) {
+      await reader.cancel().catch(() => {});
+      throw error;
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        // no-op
+      }
+      await fileHandle.close().catch(() => {});
+    }
+
+    await fs.rename(opts.tempPath, opts.finalPath);
+    return { bytesWritten };
+  } catch (error) {
+    await removeTemporaryDownloadFile(opts.tempPath);
+    throw error;
   }
 }
 
@@ -252,9 +375,23 @@ function classifyResponseContent(
 
   const downloadableByMime = documentExtensionFromMimeType(contentType);
   const downloadableByName =
-    isDownloadableDocumentFilename(contentDispositionName) || isDownloadableDocumentFilename(urlBaseName);
+    (isDownloadableDocumentFilename(contentDispositionName) ? contentDispositionName : null)
+    ?? (isDownloadableDocumentFilename(urlBaseName) ? urlBaseName : null);
 
-  if (downloadableByMime || ((!normalized || normalized === "application/octet-stream") && downloadableByName)) {
+  if (downloadableByName && !isStructuredInlineMimeType(contentType)) {
+    return {
+      kind: "download",
+      category: "document",
+      fileName: chooseDownloadFileName({
+        contentType: null,
+        resolvedUrl,
+        contentDisposition,
+        preferredFileName: downloadableByName,
+      }),
+    };
+  }
+
+  if (downloadableByMime) {
     return {
       kind: "download",
       category: "document",
@@ -491,8 +628,12 @@ function formatFetchedText(
 }
 
 export const __internal = {
+  getMaxDownloadBytes: () => maxDownloadBytes,
   getResponseTimeoutMs: () => responseTimeoutMs,
   isDesktopBundleRuntime,
+  setMaxDownloadBytes: (bytes: number) => {
+    maxDownloadBytes = bytes;
+  },
   setResponseTimeoutMs: (ms: number) => {
     responseTimeoutMs = ms;
   },
@@ -501,7 +642,7 @@ export const __internal = {
 export function createWebFetchTool(ctx: ToolContext) {
   return defineTool({
     description:
-      "Fetch a URL and return clean markdown for HTML pages, preserve direct text responses, or save supported image and binary document downloads into the workspace Downloads folder.",
+      "Fetch a URL and return clean markdown for HTML pages, preserve direct text responses, or save supported image and document downloads into the workspace Downloads folder.",
     inputSchema: z.object({
       url: z.string().url().describe("URL to fetch"),
       maxLength: z.number().int().min(1000).max(200000).optional().default(50000),
@@ -524,9 +665,14 @@ export function createWebFetchTool(ctx: ToolContext) {
         const downloadDir = resolveMaybeRelative("Downloads", ctx.config.workingDirectory);
         const targetPath = await ensureUniqueDownloadPath(downloadDir, contentKind.fileName);
         const allowedTargetPath = await assertWritePathAllowed(targetPath, ctx.config, "write");
+        const allowedTempPath = await assertWritePathAllowed(temporaryDownloadPath(allowedTargetPath), ctx.config, "write");
         await fs.mkdir(path.dirname(allowedTargetPath), { recursive: true });
-        const bytes = Buffer.from(await response.arrayBuffer());
-        await fs.writeFile(allowedTargetPath, bytes);
+        const { bytesWritten } = await downloadResponseToFile({
+          response,
+          finalPath: allowedTargetPath,
+          tempPath: allowedTempPath,
+          maxBytes: maxDownloadBytes,
+        });
 
         const out = `File downloaded ${allowedTargetPath}`;
         ctx.log(
@@ -534,7 +680,7 @@ export function createWebFetchTool(ctx: ToolContext) {
             download: true,
             category: contentKind.category,
             path: allowedTargetPath,
-            bytes: bytes.length,
+            bytes: bytesWritten,
           })}`
         );
         return out;

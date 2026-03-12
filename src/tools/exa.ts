@@ -79,16 +79,17 @@ function getExaStringList(value: unknown): string[] {
 }
 
 export async function resolveExaApiKey(ctx: ToolContext): Promise<string | undefined> {
-  const fromEnv = process.env.EXA_API_KEY?.trim();
-  if (fromEnv) return fromEnv;
-
   try {
     const homedir = resolveHomeDirFromToolContext(ctx);
     const paths = getAiCoworkerPaths(homedir ? { homedir } : {});
-    return await readToolApiKey({ name: "exa", paths });
+    const saved = await readToolApiKey({ name: "exa", paths });
+    if (saved?.trim()) return saved.trim();
   } catch {
-    return undefined;
+    // Fall back to ambient env only when the saved-key path is unavailable.
   }
+
+  const fromEnv = process.env.EXA_API_KEY?.trim();
+  return fromEnv || undefined;
 }
 
 export async function postExaJson(opts: {

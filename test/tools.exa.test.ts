@@ -25,7 +25,7 @@ async function makeCoworkHome() {
 }
 
 describe("tools/exa", () => {
-  test("resolveExaApiKey prefers EXA_API_KEY over stored key", async () => {
+  test("resolveExaApiKey prefers stored key over EXA_API_KEY", async () => {
     const { tmp, userAgentDir, authDir } = await makeCoworkHome();
     await fs.writeFile(
       path.join(authDir, "connections.json"),
@@ -37,6 +37,24 @@ describe("tools/exa", () => {
       }),
       "utf-8"
     );
+
+    const prev = process.env.EXA_API_KEY;
+    process.env.EXA_API_KEY = "env-key";
+    try {
+      const result = await resolveExaApiKey(makeCtx(userAgentDir));
+      expect(result).toBe("saved-key");
+    } finally {
+      if (prev === undefined) {
+        delete process.env.EXA_API_KEY;
+      } else {
+        process.env.EXA_API_KEY = prev;
+      }
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("resolveExaApiKey falls back to EXA_API_KEY when no stored key is available", async () => {
+    const { tmp, userAgentDir } = await makeCoworkHome();
 
     const prev = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "env-key";

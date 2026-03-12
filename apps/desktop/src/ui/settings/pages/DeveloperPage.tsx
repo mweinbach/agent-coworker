@@ -42,7 +42,7 @@ export function DeveloperPage() {
     [selectedWorkspaceId, workspaces],
   );
   const persistedOverflowThreshold = workspace?.defaultToolOutputOverflowChars ?? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS;
-  const overflowEnabled = workspace?.defaultToolOutputOverflowChars !== null;
+  const overflowEnabled = workspace ? workspace.defaultToolOutputOverflowChars !== null : false;
   const [overflowThresholdDraft, setOverflowThresholdDraft] = useState(String(persistedOverflowThreshold));
 
   useEffect(() => {
@@ -146,7 +146,7 @@ export function DeveloperPage() {
                   <div className="text-sm font-medium">Enable spill files</div>
                   <div className="text-xs text-muted-foreground">
                     When enabled, oversized text or JSON-like tool results are saved into workspace-local scratch files
-                    instead of being fully inlined into model context.
+                    after the threshold is crossed. Cowork keeps a fixed inline preview and writes the full result to disk.
                   </div>
                 </div>
                 <Checkbox
@@ -178,13 +178,15 @@ export function DeveloperPage() {
                 />
                 <div className="text-xs text-muted-foreground">
                   Threshold is measured against the serialized tool result that would otherwise be sent back into model
-                  context. Default: {DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS.toLocaleString()} characters.
+                  context. Once a result spills, Cowork still keeps the first 5,000 characters inline and saves the
+                  rest. Default trigger: {DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS.toLocaleString()} characters.
                 </div>
                 {overflowThresholdError ? (
                   <div className="text-xs text-destructive">{overflowThresholdError}</div>
                 ) : (
                   <div className="text-xs text-muted-foreground">
-                    Spill files are written as UTF-8 text into <code>{workspace.path}/.ModelScratchpad</code>.
+                    Spill files are written as UTF-8 text into <code>{workspace.path}/.ModelScratchpad</code>. Set the
+                    threshold to <code>0</code> to spill immediately while still keeping that 5,000-character preview.
                   </div>
                 )}
               </div>

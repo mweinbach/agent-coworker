@@ -1,6 +1,8 @@
 export const DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS = 25_000;
 export const MODEL_SCRATCHPAD_DIRNAME = ".ModelScratchpad";
-export const TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS = 1_200;
+// This is the fixed inline preview size after overflow is triggered. The
+// configured threshold still controls when spilling happens.
+export const TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS = 5_000;
 
 export function effectiveToolOutputOverflowChars(value: number | null | undefined): number | null {
   return value === undefined ? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS : value;

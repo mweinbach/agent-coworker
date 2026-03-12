@@ -56,7 +56,7 @@ Changes in `7.14`:
 
 Changes in `7.13`:
 
-- `set_config.config` now accepts `toolOutputOverflowChars` as a workspace-scoped overflow spill threshold, and `null` disables spill files.
+- `set_config.config` now accepts `toolOutputOverflowChars` as a workspace-scoped overflow spill threshold, and `null` disables spill files. This threshold controls when spilling starts; it does not change the fixed inline preview length.
 - `session_config.config` now reports the effective `toolOutputOverflowChars` value for the live session.
 
 Changes in `7.12`:
@@ -1774,7 +1774,7 @@ Update runtime configuration values.
 | `config.yolo` | `boolean` | No | Auto-approve all commands |
 | `config.observabilityEnabled` | `boolean` | No | Toggle observability |
 | `config.backupsEnabled` | `boolean` | No | Toggle session backups for the current session and persist the workspace default for future sessions |
-| `config.toolOutputOverflowChars` | `number \| null` | No | Workspace-scoped character threshold for spilling oversized tool outputs into `.ModelScratchpad`; `null` disables spill files |
+| `config.toolOutputOverflowChars` | `number \| null` | No | Workspace-scoped character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
 | `config.subAgentModel` | `string` | No | Non-empty sub-agent model ID |
 | `config.maxSteps` | `number` | No | Max steps per turn (1-1000) |
 | `config.providerOptions` | `object` | No | Editable OpenAI-compatible provider option patch. Only `openai` and `codex-cli` are allowed |
@@ -2311,6 +2311,7 @@ Incremental model stream chunk. Emitted during a turn for each streaming part fr
 
 Notes:
 - When an oversized non-image tool result is spilled to `.ModelScratchpad`, the `tool_result` chunk carries compact overflow metadata (`overflow`, `filePath`, `chars`, `preview`) instead of the full text payload.
+- `preview` is a fixed inline preview of the first 5,000 characters plus a truncation note when additional content was written to disk.
 - The runtime emits a companion `file` chunk with `{ "kind": "tool-output-overflow", "toolName": "...", "toolCallId": "...", "path": "...", "chars": 12345, "preview": "..." }`.
 
 ---
@@ -3134,7 +3135,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.observabilityEnabled` | `boolean` | Whether observability is enabled |
 | `config.backupsEnabled` | `boolean` | Whether backups are enabled for the live session after applying any session-scoped override |
 | `config.defaultBackupsEnabled` | `boolean` | The persisted workspace backup default from the harness/core config, before any live session override is applied |
-| `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for spilling oversized tool outputs into `.ModelScratchpad`; `null` disables spill files |
+| `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
 | `config.defaultToolOutputOverflowChars` | `number \| null` | Persisted workspace overflow default when explicitly configured; omitted when the session is inheriting the built-in threshold |
 | `config.subAgentModel` | `string` | Sub-agent model identifier |
 | `config.maxSteps` | `number` | Maximum steps per turn |

@@ -151,6 +151,9 @@ describe("desktop developer page", () => {
       expect(container.textContent).toContain("Workspace Tool Output Spill Files");
       expect(container.textContent).toContain("Enable spill files");
       expect(container.textContent).toContain("Character threshold");
+      expect(container.textContent).toContain("Cowork keeps a fixed inline preview");
+      expect(container.textContent).toContain("first 5,000 characters inline");
+      expect(container.textContent).toContain("Set the threshold to 0 to spill immediately");
       expect(container.textContent).toContain("Workspace 1");
       expect(container.textContent).toContain("/tmp/workspace-1");
       expect(container.innerHTML).toContain('value="12000"');

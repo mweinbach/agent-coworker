@@ -11,7 +11,7 @@ import type { AgentConfig, ModelMessage } from "../src/types";
 import { getAiCoworkerPaths } from "../src/connect";
 import { CODEX_BACKEND_BASE_URL, writeCodexAuthMaterial } from "../src/providers/codex-auth";
 import { __internal as piRuntimeInternal, createPiRuntime } from "../src/runtime/piRuntime";
-import { MODEL_SCRATCHPAD_DIRNAME } from "../src/shared/toolOutputOverflow";
+import { MODEL_SCRATCHPAD_DIRNAME, TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS } from "../src/shared/toolOutputOverflow";
 
 function b64url(input: string): string {
   return Buffer.from(input, "utf8").toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
@@ -561,6 +561,12 @@ describe("pi runtime regressions", () => {
     expect((toolResultOutput.filePath as string)).toContain(path.join(homeDir, ".ModelScratchpad"));
     expect((toolResultOutput.value as string).length).toBeLessThan(oversized.length);
     expect(toolResultOutput.value).toContain(toolResultOutput.filePath as string);
+    expect(toolResultOutput.value).toContain(`Preview (first ${TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS.toLocaleString()} chars):`);
+    expect(String(toolResultOutput.preview).startsWith(oversized.slice(0, TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS))).toBe(true);
+    expect(String(toolResultOutput.preview)).toContain(
+      `preview truncated ${oversized.length - TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS} chars`
+    );
+    expect(String(toolResultOutput.preview).length).toBeGreaterThan(120);
 
     const spillPath = toolResultOutput.filePath as string;
     expect(await fs.readFile(spillPath, "utf-8")).toBe(oversized);

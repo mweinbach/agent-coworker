@@ -241,12 +241,9 @@ function createCustomWebSearchTool(ctx: ToolContext, options: CustomWebSearchToo
 }
 
 export function createWebSearchTool(ctx: ToolContext) {
-  switch (ctx.config.provider) {
-    case "google":
-      return createCustomWebSearchTool(ctx, { exaOnly: true });
-    case "openai":
-    case "anthropic":
-    case "codex-cli":
-      return createCustomWebSearchTool(ctx);
+  if (ctx.config.provider === "google") {
+    return createCustomWebSearchTool(ctx, { exaOnly: true });
   }
+
+  return createCustomWebSearchTool(ctx);
 }

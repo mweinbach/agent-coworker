@@ -374,6 +374,28 @@ const providerAuthSetApiKeySchema = schemaWithType("provider_auth_set_api_key", 
   }
 });
 
+const providerAuthCopyApiKeySchema = schemaWithType("provider_auth_copy_api_key", {
+  sessionId: requiredSessionId("provider_auth_copy_api_key"),
+  provider: z.unknown(),
+  sourceProvider: z.unknown(),
+}).superRefine((value, ctx) => {
+  if (!isProviderName(value.provider)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["provider"],
+      message: "provider_auth_copy_api_key missing/invalid provider",
+    });
+  }
+
+  if (!isProviderName(value.sourceProvider)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["sourceProvider"],
+      message: "provider_auth_copy_api_key missing/invalid sourceProvider",
+    });
+  }
+});
+
 const setEnableMcpSchema = schemaWithType("set_enable_mcp", {
   sessionId: requiredSessionId("set_enable_mcp"),
   enableMcp: requiredBoolean("set_enable_mcp missing/invalid enableMcp"),
@@ -592,6 +614,7 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   providerAuthLogoutSchema,
   providerAuthCallbackSchema,
   providerAuthSetApiKeySchema,
+  providerAuthCopyApiKeySchema,
   setEnableMcpSchema,
   mcpServerUpsertSchema,
   mcpServerAuthCallbackSchema,
@@ -698,6 +721,21 @@ function normalizeClientMessage(parsed: ParsedClientMessage): ClientMessage {
         provider: parsed.provider,
         methodId,
         apiKey,
+      };
+    }
+    case "provider_auth_copy_api_key": {
+      const sessionId = parsed.sessionId as string;
+      if (!isProviderName(parsed.provider)) {
+        throw new Error("provider_auth_copy_api_key missing/invalid provider");
+      }
+      if (!isProviderName(parsed.sourceProvider)) {
+        throw new Error("provider_auth_copy_api_key missing/invalid sourceProvider");
+      }
+      return {
+        type: "provider_auth_copy_api_key",
+        sessionId,
+        provider: parsed.provider,
+        sourceProvider: parsed.sourceProvider,
       };
     }
     case "mcp_server_upsert": {

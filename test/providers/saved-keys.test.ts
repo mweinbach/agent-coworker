@@ -102,6 +102,70 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
     });
   });
 
+  test("opencode-go saved key overrides OPENCODE_API_KEY", async () => {
+    const { home } = await makeTmpDirs();
+    const savedKey = "saved-opencode-key";
+    const envKey = "env-opencode-key";
+
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        "opencode-go": {
+          service: "opencode-go",
+          mode: "api_key",
+          apiKey: savedKey,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    await withEnv("OPENCODE_API_KEY", envKey, async () => {
+      const cfg = makeConfig({
+        provider: "opencode-go",
+        model: "glm-5",
+        subAgentModel: "glm-5",
+        userAgentDir: path.join(home, ".agent"),
+      });
+
+      const model = getModel(cfg) as any;
+      const headers = await model.config.headers();
+      expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+    });
+  });
+
+  test("opencode-zen saved key overrides OPENCODE_ZEN_API_KEY", async () => {
+    const { home } = await makeTmpDirs();
+    const savedKey = "saved-opencode-zen-key";
+    const envKey = "env-opencode-zen-key";
+
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        "opencode-zen": {
+          service: "opencode-zen",
+          mode: "api_key",
+          apiKey: savedKey,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    await withEnv("OPENCODE_ZEN_API_KEY", envKey, async () => {
+      const cfg = makeConfig({
+        provider: "opencode-zen",
+        model: "glm-5",
+        subAgentModel: "glm-5",
+        userAgentDir: path.join(home, ".agent"),
+      });
+
+      const model = getModel(cfg) as any;
+      const headers = await model.config.headers();
+      expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+    });
+  });
+
   test("codex-cli provider does not reuse saved openai key", async () => {
     const { home } = await makeTmpDirs();
     const savedKey = "saved-openai-key";
@@ -179,6 +243,66 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const cfg = makeConfig({
         provider: "openai",
         model: "gpt-5.2",
+        userAgentDir: path.join(home, ".agent"),
+      });
+
+      const model = getModel(cfg) as any;
+      const headers = await model.config.headers();
+      expect(headers.authorization).toBe(`Bearer ${envKey}`);
+    });
+  });
+
+  test("opencode-go falls back to OPENCODE_API_KEY when saved entry has no api key", async () => {
+    const { home } = await makeTmpDirs();
+    const envKey = "env-opencode-fallback";
+
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        "opencode-go": {
+          service: "opencode-go",
+          mode: "oauth_pending",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    await withEnv("OPENCODE_API_KEY", envKey, async () => {
+      const cfg = makeConfig({
+        provider: "opencode-go",
+        model: "glm-5",
+        subAgentModel: "glm-5",
+        userAgentDir: path.join(home, ".agent"),
+      });
+
+      const model = getModel(cfg) as any;
+      const headers = await model.config.headers();
+      expect(headers.authorization).toBe(`Bearer ${envKey}`);
+    });
+  });
+
+  test("opencode-zen falls back to OPENCODE_ZEN_API_KEY when saved entry has no api key", async () => {
+    const { home } = await makeTmpDirs();
+    const envKey = "env-opencode-zen-fallback";
+
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        "opencode-zen": {
+          service: "opencode-zen",
+          mode: "oauth_pending",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    await withEnv("OPENCODE_ZEN_API_KEY", envKey, async () => {
+      const cfg = makeConfig({
+        provider: "opencode-zen",
+        model: "glm-5",
+        subAgentModel: "glm-5",
         userAgentDir: path.join(home, ".agent"),
       });
 

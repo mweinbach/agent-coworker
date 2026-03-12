@@ -72,6 +72,12 @@ export type ClientMessage =
     methodId: string;
     apiKey: string;
   }
+  | {
+    type: "provider_auth_copy_api_key";
+    sessionId: string;
+    provider: AgentConfig["provider"];
+    sourceProvider: AgentConfig["provider"];
+  }
   | { type: "list_tools"; sessionId: string }
   | { type: "list_commands"; sessionId: string }
   | {
@@ -376,7 +382,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.11";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.12";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -391,6 +397,7 @@ export const CLIENT_MESSAGE_TYPES = [
   "provider_auth_logout",
   "provider_auth_callback",
   "provider_auth_set_api_key",
+  "provider_auth_copy_api_key",
   "list_tools",
   "list_commands",
   "execute_command",

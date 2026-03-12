@@ -31,6 +31,60 @@ describe("pricing", () => {
             expect(pricing!.inputPerMillion).toBe(0.15);
         });
 
+        it("resolves exact match for opencode-go models", () => {
+            const glm = resolveModelPricing("opencode-go", "glm-5");
+            expect(glm).not.toBeNull();
+            expect(glm!.inputPerMillion).toBe(1);
+            expect(glm!.outputPerMillion).toBe(3.2);
+            expect(glm!.cachedInputPerMillion).toBe(0.2);
+
+            const kimi = resolveModelPricing("opencode-go", "kimi-k2.5");
+            expect(kimi).not.toBeNull();
+            expect(kimi!.inputPerMillion).toBe(0.6);
+            expect(kimi!.outputPerMillion).toBe(3);
+            expect(kimi!.cachedInputPerMillion).toBe(0.1);
+        });
+
+        it("resolves exact match for opencode-zen models", () => {
+            const glm = resolveModelPricing("opencode-zen", "glm-5");
+            expect(glm).not.toBeNull();
+            expect(glm!.inputPerMillion).toBe(1);
+            expect(glm!.outputPerMillion).toBe(3.2);
+            expect(glm!.cachedInputPerMillion).toBe(0.2);
+
+            const kimi = resolveModelPricing("opencode-zen", "kimi-k2.5");
+            expect(kimi).not.toBeNull();
+            expect(kimi!.inputPerMillion).toBe(0.6);
+            expect(kimi!.outputPerMillion).toBe(3);
+            expect(kimi!.cachedInputPerMillion).toBe(0.08);
+
+            const nemotron = resolveModelPricing("opencode-zen", "nemotron-3-super-free");
+            expect(nemotron).not.toBeNull();
+            expect(nemotron!.inputPerMillion).toBe(0);
+            expect(nemotron!.outputPerMillion).toBe(0);
+
+            const mimo = resolveModelPricing("opencode-zen", "mimo-v2-flash-free");
+            expect(mimo).not.toBeNull();
+            expect(mimo!.inputPerMillion).toBe(0);
+            expect(mimo!.outputPerMillion).toBe(0);
+
+            const bigPickle = resolveModelPricing("opencode-zen", "big-pickle");
+            expect(bigPickle).not.toBeNull();
+            expect(bigPickle!.inputPerMillion).toBe(0);
+            expect(bigPickle!.outputPerMillion).toBe(0);
+
+            const minimaxFree = resolveModelPricing("opencode-zen", "minimax-m2.5-free");
+            expect(minimaxFree).not.toBeNull();
+            expect(minimaxFree!.inputPerMillion).toBe(0);
+            expect(minimaxFree!.outputPerMillion).toBe(0);
+
+            const minimax = resolveModelPricing("opencode-zen", "minimax-m2.5");
+            expect(minimax).not.toBeNull();
+            expect(minimax!.inputPerMillion).toBe(0.3);
+            expect(minimax!.outputPerMillion).toBe(1.2);
+            expect(minimax!.cachedInputPerMillion).toBe(0.06);
+        });
+
         it("resolves exact match for codex-cli gpt-5.4 pricing", () => {
             const pricing = resolveModelPricing("codex-cli", "gpt-5.4");
             expect(pricing).not.toBeNull();
@@ -169,8 +223,8 @@ describe("pricing", () => {
             for (const entry of catalog) {
                 expect(entry.provider).toBeDefined();
                 expect(entry.model).toBeDefined();
-                expect(entry.pricing.inputPerMillion).toBeGreaterThan(0);
-                expect(entry.pricing.outputPerMillion).toBeGreaterThan(0);
+                expect(entry.pricing.inputPerMillion).toBeGreaterThanOrEqual(0);
+                expect(entry.pricing.outputPerMillion).toBeGreaterThanOrEqual(0);
             }
         });
 
@@ -180,6 +234,8 @@ describe("pricing", () => {
             expect(providers.has("anthropic")).toBe(true);
             expect(providers.has("openai")).toBe(true);
             expect(providers.has("google")).toBe(true);
+            expect(providers.has("opencode-go")).toBe(true);
+            expect(providers.has("opencode-zen")).toBe(true);
             expect(providers.has("codex-cli")).toBe(true);
         });
 

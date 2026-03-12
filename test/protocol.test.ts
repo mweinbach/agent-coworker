@@ -424,6 +424,23 @@ describe("safeParseClientMessage", () => {
         apiKey: "",
       }))).toBe("provider_auth_set_api_key missing/invalid apiKey");
     });
+
+    test("provider_auth_copy_api_key validation", () => {
+      const msg = expectOk(JSON.stringify({
+        type: "provider_auth_copy_api_key",
+        sessionId: "s1",
+        provider: "opencode-zen",
+        sourceProvider: "opencode-go",
+      }));
+      expect(msg.type).toBe("provider_auth_copy_api_key");
+
+      expect(expectErr(JSON.stringify({
+        type: "provider_auth_copy_api_key",
+        sessionId: "s1",
+        provider: "opencode-zen",
+        sourceProvider: "nope",
+      }))).toBe("provider_auth_copy_api_key missing/invalid sourceProvider");
+    });
   });
 
   describe("list_skills", () => {
@@ -1634,6 +1651,7 @@ describe("safeParseClientMessage", () => {
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_logout")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_callback")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_set_api_key")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_copy_api_key")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("mcp_servers_get")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("mcp_server_upsert")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("mcp_server_delete")).toBe(true);

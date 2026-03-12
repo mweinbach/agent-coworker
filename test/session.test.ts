@@ -1240,6 +1240,101 @@ describe("AgentSession", () => {
       expect((session as any).state.providerState).toBeNull();
     });
 
+    test("copyProviderApiKey emits provider_auth_result and refreshes status/catalog", async () => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "session-copy-provider-key-"));
+      const connectionsFile = path.join(home, ".cowork", "auth", "connections.json");
+      await fs.mkdir(path.dirname(connectionsFile), { recursive: true });
+      await fs.writeFile(connectionsFile, JSON.stringify({
+        version: 1,
+        updatedAt: "2026-03-11T00:00:00.000Z",
+        services: {
+          "opencode-go": {
+            service: "opencode-go",
+            mode: "api_key",
+            apiKey: "opencode-go-key-1234",
+            updatedAt: "2026-03-11T00:00:00.000Z",
+          },
+        },
+      }), "utf-8");
+
+      const statuses = [
+        {
+          provider: "opencode-zen",
+          authorized: true,
+          verified: false,
+          mode: "api_key",
+          account: null,
+          message: "API key saved.",
+          checkedAt: "2026-03-11T00:00:00.000Z",
+          savedApiKeyMasks: { api_key: "open...1234" },
+        },
+      ];
+      const getProviderCatalogImpl = mock(async () => ({
+        all: [
+          { id: "opencode-go", name: "OpenCode Go", models: ["glm-5", "kimi-k2.5"], defaultModel: "glm-5" },
+          {
+            id: "opencode-zen",
+            name: "OpenCode Zen",
+            models: [
+              "glm-5",
+              "kimi-k2.5",
+              "nemotron-3-super-free",
+              "mimo-v2-flash-free",
+              "big-pickle",
+              "minimax-m2.5-free",
+              "minimax-m2.5",
+            ],
+            defaultModel: "glm-5",
+          },
+        ],
+        default: { "opencode-go": "glm-5", "opencode-zen": "glm-5" },
+        connected: ["opencode-go", "opencode-zen"],
+      }));
+      const getProviderStatusesImpl = mock(async () => statuses);
+      const connectProviderImpl = mock(async (opts: any) => ({
+        ok: true,
+        provider: opts.provider,
+        mode: "api_key",
+        storageFile: connectionsFile,
+        message: "Provider key saved.",
+        maskedApiKey: "open...1234",
+      }));
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          userAgentDir: path.join(home, ".agent"),
+        },
+        connectProviderImpl: connectProviderImpl as any,
+        getAiCoworkerPathsImpl: mock(({ homedir }: { homedir?: string } = {}) => ({
+          rootDir: path.join(homedir ?? home, ".cowork"),
+          authDir: path.join(homedir ?? home, ".cowork", "auth"),
+          configDir: path.join(homedir ?? home, ".cowork", "config"),
+          sessionsDir: path.join(homedir ?? home, ".cowork", "sessions"),
+          logsDir: path.join(homedir ?? home, ".cowork", "logs"),
+          skillsDir: path.join(homedir ?? home, ".cowork", "skills"),
+          connectionsFile,
+        })),
+        getProviderCatalogImpl: getProviderCatalogImpl as any,
+        getProviderStatusesImpl: getProviderStatusesImpl as any,
+      });
+
+      await session.copyProviderApiKey("opencode-zen", "opencode-go");
+
+      const authEvt = events.find((e) => e.type === "provider_auth_result");
+      expect(authEvt).toBeDefined();
+      if (authEvt && authEvt.type === "provider_auth_result") {
+        expect(authEvt.ok).toBe(true);
+        expect(authEvt.provider).toBe("opencode-zen");
+        expect(authEvt.methodId).toBe("api_key");
+        expect(authEvt.message).toContain("Copied OpenCode Go API key");
+      }
+      expect(connectProviderImpl).toHaveBeenCalledTimes(1);
+      expect(connectProviderImpl.mock.calls[0]?.[0]?.provider).toBe("opencode-zen");
+      expect(connectProviderImpl.mock.calls[0]?.[0]?.apiKey).toBe("opencode-go-key-1234");
+      expect(events.some((e) => e.type === "provider_status")).toBe(true);
+      expect(events.some((e) => e.type === "provider_catalog")).toBe(true);
+    });
+
     test("callbackProviderAuth emits provider_auth_result for oauth method", async () => {
       const getProviderCatalogImpl = mock(async () => ({
         all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.4"], defaultModel: "gpt-5.4" }],

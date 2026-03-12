@@ -23,6 +23,14 @@ import {
   readCodexAuthMaterial,
   refreshCodexAuthMaterialCoalesced,
 } from "../providers/codex-auth";
+import {
+  getOpenCodeModelSpec,
+  getOpenCodeProviderConfig,
+  isOpenCodeModelSupportedByProvider,
+  isOpenCodeProviderName,
+  resolveOpenCodeApiKey,
+  type OpenCodeProviderName,
+} from "../providers/opencodeShared";
 import type { AgentConfig, ModelMessage, ProviderName } from "../types";
 import type { TelemetrySettings } from "../observability/runtime";
 import {
@@ -158,6 +166,31 @@ type ResolvedCodexAuth = {
   accountId?: string;
 };
 
+function getOpenCodePiModel(provider: OpenCodeProviderName, modelId: string): PiModel | null {
+  if (!isOpenCodeModelSupportedByProvider(provider, modelId)) return null;
+  const modelSpec = getOpenCodeModelSpec(modelId);
+  if (!modelSpec) return null;
+
+  const providerConfig = getOpenCodeProviderConfig(provider);
+  return {
+    id: modelSpec.id,
+    name: modelSpec.name,
+    api: "openai-completions",
+    provider: "opencode",
+    baseUrl: providerConfig.baseUrl,
+    reasoning: modelSpec.reasoning,
+    input: [...modelSpec.input],
+    cost: {
+      input: modelSpec.cost.input,
+      output: modelSpec.cost.output,
+      cacheRead: modelSpec.cost.cacheRead,
+      cacheWrite: modelSpec.cost.cacheWrite,
+    },
+    contextWindow: modelSpec.contextWindow,
+    maxTokens: modelSpec.maxTokens,
+  };
+}
+
 type RuntimeStepOverrides = RuntimeStepOverride;
 
 type RuntimeStepState = {
@@ -229,6 +262,17 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
     return {
       model,
       apiKey: getSavedProviderApiKey(params.config, "anthropic"),
+    };
+  }
+
+  if (isOpenCodeProviderName(provider)) {
+    const model = getOpenCodePiModel(provider, modelId);
+    if (!model) throw new Error(`No PI model metadata available for provider ${provider} (model: ${modelId}).`);
+    return {
+      model,
+      apiKey: resolveOpenCodeApiKey(provider, {
+        savedKey: getSavedProviderApiKey(params.config, provider),
+      }),
     };
   }
 
@@ -373,11 +417,16 @@ export function markModelCallSpanError(span: Span | null, error: unknown): void 
 }
 
 export function toolMapToPiTools(tools: RuntimeRunTurnParams["tools"]): Array<Record<string, unknown>> {
-  return Object.entries(tools).map(([name, def]) => ({
-    name,
-    description: def.description ?? name,
-    parameters: toPiJsonSchema(def.inputSchema),
-  }));
+  return Object.entries(tools).flatMap(([name, def]) => {
+    const toolRecord = asRecord(def);
+    if (!toolRecord) return [];
+
+    return [{
+      name,
+      description: asNonEmptyString(toolRecord.description) ?? name,
+      parameters: toPiJsonSchema(toolRecord.inputSchema),
+    }];
+  });
 }
 
 function validateToolInput(def: RuntimeToolDefinition, input: unknown): unknown {

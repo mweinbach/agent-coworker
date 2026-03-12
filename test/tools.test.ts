@@ -2626,6 +2626,23 @@ describe("createTools", () => {
     expect(Object.keys(tools).length).toBe(16);
   });
 
+  test("returns an executable webSearch tool for opencode-go", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "opencode-go",
+          model: "glm-5",
+          subAgentModel: "glm-5",
+        }),
+      })
+    );
+
+    expect((tools.webSearch as any).type).toBeUndefined();
+    expect(typeof (tools.webSearch as any).execute).toBe("function");
+    expect((tools.webSearch as any).description).toContain("BRAVE_API_KEY");
+  });
+
   test("each tool is executable or provider-native", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));

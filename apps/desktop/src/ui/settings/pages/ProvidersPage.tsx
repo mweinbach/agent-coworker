@@ -89,9 +89,17 @@ function displayProviderName(provider: ProviderName): string {
     google: "Google",
     openai: "OpenAI",
     anthropic: "Anthropic",
+    "opencode-go": "OpenCode Go",
+    "opencode-zen": "OpenCode Zen",
     "codex-cli": "Codex CLI",
   };
   return names[provider] ?? provider;
+}
+
+function siblingOpenCodeProvider(provider: ProviderName): ProviderName | null {
+  if (provider === "opencode-go") return "opencode-zen";
+  if (provider === "opencode-zen") return "opencode-go";
+  return null;
 }
 
 function fallbackExaAuthMethod(): ProviderAuthMethod {
@@ -141,6 +149,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const canConnectProvider = hasWorkspace || selectedWorkspaceId !== null;
 
   const setProviderApiKey = useAppStore((s) => s.setProviderApiKey);
+  const copyProviderApiKey = useAppStore((s) => s.copyProviderApiKey);
   const authorizeProviderAuth = useAppStore((s) => s.authorizeProviderAuth);
   const logoutProviderAuth = useAppStore((s) => s.logoutProviderAuth);
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
@@ -249,6 +258,19 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       opts.method.id === "oauth_cli" &&
       opts.status?.mode === "oauth" &&
       Boolean(opts.status?.authorized);
+    const siblingProvider =
+      opts.method.type === "api" && opts.method.id === "api_key"
+        ? siblingOpenCodeProvider(opts.provider)
+        : null;
+    const siblingStatus = siblingProvider ? providerStatusByName[siblingProvider] : null;
+    const siblingSavedApiKeyMask = siblingStatus?.savedApiKeyMasks?.api_key;
+    const siblingDisplayName = siblingProvider
+      ? catalogNameByProvider.get(siblingProvider) ?? displayProviderName(siblingProvider)
+      : null;
+    const canCopySiblingApiKey =
+      Boolean(siblingProvider)
+      && typeof siblingSavedApiKeyMask === "string"
+      && siblingSavedApiKeyMask.trim().length > 0;
 
     return (
       <div key={stateKey} className="space-y-2 border-t border-border/70 pt-4 first:border-t-0 first:pt-0">
@@ -322,6 +344,19 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                 }}
               >
                 Save
+              </Button>
+            ) : null}
+            {canCopySiblingApiKey && siblingProvider && siblingDisplayName ? (
+              <Button
+                variant="outline"
+                type="button"
+                disabled={!canConnectProvider}
+                title={!canConnectProvider ? "Add a workspace first." : undefined}
+                onClick={() => {
+                  void copyProviderApiKey(opts.provider, siblingProvider);
+                }}
+              >
+                {`Use ${siblingDisplayName} key`}
               </Button>
             ) : null}
           </div>

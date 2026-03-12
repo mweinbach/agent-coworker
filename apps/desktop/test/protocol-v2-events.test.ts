@@ -352,6 +352,20 @@ describe("desktop protocol v2 mapping", () => {
     expect(sent?.apiKey).toBe("sk-test");
   });
 
+  test("copyProviderApiKey sends provider_auth_copy_api_key", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.sent = [];
+
+    await useAppStore.getState().copyProviderApiKey("opencode-zen", "opencode-go");
+
+    const sent = controlSocket.sent.find((msg) => msg?.type === "provider_auth_copy_api_key");
+    expect(sent).toBeDefined();
+    expect(sent?.provider).toBe("opencode-zen");
+    expect(sent?.sourceProvider).toBe("opencode-go");
+  });
+
   test("connectProvider sends oauth authorize+callback for oauth providers", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const controlSocket = socketByClient("desktop-control");

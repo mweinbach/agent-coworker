@@ -38,4 +38,24 @@ describe("runtime selection", () => {
     expect(resolveRuntimeName(config)).toBe("pi");
     expect(createRuntime(config).name).toBe("pi");
   });
+
+  test("routes opencode-go through the pi runtime", () => {
+    const config = makeConfig({
+      provider: "opencode-go",
+      model: "glm-5",
+      subAgentModel: "glm-5",
+    });
+    expect(resolveRuntimeName(config)).toBe("pi");
+    expect(createRuntime(config).name).toBe("pi");
+  });
+
+  test("routes opencode-zen through the pi runtime", () => {
+    const config = makeConfig({
+      provider: "opencode-zen",
+      model: "glm-5",
+      subAgentModel: "glm-5",
+    });
+    expect(resolveRuntimeName(config)).toBe("pi");
+    expect(createRuntime(config).name).toBe("pi");
+  });
 });

@@ -59,6 +59,49 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     cachedInputPerMillion: 0.08,
   },
 
+  // ── OpenCode Go ──────────────────────────────────────────────────────
+  "opencode-go:glm-5": {
+    inputPerMillion: 1,
+    outputPerMillion: 3.2,
+    cachedInputPerMillion: 0.2,
+  },
+  "opencode-go:kimi-k2.5": {
+    inputPerMillion: 0.6,
+    outputPerMillion: 3,
+    cachedInputPerMillion: 0.1,
+  },
+  "opencode-zen:glm-5": {
+    inputPerMillion: 1,
+    outputPerMillion: 3.2,
+    cachedInputPerMillion: 0.2,
+  },
+  "opencode-zen:kimi-k2.5": {
+    inputPerMillion: 0.6,
+    outputPerMillion: 3,
+    cachedInputPerMillion: 0.08,
+  },
+  "opencode-zen:nemotron-3-super-free": {
+    inputPerMillion: 0,
+    outputPerMillion: 0,
+  },
+  "opencode-zen:mimo-v2-flash-free": {
+    inputPerMillion: 0,
+    outputPerMillion: 0,
+  },
+  "opencode-zen:big-pickle": {
+    inputPerMillion: 0,
+    outputPerMillion: 0,
+  },
+  "opencode-zen:minimax-m2.5-free": {
+    inputPerMillion: 0,
+    outputPerMillion: 0,
+  },
+  "opencode-zen:minimax-m2.5": {
+    inputPerMillion: 0.3,
+    outputPerMillion: 1.2,
+    cachedInputPerMillion: 0.06,
+  },
+
   // ── OpenAI ───────────────────────────────────────────────────────────
   "openai:gpt-5.4": {
     inputPerMillion: 2.5,
@@ -160,6 +203,8 @@ function isPricingOverrideKey(value: string): value is `${ProviderName}:${string
   return provider === "google"
     || provider === "openai"
     || provider === "anthropic"
+    || provider === "opencode-go"
+    || provider === "opencode-zen"
     || provider === "codex-cli";
 }
 

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { getModels as getPiModels } from "@mariozechner/pi-ai";
+import { z } from "zod";
 
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../src/types";
@@ -142,6 +143,147 @@ describe("pi runtime regressions", () => {
     const imported = JSON.parse(importedRaw) as Record<string, any>;
     expect(imported.tokens?.access_token).toBe("legacy-access-token");
     expect(imported.tokens?.refresh_token).toBe("legacy-refresh-token");
+  });
+
+  test("opencode-go runtime model resolution returns explicit GLM-5 PI metadata", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-glm-"));
+    const config = makeConfig(homeDir, {
+      provider: "opencode-go",
+      model: "glm-5",
+      subAgentModel: "glm-5",
+    });
+
+    const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+
+    expect(resolved.apiKey).toBeUndefined();
+    expect(resolved.model).toMatchObject({
+      id: "glm-5",
+      api: "openai-completions",
+      provider: "opencode",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      reasoning: true,
+      contextWindow: 204800,
+      maxTokens: 131072,
+      cost: {
+        input: 1,
+        output: 3.2,
+        cacheRead: 0.2,
+        cacheWrite: 0,
+      },
+    });
+  });
+
+  test("opencode-go runtime model resolution returns explicit Kimi K2.5 PI metadata", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-kimi-"));
+    const config = makeConfig(homeDir, {
+      provider: "opencode-go",
+      model: "kimi-k2.5",
+      subAgentModel: "kimi-k2.5",
+    });
+
+    const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+
+    expect(resolved.apiKey).toBeUndefined();
+    expect(resolved.model).toMatchObject({
+      id: "kimi-k2.5",
+      api: "openai-completions",
+      provider: "opencode",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      reasoning: true,
+      contextWindow: 262144,
+      maxTokens: 65536,
+      cost: {
+        input: 0.6,
+        output: 3,
+        cacheRead: 0.08,
+        cacheWrite: 0,
+      },
+    });
+    expect(resolved.model.input).toEqual(["text", "image"]);
+  });
+
+  test("opencode-zen runtime model resolution returns explicit GLM-5 PI metadata and env-key fallback", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-zen-"));
+    const config = makeConfig(homeDir, {
+      provider: "opencode-zen",
+      model: "glm-5",
+      subAgentModel: "glm-5",
+    });
+
+    const previous = process.env.OPENCODE_ZEN_API_KEY;
+    process.env.OPENCODE_ZEN_API_KEY = "env-opencode-zen-key";
+    try {
+      const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+
+      expect(resolved.apiKey).toBe("env-opencode-zen-key");
+      expect(resolved.model).toMatchObject({
+        id: "glm-5",
+        api: "openai-completions",
+        provider: "opencode",
+        baseUrl: "https://opencode.ai/zen/v1",
+        reasoning: true,
+        contextWindow: 204800,
+        maxTokens: 131072,
+        cost: {
+          input: 1,
+          output: 3.2,
+          cacheRead: 0.2,
+          cacheWrite: 0,
+        },
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCODE_ZEN_API_KEY;
+      } else {
+        process.env.OPENCODE_ZEN_API_KEY = previous;
+      }
+    }
+  });
+
+  test("opencode-zen runtime model resolution returns explicit MiniMax M2.5 PI metadata", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-zen-minimax-"));
+    const config = makeConfig(homeDir, {
+      provider: "opencode-zen",
+      model: "minimax-m2.5",
+      subAgentModel: "glm-5",
+    });
+
+    const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+
+    expect(resolved.apiKey).toBeUndefined();
+    expect(resolved.model).toMatchObject({
+      id: "minimax-m2.5",
+      api: "openai-completions",
+      provider: "opencode",
+      baseUrl: "https://opencode.ai/zen/v1",
+      reasoning: true,
+      contextWindow: 204800,
+      maxTokens: 65536,
+      cost: {
+        input: 0.3,
+        output: 1.2,
+        cacheRead: 0.06,
+        cacheWrite: 0.375,
+      },
+    });
+    expect(resolved.model.input).toEqual(["text"]);
+  });
+
+  test("toolMapToPiTools skips undefined tool definitions", () => {
+    const mapped = piRuntimeInternal.toolMapToPiTools({
+      read: {
+        description: "Read files from disk.",
+        inputSchema: z.object({ filePath: z.string() }),
+        execute: async () => "",
+      },
+      webSearch: undefined,
+    } as any);
+
+    expect(mapped).toHaveLength(1);
+    expect(mapped[0]).toMatchObject({
+      name: "read",
+      description: "Read files from disk.",
+    });
   });
 
   test("telemetry parsing keeps supported metadata and drops invalid values", () => {

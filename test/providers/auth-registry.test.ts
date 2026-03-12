@@ -7,6 +7,7 @@ import { getAiCoworkerPaths, readConnectionStore } from "../../src/connect";
 import {
   authorizeProviderAuth,
   callbackProviderAuth,
+  copyProviderApiKey,
   listProviderAuthMethods,
   logoutProviderAuth,
   resolveProviderAuthMethod,
@@ -18,6 +19,8 @@ describe("providers/authRegistry", () => {
     const methods = listProviderAuthMethods();
     expect(methods.openai?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods.google?.some((m) => m.id === "exa_api_key")).toBe(true);
+    expect(methods["opencode-go"]?.some((m) => m.id === "api_key")).toBe(true);
+    expect(methods["opencode-zen"]?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods["codex-cli"]?.some((m) => m.id === "oauth_cli")).toBe(true);
     expect(methods["codex-cli"]?.some((m) => m.id === "oauth_device")).toBe(false);
   });
@@ -129,6 +132,47 @@ describe("providers/authRegistry", () => {
     expect(result.ok).toBe(true);
     expect(connect).toHaveBeenCalledTimes(1);
     expect(connect.mock.calls[0]?.[0]?.code).toBe("auth-code-123");
+  });
+
+  test("copyProviderApiKey reuses a saved sibling key without exposing it", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-registry-copy-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const now = new Date().toISOString();
+    await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
+    await fs.writeFile(paths.connectionsFile, JSON.stringify({
+      version: 1,
+      updatedAt: now,
+      services: {
+        "opencode-go": {
+          service: "opencode-go",
+          mode: "api_key",
+          apiKey: "opencode-go-key-1234",
+          updatedAt: now,
+        },
+      },
+    }), "utf-8");
+
+    const connect = mock(async (opts: any) => ({
+      ok: true as const,
+      provider: opts.provider,
+      mode: "api_key" as const,
+      storageFile: paths.connectionsFile,
+      message: "saved",
+      maskedApiKey: "open...1234",
+    }));
+
+    const result = await copyProviderApiKey({
+      provider: "opencode-zen",
+      sourceProvider: "opencode-go",
+      methodId: "api_key",
+      paths,
+      connect,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(connect.mock.calls[0]?.[0]?.provider).toBe("opencode-zen");
+    expect(connect.mock.calls[0]?.[0]?.apiKey).toBe("opencode-go-key-1234");
   });
 
   test("logoutProviderAuth calls disconnect handler", async () => {

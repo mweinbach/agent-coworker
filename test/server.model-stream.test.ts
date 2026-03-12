@@ -63,6 +63,14 @@ describe("reasoningModeForProvider", () => {
   test('returns "reasoning" for anthropic', () => {
     expect(reasoningModeForProvider("anthropic")).toBe("reasoning");
   });
+
+  test('returns "reasoning" for opencode-go', () => {
+    expect(reasoningModeForProvider("opencode-go")).toBe("reasoning");
+  });
+
+  test('returns "reasoning" for opencode-zen', () => {
+    expect(reasoningModeForProvider("opencode-zen")).toBe("reasoning");
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,39 @@ import { getProviderCatalog } from "../../src/providers/connectionCatalog";
 import { getAiCoworkerPaths } from "../../src/connect";
 
 describe("providers/connectionCatalog", () => {
+  test("lists OpenCode providers in the provider catalog with the expected model sets", async () => {
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {},
+      }),
+    });
+
+    expect(payload.default["opencode-go"]).toBe("glm-5");
+    expect(payload.all).toContainEqual({
+      id: "opencode-go",
+      name: "OpenCode Go",
+      models: ["glm-5", "kimi-k2.5"],
+      defaultModel: "glm-5",
+    });
+    expect(payload.default["opencode-zen"]).toBe("glm-5");
+    expect(payload.all).toContainEqual({
+      id: "opencode-zen",
+      name: "OpenCode Zen",
+      models: [
+        "glm-5",
+        "kimi-k2.5",
+        "nemotron-3-super-free",
+        "mimo-v2-flash-free",
+        "big-pickle",
+        "minimax-m2.5-free",
+        "minimax-m2.5",
+      ],
+      defaultModel: "glm-5",
+    });
+  });
+
   test("connected providers exclude oauth_pending entries", async () => {
     const payload = await getProviderCatalog({
       readStore: async () => ({

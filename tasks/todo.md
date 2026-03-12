@@ -2915,3 +2915,129 @@
 - `~/.bun/bin/bun run typecheck` -> pass
 - `~/.bun/bin/bun test` -> pass (`1998 pass, 2 skip, 0 fail`)
 - `git diff --check` -> pass
+
+# Task: Add OpenCode Go provider support for GLM-5 and Kimi K2.5
+
+## Plan
+- [x] Extend provider identity, catalogs, auth, pricing, and runtime wiring to add a first-class `opencode-go` provider routed through the PI runtime.
+- [x] Update thin CLI/desktop/protocol/docs surfaces so `opencode-go` appears as a normal provider with the two allowed models only.
+- [x] Add focused regression coverage for provider parsing/catalog/auth/status, PI model resolution, runtime selection, pricing, and reasoning-mode behavior.
+- [x] Run focused verification, then full `bun test`, and record the outcome below.
+
+## Review
+- Added a first-class `opencode-go` provider across the harness core. `ProviderName`, provider/auth registries, model catalog, connection catalog, pricing, and provider model adapters now all understand `opencode-go`, with a dedicated `src/providers/opencode-go.ts` entry and API-key auth only.
+- Routed `opencode-go` through the PI runtime with explicit custom `openai-completions` metadata in `src/runtime/piRuntime.ts`. `glm-5` and `kimi-k2.5` now resolve to `https://opencode.ai/zen/go/v1` with the requested context windows, token limits, and pricing, while keeping `provider: "opencode"` so runtime env fallback still honors `OPENCODE_API_KEY`.
+- Kept the existing OpenAI-compatible settings scope unchanged. `opencode-go` does not enter the editable `providerOptions` path, does not use OpenAI/Codex continuation, and continues to stream with the existing `"reasoning"` mode rather than the Responses `"summary"` mode.
+- Updated thin presentation surfaces only where needed: desktop provider labels in `ChatView.tsx`, `ProvidersPage.tsx`, and `WorkspacesPage.tsx`, plus websocket protocol documentation examples for `ProviderName`, `provider_catalog`, and `provider_auth_methods`.
+- Added focused regressions for provider parsing, auth methods, connection catalog, saved-key/env precedence, connect/provider-status behavior, provider model creation, PI model resolution, runtime selection, pricing, and reasoning mode.
+- Fixed one typecheck-only exhaustiveness hole in `src/server/sessionTitleService.ts` by adding `opencode-go` to the title-model map and defaulting it to `glm-5`.
+
+### Verification
+- `bun test test/types.test.ts test/providers/auth-registry.test.ts test/providers/index.test.ts test/providers/cross-provider.test.ts test/providers/saved-keys.test.ts test/providers/connection-catalog.test.ts test/connect.test.ts test/providerStatus.test.ts test/runtime.selection.test.ts test/runtime.pi-runtime.test.ts test/server.model-stream.test.ts test/session/pricing.test.ts` -> pass (`280 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- `bun test` -> pass (`2019 pass, 2 skip, 0 fail`)
+- Live OpenCode Go smoke using `OPENCODE_API_KEY` from `.env` via the real PI runtime:
+  - `glm-5` -> `pong`, usage `{ promptTokens: 15, completionTokens: 48, totalTokens: 63, estimatedCostUsd: 0.00016860000000000003 }`
+  - `kimi-k2.5` -> `pong`, usage `{ promptTokens: 20, completionTokens: 206, totalTokens: 226, estimatedCostUsd: 0.00063 }`
+- `git diff --check` -> pass
+
+# Task: Fix OpenCode Go webSearch tool crash in PI runtime
+
+## Plan
+- [x] Reproduce and trace the `def.description` crash path from desktop/server error output into the runtime tool registry.
+- [x] Fix the missing `opencode-go` webSearch tool wiring and harden PI tool mapping against undefined tool definitions.
+- [x] Add focused regression coverage, run the relevant tests/typecheck, and record the verified outcome below.
+
+## Review
+- Root cause was in `src/tools/webSearch.ts`: `createWebSearchTool(...)` only returned a tool for `google`, `openai`, `anthropic`, and `codex-cli`. After adding `opencode-go`, the factory fell off the end and `createTools(...)` produced `webSearch: undefined`, which then crashed `toolMapToPiTools(...)` at `def.description`.
+- Fixed the provider wiring by making `createWebSearchTool(...)` use the Google-specific Exa-only branch only for `google`, and return the standard BRAVE/EXA-backed tool for every other provider, including `opencode-go`.
+- Hardened `src/runtime/piRuntime.ts` so `toolMapToPiTools(...)` skips malformed or undefined tool definitions instead of crashing the entire turn. That keeps this class of provider-wiring bug from surfacing as a fatal runtime exception.
+- Added focused regressions in `test/tools.test.ts` and `test/runtime.pi-runtime.test.ts` to prove `createTools(...)` returns an executable `webSearch` tool for `opencode-go` and that PI tool mapping ignores undefined tool entries.
+
+### Verification
+- `bun test test/tools.test.ts test/runtime.pi-runtime.test.ts` -> pass (`162 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- Live OpenCode Go smoke using the real `OPENCODE_API_KEY` from `.env` with prompt `can you research the macbook neo reviews and create me a review summary`:
+  - completed without the `def.description` crash
+  - returned model text beginning with `I'll search for information about "MacBook Neo"...`
+  - emitted reasoning stream parts instead of failing before the turn started
+
+# Task: Fix duplicate final assistant response after multi-step PI streaming
+
+## Plan
+- [x] Inspect the local desktop transcript for the affected thread to confirm whether the duplicate final response is stored twice or rendered twice.
+- [x] Trace the desktop replay/live assistant-message dedupe path for PI multi-step turns and identify why the merged fallback `assistant_message` still renders after streamed assistant text.
+- [x] Implement the shared desktop dedupe fix, add focused regression coverage, and run the relevant desktop tests/typecheck.
+
+## Review
+- Checked the real desktop transcript at `/Users/mweinbach/Library/Application Support/Cowork/transcripts/9d31b90b-f5b0-40ad-b41c-a61692fd504f.jsonl`. The duplicate was not two persisted final messages. The transcript contained five streamed assistant step messages plus one fallback `assistant_message` whose text was the merged concatenation of those same five messages.
+- Root cause was in desktop dedupe, not storage. `apps/desktop/src/app/store.feedMapping.ts` only skipped a fallback `assistant_message` when it matched the last streamed assistant chunk (or ended with it for raw-backed turns). For PI multi-step turns, the fallback matched the concatenation of all assistant messages since the last user turn, so it still rendered as a sixth duplicate item.
+- Fixed the shared dedupe helper so it also compares the fallback `assistant_message` against the concatenated assistant feed text since the last user message. That shared helper is used by both transcript replay and the live thread reducer, so the same fix now applies in both paths.
+- Added a focused desktop regression proving that a normalized multi-step streamed turn keeps the two streamed assistant messages and suppresses the merged fallback assistant message.
+
+### Verification
+- `bun test --cwd apps/desktop test/store-feed-mapping.test.ts test/thread-reconnect.test.ts` -> pass (`19 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- `git diff --check` -> pass
+- Real transcript sanity check with the patched mapper:
+  - before fix, the affected thread mapped to `assistantCount: 6`
+  - after fix, the same transcript maps to `assistantCount: 5`
+  - the extra merged fallback item is gone, leaving only the streamed step messages plus the final streamed answer
+
+# Task: Add `opencode-zen` as a sibling provider to `opencode-go`
+
+## Plan
+- [x] Refactor the current OpenCode provider metadata into shared helpers and add `opencode-zen` across provider/runtime/catalog/pricing surfaces while keeping `opencode-go` stable.
+- [x] Add a harness-level `provider_auth_copy_api_key` flow that copies a saved API key between the two OpenCode providers without exposing the raw secret to clients.
+- [x] Wire the desktop Providers page and provider actions to surface `OpenCode Zen`, keep labels distinct, and offer one-click sibling key reuse only for saved keys.
+- [x] Add focused provider/runtime/protocol/desktop regressions, update websocket docs, and run the required verification.
+
+## Review
+- Added a shared OpenCode provider definition layer in `src/providers/opencodeShared.ts` so `opencode-go` and `opencode-zen` now derive their labels, model catalog, pricing metadata, adapter ids, base URLs, and provider-specific env vars from one place. `opencode-go` stays on `https://opencode.ai/zen/go/v1` with `OPENCODE_API_KEY`; `opencode-zen` uses `https://opencode.ai/zen/v1` with `OPENCODE_ZEN_API_KEY`.
+- Extended the harness/provider surfaces to treat `opencode-zen` as a first-class provider everywhere `ProviderName` participates: catalogs, auth registry, pricing, runtime selection, PI model resolution, session-title defaults, protocol parsing, and provider/model labels in desktop chat and workspace settings.
+- Added a new websocket client message, `provider_auth_copy_api_key`, and implemented the copy on the server in `ProviderAuthManager`/`authRegistry`. The copy only works between the two OpenCode siblings, only for saved connection-store API keys, and reuses the existing `provider_auth_result`, `provider_status`, and `provider_catalog` refresh flow so no raw key ever leaves the harness.
+- Updated the desktop Providers page to render both `OpenCode Go` and `OpenCode Zen` and to show a one-click `Use OpenCode Go key` / `Use OpenCode Zen key` action only when the sibling provider has a saved masked API key. Env-only keys do not surface a copy action.
+- Updated the websocket protocol docs to version `7.12`, documented the new client message, and refreshed provider/auth catalog examples so both OpenCode providers appear in the public contract.
+
+### Verification
+- `bun test test/types.test.ts test/providers/auth-registry.test.ts test/providers/index.test.ts test/providers/cross-provider.test.ts test/providers/saved-keys.test.ts test/providers/connection-catalog.test.ts test/connect.test.ts test/providerStatus.test.ts test/runtime.selection.test.ts test/runtime.pi-runtime.test.ts test/server.model-stream.test.ts test/protocol.test.ts test/session.test.ts test/session/pricing.test.ts apps/desktop/test/protocol-v2-events.test.ts apps/desktop/test/providers-page.test.ts` -> pass (`695 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- `bun test` -> pass (`2046 pass, 2 skip, 0 fail`)
+
+# Task: Add more OpenCode Zen models
+
+## Plan
+- [x] Refactor the shared OpenCode model catalog so Zen can expose additional models without changing the Go provider catalog.
+- [x] Add the requested OpenCode Zen model ids, runtime metadata, and pricing entries, using OpenCode Zen docs for pricing and conservative capability defaults where the Zen API does not publish limits.
+- [x] Update focused provider/runtime/pricing tests, run verification, and record outcomes below.
+
+## Review
+- Split the OpenCode model catalog in `src/providers/opencodeShared.ts` so `opencode-go` keeps `["glm-5", "kimi-k2.5"]` while `opencode-zen` now additionally exposes `nemotron-3-super-free`, `mimo-v2-flash-free`, `big-pickle`, `minimax-m2.5-free`, and `minimax-m2.5`.
+- Added pricing for the five new Zen-only models in `src/session/pricing.ts` using the published OpenCode Zen docs rates. The free models are estimated at zero input/output cost; `big-pickle` is `2 / 8` USD per 1M input/output tokens; `minimax-m2.5` is `0.4 / 2.2`.
+- Tightened provider validation so Zen-only model ids do not silently work on `opencode-go`. `src/runtime/piRuntime.ts` now checks provider support before resolving PI metadata, and `src/providers/modelAdapter.ts` throws if a Zen-only model is requested through the Go provider adapter path.
+- Added conservative runtime metadata for the new Zen-only models in `src/providers/opencodeShared.ts`. OpenCode Zen’s public `/models` endpoint currently exposes ids but not authoritative capability limits, so the new entries use conservative text/multimodal defaults while keeping the exact Zen pricing and the live model ids.
+- Updated protocol examples and focused regressions so the provider catalog, runtime resolution, pricing, and session/provider catalog flows all reflect the larger Zen model list.
+
+### Verification
+- `bun test test/providers/index.test.ts test/providers/connection-catalog.test.ts test/runtime.pi-runtime.test.ts test/session/pricing.test.ts test/session.test.ts` -> pass (`253 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- `bun test` -> pass (`2049 pass, 2 skip, 0 fail`)
+- Public Zen model-list sanity check:
+  - `bun -e 'fetch("https://opencode.ai/zen/v1/models") ...'` -> `status: 200`, `missing: []` for `nemotron-3-super-free`, `mimo-v2-flash-free`, `big-pickle`, `minimax-m2.5-free`, `minimax-m2.5`
+
+# Task: Refresh OpenCode Zen metadata from current official sources
+
+## Plan
+- [x] Re-check the harness compaction path so current OpenCode context-window metadata is not misrepresented as automatic token compaction.
+- [x] Replace stale OpenCode Zen pricing/capability assumptions with values confirmed from current official provider docs or live endpoints where available.
+- [x] Rerun focused verification, then record exactly what remains conservative or unpublished upstream.
+
+## Review
+- Confirmed the harness is not doing token-aware compaction for OpenCode Zen through PI. Runtime history is still capped only by `MAX_MESSAGE_HISTORY = 200` in `src/server/session/HistoryManager.ts`, while `contextWindow` on the PI model is metadata passed through to the transport.
+- Refreshed the OpenCode model metadata in `src/providers/opencodeShared.ts` and `src/session/pricing.ts` using current official provider information instead of the older bundled PI assumptions. That corrected `kimi-k2.5` cached-read pricing, made `big-pickle` free, updated `minimax-m2.5` pricing, and tightened the published context windows for `nemotron-3-super-free`, `mimo-v2-flash-free`, and the `minimax-m2.5*` entries.
+- Left unpublished upstream limits conservative on purpose. OpenCode Zen currently exposes model ids and pricing, but not authoritative max-output limits for several of these models, and `big-pickle` still does not have a public context-window/max-output spec.
+
+### Verification
+- `bun test test/runtime.pi-runtime.test.ts test/session/pricing.test.ts test/session.test.ts` -> pass (`235 pass, 0 fail`)
+- `bun run typecheck` -> pass
+- `git diff --check` -> pass

@@ -74,6 +74,8 @@ describe("connect helpers", () => {
     expect(isOauthCliProvider("openai")).toBe(false);
     expect(isOauthCliProvider("google")).toBe(false);
     expect(isOauthCliProvider("anthropic")).toBe(false);
+    expect(isOauthCliProvider("opencode-go")).toBe(false);
+    expect(isOauthCliProvider("opencode-zen")).toBe(false);
   });
 });
 
@@ -189,6 +191,50 @@ describe("connectProvider", () => {
     expect(entry).toBeDefined();
     expect(entry?.mode).toBe("oauth_pending");
     expect(entry?.apiKey).toBeUndefined();
+  });
+
+  test("stores api key for opencode-go when key is provided", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+
+    const result = await connectProvider({
+      provider: "opencode-go",
+      apiKey: "opencode-test-key-1234",
+      paths,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.mode).toBe("api_key");
+    expect(result.maskedApiKey).toBe("open...1234");
+
+    const store = await readConnectionStore(paths);
+    const entry = store.services["opencode-go"];
+    expect(entry).toBeDefined();
+    expect(entry?.mode).toBe("api_key");
+    expect(entry?.apiKey).toBe("opencode-test-key-1234");
+  });
+
+  test("stores api key for opencode-zen when key is provided", async () => {
+    const home = await makeTmpHome();
+    const paths = getAiCoworkerPaths({ homedir: home });
+
+    const result = await connectProvider({
+      provider: "opencode-zen",
+      apiKey: "opencode-zen-test-key-5678",
+      paths,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.mode).toBe("api_key");
+    expect(result.maskedApiKey).toBe("open...5678");
+
+    const store = await readConnectionStore(paths);
+    const entry = store.services["opencode-zen"];
+    expect(entry).toBeDefined();
+    expect(entry?.mode).toBe("api_key");
+    expect(entry?.apiKey).toBe("opencode-zen-test-key-5678");
   });
 
   test("codex-cli Cowork-owned oauth succeeds and stores oauth mode", async () => {

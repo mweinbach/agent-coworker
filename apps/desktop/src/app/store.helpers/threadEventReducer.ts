@@ -457,7 +457,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     }
 
     if (evt.type === "assistant_message") {
-      if (shouldSkipAssistantMessageAfterStreamReplay(stream, evt.text)) return;
+      const existingFeed = get().threadRuntimeById[threadId]?.feed ?? [];
+      if (shouldSkipAssistantMessageAfterStreamReplay(stream, evt.text, existingFeed)) return;
 
       pushFeedItem(set, threadId, {
         id: deps.makeId(),

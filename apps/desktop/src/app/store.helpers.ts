@@ -232,6 +232,7 @@ export type AppStoreState = {
 
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
   setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;
+  copyProviderApiKey: (provider: ProviderName, sourceProvider: ProviderName) => Promise<void>;
   authorizeProviderAuth: (provider: ProviderName, methodId: string) => Promise<void>;
   logoutProviderAuth: (provider: ProviderName) => Promise<void>;
   callbackProviderAuth: (provider: ProviderName, methodId: string, code?: string) => Promise<void>;

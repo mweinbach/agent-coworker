@@ -1,4 +1,9 @@
 import type { ProviderName } from "../types";
+import {
+  OPENCODE_DEFAULT_MODEL,
+  OPENCODE_GO_AVAILABLE_MODELS,
+  OPENCODE_ZEN_AVAILABLE_MODELS,
+} from "./opencodeShared";
 
 type ProviderModelDefinition = {
   defaultModel: string;
@@ -9,6 +14,14 @@ export const PROVIDER_MODEL_CATALOG = {
   anthropic: {
     defaultModel: "claude-opus-4-6",
     availableModels: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"],
+  },
+  "opencode-go": {
+    defaultModel: OPENCODE_DEFAULT_MODEL,
+    availableModels: OPENCODE_GO_AVAILABLE_MODELS,
+  },
+  "opencode-zen": {
+    defaultModel: OPENCODE_DEFAULT_MODEL,
+    availableModels: OPENCODE_ZEN_AVAILABLE_MODELS,
   },
   "codex-cli": {
     defaultModel: "gpt-5.4",
@@ -34,6 +47,8 @@ export function availableModelsForProvider(provider: ProviderName): readonly str
 
 export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   anthropic: PROVIDER_MODEL_CATALOG.anthropic.availableModels,
+  "opencode-go": PROVIDER_MODEL_CATALOG["opencode-go"].availableModels,
+  "opencode-zen": PROVIDER_MODEL_CATALOG["opencode-zen"].availableModels,
   "codex-cli": PROVIDER_MODEL_CATALOG["codex-cli"].availableModels,
   google: PROVIDER_MODEL_CATALOG.google.availableModels,
   openai: PROVIDER_MODEL_CATALOG.openai.availableModels,

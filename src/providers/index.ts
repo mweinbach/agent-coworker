@@ -4,6 +4,8 @@ import { anthropicProvider } from "./anthropic";
 import { PROVIDER_MODEL_CATALOG } from "./catalog";
 import { codexCliProvider } from "./codex-cli";
 import { googleProvider } from "./google";
+import { opencodeGoProvider } from "./opencode-go";
+import { opencodeZenProvider } from "./opencode-zen";
 import { openaiProvider } from "./openai";
 export { DEFAULT_PROVIDER_OPTIONS } from "./providerOptions";
 export {
@@ -37,6 +39,8 @@ export type ProviderDefinition = {
 
 const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   anthropic: anthropicProvider,
+  "opencode-go": opencodeGoProvider,
+  "opencode-zen": opencodeZenProvider,
   "codex-cli": codexCliProvider,
   google: googleProvider,
   openai: openaiProvider,
@@ -44,6 +48,8 @@ const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
 
 export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   anthropic: { ...PROVIDER_RUNTIMES.anthropic, ...PROVIDER_MODEL_CATALOG.anthropic },
+  "opencode-go": { ...PROVIDER_RUNTIMES["opencode-go"], ...PROVIDER_MODEL_CATALOG["opencode-go"] },
+  "opencode-zen": { ...PROVIDER_RUNTIMES["opencode-zen"], ...PROVIDER_MODEL_CATALOG["opencode-zen"] },
   "codex-cli": { ...PROVIDER_RUNTIMES["codex-cli"], ...PROVIDER_MODEL_CATALOG["codex-cli"] },
   google: { ...PROVIDER_RUNTIMES.google, ...PROVIDER_MODEL_CATALOG.google },
   openai: { ...PROVIDER_RUNTIMES.openai, ...PROVIDER_MODEL_CATALOG.openai },

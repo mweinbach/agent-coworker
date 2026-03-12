@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.11`
+- Current protocol version: `7.12`
 
 ## Table of Contents
 
@@ -27,7 +27,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 - [Client -> Server Messages](#client---server-messages)
   - Handshake: [client_hello](#client_hello)
   - Conversation: [user_message](#user_message) | [ask_response](#ask_response) | [approval_response](#approval_response) | [cancel](#cancel) | [reset](#reset)
-  - Model & Provider: [set_model](#set_model) | [refresh_provider_status](#refresh_provider_status) | [provider_catalog_get](#provider_catalog_get) | [provider_auth_methods_get](#provider_auth_methods_get) | [provider_auth_authorize](#provider_auth_authorize) | [provider_auth_logout](#provider_auth_logout) | [provider_auth_callback](#provider_auth_callback) | [provider_auth_set_api_key](#provider_auth_set_api_key)
+  - Model & Provider: [set_model](#set_model) | [refresh_provider_status](#refresh_provider_status) | [provider_catalog_get](#provider_catalog_get) | [provider_auth_methods_get](#provider_auth_methods_get) | [provider_auth_authorize](#provider_auth_authorize) | [provider_auth_logout](#provider_auth_logout) | [provider_auth_callback](#provider_auth_callback) | [provider_auth_set_api_key](#provider_auth_set_api_key) | [provider_auth_copy_api_key](#provider_auth_copy_api_key)
   - Tools & Commands: [list_tools](#list_tools) | [list_commands](#list_commands) | [execute_command](#execute_command)
   - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill)
   - MCP: [set_enable_mcp](#set_enable_mcp) | [mcp_servers_get](#mcp_servers_get) | [mcp_server_upsert](#mcp_server_upsert) | [mcp_server_delete](#mcp_server_delete) | [mcp_server_validate](#mcp_server_validate) | [mcp_server_auth_authorize](#mcp_server_auth_authorize) | [mcp_server_auth_callback](#mcp_server_auth_callback) | [mcp_server_auth_set_api_key](#mcp_server_auth_set_api_key) | [mcp_servers_migrate_legacy](#mcp_servers_migrate_legacy)
@@ -48,6 +48,11 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.12`:
+
+- New client message: `provider_auth_copy_api_key`.
+- Added `opencode-zen` as a first-class provider alongside `opencode-go`.
 
 Changes in `7.11`:
 
@@ -193,7 +198,7 @@ Types referenced across multiple messages.
 ### ProviderName
 
 ```
-"google" | "openai" | "anthropic" | "codex-cli"
+"google" | "openai" | "anthropic" | "opencode-go" | "opencode-zen" | "codex-cli"
 ```
 
 ### PublicConfig
@@ -214,10 +219,10 @@ Returned in `server_hello` and `config_updated`:
 
 ```json
 {
-  "id": "openai",
-  "name": "OpenAI",
-  "models": ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex"],
-  "defaultModel": "gpt-5.4"
+  "id": "opencode-zen",
+  "name": "OpenCode Zen",
+  "models": ["glm-5", "kimi-k2.5", "nemotron-3-super-free", "mimo-v2-flash-free", "big-pickle", "minimax-m2.5-free", "minimax-m2.5"],
+  "defaultModel": "glm-5"
 }
 ```
 
@@ -958,6 +963,25 @@ Set a provider API key.
 | `provider` | `ProviderName` | Yes | Must be a valid provider |
 | `methodId` | `string` | Yes | Non-empty. Must be a registered auth method for the given provider |
 | `apiKey` | `string` | Yes | Non-empty API key value |
+
+**Response:** `provider_auth_result`, then `provider_status` and `provider_catalog` on success.
+
+---
+
+### provider_auth_copy_api_key
+
+Copy a saved API key from one provider entry to another without exposing the secret to the client. Currently this is only supported between `opencode-go` and `opencode-zen`.
+
+```json
+{ "type": "provider_auth_copy_api_key", "sessionId": "...", "provider": "opencode-zen", "sourceProvider": "opencode-go" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"provider_auth_copy_api_key"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `provider` | `ProviderName` | Yes | Target provider that will receive the copied saved API key |
+| `sourceProvider` | `ProviderName` | Yes | Source provider whose saved API key should be copied |
 
 **Response:** `provider_auth_result`, then `provider_status` and `provider_catalog` on success.
 
@@ -2063,10 +2087,12 @@ Provider catalog metadata. Sent on connection and after model changes.
   "type": "provider_catalog",
   "sessionId": "...",
   "all": [
-    { "id": "openai", "name": "OpenAI", "models": ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex"], "defaultModel": "gpt-5.4" }
+    { "id": "openai", "name": "OpenAI", "models": ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex"], "defaultModel": "gpt-5.4" },
+    { "id": "opencode-go", "name": "OpenCode Go", "models": ["glm-5", "kimi-k2.5"], "defaultModel": "glm-5" },
+    { "id": "opencode-zen", "name": "OpenCode Zen", "models": ["glm-5", "kimi-k2.5", "nemotron-3-super-free", "mimo-v2-flash-free", "big-pickle", "minimax-m2.5-free", "minimax-m2.5"], "defaultModel": "glm-5" }
   ],
-  "default": { "openai": "gpt-5.4", "google": "gemini-2.5-pro" },
-  "connected": ["openai"]
+  "default": { "openai": "gpt-5.4", "opencode-go": "glm-5", "opencode-zen": "glm-5", "google": "gemini-3.1-pro-preview-customtools" },
+  "connected": ["openai", "opencode-go", "opencode-zen"]
 }
 ```
 
@@ -2089,10 +2115,12 @@ Auth method registry for all providers.
   "type": "provider_auth_methods",
   "sessionId": "...",
   "methods": {
-    "openai": [{ "id": "api_key", "type": "api", "label": "API Key" }],
+    "openai": [{ "id": "api_key", "type": "api", "label": "API key" }],
+    "opencode-go": [{ "id": "api_key", "type": "api", "label": "API key" }],
+    "opencode-zen": [{ "id": "api_key", "type": "api", "label": "API key" }],
     "codex-cli": [
-      { "id": "oauth_cli", "type": "oauth", "label": "OAuth (CLI)", "oauthMode": "auto" },
-      { "id": "api_key", "type": "api", "label": "API Key" }
+      { "id": "oauth_cli", "type": "oauth", "label": "Sign in with ChatGPT (browser)", "oauthMode": "auto" },
+      { "id": "api_key", "type": "api", "label": "API key" }
     ]
   }
 }
@@ -2137,7 +2165,7 @@ Auth challenge payload returned after `provider_auth_authorize`.
 
 ### provider_auth_result
 
-Auth completion result after `provider_auth_callback`, `provider_auth_set_api_key`, or `provider_auth_logout`.
+Auth completion result after `provider_auth_callback`, `provider_auth_set_api_key`, `provider_auth_copy_api_key`, or `provider_auth_logout`.
 
 ```json
 {

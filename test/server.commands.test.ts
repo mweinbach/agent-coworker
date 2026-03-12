@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -74,5 +76,54 @@ describe("server command helpers", () => {
     expect(command?.name).toBe("triage");
     expect(command?.description).toBe("triage issues");
     expect(command?.hints).toContain("$ARGUMENTS");
+  });
+
+  test("resolveCommand strips skill front matter and exposes skill metadata", async () => {
+    const skillsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-command-skills-"));
+    const skillDir = path.join(skillsRoot, "release-notes");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      `---
+name: release-notes
+description: Draft release notes
+---
+Summarize these commits for release notes.
+
+$ARGUMENTS
+`,
+      "utf-8",
+    );
+
+    const command = await resolveCommand(makeConfig({ skillsDirs: [skillsRoot] }), "release-notes");
+    expect(command).not.toBeNull();
+    expect(command?.source).toBe("skill");
+    expect(command?.description).toBe("Draft release notes");
+    expect(command?.template).toBe("Summarize these commits for release notes.\n\n$ARGUMENTS");
+    expect(command?.hints).toEqual(["$ARGUMENTS"]);
+  });
+
+  test("resolveCommand lets config commands override built-in command templates", async () => {
+    const config = makeConfig({
+      command: {
+        review: {
+          description: "custom review flow",
+          source: "command",
+          template: "Custom review for $1",
+        },
+      },
+    });
+
+    const command = await resolveCommand(config, "review");
+    expect(command).not.toBeNull();
+    expect(command?.source).toBe("command");
+    expect(command?.description).toBe("custom review flow");
+    expect(command?.template).toBe("Custom review for $1");
+  });
+
+  test("expandCommandTemplate preserves quoted arguments as single placeholder tokens", () => {
+    expect(
+      expandCommandTemplate("Compare $1 against $2", '"release branch" main'),
+    ).toBe("Compare release branch against main");
   });
 });

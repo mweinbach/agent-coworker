@@ -18,7 +18,7 @@ import {
   renamePath,
   trashPath,
 } from "../../lib/desktopCommands";
-import type { ProviderName } from "../../lib/wsProtocol";
+import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS, type ProviderName } from "../../lib/wsProtocol";
 
 import {
   type AppStoreActions,
@@ -86,6 +86,13 @@ const persistedWorkspaceSchema = z.object({
   defaultProvider: normalizedProviderSchema,
   defaultModel: optionalStringWithContentSchema,
   defaultSubAgentModel: optionalStringWithContentSchema,
+  defaultToolOutputOverflowChars: z.preprocess((value) => {
+    if (value === null) return null;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.max(0, Math.floor(value));
+    }
+    return DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS;
+  }, z.number().int().nonnegative().nullable()).optional(),
   providerOptions: z.unknown().optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
@@ -101,6 +108,7 @@ const persistedWorkspaceSchema = z.object({
     defaultProvider: workspace.defaultProvider,
     defaultModel: model,
     defaultSubAgentModel: workspace.defaultSubAgentModel ?? model,
+    defaultToolOutputOverflowChars: workspace.defaultToolOutputOverflowChars ?? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS,
     providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
     defaultEnableMcp: workspace.defaultEnableMcp,
     defaultBackupsEnabled: workspace.defaultBackupsEnabled,

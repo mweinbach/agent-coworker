@@ -38,6 +38,7 @@ export type WorkspaceRecord = {
   defaultProvider?: ProviderName;
   defaultModel?: string;
   defaultSubAgentModel?: string;
+  defaultToolOutputOverflowChars?: number | null;
   providerOptions?: WorkspaceProviderOptions;
   defaultEnableMcp: boolean;
   defaultBackupsEnabled: boolean;

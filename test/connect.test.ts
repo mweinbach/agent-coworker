@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { OAUTH_LOOPBACK_HOST } from "../src/auth/oauth-server";
 import { __internal as connectInternal } from "../src/connect";
+import { parseConnectionStoreJson } from "../src/store/connections";
 
 const mockedAuthorizeUrl = `https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=${encodeURIComponent(`http://${OAUTH_LOOPBACK_HOST}:1455/auth/callback`)}&scope=openid%20profile%20email%20offline_access&code_challenge=mock-challenge&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&state=mock-state&originator=codex_cli_rs`;
 
@@ -448,4 +449,56 @@ describe("connectProvider", () => {
     expect(persisted?.account?.account_id).toBe("acc_manual");
   });
 
+});
+
+describe("connection store parsing", () => {
+  const baseStore = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    services: {},
+  };
+
+  test("ignores unknown service keys instead of failing", () => {
+    const raw = JSON.stringify({
+      ...baseStore,
+      services: {
+        "not-a-provider": {
+          service: "not-a-provider",
+          mode: "api_key",
+          apiKey: "irrelevant",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const parsed = parseConnectionStoreJson(raw, "/tmp/connections.json");
+    expect(parsed.services).toEqual({});
+  });
+
+  test("throws when a service entry claims the wrong service name", () => {
+    const raw = JSON.stringify({
+      ...baseStore,
+      services: {
+        openai: {
+          service: "google",
+          mode: "api_key",
+          apiKey: "sk-bad",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    expect(() => parseConnectionStoreJson(raw, "/tmp/connections.json")).toThrow("Invalid connection store schema");
+  });
+
+  test("enforces string tool API keys", () => {
+    const raw = JSON.stringify({
+      ...baseStore,
+      toolApiKeys: {
+        exa: 123,
+      },
+    });
+
+    expect(() => parseConnectionStoreJson(raw, "/tmp/connections.json")).toThrow("Invalid connection store schema");
+  });
 });

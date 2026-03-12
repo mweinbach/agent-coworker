@@ -151,6 +151,7 @@ describe("workspace settings sync", () => {
           defaultProvider: "openai",
           defaultModel: "gpt-5.2",
           defaultSubAgentModel: "gpt-5.2",
+          defaultToolOutputOverflowChars: 25000,
           defaultEnableMcp: true,
           defaultBackupsEnabled: true,
           yolo: false,
@@ -388,6 +389,7 @@ describe("workspace settings sync", () => {
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(workspace?.defaultSubAgentModel).toBe("gpt-5-mini");
     expect(workspace?.defaultBackupsEnabled).toBe(false);
+    expect(workspace?.defaultToolOutputOverflowChars).toBe(12000);
     expect(runtime?.controlSessionConfig?.subAgentModel).toBe("gpt-5-mini");
     expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultBackupsEnabled).toBe(false);
@@ -572,10 +574,13 @@ describe("workspace settings sync", () => {
 
     const sentTypes = threadSocket.sent.map((message) => message?.type);
     expect(sentTypes).toEqual(["set_config", "set_model", "set_config", "set_enable_mcp"]);
-    // First set_config is the immediate backupsEnabled-only message
+    // First set_config carries immediate safe runtime defaults.
     expect(threadSocket.sent[0]).toMatchObject({
       type: "set_config",
-      config: { backupsEnabled: true },
+      config: {
+        backupsEnabled: true,
+        toolOutputOverflowChars: 25000,
+      },
     });
     // Second set_config carries the rest of the config patch
     expect(threadSocket.sent[2]).toMatchObject({
@@ -635,7 +640,10 @@ describe("workspace settings sync", () => {
 
     expect(threadSocket.sent[0]).toMatchObject({
       type: "set_config",
-      config: { backupsEnabled: false },
+      config: {
+        backupsEnabled: false,
+        toolOutputOverflowChars: 25000,
+      },
     });
   });
 
@@ -680,6 +688,7 @@ describe("workspace settings sync", () => {
       defaultProvider: "openai",
       defaultModel: "gpt-5.2",
       defaultSubAgentModel: "gpt-5.2-mini",
+      defaultToolOutputOverflowChars: 12000,
       defaultEnableMcp: false,
       defaultBackupsEnabled: false,
       providerOptions: {
@@ -703,6 +712,7 @@ describe("workspace settings sync", () => {
       config: {
         backupsEnabled: false,
         subAgentModel: "gpt-5.2-mini",
+        toolOutputOverflowChars: 12000,
         providerOptions: {
           openai: {
             reasoningEffort: "high",
@@ -723,10 +733,13 @@ describe("workspace settings sync", () => {
       "set_config",
       "set_enable_mcp",
     ]);
-    // First set_config is the immediate backupsEnabled-only message
+    // First set_config carries immediate safe runtime defaults.
     expect(idleThreadSocket.sent[0]).toMatchObject({
       type: "set_config",
-      config: { backupsEnabled: false },
+      config: {
+        backupsEnabled: false,
+        toolOutputOverflowChars: 12000,
+      },
     });
     // Second set_config carries the rest of the config patch
     expect(idleThreadSocket.sent[2]).toMatchObject({
@@ -746,13 +759,16 @@ describe("workspace settings sync", () => {
         },
       },
     });
-    // Busy thread still gets the immediate backupsEnabled config
+    // Busy thread still gets the immediate safe runtime config
     expect(busyThreadSocket.sent.map((message) => message?.type)).toEqual([
       "set_config",
     ]);
     expect(busyThreadSocket.sent[0]).toMatchObject({
       type: "set_config",
-      config: { backupsEnabled: false },
+      config: {
+        backupsEnabled: false,
+        toolOutputOverflowChars: 12000,
+      },
     });
 
     busyThreadSocket.sent = [];

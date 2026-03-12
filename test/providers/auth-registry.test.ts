@@ -10,6 +10,7 @@ import {
   copyProviderApiKey,
   listProviderAuthMethods,
   logoutProviderAuth,
+  requiresProviderAuthCode,
   resolveProviderAuthMethod,
   setProviderApiKey,
 } from "../../src/providers/authRegistry";
@@ -29,6 +30,11 @@ describe("providers/authRegistry", () => {
     expect(resolveProviderAuthMethod("openai", "oauth_cli")).toBeNull();
   });
 
+  test("requiresProviderAuthCode stays false for auto oauth and unknown methods", () => {
+    expect(requiresProviderAuthCode("codex-cli", "oauth_cli")).toBe(false);
+    expect(requiresProviderAuthCode("openai", "missing")).toBe(false);
+  });
+
   test("authorizeProviderAuth returns challenge for oauth method", () => {
     const result = authorizeProviderAuth({ provider: "codex-cli", methodId: "oauth_cli" });
     expect(result.ok).toBe(true);
@@ -41,6 +47,9 @@ describe("providers/authRegistry", () => {
   test("authorizeProviderAuth fails for api key method", () => {
     const result = authorizeProviderAuth({ provider: "openai", methodId: "api_key" });
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe('Auth method "api_key" does not support authorization.');
+    }
   });
 
   test("setProviderApiKey validates and calls connect handler", async () => {
@@ -63,6 +72,62 @@ describe("providers/authRegistry", () => {
     expect(result.ok).toBe(true);
     expect(connect).toHaveBeenCalledTimes(1);
     expect(connect.mock.calls[0]?.[0]?.apiKey).toBe("sk-test");
+  });
+
+  test("setProviderApiKey refuses oauth methods", async () => {
+    const connect = mock(async () => ({
+      ok: true as const,
+      provider: "codex-cli" as const,
+      mode: "api_key" as const,
+      storageFile: "/tmp/connections.json",
+      message: "saved",
+      maskedApiKey: "sk-t...est",
+    }));
+
+    const result = await setProviderApiKey({
+      provider: "codex-cli",
+      methodId: "oauth_cli",
+      apiKey: "unused",
+      connect,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(connect).not.toHaveBeenCalled();
+    expect(result.message).toContain("not an API key method");
+  });
+
+  test("setProviderApiKey trims whitespace before forwarding and rejects blank keys", async () => {
+    const connect = mock(async (opts: any) => ({
+      ok: true as const,
+      provider: opts.provider,
+      mode: "api_key" as const,
+      storageFile: "/tmp/connections.json",
+      message: "saved",
+      maskedApiKey: "sk-t...est",
+    }));
+
+    const trimmed = await setProviderApiKey({
+      provider: "openai",
+      methodId: "api_key",
+      apiKey: "  sk-test-trimmed  ",
+      connect,
+    });
+
+    expect(trimmed.ok).toBe(true);
+    expect(connect.mock.calls[0]?.[0]?.apiKey).toBe("sk-test-trimmed");
+
+    const blank = await setProviderApiKey({
+      provider: "openai",
+      methodId: "api_key",
+      apiKey: "   ",
+      connect,
+    });
+
+    expect(blank.ok).toBe(false);
+    if (!blank.ok) {
+      expect(blank.message).toBe("API key is required.");
+    }
+    expect(connect).toHaveBeenCalledTimes(1);
   });
 
   test("setProviderApiKey stores Exa key for google exa_api_key method", async () => {
@@ -112,7 +177,7 @@ describe("providers/authRegistry", () => {
     expect(connect).toHaveBeenCalledTimes(1);
   });
 
-  test("callbackProviderAuth forwards code to connect handler", async () => {
+  test("callbackProviderAuth forwards the full oauth callback context to connect handler", async () => {
     const connect = mock(async (opts: any) => ({
       ok: true as const,
       provider: opts.provider,
@@ -120,18 +185,41 @@ describe("providers/authRegistry", () => {
       storageFile: "/tmp/connections.json",
       message: "oauth complete",
     }));
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-registry-callback-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const pending = {
+      authUrl: "https://example.test/oauth",
+      redirectUri: "http://localhost:9999/callback",
+      codeVerifier: "verifier-123",
+      waitForCode: Promise.resolve("browser-code"),
+      close: () => {},
+    };
+    const onOauthLine = mock((_line: string) => {});
 
     const result = await callbackProviderAuth({
       provider: "codex-cli",
       methodId: "oauth_cli",
-      code: "auth-code-123",
+      code: "  auth-code-123  ",
+      codexBrowserAuthPending: pending,
+      cwd: "/tmp/workspace",
+      paths,
       connect,
       oauthStdioMode: "pipe",
+      onOauthLine,
     });
 
     expect(result.ok).toBe(true);
     expect(connect).toHaveBeenCalledTimes(1);
-    expect(connect.mock.calls[0]?.[0]?.code).toBe("auth-code-123");
+    expect(connect.mock.calls[0]?.[0]).toMatchObject({
+      provider: "codex-cli",
+      methodId: "oauth_cli",
+      code: "auth-code-123",
+      codexBrowserAuthPending: pending,
+      cwd: "/tmp/workspace",
+      paths,
+      oauthStdioMode: "pipe",
+      onOauthLine,
+    });
   });
 
   test("copyProviderApiKey reuses a saved sibling key without exposing it", async () => {
@@ -175,6 +263,33 @@ describe("providers/authRegistry", () => {
     expect(connect.mock.calls[0]?.[0]?.apiKey).toBe("opencode-go-key-1234");
   });
 
+  test("copyProviderApiKey fails when the source provider has no saved api key", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-registry-copy-missing-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const connect = mock(async (opts: any) => ({
+      ok: true as const,
+      provider: opts.provider,
+      mode: "api_key" as const,
+      storageFile: paths.connectionsFile,
+      message: "saved",
+      maskedApiKey: "masked",
+    }));
+
+    const result = await copyProviderApiKey({
+      provider: "opencode-zen",
+      sourceProvider: "opencode-go",
+      methodId: "api_key",
+      paths,
+      connect,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toBe("No saved API key found for opencode-go.");
+    }
+    expect(connect).toHaveBeenCalledTimes(0);
+  });
+
   test("logoutProviderAuth calls disconnect handler", async () => {
     const disconnect = mock(async (opts: any) => ({
       ok: true as const,
@@ -191,5 +306,65 @@ describe("providers/authRegistry", () => {
     expect(result.ok).toBe(true);
     expect(disconnect).toHaveBeenCalledTimes(1);
     expect(disconnect.mock.calls[0]?.[0]?.provider).toBe("codex-cli");
+  });
+
+  test("copyProviderApiKey reports missing saved key and skips connect", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-registry-copy-none-"));
+    const paths = getAiCoworkerPaths({ homedir: home });
+    const now = new Date().toISOString();
+    await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
+    await fs.writeFile(paths.connectionsFile, JSON.stringify({
+      version: 1,
+      updatedAt: now,
+      services: {
+        openai: {
+          service: "openai",
+          mode: "oauth_pending",
+          updatedAt: now,
+        },
+      },
+    }), "utf-8");
+
+    const connect = mock(async () => ({
+      ok: true as const,
+      provider: "anthropic" as const,
+      mode: "api_key" as const,
+      storageFile: paths.connectionsFile,
+      message: "saved",
+      maskedApiKey: "sk...",
+    }));
+
+    const result = await copyProviderApiKey({
+      provider: "anthropic",
+      sourceProvider: "openai",
+      methodId: "api_key",
+      paths,
+      connect,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(connect).not.toHaveBeenCalled();
+    expect(result.message).toContain("No saved API key");
+  });
+
+  test("callbackProviderAuth rejects non-oauth methods", async () => {
+    const connect = mock(async () => ({
+      ok: true as const,
+      provider: "openai" as const,
+      mode: "api_key" as const,
+      storageFile: "/tmp/connections.json",
+      message: "saved",
+      maskedApiKey: "sk...",
+    }));
+
+    const result = await callbackProviderAuth({
+      provider: "openai",
+      methodId: "api_key",
+      connect,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(connect).not.toHaveBeenCalled();
+    expect(result.message).toContain("not an OAuth method");
   });
 });

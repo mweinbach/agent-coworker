@@ -1,3 +1,22 @@
+# Task: Add desktop Developer settings for tool output overflow spill files
+
+## Plan
+- [x] Extend desktop workspace state/persistence so `toolOutputOverflowChars` can be stored as a workspace developer setting.
+- [x] Wire desktop control-session sync and workspace-default application so the selected workspace can push `toolOutputOverflowChars` to control/thread sessions.
+- [x] Add a Developer settings UI for the active workspace with enable/disable, threshold editing, and reset-to-default controls.
+- [x] Add focused desktop tests for state sync/UI coverage, then run verification and record results.
+
+## Review
+- Added a workspace-scoped desktop default for tool output overflow thresholds across `apps/desktop/src/app/types.ts`, desktop persistence/schema normalization, new-workspace defaults, control-session hydration, and workspace-default propagation to control sessions and live threads.
+- Updated the desktop workspace-default sync path so `set_config` now carries `toolOutputOverflowChars` alongside the existing safe runtime defaults, while preserving the deferred model/sub-agent/provider-option behavior for busy threads.
+- Built the control into `apps/desktop/src/ui/settings/pages/DeveloperPage.tsx` under Developer settings. The new card targets the selected workspace, supports enable/disable via `null`, editable numeric thresholds, and a reset-to-default action for `25000`.
+- Added desktop coverage for the new state and UI in `apps/desktop/test/workspace-settings-sync.test.ts`, `apps/desktop/test/desktop-schemas.test.ts`, and `apps/desktop/test/developer-page.test.tsx`.
+- Verification:
+  - `bun test apps/desktop/test/developer-page.test.tsx apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/desktop-schemas.test.ts --bail` -> pass
+  - `bun test` -> pass (`2106 pass, 0 fail`)
+  - `bun run typecheck` -> pass
+  - `git diff --check` -> pass
+
 # Task: Add tool output overflow spill files
 
 ## Plan
@@ -222,12 +241,24 @@
 # Task: Audit repo-wide test coverage for missing or ineffective assertions
 
 ## Plan
-- [ ] Inventory the current test surface and identify concrete weak or missing coverage areas across harness, providers, and UI/client code.
-- [ ] Add or strengthen the highest-signal regressions without rewriting unrelated production behavior.
-- [ ] Run targeted verification for each touched area, then run broader repo validation and record any remaining gaps or pre-existing issues.
+- [x] Inventory the current test surface and identify concrete weak or missing coverage areas across harness, providers, and UI/client code.
+- [x] Add or strengthen the highest-signal regressions without rewriting unrelated production behavior.
+- [x] Run targeted verification for each touched area, then run broader repo validation and record any remaining gaps or pre-existing issues.
 
 ## Review
-- In progress.
+- Strengthened `test/decode-client-message.test.ts` so websocket decode coverage now proves all protocol error-code mappings that matter in production: unsupported raw payloads, non-object JSON envelopes, missing `type`, and known-message validation failures.
+- Strengthened `test/agentSocket.runtime.test.ts` so `AgentSocket` no longer relies on smoke coverage for reconnect behavior. The tests now prove resume URL construction, deferred send-queue flushing until `server_hello`, and keepalive pings only after a session is established.
+- Strengthened `test/agentSocket.parse.test.ts` so the client parser proves `safeParseServerEventDetailed(...)` preserves `unknown_type`, `invalid_envelope`, and `invalid_event` distinctions instead of only falling back to null-ish parse failures.
+- Strengthened `test/providers/auth-registry.test.ts` so provider auth coverage now checks trimmed API-key forwarding, blank-key rejection before side effects, full OAuth callback context forwarding, and missing-source-key copy failures instead of mostly asserting `ok`/mock-call counts.
+- Strengthened `test/server.commands.test.ts` so command resolution proves real outcomes: skill front matter is stripped before execution, config commands override built-ins, and quoted placeholder arguments stay grouped correctly.
+- Verification:
+  - `~/.bun/bin/bun test test/decode-client-message.test.ts test/providers/auth-registry.test.ts test/agentSocket.runtime.test.ts test/agentSocket.parse.test.ts test/server.commands.test.ts --bail` -> pass (`50 pass, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun test` in the default environment -> fails for pre-existing environment-sensitive reasons unrelated to this patch set:
+    - remote MCP tests attempted live `mcp.grep.app` access because `RUN_REMOTE_MCP_TESTS` was enabled in the shell
+    - CLI REPL tests hit `EPERM` writing under `/Users/mweinbach/.cowork/state`
+    - `test/mcp.oauth-provider.test.ts` hit a pre-existing `EADDRINUSE` failure while binding an auto-OAuth callback server on `127.0.0.1:0`
+  - `HOME=/tmp/agent-coworker-test-home RUN_REMOTE_MCP_TESTS=0 ~/.bun/bin/bun test` -> remote MCP and CLI-home failures were removed, but the suite still stopped on the same pre-existing `test/mcp.oauth-provider.test.ts` `EADDRINUSE` callback-capture failure.
 
 # Task: Implement workspace backup settings page
 
@@ -3187,3 +3218,24 @@
 - `bun test test/tools.test.ts --test-name-pattern "webSearch tool"` -> pass (`9 pass, 0 fail`)
 - `bunx tsc --noEmit` -> pass
 - `git diff --check` -> pass
+
+# Task: 2026-03-12 repo-wide test audit follow-up
+
+## Plan
+- [x] Audit the current test surface for weak assertions or missing coverage across provider/auth, client/replay, REPL, and catalog code.
+- [x] Add focused regressions in clean test files without disturbing unrelated in-flight runtime edits.
+- [x] Run targeted validation for the touched files, then widen verification and record any pre-existing environment blockers.
+
+## Review
+- Strengthened `test/connect.test.ts` with direct `parseConnectionStoreJson(...)` coverage so the Cowork auth-store parser now proves unknown providers are ignored, mismatched service keys fail schema validation, and invalid tool API key shapes are rejected.
+- Strengthened `test/providers/auth-registry.test.ts` so provider auth helpers now prove trimmed API-key forwarding, blank-key rejection, OAuth-method rejection on API-key paths, full callback-context forwarding, and copy failures for both missing and non-API-key source entries.
+- Strengthened `test/providers/connection-catalog.test.ts` so the provider catalog now proves `all` and `default` stay aligned with `PROVIDER_NAMES`, and `codex-cli` is not duplicated when both Cowork OAuth material and `connections.json` report it as connected.
+- Strengthened `test/modelStreamReplay.test.ts` so replay runtime behavior now proves `clearModelStreamReplayRuntime(...)` resets both projector/raw-backed state, projector instances are reused across multiple raw events for the same turn, and the duplicate-suppression filter does not wrongly drop non-configured chunk types like `finish`.
+- Strengthened `test/agentSocket.runtime.test.ts` so client transport coverage now proves reconnect resume URLs, deferred send-queue flushing only after `server_hello`, and keepalive pings only after a session ID exists.
+- Added `test/repl.prompt-controller.test.ts` so the CLI prompt controller now proves approval prompts take precedence over asks, queues drain in order, and the prompt mode returns to `you> ` when no prompts remain.
+
+### Verification
+- `~/.bun/bin/bun test test/connect.test.ts test/providers/auth-registry.test.ts test/providers/connection-catalog.test.ts test/modelStreamReplay.test.ts test/repl.prompt-controller.test.ts test/agentSocket.runtime.test.ts --bail` -> pass (`52 pass, 0 fail`)
+- `~/.bun/bin/bun test --bail` -> fails outside this patch set because remote MCP tests tried live `mcp.grep.app` access when `RUN_REMOTE_MCP_TESTS` was enabled.
+- `HOME=/tmp/agent-coworker-test-home RUN_REMOTE_MCP_TESTS=0 ~/.bun/bin/bun test --bail` -> gets past the remote MCP and CLI-home issues, but still stops on the pre-existing `test/mcp.oauth-provider.test.ts` callback-capture bind failure (`EADDRINUSE` at `src/mcp/oauthProvider.ts:127`).
+- `HOME=/tmp/agent-coworker-test-home RUN_REMOTE_MCP_TESTS=0 ~/.bun/bin/bun test test/mcp.oauth-provider.test.ts --bail` -> reproduces the same pre-existing `EADDRINUSE` failure in isolation.

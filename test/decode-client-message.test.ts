@@ -51,4 +51,51 @@ describe("decodeClientMessage", () => {
       expect(decoded.event.message).toContain("Unknown type");
     }
   });
+
+  test("maps non-object JSON payloads to invalid_payload", () => {
+    const raw = new Uint8Array(Buffer.from(JSON.stringify(["not", "an", "object"]), "utf-8"));
+    const decoded = decodeClientMessage(raw, "s-1");
+
+    expect(decoded.ok).toBe(false);
+    if (!decoded.ok) {
+      expect(decoded.event.code).toBe("invalid_payload");
+      expect(decoded.event.sessionId).toBe("s-1");
+      expect(decoded.event.message).toBe("Expected object");
+    }
+  });
+
+  test("maps object payloads missing a type to missing_type", () => {
+    const raw = new Uint8Array(Buffer.from(JSON.stringify({ sessionId: "s-1" }), "utf-8"));
+    const decoded = decodeClientMessage(raw, "s-1");
+
+    expect(decoded.ok).toBe(false);
+    if (!decoded.ok) {
+      expect(decoded.event.code).toBe("missing_type");
+      expect(decoded.event.message).toBe("Missing type");
+      expect(decoded.event.source).toBe("protocol");
+    }
+  });
+
+  test("maps known message validation failures to validation_failed", () => {
+    const raw = new Uint8Array(Buffer.from(JSON.stringify({ type: "ping" }), "utf-8"));
+    const decoded = decodeClientMessage(raw, "s-1");
+
+    expect(decoded.ok).toBe(false);
+    if (!decoded.ok) {
+      expect(decoded.event.code).toBe("validation_failed");
+      expect(decoded.event.message).toBe("ping missing sessionId");
+      expect(decoded.event.sessionId).toBe("s-1");
+    }
+  });
+
+  test("maps unsupported raw websocket payload types to invalid_json", () => {
+    const decoded = decodeClientMessage({ bad: "payload" }, "s-1");
+
+    expect(decoded.ok).toBe(false);
+    if (!decoded.ok) {
+      expect(decoded.event.code).toBe("invalid_json");
+      expect(decoded.event.message).toBe("Invalid JSON");
+      expect(decoded.event.sessionId).toBe("s-1");
+    }
+  });
 });

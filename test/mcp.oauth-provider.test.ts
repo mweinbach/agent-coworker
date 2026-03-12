@@ -20,15 +20,76 @@ function makeOAuthServer(overrides: Partial<MCPRegistryServer> = {}): MCPRegistr
 }
 
 describe("mcp oauth provider", () => {
+  let tokenServer: Server;
+  let tokenServerUrl: string;
+  let lastTokenRequest: { body: URLSearchParams } | undefined;
+
+  beforeAll(async () => {
+    tokenServer = createServer((req, res) => {
+      // Serve RFC 9728 protected resource metadata.
+      if (req.url?.startsWith("/.well-known/oauth-protected-resource")) {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({
+          resource: tokenServerUrl,
+          authorization_servers: [tokenServerUrl],
+        }));
+        return;
+      }
+      // Serve RFC 8414 authorization server metadata.
+      if (req.url?.startsWith("/.well-known/oauth-authorization-server")) {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({
+          issuer: tokenServerUrl,
+          authorization_endpoint: `${tokenServerUrl}/authorize`,
+          token_endpoint: `${tokenServerUrl}/token`,
+          response_types_supported: ["code"],
+          code_challenge_methods_supported: ["S256"],
+        }));
+        return;
+      }
+      if (req.url === "/token" && req.method === "POST") {
+        let rawBody = "";
+        req.on("data", (chunk: Buffer) => { rawBody += chunk.toString(); });
+        req.on("end", () => {
+          lastTokenRequest = { body: new URLSearchParams(rawBody) };
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({
+            access_token: "real-access-token",
+            token_type: "Bearer",
+            refresh_token: "real-refresh-token",
+            expires_in: 3600,
+            scope: "tools.read",
+          }));
+        });
+        return;
+      }
+      res.statusCode = 404;
+      res.end("Not found");
+    });
+
+    await new Promise<void>((resolve) => {
+      tokenServer.listen(0, "127.0.0.1", () => resolve());
+    });
+    const addr = tokenServer.address();
+    if (!addr || typeof addr === "string") throw new Error("Failed to bind token server");
+    tokenServerUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(() => {
+    tokenServer.close();
+  });
+
   test("authorizeMCPServerOAuth creates challenge and pending payload", async () => {
-    const server = makeOAuthServer({ auth: { type: "oauth", oauthMode: "code", scope: "tools.read" } });
+    const server = makeOAuthServer({
+      transport: { type: "http", url: `${tokenServerUrl}/mcp` },
+      auth: { type: "oauth", oauthMode: "code", scope: "tools.read" },
+    });
     const result = await authorizeMCPServerOAuth(server);
 
     expect(result.challenge.method).toBe("code");
-    // The SDK builds the URL from discovered metadata (or falls back to origin).
-    // Verify we get a valid URL with the expected OAuth parameters.
     expect(result.challenge.url).toBeDefined();
     const authUrl = new URL(result.challenge.url!);
+    expect(authUrl.origin + authUrl.pathname).toBe(`${tokenServerUrl}/authorize`);
     expect(authUrl.searchParams.get("response_type")).toBe("code");
     expect(authUrl.searchParams.get("code_challenge_method")).toBe("S256");
     expect(result.pending.state.length).toBeGreaterThan(0);
@@ -36,10 +97,21 @@ describe("mcp oauth provider", () => {
   });
 
   test("auto oauth callback capture supports manual continue path", async () => {
-    const server = makeOAuthServer({ auth: { type: "oauth", oauthMode: "auto", scope: "tools.read" } });
-    const result = await authorizeMCPServerOAuth(server);
+    const server = makeOAuthServer({
+      transport: { type: "http", url: `${tokenServerUrl}/mcp` },
+      auth: { type: "oauth", oauthMode: "auto", scope: "tools.read" },
+    });
+    let openedUrl = "";
+    const result = await authorizeMCPServerOAuth(server, undefined, {
+      openUrl: async (url) => {
+        openedUrl = url;
+        return true;
+      },
+    });
 
     expect(result.challenge.method).toBe("auto");
+    expect(result.openedBrowser).toBe(true);
+    expect(openedUrl).toBe(result.challenge.url);
 
     const callbackUrl = new URL(result.pending.redirectUri);
     callbackUrl.searchParams.set("state", result.pending.state);
@@ -53,64 +125,6 @@ describe("mcp oauth provider", () => {
   });
 
   describe("exchangeMCPServerOAuthCode", () => {
-    let tokenServer: Server;
-    let tokenServerUrl: string;
-    let lastTokenRequest: { body: URLSearchParams } | undefined;
-
-    beforeAll(async () => {
-      tokenServer = createServer((req, res) => {
-        // Serve RFC 9728 protected resource metadata.
-        if (req.url?.startsWith("/.well-known/oauth-protected-resource")) {
-          res.setHeader("content-type", "application/json");
-          res.end(JSON.stringify({
-            resource: tokenServerUrl,
-            authorization_servers: [tokenServerUrl],
-          }));
-          return;
-        }
-        // Serve RFC 8414 authorization server metadata.
-        if (req.url?.startsWith("/.well-known/oauth-authorization-server")) {
-          res.setHeader("content-type", "application/json");
-          res.end(JSON.stringify({
-            issuer: tokenServerUrl,
-            authorization_endpoint: `${tokenServerUrl}/authorize`,
-            token_endpoint: `${tokenServerUrl}/token`,
-            response_types_supported: ["code"],
-            code_challenge_methods_supported: ["S256"],
-          }));
-          return;
-        }
-        if (req.url === "/token" && req.method === "POST") {
-          let rawBody = "";
-          req.on("data", (chunk: Buffer) => { rawBody += chunk.toString(); });
-          req.on("end", () => {
-            lastTokenRequest = { body: new URLSearchParams(rawBody) };
-            res.setHeader("content-type", "application/json");
-            res.end(JSON.stringify({
-              access_token: "real-access-token",
-              token_type: "Bearer",
-              refresh_token: "real-refresh-token",
-              expires_in: 3600,
-              scope: "tools.read",
-            }));
-          });
-          return;
-        }
-        res.statusCode = 404;
-        res.end("Not found");
-      });
-
-      await new Promise<void>((resolve) => {
-        tokenServer.listen(0, "127.0.0.1", () => resolve());
-      });
-      const addr = tokenServer.address();
-      if (!addr || typeof addr === "string") throw new Error("Failed to bind token server");
-      tokenServerUrl = `http://127.0.0.1:${addr.port}`;
-    });
-
-    afterAll(() => {
-      tokenServer.close();
-    });
 
     test("exchanges authorization code at token endpoint", async () => {
       const server = makeOAuthServer({

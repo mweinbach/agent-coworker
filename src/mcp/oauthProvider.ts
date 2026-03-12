@@ -17,7 +17,7 @@ import { z } from "zod";
 import type { MCPRegistryServer } from "./configRegistry";
 import type { MCPServerOAuthClientInfo, MCPServerOAuthPending, MCPServerOAuthTokens } from "./authStore";
 import { nowIso } from "../utils/typeGuards";
-import { openExternalUrl } from "../utils/browser";
+import { openExternalUrl, type UrlOpener } from "../utils/browser";
 
 /** Default client_id used when no dynamic registration endpoint is available. */
 const FALLBACK_CLIENT_ID = "agent-coworker-desktop";
@@ -249,6 +249,7 @@ async function ensureClientInformation(opts: {
 export async function authorizeMCPServerOAuth(
   server: MCPRegistryServer,
   storedClientInfo?: MCPServerOAuthClientInfo,
+  opts: { openUrl?: UrlOpener } = {},
 ): Promise<MCPOAuthAuthorizeResult> {
   if (!isHttpLikeServer(server)) {
     throw new Error("OAuth is only supported for HTTP/SSE MCP transports.");
@@ -298,7 +299,7 @@ export async function authorizeMCPServerOAuth(
 
   let openedBrowser = false;
   if (method === "auto") {
-    openedBrowser = await openExternalUrl(url);
+    openedBrowser = await (opts.openUrl ?? openExternalUrl)(url);
   }
 
   const pending: MCPServerOAuthPending = {

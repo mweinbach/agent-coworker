@@ -34,6 +34,9 @@ jobs:
         run: bun run docs:check
 
       - name: Unit tests
+        env:
+          RUN_REMOTE_MCP_TESTS: "1"
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: bun test
 
   harness_full_testing:
@@ -61,9 +64,10 @@ jobs:
           GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           missing=0
-          for k in OPENAI_API_KEY GOOGLE_GENERATIVE_AI_API_KEY ANTHROPIC_API_KEY; do
+          for k in OPENAI_API_KEY GOOGLE_GENERATIVE_AI_API_KEY ANTHROPIC_API_KEY OPENCODE_API_KEY; do
             if [ -z "${!k}" ]; then
               echo "Missing required secret: $k"
               missing=1
@@ -79,6 +83,7 @@ jobs:
           GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: bun run harness:run
 
       - name: Upload harness artifacts

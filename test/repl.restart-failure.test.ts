@@ -91,6 +91,15 @@ class FakeWebSocket {
   }
 }
 
+async function waitForCliReady(timeoutMs = 1_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (rlRef && FakeWebSocket.instances[0]) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("Timed out waiting for CLI test harness to connect.");
+}
+
 describe("CLI REPL restart failure recovery", () => {
   test("does not get stuck after a failed /restart (serverStopping reset; disconnect cleanup not skipped)", async () => {
     rlRef = null;
@@ -134,8 +143,7 @@ describe("CLI REPL restart failure recovery", () => {
         },
       });
 
-      // Allow handshake and readline wiring to complete.
-      await new Promise((r) => setTimeout(r, 5));
+      await waitForCliReady();
 
       expect(rlRef).toBeDefined();
       expect(FakeWebSocket.instances[0]).toBeDefined();
@@ -160,4 +168,3 @@ describe("CLI REPL restart failure recovery", () => {
     }
   });
 });
-

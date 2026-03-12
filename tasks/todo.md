@@ -1,3 +1,32 @@
+# Task: Make MCP OAuth tests headless-safe and stabilize GitHub execution
+
+## Plan
+- [x] Audit the MCP OAuth provider/browser-open path and identify the minimal injection seam that keeps runtime behavior unchanged.
+- [x] Update the MCP OAuth provider tests to use a stubbed opener instead of the real external browser command, and tighten any related assertions around auto/code flows.
+- [x] Reproduce GitHub-sensitive failures or skips locally where possible, fix any deterministic CI assumptions uncovered by this task, and keep unrelated env-only failures called out separately.
+- [x] Run focused test coverage first, then the required broader verification/build commands, and record results here.
+
+## Review
+- `src/mcp/oauthProvider.ts` now accepts an optional injected `openUrl` dependency in `authorizeMCPServerOAuth()`. Production callers still default to `openExternalUrl`, but tests can stop the real OS/browser launch path entirely.
+- `test/mcp.oauth-provider.test.ts` now stubs the opener in auto mode and routes both authorize-path tests through the same local metadata/token server used by the exchange tests, so the file is fully headless and no longer depends on external OAuth discovery.
+- GitHub Actions PR check inspection (`gh` on PR `#35`, failing run `23019023411`) showed the active `Docs + Tests` failures were not MCP OAuth. The concrete failures were seven flaking websocket/REPL tests: `test/repl.restart-failure.test.ts`, `test/repl.disconnect-send.test.ts`, and `test/agentSocket.runtime.test.ts`.
+- `test/repl.restart-failure.test.ts` and `test/repl.disconnect-send.test.ts` no longer sleep for a fixed `5ms`; both now poll until the fake readline + fake websocket are actually connected, which removes the slow-runner race seen on GitHub.
+- `test/agentSocket.runtime.test.ts` now marks the shared-global websocket/timer cases as `test.serial(...)`, preventing Bun from interleaving tests that reset shared fake websocket state or patch global timers.
+- `.github/workflows/ci.yml` now enables `RUN_REMOTE_MCP_TESTS=1` in the `Docs + Tests` job and passes `OPENCODE_API_KEY` into both the unit-test job and the testing-environment harness job, so GitHub executes the remote MCP coverage instead of silently skipping it.
+- `test/runtime.pi-runtime.test.ts` now explicitly clears `OPENCODE_API_KEY` around the `opencode-go` metadata assertions so those tests stay deterministic even when CI exports a real key for remote integration coverage.
+- Verification:
+  - `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test test/mcp.oauth-provider.test.ts test/repl.restart-failure.test.ts test/repl.disconnect-send.test.ts test/agentSocket.runtime.test.ts --rerun-each 20` -> pass (`240 pass, 0 fail`)
+  - `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test test/mcp.oauth-provider.test.ts test/repl.restart-failure.test.ts test/repl.disconnect-send.test.ts test/agentSocket.runtime.test.ts --bail` -> pass
+  - `RUN_REMOTE_MCP_TESTS=1 OPENCODE_API_KEY='<redacted>' ~/.bun/bin/bun test test/mcp.remote.grep.test.ts test/agent.remote-mcp.grep.test.ts --bail` -> pass (`2 pass, 0 fail`)
+  - `OPENCODE_API_KEY='<redacted>' ~/.bun/bin/bun test test/runtime.pi-runtime.test.ts --test-name-pattern 'opencode-go runtime model resolution' --bail` -> pass (`2 pass, 0 fail`)
+  - `RUN_REMOTE_MCP_TESTS=1 OPENCODE_API_KEY='<redacted>' OPENCODE_ZEN_API_KEY='' CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test` -> pass (`2187 pass, 0 fail`)
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `~/.bun/bin/bun run typecheck` -> fails in unchanged desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345`)
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `git diff --check` -> pass
+
 # Task: Fix review follow-ups for download finalization, spill-file privacy, and overflow inheritance
 
 ## Plan

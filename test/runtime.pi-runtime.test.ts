@@ -60,6 +60,23 @@ function pickCodexModelId(): string {
   return models[0]?.id ?? "codex-mini-latest";
 }
 
+async function withEnv<T>(
+  key: string,
+  value: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = process.env[key];
+  if (typeof value === "string") process.env[key] = value;
+  else delete process.env[key];
+
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
+}
+
 describe("pi runtime regressions", () => {
   test("calls onModelAbort exactly once when turn starts with an aborted signal", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-abort-"));
@@ -154,7 +171,9 @@ describe("pi runtime regressions", () => {
       subAgentModel: "glm-5",
     });
 
-    const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+    const resolved = await withEnv("OPENCODE_API_KEY", undefined, async () => (
+      await piRuntimeInternal.resolvePiModel(makeParams(config))
+    ));
 
     expect(resolved.apiKey).toBeUndefined();
     expect(resolved.model).toMatchObject({
@@ -177,7 +196,9 @@ describe("pi runtime regressions", () => {
       subAgentModel: "kimi-k2.5",
     });
 
-    const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+    const resolved = await withEnv("OPENCODE_API_KEY", undefined, async () => (
+      await piRuntimeInternal.resolvePiModel(makeParams(config))
+    ));
 
     expect(resolved.apiKey).toBeUndefined();
     expect(resolved.model).toMatchObject({

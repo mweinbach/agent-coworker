@@ -101,6 +101,15 @@ class FakeWebSocket {
   }
 }
 
+async function waitForCliReady(timeoutMs = 1_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (rlRef && FakeWebSocket.instances[0]) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("Timed out waiting for CLI test harness to connect.");
+}
+
 describe("CLI REPL websocket send failures", () => {
   test("surfaces an error and does not silently drop a user_message when ws is not OPEN", async () => {
     rlRef = null;
@@ -126,8 +135,7 @@ describe("CLI REPL websocket send failures", () => {
         },
       });
 
-      // Allow handshake and readline wiring to complete.
-      await new Promise((r) => setTimeout(r, 5));
+      await waitForCliReady();
 
       const ws = FakeWebSocket.instances[0];
       expect(ws).toBeDefined();

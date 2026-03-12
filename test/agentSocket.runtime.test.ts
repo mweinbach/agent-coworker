@@ -53,7 +53,7 @@ function parseSentMessages(ws: FakeWebSocket): Array<Record<string, unknown>> {
 }
 
 describe("AgentSocket runtime dispatch", () => {
-  test("reports invalid socket envelopes without invoking onEvent", async () => {
+  test.serial("reports invalid socket envelopes without invoking onEvent", async () => {
     FakeWebSocket.instances = [];
     const invalid: InvalidServerEvent[] = [];
     const received: string[] = [];
@@ -79,7 +79,7 @@ describe("AgentSocket runtime dispatch", () => {
     expect(invalid[0]?.reason).toBe("invalid_json");
   });
 
-  test("does not swallow onEvent exceptions as invalid_envelope", async () => {
+  test.serial("does not swallow onEvent exceptions as invalid_envelope", async () => {
     FakeWebSocket.instances = [];
     const invalid: InvalidServerEvent[] = [];
     const consumerError = new Error("consumer handler exploded");
@@ -118,7 +118,7 @@ describe("AgentSocket runtime dispatch", () => {
     expect(invalid).toHaveLength(0);
   });
 
-  test("reconnects with resumeSessionId and flushes queued messages only after server_hello", async () => {
+  test.serial("reconnects with resumeSessionId and flushes queued messages only after server_hello", async () => {
     FakeWebSocket.instances = [];
     const scheduledReconnects: Array<() => void> = [];
     const originalSetTimeout = globalThis.setTimeout;
@@ -215,7 +215,7 @@ describe("AgentSocket runtime dispatch", () => {
     }
   });
 
-  test("sends keepalive pings only after a session is established", async () => {
+  test.serial("sends keepalive pings only after a session is established", async () => {
     FakeWebSocket.instances = [];
     const pingCallbacks: Array<() => void> = [];
     const clearedIntervals: number[] = [];
@@ -331,7 +331,7 @@ describe("AgentSocket reconnect queue", () => {
     }
   }
 
-  test("queues user messages until server_hello flushes them", async () => {
+  test.serial("queues user messages until server_hello flushes them", async () => {
     DelayedOpenWebSocket.instances = [];
     const socket = new AgentSocket({
       url: "ws://example.test/socket",

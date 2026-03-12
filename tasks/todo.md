@@ -1,3 +1,22 @@
+# Task: Add document-download handling to webFetch
+
+## Plan
+- [x] Audit the current `webFetch` response classification and choose the minimal harness-level contract for downloadable document types.
+- [x] Implement document-like fetch handling so supported binary/text docs are saved into `<workingDirectory>/Downloads` and the tool returns a local file path message.
+- [x] Update prompt/docs guidance and add focused regression coverage for supported doc content types, naming, and fallback behavior.
+- [x] Run targeted verification and record outcomes in the review section.
+
+## Review
+- `src/tools/webFetch.ts` now classifies a third response mode for document-style downloads. PDFs, Markdown documents, Office files, spreadsheets, slide decks, and similar supported types are saved into `<workingDirectory>/Downloads`, with filename selection derived from `Content-Disposition`, URL basename, and MIME fallback, plus `-2`/`-3` suffixing to avoid overwriting existing files.
+- The `webFetch` tool now returns plain text in the form `File downloaded /absolute/path/...`, which keeps the runtime/tool-result contract unchanged while giving the model a stable workspace path it can use in follow-up tool calls.
+- Updated the shipped README and system prompt templates so the documented `webFetch` contract now mentions inline image handling and `Downloads/` file saves for document-like responses.
+- Added focused regressions in `test/tools.test.ts` for PDF downloads, Markdown-by-extension downloads, Office MIME downloads with `Content-Disposition` filenames, octet-stream extension fallback, and collision-safe renaming. Added prompt coverage in `test/prompt.test.ts` for the new `File downloaded ...` guidance across shipped prompt files.
+- Verification:
+  - `bun test test/tools.test.ts test/prompt.test.ts` -> pass (`201 pass, 0 fail`)
+  - `./node_modules/.bin/tsc --noEmit` -> pass
+  - `git diff --check` -> pass
+  - `bun run typecheck` -> fails in existing desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345` in `observability_status` typing); unrelated to this `webFetch` change.
+
 # Task: Add standalone cowork-server Bun binary release pipeline
 
 ## Plan

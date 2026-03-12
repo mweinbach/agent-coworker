@@ -203,7 +203,7 @@ Cowork ships with server-side tools for:
 
 Some sessions also expose persistent-agent control tools such as `spawnPersistentAgent`, `listPersistentAgents`, `sendAgentInput`, `waitForAgent`, and `closeAgent`.
 
-`webSearch` supports Brave or Exa depending on configured credentials. `webFetch` is not just a raw fetch; it extracts readable content and converts it into markdown-friendly text.
+`webSearch` supports Brave or Exa depending on configured credentials. `webFetch` is not just a raw fetch; it extracts readable web pages into markdown-friendly text, returns inline image content for supported direct image URLs, and saves document-style downloads into `Downloads/` with a returned local file path.
 
 ### Skills
 

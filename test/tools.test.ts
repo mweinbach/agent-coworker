@@ -1438,6 +1438,156 @@ describe("webFetch tool", () => {
     }
   });
 
+  test("downloads PDFs into the workspace Downloads folder", async () => {
+    const dir = await tmpDir();
+    const pdfBytes = Buffer.from("%PDF-1.7\nfake\n");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response(pdfBytes, {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      const out: string = await t.execute({ url: "https://example.com/reports/q1-summary.pdf", maxLength: 50000 });
+      const downloadedPath = path.join(dir, "Downloads", "q1-summary.pdf");
+
+      expect(out).toBe(`File downloaded ${downloadedPath}`);
+      expect(await fs.readFile(downloadedPath)).toEqual(pdfBytes);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("downloads markdown files when the URL extension indicates a document", async () => {
+    const dir = await tmpDir();
+    const markdown = Buffer.from("# Release Notes\n\n- item\n");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      return new Response(markdown, {
+        status: 200,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      const out: string = await t.execute({ url: "https://example.com/docs/README.md", maxLength: 50000 });
+      const downloadedPath = path.join(dir, "Downloads", "README.md");
+
+      expect(out).toBe(`File downloaded ${downloadedPath}`);
+      expect(await fs.readFile(downloadedPath, "utf-8")).toBe(markdown.toString("utf-8"));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("downloads office documents from document MIME types and content-disposition filenames", async () => {
+    const dir = await tmpDir();
+    const cases = [
+      {
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        fileName: "quarterly report.docx",
+      },
+      {
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        fileName: "planning sheet.xlsx",
+      },
+      {
+        mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        fileName: "board deck.pptx",
+      },
+    ] as const;
+
+    const originalFetch = globalThis.fetch;
+
+    try {
+      for (const testCase of cases) {
+        const bytes = Buffer.from(`bytes:${testCase.fileName}`);
+        globalThis.fetch = mock(async () => {
+          return new Response(bytes, {
+            status: 200,
+            headers: {
+              "Content-Type": testCase.mimeType,
+              "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(testCase.fileName)}`,
+            },
+          });
+        }) as any;
+
+        const t: any = createWebFetchTool(makeCtx(dir));
+        const out: string = await t.execute({ url: "https://example.com/download", maxLength: 50000 });
+        const downloadedPath = path.join(dir, "Downloads", testCase.fileName);
+
+        expect(out).toBe(`File downloaded ${downloadedPath}`);
+        expect(await fs.readFile(downloadedPath)).toEqual(bytes);
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("downloads recognized document extensions even when served as octet-stream", async () => {
+    const dir = await tmpDir();
+    const cases = [
+      { url: "https://example.com/exports/budget.xlsx", fileName: "budget.xlsx" },
+      { url: "https://example.com/exports/slides.pptx", fileName: "slides.pptx" },
+    ] as const;
+
+    const originalFetch = globalThis.fetch;
+
+    try {
+      for (const testCase of cases) {
+        const bytes = Buffer.from(`bytes:${testCase.fileName}`);
+        globalThis.fetch = mock(async () => {
+          return new Response(bytes, {
+            status: 200,
+            headers: { "Content-Type": "application/octet-stream" },
+          });
+        }) as any;
+
+        const t: any = createWebFetchTool(makeCtx(dir));
+        const out: string = await t.execute({ url: testCase.url, maxLength: 50000 });
+        const downloadedPath = path.join(dir, "Downloads", testCase.fileName);
+
+        expect(out).toBe(`File downloaded ${downloadedPath}`);
+        expect(await fs.readFile(downloadedPath)).toEqual(bytes);
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("avoids overwriting an existing download by suffixing the filename", async () => {
+    const dir = await tmpDir();
+    let requestCount = 0;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async () => {
+      requestCount += 1;
+      return new Response(Buffer.from(`pdf-${requestCount}`), {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      });
+    }) as any;
+
+    try {
+      const t: any = createWebFetchTool(makeCtx(dir));
+      const first = await t.execute({ url: "https://example.com/report.pdf", maxLength: 50000 });
+      const second = await t.execute({ url: "https://example.com/report.pdf", maxLength: 50000 });
+
+      expect(first).toBe(`File downloaded ${path.join(dir, "Downloads", "report.pdf")}`);
+      expect(second).toBe(`File downloaded ${path.join(dir, "Downloads", "report-2.pdf")}`);
+      expect(await fs.readFile(path.join(dir, "Downloads", "report.pdf"), "utf-8")).toBe("pdf-1");
+      expect(await fs.readFile(path.join(dir, "Downloads", "report-2.pdf"), "utf-8")).toBe("pdf-2");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("rejects non-text content types", async () => {
     const dir = await tmpDir();
 

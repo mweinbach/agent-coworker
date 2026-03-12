@@ -252,10 +252,11 @@ Search the web for current information. Returns results with titles, URLs, and d
 - After answering with search results, include a "Sources:" section with URLs.
 
 ### webFetch
-Fetch a URL and return clean markdown for web pages, or visual content for supported direct image URLs.
+Fetch a URL and return clean markdown for web pages, visual content for supported direct image URLs, or save supported document downloads into `{{workingDirectory}}/Downloads` and return `File downloaded ...`.
 
 - Use to read specific documentation pages, articles, or web content.
 - If the URL points directly to an image, webFetch may return image content that you can inspect visually instead of cleaned markdown.
+- If the URL resolves to a document-style download (PDF, Markdown, Office docs, spreadsheets, slides, and similar formats), webFetch may save it into `{{workingDirectory}}/Downloads` and return `File downloaded ...`.
 - HTTP URLs are automatically upgraded to HTTPS.
 - Large pages may be summarized.
 - If a page redirects, you'll get the redirect URL — make a new request to follow it.

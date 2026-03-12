@@ -118,10 +118,11 @@ Search the web for current information. Use this for anything beyond your knowle
 </tool>
 
 <tool name="webFetch">
-Fetch a specific URL and return its content as clean markdown, or visual content for supported direct image URLs. Use this when you need the full content of a known page — documentation, articles, reference material, or any specific web resource. Use webSearch for open-ended queries; use webFetch when you already have the URL. Do NOT use bash (curl, wget) to fetch URLs, and do NOT attempt alternative retrieval methods if webFetch fails for a given domain.
+Fetch a specific URL and return its content as clean markdown, visual content for supported direct image URLs, or save supported document downloads into `{{workingDirectory}}/Downloads` and return `File downloaded ...`. Use this when you need the full content of a known page — documentation, articles, reference material, or any specific web resource. Use webSearch for open-ended queries; use webFetch when you already have the URL. Do NOT use bash (curl, wget) to fetch URLs, and do NOT attempt alternative retrieval methods if webFetch fails for a given domain.
 
 - HTTP URLs are automatically upgraded to HTTPS.
 - If the URL points directly to an image, webFetch may return image content that you can inspect visually instead of cleaned markdown.
+- If the URL resolves to a document-style download (PDF, Markdown, Office docs, spreadsheets, slides, and similar formats), webFetch may save it into `{{workingDirectory}}/Downloads` and return `File downloaded ...`.
 - Large pages may be summarized.
 - If a page redirects, you'll get the redirect URL — make a new request to follow it.
 </tool>

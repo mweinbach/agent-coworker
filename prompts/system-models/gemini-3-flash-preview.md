@@ -127,7 +127,7 @@ For the Google provider in this app, webSearch uses Exa. If webSearch is disable
 
 ### webFetch
 
-Fetch a URL as clean markdown for web pages, or visual content for supported direct image URLs. If the URL points directly to an image, webFetch may return image content that you can inspect visually instead of cleaned markdown. HTTP auto-upgrades to HTTPS. Large pages may be summarized. Follow redirects by making a new request with the redirect URL.
+Fetch a URL as clean markdown for web pages, visual content for supported direct image URLs, or save supported document downloads into `{{workingDirectory}}/Downloads` and return `File downloaded ...`. If the URL points directly to an image, webFetch may return image content that you can inspect visually instead of cleaned markdown. If the URL resolves to a document-style download (PDF, Markdown, Office docs, spreadsheets, slides, and similar formats), webFetch may save it into `{{workingDirectory}}/Downloads` and return `File downloaded ...`. HTTP auto-upgrades to HTTPS. Large pages may be summarized. Follow redirects by making a new request with the redirect URL.
 
 ## Interaction
 

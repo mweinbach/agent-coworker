@@ -33,6 +33,7 @@ export function DeveloperPage() {
   const showHiddenFiles = useAppStore((s) => s.showHiddenFiles);
   const setShowHiddenFiles = useAppStore((s) => s.setShowHiddenFiles);
   const workspaces = useAppStore((s) => s.workspaces);
+  const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
@@ -41,14 +42,41 @@ export function DeveloperPage() {
     () => workspaces.find((entry) => entry.id === selectedWorkspaceId) ?? workspaces[0] ?? null,
     [selectedWorkspaceId, workspaces],
   );
-  const persistedOverflowThreshold = workspace?.defaultToolOutputOverflowChars ?? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS;
+  const workspaceRuntime = useMemo(
+    () => (workspace ? workspaceRuntimeById[workspace.id] ?? null : null),
+    [workspace?.id, workspaceRuntimeById],
+  );
+  const inheritedOverflowThreshold = workspaceRuntime?.controlSessionConfig?.toolOutputOverflowChars;
   const overflowUsesInheritedDefault = workspace?.defaultToolOutputOverflowChars === undefined;
-  const overflowEnabled = workspace ? workspace.defaultToolOutputOverflowChars !== null : false;
+  const effectiveOverflowThreshold =
+    workspace?.defaultToolOutputOverflowChars !== undefined
+      ? workspace.defaultToolOutputOverflowChars
+      : inheritedOverflowThreshold;
+  const nextEnabledOverflowThreshold =
+    typeof inheritedOverflowThreshold === "number"
+      ? inheritedOverflowThreshold
+      : DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS;
+  const persistedOverflowThreshold =
+    typeof effectiveOverflowThreshold === "number"
+      ? effectiveOverflowThreshold
+      : nextEnabledOverflowThreshold;
+  const overflowEnabled = workspace ? effectiveOverflowThreshold !== null : false;
   const [overflowThresholdDraft, setOverflowThresholdDraft] = useState(String(persistedOverflowThreshold));
 
   useEffect(() => {
-    setOverflowThresholdDraft(String(workspace?.defaultToolOutputOverflowChars ?? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS));
-  }, [workspace?.id, workspace?.defaultToolOutputOverflowChars]);
+    setOverflowThresholdDraft(String(persistedOverflowThreshold));
+  }, [persistedOverflowThreshold, workspace?.id]);
+
+  const enableOverflowWithDefault = () => {
+    if (!workspace) return;
+    setOverflowThresholdDraft(String(nextEnabledOverflowThreshold));
+    void updateWorkspaceDefaults(
+      workspace.id,
+      inheritedOverflowThreshold === null
+        ? { defaultToolOutputOverflowChars: DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS }
+        : { clearDefaultToolOutputOverflowChars: true },
+    );
+  };
 
   const parsedOverflowThreshold = parseOverflowThresholdDraft(overflowThresholdDraft);
   const overflowThresholdError =
@@ -155,13 +183,14 @@ export function DeveloperPage() {
                   aria-label="Enable tool output overflow spill files"
                   onCheckedChange={(checked) => {
                     const nextEnabled = toBoolean(checked);
-                    setOverflowThresholdDraft(String(workspace.defaultToolOutputOverflowChars ?? DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS));
-                    void updateWorkspaceDefaults(
-                      workspace.id,
-                      nextEnabled
-                        ? { clearDefaultToolOutputOverflowChars: true }
-                        : { defaultToolOutputOverflowChars: null },
-                    );
+                    if (nextEnabled) {
+                      enableOverflowWithDefault();
+                      return;
+                    }
+                    setOverflowThresholdDraft(String(persistedOverflowThreshold));
+                    void updateWorkspaceDefaults(workspace.id, {
+                      defaultToolOutputOverflowChars: null,
+                    });
                   }}
                 />
               </div>
@@ -211,10 +240,14 @@ export function DeveloperPage() {
                   variant="outline"
                   disabled={overflowEnabled && overflowUsesInheritedDefault}
                   onClick={() => {
-                    setOverflowThresholdDraft(String(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS));
-                    void updateWorkspaceDefaults(workspace.id, {
-                      clearDefaultToolOutputOverflowChars: true,
-                    });
+                    if (overflowEnabled) {
+                      setOverflowThresholdDraft(String(nextEnabledOverflowThreshold));
+                      void updateWorkspaceDefaults(workspace.id, {
+                        clearDefaultToolOutputOverflowChars: true,
+                      });
+                      return;
+                    }
+                    enableOverflowWithDefault();
                   }}
                 >
                   {overflowEnabled ? "Inherit default" : "Enable default"}

@@ -1,3 +1,24 @@
+# Task: Use effective overflow default when workspace override is unset
+
+## Plan
+- [x] Audit the Developer page overflow state derivation against workspace runtime session config so inherited defaults render from the effective value.
+- [x] Patch the desktop Developer page to use the effective runtime overflow threshold and enabled state whenever `defaultToolOutputOverflowChars` is unset, without changing explicit override behavior.
+- [x] Add regression coverage for inherited numeric and inherited `null` defaults, run the required test/build commands, and record the results here.
+
+## Review
+- `apps/desktop/src/ui/settings/pages/DeveloperPage.tsx` now resolves the displayed spill-file enabled state and threshold from `workspaceRuntimeById[workspace.id].controlSessionConfig.toolOutputOverflowChars` whenever `defaultToolOutputOverflowChars` is unset, so inherited user-level or built-in defaults render correctly instead of falling back to `25000`.
+- The same Developer page now treats enable actions against an inherited disabled default (`toolOutputOverflowChars: null`) as an explicit built-in-threshold restore (`25000`) instead of sending another clear/inherit no-op. Existing explicit-override behavior is unchanged: numeric overrides can still revert to inherit, and disabled explicit overrides still restore inherited numeric defaults when one exists.
+- `apps/desktop/test/developer-page.test.tsx` now covers both missing-override inherited paths: inherited numeric thresholds render from runtime session config, and inherited disabled defaults allow `Enable default` to persist the built-in threshold.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/developer-page.test.tsx apps/desktop/test/workspace-settings-sync.test.ts --bail` -> pass (`20 pass, 0 fail`)
+  - `OPENCODE_API_KEY='' OPENCODE_ZEN_API_KEY='' ~/.bun/bin/bun test` -> pass (`2187 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> fails in unchanged desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345`)
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass
+  - `git diff --check` -> pass
+
 # Task: Make MCP OAuth tests headless-safe and stabilize GitHub execution
 
 ## Plan

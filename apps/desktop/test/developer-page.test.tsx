@@ -114,6 +114,7 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
+const { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } = await import("../src/lib/wsProtocol");
 const { DeveloperPage } = await import("../src/ui/settings/pages/DeveloperPage");
 
 describe("desktop developer page", () => {
@@ -218,6 +219,63 @@ describe("desktop developer page", () => {
     }
   });
 
+  test("uses the inherited runtime overflow threshold when the workspace override is unset", async () => {
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+          defaultSubAgentModel: "gpt-5.4",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        "ws-1": {
+          controlSessionConfig: {
+            toolOutputOverflowChars: 12000,
+          },
+        } as any,
+      },
+    });
+
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(DeveloperPage));
+      });
+
+      const checkbox = container.querySelector('[aria-label="Enable tool output overflow spill files"]');
+      if (!(checkbox instanceof harness.dom.window.HTMLElement)) throw new Error("missing overflow checkbox");
+      const thresholdInput = container.querySelector('[aria-label="Tool output overflow character threshold"]');
+      if (!(thresholdInput instanceof harness.dom.window.HTMLInputElement)) throw new Error("missing threshold input");
+      const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.includes("Inherit default"));
+      if (!button) throw new Error("missing inherit default button");
+
+      expect(checkbox.getAttribute("data-state")).toBe("checked");
+      expect(thresholdInput.disabled).toBe(false);
+      expect(thresholdInput.value).toBe("12000");
+      expect(button.hasAttribute("disabled")).toBe(true);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("enable default restores inherited overflow behavior from a disabled workspace override", async () => {
     const updateWorkspaceDefaults = mock(async () => {});
     useAppStore.setState({
@@ -260,6 +318,72 @@ describe("desktop developer page", () => {
 
       expect(updateWorkspaceDefaults).toHaveBeenCalledWith("ws-1", {
         clearDefaultToolOutputOverflowChars: true,
+      });
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("enable default writes the built-in threshold when the inherited runtime default is disabled", async () => {
+    const updateWorkspaceDefaults = mock(async () => {});
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+          defaultSubAgentModel: "gpt-5.4",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      workspaceRuntimeById: {
+        "ws-1": {
+          controlSessionConfig: {
+            toolOutputOverflowChars: null,
+          },
+        } as any,
+      },
+      updateWorkspaceDefaults,
+    });
+
+    const harness = setupJsdom();
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(DeveloperPage));
+      });
+
+      const checkbox = container.querySelector('[aria-label="Enable tool output overflow spill files"]');
+      if (!(checkbox instanceof harness.dom.window.HTMLElement)) throw new Error("missing overflow checkbox");
+      const thresholdInput = container.querySelector('[aria-label="Tool output overflow character threshold"]');
+      if (!(thresholdInput instanceof harness.dom.window.HTMLInputElement)) throw new Error("missing threshold input");
+      const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.includes("Enable default"));
+      if (!button) throw new Error("missing enable default button");
+
+      expect(checkbox.getAttribute("data-state")).toBe("unchecked");
+      expect(thresholdInput.disabled).toBe(true);
+      expect(thresholdInput.value).toBe(String(DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS));
+
+      await act(async () => {
+        button.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(updateWorkspaceDefaults).toHaveBeenCalledWith("ws-1", {
+        defaultToolOutputOverflowChars: DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS,
       });
 
       await act(async () => {

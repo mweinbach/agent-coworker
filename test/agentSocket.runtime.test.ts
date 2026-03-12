@@ -45,7 +45,37 @@ class FakeWebSocket {
 }
 
 async function flushMicrotasks() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+}
+
+function createManualTimers() {
+  const timeoutCallbacks: Array<() => void> = [];
+  const intervalCallbacks: Array<() => void> = [];
+  const clearedTimeouts: unknown[] = [];
+  const clearedIntervals: unknown[] = [];
+
+  return {
+    timeoutCallbacks,
+    intervalCallbacks,
+    clearedTimeouts,
+    clearedIntervals,
+    scheduler: {
+      setTimeout(callback: () => void) {
+        timeoutCallbacks.push(callback);
+        return { kind: "timeout", id: timeoutCallbacks.length };
+      },
+      clearTimeout(handle: unknown) {
+        clearedTimeouts.push(handle);
+      },
+      setInterval(callback: () => void) {
+        intervalCallbacks.push(callback);
+        return { kind: "interval", id: intervalCallbacks.length };
+      },
+      clearInterval(handle: unknown) {
+        clearedIntervals.push(handle);
+      },
+    },
+  };
 }
 
 function parseSentMessages(ws: FakeWebSocket): Array<Record<string, unknown>> {
@@ -120,175 +150,137 @@ describe("AgentSocket runtime dispatch", () => {
 
   test.serial("reconnects with resumeSessionId and flushes queued messages only after server_hello", async () => {
     FakeWebSocket.instances = [];
-    const scheduledReconnects: Array<() => void> = [];
-    const originalSetTimeout = globalThis.setTimeout;
-    const originalClearTimeout = globalThis.clearTimeout;
+    const timers = createManualTimers();
     const onClose: string[] = [];
-    const waitForSocketOpen = () => new Promise<void>((resolve) => originalSetTimeout(resolve, 0));
 
-    (globalThis as typeof globalThis & {
-      setTimeout: typeof setTimeout;
-      clearTimeout: typeof clearTimeout;
-    }).setTimeout = ((callback: TimerHandler) => {
-      scheduledReconnects.push(callback as () => void);
-      return 1 as unknown as ReturnType<typeof setTimeout>;
-    }) as typeof setTimeout;
-    (globalThis as typeof globalThis & {
-      clearTimeout: typeof clearTimeout;
-    }).clearTimeout = ((_timer: ReturnType<typeof setTimeout>) => {}) as typeof clearTimeout;
+    const socket = new AgentSocket({
+      url: "ws://example.test/socket",
+      client: "test-client",
+      WebSocketImpl: FakeWebSocket as any,
+      autoReconnect: true,
+      pingIntervalMs: 0,
+      timers: timers.scheduler,
+      onEvent: () => {},
+      onClose: (reason) => onClose.push(reason),
+    });
 
-    try {
-      const socket = new AgentSocket({
-        url: "ws://example.test/socket",
+    socket.connect();
+    await flushMicrotasks();
+
+    const ws1 = FakeWebSocket.instances[0];
+    expect(ws1).toBeDefined();
+    await ws1!.emitMessage(
+      JSON.stringify({
+        type: "server_hello",
+        sessionId: "sess-1",
+        config: {
+          provider: "openai",
+          model: "gpt-test",
+          workingDirectory: "/tmp",
+        },
+      }),
+    );
+
+    ws1!.close();
+    expect(timers.timeoutCallbacks).toHaveLength(1);
+    expect(onClose).toHaveLength(0);
+
+    expect(
+      socket.send({ type: "user_message", sessionId: "sess-1", text: "retry me" }),
+    ).toBe(true);
+
+    timers.timeoutCallbacks[0]!();
+    await flushMicrotasks();
+
+    const ws2 = FakeWebSocket.instances[1];
+    expect(ws2).toBeDefined();
+    expect(ws2!.url).toContain("resumeSessionId=sess-1");
+    expect(parseSentMessages(ws2!)).toEqual([
+      {
+        type: "client_hello",
         client: "test-client",
-        WebSocketImpl: FakeWebSocket as any,
-        autoReconnect: true,
-        pingIntervalMs: 0,
-        onEvent: () => {},
-        onClose: (reason) => onClose.push(reason),
-      });
+      },
+    ]);
 
-      socket.connect();
-      await waitForSocketOpen();
-
-      const ws1 = FakeWebSocket.instances[0];
-      expect(ws1).toBeDefined();
-      await ws1!.emitMessage(
-        JSON.stringify({
-          type: "server_hello",
-          sessionId: "sess-1",
-          config: {
-            provider: "openai",
-            model: "gpt-test",
-            workingDirectory: "/tmp",
-          },
-        }),
-      );
-
-      ws1!.close();
-      expect(scheduledReconnects).toHaveLength(1);
-      expect(onClose).toHaveLength(0);
-
-      expect(
-        socket.send({ type: "user_message", sessionId: "sess-1", text: "retry me" }),
-      ).toBe(true);
-
-      scheduledReconnects[0]!();
-      await waitForSocketOpen();
-
-      const ws2 = FakeWebSocket.instances[1];
-      expect(ws2).toBeDefined();
-      expect(ws2!.url).toContain("resumeSessionId=sess-1");
-      expect(parseSentMessages(ws2!)).toEqual([
-        {
-          type: "client_hello",
-          client: "test-client",
+    await ws2!.emitMessage(
+      JSON.stringify({
+        type: "server_hello",
+        sessionId: "sess-1",
+        config: {
+          provider: "openai",
+          model: "gpt-test",
+          workingDirectory: "/tmp",
         },
-      ]);
+      }),
+    );
 
-      await ws2!.emitMessage(
-        JSON.stringify({
-          type: "server_hello",
-          sessionId: "sess-1",
-          config: {
-            provider: "openai",
-            model: "gpt-test",
-            workingDirectory: "/tmp",
-          },
-        }),
-      );
-
-      expect(parseSentMessages(ws2!)).toEqual([
-        {
-          type: "client_hello",
-          client: "test-client",
-        },
-        {
-          type: "user_message",
-          sessionId: "sess-1",
-          text: "retry me",
-        },
-      ]);
-    } finally {
-      globalThis.setTimeout = originalSetTimeout;
-      globalThis.clearTimeout = originalClearTimeout;
-    }
+    expect(parseSentMessages(ws2!)).toEqual([
+      {
+        type: "client_hello",
+        client: "test-client",
+      },
+      {
+        type: "user_message",
+        sessionId: "sess-1",
+        text: "retry me",
+      },
+    ]);
   });
 
   test.serial("sends keepalive pings only after a session is established", async () => {
     FakeWebSocket.instances = [];
-    const pingCallbacks: Array<() => void> = [];
-    const clearedIntervals: number[] = [];
-    const originalSetInterval = globalThis.setInterval;
-    const originalClearInterval = globalThis.clearInterval;
+    const timers = createManualTimers();
 
-    (globalThis as typeof globalThis & {
-      setInterval: typeof setInterval;
-      clearInterval: typeof clearInterval;
-    }).setInterval = ((callback: TimerHandler) => {
-      pingCallbacks.push(callback as () => void);
-      return pingCallbacks.length as unknown as ReturnType<typeof setInterval>;
-    }) as typeof setInterval;
-    (globalThis as typeof globalThis & {
-      clearInterval: typeof clearInterval;
-    }).clearInterval = ((timer: ReturnType<typeof setInterval>) => {
-      clearedIntervals.push(timer as unknown as number);
-    }) as typeof clearInterval;
+    const socket = new AgentSocket({
+      url: "ws://example.test/socket",
+      client: "test-client",
+      WebSocketImpl: FakeWebSocket as any,
+      pingIntervalMs: 1000,
+      timers: timers.scheduler,
+      onEvent: () => {},
+    });
 
-    try {
-      const socket = new AgentSocket({
-        url: "ws://example.test/socket",
+    socket.connect();
+    await flushMicrotasks();
+
+    const ws = FakeWebSocket.instances[0];
+    expect(ws).toBeDefined();
+    expect(timers.intervalCallbacks).toHaveLength(1);
+
+    timers.intervalCallbacks[0]!();
+    expect(parseSentMessages(ws!)).toEqual([
+      {
+        type: "client_hello",
         client: "test-client",
-        WebSocketImpl: FakeWebSocket as any,
-        pingIntervalMs: 1000,
-        onEvent: () => {},
-      });
+      },
+    ]);
 
-      socket.connect();
-      await flushMicrotasks();
-
-      const ws = FakeWebSocket.instances[0];
-      expect(ws).toBeDefined();
-      expect(pingCallbacks).toHaveLength(1);
-
-      pingCallbacks[0]!();
-      expect(parseSentMessages(ws!)).toEqual([
-        {
-          type: "client_hello",
-          client: "test-client",
+    await ws!.emitMessage(
+      JSON.stringify({
+        type: "server_hello",
+        sessionId: "sess-keepalive",
+        config: {
+          provider: "openai",
+          model: "gpt-test",
+          workingDirectory: "/tmp",
         },
-      ]);
+      }),
+    );
 
-      await ws!.emitMessage(
-        JSON.stringify({
-          type: "server_hello",
-          sessionId: "sess-keepalive",
-          config: {
-            provider: "openai",
-            model: "gpt-test",
-            workingDirectory: "/tmp",
-          },
-        }),
-      );
+    timers.intervalCallbacks[0]!();
+    expect(parseSentMessages(ws!)).toEqual([
+      {
+        type: "client_hello",
+        client: "test-client",
+      },
+      {
+        type: "ping",
+        sessionId: "sess-keepalive",
+      },
+    ]);
 
-      pingCallbacks[0]!();
-      expect(parseSentMessages(ws!)).toEqual([
-        {
-          type: "client_hello",
-          client: "test-client",
-        },
-        {
-          type: "ping",
-          sessionId: "sess-keepalive",
-        },
-      ]);
-
-      socket.close();
-      expect(clearedIntervals).not.toHaveLength(0);
-    } finally {
-      globalThis.setInterval = originalSetInterval;
-      globalThis.clearInterval = originalClearInterval;
-    }
+    socket.close();
+    expect(timers.clearedIntervals).not.toHaveLength(0);
   });
 });
 
@@ -352,7 +344,7 @@ describe("AgentSocket reconnect queue", () => {
 
     ws?.triggerOpen();
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushMicrotasks();
 
     const hello: ServerEvent = {
       type: "server_hello",

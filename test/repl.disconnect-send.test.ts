@@ -105,7 +105,7 @@ async function waitForCliReady(timeoutMs = 1_000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (rlRef && FakeWebSocket.instances[0]) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
   throw new Error("Timed out waiting for CLI test harness to connect.");
 }

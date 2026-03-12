@@ -20,7 +20,20 @@ type WebSocketConstructorLike = {
   readonly OPEN: number;
 };
 
+type AgentSocketTimerScheduler = {
+  setTimeout(callback: () => void, delayMs: number): unknown;
+  clearTimeout(handle: unknown): void;
+  setInterval(callback: () => void, delayMs: number): unknown;
+  clearInterval(handle: unknown): void;
+};
+
 const webSocketImplSchema = z.custom<WebSocketConstructorLike>((value) => typeof value === "function");
+const defaultTimerScheduler: AgentSocketTimerScheduler = {
+  setTimeout: (callback, delayMs) => globalThis.setTimeout(callback, delayMs),
+  clearTimeout: (handle) => globalThis.clearTimeout(handle as never),
+  setInterval: (callback, delayMs) => globalThis.setInterval(callback, delayMs),
+  clearInterval: (handle) => globalThis.clearInterval(handle as never),
+};
 
 export function safeJsonParse(raw: unknown): unknown | null {
   return safeParseServerEventJson(raw);
@@ -91,6 +104,8 @@ export type AgentSocketOpts = {
   maxReconnectAttempts?: number;
   /** Ping interval in ms for keepalive. 0 disables. Default: 30000. */
   pingIntervalMs?: number;
+  /** Internal test hook for isolating reconnect/keepalive timers. */
+  timers?: AgentSocketTimerScheduler;
 };
 
 /** Base delay for exponential backoff (ms). */
@@ -110,6 +125,7 @@ export class AgentSocket {
   private readonly autoReconnect: boolean;
   private readonly maxReconnectAttempts: number;
   private readonly pingIntervalMs: number;
+  private readonly timers: AgentSocketTimerScheduler;
 
   private ws: WebSocketLike | null = null;
   private ready = Promise.withResolvers<string>();
@@ -118,11 +134,11 @@ export class AgentSocket {
 
   // Reconnection state.
   private reconnectAttempt = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimer: unknown = null;
   private intentionalClose = false;
 
   // Keepalive state.
-  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private pingTimer: unknown = null;
 
   // Queue messages sent while disconnected (if autoReconnect is on).
   private sendQueue: ClientMessage[] = [];
@@ -139,6 +155,7 @@ export class AgentSocket {
     this.autoReconnect = opts.autoReconnect ?? false;
     this.maxReconnectAttempts = opts.maxReconnectAttempts ?? 10;
     this.pingIntervalMs = opts.pingIntervalMs ?? 30_000;
+    this.timers = opts.timers ?? defaultTimerScheduler;
 
     const impl = opts.WebSocketImpl ?? (globalThis as { WebSocket?: unknown }).WebSocket;
     const parsedImpl = webSocketImplSchema.safeParse(impl);
@@ -308,15 +325,15 @@ export class AgentSocket {
     // Reset the ready promise so consumers can await the new session.
     this.ready = Promise.withResolvers<string>();
 
-    this.reconnectTimer = setTimeout(() => {
+    this.reconnectTimer = this.timers.setTimeout(() => {
       this.reconnectTimer = null;
       this.doConnect();
     }, delay);
   }
 
   private cancelReconnect() {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
+    if (this.reconnectTimer !== null) {
+      this.timers.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     this.reconnectAttempt = 0;
@@ -329,7 +346,7 @@ export class AgentSocket {
   private startPing() {
     this.stopPing();
     if (this.pingIntervalMs <= 0) return;
-    this.pingTimer = setInterval(() => {
+    this.pingTimer = this.timers.setInterval(() => {
       if (this.ws && this.ws.readyState === this.WebSocketImpl.OPEN) {
         const sessionId = this._sessionId;
         if (!sessionId) return;
@@ -343,8 +360,8 @@ export class AgentSocket {
   }
 
   private stopPing() {
-    if (this.pingTimer) {
-      clearInterval(this.pingTimer);
+    if (this.pingTimer !== null) {
+      this.timers.clearInterval(this.pingTimer);
       this.pingTimer = null;
     }
   }

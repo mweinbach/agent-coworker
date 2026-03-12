@@ -3470,3 +3470,27 @@
 - `bun run build:server-binary` -> pass
 - `bun run build:desktop-resources` -> pass
 - `bun run desktop:build` -> pass
+
+# Task: Stabilize CI timer-sensitive websocket and REPL tests
+
+## Plan
+- [x] Remove global timer monkeypatching from `AgentSocket`-related tests by injecting timer hooks into the runtime/client helper instead of mutating `globalThis`.
+- [x] Rework any remaining timer-acceleration tests that still patch `globalThis.setTimeout` so they stay isolated under parallel Bun execution.
+- [x] Run focused CI-sensitive reruns first, then the full required verification/build commands, and record results here.
+
+## Review
+- `src/client/agentSocket.ts` now accepts an internal `timers` scheduler hook and routes reconnect/keepalive timers through it, so tests can drive those code paths without mutating shared globals.
+- `test/agentSocket.runtime.test.ts` now uses injected manual timers for reconnect and keepalive coverage instead of overriding `globalThis.setTimeout` / `setInterval`, and its microtask waits no longer depend on global timer state.
+- `test/repl.restart-failure.test.ts` and `test/repl.disconnect-send.test.ts` now wait for CLI readiness with `setImmediate`, which still yields the event loop for async REPL/bootstrap work but no longer couples those tests to any patched global timeout implementation.
+- `apps/desktop/test/protocol-v2-events.test.ts` no longer monkeypatches `globalThis.setTimeout` for the `session_busy` assertion, removing the remaining cross-file timer mutation in the desktop suite.
+- `gh pr checks 35` still reports the pre-existing failing `Docs + Tests` run from `https://github.com/mweinbach/agent-coworker/actions/runs/23019673901/job/66852385608`; the check has not been rerun because these local fixes have not been pushed yet.
+
+### Verification
+- `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test test/repl.restart-failure.test.ts test/repl.disconnect-send.test.ts test/agentSocket.runtime.test.ts apps/desktop/test/protocol-v2-events.test.ts --rerun-each 50 --bail` -> pass (`1900 pass, 0 fail`)
+- `CI=1 GITHUB_ACTIONS=true ~/.bun/bin/bun test --bail` -> pass (`2185 pass, 2 skip, 0 fail`)
+- `bun run typecheck` -> fails in unchanged desktop code at `apps/desktop/src/app/store.feedMapping.ts:136` (`TS2345`)
+- `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:216` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+- `bun run build:server-binary` -> pass
+- `bun run build:desktop-resources` -> pass
+- `bun run desktop:build` -> pass
+- `git diff --check` -> pass

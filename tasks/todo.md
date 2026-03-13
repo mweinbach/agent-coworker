@@ -1,3 +1,24 @@
+# Task: Harden opencode PR review workflow
+
+## Plan
+- [x] Audit the current `opencode-review` workflow behavior against the noisy merged-PR comment and identify the workflow-level controls available to reduce stale or overlong reviews.
+- [x] Patch the workflow so in-flight reviews are canceled when a PR closes, draft PRs are skipped, shared session links are suppressed, and the prompt constrains output to terse unresolved findings only.
+- [ ] Run the repo-required verification commands plus a workflow syntax sanity check, then commit and push the change on `main`.
+
+## Review
+- `opencode-review.yml` now listens for `pull_request.closed` in the same workflow and uses a PR-number concurrency group with `cancel-in-progress: true`, so a close/merge event cancels any in-flight review run instead of letting it finish into a merged timeline.
+- The review job now skips closed and draft PRs, caps runtime at 15 minutes, and sets `share: false` so automated review comments stop attaching the public session/share card noise.
+- The custom prompt now tells OpenCode to behave like a terse code reviewer: review only the current diff, prefer static analysis, only comment on actionable unresolved bugs/regressions/missing tests, avoid congratulatory or “everything is fixed now” summaries, and keep any comment to at most 3 bullets.
+- Verification:
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/opencode-review.yml"); puts "opencode-review.yml ok"'` -> pass
+  - `git diff --check` -> pass
+  - `HOME=$(mktemp -d) ~/.bun/bin/bun test` -> pass (`2213 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI files at `apps/TUI/routes/session/index.tsx:248` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass; notarization skipped because Apple notarization credentials are not fully configured in this environment
+
 # Task: Merge PR #36 into main
 
 ## Plan

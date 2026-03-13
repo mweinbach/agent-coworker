@@ -2,11 +2,17 @@ name: opencode-review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+
+concurrency:
+  group: opencode-review-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   review:
+    if: github.event.action != 'closed' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       id-token: write
       contents: read
@@ -22,9 +28,22 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           model: opencode-go/glm-5
+          share: false
           use_github_token: true
           prompt: |
-            Review this pull request:
-            - Check for code quality issues
-            - Look for potential bugs
-            - Suggest improvements
+            Review the current pull request like a terse senior engineer.
+
+            Scope:
+            - Inspect only the current PR diff and changed behavior.
+            - Ignore style nits unless they hide a real defect.
+            - Ignore already-fixed discussion unless it is still present in the diff.
+            - Prefer static code review. Run local commands only when needed to confirm a suspected issue.
+
+            Output rules:
+            - Comment only if you find an actionable bug, regression risk, compatibility issue, or missing test worth follow-up.
+            - If there are no actionable findings, do not post a summary comment.
+            - Do not congratulate, restate the PR, or list resolved items.
+            - Keep the response short: at most 3 bullets.
+            - Each bullet must name the concrete risk and why it matters.
+            - Prefer file-specific feedback over generic advice.
+            - Never post after the PR is closed or merged.

@@ -12,7 +12,7 @@ import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow"
 import { resolveProviderName, resolveRuntimeName as resolveRuntimeNameFromValue } from "./types";
 import type { AgentConfig, CommandTemplateConfig, ProviderName, RuntimeName } from "./types";
 import { resolveCoworkHomedir } from "./utils/coworkHome";
-import { assertSupportedModel, defaultSupportedModel } from "./models/registry";
+import { assertSupportedModel, defaultSupportedModel, getSupportedModel } from "./models/registry";
 
 export { defaultModelForProvider } from "./providers";
 
@@ -86,6 +86,25 @@ function mergeProviderOptionDefaults(
     currentProviderOptions as Record<string, unknown>,
   );
   return current;
+}
+
+function resolveSupportedConfiguredModel(provider: ProviderName, modelId: string, source: string) {
+  const supported = getSupportedModel(provider, modelId);
+  if (supported) return supported;
+  const fallback = defaultSupportedModel(provider);
+  console.warn(
+    `[config] Ignoring unsupported ${source} "${modelId}" for provider ${provider}; using "${fallback.id}".`
+  );
+  return fallback;
+}
+
+function resolveSupportedConfiguredSubAgentModel(provider: ProviderName, subAgentModelId: string, fallbackModelId: string): string {
+  const supported = getSupportedModel(provider, subAgentModelId);
+  if (supported) return supported.id;
+  console.warn(
+    `[config] Ignoring unsupported sub-agent model "${subAgentModelId}" for provider ${provider}; using "${fallbackModelId}".`
+  );
+  return fallbackModelId;
 }
 
 async function loadJsonSafe(filePath: string): Promise<Record<string, unknown>> {
@@ -287,14 +306,14 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asNonEmptyString(userConfig.model) ||
     (asProviderName(builtInDefaults.provider) === provider && asNonEmptyString(builtInDefaults.model)) ||
     defaultModelForProvider(provider);
-  const supportedModel = assertSupportedModel(provider, model, "model");
+  const supportedModel = resolveSupportedConfiguredModel(provider, model, "model");
 
   const subAgentModel =
     asNonEmptyString(projectConfig.subAgentModel) ||
     asNonEmptyString(userConfig.subAgentModel) ||
     asNonEmptyString(builtInDefaults.subAgentModel) ||
     supportedModel.id;
-  const supportedSubAgentModel = assertSupportedModel(provider, subAgentModel, "sub-agent model");
+  const supportedSubAgentModelId = resolveSupportedConfiguredSubAgentModel(provider, subAgentModel, supportedModel.id);
 
   const parsedToolOutputOverflowChars = normalizeNullableNonNegativeInt(
     (merged as Record<string, unknown>).toolOutputOverflowChars
@@ -416,7 +435,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     provider,
     runtime,
     model: supportedModel.id,
-    subAgentModel: supportedSubAgentModel.id,
+    subAgentModel: supportedSubAgentModelId,
     toolOutputOverflowChars,
     inheritedToolOutputOverflowChars,
     ...(projectToolOutputOverflowChars !== undefined

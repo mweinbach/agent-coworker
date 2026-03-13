@@ -1,4 +1,5 @@
 import { getObservabilityHealth } from "../../observability/runtime";
+import { assertSupportedModel } from "../../models/registry";
 import {
   mergeEditableOpenAiCompatibleProviderOptions,
   pickEditableOpenAiCompatibleProviderOptions,
@@ -175,9 +176,23 @@ export class SessionMetadataManager {
       return;
     }
 
-    const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
+    let normalizedSubAgentModel: string | undefined;
     if (patch.subAgentModel !== undefined) {
-      persistPatch.subAgentModel = patch.subAgentModel;
+      try {
+        normalizedSubAgentModel = assertSupportedModel(
+          this.context.state.config.provider,
+          patch.subAgentModel,
+          "sub-agent model",
+        ).id;
+      } catch (err) {
+        this.context.emitError("validation_failed", "session", err instanceof Error ? err.message : String(err));
+        return;
+      }
+    }
+
+    const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
+    if (normalizedSubAgentModel !== undefined) {
+      persistPatch.subAgentModel = normalizedSubAgentModel;
     }
     if (patch.observabilityEnabled !== undefined) {
       persistPatch.observabilityEnabled = patch.observabilityEnabled;
@@ -216,8 +231,8 @@ export class SessionMetadataManager {
       this.context.state.backupsEnabledOverride = null;
       this.context.state.config = { ...this.context.state.config, backupsEnabled: patch.backupsEnabled };
     }
-    if (patch.subAgentModel !== undefined) {
-      this.context.state.config = { ...this.context.state.config, subAgentModel: patch.subAgentModel };
+    if (normalizedSubAgentModel !== undefined) {
+      this.context.state.config = { ...this.context.state.config, subAgentModel: normalizedSubAgentModel };
     }
     if (patch.toolOutputOverflowChars !== undefined) {
       this.context.state.config = {

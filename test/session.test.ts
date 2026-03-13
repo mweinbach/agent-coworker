@@ -6,6 +6,7 @@ import path from "node:path";
 import { SessionCostTracker } from "../src/session/costTracker";
 import type { AgentConfig, TodoItem } from "../src/types";
 import { ASK_SKIP_TOKEN, type ServerEvent } from "../src/server/protocol";
+import { defaultSupportedModel } from "../src/models/registry";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import type {
   SessionBackupHandle,
@@ -755,6 +756,35 @@ describe("AgentSession", () => {
         backupsEnabled: false,
         toolOutputOverflowChars: null,
       });
+    });
+
+    test("setConfig rejects unsupported subAgentModel values before persistence", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const { session, events } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session"),
+          provider: "openai",
+          model: "gpt-5.2",
+          subAgentModel: "gpt-5.2",
+        },
+        persistProjectConfigPatchImpl,
+      });
+
+      await session.setConfig({
+        subAgentModel: "gemini-3-pro-preview",
+      });
+
+      expect(persistProjectConfigPatchImpl).not.toHaveBeenCalled();
+      expect(session.getSessionConfigEvent().config.subAgentModel).toBe("gpt-5.2");
+      expect(events.some((evt) => evt.type === "session_config")).toBe(false);
+
+      const errEvt = events.find((evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error");
+      expect(errEvt).toBeDefined();
+      if (errEvt) {
+        expect(errEvt.code).toBe("validation_failed");
+        expect(errEvt.source).toBe("session");
+        expect(errEvt.message).toContain('Unsupported sub-agent model "gemini-3-pro-preview" for provider openai');
+      }
     });
 
     test("setConfig can clear the persisted toolOutputOverflowChars override and restore inheritance", async () => {
@@ -4043,6 +4073,80 @@ describe("AgentSession", () => {
       expect(usageEvt?.usage?.turns).toHaveLength(8);
       expect(usageEvt?.usage?.turns[0]?.turnId).toBe("turn-3");
       expect(usageEvt?.usage?.turns.at(-1)?.turnId).toBe("turn-10");
+    });
+
+    test("migrates unsupported persisted models to provider default and persists the upgraded snapshot", async () => {
+      const { emit, events } = makeEmit();
+      const writePersistedSessionSnapshotImpl = mock(async () => "/tmp/mock-home/.cowork/sessions/persisted-upgraded.json");
+      const persistedModel = "gpt-5.3-codex";
+      const expectedModel = defaultSupportedModel("openai").id;
+
+      const session = AgentSession.fromPersisted({
+        persisted: {
+          sessionId: "persisted-legacy-model",
+          sessionKind: "root",
+          parentSessionId: null,
+          agentType: null,
+          title: "Legacy",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "openai",
+          model: persistedModel,
+          workingDirectory: "/tmp/persisted",
+          enableMcp: true,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:01.000Z",
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          messageCount: 1,
+          lastEventSeq: 1,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }] as any,
+          providerState: {
+            provider: "openai",
+            model: persistedModel,
+            responseId: "resp_legacy",
+            updatedAt: "2026-03-09T00:00:01.000Z",
+          },
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+        baseConfig: makeConfig("/tmp/persisted"),
+        emit,
+        sessionBackupFactory: makeSessionBackupFactory(),
+        getProviderStatusesImpl: async () => [],
+        writePersistedSessionSnapshotImpl,
+      });
+
+      expect(session.getPublicConfig().provider).toBe("openai");
+      expect(session.getPublicConfig().model).toBe(expectedModel);
+      expect(session.getSessionInfoEvent().model).toBe(expectedModel);
+
+      const migrationLog = events.find(
+        (event): event is Extract<ServerEvent, { type: "log" }> =>
+          event.type === "log" && event.line.includes("unsupported model")
+      );
+      expect(migrationLog).toBeDefined();
+      expect(migrationLog?.line).toContain(`"${persistedModel}"`);
+      expect(migrationLog?.line).toContain(`"${expectedModel}"`);
+      expect(migrationLog?.line).toContain("Cleared saved continuation state");
+
+      await flushAsyncWork();
+      await flushAsyncWork();
+
+      expect(writePersistedSessionSnapshotImpl).toHaveBeenCalledTimes(1);
+      const persistedCall = writePersistedSessionSnapshotImpl.mock.calls[0]?.[0] as {
+        snapshot: {
+          session: { model: string };
+          config: { model: string };
+          context: { providerState: unknown };
+        };
+      };
+      expect(persistedCall.snapshot.session.model).toBe(expectedModel);
+      expect(persistedCall.snapshot.config.model).toBe(expectedModel);
+      expect(persistedCall.snapshot.context.providerState).toBeNull();
     });
   });
   // =========================================================================

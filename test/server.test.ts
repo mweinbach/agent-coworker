@@ -2632,6 +2632,51 @@ describe("Protocol Doc Parity", () => {
     }
   });
 
+  test("set_config rejects unsupported subAgentModel values before persisting them", async () => {
+    const tmpDir = await makeTmpProject();
+    await fs.writeFile(
+      path.join(tmpDir, ".agent", "config.json"),
+      `${JSON.stringify({
+        provider: "openai",
+        model: "gpt-5.2",
+        subAgentModel: "gpt-5.2",
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      env: {
+        AGENT_WORKING_DIR: tmpDir,
+        AGENT_PROVIDER: "openai",
+        COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+      },
+    }));
+    try {
+      const errorEvent = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({
+          type: "set_config",
+          sessionId,
+          config: {
+            subAgentModel: "gemini-3-pro-preview",
+          },
+        }),
+        (message) => message.type === "error",
+      );
+
+      expect(errorEvent.code).toBe("validation_failed");
+      expect(errorEvent.source).toBe("session");
+      expect(errorEvent.message).toContain('Unsupported sub-agent model "gemini-3-pro-preview" for provider openai');
+
+      const persistedConfig = JSON.parse(
+        await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),
+      ) as any;
+      expect(persistedConfig.subAgentModel).toBe("gpt-5.2");
+    } finally {
+      server.stop();
+    }
+  });
+
   test("set_config persists toolOutputOverflowChars null and new sessions inherit it", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir));

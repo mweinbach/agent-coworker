@@ -43,7 +43,7 @@ describe("Provider switching via config", () => {
     expect(cfg.model).toBe("claude-opus-4-6");
   });
 
-  test("explicit model in project config persists across provider switch", async () => {
+  test("explicit model in project config falls back when the provider switch makes it unsupported", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
@@ -51,13 +51,16 @@ describe("Provider switching via config", () => {
       model: "gpt-5.2",
     });
 
-    // Switch provider but keep model from config
-    await expect(loadConfig({
+    const cfg = await loadConfig({
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
       env: { AGENT_PROVIDER: "anthropic" },
-    })).rejects.toThrow('Unsupported model "gpt-5.2" for provider anthropic');
+    });
+
+    expect(cfg.provider).toBe("anthropic");
+    expect(cfg.model).toBe("claude-opus-4-6");
+    expect(cfg.subAgentModel).toBe("claude-opus-4-6");
   });
 
   test("provider from user config can be overridden by project config", async () => {

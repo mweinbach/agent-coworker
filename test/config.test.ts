@@ -63,12 +63,14 @@ describe("loadConfig", () => {
     expect(cfg.model).toBe("gpt-5.2");
     expect(cfg.outputDirectory).toBe(path.join(cwd, "project-output"));
 
-    await expect(loadConfig({
+    const cfgFallback = await loadConfig({
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
       env: { AGENT_PROVIDER: "google", AGENT_MODEL: "gemini-test" },
-    })).rejects.toThrow('Unsupported model "gemini-test" for provider google');
+    });
+    expect(cfgFallback.provider).toBe("google");
+    expect(cfgFallback.model).toBe(defaultModelForProvider("google"));
   });
 
   test("provider override uses provider-default model when no model is set", async () => {
@@ -233,15 +235,39 @@ describe("loadConfig", () => {
     const { cwd, home } = await makeTmpDirs();
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
-      model: "gpt-5.2",
+      provider: "openai",
+      model: "gpt-5.1",
     });
 
-    await expect(loadConfig({
+    const cfg = await loadConfig({
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
-      env: { AGENT_MODEL: "env-model-override" },
-    })).rejects.toThrow('Unsupported model "env-model-override" for provider google');
+      env: { AGENT_MODEL: "gpt-5.2" },
+    });
+    expect(cfg.provider).toBe("openai");
+    expect(cfg.model).toBe("gpt-5.2");
+  });
+
+  test("invalid configured model IDs fall back to provider defaults during startup", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      provider: "google",
+      model: "gemini-legacy-preview",
+      subAgentModel: "gemini-legacy-research",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.provider).toBe("google");
+    expect(cfg.model).toBe(defaultModelForProvider("google"));
+    expect(cfg.subAgentModel).toBe(cfg.model);
   });
 
   test("AGENT_WORKING_DIR env var overrides cwd", async () => {
@@ -969,15 +995,18 @@ describe("getModel", () => {
     );
   });
 
-  test("uses config.model when no override ID provided", async () => {
+  test("invalid AGENT_MODEL falls back to provider default when no override ID is provided", async () => {
     const { cwd, home } = await makeTmpDirs();
 
-    await expect(loadConfig({
+    const cfg = await loadConfig({
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
       env: { AGENT_PROVIDER: "google", AGENT_MODEL: "gemini-specific" },
-    })).rejects.toThrow('Unsupported model "gemini-specific" for provider google');
+    });
+
+    expect(cfg.model).toBe(defaultModelForProvider("google"));
+    expect(cfg.subAgentModel).toBe(defaultModelForProvider("google"));
   });
 });
 

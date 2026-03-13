@@ -1,3 +1,34 @@
+# Task: Address PR #36 review comments
+
+## Plan
+- [x] Inspect the unresolved PR #36 review threads and confirm the exact runtime/config paths that need changes.
+- [x] Preserve session resume when persisted sessions reference legacy or no-longer-supported model IDs, while keeping current model validation strict for new config/runtime paths.
+- [x] Preserve startup compatibility when legacy configured `model` or `subAgentModel` IDs no longer exist in the registry, while keeping explicit runtime override validation strict.
+- [x] Reject invalid `set_config.config.subAgentModel` values up front and add regression coverage for the validation boundary.
+- [x] Run focused tests, the full test suite, typechecks, required builds, and record the review outcome here.
+
+## Review
+- Resolved all three PR #36 review findings in code:
+  - `P1` resume regression: `AgentSession.fromPersisted` no longer hard-fails for legacy unsupported model IDs. It now migrates to the provider default model, clears stale continuation state for migrated sessions, emits a migration log event, and persists the upgraded snapshot immediately.
+  - `P1` startup compatibility regression: `loadConfig()` no longer hard-fails when persisted config or `AGENT_MODEL` still references a removed model ID. Startup now falls back to the current provider default for `model` and to the resolved main model for `subAgentModel`, while logging a warning instead of crashing the server/CLI.
+  - `P2` delayed `subAgentModel` failures: `set_config` now validates `config.subAgentModel` against the current provider before persistence/runtime updates and returns a `validation_failed` session error on unsupported values.
+- Added regression coverage:
+  - `test/session.test.ts`: `setConfig rejects unsupported subAgentModel values before persistence`.
+  - `test/server.test.ts`: `set_config rejects unsupported subAgentModel values before persisting them`.
+  - `test/session.test.ts`: `migrates unsupported persisted models to provider default and persists the upgraded snapshot`.
+  - `test/config.test.ts`: invalid configured `model`/`subAgentModel` startup values now fall back to provider defaults instead of crashing startup.
+  - `test/providers/config-switching.test.ts`: provider switches now fall back to the destination provider default when the previous provider's model ID is unsupported.
+- Protocol docs updated for the user-visible contract change:
+  - `docs/websocket-protocol.md` now states `set_config.config.subAgentModel` must be valid for the current provider and unsupported values are rejected with `validation_failed`.
+- Verification:
+  - `HOME=$(mktemp -d) ~/.bun/bin/bun test` -> pass (`2207 pass, 2 skip, 0 fail`).
+  - `~/.bun/bin/bun run typecheck` -> pass.
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:248` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`).
+  - `~/.bun/bin/bun run build:server-binary` -> pass.
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass.
+  - `~/.bun/bin/bun run desktop:build` -> pass; notarization skipped because Apple notarization credentials are not configured in this environment.
+  - `git diff --check` -> pass.
+
 # Task: Fix failing `opencode-review` PR workflow
 
 ## Plan

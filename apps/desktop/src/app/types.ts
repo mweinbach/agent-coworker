@@ -134,7 +134,7 @@ export type FeedItem =
 
 export type ViewId = "chat" | "skills" | "settings";
 
-export type SettingsPageId = "providers" | "usage" | "workspaces" | "backup" | "mcp" | "updates" | "developer";
+export type SettingsPageId = "providers" | "usage" | "workspaces" | "backup" | "mcp" | "memory" | "updates" | "developer";
 
 export type SessionConfigSubset = Extract<ServerEvent, { type: "session_config" }>["config"];
 export type MCPServersEvent = Extract<ServerEvent, { type: "mcp_servers" }>;
@@ -146,6 +146,14 @@ export type TurnUsageSnapshot = Pick<Extract<ServerEvent, { type: "turn_usage" }
 export type WorkspaceBackupsEvent = Extract<ServerEvent, { type: "workspace_backups" }>;
 export type WorkspaceBackupDeltaEvent = Extract<ServerEvent, { type: "workspace_backup_delta" }>;
 export type WorkspaceBackupEntry = WorkspaceBackupsEvent["backups"][number];
+
+export type MemoryListEntry = {
+  id: string;
+  scope: "workspace" | "user";
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export type WorkspaceRuntime = {
   serverUrl: string | null;
@@ -165,6 +173,8 @@ export type WorkspaceRuntime = {
   skills: SkillEntry[];
   selectedSkillName: string | null;
   selectedSkillContent: string | null;
+  memories: MemoryListEntry[];
+  memoriesLoading: boolean;
   workspaceBackupsPath: string | null;
   workspaceBackups: WorkspaceBackupsEvent["backups"];
   workspaceBackupsLoading: boolean;

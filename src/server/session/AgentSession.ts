@@ -662,6 +662,7 @@ export class AgentSession {
     }
     this.context.emit({ type: "session_settings", sessionId: this.id, enableMcp: this.getEnableMcp(), enableMemory: this.getEnableMemory(), memoryRequireApproval: this.getMemoryRequireApproval() });
     this.queuePersistSessionSnapshot("session.enable_memory");
+    await this.refreshSystemPromptForMemoryChange();
   }
 
   async setMemoryRequireApproval(memoryRequireApproval: boolean) {
@@ -674,18 +675,48 @@ export class AgentSession {
   }
 
   async emitMemories(scope?: MemoryScope) {
-    const memories = await this.memoryStore.list(scope);
-    this.context.emit({ type: "memory_list", sessionId: this.id, memories });
+    try {
+      const memories = await this.memoryStore.list(scope);
+      this.context.emit({ type: "memory_list", sessionId: this.id, memories });
+    } catch (err) {
+      this.context.emitError("internal_error", "session", `Failed to list memories: ${String(err)}`);
+    }
   }
 
   async upsertMemory(scope: MemoryScope, id: string | undefined, content: string) {
-    await this.memoryStore.upsert(scope, { id, content });
+    try {
+      await this.memoryStore.upsert(scope, { id, content });
+    } catch (err) {
+      this.context.emitError("internal_error", "session", `Failed to upsert memory: ${String(err)}`);
+      return;
+    }
     await this.emitMemories();
+    await this.refreshSystemPromptForMemoryChange();
   }
 
   async deleteMemory(scope: MemoryScope, id: string) {
-    await this.memoryStore.remove(scope, id);
+    try {
+      await this.memoryStore.remove(scope, id);
+    } catch (err) {
+      this.context.emitError("internal_error", "session", `Failed to delete memory: ${String(err)}`);
+      return;
+    }
     await this.emitMemories();
+    await this.refreshSystemPromptForMemoryChange();
+  }
+
+  private async refreshSystemPromptForMemoryChange() {
+    try {
+      const result = await this.context.deps.loadSystemPromptWithSkillsImpl(this.state.config);
+      this.state.system = result.prompt;
+      this.state.discoveredSkills = result.discoveredSkills;
+    } catch (err) {
+      this.context.emitError(
+        "internal_error",
+        "session",
+        `Failed to refresh system prompt after memory change: ${String(err)}`,
+      );
+    }
   }
 
   async emitMcpServers() {

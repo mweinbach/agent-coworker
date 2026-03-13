@@ -231,6 +231,10 @@ export type AppStoreState = {
   deleteWorkspaceBackupEntry: (workspaceId: string, targetSessionId: string) => Promise<void>;
   setWorkspaceBackupSessionEnabled: (workspaceId: string, targetSessionId: string, enabled: boolean) => Promise<void>;
 
+  requestWorkspaceMemories: (workspaceId: string) => Promise<void>;
+  upsertWorkspaceMemory: (workspaceId: string, scope: "workspace" | "user", id: string | undefined, content: string) => Promise<void>;
+  deleteWorkspaceMemory: (workspaceId: string, scope: "workspace" | "user", id: string) => Promise<void>;
+
   connectProvider: (provider: ProviderName, apiKey?: string) => Promise<void>;
   setProviderApiKey: (provider: ProviderName, methodId: string, apiKey: string) => Promise<void>;
   copyProviderApiKey: (provider: ProviderName, sourceProvider: ProviderName) => Promise<void>;

@@ -71,6 +71,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
             socket.send({ type: "provider_auth_methods_get", sessionId: evt.sessionId });
             socket.send({ type: "refresh_provider_status", sessionId: evt.sessionId });
             socket.send({ type: "mcp_servers_get", sessionId: evt.sessionId });
+            socket.send({ type: "memory_list", sessionId: evt.sessionId });
           } catch {
             // ignore
           }
@@ -269,6 +270,20 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
                 workspaceBackupDelta: evt,
                 workspaceBackupDeltaLoading: false,
                 workspaceBackupDeltaError: null,
+              },
+            },
+          }));
+          return;
+        }
+
+        if (evt.type === "memory_list") {
+          set((s) => ({
+            workspaceRuntimeById: {
+              ...s.workspaceRuntimeById,
+              [workspaceId]: {
+                ...s.workspaceRuntimeById[workspaceId],
+                memories: evt.memories,
+                memoriesLoading: false,
               },
             },
           }));

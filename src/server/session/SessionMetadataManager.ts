@@ -34,6 +34,7 @@ export class SessionMetadataManager {
             },
           }
         : {}),
+      ...(patch.enableMemory !== undefined ? { enableMemory: patch.enableMemory } : {}),
     };
   }
 
@@ -68,7 +69,7 @@ export class SessionMetadataManager {
         observabilityEnabled: this.context.state.config.observabilityEnabled ?? false,
         backupsEnabled,
         enableMemory: this.context.state.config.enableMemory ?? true,
-        memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? true,
+        memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? false,
         defaultBackupsEnabled,
         subAgentModel: this.context.state.config.subAgentModel,
         maxSteps: this.context.state.maxSteps,
@@ -219,7 +220,7 @@ export class SessionMetadataManager {
     }
 
     let refreshedSystemPrompt: Awaited<ReturnType<SessionContext["deps"]["loadSystemPromptWithSkillsImpl"]>> | null = null;
-    if (patch.userName !== undefined || patch.userProfile !== undefined) {
+    if (patch.userName !== undefined || patch.userProfile !== undefined || patch.enableMemory !== undefined) {
       try {
         refreshedSystemPrompt = await this.context.deps.loadSystemPromptWithSkillsImpl(this.promptRefreshConfig(patch));
       } catch (err) {

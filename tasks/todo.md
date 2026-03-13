@@ -1,3 +1,24 @@
+# Task: Fix failing `opencode-review` PR workflow
+
+## Plan
+- [x] Inspect the latest failing `opencode-review` GitHub Actions run for PR `#36` and identify the concrete failure mode in the workflow/action setup.
+- [x] Patch the workflow or repository configuration to eliminate the failure without weakening the intended review behavior.
+- [x] Run targeted verification for the changed workflow-related surfaces plus the repo-required verification commands, then record the outcome here.
+
+## Review
+- The failing check was not an application/test regression. In GitHub Actions run `23034800598` for PR `#36`, `anomalyco/opencode/github@latest` completed its local setup and then failed when it tried to add a reaction and create a PR comment. GitHub returned `403 Resource not accessible by integration` for both `POST /issues/36/reactions` and `POST /issues/36/comments`.
+- Root cause: [opencode-review.yml](/Users/mweinbach/Projects/agent-coworker/.github/workflows/opencode-review.yml) granted only `pull-requests: read` and `issues: read`, but the action’s normal review flow writes PR-visible artifacts. The workflow was denying the exact operations the action is designed to perform.
+- Fixed by changing the `review` job permissions in [opencode-review.yml](/Users/mweinbach/Projects/agent-coworker/.github/workflows/opencode-review.yml) to `pull-requests: write` and `issues: write`, while keeping `contents: read` and `id-token: write` unchanged.
+- Verification:
+  - `gh run view 23034800598 --log` -> confirmed the concrete 403 failure mode and the denied endpoints.
+  - `python3` YAML sanity check for `.github/workflows/opencode-review.yml` -> pass.
+  - `~/.bun/bin/bun test` -> pass (`2203 pass, 2 skip, 0 fail`).
+  - `~/.bun/bin/bun run typecheck` -> pass.
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> still fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:248` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`).
+  - `~/.bun/bin/bun run build:server-binary` -> pass.
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass.
+  - `~/.bun/bin/bun run desktop:build` -> pass.
+
 # Task: Move desktop fix stack onto current main
 
 ## Plan

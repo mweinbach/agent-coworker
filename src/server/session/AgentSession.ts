@@ -566,7 +566,7 @@ export class AgentSession {
   }
 
   getMemoryRequireApproval() {
-    return this.state.config.memoryRequireApproval ?? true;
+    return this.state.config.memoryRequireApproval ?? false;
   }
 
   getBackupsEnabled() {

@@ -3130,6 +3130,68 @@ describe("memory tool", () => {
     const res: string = await t.execute({ action: "read" });
     expect(res).toContain("User-level hot cache");
   });
+
+  test("write without key generates unique IDs (no collision)", async () => {
+    const dir = await tmpDir();
+    const t: any = createMemoryTool(makeCtx(dir));
+
+    await t.execute({ action: "write", content: "First auto-id entry" });
+    await t.execute({ action: "write", content: "Second auto-id entry" });
+
+    const res: string = await t.execute({ action: "read" });
+    expect(res).toContain("First auto-id entry");
+    expect(res).toContain("Second auto-id entry");
+  });
+
+  test("returns disabled message when enableMemory is false", async () => {
+    const dir = await tmpDir();
+    const t: any = createMemoryTool(makeCtx(dir, { config: makeConfig(dir, { enableMemory: false }) }));
+    const res: string = await t.execute({ action: "read" });
+    expect(res).toContain("disabled");
+  });
+
+  test("prompts for approval when memoryRequireApproval is true and approves", async () => {
+    const dir = await tmpDir();
+    let prompted = false;
+    const t: any = createMemoryTool(
+      makeCtx(dir, {
+        config: makeConfig(dir, { memoryRequireApproval: true }),
+        askUser: async () => {
+          prompted = true;
+          return "approve";
+        },
+      })
+    );
+    const res: string = await t.execute({ action: "write", key: "pref", content: "Dark mode" });
+    expect(prompted).toBe(true);
+    expect(res).toContain("Memory written");
+  });
+
+  test("denies write when memoryRequireApproval is true and user denies", async () => {
+    const dir = await tmpDir();
+    const t: any = createMemoryTool(
+      makeCtx(dir, {
+        config: makeConfig(dir, { memoryRequireApproval: true }),
+        askUser: async () => "deny",
+      })
+    );
+    const res: string = await t.execute({ action: "write", key: "pref", content: "Light mode" });
+    expect(res).toContain("denied");
+  });
+
+  test("legacy import deduplicates files normalizing to the same id", async () => {
+    const dir = await tmpDir();
+    const memDir = path.join(dir, ".agent", "memory");
+    await fs.mkdir(memDir, { recursive: true });
+    // Both normalize to "foo-bar"
+    await fs.writeFile(path.join(memDir, "foo bar.md"), "First content", "utf-8");
+    await fs.writeFile(path.join(memDir, "foo-bar.md"), "Second content", "utf-8");
+
+    const t: any = createMemoryTool(makeCtx(dir));
+    // Should not throw SQLITE_CONSTRAINT_PRIMARYKEY
+    const res: string = await t.execute({ action: "read" });
+    expect(res).toContain("foo-bar");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -3167,6 +3229,13 @@ describe("createTools", () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));
     expect(Object.keys(tools).length).toBe(16);
+  });
+
+  test("omits memory tool when enableMemory is false", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(makeCtx(dir, { config: makeConfig(dir, { enableMemory: false }) }));
+    expect(tools).not.toHaveProperty("memory");
+    expect(Object.keys(tools).length).toBe(15);
   });
 
   test("returns an executable webSearch tool for opencode-go", async () => {

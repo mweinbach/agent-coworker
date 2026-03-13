@@ -124,7 +124,7 @@ export interface AgentConfig {
 
   /**
    * Whether model-requested memory writes require explicit user approval.
-   * Defaults to true when not specified.
+   * Defaults to false when not specified.
    */
   memoryRequireApproval?: boolean;
 

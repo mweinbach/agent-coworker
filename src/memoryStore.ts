@@ -120,8 +120,10 @@ export class MemoryStore {
       const existingIds = new Set(
         (db.query("SELECT id FROM memories").all() as Array<{ id: string }>).map((row) => row.id)
       );
+      const seenIds = new Set<string>();
       for (const item of filesToImport) {
-        if (existingIds.has(item.id)) continue;
+        if (existingIds.has(item.id) || seenIds.has(item.id)) continue;
+        seenIds.add(item.id);
         db.query(
           "INSERT INTO memories(id, content, created_at, updated_at) VALUES(?, ?, ?, ?)"
         ).run(item.id, item.content.trim(), timestamp, timestamp);
@@ -194,7 +196,7 @@ export class MemoryStore {
   }
 
   async upsert(scope: MemoryScope, input: { id?: string; content: string }): Promise<MemoryEntry> {
-    const normalizedId = normalizeMemoryId(input.id ?? "");
+    const normalizedId = input.id?.trim() ? normalizeMemoryId(input.id) : crypto.randomUUID();
     const content = input.content.trim();
     const timestamp = nowIso();
     return this.withDb(scope, (db) => {

@@ -590,7 +590,7 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("This is the user hot cache content.");
   });
 
-  test("project AGENT.md takes priority over user AGENT.md", async () => {
+  test("includes both project and user AGENT.md entries when both exist", async () => {
     const { tmp } = await makeTmpDirs();
     const projectAgentDir = path.join(tmp, "project", ".agent");
     const userAgentDir = path.join(tmp, "home", ".agent");
@@ -613,7 +613,7 @@ describe("loadSystemPrompt", () => {
 
     const prompt = await loadSystemPrompt(config);
     expect(prompt).toContain("PROJECT cache wins.");
-    expect(prompt).not.toContain("USER cache loses.");
+    expect(prompt).toContain("USER cache loses.");
   });
 
   test("skips hot cache section when no AGENT.md exists", async () => {
@@ -801,6 +801,24 @@ describe("loadHotCache (tested indirectly)", () => {
 
     const prompt = await loadSystemPrompt(config);
     // No memory section should be appended
+    expect(prompt).not.toContain("## Memory");
+  });
+
+  test("skips memory injection when the memory database is corrupt", async () => {
+    const { tmp } = await makeTmpDirs();
+    const projectAgentDir = path.join(tmp, "corrupt-project", ".agent");
+    const userAgentDir = path.join(tmp, "corrupt-home", ".agent");
+
+    await writeFile(path.join(projectAgentDir, "memory.sqlite"), "not a sqlite db");
+
+    const config = makeConfig({
+      projectAgentDir,
+      userAgentDir,
+      skillsDirs: ["/nonexistent/skills"],
+    });
+
+    const prompt = await loadSystemPrompt(config);
+    expect(prompt).toContain("<environment>");
     expect(prompt).not.toContain("## Memory");
   });
 

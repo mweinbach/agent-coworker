@@ -199,9 +199,13 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
       path.join(config.projectAgentDir, "memory.sqlite"),
       path.join(config.userAgentDir, "memory.sqlite")
     );
-    const memorySection = await memoryStore.renderPromptSection();
-    if (memorySection.trim()) {
-      prompt += `\n\n${memorySection}`;
+    try {
+      const memorySection = await memoryStore.renderPromptSection();
+      if (memorySection.trim()) {
+        prompt += `\n\n${memorySection}`;
+      }
+    } catch {
+      // Fail open so a corrupt or unreadable memory DB does not block session startup.
     }
   }
 

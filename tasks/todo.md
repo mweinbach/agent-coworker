@@ -1,3 +1,33 @@
+# Task: Triage open PR review comments on current branch
+
+## Plan
+- [ ] Fetch the open PR review threads for `codex/add-memory-management-feature` and identify unresolved items.
+- [ ] Summarize each thread into a short actionable fix description with enough context to choose from.
+- [ ] Ask the user which numbered comments should be addressed next.
+
+## Review
+- Fetched PR #38 review threads with `python3 scripts/fetch_comments.py`.
+- Thread 1 is already resolved on GitHub.
+- Threads 2, 3, and 4 appear to already be implemented on the current branch:
+  - [src/server/session/AgentSession.ts](/Users/mweinbach/Projects/agent-coworker/src/server/session/AgentSession.ts) now refreshes `state.system` after memory upserts/deletes and wraps mutation failures in structured `internal_error` emissions.
+  - [src/server/session/SessionMetadataManager.ts](/Users/mweinbach/Projects/agent-coworker/src/server/session/SessionMetadataManager.ts) now rebuilds the prompt when `set_config` changes `enableMemory`.
+- Thread 5 was still actionable and is now fixed: [src/prompt.ts](/Users/mweinbach/Projects/agent-coworker/src/prompt.ts) now fails open when memory prompt rendering throws, so a corrupt or unreadable `.agent/memory.sqlite` no longer blocks prompt loading or session startup.
+- Added regressions in [test/prompt.test.ts](/Users/mweinbach/Projects/agent-coworker/test/prompt.test.ts) for corrupt memory DB fallback and refreshed a stale hot-cache expectation to match the current dual-scope memory import behavior.
+- Added regressions in [test/session.test.ts](/Users/mweinbach/Projects/agent-coworker/test/session.test.ts) that prove:
+  - `set_config({ enableMemory })` refreshes the cached system prompt before the next turn.
+  - `upsertMemory()` and `deleteMemory()` refresh the cached system prompt for later turns.
+  - memory mutation failures emit structured session errors instead of surfacing as uncaught promise rejections.
+- Verification:
+  - `git diff --check` -> pass
+  - `HOME=$(mktemp -d) ~/.bun/bin/bun test test/prompt.test.ts --bail` -> pass
+  - `HOME=$(mktemp -d) ~/.bun/bin/bun test test/session.test.ts --bail` -> pass
+  - `HOME=$(mktemp -d) ~/.bun/bin/bun test` -> pass (`2236 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> pass
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass; notarization explicitly skipped because Apple notarization credentials were not fully configured in this environment
+
 # Task: Fix remaining PR #37 prompt templating review comments
 
 ## Plan

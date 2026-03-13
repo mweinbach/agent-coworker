@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/solid";
 import { For, Show, Switch, Match, createMemo, createSignal, onCleanup, onMount } from "solid-js";
@@ -5,6 +6,11 @@ import { useTheme } from "../../context/theme";
 import { useSyncState } from "../../context/sync";
 import { useKV } from "../../context/kv";
 import { useDialog } from "../../context/dialog";
+import {
+  buildCitationOverflowFilePathsByMessageId,
+  buildCitationUrlsByMessageId,
+  extractCitationUrlsFromWebSearchResult,
+} from "../../../../src/shared/displayCitationMarkers";
 import { SessionHeader } from "./header";
 import { SessionFooter } from "./footer";
 import { SessionSidebar } from "./sidebar";
@@ -39,6 +45,24 @@ export function Session(props: { sessionId: string }) {
 
   const hasInteraction = createMemo(() => {
     return syncState.pendingAsk !== null || syncState.pendingApproval !== null;
+  });
+  const citationUrlsByMessageId = createMemo(() => {
+    const inlineUrlsByMessageId = buildCitationUrlsByMessageId(syncState.feed);
+    const overflowFilePathsByMessageId = buildCitationOverflowFilePathsByMessageId(syncState.feed);
+
+    for (const [messageId, filePath] of overflowFilePathsByMessageId) {
+      try {
+        const content = readFileSync(filePath, "utf-8");
+        const urls = extractCitationUrlsFromWebSearchResult(content);
+        if (urls.size > 0) {
+          inlineUrlsByMessageId.set(messageId, urls);
+        }
+      } catch {
+        // Keep inline preview-derived citations when the spill file is unavailable.
+      }
+    }
+
+    return inlineUrlsByMessageId;
   });
 
   useKeyboard((e) => {
@@ -81,7 +105,12 @@ export function Session(props: { sessionId: string }) {
           paddingTop={1}
         >
           <For each={syncState.feed}>
-            {(item) => <FeedItemRenderer item={item} />}
+            {(item) => (
+              <FeedItemRenderer
+                item={item}
+                citationUrlsByIndex={citationUrlsByMessageId().get(item.id)}
+              />
+            )}
           </For>
         </scrollbox>
 
@@ -111,7 +140,7 @@ export function Session(props: { sessionId: string }) {
   );
 }
 
-function FeedItemRenderer(props: { item: FeedItem }) {
+function FeedItemRenderer(props: { item: FeedItem; citationUrlsByIndex?: ReadonlyMap<number, string> }) {
   const theme = useTheme();
 
   return (
@@ -121,7 +150,10 @@ function FeedItemRenderer(props: { item: FeedItem }) {
       </Match>
 
       <Match when={props.item.type === "message" && (props.item as any).role === "assistant"}>
-        <AssistantMessage text={(props.item as any).text} />
+        <AssistantMessage
+          text={(props.item as any).text}
+          citationUrlsByIndex={props.citationUrlsByIndex}
+        />
       </Match>
 
       <Match when={props.item.type === "reasoning"}>

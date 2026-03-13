@@ -1,4 +1,4 @@
-import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { AlertTriangleIcon, MessageSquareIcon, RotateCcwIcon } from "lucide-react";
@@ -38,9 +38,15 @@ import {
   SelectValue,
 } from "../components/ui/select";
 import { MODEL_CHOICES, UI_DISABLED_PROVIDERS } from "../lib/modelChoices";
+import { readFile } from "../lib/desktopCommands";
 import type { ProviderName } from "../lib/wsProtocol";
 import { cn } from "../lib/utils";
 import { formatCost, formatTokenCount } from "../../../../src/session/pricing";
+import {
+  buildCitationOverflowFilePathsByMessageId,
+  buildCitationUrlsByMessageId,
+  extractCitationUrlsFromWebSearchResult,
+} from "../../../../src/shared/displayCitationMarkers";
 import type { SessionUsageSnapshot, TurnUsageSnapshot } from "../app/types";
 import { ActivityGroupCard } from "./chat/ActivityGroupCard";
 import { buildChatRenderItems } from "./chat/activityGroups";
@@ -233,7 +239,10 @@ export function ChatThreadHeader(props: {
   );
 }
 
-const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
+const FeedRow = memo(function FeedRow(props: {
+  item: FeedItem;
+  citationUrlsByIndex?: ReadonlyMap<number, string>;
+}) {
   const { developerMode } = useChatViewContext();
   const item = props.item;
 
@@ -242,7 +251,12 @@ const FeedRow = memo(function FeedRow(props: { item: FeedItem }) {
       <Message from={item.role}>
         <MessageContent>
           {item.role === "assistant" ? (
-            <MessageResponse>{item.text}</MessageResponse>
+            <MessageResponse
+              citationUrlsByIndex={props.citationUrlsByIndex}
+              normalizeDisplayCitations
+            >
+              {item.text}
+            </MessageResponse>
           ) : (
             <div className="whitespace-pre-wrap">{item.text}</div>
           )}
@@ -382,6 +396,9 @@ export function ChatView() {
   const hasPromptModal = useAppStore((s) => s.promptModal !== null);
   const developerMode = useAppStore((s) => s.developerMode);
   const messageBarHeight = useAppStore((s) => s.messageBarHeight);
+  const [overflowCitationUrlsByMessageId, setOverflowCitationUrlsByMessageId] = useState<Map<string, Map<number, string>>>(
+    () => new Map(),
+  );
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
@@ -398,6 +415,20 @@ export function ChatView() {
   const feed = rt?.feed ?? [];
   const normalizedFeed = normalizeFeedForToolCards(feed, developerMode);
   const visibleFeed = filterFeedForDeveloperMode(normalizedFeed, developerMode);
+  const inlineCitationUrlsByMessageId = useMemo(() => buildCitationUrlsByMessageId(visibleFeed), [visibleFeed]);
+  const citationOverflowFilePathsByMessageId = useMemo(
+    () => buildCitationOverflowFilePathsByMessageId(visibleFeed),
+    [visibleFeed],
+  );
+  const citationUrlsByMessageId = useMemo(() => {
+    const merged = new Map(inlineCitationUrlsByMessageId);
+    for (const [messageId, urls] of overflowCitationUrlsByMessageId) {
+      if (urls.size > 0) {
+        merged.set(messageId, urls);
+      }
+    }
+    return merged;
+  }, [inlineCitationUrlsByMessageId, overflowCitationUrlsByMessageId]);
   const renderItems = useMemo(() => buildChatRenderItems(visibleFeed), [visibleFeed]);
   const contextValue = useMemo<ChatViewContextValue>(
     () => ({
@@ -443,6 +474,42 @@ export function ChatView() {
       el.scrollTop = el.scrollHeight;
     }
   }, [selectedThreadId, visibleFeed.length]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const entries = [...citationOverflowFilePathsByMessageId.entries()];
+    if (entries.length === 0) {
+      setOverflowCitationUrlsByMessageId(new Map());
+      return;
+    }
+
+    void (async () => {
+      const urlsByMessageId = new Map<string, Map<number, string>>();
+      const textByPath = new Map<string, string>();
+
+      for (const [messageId, filePath] of entries) {
+        try {
+          let content = textByPath.get(filePath);
+          if (content === undefined) {
+            content = await readFile({ path: filePath });
+            textByPath.set(filePath, content);
+          }
+          urlsByMessageId.set(messageId, extractCitationUrlsFromWebSearchResult(content));
+        } catch {
+          urlsByMessageId.set(messageId, new Map());
+        }
+      }
+
+      if (!cancelled) {
+        setOverflowCitationUrlsByMessageId(urlsByMessageId);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [citationOverflowFilePathsByMessageId]);
 
   useEffect(() => {
     if (selectedThreadId && textareaRef.current) {
@@ -563,7 +630,11 @@ export function ChatView() {
                 item.kind === "activity-group" ? (
                   <ActivityGroupCard key={item.id} items={item.items} />
                 ) : (
-                  <FeedRow key={item.item.id} item={item.item} />
+                  <FeedRow
+                    key={item.item.id}
+                    item={item.item}
+                    citationUrlsByIndex={citationUrlsByMessageId.get(item.item.id)}
+                  />
                 )
               )
             )}

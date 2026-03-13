@@ -2,7 +2,7 @@ import type { ComponentProps, HTMLAttributes } from "react";
 import type { Options as RehypeSanitizeOptions } from "rehype-sanitize";
 import type { PluggableList } from "unified";
 
-import { memo } from "react";
+import { Children, memo } from "react";
 import {
   defaultRehypePlugins,
   defaultRemarkPlugins,
@@ -15,6 +15,7 @@ import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 
+import { normalizeDisplayCitationMarkers } from "../../../../../src/shared/displayCitationMarkers";
 import { confirmAction, openPath } from "../../lib/desktopCommands";
 import { cn } from "../../lib/utils";
 
@@ -55,6 +56,7 @@ const streamdownPlugins = { cjk, code, math, mermaid };
 const DESKTOP_LOCAL_FILE_PROTOCOL = "cowork-file:";
 const desktopSanitizeSchema: RehypeSanitizeOptions = {
   ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), "sup"],
   protocols: {
     ...defaultSchema.protocols,
     href: [...(defaultSchema.protocols?.href ?? []), "tel", "cowork-file"],
@@ -438,16 +440,49 @@ function DesktopMessageLink({
   );
 }
 
-export type MessageResponseProps = StreamdownProps;
+export type MessageResponseProps = StreamdownProps & {
+  normalizeDisplayCitations?: boolean;
+  citationUrlsByIndex?: ReadonlyMap<number, string>;
+};
 
-export const MessageResponse = memo(function MessageResponse({ className, ...props }: MessageResponseProps) {
-  const { components, plugins, rehypePlugins, remarkPlugins, ...restProps } = props;
+function normalizeMessageResponseChildren(
+  children: StreamdownProps["children"],
+  normalizeDisplayCitations: boolean,
+  citationUrlsByIndex?: ReadonlyMap<number, string>,
+): StreamdownProps["children"] {
+  if (!normalizeDisplayCitations) {
+    return children;
+  }
+
+  if (typeof children === "string") {
+    return normalizeDisplayCitationMarkers(children, {
+      citationUrlsByIndex,
+      citationMode: "html",
+    });
+  }
+
+  return Children.map(children, (child) => typeof child === "string"
+    ? normalizeDisplayCitationMarkers(child, {
+      citationUrlsByIndex,
+      citationMode: "html",
+    })
+    : child);
+}
+
+export const MessageResponse = memo(function MessageResponse({
+  className,
+  citationUrlsByIndex,
+  normalizeDisplayCitations = false,
+  ...props
+}: MessageResponseProps) {
+  const { children, components, plugins, rehypePlugins, remarkPlugins, ...restProps } = props;
 
   return (
     <Streamdown
       {...restProps}
+      children={normalizeMessageResponseChildren(children, normalizeDisplayCitations, citationUrlsByIndex)}
       className={cn(
-        "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3",
+        "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_a]:underline [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border/80 [&_pre]:bg-muted/45 [&_pre]:p-3 [&_sup]:ml-0.5 [&_sup]:align-super [&_sup]:text-[0.72em] [&_sup]:leading-none [&_sup_a]:font-medium [&_sup_a]:text-primary [&_sup_a]:no-underline hover:[&_sup_a]:underline",
         className,
       )}
       components={{

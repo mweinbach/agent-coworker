@@ -51,7 +51,7 @@ const ReasoningTraceRow = memo(function ReasoningTraceRow(props: {
           <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
             {reasoningLabel(props.mode)}
           </div>
-          <MessageResponse className="mt-1 text-sm leading-6 text-foreground/85">
+          <MessageResponse normalizeDisplayCitations className="mt-1 text-sm leading-6 text-foreground/85">
             {props.text}
           </MessageResponse>
         </div>

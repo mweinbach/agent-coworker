@@ -167,4 +167,22 @@ describe("desktop message local file links", () => {
     expect(html).toContain("create_models.py");
     expect(html).not.toContain("C:\\Users\\Test\\Desktop\\Cowork Test\\create_models.py");
   });
+
+  test("renders assistant citations as superscript links when URLs are available", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        MessageResponse,
+        {
+          normalizeDisplayCitations: true,
+          citationUrlsByIndex: new Map([[5, "https://example.com/source-5"]]),
+        },
+        "Official details on Vera Rubin.[5†L1-L8][5†L20-L25]",
+      ),
+    );
+
+    expect(html).toContain('data-streamdown="superscript"');
+    expect(html).toContain('href="https://example.com/source-5"');
+    expect(html).toContain(">5<");
+    expect(html).not.toContain("†L");
+  });
 });

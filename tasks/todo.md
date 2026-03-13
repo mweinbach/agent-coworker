@@ -1,3 +1,24 @@
+# Task: Fix user-facing citation indexing in conversation messages
+
+## Plan
+- [x] Inspect persisted session content and current desktop/TUI rendering to confirm how raw citation/index markers are stored and displayed.
+- [x] Add a shared display normalization for raw web citation markers so assistant messages render readable source indices for users.
+- [x] Add regression coverage and run the required verification commands, then record the results here.
+
+## Review
+- Added `src/shared/displayCitationMarkers.ts` to normalize stored raw citation markers into display-safe output for both desktop and TUI rendering. Resolvable citations are rendered as superscript links; unresolvable citations are removed entirely so the message text does not keep stray numbers or spacing artifacts.
+- Desktop message rendering now hydrates citation URLs from both inline `webSearch` results and overflow spill files, which fixes missing later-source links in long search outputs. The same shared citation normalization is also wired into the TUI markdown path so both clients present the same user-facing contract.
+- Added regressions in `test/displayCitationMarkers.test.ts` and `apps/desktop/test/message-links.test.ts` covering linked superscripts, missing-link elision, repeated citation handling, and overflow-backed URL recovery.
+- Verification:
+  - `~/.bun/bin/bun test test/displayCitationMarkers.test.ts apps/desktop/test/message-links.test.ts --bail` -> pass (`17 pass, 0 fail`)
+  - `~/.bun/bin/bun test` -> fails only in the external remote MCP coverage: `runTurn + remote MCP (mcp.grep.app) > loads the remote MCP tools and can execute them via the tools passed to streamText` returned `Streamable HTTP error ... 500: Internal Server Error`
+- `~/.bun/bin/bunx tsc --noEmit -p apps/desktop/tsconfig.json` -> pass
+- `~/.bun/bin/bun run typecheck` -> pass
+- `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:248` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+- `~/.bun/bin/bun run build:server-binary` -> pass
+- `~/.bun/bin/bun run build:desktop-resources` -> pass
+- `~/.bun/bin/bun run desktop:build` -> pass
+
 # Task: Ship v0.1.21
 
 ## Plan

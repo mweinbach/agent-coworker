@@ -1,16 +1,24 @@
 import { type JSX } from "solid-js";
 import { SyntaxStyle } from "@opentui/core";
+import { normalizeDisplayCitationMarkers } from "../../../src/shared/displayCitationMarkers";
 import type { ThemeColors } from "../context/theme";
 
 type MarkdownProps = {
   markdown: string;
   theme: ThemeColors;
   maxChars?: number;
+  normalizeDisplayCitations?: boolean;
+  citationUrlsByIndex?: ReadonlyMap<number, string>;
 };
 
 export function Markdown(props: MarkdownProps) {
   const content = () => {
-    let text = props.markdown;
+    let text = props.normalizeDisplayCitations
+      ? normalizeDisplayCitationMarkers(props.markdown, {
+        citationUrlsByIndex: props.citationUrlsByIndex,
+        citationMode: "markdown",
+      })
+      : props.markdown;
     if (props.maxChars && text.length > props.maxChars) {
       text = text.slice(0, props.maxChars) + `\n… (${text.length - props.maxChars} more chars)`;
     }

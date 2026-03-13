@@ -1,3 +1,16 @@
+# Task: Merge PR #36 into main
+
+## Plan
+- [x] Inspect PR `#36` mergeability, branch cleanliness, and commit stack to choose a safe merge path.
+- [x] Prefer a squash merge because the branch contains multiple review/automation follow-up commits that should land as one coherent mainline change.
+- [x] Post a detailed PR comment summarizing the shipped work and verification before merging.
+- [ ] Merge PR `#36` into `main`, sync the local `main` branch, and confirm the final state.
+
+## Review
+- PR `#36` is currently `MERGEABLE`, the working tree is clean, and the branch head is pushed at `origin/codex/plan-multimodal-model-configs`.
+- Chose a squash merge instead of replaying the full branch history because the stack includes the original feature plus multiple review/automation follow-up commits (`opencode` workflow churn, review-fix batches, and PR comment tooling), which should land on `main` as one coherent change.
+- Posted a detailed PR comment summarizing the shipped work, review fixes, and verification so the merge record is readable from the PR timeline even after squashing.
+
 # Task: Address latest opencode PR review comment
 
 ## Plan

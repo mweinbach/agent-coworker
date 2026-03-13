@@ -143,6 +143,12 @@ export function dispatchClientMessage({
       return void session.listSessions();
     case "delete_session":
       return void session.deleteSession(message.targetSessionId);
+    case "memory_list":
+      return void session.emitMemories(message.scope);
+    case "memory_upsert":
+      return void session.upsertMemory(message.scope, message.id, message.content);
+    case "memory_delete":
+      return void session.deleteMemory(message.scope, message.id);
     case "subagent_create":
       return void session.createSubagentSession(message.agentType, message.task);
     case "subagent_sessions_get":

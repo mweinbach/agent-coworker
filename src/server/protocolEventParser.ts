@@ -126,6 +126,8 @@ const serverEventSchema = z.discriminatedUnion("type", [
     type: z.literal("session_settings"),
     sessionId: nonEmptyTrimmedStringSchema,
     enableMcp: z.boolean(),
+    enableMemory: z.boolean(),
+    memoryRequireApproval: z.boolean(),
   }).passthrough(),
   z.object({
     type: z.literal("session_info"),
@@ -271,6 +273,17 @@ const serverEventSchema = z.discriminatedUnion("type", [
       workingDirectory: z.string(),
       outputDirectory: z.string().optional(),
     }).passthrough(),
+  }).passthrough(),
+  z.object({
+    type: z.literal("memory_list"),
+    sessionId: nonEmptyTrimmedStringSchema,
+    memories: z.array(z.object({
+      id: z.string(),
+      scope: z.enum(["workspace", "user"]),
+      content: z.string(),
+      createdAt: z.string(),
+      updatedAt: z.string(),
+    })),
   }).passthrough(),
   z.object({
     type: z.literal("tools"),

@@ -3908,7 +3908,7 @@
 # Task: Make user profile/name prompt injection conditional via regex line injection
 
 ## Plan
-- [x] Update prompt template wording to remove literal "(if provided)" suffixes for user name/profile lines.
+- [x] Update prompt template wording to remove literal “(if provided)” suffixes for user name/profile lines.
 - [x] Refactor prompt variable injection to use regex-based line replacement that removes entire placeholder lines when values are empty.
 - [x] Run targeted prompt tests plus required typecheck/build/test commands and record results.
 
@@ -3940,3 +3940,29 @@
   - `~/.bun/bin/bun run build:desktop-resources` -> pass
   - `~/.bun/bin/bun run desktop:build` -> pass; notarization skipped because Apple notarization credentials are not configured in this environment
   - `git diff --check` -> pass
+
+# Task: Rework memory feature to replace legacy runtime behavior
+
+## Plan
+- [x] Audit the previous SQLite memory patch and identify where legacy AGENT.md/.agent/memory behavior is still active in runtime paths.
+- [x] Refactor memory tool and prompt injection to be SQLite-first (single source of truth) and keep backward compatibility via one-way legacy import only.
+- [x] Run targeted + required verification commands/builds, then document results and ship commit/PR.
+
+
+## Review
+- Replaced runtime dual-write memory behavior with SQLite-first memory reads/writes/search/delete in `src/tools/memory.ts`. Legacy `.agent/AGENT.md` and `.agent/memory/*.md` are now imported one-way into SQLite by `MemoryStore` and no longer used as live runtime storage.
+- Prompt memory injection is now sourced only from SQLite-backed entries (`## Memory (saved entries)`), which keeps model context aligned with what the memory tool actually manages.
+- Updated websocket protocol documentation to keep memory client/server headings in canonical sections and removed duplicated ad-hoc tail documentation blocks.
+- Verification run included typecheck, server/desktop builds, targeted memory + protocol tests, and full `bun test` run (which currently fails on unrelated pre-existing suite issues such as `test.serial` usage and existing desktop workspace-setting test failures).
+
+# Task: Improve memory prompt injection section copy
+
+## Plan
+- [x] Inspect current memory prompt section formatting/content and define dedicated cohesive section copy.
+- [x] Update prompt injection implementation (and tests if needed) so memory guidance references agent memory behavior/tooling clearly.
+- [x] Run targeted verification, document review notes, then commit and create PR.
+
+## Review
+- Updated the injected memory prompt block to a dedicated `## Memory` section with cohesive guidance about persistent memories, the `memory` tool responsibilities, and instruction precedence, followed by a `### Saved Memory Entries` list.
+- Preserved SQLite-first runtime semantics; this is prompt-quality/structure improvement only, not a storage behavior regression.
+- Updated prompt tests to assert the new section heading while retaining coverage for imported hot-cache content behavior.

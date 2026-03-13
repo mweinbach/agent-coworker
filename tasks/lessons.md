@@ -95,3 +95,4 @@
 - When the user supplies an authoritative model-cutoff table mid-implementation, stop and update the registry assumptions immediately instead of continuing to churn around older local defaults or partial web results.
 - When adding profile metadata, do not introduce a second name field; keep identity sourced from existing `userName` unless the user explicitly asks for a separate profile-name concept.
 - For optional prompt metadata fields, do not leave placeholder labels like "(if provided)" in templates; injection should conditionally remove whole lines when values are empty.
+- When users ask for prompt UX polish, prioritize cohesive narrative copy in injected sections (not just raw data dumps) and keep the section self-explanatory about tool usage and precedence.

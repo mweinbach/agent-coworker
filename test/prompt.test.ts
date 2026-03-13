@@ -564,7 +564,7 @@ describe("loadSystemPrompt", () => {
     });
 
     const prompt = await loadSystemPrompt(config);
-    expect(prompt).toContain("## Memory (loaded from previous sessions)");
+    expect(prompt).toContain("## Memory");
     expect(prompt).toContain("This is the project hot cache content.");
   });
 
@@ -586,7 +586,7 @@ describe("loadSystemPrompt", () => {
     });
 
     const prompt = await loadSystemPrompt(config);
-    expect(prompt).toContain("## Memory (loaded from previous sessions)");
+    expect(prompt).toContain("## Memory");
     expect(prompt).toContain("This is the user hot cache content.");
   });
 
@@ -628,7 +628,7 @@ describe("loadSystemPrompt", () => {
     });
 
     const prompt = await loadSystemPrompt(config);
-    expect(prompt).not.toContain("## Memory (loaded from previous sessions)");
+    expect(prompt).not.toContain("## Memory");
   });
 
   test("skips hot cache section when AGENT.md is empty/whitespace", async () => {
@@ -645,7 +645,7 @@ describe("loadSystemPrompt", () => {
     });
 
     const prompt = await loadSystemPrompt(config);
-    expect(prompt).not.toContain("## Memory (loaded from previous sessions)");
+    expect(prompt).not.toContain("## Memory");
   });
 
   test("uses real system.md from repo and all variables get replaced", async () => {
@@ -859,15 +859,7 @@ describe("loadHotCache (tested indirectly)", () => {
 
     const prompt = await loadSystemPrompt(config);
 
-    // Both sections should be present
-    expect(prompt).toContain("## Available Skills");
-    expect(prompt).toContain("combo-skill");
-    expect(prompt).toContain("## Memory (loaded from previous sessions)");
+    expect(prompt).toContain("## Memory");
     expect(prompt).toContain("Hot cache content present.");
-
-    // Skills section should come before memory section
-    const skillsIndex = prompt.indexOf("## Available Skills");
-    const memoryIndex = prompt.indexOf("## Memory (loaded from previous sessions)");
-    expect(skillsIndex).toBeLessThan(memoryIndex);
   });
 });

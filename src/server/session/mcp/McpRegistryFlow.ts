@@ -27,7 +27,13 @@ export class McpRegistryFlow {
       }
     }
 
-    this.context.emit({ type: "session_settings", sessionId: this.context.id, enableMcp });
+    this.context.emit({
+      type: "session_settings",
+      sessionId: this.context.id,
+      enableMcp,
+      enableMemory: this.context.state.config.enableMemory ?? true,
+      memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? true,
+    });
     this.context.queuePersistSessionSnapshot("session.enable_mcp");
 
     if (persistError) {

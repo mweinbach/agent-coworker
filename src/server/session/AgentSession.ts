@@ -7,6 +7,7 @@ import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import { getProviderCatalog } from "../../providers/connectionCatalog";
 import { getProviderStatuses } from "../../providerStatus";
 import { defaultSupportedModel, getSupportedModel } from "../../models/registry";
+import { MemoryStore, type MemoryScope } from "../../memoryStore";
 import type {
   AgentConfig,
   HarnessContextPayload,
@@ -129,6 +130,7 @@ export class AgentSession {
   private readonly adminManager: SessionAdminManager;
   private readonly backupController: SessionBackupController;
   private pendingConfigMutation: Promise<void> = Promise.resolve();
+  private readonly memoryStore: MemoryStore;
   private bufferDisconnectedEvents = false;
   private disconnectedReplayEvents: ServerEvent[] = [];
 
@@ -216,6 +218,8 @@ export class AgentSession {
       lastAutoCheckpointAt: 0,
       costTracker: null,
     };
+
+    this.memoryStore = new MemoryStore(`${opts.config.projectAgentDir}/memory.sqlite`, `${opts.config.userAgentDir}/memory.sqlite`);
 
     this.deps = {
       connectProviderImpl: opts.connectProviderImpl ?? connectModelProvider,
@@ -557,6 +561,14 @@ export class AgentSession {
     return this.state.config.enableMcp ?? false;
   }
 
+  getEnableMemory() {
+    return this.state.config.enableMemory ?? true;
+  }
+
+  getMemoryRequireApproval() {
+    return this.state.config.memoryRequireApproval ?? true;
+  }
+
   getBackupsEnabled() {
     return this.state.backupsEnabledOverride ?? this.state.config.backupsEnabled ?? true;
   }
@@ -641,6 +653,39 @@ export class AgentSession {
 
   async setEnableMcp(enableMcp: boolean) {
     await this.mcpManager.setEnableMcp(enableMcp);
+  }
+
+  async setEnableMemory(enableMemory: boolean) {
+    this.state.config = { ...this.state.config, enableMemory };
+    if (this.deps.persistProjectConfigPatchImpl) {
+      await this.deps.persistProjectConfigPatchImpl({ enableMemory });
+    }
+    this.context.emit({ type: "session_settings", sessionId: this.id, enableMcp: this.getEnableMcp(), enableMemory: this.getEnableMemory(), memoryRequireApproval: this.getMemoryRequireApproval() });
+    this.queuePersistSessionSnapshot("session.enable_memory");
+  }
+
+  async setMemoryRequireApproval(memoryRequireApproval: boolean) {
+    this.state.config = { ...this.state.config, memoryRequireApproval };
+    if (this.deps.persistProjectConfigPatchImpl) {
+      await this.deps.persistProjectConfigPatchImpl({ memoryRequireApproval });
+    }
+    this.context.emit({ type: "session_settings", sessionId: this.id, enableMcp: this.getEnableMcp(), enableMemory: this.getEnableMemory(), memoryRequireApproval: this.getMemoryRequireApproval() });
+    this.queuePersistSessionSnapshot("session.memory_require_approval");
+  }
+
+  async emitMemories(scope?: MemoryScope) {
+    const memories = await this.memoryStore.list(scope);
+    this.context.emit({ type: "memory_list", sessionId: this.id, memories });
+  }
+
+  async upsertMemory(scope: MemoryScope, id: string | undefined, content: string) {
+    await this.memoryStore.upsert(scope, { id, content });
+    await this.emitMemories();
+  }
+
+  async deleteMemory(scope: MemoryScope, id: string) {
+    await this.memoryStore.remove(scope, id);
+    await this.emitMemories();
   }
 
   async emitMcpServers() {

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AgentConfig } from "./types";
 import { discoverSkills } from "./skills";
 import { assertSupportedModel, type SupportedModel } from "./models/registry";
+import { MemoryStore } from "./memoryStore";
 
 async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
   const supportedModel = assertSupportedModel(config.provider, config.model, "model");
@@ -193,9 +194,15 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
       list;
   }
 
-  const hotCache = await loadHotCache(config);
-  if (hotCache.trim()) {
-    prompt += `\n\n## Memory (loaded from previous sessions)\n\n${hotCache}`;
+  if (config.enableMemory ?? true) {
+    const memoryStore = new MemoryStore(
+      path.join(config.projectAgentDir, "memory.sqlite"),
+      path.join(config.userAgentDir, "memory.sqlite")
+    );
+    const memorySection = await memoryStore.renderPromptSection();
+    if (memorySection.trim()) {
+      prompt += `\n\n${memorySection}`;
+    }
   }
 
   const discoveredSkills = skills.map((s) => ({ name: s.name, description: s.description }));

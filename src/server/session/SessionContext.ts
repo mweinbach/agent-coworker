@@ -40,7 +40,7 @@ export type PersistedModelSelection = {
 export type PersistedProjectConfigPatch = Partial<
   Pick<
     AgentConfig,
-    "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
+    "provider" | "model" | "subAgentModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
   >
 > & {
   userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;

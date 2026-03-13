@@ -117,6 +117,18 @@ export interface AgentConfig {
   enableMcp?: boolean;
 
   /**
+   * Whether memory tool + prompt memory injection are enabled.
+   * Defaults to true when not specified.
+   */
+  enableMemory?: boolean;
+
+  /**
+   * Whether model-requested memory writes require explicit user approval.
+   * Defaults to true when not specified.
+   */
+  memoryRequireApproval?: boolean;
+
+  /**
    * Whether to include raw model stream chunks in emitted stream events.
    * Defaults to true when not specified.
    */

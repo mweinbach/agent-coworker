@@ -67,6 +67,8 @@ export class SessionMetadataManager {
         yolo: this.context.state.yolo,
         observabilityEnabled: this.context.state.config.observabilityEnabled ?? false,
         backupsEnabled,
+        enableMemory: this.context.state.config.enableMemory ?? true,
+        memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? true,
         defaultBackupsEnabled,
         subAgentModel: this.context.state.config.subAgentModel,
         maxSteps: this.context.state.maxSteps,
@@ -240,6 +242,12 @@ export class SessionMetadataManager {
     if (patch.backupsEnabled !== undefined) {
       persistPatch.backupsEnabled = patch.backupsEnabled;
     }
+    if (patch.enableMemory !== undefined) {
+      persistPatch.enableMemory = patch.enableMemory;
+    }
+    if (patch.memoryRequireApproval !== undefined) {
+      persistPatch.memoryRequireApproval = patch.memoryRequireApproval;
+    }
     if (patch.toolOutputOverflowChars !== undefined) {
       persistPatch.toolOutputOverflowChars = patch.toolOutputOverflowChars;
     }
@@ -276,6 +284,12 @@ export class SessionMetadataManager {
     if (patch.backupsEnabled !== undefined) {
       this.context.state.backupsEnabledOverride = null;
       this.context.state.config = { ...this.context.state.config, backupsEnabled: patch.backupsEnabled };
+    }
+    if (patch.enableMemory !== undefined) {
+      this.context.state.config = { ...this.context.state.config, enableMemory: patch.enableMemory };
+    }
+    if (patch.memoryRequireApproval !== undefined) {
+      this.context.state.config = { ...this.context.state.config, memoryRequireApproval: patch.memoryRequireApproval };
     }
     if (normalizedSubAgentModel !== undefined) {
       this.context.state.config = { ...this.context.state.config, subAgentModel: normalizedSubAgentModel };

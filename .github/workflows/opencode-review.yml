@@ -28,8 +28,6 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
           model: opencode-go/glm-5
-          agent: plan
-          share: false
           prompt: |
             Review this pull request only.
 

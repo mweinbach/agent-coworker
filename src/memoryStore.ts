@@ -140,7 +140,7 @@ export class MemoryStore {
         if (existingIds.has(item.id) || seenIds.has(item.id)) continue;
         seenIds.add(item.id);
         db.query(
-          "INSERT INTO memories(id, content, created_at, updated_at) VALUES(?, ?, ?, ?)"
+          "INSERT OR IGNORE INTO memories(id, content, created_at, updated_at) VALUES(?, ?, ?, ?)"
         ).run(item.id, item.content.trim(), timestamp, timestamp);
       }
     }

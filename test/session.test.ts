@@ -71,8 +71,8 @@ const { AgentSession } = await import("../src/server/session/AgentSession");
 function makeConfig(dir: string): AgentConfig {
   return {
     provider: "google",
-    model: "gemini-2.0-flash",
-    subAgentModel: "gemini-2.0-flash",
+    model: "gemini-3-flash-preview",
+    subAgentModel: "gemini-3-flash-preview",
     workingDirectory: dir,
     outputDirectory: path.join(dir, "output"),
     uploadsDirectory: path.join(dir, "uploads"),
@@ -334,7 +334,7 @@ describe("AgentSession", () => {
       expect(info.titleSource).toBe("default");
       expect(info.titleModel).toBeNull();
       expect(info.provider).toBe("google");
-      expect(info.model).toBe("gemini-2.0-flash");
+      expect(info.model).toBe("gemini-3-flash-preview");
     });
 
     test("initializes with empty messages (sendUserMessage produces no history artifacts)", async () => {
@@ -384,7 +384,7 @@ describe("AgentSession", () => {
 
     test("returns model", () => {
       const { session } = makeSession();
-      expect(session.getPublicConfig().model).toBe("gemini-2.0-flash");
+      expect(session.getPublicConfig().model).toBe("gemini-3-flash-preview");
     });
 
     test("returns workingDirectory", () => {
@@ -683,7 +683,7 @@ describe("AgentSession", () => {
       expect(evt.config.defaultBackupsEnabled).toBe(true);
       expect(evt.config.toolOutputOverflowChars).toBe(25000);
       expect("defaultToolOutputOverflowChars" in evt.config).toBe(false);
-      expect(evt.config.subAgentModel).toBe("gemini-2.0-flash");
+      expect(evt.config.subAgentModel).toBe("gemini-3-flash-preview");
       expect(evt.config.maxSteps).toBe(100);
     });
 
@@ -732,7 +732,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
       await session.setConfig({
-        subAgentModel: "gpt-5.2-mini",
+        subAgentModel: "gemini-3-pro-preview",
         observabilityEnabled: true,
         backupsEnabled: false,
         toolOutputOverflowChars: null,
@@ -741,7 +741,7 @@ describe("AgentSession", () => {
 
       const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
       expect(cfgEvt).toBeDefined();
-      expect(cfgEvt.config.subAgentModel).toBe("gpt-5.2-mini");
+      expect(cfgEvt.config.subAgentModel).toBe("gemini-3-pro-preview");
       expect(cfgEvt.config.observabilityEnabled).toBe(true);
       expect(cfgEvt.config.backupsEnabled).toBe(false);
       expect(cfgEvt.config.defaultBackupsEnabled).toBe(false);
@@ -750,7 +750,7 @@ describe("AgentSession", () => {
       expect(cfgEvt.config.maxSteps).toBe(25);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
-        subAgentModel: "gpt-5.2-mini",
+        subAgentModel: "gemini-3-pro-preview",
         observabilityEnabled: true,
         backupsEnabled: false,
         toolOutputOverflowChars: null,
@@ -802,13 +802,13 @@ describe("AgentSession", () => {
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
       await session.setConfig({
-        subAgentModel: "gpt-5.2-mini",
+        subAgentModel: "gemini-3-pro-preview",
         observabilityEnabled: true,
         maxSteps: 25,
       });
 
       const cfg = session.getSessionConfigEvent().config;
-      expect(cfg.subAgentModel).toBe("gemini-2.0-flash");
+      expect(cfg.subAgentModel).toBe("gemini-3-flash-preview");
       expect(cfg.observabilityEnabled).toBe(false);
       expect(cfg.maxSteps).toBe(100);
 
@@ -1059,34 +1059,34 @@ describe("AgentSession", () => {
   describe("setModel", () => {
     test("updates model in-session and emits config_updated", async () => {
       const { session, events } = makeSession();
-      await session.setModel("gpt-5.2");
+      await session.setModel("gemini-3-flash-preview");
 
       expect(session.getPublicConfig().provider).toBe("google");
-      expect(session.getPublicConfig().model).toBe("gpt-5.2");
+      expect(session.getPublicConfig().model).toBe("gemini-3-flash-preview");
       const updated = events.find(
         (e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated"
       );
       expect(updated).toBeDefined();
       if (updated) {
         expect(updated.config.provider).toBe("google");
-        expect(updated.config.model).toBe("gpt-5.2");
+        expect(updated.config.model).toBe("gemini-3-flash-preview");
       }
       expect(events.some((e) => e.type === "error")).toBe(false);
     });
 
     test("updates provider+model in-session and emits config_updated", async () => {
       const { session, events } = makeSession();
-      await session.setModel("claude-4-5-sonnet", "anthropic");
+      await session.setModel("claude-sonnet-4-5", "anthropic");
 
       expect(session.getPublicConfig().provider).toBe("anthropic");
-      expect(session.getPublicConfig().model).toBe("claude-4-5-sonnet");
+      expect(session.getPublicConfig().model).toBe("claude-sonnet-4-5");
       const updated = events.find(
         (e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated"
       );
       expect(updated).toBeDefined();
       if (updated) {
         expect(updated.config.provider).toBe("anthropic");
-        expect(updated.config.model).toBe("claude-4-5-sonnet");
+        expect(updated.config.model).toBe("claude-sonnet-4-5");
       }
       expect(events.some((e) => e.type === "error")).toBe(false);
     });
@@ -1136,11 +1136,11 @@ describe("AgentSession", () => {
       });
       const { session, events } = makeSession({ persistModelSelectionImpl });
 
-      await session.setModel("gpt-5.2");
+      await session.setModel("gemini-3-flash-preview");
 
       const updated = events.find((e): e is Extract<ServerEvent, { type: "config_updated" }> => e.type === "config_updated");
       expect(updated).toBeDefined();
-      expect(session.getPublicConfig().model).toBe("gpt-5.2");
+      expect(session.getPublicConfig().model).toBe("gemini-3-flash-preview");
       const err = events.find(
         (e): e is Extract<ServerEvent, { type: "error" }> =>
           e.type === "error" && e.message.includes("Model updated for this session")
@@ -1169,7 +1169,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession();
       const before = session.getPublicConfig();
 
-      await session.setModel("gpt-5.2", "invalid-provider" as any);
+      await session.setModel("gemini-3-flash-preview", "invalid-provider" as any);
 
       expect(session.getPublicConfig()).toEqual(before);
       const err = events.find((e) => e.type === "error");
@@ -1184,9 +1184,9 @@ describe("AgentSession", () => {
     test("emitProviderCatalog emits provider_catalog event", async () => {
       const catalog = {
         all: [
-          { id: "openai", name: "OpenAI", models: ["gpt-5.4"], defaultModel: "gpt-5.4" },
+          { id: "openai", name: "OpenAI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" },
         ],
-        default: { openai: "gpt-5.4" },
+        default: { openai: "gpt-5.2" },
         connected: ["openai"],
       };
       const getProviderCatalogImpl = mock(async () => catalog);
@@ -1203,7 +1203,7 @@ describe("AgentSession", () => {
         expect(evt.all).toEqual(catalog.all);
         expect(evt.default).toEqual({
           ...catalog.default,
-          google: "gemini-2.0-flash",
+          google: "gemini-3-flash-preview",
         });
         expect(evt.connected).toEqual(catalog.connected);
       }
@@ -1248,8 +1248,8 @@ describe("AgentSession", () => {
         },
       ];
       const getProviderCatalogImpl = mock(async () => ({
-        all: [{ id: "openai", name: "OpenAI", models: ["gpt-5.4"], defaultModel: "gpt-5.4" }],
-        default: { openai: "gpt-5.4" },
+        all: [{ id: "openai", name: "OpenAI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" }],
+        default: { openai: "gpt-5.2" },
         connected: ["openai"],
       }));
       const getProviderStatusesImpl = mock(async () => statuses);
@@ -1377,8 +1377,8 @@ describe("AgentSession", () => {
 
     test("callbackProviderAuth emits provider_auth_result for oauth method", async () => {
       const getProviderCatalogImpl = mock(async () => ({
-        all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.4"], defaultModel: "gpt-5.4" }],
-        default: { "codex-cli": "gpt-5.4" },
+        all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" }],
+        default: { "codex-cli": "gpt-5.2" },
         connected: ["codex-cli"],
       }));
       const getProviderStatusesImpl = mock(async () => []);
@@ -1397,7 +1397,7 @@ describe("AgentSession", () => {
       });
       (session as any).state.providerState = {
         provider: "codex-cli",
-        model: "gpt-5.4",
+        model: "gpt-5.2",
         responseId: "resp_before_oauth",
         updatedAt: "2026-02-16T00:00:00.000Z",
         accountId: "acct_123",
@@ -1417,8 +1417,8 @@ describe("AgentSession", () => {
 
     test("callbackProviderAuth accepts a manual codex auth code after authorize", async () => {
       const getProviderCatalogImpl = mock(async () => ({
-        all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.4"], defaultModel: "gpt-5.4" }],
-        default: { "codex-cli": "gpt-5.4" },
+        all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" }],
+        default: { "codex-cli": "gpt-5.2" },
         connected: ["codex-cli"],
       }));
       const getProviderStatusesImpl = mock(async () => []);
@@ -1445,7 +1445,7 @@ describe("AgentSession", () => {
       });
       (session as any).state.providerState = {
         provider: "codex-cli",
-        model: "gpt-5.4",
+        model: "gpt-5.2",
         responseId: "resp_before_oauth",
         updatedAt: "2026-02-16T00:00:00.000Z",
         accountId: "acct_123",
@@ -1474,8 +1474,8 @@ describe("AgentSession", () => {
 
     test("logoutProviderAuth emits provider_auth_result and clears provider state", async () => {
       const getProviderCatalogImpl = mock(async () => ({
-        all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.4"], defaultModel: "gpt-5.4" }],
-        default: { "codex-cli": "gpt-5.4" },
+        all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" }],
+        default: { "codex-cli": "gpt-5.2" },
         connected: [],
       }));
       const getProviderStatusesImpl = mock(async () => []);
@@ -1494,7 +1494,7 @@ describe("AgentSession", () => {
       });
       (session as any).state.providerState = {
         provider: "codex-cli",
-        model: "gpt-5.4",
+        model: "gpt-5.2",
         responseId: "resp_before_logout",
         updatedAt: "2026-02-16T00:00:00.000Z",
         accountId: "acct_123",
@@ -3795,8 +3795,8 @@ describe("AgentSession", () => {
         config: {
           ...makeConfig(dir),
           provider: "openai",
-          model: "gpt-5.4",
-          subAgentModel: "gpt-5.4",
+          model: "gpt-5.2",
+          subAgentModel: "gpt-5.2",
         },
       });
 
@@ -3837,8 +3837,8 @@ describe("AgentSession", () => {
         config: {
           ...makeConfig(dir),
           provider: "openai",
-          model: "gpt-5.4",
-          subAgentModel: "gpt-5.4",
+          model: "gpt-5.2",
+          subAgentModel: "gpt-5.2",
         },
       });
 
@@ -3879,8 +3879,8 @@ describe("AgentSession", () => {
         config: {
           ...makeConfig("/tmp/test-session-compact-usage"),
           provider: "openai",
-          model: "gpt-5.4",
-          subAgentModel: "gpt-5.4",
+          model: "gpt-5.2",
+          subAgentModel: "gpt-5.2",
         },
       });
 
@@ -3912,8 +3912,8 @@ describe("AgentSession", () => {
         config: {
           ...makeConfig("/tmp/test-session-budget-alerts"),
           provider: "openai",
-          model: "gpt-5.4",
-          subAgentModel: "gpt-5.4",
+          model: "gpt-5.2",
+          subAgentModel: "gpt-5.2",
         },
       });
 
@@ -3924,12 +3924,12 @@ describe("AgentSession", () => {
 
       const warningEvt = events.find((e) => e.type === "budget_warning") as Extract<ServerEvent, { type: "budget_warning" }> | undefined;
       expect(warningEvt).toBeDefined();
-      expect(warningEvt?.currentCostUsd).toBe(17.5);
+      expect(warningEvt?.currentCostUsd).toBe(15.75);
       expect(warningEvt?.thresholdUsd).toBe(1);
 
       const exceededEvt = events.find((e) => e.type === "budget_exceeded") as Extract<ServerEvent, { type: "budget_exceeded" }> | undefined;
       expect(exceededEvt).toBeDefined();
-      expect(exceededEvt?.currentCostUsd).toBe(17.5);
+      expect(exceededEvt?.currentCostUsd).toBe(15.75);
       expect(exceededEvt?.thresholdUsd).toBe(2);
 
       const costLogs = events
@@ -3991,7 +3991,7 @@ describe("AgentSession", () => {
         tracker.recordTurn({
           turnId: `turn-${i + 1}`,
           provider: "openai",
-          model: "gpt-5.4",
+          model: "gpt-5.2",
           usage: {
             promptTokens: 100,
             completionTokens: 25,
@@ -4012,7 +4012,7 @@ describe("AgentSession", () => {
           titleSource: "manual",
           titleModel: null,
           provider: "openai",
-          model: "gpt-5.4",
+          model: "gpt-5.2",
           workingDirectory: "/tmp/persisted",
           enableMcp: true,
           createdAt: "2026-03-09T00:00:00.000Z",
@@ -4284,7 +4284,7 @@ describe("AgentSession", () => {
         agentType: "general" as const,
         title: "Child",
         provider: "google" as const,
-        model: "gemini-2.0-flash",
+        model: "gemini-3-flash-preview",
         createdAt: "2026-03-08T00:00:00.000Z",
         updatedAt: "2026-03-08T00:00:00.000Z",
         status: "active" as const,
@@ -4302,7 +4302,7 @@ describe("AgentSession", () => {
           agentType: "general" as const,
           title: "Child",
           provider: "google" as const,
-          model: "gemini-2.0-flash",
+          model: "gemini-3-flash-preview",
           createdAt: "2026-03-08T00:00:00.000Z",
           updatedAt: "2026-03-08T00:00:00.000Z",
           status: "closed" as const,

@@ -101,7 +101,7 @@ describe("desktop usage page", () => {
             byModel: [
               {
                 provider: "openai",
-                model: "gpt-5.4",
+                model: "gpt-5.2",
                 turns: 2,
                 totalPromptTokens: 2400,
                 totalCompletionTokens: 700,
@@ -124,7 +124,7 @@ describe("desktop usage page", () => {
                 turnIndex: 1,
                 timestamp: "2026-03-10T00:03:00.000Z",
                 provider: "openai",
-                model: "gpt-5.4",
+                model: "gpt-5.2",
                 usage: {
                   promptTokens: 1400,
                   completionTokens: 400,
@@ -170,7 +170,7 @@ describe("desktop usage page", () => {
     expect(html).toContain("Budget thread");
     expect(html).toContain("Model breakdown");
     expect(html).toContain("Recent turns");
-    expect(html).toContain("gpt-5.4");
+    expect(html).toContain("gpt-5.2");
     expect(html).toContain("gemini-3-flash-preview");
     expect(html).toContain("est. $0.02");
     expect(html).toContain("Warning triggered");
@@ -215,7 +215,7 @@ describe("desktop usage page", () => {
             byModel: [
               {
                 provider: "openai",
-                model: "gpt-5.4",
+                model: "gpt-5.2",
                 turns: 1,
                 totalPromptTokens: 1000,
                 totalCompletionTokens: 200,
@@ -229,7 +229,7 @@ describe("desktop usage page", () => {
                 turnIndex: 1,
                 timestamp: "2026-03-10T00:03:00.000Z",
                 provider: "openai",
-                model: "gpt-5.4",
+                model: "gpt-5.2",
                 usage: {
                   promptTokens: 1000,
                   completionTokens: 200,

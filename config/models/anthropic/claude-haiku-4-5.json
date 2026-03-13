@@ -1,0 +1,16 @@
+{
+  "id": "claude-haiku-4-5",
+  "provider": "anthropic",
+  "displayName": "Claude Haiku 4.5",
+  "knowledgeCutoff": "February 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/claude-haiku-4-5.md",
+  "providerOptionsDefaults": {
+    "thinking": {
+      "type": "enabled",
+      "budgetTokens": 32000
+    },
+    "disableParallelToolUse": true
+  },
+  "isDefault": false
+}

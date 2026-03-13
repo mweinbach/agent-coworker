@@ -1,13 +1,10 @@
-import { DEFAULT_ANTHROPIC_PROVIDER_OPTIONS } from "./anthropic";
-import { DEFAULT_CODEX_CLI_PROVIDER_OPTIONS } from "./codex-cli";
-import { DEFAULT_GOOGLE_PROVIDER_OPTIONS } from "./google";
-import { DEFAULT_OPENAI_PROVIDER_OPTIONS } from "./openai";
+import { defaultSupportedModel } from "../models/registry";
 
 // Central place to tune provider-specific reasoning/thinking behavior.
 // Split per-provider so each module owns its own defaults.
 export const DEFAULT_PROVIDER_OPTIONS: Record<string, any> = {
-  openai: DEFAULT_OPENAI_PROVIDER_OPTIONS,
-  google: DEFAULT_GOOGLE_PROVIDER_OPTIONS,
-  anthropic: DEFAULT_ANTHROPIC_PROVIDER_OPTIONS,
-  "codex-cli": DEFAULT_CODEX_CLI_PROVIDER_OPTIONS,
+  openai: defaultSupportedModel("openai").providerOptionsDefaults,
+  google: defaultSupportedModel("google").providerOptionsDefaults,
+  anthropic: defaultSupportedModel("anthropic").providerOptionsDefaults,
+  "codex-cli": defaultSupportedModel("codex-cli").providerOptionsDefaults,
 };

@@ -63,7 +63,7 @@ describe("src/providers/index.ts", () => {
     test("rejects Zen-only OpenCode models on opencode-go", () => {
       const config = makeConfig({ provider: "opencode-go", model: "glm-5", subAgentModel: "glm-5" });
       expect(() => getModelForProvider(config, "minimax-m2.5")).toThrow(
-        "opencode-go does not support model minimax-m2.5.",
+        'Unsupported model "minimax-m2.5" for provider opencode-go.',
       );
     });
 

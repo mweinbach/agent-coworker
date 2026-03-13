@@ -17,12 +17,12 @@ describe("pricing", () => {
             expect(pricing!.outputPerMillion).toBe(15);
         });
 
-        it("resolves exact match for openai gpt-5.4 pricing", () => {
-            const pricing = resolveModelPricing("openai", "gpt-5.4");
+        it("resolves exact match for openai gpt-5.2 pricing", () => {
+            const pricing = resolveModelPricing("openai", "gpt-5.2");
             expect(pricing).not.toBeNull();
-            expect(pricing!.inputPerMillion).toBe(2.5);
-            expect(pricing!.outputPerMillion).toBe(15);
-            expect(pricing!.cachedInputPerMillion).toBe(0.25);
+            expect(pricing!.inputPerMillion).toBe(1.75);
+            expect(pricing!.outputPerMillion).toBe(14);
+            expect(pricing!.cachedInputPerMillion).toBe(0.175);
         });
 
         it("resolves exact match for google model", () => {
@@ -89,12 +89,12 @@ describe("pricing", () => {
             expect(minimax!.cachedInputPerMillion).toBe(0.06);
         });
 
-        it("resolves exact match for codex-cli gpt-5.4 pricing", () => {
-            const pricing = resolveModelPricing("codex-cli", "gpt-5.4");
+        it("resolves exact match for codex-cli gpt-5.2 pricing", () => {
+            const pricing = resolveModelPricing("codex-cli", "gpt-5.2-codex");
             expect(pricing).not.toBeNull();
-            expect(pricing!.inputPerMillion).toBe(2.5);
-            expect(pricing!.outputPerMillion).toBe(15);
-            expect(pricing!.cachedInputPerMillion).toBe(0.25);
+            expect(pricing!.inputPerMillion).toBe(1.75);
+            expect(pricing!.outputPerMillion).toBe(14);
+            expect(pricing!.cachedInputPerMillion).toBe(0.175);
         });
 
         it("returns null for unknown provider/model", () => {
@@ -130,14 +130,14 @@ describe("pricing", () => {
         it("lets env overrides replace built-in pricing entries", () => {
             const env = {
                 COWORK_MODEL_PRICING_OVERRIDES: JSON.stringify({
-                    "openai:gpt-5.4": {
+                    "openai:gpt-5.2": {
                         inputPerMillion: 7,
                         outputPerMillion: 14,
                     },
                 }),
             };
 
-            const pricing = resolveModelPricing("openai", "gpt-5.4", env);
+            const pricing = resolveModelPricing("openai", "gpt-5.2", env);
             expect(pricing).toEqual({
                 inputPerMillion: 7,
                 outputPerMillion: 14,
@@ -160,20 +160,20 @@ describe("pricing", () => {
         });
 
         it("calculates cost for large token counts", () => {
-            const pricing = resolveModelPricing("openai", "gpt-5.4")!;
-            // 1M input + 500K output = (1) * 2.5 + (0.5) * 15 = 2.5 + 7.5 = 10
+            const pricing = resolveModelPricing("openai", "gpt-5.2")!;
+            // 1M input + 500K output = (1) * 1.75 + (0.5) * 14 = 1.75 + 7 = 8.75
             const cost = calculateTokenCost(1_000_000, 500_000, pricing);
-            expect(cost).toBeCloseTo(10, 4);
+            expect(cost).toBeCloseTo(8.75, 4);
         });
 
         it("discounts cached prompt tokens when cached pricing is known", () => {
-            const pricing = resolveModelPricing("openai", "gpt-5.4")!;
+            const pricing = resolveModelPricing("openai", "gpt-5.2")!;
             // 1M prompt tokens with 400K cached + 500K output
-            // 600K uncached input @ 2.5 = 1.5
-            // 400K cached input @ 0.25 = 0.1
-            // 500K output @ 15 = 7.5
+            // 600K uncached input @ 1.75 = 1.05
+            // 400K cached input @ 0.175 = 0.07
+            // 500K output @ 14 = 7
             const cost = calculateTokenCost(1_000_000, 500_000, pricing, 400_000);
-            expect(cost).toBeCloseTo(9.1, 4);
+            expect(cost).toBeCloseTo(8.12, 4);
         });
     });
 

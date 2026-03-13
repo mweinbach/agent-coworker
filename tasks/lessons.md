@@ -87,3 +87,4 @@
 - When parallel edits or another agent touch the same regression fix, re-check the exact working-tree diff before continuing; a partially reverted bootstrap/defaulting path can silently reintroduce the bug even if nearby code still looks fixed.
 - When a review surfaces a missing provider capability, verify the repo’s intended product contract before turning it into a bug; `opencode-go` intentionally has no local pricing or pricing overrides here.
 - When a tool has both saved credentials and environment fallback, match the repo’s standard precedence: user-saved auth should win over ambient shell env unless the product explicitly says otherwise.
+- When the user supplies an authoritative model-cutoff table mid-implementation, stop and update the registry assumptions immediately instead of continuing to churn around older local defaults or partial web results.

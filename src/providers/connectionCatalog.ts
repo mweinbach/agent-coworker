@@ -1,13 +1,18 @@
 import { getAiCoworkerPaths, readConnectionStore, type AiCoworkerPaths } from "../connect";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
-import { PROVIDER_MODEL_CATALOG } from "./catalog";
+import { defaultSupportedModel, listSupportedModels, type SupportedModel } from "../models/registry";
 import { readCodexAuthMaterial } from "./codex-auth";
 import { getOpenCodeDisplayName } from "./opencodeShared";
+
+export type ProviderCatalogModelEntry = Pick<
+  SupportedModel,
+  "id" | "displayName" | "knowledgeCutoff" | "supportsImageInput"
+>;
 
 export type ProviderCatalogEntry = {
   id: ProviderName;
   name: string;
-  models: string[];
+  models: ProviderCatalogModelEntry[];
   defaultModel: string;
 };
 
@@ -30,8 +35,13 @@ export function listProviderCatalogEntries(): ProviderCatalogEntry[] {
   return PROVIDER_NAMES.map((provider) => ({
     id: provider,
     name: PROVIDER_LABELS[provider],
-    models: [...PROVIDER_MODEL_CATALOG[provider].availableModels],
-    defaultModel: PROVIDER_MODEL_CATALOG[provider].defaultModel,
+    models: listSupportedModels(provider).map((model) => ({
+      id: model.id,
+      displayName: model.displayName,
+      knowledgeCutoff: model.knowledgeCutoff,
+      supportsImageInput: model.supportsImageInput,
+    })),
+    defaultModel: defaultSupportedModel(provider).id,
   }));
 }
 

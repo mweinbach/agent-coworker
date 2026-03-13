@@ -1,4 +1,5 @@
 import type { AgentConfig, ProviderName } from "../types";
+import { assertSupportedModel } from "../models/registry";
 
 import { anthropicProvider } from "./anthropic";
 import { PROVIDER_MODEL_CATALOG } from "./catalog";
@@ -56,7 +57,8 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
 };
 
 export function getModelForProvider(config: AgentConfig, modelId: string, savedKey?: string) {
-  return PROVIDERS[config.provider].createModel({ config, modelId, savedKey });
+  const supported = assertSupportedModel(config.provider, modelId);
+  return PROVIDERS[config.provider].createModel({ config, modelId: supported.id, savedKey });
 }
 
 export function getProviderKeyCandidates(provider: ProviderName): readonly ProviderName[] {

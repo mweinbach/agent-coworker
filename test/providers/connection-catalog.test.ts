@@ -39,7 +39,20 @@ describe("providers/connectionCatalog", () => {
     expect(payload.all).toContainEqual({
       id: "opencode-go",
       name: "OpenCode Go",
-      models: ["glm-5", "kimi-k2.5"],
+      models: [
+        {
+          id: "glm-5",
+          displayName: "GLM-5",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: false,
+        },
+        {
+          id: "kimi-k2.5",
+          displayName: "Kimi K2.5",
+          knowledgeCutoff: "April 2024",
+          supportsImageInput: true,
+        },
+      ],
       defaultModel: "glm-5",
     });
     expect(payload.default["opencode-zen"]).toBe("glm-5");
@@ -47,13 +60,48 @@ describe("providers/connectionCatalog", () => {
       id: "opencode-zen",
       name: "OpenCode Zen",
       models: [
-        "glm-5",
-        "kimi-k2.5",
-        "nemotron-3-super-free",
-        "mimo-v2-flash-free",
-        "big-pickle",
-        "minimax-m2.5-free",
-        "minimax-m2.5",
+        {
+          id: "big-pickle",
+          displayName: "Big Pickle",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: false,
+        },
+        {
+          id: "glm-5",
+          displayName: "GLM-5",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: false,
+        },
+        {
+          id: "kimi-k2.5",
+          displayName: "Kimi K2.5",
+          knowledgeCutoff: "April 2024",
+          supportsImageInput: true,
+        },
+        {
+          id: "mimo-v2-flash-free",
+          displayName: "Mimo V2 Flash Free",
+          knowledgeCutoff: "December 2024",
+          supportsImageInput: false,
+        },
+        {
+          id: "minimax-m2.5",
+          displayName: "MiniMax M2.5",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: false,
+        },
+        {
+          id: "minimax-m2.5-free",
+          displayName: "MiniMax M2.5 Free",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: false,
+        },
+        {
+          id: "nemotron-3-super-free",
+          displayName: "Nemotron 3 Super Free",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: false,
+        },
       ],
       defaultModel: "glm-5",
     });

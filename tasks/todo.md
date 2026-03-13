@@ -3642,3 +3642,21 @@
 - `bun run build:server-binary` -> pass again after diagnostic instrumentation
 - `bun run build:desktop-resources` -> pass again after diagnostic instrumentation
 - `bun run desktop:build` -> pass again after diagnostic instrumentation
+
+# Task: Implement supported model registry and capability-gated prompting
+- [x] Replace split model metadata with per-model registry config files under `config/models/`.
+- [x] Load supported models from the registry, derive provider catalogs/defaults from it, and fail closed on unsupported IDs in config/runtime/session entry points.
+- [x] Gate prompt/runtime image behavior off shared model capabilities and expose richer model metadata to catalogs.
+- [x] Verify shipped model metadata against current sources, run required verification, and record the review.
+
+## Review
+- Model metadata now lives in `config/models/<provider>/*.json`, loaded via `src/models/registry.ts`; provider catalogs/defaults, prompt template selection, runtime image gating, and config validation all resolve through that registry instead of split hardcoded catalogs.
+- Unsupported/custom model IDs now fail closed across config loading, direct model overrides, websocket `set_model`, and persisted session restore. Prompt assembly strips image-inspection guidance for models whose registry entry has `supportsImageInput: false`, and `src/runtime/piRuntime.ts` uses the same flag when shaping model IO.
+- Verified current public model metadata where vendor docs expose it: OpenAI `gpt-5.2`, `gpt-5.1`, and `gpt-5-mini` pages; Google Gemini API model docs for Gemini 3 Pro/Flash; Anthropic’s current model table for Claude 4.6 / 4.5 image support and published cutoffs; Xiaomi’s MiMo V2 Flash README for the December 2024 cutoff; Moonshot’s Kimi K2.5 materials for multimodal support. Where an exact cutoff was not currently published in vendor docs, the registry keeps the supplied/project value or `Unknown` rather than inventing one.
+- Also refreshed stale OpenAI/Codex local pricing entries in `src/session/pricing.ts` to current official model-page values so session usage math stays aligned with current docs.
+- Verification:
+  - `~/.bun/bin/bun test` -> pass (`2193 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass

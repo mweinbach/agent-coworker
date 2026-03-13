@@ -1,0 +1,10 @@
+{
+  "id": "nemotron-3-super-free",
+  "provider": "opencode-zen",
+  "displayName": "Nemotron 3 Super Free",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

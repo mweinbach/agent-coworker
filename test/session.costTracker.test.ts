@@ -9,7 +9,7 @@ describe("SessionCostTracker", () => {
     tracker.recordTurn({
       turnId: "turn-1",
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       usage: {
         promptTokens: 1_000_000,
         completionTokens: 1_000_000,
@@ -38,7 +38,7 @@ describe("SessionCostTracker", () => {
     tracker.recordTurn({
       turnId: "turn-1",
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       usage: {
         promptTokens: 1_000_000,
         completionTokens: 1_000_000,
@@ -56,7 +56,7 @@ describe("SessionCostTracker", () => {
     original.recordTurn({
       turnId: "turn-1",
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       usage: {
         promptTokens: 1000,
         completionTokens: 250,
@@ -76,7 +76,7 @@ describe("SessionCostTracker", () => {
     tracker.recordTurn({
       turnId: "turn-1",
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       usage: {
         promptTokens: 1_000_000,
         cachedPromptTokens: 400_000,
@@ -85,7 +85,7 @@ describe("SessionCostTracker", () => {
       },
     });
 
-    expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeCloseTo(9.1, 6);
+    expect(tracker.getSnapshot().estimatedTotalCostUsd).toBeCloseTo(8.12, 6);
   });
 
   test("prefers runtime-provided estimated cost when present", () => {
@@ -94,7 +94,7 @@ describe("SessionCostTracker", () => {
     tracker.recordTurn({
       turnId: "turn-1",
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       usage: {
         promptTokens: 1000,
         completionTokens: 100,
@@ -113,7 +113,7 @@ describe("SessionCostTracker", () => {
     tracker.recordTurn({
       turnId: "turn-1",
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       usage: {
         promptTokens: 1000,
         completionTokens: 100,
@@ -189,7 +189,7 @@ describe("SessionCostTracker", () => {
     tracker.recordTurn({
       turnId: "turn-1",
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       usage: {
         promptTokens: 1_000_000,
         completionTokens: 1_000_000,
@@ -198,8 +198,8 @@ describe("SessionCostTracker", () => {
     });
 
     expect(alerts).toEqual([
-      { type: "budget_warning", currentCostUsd: 17.5, thresholdUsd: 1 },
-      { type: "budget_exceeded", currentCostUsd: 17.5, thresholdUsd: 2 },
+      { type: "budget_warning", currentCostUsd: 15.75, thresholdUsd: 1 },
+      { type: "budget_exceeded", currentCostUsd: 15.75, thresholdUsd: 2 },
     ]);
   });
 
@@ -209,7 +209,7 @@ describe("SessionCostTracker", () => {
     tracker.recordTurn({
       turnId: "turn-1",
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       usage: {
         promptTokens: 1000,
         completionTokens: 250,
@@ -224,12 +224,12 @@ describe("SessionCostTracker", () => {
 
     const freshSnapshot = tracker.getSnapshot();
     expect(freshSnapshot.byModel[0]).toMatchObject({
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       turns: 1,
       totalTokens: 1250,
     });
     expect(freshSnapshot.turns[0]).toMatchObject({
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       usage: {
         promptTokens: 1000,
         completionTokens: 250,
@@ -245,7 +245,7 @@ describe("SessionCostTracker", () => {
       tracker.recordTurn({
         turnId: `turn-${i + 1}`,
         provider: "openai",
-        model: "gpt-5.4",
+        model: "gpt-5.2",
         usage: {
           promptTokens: 100 + i,
           completionTokens: 25,
@@ -268,7 +268,7 @@ describe("SessionCostTracker", () => {
     tracker.recordTurn({
       turnId: "turn-1",
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       usage: {
         promptTokens: 1000,
         completionTokens: 100,

@@ -33,6 +33,7 @@ import {
   type OpenCodeProviderName,
 } from "../providers/opencodeShared";
 import type { AgentConfig, ModelMessage, ProviderName } from "../types";
+import { assertSupportedModel } from "../models/registry";
 import type { TelemetrySettings } from "../observability/runtime";
 import {
   continuationMatchesTarget,
@@ -168,6 +169,17 @@ type ResolvedCodexAuth = {
   accountId?: string;
 };
 
+function applySupportedModelMetadata(model: PiModel, provider: ProviderName, modelId: string): PiModel {
+  const supported = assertSupportedModel(provider, modelId, "model");
+  const input: Array<"text" | "image"> = supported.supportsImageInput ? ["text", "image"] : ["text"];
+  return {
+    ...model,
+    id: supported.id,
+    name: supported.displayName,
+    input,
+  };
+}
+
 function getOpenCodePiModel(provider: OpenCodeProviderName, modelId: string): PiModel | null {
   if (!isOpenCodeModelSupportedByProvider(provider, modelId)) return null;
   const modelSpec = getOpenCodeModelSpec(modelId);
@@ -249,7 +261,7 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
     const model = pickKnownPiModel("openai", modelId);
     if (!model) throw new Error(`No PI model metadata available for provider openai (model: ${modelId}).`);
     return {
-      model,
+      model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: getSavedProviderApiKey(params.config, "openai"),
     };
   }
@@ -258,7 +270,7 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
     const model = pickKnownPiModel("google", modelId);
     if (!model) throw new Error(`No PI model metadata available for provider google (model: ${modelId}).`);
     return {
-      model,
+      model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: getSavedProviderApiKey(params.config, "google"),
     };
   }
@@ -267,7 +279,7 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
     const model = pickKnownPiModel("anthropic", modelId);
     if (!model) throw new Error(`No PI model metadata available for provider anthropic (model: ${modelId}).`);
     return {
-      model,
+      model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: getSavedProviderApiKey(params.config, "anthropic"),
     };
   }
@@ -276,7 +288,7 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
     const model = getOpenCodePiModel(provider, modelId);
     if (!model) throw new Error(`No PI model metadata available for provider ${provider} (model: ${modelId}).`);
     return {
-      model,
+      model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveOpenCodeApiKey(provider, {
         savedKey: getSavedProviderApiKey(params.config, provider),
       }),
@@ -291,13 +303,13 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
         throw new Error(`No PI model metadata available for provider codex-cli/openai (model: ${modelId}).`);
       }
       return {
-        model: {
+        model: applySupportedModelMetadata({
           ...openaiModel,
           id: modelId,
           name: modelId,
           provider: "openai",
           api: "openai-responses",
-        },
+        }, provider, modelId),
         apiKey: savedKey,
       };
     }
@@ -312,7 +324,7 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
       : undefined;
 
     return {
-      model: {
+      model: applySupportedModelMetadata({
         ...codexModel,
         id: modelId,
         name: modelId,
@@ -320,7 +332,7 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
         api: "openai-codex-responses",
         baseUrl: CODEX_BACKEND_BASE_URL,
         ...(codexHeaders ? { headers: { ...(codexModel.headers ?? {}), ...codexHeaders } } : {}),
-      },
+      }, provider, modelId),
       apiKey: codexAuth.accessToken,
       ...(codexAuth.accountId ? { accountId: codexAuth.accountId } : {}),
       ...(codexHeaders ? { headers: codexHeaders } : {}),

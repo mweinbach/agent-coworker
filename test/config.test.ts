@@ -42,13 +42,13 @@ describe("loadConfig", () => {
 
     await writeJson(path.join(home, ".agent", "config.json"), {
       provider: "anthropic",
-      model: "claude-test",
+      model: "claude-sonnet-4-5",
       outputDirectory: "user-output",
     });
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       provider: "openai",
-      model: "gpt-test",
+      model: "gpt-5.2",
       outputDirectory: "project-output",
     });
 
@@ -60,18 +60,15 @@ describe("loadConfig", () => {
     });
 
     expect(cfg.provider).toBe("openai");
-    expect(cfg.model).toBe("gpt-test");
+    expect(cfg.model).toBe("gpt-5.2");
     expect(cfg.outputDirectory).toBe(path.join(cwd, "project-output"));
 
-    const cfg2 = await loadConfig({
+    await expect(loadConfig({
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
       env: { AGENT_PROVIDER: "google", AGENT_MODEL: "gemini-test" },
-    });
-
-    expect(cfg2.provider).toBe("google");
-    expect(cfg2.model).toBe("gemini-test");
+    })).rejects.toThrow('Unsupported model "gemini-test" for provider google');
   });
 
   test("provider override uses provider-default model when no model is set", async () => {
@@ -128,7 +125,7 @@ describe("loadConfig", () => {
     expect(cfg.provider).toBe("google");
     expect(cfg.model).toBe(defaultModelForProvider("google"));
     expect(cfg.subAgentModel).toBe(defaultModelForProvider("google"));
-    expect(cfg.knowledgeCutoff).toBe("End of May 2025");
+    expect(cfg.knowledgeCutoff).toBe("January 2025");
     expect(cfg.userName).toBe("");
     expect(cfg.observabilityEnabled).toBe(true);
     expect(cfg.toolOutputOverflowChars).toBe(25000);
@@ -173,7 +170,7 @@ describe("loadConfig", () => {
 
     await writeJson(path.join(home, ".agent", "config.json"), {
       provider: "anthropic",
-      model: "claude-custom",
+      model: "claude-sonnet-4-5",
       userName: "Alice",
     });
 
@@ -185,7 +182,7 @@ describe("loadConfig", () => {
     });
 
     expect(cfg.provider).toBe("anthropic");
-    expect(cfg.model).toBe("claude-custom");
+    expect(cfg.model).toBe("claude-sonnet-4-5");
     expect(cfg.userName).toBe("Alice");
   });
 
@@ -194,13 +191,13 @@ describe("loadConfig", () => {
 
     await writeJson(path.join(home, ".agent", "config.json"), {
       provider: "anthropic",
-      model: "claude-user",
+      model: "claude-sonnet-4-5",
       userName: "Alice",
     });
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       provider: "openai",
-      model: "gpt-project",
+      model: "gpt-5.2",
     });
 
     const cfg = await loadConfig({
@@ -211,7 +208,7 @@ describe("loadConfig", () => {
     });
 
     expect(cfg.provider).toBe("openai");
-    expect(cfg.model).toBe("gpt-project");
+    expect(cfg.model).toBe("gpt-5.2");
     expect(cfg.userName).toBe("Alice");
   });
 
@@ -236,17 +233,15 @@ describe("loadConfig", () => {
     const { cwd, home } = await makeTmpDirs();
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
-      model: "gpt-project",
+      model: "gpt-5.2",
     });
 
-    const cfg = await loadConfig({
+    await expect(loadConfig({
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
       env: { AGENT_MODEL: "env-model-override" },
-    });
-
-    expect(cfg.model).toBe("env-model-override");
+    })).rejects.toThrow('Unsupported model "env-model-override" for provider google');
   });
 
   test("AGENT_WORKING_DIR env var overrides cwd", async () => {
@@ -363,8 +358,8 @@ describe("loadConfig", () => {
 
     // Project overrides user for userName
     expect(cfg.userName).toBe("ProjectName");
-    // User-level knowledgeCutoff preserved (not overridden by project)
-    expect(cfg.knowledgeCutoff).toBe("user-level-cutoff");
+    // Registry knowledgeCutoff remains authoritative.
+    expect(cfg.knowledgeCutoff).toBe("January 2025");
     // Provider from built-in defaults (not overridden by user or project)
     expect(cfg.provider).toBe("google");
   });
@@ -388,7 +383,7 @@ describe("loadConfig", () => {
     const customBuiltIn = path.join(os.tmpdir(), "builtin-nosub-" + Date.now());
     await writeJson(path.join(customBuiltIn, "config", "defaults.json"), {
       provider: "openai",
-      model: "gpt-main",
+      model: "gpt-5.2",
     });
 
     const cfg = await loadConfig({
@@ -398,18 +393,18 @@ describe("loadConfig", () => {
       env: {},
     });
 
-    expect(cfg.subAgentModel).toBe("gpt-main");
+    expect(cfg.subAgentModel).toBe("gpt-5.2");
   });
 
   test("subAgentModel from project config overrides user config", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     await writeJson(path.join(home, ".agent", "config.json"), {
-      subAgentModel: "user-sub-model",
+      subAgentModel: "gemini-3-flash-preview",
     });
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
-      subAgentModel: "project-sub-model",
+      subAgentModel: "gemini-3-pro-preview",
     });
 
     const cfg = await loadConfig({
@@ -419,10 +414,10 @@ describe("loadConfig", () => {
       env: {},
     });
 
-    expect(cfg.subAgentModel).toBe("project-sub-model");
+    expect(cfg.subAgentModel).toBe("gemini-3-pro-preview");
   });
 
-  test("knowledgeCutoff from project config overrides user and defaults", async () => {
+  test("knowledgeCutoff config values are ignored in favor of the selected model registry entry", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     await writeJson(path.join(home, ".agent", "config.json"), {
@@ -440,7 +435,7 @@ describe("loadConfig", () => {
       env: {},
     });
 
-    expect(cfg.knowledgeCutoff).toBe("Project cutoff 2025");
+    expect(cfg.knowledgeCutoff).toBe("January 2025");
   });
 
   test("invalid provider in config falls back to default", async () => {
@@ -599,7 +594,7 @@ describe("loadConfig", () => {
 
     await writeJson(path.join(customBuiltIn, "config", "defaults.json"), {
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       providerOptions: {
         openai: {
           reasoningEffort: "low",
@@ -969,23 +964,20 @@ describe("getModel", () => {
       env: { AGENT_PROVIDER: "google" },
     });
 
-    const model = getModel(cfg, "gemini-custom-override");
-    expect(model).toBeDefined();
+    expect(() => getModel(cfg, "gemini-custom-override")).toThrow(
+      'Unsupported model override "gemini-custom-override" for provider google',
+    );
   });
 
   test("uses config.model when no override ID provided", async () => {
     const { cwd, home } = await makeTmpDirs();
 
-    const cfg = await loadConfig({
+    await expect(loadConfig({
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
       env: { AGENT_PROVIDER: "google", AGENT_MODEL: "gemini-specific" },
-    });
-
-    const model = getModel(cfg);
-    expect(model).toBeDefined();
-    expect(cfg.model).toBe("gemini-specific");
+    })).rejects.toThrow('Unsupported model "gemini-specific" for provider google');
   });
 });
 
@@ -1025,8 +1017,8 @@ describe("deepMerge (tested indirectly through recognized fields)", () => {
 
     // Project overrides user for userName
     expect(cfg.userName).toBe("ProjectLevel");
-    // User-level knowledgeCutoff preserved when not overridden
-    expect(cfg.knowledgeCutoff).toBe("2024");
+    // Model metadata remains registry-backed.
+    expect(cfg.knowledgeCutoff).toBe("January 2025");
   });
 
   test("does not mutate original objects (verified by loading twice)", async () => {
@@ -1111,7 +1103,7 @@ describe("loadJsonSafe (tested indirectly)", () => {
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       provider: "anthropic",
-      model: "claude-valid",
+      model: "claude-sonnet-4-5",
     });
 
     const cfg = await loadConfig({
@@ -1122,6 +1114,6 @@ describe("loadJsonSafe (tested indirectly)", () => {
     });
 
     expect(cfg.provider).toBe("anthropic");
-    expect(cfg.model).toBe("claude-valid");
+    expect(cfg.model).toBe("claude-sonnet-4-5");
   });
 });

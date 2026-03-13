@@ -3,70 +3,59 @@ import path from "node:path";
 
 import type { AgentConfig } from "./types";
 import { discoverSkills } from "./skills";
-
-type ModelSystemPromptTemplate = {
-  fileName: string;
-  matches: (modelId: string) => boolean;
-};
-
-const MODEL_SYSTEM_PROMPT_TEMPLATES: readonly ModelSystemPromptTemplate[] = [
-  {
-    fileName: "gpt-5.2.md",
-    matches: (modelId) => modelId === "gpt-5.2",
-  },
-  {
-    fileName: "gpt-5.4.md",
-    matches: (modelId) => modelId === "gpt-5.4",
-  },
-  {
-    fileName: "claude-opus-4-6.md",
-    matches: (modelId) => modelId === "claude-opus-4-6" || modelId.startsWith("claude-opus-4-6-"),
-  },
-  {
-    fileName: "claude-sonnet-4-6.md",
-    matches: (modelId) =>
-      modelId === "claude-sonnet-4-6" ||
-      modelId.startsWith("claude-sonnet-4-6-"),
-  },
-  {
-    fileName: "gemini-3-flash-preview.md",
-    matches: (modelId) => modelId === "gemini-3-flash-preview",
-  },
-  {
-    fileName: "gemini-3-pro-preview.md",
-    matches: (modelId) => modelId === "gemini-3-pro-preview",
-  },
-  {
-    fileName: "gemini-3.1-pro-preview.md",
-    matches: (modelId) => modelId === "gemini-3.1-pro-preview",
-  },
-  {
-    fileName: "claude-haiku-4-5.md",
-    matches: (modelId) => modelId === "claude-haiku-4-5" || modelId.startsWith("claude-haiku-4-5-"),
-  },
-];
-
-function normalizeModelId(modelId: string): string {
-  return modelId.trim().toLowerCase();
-}
-
-function resolveModelSystemPromptTemplate(modelId: string): ModelSystemPromptTemplate | null {
-  const normalized = normalizeModelId(modelId);
-  return MODEL_SYSTEM_PROMPT_TEMPLATES.find((template) => template.matches(normalized)) ?? null;
-}
+import { assertSupportedModel, type SupportedModel } from "./models/registry";
 
 async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
-  const defaultSystemPath = path.join(config.builtInDir, "prompts", "system.md");
-  const modelTemplate = resolveModelSystemPromptTemplate(config.model);
-  if (!modelTemplate) return defaultSystemPath;
-
-  const modelSystemPath = path.join(config.builtInDir, "prompts", "system-models", modelTemplate.fileName);
+  const supportedModel = assertSupportedModel(config.provider, config.model, "model");
+  const modelSystemPath = path.join(config.builtInDir, "prompts", supportedModel.promptTemplate);
   try {
     await fs.access(modelSystemPath);
     return modelSystemPath;
   } catch {
-    return defaultSystemPath;
+    return path.join(config.builtInDir, "prompts", "system.md");
   }
+}
+
+function stripPromptLine(prompt: string, matcher: RegExp): string {
+  return prompt
+    .split("\n")
+    .filter((line) => !matcher.test(line))
+    .join("\n");
+}
+
+function renderCapabilitySpecificPrompt(prompt: string, supportedModel: SupportedModel): string {
+  if (supportedModel.supportsImageInput) return prompt;
+
+  let out = prompt;
+  const replacements: Array<[RegExp, string]> = [
+    [/(text,\s*CSV,\s*)images(,\s*PDFs)/gi, "$1PDFs"],
+    [/(text,\s*images,\s*and\s*)PDFs/gi, "text and PDFs"],
+    [/(text files,\s*)images\s*\(returned as visual content if the model supports it\),\s*and\s*PDFs/gi, "text files and PDFs"],
+    [/(Supports\s*)text,\s*images,\s*and\s*PDFs/gi, "$1text and PDFs"],
+    [/(supports\s*)text files,\s*images\s*\(visual content\),\s*and\s*PDFs/gi, "$1text files and PDFs"],
+    [/(creating a PDF from uploaded )images/gi, "$1files"],
+  ];
+
+  for (const [pattern, replacement] of replacements) {
+    out = out.replace(pattern, replacement);
+  }
+
+  const imageGuidancePatterns = [
+    /visual content for supported images/i,
+    /if read returns an image/i,
+    /do not ask the user to re-upload it just because it is visual/i,
+    /url points directly to an image/i,
+    /download a direct image url and inspect it with `read`/i,
+    /downloaded path to inspect it visually/i,
+    /uploads an image of text/i,
+    /images might require both the pdf skill and an image processing skill/i,
+  ];
+
+  for (const pattern of imageGuidancePatterns) {
+    out = stripPromptLine(out, pattern);
+  }
+
+  return out;
 }
 
 function buildSkillSearchOrder(config: AgentConfig): string {
@@ -123,6 +112,7 @@ export interface SystemPromptResult {
  * Use this when you need the skill metadata (e.g. for dynamic tool descriptions).
  */
 export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<SystemPromptResult> {
+  const supportedModel = assertSupportedModel(config.provider, config.model, "model");
   const systemPath = await resolveSystemTemplatePath(config);
   let prompt = await fs.readFile(systemPath, "utf-8");
 
@@ -151,9 +141,9 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
       day: "numeric",
     }),
     currentYear: new Date().getFullYear().toString(),
-    modelName: config.model,
+    modelName: supportedModel.displayName,
     userName: config.userName || "",
-    knowledgeCutoff: config.knowledgeCutoff || "unknown",
+    knowledgeCutoff: supportedModel.knowledgeCutoff,
     skillNames: skillNames || '"pdf", "doc", "slides", "spreadsheet"',
     skillExamples:
       skillExamples ||
@@ -168,6 +158,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = prompt.replace(/{{(\w+)}}/g, (match, key) => {
     return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : match;
   });
+  prompt = renderCapabilitySpecificPrompt(prompt, supportedModel);
 
   prompt += `\n\n${buildSkillPolicySection(vars.skillNames, vars.skillExamples, config)}`;
 

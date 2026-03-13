@@ -5,6 +5,7 @@ import { SessionCostTracker } from "../../session/costTracker";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import { getProviderCatalog } from "../../providers/connectionCatalog";
 import { getProviderStatuses } from "../../providerStatus";
+import { assertSupportedModel } from "../../models/registry";
 import type {
   AgentConfig,
   HarnessContextPayload,
@@ -417,6 +418,7 @@ export class AgentSession {
     getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
   }): AgentSession {
     const { persisted } = opts;
+    assertSupportedModel(persisted.provider, persisted.model, "persisted model");
     const config: AgentConfig = {
       ...opts.baseConfig,
       provider: persisted.provider,

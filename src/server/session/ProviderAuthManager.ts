@@ -14,6 +14,7 @@ import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
 import { isProviderName } from "../../types";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import type { ServerEvent } from "../protocol";
+import { assertSupportedModel } from "../../models/registry";
 
 export class ProviderAuthManager {
   private pendingCodexBrowserAuth: CodexBrowserOAuthPending | null = null;
@@ -75,7 +76,13 @@ export class ProviderAuthManager {
 
     const currentConfig = this.opts.getConfig();
     const nextProvider = providerRaw ?? currentConfig.provider;
-    const nextSubAgentModel = currentConfig.subAgentModel === currentConfig.model
+    try {
+      assertSupportedModel(nextProvider, modelId, "model");
+    } catch (error) {
+      this.opts.emitError("validation_failed", "provider", error instanceof Error ? error.message : String(error));
+      return;
+    }
+    const nextSubAgentModel = currentConfig.provider !== nextProvider || currentConfig.subAgentModel === currentConfig.model
       ? modelId
       : currentConfig.subAgentModel;
     const shouldClearProviderState =

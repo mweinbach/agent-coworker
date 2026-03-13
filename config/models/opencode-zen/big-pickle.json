@@ -1,0 +1,10 @@
+{
+  "id": "big-pickle",
+  "provider": "opencode-zen",
+  "displayName": "Big Pickle",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

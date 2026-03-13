@@ -23,18 +23,18 @@ describe("OpenAI provider (gpt-5.4 with reasoning)", () => {
   });
 
   test("getModel with explicit gpt-5.4 override", () => {
-    const cfg = makeConfig({ provider: "openai", model: "gpt-4o" });
+    const cfg = makeConfig({ provider: "openai", model: "gpt-5.1" });
     const model = getModel(cfg, "gpt-5.4");
 
     expect(model.modelId).toBe("gpt-5.4");
     expect(model.provider).toBe("openai.responses");
   });
 
-  test("getModel with o3-mini model ID", () => {
-    const cfg = makeConfig({ provider: "openai", model: "o3-mini" });
+  test("getModel with gpt-5.1 model ID", () => {
+    const cfg = makeConfig({ provider: "openai", model: "gpt-5.1" });
     const model = getModel(cfg);
 
-    expect(model.modelId).toBe("o3-mini");
+    expect(model.modelId).toBe("gpt-5.1");
     expect(model.provider).toBe("openai.responses");
   });
 
@@ -95,18 +95,18 @@ describe("OpenAI provider (gpt-5.4 with reasoning)", () => {
     expect(cfg.model).toBe("gpt-5.4");
   });
 
-  test("loadConfig with openai provider and custom model", async () => {
+  test("loadConfig with openai provider and supported non-default model", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
-      env: { AGENT_PROVIDER: "openai", AGENT_MODEL: "o3-mini" },
+      env: { AGENT_PROVIDER: "openai", AGENT_MODEL: "gpt-5.2-pro" },
     });
 
     expect(cfg.provider).toBe("openai");
-    expect(cfg.model).toBe("o3-mini");
+    expect(cfg.model).toBe("gpt-5.2-pro");
   });
 
   test("loadConfig openai from project config file", async () => {

@@ -1,9 +1,5 @@
 import type { ProviderName } from "../types";
-import {
-  OPENCODE_DEFAULT_MODEL,
-  OPENCODE_GO_AVAILABLE_MODELS,
-  OPENCODE_ZEN_AVAILABLE_MODELS,
-} from "./opencodeShared";
+import { defaultModelIdForProvider, listSupportedModelIds } from "../models/registry";
 
 type ProviderModelDefinition = {
   defaultModel: string;
@@ -12,28 +8,28 @@ type ProviderModelDefinition = {
 
 export const PROVIDER_MODEL_CATALOG = {
   anthropic: {
-    defaultModel: "claude-opus-4-6",
-    availableModels: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"],
+    defaultModel: defaultModelIdForProvider("anthropic"),
+    availableModels: listSupportedModelIds("anthropic"),
   },
   "opencode-go": {
-    defaultModel: OPENCODE_DEFAULT_MODEL,
-    availableModels: OPENCODE_GO_AVAILABLE_MODELS,
+    defaultModel: defaultModelIdForProvider("opencode-go"),
+    availableModels: listSupportedModelIds("opencode-go"),
   },
   "opencode-zen": {
-    defaultModel: OPENCODE_DEFAULT_MODEL,
-    availableModels: OPENCODE_ZEN_AVAILABLE_MODELS,
+    defaultModel: defaultModelIdForProvider("opencode-zen"),
+    availableModels: listSupportedModelIds("opencode-zen"),
   },
   "codex-cli": {
-    defaultModel: "gpt-5.4",
-    availableModels: ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.2"],
+    defaultModel: defaultModelIdForProvider("codex-cli"),
+    availableModels: listSupportedModelIds("codex-cli"),
   },
   google: {
-    defaultModel: "gemini-3.1-pro-preview-customtools",
-    availableModels: ["gemini-3.1-pro-preview-customtools", "gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-3.1-pro-preview"],
+    defaultModel: defaultModelIdForProvider("google"),
+    availableModels: listSupportedModelIds("google"),
   },
   openai: {
-    defaultModel: "gpt-5.4",
-    availableModels: ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex", "gpt-5.1", "gpt-5-mini", "gpt-5.2-pro"],
+    defaultModel: defaultModelIdForProvider("openai"),
+    availableModels: listSupportedModelIds("openai"),
   },
 } as const satisfies Record<ProviderName, ProviderModelDefinition>;
 

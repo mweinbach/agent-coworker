@@ -1032,7 +1032,7 @@ describe("safeParseClientMessage", () => {
             observabilityEnabled: false,
             backupsEnabled: true,
             toolOutputOverflowChars: null,
-            subAgentModel: "gpt-5.4",
+            subAgentModel: "gpt-5.2",
             maxSteps: 25,
             providerOptions: {
               openai: {
@@ -1050,7 +1050,7 @@ describe("safeParseClientMessage", () => {
         expect(msg.config.observabilityEnabled).toBe(false);
         expect(msg.config.backupsEnabled).toBe(true);
         expect(msg.config.toolOutputOverflowChars).toBeNull();
-        expect(msg.config.subAgentModel).toBe("gpt-5.4");
+        expect(msg.config.subAgentModel).toBe("gpt-5.2");
         expect(msg.config.maxSteps).toBe(25);
         expect(msg.config.providerOptions?.openai?.reasoningEffort).toBe("xhigh");
         expect(msg.config.providerOptions?.openai?.reasoningSummary).toBe("concise");

@@ -8,8 +8,8 @@ import type { AgentConfig, ModelMessage } from "../src/types";
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     provider: "openai",
-    model: "gpt-5.4",
-    subAgentModel: "gpt-5.4",
+    model: "gpt-5.2",
+    subAgentModel: "gpt-5.2",
     workingDirectory: "/tmp",
     outputDirectory: "/tmp/output",
     uploadsDirectory: "/tmp/uploads",

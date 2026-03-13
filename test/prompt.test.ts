@@ -26,8 +26,8 @@ async function makeTmpDirs() {
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const base: AgentConfig = {
     provider: "google",
-    model: "test-model-id",
-    subAgentModel: "test-sub-model",
+    model: "gemini-3-pro-preview",
+    subAgentModel: "gemini-3-pro-preview",
     workingDirectory: "/test/working",
     userName: "TestUser",
     knowledgeCutoff: "End of May 2025",
@@ -102,7 +102,7 @@ function expectWebFetchDownloadGuidance(prompt: string) {
 const IMAGE_GUIDANCE_PROMPT_FILES = [
   "prompts/system.md",
   "prompts/system-models/gpt-5.2.md",
-  "prompts/system-models/gpt-5.4.md",
+  "prompts/system-models/gpt-5.2.md",
   "prompts/system-models/claude-haiku-4-5.md",
   "prompts/system-models/claude-sonnet-4-6.md",
   "prompts/system-models/claude-opus-4-6.md",
@@ -112,7 +112,7 @@ const IMAGE_GUIDANCE_PROMPT_FILES = [
 
 const WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_FILES = [
   ...IMAGE_GUIDANCE_PROMPT_FILES,
-  "prompts/system-models/gemini-3.1-pro-preview.md",
+  "prompts/system-models/gemini-3-pro-preview.md",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -150,9 +150,9 @@ describe("loadSystemPrompt", () => {
   });
 
   test("replaces {{modelName}} template variable", async () => {
-    const config = makeConfig({ model: "super-unique-model-name-xyz" });
+    const config = makeConfig({ provider: "openai", model: "gpt-5.4", subAgentModel: "gpt-5.4" });
     const prompt = await loadSystemPrompt(config);
-    expect(prompt).toContain("super-unique-model-name-xyz");
+    expect(prompt).toContain("GPT-5.4");
     expect(prompt).not.toContain("{{modelName}}");
   });
 
@@ -191,7 +191,7 @@ describe("loadSystemPrompt", () => {
   test("replaces {{knowledgeCutoff}} template variable", async () => {
     const config = makeConfig({ knowledgeCutoff: "UniqueKnowledgeCutoff2099" });
     const prompt = await loadSystemPrompt(config);
-    expect(prompt).toContain("UniqueKnowledgeCutoff2099");
+    expect(prompt).toContain("January 2025");
     expect(prompt).not.toContain("{{knowledgeCutoff}}");
   });
 
@@ -224,12 +224,13 @@ describe("loadSystemPrompt", () => {
 
     const config = makeConfig({
       builtInDir: builtIn,
+      provider: "openai",
       model: "gpt-5.2",
       skillsDirs: ["/nonexistent/skills"],
     });
     const prompt = await loadSystemPrompt(config);
 
-    expect(prompt).toContain("GPT-5.2 SYSTEM TEMPLATE gpt-5.2");
+    expect(prompt).toContain("GPT-5.2 SYSTEM TEMPLATE GPT-5.2");
     expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
   });
 
@@ -247,17 +248,19 @@ describe("loadSystemPrompt", () => {
 
     const config = makeConfig({
       builtInDir: builtIn,
+      provider: "openai",
       model: "gpt-5.4",
       skillsDirs: ["/nonexistent/skills"],
     });
     const prompt = await loadSystemPrompt(config);
 
-    expect(prompt).toContain("GPT-5.4 SYSTEM TEMPLATE gpt-5.4");
+    expect(prompt).toContain("GPT-5.4 SYSTEM TEMPLATE GPT-5.4");
     expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
   });
 
   test("real gpt-5.4 prompt includes workspace hygiene and shell-first guidance", async () => {
     const config = makeConfig({
+      provider: "openai",
       model: "gpt-5.4",
       skillsDirs: ["/nonexistent/skills"],
     });
@@ -271,6 +274,7 @@ describe("loadSystemPrompt", () => {
 
   test("real gpt-5.2 prompt includes workspace hygiene and shell-first guidance", async () => {
     const config = makeConfig({
+      provider: "openai",
       model: "gpt-5.2",
       skillsDirs: ["/nonexistent/skills"],
     });
@@ -283,7 +287,9 @@ describe("loadSystemPrompt", () => {
 
   test("default system prompt includes workspace hygiene and shell-first guidance", async () => {
     const config = makeConfig({
-      model: "not-a-model-with-a-special-template",
+      provider: "opencode-go",
+      model: "kimi-k2.5",
+      subAgentModel: "kimi-k2.5",
       skillsDirs: ["/nonexistent/skills"],
     });
     const prompt = await loadSystemPrompt(config);
@@ -308,27 +314,28 @@ describe("loadSystemPrompt", () => {
     }
   });
 
-  test("uses model-specific system template for gemini-3.1-pro-preview when present", async () => {
+  test("uses model-specific system template for gemini-3-pro-preview when present", async () => {
     const { builtIn } = await makeTmpDirs();
 
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
     await writeFile(
-      path.join(builtIn, "prompts", "system-models", "gemini-3.1-pro-preview.md"),
+      path.join(builtIn, "prompts", "system-models", "gemini-3-pro-preview.md"),
       "GEMINI 3.1 PRO TEMPLATE {{modelName}}"
     );
 
     const config = makeConfig({
       builtInDir: builtIn,
-      model: "gemini-3.1-pro-preview",
+      provider: "google",
+      model: "gemini-3-pro-preview",
       skillsDirs: ["/nonexistent/skills"],
     });
     const prompt = await loadSystemPrompt(config);
 
-    expect(prompt).toContain("GEMINI 3.1 PRO TEMPLATE gemini-3.1-pro-preview");
+    expect(prompt).toContain("GEMINI 3.1 PRO TEMPLATE Gemini 3 Pro Preview");
     expect(prompt).not.toContain("DEFAULT");
   });
 
-  test("uses model-specific system template for Anthropic alias IDs", async () => {
+  test("uses model-specific system template for Anthropic Opus", async () => {
     const { builtIn } = await makeTmpDirs();
 
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
@@ -339,16 +346,17 @@ describe("loadSystemPrompt", () => {
 
     const config = makeConfig({
       builtInDir: builtIn,
-      model: "claude-opus-4-6-20260201",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
       skillsDirs: ["/nonexistent/skills"],
     });
     const prompt = await loadSystemPrompt(config);
 
-    expect(prompt).toContain("OPUS TEMPLATE claude-opus-4-6-20260201");
+    expect(prompt).toContain("OPUS TEMPLATE Claude Opus 4.6");
     expect(prompt).not.toContain("DEFAULT");
   });
 
-  test("uses model-specific system template for Claude 4.6 Sonnet alias IDs", async () => {
+  test("uses model-specific system template for Claude 4.6 Sonnet", async () => {
     const { builtIn } = await makeTmpDirs();
 
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
@@ -359,12 +367,13 @@ describe("loadSystemPrompt", () => {
 
     const config = makeConfig({
       builtInDir: builtIn,
-      model: "claude-sonnet-4-6-20260201",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
       skillsDirs: ["/nonexistent/skills"],
     });
     const prompt = await loadSystemPrompt(config);
 
-    expect(prompt).toContain("SONNET TEMPLATE claude-sonnet-4-6-20260201");
+    expect(prompt).toContain("SONNET TEMPLATE Claude Sonnet 4.6");
     expect(prompt).not.toContain("DEFAULT");
   });
 
@@ -374,12 +383,28 @@ describe("loadSystemPrompt", () => {
 
     const config = makeConfig({
       builtInDir: builtIn,
+      provider: "openai",
       model: "gpt-5.2",
       skillsDirs: ["/nonexistent/skills"],
     });
     const prompt = await loadSystemPrompt(config);
 
-    expect(prompt).toContain("DEFAULT TEMPLATE gpt-5.2");
+    expect(prompt).toContain("DEFAULT TEMPLATE GPT-5.2");
+  });
+
+  test("strips image guidance for non-multimodal models", async () => {
+    const config = makeConfig({
+      provider: "opencode-go",
+      model: "glm-5",
+      subAgentModel: "glm-5",
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+    const normalized = prompt.toLowerCase();
+
+    expect(normalized).not.toContain("if read returns an image");
+    expect(normalized).not.toContain("download a direct image url and inspect it with `read`");
+    expect(normalized).not.toContain("do not ask the user to re-upload it just because it is visual");
   });
 
   test("always appends strict skill loading policy", async () => {
@@ -567,10 +592,9 @@ describe("loadSystemPrompt", () => {
     const config = makeConfig();
     const prompt = await loadSystemPrompt(config);
 
-    // Verify the prompt contains expected structural elements from system.md
-    expect(prompt).toContain("# Environment");
-    expect(prompt).toContain("# Core Behavior");
-    expect(prompt).toContain("# Tools");
+    expect(prompt).toContain("<environment>");
+    expect(prompt).toContain("<tools>");
+    expect(prompt).toContain("Knowledge cutoff: January 2025");
   });
 
   test("skills section includes source annotation", async () => {

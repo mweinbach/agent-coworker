@@ -1,0 +1,10 @@
+{
+  "id": "kimi-k2.5",
+  "provider": "opencode-go",
+  "displayName": "Kimi K2.5",
+  "knowledgeCutoff": "April 2024",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

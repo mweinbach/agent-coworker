@@ -1156,8 +1156,8 @@ describe("webSearch tool", () => {
         makeCtx(dir, {
           config: makeConfig(dir, {
             provider: "google",
-            model: "gemini-3.1-pro-preview",
-            subAgentModel: "gemini-3.1-pro-preview",
+            model: "gemini-3-pro-preview",
+            subAgentModel: "gemini-3-pro-preview",
           }),
         })
       );

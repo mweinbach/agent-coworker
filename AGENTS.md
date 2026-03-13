@@ -75,6 +75,17 @@ When adding a new WebSocket message or event:
 - `--yolo` bypasses command approvals; use only for local experiments.
 - Make commits liberally as you go with meaningful detailed messages.
 
+## Model Metadata Rules
+
+When adding a new supported model:
+
+- Add a dedicated config file under `config/models/<provider>/` and make that file the source of truth for the model.
+- Include, at minimum: canonical `id`, `displayName`, `knowledgeCutoff`, `supportsImageInput`, `promptTemplate`, `providerOptionsDefaults`, and `isDefault` when applicable.
+- Verify published model metadata against current vendor docs before landing it. If an exact cutoff or capability is not currently published, use an explicit conservative value like `Unknown` instead of guessing.
+- Keep prompt/runtime behavior aligned with the registry entry. `supportsImageInput` must match both prompt instructions and runtime/tool payload handling.
+- Update any related pricing/catalog tests and docs when model metadata changes.
+- Do not add unsupported/custom model IDs as passthroughs. New models must be added to the registry explicitly before they are selectable.
+
 ## agent-browser Skill + Electron
 
 If the project has `.agent/skills/agent-browser/SKILL.md`, use that skill for desktop UI/browser automation tasks.

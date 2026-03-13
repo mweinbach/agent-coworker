@@ -37,7 +37,7 @@ export function LocalProvider(props: { children: JSX.Element }) {
   const modelChoices = createMemo(() => {
     if (syncState.providerCatalog.length === 0) return fallbackChoices;
     return syncState.providerCatalog.flatMap((entry) =>
-      (entry.models ?? []).map((model) => ({ provider: entry.id, model }))
+      (entry.models ?? []).map((model) => ({ provider: entry.id, model: model.id }))
     );
   });
 

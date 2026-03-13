@@ -131,7 +131,7 @@ describe("usage tool", () => {
         const tool = createUsageTool(ctx);
         const result = await tool.execute({ action: "pricing" });
         expect(result).toContain("Known Model Pricing");
-        expect(result).toContain("gpt-5.4");
+        expect(result).toContain("gpt-5.2");
         expect(result).toContain("claude-opus-4-6");
     });
 

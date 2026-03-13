@@ -27,8 +27,8 @@ const { AgentSession } = await import("../src/server/session/AgentSession");
 function makeConfig(dir: string): AgentConfig {
   return {
     provider: "google",
-    model: "gemini-2.0-flash",
-    subAgentModel: "gemini-2.0-flash",
+    model: "gemini-3-flash-preview",
+    subAgentModel: "gemini-3-flash-preview",
     workingDirectory: dir,
     outputDirectory: path.join(dir, "output"),
     uploadsDirectory: path.join(dir, "uploads"),

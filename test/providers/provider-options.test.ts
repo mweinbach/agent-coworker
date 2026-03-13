@@ -122,7 +122,7 @@ describe("Agent providerOptions pass-through", () => {
     const providerOptions = { openai: { reasoningEffort: "high" } };
     const config = makeConfig({
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       providerOptions,
     });
 
@@ -135,7 +135,7 @@ describe("Agent providerOptions pass-through", () => {
   });
 
   test("providerOptions is undefined in streamText when config has none", async () => {
-    const config = makeConfig({ provider: "openai", model: "gpt-5.4" });
+    const config = makeConfig({ provider: "openai", model: "gpt-5.2" });
     delete config.providerOptions;
 
     await runTurn(makeRunTurnParams({ config }));

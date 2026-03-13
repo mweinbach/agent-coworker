@@ -5,6 +5,7 @@ import { SessionCostTracker } from "../../session/costTracker";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import { getProviderCatalog } from "../../providers/connectionCatalog";
 import { getProviderStatuses } from "../../providerStatus";
+import { defaultSupportedModel, getSupportedModel } from "../../models/registry";
 import type {
   AgentConfig,
   HarnessContextPayload,
@@ -417,10 +418,14 @@ export class AgentSession {
     getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
   }): AgentSession {
     const { persisted } = opts;
+    const supportedPersistedModel = getSupportedModel(persisted.provider, persisted.model);
+    const resumedModel = supportedPersistedModel ?? defaultSupportedModel(persisted.provider);
+    const migratedLegacyModel = supportedPersistedModel === null;
+    const clearedContinuationState = migratedLegacyModel && persisted.providerState !== null;
     const config: AgentConfig = {
       ...opts.baseConfig,
       provider: persisted.provider,
-      model: persisted.model,
+      model: resumedModel.id,
       workingDirectory: persisted.workingDirectory,
       enableMcp: persisted.enableMcp,
       outputDirectory: persisted.outputDirectory,
@@ -434,13 +439,13 @@ export class AgentSession {
       createdAt: persisted.createdAt,
       updatedAt: persisted.updatedAt,
       provider: persisted.provider,
-      model: persisted.model,
+      model: resumedModel.id,
       sessionKind: persisted.sessionKind,
       ...(persisted.parentSessionId ? { parentSessionId: persisted.parentSessionId } : {}),
       ...(persisted.agentType ? { agentType: persisted.agentType } : {}),
     };
 
-    return new AgentSession({
+    const session = new AgentSession({
       config,
       system: persisted.systemPrompt,
       discoveredSkills: opts.discoveredSkills,
@@ -476,14 +481,24 @@ export class AgentSession {
         status: persisted.status,
         hasGeneratedTitle: persisted.titleSource !== "default" || persisted.messageCount > 0,
         messages: persisted.messages,
-        providerState: persisted.providerState,
+        providerState: migratedLegacyModel ? null : persisted.providerState,
         todos: persisted.todos,
         harnessContext: persisted.harnessContext,
         backupsEnabledOverride: persisted.backupsEnabledOverride,
         costTracker: persisted.costTracker,
       },
-      skipInitialPersist: true,
+      skipInitialPersist: !migratedLegacyModel,
     });
+
+    if (migratedLegacyModel) {
+      opts.emit({
+        type: "log",
+        sessionId: persisted.sessionId,
+        line: `[session] Resumed legacy session using unsupported model "${persisted.model}" for provider ${persisted.provider}; migrated to "${resumedModel.id}".${clearedContinuationState ? " Cleared saved continuation state for the old model." : ""}`,
+      });
+    }
+
+    return session;
   }
 
   getPublicConfig() {

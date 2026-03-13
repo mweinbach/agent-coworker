@@ -1,0 +1,10 @@
+{
+  "id": "mimo-v2-flash-free",
+  "provider": "opencode-zen",
+  "displayName": "Mimo V2 Flash Free",
+  "knowledgeCutoff": "December 2024",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

@@ -1,0 +1,10 @@
+{
+  "id": "glm-5",
+  "provider": "opencode-zen",
+  "displayName": "GLM-5",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": true
+}

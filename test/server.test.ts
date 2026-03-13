@@ -951,8 +951,8 @@ describe("WebSocket Lifecycle", () => {
       path.join(tmpDir, ".agent", "config.json"),
       `${JSON.stringify({
         provider: "google",
-        model: "model-main",
-        subAgentModel: "model-sub",
+        model: "gemini-3-pro-preview",
+        subAgentModel: "gemini-3-flash-preview",
       }, null, 2)}\n`,
       "utf-8",
     );
@@ -968,8 +968,8 @@ describe("WebSocket Lifecycle", () => {
       const general = await createPersistentSubagent(url, "general task", "general");
       const research = await createPersistentSubagent(url, "research task", "research");
 
-      expect(general.subagent.model).toBe("model-sub");
-      expect(research.subagent.model).toBe("model-main");
+      expect(general.subagent.model).toBe("gemini-3-flash-preview");
+      expect(research.subagent.model).toBe("gemini-3-pro-preview");
     } finally {
       server.stop();
     }
@@ -1019,10 +1019,10 @@ describe("WebSocket Lifecycle", () => {
 
       const update = await sendAndWaitForEvent(
         `${url}?resumeSessionId=${childId}`,
-        (sessionId) => ({ type: "set_model", sessionId, model: "child-only-model" }),
+        (sessionId) => ({ type: "set_model", sessionId, model: "gemini-3-pro-preview" }),
         (msg) => msg.type === "config_updated",
       );
-      expect(update.config.model).toBe("child-only-model");
+      expect(update.config.model).toBe("gemini-3-pro-preview");
 
       await expect(fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8")).rejects.toThrow();
     } finally {
@@ -2500,24 +2500,24 @@ describe("Protocol Doc Parity", () => {
 
       const model = await sendAndCollect(
         url,
-        (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.4" }),
+        (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.2" }),
         1,
       );
       expect(model.responses[0].type).toBe("config_updated");
       if (model.responses[0].type === "config_updated") {
         expect(model.responses[0].config.provider).toBe("openai");
-        expect(model.responses[0].config.model).toBe("gpt-5.4");
+        expect(model.responses[0].config.model).toBe("gpt-5.2");
       }
 
       const nextSessionHello = (await collectMessages(url, 1))[0];
       expect(nextSessionHello.type).toBe("server_hello");
       expect(nextSessionHello.config.provider).toBe("openai");
-      expect(nextSessionHello.config.model).toBe("gpt-5.4");
+      expect(nextSessionHello.config.model).toBe("gpt-5.2");
 
       const persistedConfigPath = path.join(tmpDir, ".agent", "config.json");
       const persistedConfig = JSON.parse(await fs.readFile(persistedConfigPath, "utf-8")) as Record<string, unknown>;
       expect(persistedConfig.provider).toBe("openai");
-      expect(persistedConfig.model).toBe("gpt-5.4");
+      expect(persistedConfig.model).toBe("gpt-5.2");
     } finally {
       server.stop();
     }
@@ -2531,14 +2531,14 @@ describe("Protocol Doc Parity", () => {
 
       const result = await sendAndCollect(
         url,
-        (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.4" }),
+        (sessionId) => ({ type: "set_model", sessionId, provider: "openai", model: "gpt-5.2" }),
         2,
       );
 
       expect(result.responses[0].type).toBe("config_updated");
       if (result.responses[0].type === "config_updated") {
         expect(result.responses[0].config.provider).toBe("openai");
-        expect(result.responses[0].config.model).toBe("gpt-5.4");
+        expect(result.responses[0].config.model).toBe("gpt-5.2");
       }
 
       expect(result.responses[1].type).toBe("error");
@@ -2627,6 +2627,51 @@ describe("Protocol Doc Parity", () => {
       expect(persistedConfig.providerOptions["codex-cli"].reasoningEffort).toBe("xhigh");
       expect(persistedConfig.providerOptions["codex-cli"].reasoningSummary).toBe("detailed");
       expect(persistedConfig.providerOptions["codex-cli"].textVerbosity).toBe("medium");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("set_config rejects unsupported subAgentModel values before persisting them", async () => {
+    const tmpDir = await makeTmpProject();
+    await fs.writeFile(
+      path.join(tmpDir, ".agent", "config.json"),
+      `${JSON.stringify({
+        provider: "openai",
+        model: "gpt-5.2",
+        subAgentModel: "gpt-5.2",
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      env: {
+        AGENT_WORKING_DIR: tmpDir,
+        AGENT_PROVIDER: "openai",
+        COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+      },
+    }));
+    try {
+      const errorEvent = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({
+          type: "set_config",
+          sessionId,
+          config: {
+            subAgentModel: "gemini-3-pro-preview",
+          },
+        }),
+        (message) => message.type === "error",
+      );
+
+      expect(errorEvent.code).toBe("validation_failed");
+      expect(errorEvent.source).toBe("session");
+      expect(errorEvent.message).toContain('Unsupported sub-agent model "gemini-3-pro-preview" for provider openai');
+
+      const persistedConfig = JSON.parse(
+        await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),
+      ) as any;
+      expect(persistedConfig.subAgentModel).toBe("gpt-5.2");
     } finally {
       server.stop();
     }

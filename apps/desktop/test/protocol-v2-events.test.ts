@@ -787,7 +787,7 @@ describe("desktop protocol v2 mapping", () => {
       turnId: "turn-late-reasoning",
       index: 0,
       provider: "codex-cli",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       format: "openai-responses-v1",
       normalizerVersion: 1,
       event: {
@@ -801,7 +801,7 @@ describe("desktop protocol v2 mapping", () => {
       turnId: "turn-late-reasoning",
       index: 1,
       provider: "codex-cli",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       format: "openai-responses-v1",
       normalizerVersion: 1,
       event: {
@@ -816,7 +816,7 @@ describe("desktop protocol v2 mapping", () => {
       turnId: "turn-late-reasoning",
       index: 2,
       provider: "codex-cli",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
       format: "openai-responses-v1",
       normalizerVersion: 1,
       event: {

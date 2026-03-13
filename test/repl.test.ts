@@ -366,7 +366,7 @@ describe("REPL slash command routing", () => {
       getBusy: () => false,
       getConfig: () => ({
         provider: "openai",
-        model: "gpt-5.4",
+        model: "gpt-5.2",
         workingDirectory: "/tmp",
       }),
       getSelectedProvider: () => selectedProvider,
@@ -478,7 +478,7 @@ describe("REPL slash command routing", () => {
       activateNextPrompt,
       getConfig: () => ({
         provider: "google",
-        model: "gemini-3.1-pro-preview-customtools",
+        model: "gemini-3-pro-preview",
         workingDirectory: "/tmp",
       }),
     });
@@ -506,7 +506,7 @@ describe("REPL slash command routing", () => {
       activateNextPrompt,
       getConfig: () => ({
         provider: "codex-cli",
-        model: "gpt-5.4",
+        model: "gpt-5.2",
         workingDirectory: "/tmp",
       }),
     });

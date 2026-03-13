@@ -11,8 +11,8 @@ function makeBaseContext(): SessionContext {
     state: {
       config: {
         provider: "google",
-        model: "gemini-2.0-flash",
-        subAgentModel: "gemini-2.0-flash",
+        model: "gemini-3-flash-preview",
+        subAgentModel: "gemini-3-flash-preview",
         workingDirectory: "/tmp/project",
         userName: "",
         knowledgeCutoff: "unknown",
@@ -44,7 +44,7 @@ function makeBaseContext(): SessionContext {
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
         provider: "google",
-        model: "gemini-2.0-flash",
+        model: "gemini-3-flash-preview",
       },
       persistenceStatus: "active",
       hasGeneratedTitle: false,

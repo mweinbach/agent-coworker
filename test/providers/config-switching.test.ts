@@ -43,15 +43,14 @@ describe("Provider switching via config", () => {
     expect(cfg.model).toBe("claude-opus-4-6");
   });
 
-  test("explicit model in project config persists across provider switch", async () => {
+  test("explicit model in project config falls back when the provider switch makes it unsupported", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.2",
     });
 
-    // Switch provider but keep model from config
     const cfg = await loadConfig({
       cwd,
       homedir: home,
@@ -60,8 +59,8 @@ describe("Provider switching via config", () => {
     });
 
     expect(cfg.provider).toBe("anthropic");
-    // model from project config is "gpt-5.4" which is kept even though provider changed
-    expect(cfg.model).toBe("gpt-5.4");
+    expect(cfg.model).toBe("claude-opus-4-6");
+    expect(cfg.subAgentModel).toBe("claude-opus-4-6");
   });
 
   test("provider from user config can be overridden by project config", async () => {
@@ -120,7 +119,7 @@ describe("Model defaults when built-in defaults specify a different provider", (
     const customBuiltIn = path.join(os.tmpdir(), "builtin-match-" + Date.now());
     await writeJson(path.join(customBuiltIn, "config", "defaults.json"), {
       provider: "openai",
-      model: "gpt-custom-default",
+      model: "gpt-5.4",
     });
 
     const cfg = await loadConfig({
@@ -131,6 +130,6 @@ describe("Model defaults when built-in defaults specify a different provider", (
     });
 
     expect(cfg.provider).toBe("openai");
-    expect(cfg.model).toBe("gpt-custom-default");
+    expect(cfg.model).toBe("gpt-5.4");
   });
 });

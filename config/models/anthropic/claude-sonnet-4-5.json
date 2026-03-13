@@ -1,0 +1,16 @@
+{
+  "id": "claude-sonnet-4-5",
+  "provider": "anthropic",
+  "displayName": "Claude Sonnet 4.5",
+  "knowledgeCutoff": "January 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/claude-sonnet-4-6.md",
+  "providerOptionsDefaults": {
+    "thinking": {
+      "type": "enabled",
+      "budgetTokens": 32000
+    },
+    "disableParallelToolUse": true
+  },
+  "isDefault": false
+}

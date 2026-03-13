@@ -15,8 +15,8 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const base = "/tmp/agent-test";
   return {
     provider: "google",
-    model: "gemini-2.0-flash",
-    subAgentModel: "gemini-2.0-flash",
+    model: "gemini-3-flash-preview",
+    subAgentModel: "gemini-3-flash-preview",
     workingDirectory: base,
     outputDirectory: path.join(base, "output"),
     uploadsDirectory: path.join(base, "uploads"),

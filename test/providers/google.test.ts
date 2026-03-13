@@ -5,15 +5,15 @@ import { PROVIDER_MODEL_CATALOG } from "../../src/providers";
 import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot } from "./helpers";
 
 // ---------------------------------------------------------------------------
-// Google provider - gemini-3.1-pro-preview-customtools
+// Google provider - gemini-3-pro-preview
 // ---------------------------------------------------------------------------
-describe("Google provider (gemini-3.1-pro-preview-customtools)", () => {
-  test("defaultModelForProvider returns gemini-3.1-pro-preview-customtools", () => {
-    expect(defaultModelForProvider("google")).toBe("gemini-3.1-pro-preview-customtools");
+describe("Google provider (gemini-3-pro-preview)", () => {
+  test("defaultModelForProvider returns gemini-3-pro-preview", () => {
+    expect(defaultModelForProvider("google")).toBe("gemini-3-pro-preview");
   });
 
-  test("catalog includes gemini-3.1-pro-preview", () => {
-    expect(PROVIDER_MODEL_CATALOG.google.availableModels).toContain("gemini-3.1-pro-preview");
+  test("catalog includes gemini-3-pro-preview", () => {
+    expect(PROVIDER_MODEL_CATALOG.google.availableModels).toContain("gemini-3-pro-preview");
   });
 
   test("getModel creates google model with default gemini-3-flash-preview", () => {
@@ -27,7 +27,7 @@ describe("Google provider (gemini-3.1-pro-preview-customtools)", () => {
   });
 
   test("getModel with explicit gemini model override", () => {
-    const cfg = makeConfig({ provider: "google", model: "gemini-2.0-flash" });
+    const cfg = makeConfig({ provider: "google", model: "gemini-3-flash-preview" });
     const model = getModel(cfg, "gemini-3-flash-preview");
 
     expect(model.modelId).toBe("gemini-3-flash-preview");
@@ -82,6 +82,6 @@ describe("Google provider (gemini-3.1-pro-preview-customtools)", () => {
     });
 
     expect(cfg.provider).toBe("google");
-    expect(cfg.model).toBe("gemini-3.1-pro-preview-customtools");
+    expect(cfg.model).toBe("gemini-3-pro-preview");
   });
 });

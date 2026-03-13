@@ -1,0 +1,16 @@
+{
+  "id": "claude-opus-4-6",
+  "provider": "anthropic",
+  "displayName": "Claude Opus 4.6",
+  "knowledgeCutoff": "May 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/claude-opus-4-6.md",
+  "providerOptionsDefaults": {
+    "thinking": {
+      "type": "enabled",
+      "budgetTokens": 32000
+    },
+    "disableParallelToolUse": true
+  },
+  "isDefault": true
+}

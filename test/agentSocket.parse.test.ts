@@ -88,7 +88,7 @@ describe("agent socket parser", () => {
           defaultBackupsEnabled: true,
           toolOutputOverflowChars: 25000,
           defaultToolOutputOverflowChars: 25000,
-          subAgentModel: "gpt-5.4",
+          subAgentModel: "gpt-5.2",
           maxSteps: 100,
           providerOptions: {
             openai: {
@@ -235,7 +235,7 @@ describe("agent socket parser", () => {
         byModel: [
           {
             provider: "openai",
-            model: "gpt-5.4",
+            model: "gpt-5.2",
             turns: 1,
             totalPromptTokens: 10,
             totalCompletionTokens: 5,

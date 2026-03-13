@@ -35,7 +35,7 @@ async function writeCodexAuth(home: string, overrides: Partial<{
 describe("provider model adapters", () => {
   test("OpenAI adapter prefers saved key over env", async () => {
     await withEnv("OPENAI_API_KEY", "env-key", async () => {
-      const adapter = createOpenAiModelAdapter("gpt-5.4", "saved-key");
+      const adapter = createOpenAiModelAdapter("gpt-5.2", "saved-key");
       const headers = await adapter.config.headers();
       expect(headers.authorization).toBe("Bearer saved-key");
     });
@@ -43,7 +43,7 @@ describe("provider model adapters", () => {
 
   test("OpenAI adapter falls back to env key", async () => {
     await withEnv("OPENAI_API_KEY", "env-key", async () => {
-      const adapter = createOpenAiModelAdapter("gpt-5.4");
+      const adapter = createOpenAiModelAdapter("gpt-5.2");
       const headers = await adapter.config.headers();
       expect(headers.authorization).toBe("Bearer env-key");
     });
@@ -80,7 +80,7 @@ describe("provider model adapters", () => {
       await withEnv("GOOGLE_GENERATIVE_AI_API_KEY", undefined, async () => {
         await withEnv("GOOGLE_API_KEY", undefined, async () => {
           await withEnv("ANTHROPIC_API_KEY", undefined, async () => {
-            const openAiHeaders = await createOpenAiModelAdapter("gpt-5.4").config.headers();
+            const openAiHeaders = await createOpenAiModelAdapter("gpt-5.2").config.headers();
             const googleHeaders = await createGoogleModelAdapter("gemini-3.1").config.headers();
             const anthropicHeaders = await createAnthropicModelAdapter("claude-opus-4-6").config.headers();
 
@@ -95,7 +95,7 @@ describe("provider model adapters", () => {
 
   test("Codex adapter honors saved key before disk material", async () => {
     const config = makeConfig({ provider: "codex-cli" });
-    const adapter = createCodexCliModelAdapter(config, "gpt-5.4", "sk-abc");
+    const adapter = createCodexCliModelAdapter(config, "gpt-5.2", "sk-abc");
     const headers = await adapter.config.headers();
     expect(headers.authorization).toBe("Bearer sk-abc");
   });
@@ -109,7 +109,7 @@ describe("provider model adapters", () => {
         userAgentDir: path.join(home, ".agent"),
       });
 
-      const adapter = createCodexCliModelAdapter(config, "gpt-5.4");
+      const adapter = createCodexCliModelAdapter(config, "gpt-5.2");
       const headers = await adapter.config.headers();
 
       expect(headers.authorization).toBe("Bearer codex-token");

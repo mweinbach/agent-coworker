@@ -1781,7 +1781,7 @@ Update runtime configuration values.
 | `config.backupsEnabled` | `boolean` | No | Toggle session backups for the current session and persist the workspace default for future sessions |
 | `config.toolOutputOverflowChars` | `number \| null` | No | Workspace-scoped character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
 | `config.clearToolOutputOverflowChars` | `boolean` | No | When `true`, delete the persisted workspace overflow override and resume inheriting the built-in or user-level default. Cannot be combined with `config.toolOutputOverflowChars`. |
-| `config.subAgentModel` | `string` | No | Non-empty sub-agent model ID |
+| `config.subAgentModel` | `string` | No | Non-empty sub-agent model ID for the current provider. Unsupported values are rejected with a `validation_failed` session error. |
 | `config.maxSteps` | `number` | No | Max steps per turn (1-1000) |
 | `config.providerOptions` | `object` | No | Editable OpenAI-compatible provider option patch. Only `openai` and `codex-cli` are allowed |
 | `config.providerOptions.openai.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | OpenAI reasoning effort |

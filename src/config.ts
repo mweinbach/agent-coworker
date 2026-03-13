@@ -12,6 +12,7 @@ import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow"
 import { resolveProviderName, resolveRuntimeName as resolveRuntimeNameFromValue } from "./types";
 import type { AgentConfig, CommandTemplateConfig, ProviderName, RuntimeName } from "./types";
 import { resolveCoworkHomedir } from "./utils/coworkHome";
+import { assertSupportedModel, defaultSupportedModel, getSupportedModel } from "./models/registry";
 
 export { defaultModelForProvider } from "./providers";
 
@@ -70,6 +71,50 @@ function deepMerge<T extends Record<string, unknown>>(base: T, override: T): T {
     out[k] = v;
   }
   return out as T;
+}
+
+function mergeProviderOptionDefaults(
+  provider: ProviderName,
+  modelId: string,
+  providerOptions: Record<string, any> | undefined,
+): Record<string, any> | undefined {
+  const defaults = assertSupportedModel(provider, modelId, "model").providerOptionsDefaults;
+  const current = isPlainObject(providerOptions) ? deepMerge({}, providerOptions) as Record<string, any> : undefined;
+  const currentProviderOptions =
+    current && isPlainObject(current[provider]) ? current[provider] as Record<string, unknown> : undefined;
+  const mergedProviderOptions = deepMerge(
+    deepMerge({}, defaults as Record<string, unknown>),
+    currentProviderOptions ?? {},
+  );
+  if (Object.keys(mergedProviderOptions).length === 0) {
+    if (!current) return undefined;
+    delete current[provider];
+    return Object.keys(current).length > 0 ? current : undefined;
+  }
+
+  return {
+    ...(current ?? {}),
+    [provider]: mergedProviderOptions,
+  };
+}
+
+function resolveSupportedConfiguredModel(provider: ProviderName, modelId: string, source: string) {
+  const supported = getSupportedModel(provider, modelId);
+  if (supported) return supported;
+  const fallback = defaultSupportedModel(provider);
+  console.warn(
+    `[config] Ignoring unsupported ${source} "${modelId}" for provider ${provider}; using "${fallback.id}".`
+  );
+  return fallback;
+}
+
+function resolveSupportedConfiguredSubAgentModel(provider: ProviderName, subAgentModelId: string, fallbackModelId: string): string {
+  const supported = getSupportedModel(provider, subAgentModelId);
+  if (supported) return supported.id;
+  console.warn(
+    `[config] Ignoring unsupported sub-agent model "${subAgentModelId}" for provider ${provider}; using "${fallbackModelId}".`
+  );
+  return fallbackModelId;
 }
 
 async function loadJsonSafe(filePath: string): Promise<Record<string, unknown>> {
@@ -271,12 +316,14 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asNonEmptyString(userConfig.model) ||
     (asProviderName(builtInDefaults.provider) === provider && asNonEmptyString(builtInDefaults.model)) ||
     defaultModelForProvider(provider);
+  const supportedModel = resolveSupportedConfiguredModel(provider, model, "model");
 
   const subAgentModel =
     asNonEmptyString(projectConfig.subAgentModel) ||
     asNonEmptyString(userConfig.subAgentModel) ||
     asNonEmptyString(builtInDefaults.subAgentModel) ||
-    model;
+    supportedModel.id;
+  const supportedSubAgentModelId = resolveSupportedConfiguredSubAgentModel(provider, subAgentModel, supportedModel.id);
 
   const parsedToolOutputOverflowChars = normalizeNullableNonNegativeInt(
     (merged as Record<string, unknown>).toolOutputOverflowChars
@@ -318,11 +365,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asNonEmptyString(userConfig.userName) ||
     asString(builtInDefaults.userName) ||
     "";
-  const knowledgeCutoff =
-    asNonEmptyString(projectConfig.knowledgeCutoff) ||
-    asNonEmptyString(userConfig.knowledgeCutoff) ||
-    asNonEmptyString(builtInDefaults.knowledgeCutoff) ||
-    "unknown";
+  const knowledgeCutoff = supportedModel.knowledgeCutoff;
 
   const enableMcp =
     asBoolean(env.AGENT_ENABLE_MCP) ??
@@ -391,6 +434,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     : undefined;
   const disableBuiltInSkills = asBoolean(env.COWORK_DISABLE_BUILTIN_SKILLS) ?? false;
 
+  const normalizedProviderOptions = mergeProviderOptionDefaults(provider, supportedModel.id, providerOptions);
+
   const mergedModelSettings = parseLayer(modelSettingsLayerSchema, (merged as Record<string, unknown>).modelSettings, {});
   const maxRetries = normalizeNonNegativeInt(env.AGENT_MODEL_MAX_RETRIES) ?? mergedModelSettings.maxRetries;
   const normalizedModelSettings: AgentConfig["modelSettings"] =
@@ -399,8 +444,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   return {
     provider,
     runtime,
-    model,
-    subAgentModel,
+    model: supportedModel.id,
+    subAgentModel: supportedSubAgentModelId,
     toolOutputOverflowChars,
     inheritedToolOutputOverflowChars,
     ...(projectToolOutputOverflowChars !== undefined
@@ -437,13 +482,14 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     observability,
     harness,
     command,
-    ...(providerOptions ? { providerOptions } : {}),
+    ...(normalizedProviderOptions ? { providerOptions: normalizedProviderOptions } : {}),
     ...(normalizedModelSettings ? { modelSettings: normalizedModelSettings } : {}),
   };
 }
 
 export function getModel(config: AgentConfig, id?: string) {
   const modelId = id || config.model;
+  assertSupportedModel(config.provider, modelId, id ? "model override" : "model");
   const savedKey = getSavedProviderApiKey(config, config.provider);
   return getModelForProvider(config, modelId, savedKey);
 }

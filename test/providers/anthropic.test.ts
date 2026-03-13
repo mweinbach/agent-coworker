@@ -24,7 +24,7 @@ describe("Anthropic provider (claude-opus-4-6)", () => {
   });
 
   test("getModel with explicit claude-opus-4-6 override", () => {
-    const cfg = makeConfig({ provider: "anthropic", model: "some-other-model" });
+    const cfg = makeConfig({ provider: "anthropic", model: "claude-sonnet-4-5" });
     const model = getModel(cfg, "claude-opus-4-6");
 
     expect(model.modelId).toBe("claude-opus-4-6");
@@ -32,10 +32,10 @@ describe("Anthropic provider (claude-opus-4-6)", () => {
   });
 
   test("getModel with claude-sonnet-4-5 model ID", () => {
-    const cfg = makeConfig({ provider: "anthropic", model: "claude-sonnet-4-5-20250929" });
+    const cfg = makeConfig({ provider: "anthropic", model: "claude-sonnet-4-5" });
     const model = getModel(cfg);
 
-    expect(model.modelId).toBe("claude-sonnet-4-5-20250929");
+    expect(model.modelId).toBe("claude-sonnet-4-5");
     expect(model.provider).toBe("anthropic.messages");
   });
 
@@ -48,10 +48,10 @@ describe("Anthropic provider (claude-opus-4-6)", () => {
   });
 
   test("getModel with claude-haiku-4-5 model ID", () => {
-    const cfg = makeConfig({ provider: "anthropic", model: "claude-haiku-4-5-20251001" });
+    const cfg = makeConfig({ provider: "anthropic", model: "claude-haiku-4-5" });
     const model = getModel(cfg);
 
-    expect(model.modelId).toBe("claude-haiku-4-5-20251001");
+    expect(model.modelId).toBe("claude-haiku-4-5");
     expect(model.provider).toBe("anthropic.messages");
   });
 
@@ -107,18 +107,18 @@ describe("Anthropic provider (claude-opus-4-6)", () => {
     expect(cfg.model).toBe("claude-opus-4-6");
   });
 
-  test("loadConfig with anthropic provider and custom model", async () => {
+  test("loadConfig with anthropic provider and supported non-default model", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
-      env: { AGENT_PROVIDER: "anthropic", AGENT_MODEL: "claude-sonnet-4-5-20250929" },
+      env: { AGENT_PROVIDER: "anthropic", AGENT_MODEL: "claude-sonnet-4-5" },
     });
 
     expect(cfg.provider).toBe("anthropic");
-    expect(cfg.model).toBe("claude-sonnet-4-5-20250929");
+    expect(cfg.model).toBe("claude-sonnet-4-5");
   });
 
   test("loadConfig anthropic from project config file", async () => {

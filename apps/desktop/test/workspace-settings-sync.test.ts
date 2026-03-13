@@ -516,7 +516,7 @@ describe("workspace settings sync", () => {
         backupsEnabled: true,
         defaultBackupsEnabled: true,
         toolOutputOverflowChars: 25000,
-        subAgentModel: "gpt-5.4-mini",
+        subAgentModel: "gpt-5-mini",
         providerOptions: {
           openai: {
             reasoningSummary: "concise",
@@ -586,7 +586,7 @@ describe("workspace settings sync", () => {
         backupsEnabled: true,
         defaultBackupsEnabled: true,
         toolOutputOverflowChars: 25000,
-        subAgentModel: "gpt-5.4-mini",
+        subAgentModel: "gpt-5-mini",
         maxSteps: 75,
       },
     });

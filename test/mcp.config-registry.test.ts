@@ -9,8 +9,8 @@ import { loadMCPConfigRegistry, migrateLegacyMCPServers, upsertWorkspaceMCPServe
 function makeConfig(workspaceRoot: string, userHome: string, builtInConfigDir: string): AgentConfig {
   return {
     provider: "google",
-    model: "gemini-2.0-flash",
-    subAgentModel: "gemini-2.0-flash",
+    model: "gemini-3-flash-preview",
+    subAgentModel: "gemini-3-flash-preview",
     workingDirectory: workspaceRoot,
     outputDirectory: path.join(workspaceRoot, "output"),
     uploadsDirectory: path.join(workspaceRoot, "uploads"),

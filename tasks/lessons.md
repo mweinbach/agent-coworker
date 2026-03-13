@@ -1,5 +1,6 @@
 # Lessons
 
+- When finishing PR review work in this repo, do not stop at local code/test changes; reply on each completed GitHub review thread and resolve it in the PR in the same pass.
 - Before doing multi-commit feature work in this repo, confirm the active branch is based on current `main`; if it is not, rebase or restart from current `main` before building the stack.
 - For settings that can be explicitly set, explicitly disabled, or inherited, never overload `undefined` for both “no-op” and “inherit”; add a dedicated clear/inherit path end-to-end so reset-to-default actions delete persisted overrides instead of pinning the current built-in value.
 - When the user narrows a protocol or compatibility requirement, apply that exact direction to the fix; do not keep broader backward-compat or provider-scope assumptions alive in the implementation.
@@ -87,3 +88,4 @@
 - When parallel edits or another agent touch the same regression fix, re-check the exact working-tree diff before continuing; a partially reverted bootstrap/defaulting path can silently reintroduce the bug even if nearby code still looks fixed.
 - When a review surfaces a missing provider capability, verify the repo’s intended product contract before turning it into a bug; `opencode-go` intentionally has no local pricing or pricing overrides here.
 - When a tool has both saved credentials and environment fallback, match the repo’s standard precedence: user-saved auth should win over ambient shell env unless the product explicitly says otherwise.
+- When the user supplies an authoritative model-cutoff table mid-implementation, stop and update the registry assumptions immediately instead of continuing to churn around older local defaults or partial web results.

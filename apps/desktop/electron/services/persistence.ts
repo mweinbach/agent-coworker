@@ -9,7 +9,9 @@ import type {
   ThreadRecord,
   TranscriptEvent,
   WorkspaceRecord,
+  WorkspaceUserProfile,
 } from "../../src/app/types";
+import { normalizeWorkspaceUserProfile } from "../../src/app/types";
 import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibleProviderOptions";
 import { normalizePersistedProviderState } from "../../src/app/persistedProviderState";
 import type { TranscriptBatchInput } from "../../src/lib/desktopApi";
@@ -59,6 +61,10 @@ function asNonEmptyString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function asDefinedString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function asSafeId(value: unknown): string | null {
@@ -172,6 +178,10 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       defaultSubAgentModel: asOptionalString(item.defaultSubAgentModel),
       defaultToolOutputOverflowChars: asOptionalNullableNonNegativeInteger(item.defaultToolOutputOverflowChars),
       providerOptions: normalizeWorkspaceProviderOptions(item.providerOptions),
+      userName: asDefinedString(item.userName),
+      userProfile: isRecord(item.userProfile)
+        ? normalizeWorkspaceUserProfile(item.userProfile as Partial<WorkspaceUserProfile>)
+        : undefined,
       defaultEnableMcp: typeof item.defaultEnableMcp === "boolean" ? item.defaultEnableMcp : true,
       defaultBackupsEnabled: typeof item.defaultBackupsEnabled === "boolean" ? item.defaultBackupsEnabled : true,
       yolo: typeof item.yolo === "boolean" ? item.yolo : false,

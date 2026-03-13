@@ -41,6 +41,12 @@ describe("desktop persisted-state schema defaults", () => {
           defaultEnableMcp: false,
           defaultBackupsEnabled: false,
           defaultToolOutputOverflowChars: null,
+          userName: "Alex",
+          userProfile: {
+            instructions: "Keep answers terse.",
+            work: "Platform engineer",
+            details: "Prefers Bun",
+          },
           yolo: true,
         },
       ],
@@ -52,6 +58,12 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.workspaces[0]?.defaultEnableMcp).toBe(false);
     expect(parsed.workspaces[0]?.defaultBackupsEnabled).toBe(false);
     expect(parsed.workspaces[0]?.defaultToolOutputOverflowChars).toBeNull();
+    expect(parsed.workspaces[0]?.userName).toBe("Alex");
+    expect(parsed.workspaces[0]?.userProfile).toEqual({
+      instructions: "Keep answers terse.",
+      work: "Platform engineer",
+      details: "Prefers Bun",
+    });
     expect(parsed.workspaces[0]?.yolo).toBe(true);
     expect(parsed.developerMode).toBe(true);
     expect(parsed.showHiddenFiles).toBe(true);

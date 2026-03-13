@@ -47,6 +47,7 @@ import {
   truncateTitle,
 } from "../store.helpers";
 import { mergeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
+import { normalizeWorkspaceUserProfile } from "../types";
 import type { ThreadRecord, WorkspaceDefaultsPatch, WorkspaceRecord } from "../types";
 
 export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "applyWorkspaceDefaultsToThread" | "updateWorkspaceDefaults"> {
@@ -114,6 +115,9 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const subAgentModel =
         (ws.defaultSubAgentModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.subAgentModel?.trim() || "") || undefined;
       const providerOptions = ws.providerOptions;
+      const userName = ws.userName;
+      const userProfile = ws.userProfile ? normalizeWorkspaceUserProfile(ws.userProfile) : undefined;
+      const hasProfileDefaults = userName !== undefined || userProfile !== undefined;
 
       if (provider && model) {
         const ok = sendThread(get, threadId, (sessionId) => ({
@@ -125,13 +129,15 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         if (ok) appendThreadTranscript(threadId, "client", { type: "set_model", sessionId: rt.sessionId, provider, model });
       }
 
-      if (subAgentModel || providerOptions) {
+      if (subAgentModel || providerOptions || hasProfileDefaults) {
         const okConfig = sendThread(get, threadId, (sessionId) => ({
           type: "set_config",
           sessionId,
           config: {
             ...(subAgentModel ? { subAgentModel } : {}),
             ...(providerOptions ? { providerOptions: providerOptions as OpenAiCompatibleProviderOptionsByProvider } : {}),
+            ...(userName !== undefined ? { userName } : {}),
+            ...(userProfile !== undefined ? { userProfile } : {}),
           },
         }));
         if (okConfig) {
@@ -141,6 +147,8 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
             config: {
               ...(subAgentModel ? { subAgentModel } : {}),
               ...(providerOptions ? { providerOptions } : {}),
+              ...(userName !== undefined ? { userName } : {}),
+              ...(userProfile !== undefined ? { userProfile } : {}),
             },
           });
         }
@@ -158,7 +166,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
   
 
     updateWorkspaceDefaults: async (workspaceId, patch: WorkspaceDefaultsPatch) => {
-      const { clearDefaultToolOutputOverflowChars, ...workspacePatch } = patch;
+      const { clearDefaultToolOutputOverflowChars, userProfile: userProfilePatch, ...workspacePatch } = patch;
       set((s) => ({
         workspaces: s.workspaces.map((w) => {
           if (w.id !== workspaceId) return w;
@@ -169,6 +177,14 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
             ...(workspacePatch.providerOptions !== undefined
               ? {
                   providerOptions: mergeWorkspaceProviderOptions(w.providerOptions, workspacePatch.providerOptions),
+                }
+              : {}),
+            ...(userProfilePatch !== undefined
+              ? {
+                  userProfile: {
+                    ...normalizeWorkspaceUserProfile(w.userProfile),
+                    ...userProfilePatch,
+                  },
                 }
               : {}),
           };
@@ -184,7 +200,9 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         clearDefaultToolOutputOverflowChars === true ||
         workspacePatch.defaultEnableMcp !== undefined ||
         workspacePatch.defaultBackupsEnabled !== undefined ||
-        workspacePatch.providerOptions !== undefined;
+        workspacePatch.providerOptions !== undefined ||
+        workspacePatch.userName !== undefined ||
+        userProfilePatch !== undefined;
       if (!shouldSyncCoreSettings) {
         return;
       }
@@ -204,6 +222,8 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const subAgentModel = workspace.defaultSubAgentModel?.trim() || model;
       const toolOutputOverflowChars = workspace.defaultToolOutputOverflowChars;
       const providerOptions = workspace.providerOptions;
+      const userName = workspace.userName;
+      const userProfile = workspace.userProfile ? normalizeWorkspaceUserProfile(workspace.userProfile) : undefined;
       const clearToolOutputOverflowChars = clearDefaultToolOutputOverflowChars === true;
 
       const modelPersisted = sendControl(get, workspaceId, (sessionId) => ({
@@ -224,6 +244,8 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
               ? { clearToolOutputOverflowChars: true }
               : {}),
           ...(providerOptions ? { providerOptions: providerOptions as OpenAiCompatibleProviderOptionsByProvider } : {}),
+          ...(userName !== undefined ? { userName } : {}),
+          ...(userProfile !== undefined ? { userProfile } : {}),
         },
       }));
       const mcpPersisted = sendControl(get, workspaceId, (sessionId) => ({

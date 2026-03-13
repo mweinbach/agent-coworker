@@ -2,6 +2,7 @@ import { AgentSocket } from "../../lib/agentSocket";
 import type { ClientMessage, ProviderName, ServerEvent } from "../../lib/wsProtocol";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
+import { normalizeWorkspaceUserProfile } from "../types";
 import type { Notification } from "../types";
 import { RUNTIME } from "./runtimeState";
 
@@ -102,6 +103,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
 
         if (evt.type === "session_config") {
           const providerOptions = normalizeWorkspaceProviderOptions((evt.config as any).providerOptions);
+          const userProfile = evt.config.userProfile ? normalizeWorkspaceUserProfile(evt.config.userProfile) : undefined;
           set((s) => ({
             workspaces: s.workspaces.map((workspace) =>
               workspace.id === workspaceId
@@ -111,6 +113,8 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
                     defaultSubAgentModel: evt.config.subAgentModel,
                     defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
                     providerOptions,
+                    ...(typeof evt.config.userName === "string" ? { userName: evt.config.userName } : {}),
+                    ...(userProfile ? { userProfile } : {}),
                   }
                 : workspace,
             ),

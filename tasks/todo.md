@@ -1,3 +1,25 @@
+# Task: Review PR #37 desktop management coverage for user profile context
+
+## Plan
+- [x] Inspect the PR #37 diff with emphasis on websocket protocol, session/config persistence, and any desktop-facing surfaces that need to manage the new profile fields.
+- [x] Verify whether the desktop app already receives and can update the new user profile state through the server/workspace settings flow; patch any missing protocol or desktop wiring if needed.
+- [x] Run focused regression tests first, then the repo-required test/build verification lane, and record the result plus any residual risks here.
+
+## Review
+- The review found a real desktop gap: the PR extended websocket `session_config` with `userName` and `userProfile`, but the desktop layer only updated sync fixtures. It was not persisting those workspace defaults, hydrating them from the control session, replaying them to live thread sessions, or exposing them in the workspace settings UI.
+- Patched the desktop workspace model and sanitizers so `userName` and `userProfile` now survive renderer bootstrap, IPC validation, and Electron persistence in [types.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/app/types.ts), [bootstrap.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/app/store.actions/bootstrap.ts), [desktopSchemas.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/lib/desktopSchemas.ts), and [persistence.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/electron/services/persistence.ts).
+- Patched desktop control/thread sync so harness `session_config` snapshots hydrate the new fields and workspace default updates replay them through `set_config` to both the control session and live thread sessions in [controlSocket.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/app/store.helpers/controlSocket.ts) and [workspaceDefaults.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/app/store.actions/workspaceDefaults.ts).
+- Added a new workspace settings card so the desktop app can actually manage the profile fields, not just store them, in [WorkspacesPage.tsx](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/ui/settings/pages/WorkspacesPage.tsx).
+- Added regression coverage for renderer bootstrap, persistence, workspace sync, and settings rendering in [workspace-settings-sync.test.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/test/workspace-settings-sync.test.ts), [persistence-state-sanitization.test.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/test/persistence-state-sanitization.test.ts), [desktop-schemas.test.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/test/desktop-schemas.test.ts), and [workspaces-page.test.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/test/workspaces-page.test.ts).
+- Verification:
+  - `HOME=$(mktemp -d) ~/.bun/bin/bun test apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/workspaces-page.test.ts apps/desktop/test/desktop-schemas.test.ts apps/desktop/test/persistence-state-sanitization.test.ts --bail` -> pass (`32 pass, 0 fail`)
+  - `HOME=$(mktemp -d) ~/.bun/bin/bun test` -> pass (`2226 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI files at `apps/TUI/routes/session/index.tsx:248` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:62` (`TS2322`)
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass; macOS notarization skipped because Apple notarization credentials are not configured in this environment
+
 # Task: Address PR #37 review comments
 
 ## Plan

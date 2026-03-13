@@ -216,6 +216,45 @@ describe("workspace settings sync", () => {
     expect(loaded?.defaultSubAgentModel).toBe("gpt-5.2");
   });
 
+  test("init preserves workspace user profile defaults during rehydration", async () => {
+    mockedLoadedState = {
+      version: 2,
+      workspaces: [
+        {
+          id: "ws-profile",
+          name: "Loaded profile",
+          path: "/tmp/workspace-profile",
+          createdAt: "2026-02-19T00:00:00.000Z",
+          lastOpenedAt: "2026-02-19T00:00:00.000Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.2",
+          userName: "Alex",
+          userProfile: {
+            instructions: "Keep answers terse.",
+            work: "Platform engineer",
+            details: "Prefers Bun",
+          },
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+    };
+
+    await useAppStore.getState().init();
+
+    const loaded = useAppStore.getState().workspaces[0];
+    expect(loaded?.userName).toBe("Alex");
+    expect(loaded?.userProfile).toEqual({
+      instructions: "Keep answers terse.",
+      work: "Platform engineer",
+      details: "Prefers Bun",
+    });
+  });
+
   test("init preserves persisted workspace overflow defaults during rehydration", async () => {
     mockedLoadedState = {
       version: 2,
@@ -449,10 +488,14 @@ describe("workspace settings sync", () => {
     expect(workspace?.defaultSubAgentModel).toBe("gpt-5-mini");
     expect(workspace?.defaultBackupsEnabled).toBe(false);
     expect(workspace?.defaultToolOutputOverflowChars).toBe(12000);
+    expect(workspace?.userName).toBe("Alex");
+    expect(workspace?.userProfile).toEqual({ instructions: "", work: "", details: "" });
     expect(runtime?.controlSessionConfig?.subAgentModel).toBe("gpt-5-mini");
     expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultBackupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.toolOutputOverflowChars).toBe(12000);
+    expect((runtime?.controlSessionConfig as any)?.userName).toBe("Alex");
+    expect((runtime?.controlSessionConfig as any)?.userProfile).toEqual({ instructions: "", work: "", details: "" });
   });
 
   test("control session_config keeps session backup overrides separate from the workspace default", async () => {
@@ -492,6 +535,12 @@ describe("workspace settings sync", () => {
         workspace.id === workspaceId
           ? {
               ...workspace,
+              userName: "Alex",
+              userProfile: {
+                instructions: "Keep answers terse.",
+                work: "Platform engineer",
+                details: "Prefers Bun",
+              },
               providerOptions: {
                 openai: {
                   reasoningEffort: "high",
@@ -565,6 +614,12 @@ describe("workspace settings sync", () => {
         workspace.id === workspaceId
           ? {
               ...workspace,
+              userName: "Alex",
+              userProfile: {
+                instructions: "Keep answers terse.",
+                work: "Platform engineer",
+                details: "Prefers Bun",
+              },
               providerOptions: {
                 openai: {
                   reasoningEffort: "high",
@@ -610,6 +665,12 @@ describe("workspace settings sync", () => {
         workspace.id === workspaceId
           ? {
               ...workspace,
+              userName: "Alex",
+              userProfile: {
+                instructions: "Keep answers terse.",
+                work: "Platform engineer",
+                details: "Prefers Bun",
+              },
               providerOptions: {
                 openai: {
                   reasoningEffort: "high",
@@ -652,6 +713,12 @@ describe("workspace settings sync", () => {
       type: "set_config",
       config: {
         subAgentModel: "gpt-5.2",
+        userName: "Alex",
+        userProfile: {
+          instructions: "Keep answers terse.",
+          work: "Platform engineer",
+          details: "Prefers Bun",
+        },
         providerOptions: {
           openai: {
             reasoningEffort: "high",
@@ -744,6 +811,82 @@ describe("workspace settings sync", () => {
       config: {
         backupsEnabled: false,
         toolOutputOverflowChars: 12000,
+      },
+    });
+  });
+
+  test("updateWorkspaceDefaults merges user profile fields and syncs control plus live threads", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              userName: "Alex",
+              userProfile: {
+                instructions: "Keep answers terse.",
+                work: "Platform engineer",
+                details: "Prefers Bun",
+              },
+            }
+          : workspace,
+      ),
+    }));
+
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+
+    controlSocket.sent = [];
+    threadSocket.sent = [];
+
+    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      userName: "Taylor",
+      userProfile: {
+        details: "Prefers Bun and TypeScript",
+      },
+    });
+
+    const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
+    expect(workspace?.userName).toBe("Taylor");
+    expect(workspace?.userProfile).toEqual({
+      instructions: "Keep answers terse.",
+      work: "Platform engineer",
+      details: "Prefers Bun and TypeScript",
+    });
+
+    expect(controlSocket.sent.find((message) => message?.type === "set_config")).toMatchObject({
+      type: "set_config",
+      config: {
+        backupsEnabled: true,
+        subAgentModel: "gpt-5.2",
+        userName: "Taylor",
+        userProfile: {
+          instructions: "Keep answers terse.",
+          work: "Platform engineer",
+          details: "Prefers Bun and TypeScript",
+        },
+      },
+    });
+
+    expect(threadSocket.sent.map((message) => message?.type)).toEqual([
+      "set_config",
+      "set_model",
+      "set_config",
+      "set_enable_mcp",
+    ]);
+    expect(threadSocket.sent[2]).toMatchObject({
+      type: "set_config",
+      config: {
+        subAgentModel: "gpt-5.2",
+        userName: "Taylor",
+        userProfile: {
+          instructions: "Keep answers terse.",
+          work: "Platform engineer",
+          details: "Prefers Bun and TypeScript",
+        },
       },
     });
   });

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 
@@ -15,12 +15,17 @@ import {
   type ReasoningSummaryValue,
   type TextVerbosityValue,
 } from "../../../app/openaiCompatibleProviderOptions";
-import type { WorkspaceRecord } from "../../../app/types";
+import {
+  normalizeWorkspaceUserProfile,
+  type WorkspaceRecord,
+  type WorkspaceUserProfile,
+} from "../../../app/types";
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
 import { Checkbox } from "../../../components/ui/checkbox";
+import { Input } from "../../../components/ui/input";
 import {
   Select,
   SelectContent,
@@ -28,6 +33,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
+import { Textarea } from "../../../components/ui/textarea";
 import { confirmAction } from "../../../lib/desktopCommands";
 import { MODEL_CHOICES, modelOptionsForProvider, UI_DISABLED_PROVIDERS } from "../../../lib/modelChoices";
 import type { ProviderName } from "../../../lib/wsProtocol";
@@ -191,6 +197,135 @@ export function OpenAiCompatibleModelSettingsCard({
             </div>
           </div>
         ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+type WorkspaceUserProfileCardProps = {
+  workspace: Pick<WorkspaceRecord, "id" | "userName" | "userProfile">;
+  updateWorkspaceDefaults: (
+    workspaceId: string,
+    patch: { userName?: string; userProfile?: Partial<WorkspaceUserProfile> },
+  ) => Promise<unknown> | void;
+};
+
+function buildUserProfileDraft(workspace: WorkspaceUserProfileCardProps["workspace"]) {
+  const profile = normalizeWorkspaceUserProfile(workspace.userProfile);
+  return {
+    userName: workspace.userName ?? "",
+    instructions: profile.instructions,
+    work: profile.work,
+    details: profile.details,
+  };
+}
+
+export function WorkspaceUserProfileCard({
+  workspace,
+  updateWorkspaceDefaults,
+}: WorkspaceUserProfileCardProps) {
+  const [draft, setDraft] = useState(() => buildUserProfileDraft(workspace));
+
+  useEffect(() => {
+    setDraft(buildUserProfileDraft(workspace));
+  }, [
+    workspace.id,
+    workspace.userName,
+    workspace.userProfile?.instructions,
+    workspace.userProfile?.work,
+    workspace.userProfile?.details,
+  ]);
+
+  const currentProfile = normalizeWorkspaceUserProfile(workspace.userProfile);
+
+  const commitUserName = (value: string) => {
+    const trimmed = value.trim();
+    if (trimmed === (workspace.userName ?? "")) return;
+    void updateWorkspaceDefaults(workspace.id, { userName: trimmed });
+  };
+
+  const commitProfileField = (field: keyof WorkspaceUserProfile, value: string) => {
+    const trimmed = value.trim();
+    if (trimmed === currentProfile[field]) return;
+    void updateWorkspaceDefaults(workspace.id, { userProfile: { [field]: trimmed } });
+  };
+
+  return (
+    <Card className="border-border/80 bg-card/85">
+      <CardHeader>
+        <CardTitle>User Profile Context</CardTitle>
+        <CardDescription>
+          Workspace-specific identity and prompt context. Changes save when the field loses focus.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <div className="text-sm font-medium text-foreground">Name</div>
+          <Input
+            aria-label="Workspace user name"
+            autoComplete="off"
+            placeholder="Name used in prompt context"
+            value={draft.userName}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                userName: event.currentTarget.value,
+              }))
+            }
+            onBlur={(event) => commitUserName(event.currentTarget.value)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-sm font-medium text-foreground">Work / Job</div>
+          <Textarea
+            aria-label="Workspace work context"
+            className="min-h-24"
+            placeholder="Role, team, domain, or responsibilities"
+            value={draft.work}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                work: event.currentTarget.value,
+              }))
+            }
+            onBlur={(event) => commitProfileField("work", event.currentTarget.value)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-sm font-medium text-foreground">Instructions</div>
+          <Textarea
+            aria-label="Workspace profile instructions"
+            className="min-h-24"
+            placeholder="Behavior instructions the agent should follow"
+            value={draft.instructions}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                instructions: event.currentTarget.value,
+              }))
+            }
+            onBlur={(event) => commitProfileField("instructions", event.currentTarget.value)}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-sm font-medium text-foreground">Details Agent Should Know</div>
+          <Textarea
+            aria-label="Workspace profile details"
+            className="min-h-24"
+            placeholder="Personal or project details the agent should remember"
+            value={draft.details}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                details: event.currentTarget.value,
+              }))
+            }
+            onBlur={(event) => commitProfileField("details", event.currentTarget.value)}
+          />
+        </div>
       </CardContent>
     </Card>
   );
@@ -418,6 +553,11 @@ export function WorkspacesPage() {
               </div>
             </CardContent>
           </Card>
+
+          <WorkspaceUserProfileCard
+            workspace={ws}
+            updateWorkspaceDefaults={updateWorkspaceDefaults}
+          />
 
           <OpenAiCompatibleModelSettingsCard
             workspace={ws}

@@ -50,10 +50,19 @@ import {
 } from "../store.helpers";
 import { deriveConnectedProviders, normalizePersistedProviderState } from "../persistedProviderState";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
-import type { PersistedProviderState, ThreadRecord, WorkspaceRecord } from "../types";
+import {
+  normalizeWorkspaceUserProfile,
+  type PersistedProviderState,
+  type ThreadRecord,
+  type WorkspaceRecord,
+} from "../types";
 
 const optionalStringWithContentSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : undefined),
+  z.string().optional()
+);
+const optionalStringSchema = z.preprocess(
+  (value) => (typeof value === "string" ? value : undefined),
   z.string().optional()
 );
 
@@ -95,6 +104,12 @@ const persistedWorkspaceSchema = z.object({
     return undefined;
   }, z.number().int().nonnegative().nullable().optional()),
   providerOptions: z.unknown().optional(),
+  userName: optionalStringSchema,
+  userProfile: z.object({
+    instructions: optionalStringSchema,
+    work: optionalStringSchema,
+    details: optionalStringSchema,
+  }).passthrough().optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
@@ -111,6 +126,8 @@ const persistedWorkspaceSchema = z.object({
     defaultSubAgentModel: workspace.defaultSubAgentModel ?? model,
     defaultToolOutputOverflowChars: workspace.defaultToolOutputOverflowChars,
     providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
+    userName: workspace.userName,
+    userProfile: workspace.userProfile ? normalizeWorkspaceUserProfile(workspace.userProfile) : undefined,
     defaultEnableMcp: workspace.defaultEnableMcp,
     defaultBackupsEnabled: workspace.defaultBackupsEnabled,
     yolo: workspace.yolo,

@@ -198,6 +198,45 @@ describe("desktop persistence state validation", () => {
     expect(loaded.workspaces.find((workspace) => workspace.id === "ws_overflow_inherited")?.defaultToolOutputOverflowChars).toBeUndefined();
   });
 
+  test("saveState preserves workspace user profile defaults", async () => {
+    const persistence = new PersistenceService();
+    const profileWorkspace = path.join(userDataDir, "workspace-profile");
+    await fs.mkdir(profileWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_profile",
+          name: "Profile workspace",
+          path: profileWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          userName: "Alex",
+          userProfile: {
+            instructions: "Keep answers terse.",
+            work: "Platform engineer",
+            details: "Prefers Bun",
+          },
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.workspaces[0]?.userName).toBe("Alex");
+    expect(loaded.workspaces[0]?.userProfile).toEqual({
+      instructions: "Keep answers terse.",
+      work: "Platform engineer",
+      details: "Prefers Bun",
+    });
+  });
+
   test("saveState drops recoverable expired codex status snapshots that would look disconnected on restart", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-provider-recoverable");

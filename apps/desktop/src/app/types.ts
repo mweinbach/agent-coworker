@@ -10,6 +10,22 @@ import type {
 } from "../lib/wsProtocol";
 import type { WorkspaceProviderOptions } from "./openaiCompatibleProviderOptions";
 
+export type WorkspaceUserProfile = {
+  instructions: string;
+  work: string;
+  details: string;
+};
+
+export function normalizeWorkspaceUserProfile(
+  value?: Partial<WorkspaceUserProfile> | null,
+): WorkspaceUserProfile {
+  return {
+    instructions: typeof value?.instructions === "string" ? value.instructions : "",
+    work: typeof value?.work === "string" ? value.work : "",
+    details: typeof value?.details === "string" ? value.details : "",
+  };
+}
+
 export type ExplorerEntry = {
   name: string;
   path: string;
@@ -40,13 +56,16 @@ export type WorkspaceRecord = {
   defaultSubAgentModel?: string;
   defaultToolOutputOverflowChars?: number | null;
   providerOptions?: WorkspaceProviderOptions;
+  userName?: string;
+  userProfile?: WorkspaceUserProfile;
   defaultEnableMcp: boolean;
   defaultBackupsEnabled: boolean;
   yolo: boolean;
 };
 
-export type WorkspaceDefaultsPatch = Partial<WorkspaceRecord> & {
+export type WorkspaceDefaultsPatch = Partial<Omit<WorkspaceRecord, "userProfile">> & {
   clearDefaultToolOutputOverflowChars?: boolean;
+  userProfile?: Partial<WorkspaceUserProfile>;
 };
 
 export type ThreadStatus = "active" | "disconnected";

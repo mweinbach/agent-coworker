@@ -67,7 +67,10 @@ mock.module("../src/lib/agentSocket", () => ({
   },
 }));
 
-const { OpenAiCompatibleModelSettingsCard } = await import("../src/ui/settings/pages/WorkspacesPage");
+const {
+  OpenAiCompatibleModelSettingsCard,
+  WorkspaceUserProfileCard,
+} = await import("../src/ui/settings/pages/WorkspacesPage");
 
 describe("desktop workspaces page", () => {
   test("renders workspace controls for openai-compatible verbosity, reasoning effort, and reasoning summary", () => {
@@ -98,5 +101,28 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Verbosity");
     expect(html).toContain("Reasoning effort");
     expect(html).toContain("Reasoning summary");
+  });
+
+  test("renders workspace controls for user profile context", () => {
+    const html = renderToStaticMarkup(
+      createElement(WorkspaceUserProfileCard, {
+        workspace: {
+          id: "ws-1",
+          userName: "Alex",
+          userProfile: {
+            instructions: "Keep answers terse.",
+            work: "Platform engineer",
+            details: "Prefers Bun and TypeScript",
+          },
+        },
+        updateWorkspaceDefaults: async () => {},
+      }),
+    );
+
+    expect(html).toContain("User Profile Context");
+    expect(html).toContain("Name");
+    expect(html).toContain("Work / Job");
+    expect(html).toContain("Instructions");
+    expect(html).toContain("Details Agent Should Know");
   });
 });

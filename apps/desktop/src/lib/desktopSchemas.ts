@@ -34,6 +34,10 @@ const invalidPathSegmentPattern = /[/\\\0]/;
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 const optionalNonEmptyStringSchema = nonEmptyStringSchema.optional();
+const optionalStringSchema = z.preprocess(
+  (value) => (typeof value === "string" ? value : undefined),
+  z.string().optional(),
+);
 const safeIdSchema = nonEmptyStringSchema.regex(SAFE_ID, "contains invalid characters");
 const directionSchema = z.enum(["server", "client"]);
 
@@ -121,6 +125,12 @@ const persistedWorkspaceSchema = z.object({
     return undefined;
   }, z.number().int().nonnegative().nullable().optional()),
   providerOptions: workspaceProviderOptionsSchema.optional(),
+  userName: optionalStringSchema,
+  userProfile: z.object({
+    instructions: optionalStringSchema,
+    work: optionalStringSchema,
+    details: optionalStringSchema,
+  }).passthrough().optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),

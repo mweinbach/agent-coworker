@@ -31,7 +31,7 @@ const setConfigFieldErrorMessages: Record<string, string> = {
   toolOutputOverflowChars: "set_config config.toolOutputOverflowChars must be null or non-negative integer",
   clearToolOutputOverflowChars: "set_config config.clearToolOutputOverflowChars must be boolean",
   providerOptions: "set_config config.providerOptions must be an object",
-  userName: "set_config config.userName must be non-empty string",
+  userName: "set_config config.userName must be string",
   userProfile: "set_config config.userProfile must be an object",
 };
 
@@ -96,7 +96,7 @@ const setConfigPayloadSchema = z.object({
   toolOutputOverflowChars: z.number().int().nonnegative().nullable().optional(),
   clearToolOutputOverflowChars: z.boolean().optional(),
   providerOptions: editableOpenAiProviderOptionsByProviderSchema.optional(),
-  userName: z.string().trim().min(1).optional(),
+  userName: z.string().optional(),
   userProfile: z.object({
     instructions: z.string().optional(),
     work: z.string().optional(),

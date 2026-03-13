@@ -1169,6 +1169,88 @@ describe("safeParseClientMessage", () => {
         ),
       ).toBe("set_config config.providerOptions.codex-cli.textVerbosity must be one of low, medium, high");
     });
+
+    test("set_config accepts userName with non-empty string", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_config",
+          sessionId: "s1",
+          config: { userName: "Alice" },
+        }),
+      );
+      expect(msg.type).toBe("set_config");
+      if (msg.type === "set_config") {
+        expect(msg.config.userName).toBe("Alice");
+      }
+    });
+
+    test("set_config accepts empty userName to clear the field", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_config",
+          sessionId: "s1",
+          config: { userName: "" },
+        }),
+      );
+      expect(msg.type).toBe("set_config");
+      if (msg.type === "set_config") {
+        expect(msg.config.userName).toBe("");
+      }
+    });
+
+    test("set_config accepts userProfile object", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_config",
+          sessionId: "s1",
+          config: {
+            userProfile: {
+              instructions: "Be concise",
+              work: "Software engineer",
+              details: "Uses TypeScript",
+            },
+          },
+        }),
+      );
+      expect(msg.type).toBe("set_config");
+      if (msg.type === "set_config") {
+        expect(msg.config.userProfile?.instructions).toBe("Be concise");
+        expect(msg.config.userProfile?.work).toBe("Software engineer");
+        expect(msg.config.userProfile?.details).toBe("Uses TypeScript");
+      }
+    });
+
+    test("set_config accepts partial userProfile fields", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_config",
+          sessionId: "s1",
+          config: { userProfile: { work: "Dev" } },
+        }),
+      );
+      expect(msg.type).toBe("set_config");
+      if (msg.type === "set_config") {
+        expect(msg.config.userProfile?.work).toBe("Dev");
+        expect(msg.config.userProfile?.instructions).toBeUndefined();
+        expect(msg.config.userProfile?.details).toBeUndefined();
+      }
+    });
+
+    test("set_config accepts empty userProfile field strings to clear them", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_config",
+          sessionId: "s1",
+          config: { userProfile: { instructions: "", work: "", details: "" } },
+        }),
+      );
+      expect(msg.type).toBe("set_config");
+      if (msg.type === "set_config") {
+        expect(msg.config.userProfile?.instructions).toBe("");
+        expect(msg.config.userProfile?.work).toBe("");
+        expect(msg.config.userProfile?.details).toBe("");
+      }
+    });
   });
 
   describe("upload_file", () => {

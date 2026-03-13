@@ -79,13 +79,23 @@ function mergeProviderOptionDefaults(
   providerOptions: Record<string, any> | undefined,
 ): Record<string, any> | undefined {
   const defaults = assertSupportedModel(provider, modelId, "model").providerOptionsDefaults;
-  const current = isPlainObject(providerOptions) ? deepMerge({}, providerOptions) as Record<string, any> : {};
-  const currentProviderOptions = isPlainObject(current[provider]) ? current[provider] as Record<string, unknown> : {};
-  current[provider] = deepMerge(
+  const current = isPlainObject(providerOptions) ? deepMerge({}, providerOptions) as Record<string, any> : undefined;
+  const currentProviderOptions =
+    current && isPlainObject(current[provider]) ? current[provider] as Record<string, unknown> : undefined;
+  const mergedProviderOptions = deepMerge(
     deepMerge({}, defaults as Record<string, unknown>),
-    currentProviderOptions as Record<string, unknown>,
+    currentProviderOptions ?? {},
   );
-  return current;
+  if (Object.keys(mergedProviderOptions).length === 0) {
+    if (!current) return undefined;
+    delete current[provider];
+    return Object.keys(current).length > 0 ? current : undefined;
+  }
+
+  return {
+    ...(current ?? {}),
+    [provider]: mergedProviderOptions,
+  };
 }
 
 function resolveSupportedConfiguredModel(provider: ProviderName, modelId: string, source: string) {

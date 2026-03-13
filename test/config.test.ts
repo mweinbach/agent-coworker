@@ -661,6 +661,49 @@ describe("loadConfig", () => {
     expect(cfg.providerOptions?.google.thinkingConfig.thinkingLevel).toBe("low");
   });
 
+  test("omits providerOptions when the active provider model has no defaults and config contributes none", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {
+        AGENT_PROVIDER: "opencode-go",
+      },
+    });
+
+    expect(cfg.providerOptions).toBeUndefined();
+  });
+
+  test("preserves other providerOptions without synthesizing an empty active-provider section", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      providerOptions: {
+        openai: {
+          reasoningEffort: "high",
+        },
+      },
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {
+        AGENT_PROVIDER: "opencode-go",
+      },
+    });
+
+    expect(cfg.providerOptions).toEqual({
+      openai: {
+        reasoningEffort: "high",
+      },
+    });
+    expect(cfg.providerOptions).not.toHaveProperty("opencode-go");
+  });
+
   test("loads modelSettings maxRetries from config and allows env overrides", async () => {
     const { cwd, home } = await makeTmpDirs();
 

@@ -43,6 +43,7 @@ const supportedModelSchema = z.object({
   id: z.string().trim().min(1),
   provider: providerNameSchema,
   displayName: z.string().trim().min(1),
+  // Vendor-published cutoff strings are user-facing metadata, not a normalized date field.
   knowledgeCutoff: z.string().trim().min(1),
   supportsImageInput: z.boolean(),
   promptTemplate: z.string().trim().min(1),
@@ -82,6 +83,8 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   opencodeZenMiniMaxM25,
   opencodeZenNemotron3SuperFree,
 ] as const;
+// This list needs to stay in sync with the imports above; adding a model requires both
+// supplying the JSON file and including it in this array so buildRegistry actually sees it.
 
 function buildRegistry(entries: SupportedModel[]) {
   const byProvider: Record<ProviderName, SupportedModel[]> = {

@@ -40,6 +40,8 @@ function renderCapabilitySpecificPrompt(prompt: string, supportedModel: Supporte
     out = out.replace(pattern, replacement);
   }
 
+  // Keep these patterns aligned with prompt template wording; non-image models still
+  // rely on stripping matching guidance lines rather than template conditionals here.
   const imageGuidancePatterns = [
     /visual content for supported images/i,
     /if read returns an image/i,

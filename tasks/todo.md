@@ -1,3 +1,28 @@
+# Task: Address latest opencode PR review comment
+
+## Plan
+- [x] Inspect the latest `opencode` PR comment on PR `#36` and separate factual issues from subjective design suggestions.
+- [x] Fix the real `providerOptions` normalization bug so `loadConfig()` does not synthesize empty provider-option sections for models/providers with no defaults.
+- [x] Add or tighten registry/config regression coverage for the comment items we address, and add low-risk clarification comments where that is the right fix.
+- [x] Run focused tests, the full test suite, typechecks, required builds, and comment back on the PR with the addressed items.
+
+## Review
+- Addressed the concrete behavior bug from the opencode comment in `src/config.ts`: `mergeProviderOptionDefaults()` now returns `undefined` when the active provider/model contributes no defaults and config contributed no options, and it preserves unrelated provider sections without synthesizing an empty active-provider entry.
+- Added config regressions in `test/config.test.ts` for both no-default/no-config startup and preserving non-active provider options when the active provider has no defaults.
+- Tightened registry helper coverage in `test/models.registry.test.ts` for `assertSupportedModel`, `getSupportedModel`, `supportsImageInput`, and `providerOptionsDefaultsForModel` unknown-model behavior.
+- Added low-risk clarification comments for the remaining design-oriented opencode notes:
+  - `src/providers/providerOptions.ts` now documents that `DEFAULT_PROVIDER_OPTIONS` tracks each provider's default model options, not a provider-wide immutable constant.
+  - `src/models/registry.ts` now documents the required import + registry-entry two-step when adding models, and clarifies that `knowledgeCutoff` is vendor display metadata rather than a normalized date field.
+  - `src/prompt.ts` now documents that the image-guidance regex list must stay aligned with prompt template wording because non-image models still strip those lines post-render.
+- Verification:
+  - `HOME=$(mktemp -d) ~/.bun/bin/bun test test/config.test.ts test/models.registry.test.ts test/providers/provider-options.test.ts test/providers/openai.test.ts test/providers/google.test.ts test/providers/anthropic.test.ts --bail` -> pass (`114 pass, 0 fail`).
+  - `HOME=$(mktemp -d) ~/.bun/bin/bun test` -> pass (`2213 pass, 2 skip, 0 fail`).
+  - `~/.bun/bin/bun run typecheck` -> pass.
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:248` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`).
+  - `~/.bun/bin/bun run build:server-binary` -> pass.
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass.
+  - `~/.bun/bin/bun run desktop:build` -> pass; notarization skipped because Apple notarization credentials are not configured in this environment.
+
 # Task: Address PR #36 review comments
 
 ## Plan

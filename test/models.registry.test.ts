@@ -3,7 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { MODEL_REGISTRY_ENTRIES, defaultSupportedModel, listSupportedModels } from "../src/models/registry";
+import {
+  MODEL_REGISTRY_ENTRIES,
+  defaultSupportedModel,
+  listSupportedModels,
+  getSupportedModel,
+  assertSupportedModel,
+  supportsImageInput,
+  providerOptionsDefaultsForModel,
+} from "../src/models/registry";
 import type { ProviderName } from "../src/types";
 
 function repoRoot(): string {
@@ -42,5 +50,23 @@ describe("model registry invariants", () => {
     for (const provider of ["google", "openai", "anthropic", "opencode-go", "opencode-zen", "codex-cli"] as ProviderName[]) {
       expect(seenDefaults.get(provider)).toBe(1);
     }
+  });
+});
+
+describe("model registry helpers", () => {
+  test("assertSupportedModel throws for unknown model", () => {
+    expect(() => assertSupportedModel("openai", "missing-model")).toThrow(/Unsupported model/);
+  });
+
+  test("getSupportedModel returns null for unknown models", () => {
+    expect(getSupportedModel("openai", "missing-model")).toBeNull();
+  });
+
+  test("supportsImageInput is false when the model is unknown", () => {
+    expect(supportsImageInput("google", "missing-model")).toBe(false);
+  });
+
+  test("providerOptionsDefaultsForModel returns an empty object for unknown models", () => {
+    expect(providerOptionsDefaultsForModel("anthropic", "missing-model")).toEqual({});
   });
 });

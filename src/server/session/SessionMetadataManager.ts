@@ -22,6 +22,21 @@ export class SessionMetadataManager {
     };
   }
 
+  private promptRefreshConfig(patch: SessionConfigPatch): AgentConfig {
+    return {
+      ...this.context.state.config,
+      ...(patch.userName !== undefined ? { userName: patch.userName } : {}),
+      ...(patch.userProfile !== undefined
+        ? {
+            userProfile: {
+              ...this.effectiveUserProfile(),
+              ...patch.userProfile,
+            },
+          }
+        : {}),
+    };
+  }
+
   getPublicConfig() {
     return {
       provider: this.context.state.config.provider,
@@ -201,6 +216,20 @@ export class SessionMetadataManager {
       }
     }
 
+    let refreshedSystemPrompt: Awaited<ReturnType<SessionContext["deps"]["loadSystemPromptWithSkillsImpl"]>> | null = null;
+    if (patch.userName !== undefined || patch.userProfile !== undefined) {
+      try {
+        refreshedSystemPrompt = await this.context.deps.loadSystemPromptWithSkillsImpl(this.promptRefreshConfig(patch));
+      } catch (err) {
+        this.context.emitError(
+          "internal_error",
+          "session",
+          `Failed to refresh system prompt: ${String(err)}`
+        );
+        return;
+      }
+    }
+
     const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
     if (normalizedSubAgentModel !== undefined) {
       persistPatch.subAgentModel = normalizedSubAgentModel;
@@ -297,6 +326,10 @@ export class SessionMetadataManager {
       };
     }
     if (patch.maxSteps !== undefined) this.context.state.maxSteps = patch.maxSteps;
+    if (refreshedSystemPrompt) {
+      this.context.state.system = refreshedSystemPrompt.prompt;
+      this.context.state.discoveredSkills = refreshedSystemPrompt.discoveredSkills;
+    }
 
     this.context.emit(this.getSessionConfigEvent());
     if (patch.backupsEnabled !== undefined) {

@@ -1,3 +1,26 @@
+# Task: Address PR #37 review comments
+
+## Plan
+- [x] Inspect the unresolved PR #37 review threads and separate the real runtime regression from any already-satisfied parser contract.
+- [x] Refresh the cached session system prompt when `set_config` changes `userName` or `userProfile`, without changing unrelated runtime behavior.
+- [x] Add regression coverage for live prompt refresh and for clearing persisted profile fields with empty strings.
+- [x] Run focused tests, the full test suite, typechecks, required builds, and record the outcome here.
+
+## Review
+- Addressed the real `P1` regression in [SessionMetadataManager.ts](/Users/mweinbach/Projects/agent-coworker/src/server/session/SessionMetadataManager.ts): `setConfig()` now refreshes the cached `state.system` and `discoveredSkills` via the same system-prompt loader whenever `userName` or `userProfile` changes, so the next turn in the current session uses the updated prompt context immediately.
+- Kept the refresh path testable by adding an injected `loadSystemPromptWithSkillsImpl` dependency in [SessionContext.ts](/Users/mweinbach/Projects/agent-coworker/src/server/session/SessionContext.ts) and [AgentSession.ts](/Users/mweinbach/Projects/agent-coworker/src/server/session/AgentSession.ts), matching the repo’s existing dependency-injection pattern.
+- The `P2` parser concern was already satisfied in the current branch: `set_config` already accepted `userName: ""` and empty `userProfile` strings. Instead of churning that parser path again, I added an end-to-end server regression in [server.test.ts](/Users/mweinbach/Projects/agent-coworker/test/server.test.ts) and clarified the contract in [websocket-protocol.md](/Users/mweinbach/Projects/agent-coworker/docs/websocket-protocol.md) so empty strings are explicitly documented as clearing prompt context.
+- Added targeted regression coverage in [session.test.ts](/Users/mweinbach/Projects/agent-coworker/test/session.test.ts) to prove a live `setConfig()` profile edit changes the system prompt actually passed into the next `runTurn()` call.
+- Verification:
+  - `git diff --check` -> pass
+  - `HOME=$(mktemp -d) ~/.bun/bin/bun test test/protocol.test.ts test/session.test.ts test/server.test.ts --bail` -> pass (`447 pass, 0 fail`)
+  - `HOME=$(mktemp -d) ~/.bun/bin/bun test` -> pass (`2222 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI files at `apps/TUI/routes/session/index.tsx:248` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:62` (`TS2322`)
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass; macOS notarization skipped because Apple notarization credentials are not fully configured in this environment
+
 # Task: Stop Harness Full from running on every main push
 
 ## Plan

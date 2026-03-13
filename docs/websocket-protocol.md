@@ -1790,11 +1790,11 @@ Update runtime configuration values.
 | `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | Codex CLI reasoning effort |
 | `config.providerOptions.codex-cli.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | No | Codex CLI reasoning summary |
 | `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | No | Codex CLI verbosity |
-| `config.userProfile` | `object` | No | User profile patch merged into persisted workspace config |
-| `config.userName` | `string` | No | User name used for prompt injection |
-| `config.userProfile.instructions` | `string` | No | Custom behavioral instructions the agent should follow |
-| `config.userProfile.work` | `string` | No | Work/job context for prompt injection |
-| `config.userProfile.details` | `string` | No | Extra user details the agent should know |
+| `config.userProfile` | `object` | No | User profile patch merged into persisted workspace config. Empty-string fields clear the corresponding prompt context |
+| `config.userName` | `string` | No | User name used for prompt injection. An empty string clears it |
+| `config.userProfile.instructions` | `string` | No | Custom behavioral instructions the agent should follow. An empty string clears it |
+| `config.userProfile.work` | `string` | No | Work/job context for prompt injection. An empty string clears it |
+| `config.userProfile.details` | `string` | No | Extra user details the agent should know. An empty string clears it |
 
 **Response:** `session_config`
 

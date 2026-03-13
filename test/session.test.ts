@@ -184,12 +184,17 @@ function makeSession(
       patch: Partial<
         Pick<
           AgentConfig,
-          "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+          "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
         >
       > & {
+        userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
         clearToolOutputOverflowChars?: boolean;
       }
     ) => Promise<void> | void;
+    loadSystemPromptWithSkillsImpl: (config: AgentConfig) => Promise<{
+      prompt: string;
+      discoveredSkills: Array<{ name: string; description: string }>;
+    }>;
     generateSessionTitleImpl: (opts: { config: AgentConfig; query: string }) => Promise<{
       title: string;
       source: "default" | "model" | "heuristic";
@@ -215,6 +220,7 @@ function makeSession(
     emit: overrides?.emit ?? emit,
     connectProviderImpl: overrides?.connectProviderImpl,
     getAiCoworkerPathsImpl: overrides?.getAiCoworkerPathsImpl,
+    loadSystemPromptWithSkillsImpl: overrides?.loadSystemPromptWithSkillsImpl,
     getProviderCatalogImpl: overrides?.getProviderCatalogImpl as any,
     getProviderStatusesImpl,
     sessionBackupFactory,
@@ -756,6 +762,40 @@ describe("AgentSession", () => {
         backupsEnabled: false,
         toolOutputOverflowChars: null,
       });
+    });
+
+    test("setConfig refreshes the cached system prompt when user profile fields change", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const loadSystemPromptWithSkillsImpl = mock(async (config: AgentConfig) => ({
+        prompt: `prompt:${config.userName ?? ""}:${config.userProfile?.work ?? ""}`,
+        discoveredSkills: [{ name: "refreshed-skill", description: "Refreshed skill" }],
+      }));
+      const { session } = makeSession({
+        persistProjectConfigPatchImpl,
+        loadSystemPromptWithSkillsImpl,
+      });
+
+      await session.setConfig({
+        userName: "Casey",
+        userProfile: { work: "Engineer" },
+      });
+      await session.sendUserMessage("hello");
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        userName: "Casey",
+        userProfile: { work: "Engineer" },
+      });
+
+      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(runTurnArgs.system).toBe("prompt:Casey:Engineer");
+      expect(runTurnArgs.discoveredSkills).toEqual([
+        { name: "refreshed-skill", description: "Refreshed skill" },
+      ]);
+
+      const configEvent = session.getSessionConfigEvent();
+      expect(configEvent.config.userName).toBe("Casey");
+      expect(configEvent.config.userProfile.work).toBe("Engineer");
     });
 
     test("setConfig rejects unsupported subAgentModel values before persistence", async () => {

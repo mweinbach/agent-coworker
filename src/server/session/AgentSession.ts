@@ -1,4 +1,5 @@
 import { connectProvider as connectModelProvider, getAiCoworkerPaths, type ConnectProviderResult } from "../../connect";
+import { loadSystemPromptWithSkills } from "../../prompt";
 import { runTurn } from "../../agent";
 import { HarnessContextStore } from "../../harness/contextStore";
 import { SessionCostTracker } from "../../session/costTracker";
@@ -139,6 +140,7 @@ export class AgentSession {
     emit: (evt: ServerEvent) => void;
     connectProviderImpl?: typeof connectModelProvider;
     getAiCoworkerPathsImpl?: typeof getAiCoworkerPaths;
+    loadSystemPromptWithSkillsImpl?: typeof loadSystemPromptWithSkills;
     getProviderCatalogImpl?: typeof getProviderCatalog;
     getProviderStatusesImpl?: typeof getProviderStatuses;
     sessionBackupFactory?: SessionBackupFactory;
@@ -217,6 +219,7 @@ export class AgentSession {
     this.deps = {
       connectProviderImpl: opts.connectProviderImpl ?? connectModelProvider,
       getAiCoworkerPathsImpl: opts.getAiCoworkerPathsImpl ?? getAiCoworkerPaths,
+      loadSystemPromptWithSkillsImpl: opts.loadSystemPromptWithSkillsImpl ?? loadSystemPromptWithSkills,
       getProviderCatalogImpl: opts.getProviderCatalogImpl ?? getProviderCatalog,
       getProviderStatusesImpl: opts.getProviderStatusesImpl ?? getProviderStatuses,
       sessionBackupFactory:

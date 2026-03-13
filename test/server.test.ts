@@ -2632,6 +2632,66 @@ describe("Protocol Doc Parity", () => {
     }
   });
 
+  test("set_config accepts empty user profile values to clear persisted prompt context", async () => {
+    const tmpDir = await makeTmpProject();
+    await fs.writeFile(
+      path.join(tmpDir, ".agent", "config.json"),
+      `${JSON.stringify({
+        userName: "Alice",
+        userProfile: {
+          instructions: "Be concise",
+          work: "Engineer",
+          details: "Uses TypeScript",
+        },
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const event = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({
+          type: "set_config",
+          sessionId,
+          config: {
+            userName: "",
+            userProfile: {
+              instructions: "",
+              work: "",
+              details: "",
+            },
+          },
+        }),
+        (message) =>
+          message.type === "session_config" &&
+          message.config?.userName === "" &&
+          message.config?.userProfile?.instructions === "" &&
+          message.config?.userProfile?.work === "" &&
+          message.config?.userProfile?.details === "",
+      );
+
+      expect(event.config.userName).toBe("");
+      expect(event.config.userProfile).toEqual({
+        instructions: "",
+        work: "",
+        details: "",
+      });
+
+      const persistedConfig = JSON.parse(
+        await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),
+      ) as any;
+      expect(persistedConfig.userName).toBe("");
+      expect(persistedConfig.userProfile).toEqual({
+        instructions: "",
+        work: "",
+        details: "",
+      });
+    } finally {
+      server.stop();
+    }
+  });
+
   test("set_config rejects unsupported subAgentModel values before persisting them", async () => {
     const tmpDir = await makeTmpProject();
     await fs.writeFile(

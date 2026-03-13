@@ -21,6 +21,12 @@ type DraftMemory = {
   content: string;
 };
 
+export const HOT_MEMORY_ID = "hot";
+
+export function resolveDraftMemoryId(rawId: string): string {
+  return rawId.trim() || HOT_MEMORY_ID;
+}
+
 function emptyDraft(): DraftMemory {
   return { scope: "workspace", id: "", content: "" };
 }
@@ -68,7 +74,7 @@ export function MemoryPage() {
 
   const handleSave = () => {
     if (!workspace || !draft.content.trim()) return;
-    const id = draft.id.trim() || undefined;
+    const id = resolveDraftMemoryId(draft.id);
     void upsertWorkspaceMemory(workspace.id, draft.scope, id, draft.content.trim());
     cancelEdit();
   };
@@ -83,7 +89,8 @@ export function MemoryPage() {
       <div className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">Memory</h1>
         <p className="text-sm text-muted-foreground">
-          Manage persistent agent memories for this workspace. Memories are injected into the system prompt.
+          Manage persistent agent memories for this workspace. The hot cache is injected into the system prompt, and
+          named entries stay searchable through the memory tool.
         </p>
       </div>
 
@@ -94,13 +101,13 @@ export function MemoryPage() {
             <CardDescription>
               {editingId
                 ? "Update an existing memory entry. Delete and recreate it to move it to another scope."
-                : "Create a new memory entry in the workspace or user scope."}
+                : "Leave the ID blank to update the hot cache, or add a name to save a searchable memory entry."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="grid gap-3 md:grid-cols-2">
               <Input
-                placeholder="Memory ID (optional, auto-generated if blank)"
+                placeholder="Memory ID (optional, leave blank for hot cache)"
                 value={draft.id}
                 disabled={!!editingId}
                 onChange={(event) => setDraft((prev) => ({ ...prev, id: event.target.value }))}
@@ -118,6 +125,10 @@ export function MemoryPage() {
                   <SelectItem value="user">user</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+            <div className="text-xs text-muted-foreground">
+              The hot cache is the prompt-loaded `hot`/`AGENT.md` entry. Named memories like `people/sarah` stay
+              searchable but are not injected automatically.
             </div>
 
             <Textarea

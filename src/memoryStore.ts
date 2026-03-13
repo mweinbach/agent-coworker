@@ -244,27 +244,21 @@ export class MemoryStore {
   }
 
   async renderPromptSection(): Promise<string> {
-    const items = (await Promise.all([
-      this.getById(HOT_MEMORY_ID, "workspace"),
-      this.getById(HOT_MEMORY_ID, "user"),
-    ])).filter((item): item is MemoryEntry => item !== null);
-    if (items.length === 0) return "";
-    const lines = items.flatMap((item) => [
-      `#### ${item.scope === "workspace" ? "Workspace" : "User"} Hot Cache`,
-      "",
-      item.content,
-      "",
-    ]);
+    const workspaceHotCache = await this.getById(HOT_MEMORY_ID, "workspace");
+    const activeHotCache = workspaceHotCache ?? await this.getById(HOT_MEMORY_ID, "user");
+    if (!activeHotCache) return "";
     return [
       "## Memory",
       "",
-      "These hot-cache memories are loaded into the system prompt for this workspace/user profile.",
+      `This ${activeHotCache.scope} hot-cache memory is loaded into the system prompt.`,
       "Use the `memory` tool to read, write, search, or delete entries when the user asks to update memory.",
       "Treat memories as helpful context, but resolve conflicts in favor of the latest explicit user instruction.",
       "",
       "### Loaded Hot Cache",
       "",
-      ...lines,
+      `#### ${activeHotCache.scope === "workspace" ? "Workspace" : "User"} Hot Cache`,
+      "",
+      activeHotCache.content,
     ].join("\n");
   }
 }

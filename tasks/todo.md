@@ -1,3 +1,25 @@
+# Task: Fix remaining memory-management review findings on codex/add-memory-management-feature
+
+## Plan
+- [x] Restore workspace-over-user precedence for hot-cache prompt injection while keeping user hot cache as the fallback.
+- [x] Update the desktop Memory page so the default save path targets the hot cache and the UI copy matches the actual prompt/search behavior.
+- [x] Add regressions, run the required test/build verification suite, then commit and push the branch.
+
+## Review
+- Updated [src/memoryStore.ts](/Users/mweinbach/Projects/agent-coworker/src/memoryStore.ts) so prompt injection once again respects workspace-over-user hot-cache precedence: the workspace `hot`/`AGENT.md` entry wins when present, and the user hot cache is only used as a fallback.
+- Updated [apps/desktop/src/ui/settings/pages/MemoryPage.tsx](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/ui/settings/pages/MemoryPage.tsx) so blank IDs now save to the hot cache instead of creating a UUID-backed searchable-only entry, and the page copy now explains the difference between prompt-loaded hot cache entries and named searchable memories.
+- Added regressions in [test/prompt.test.ts](/Users/mweinbach/Projects/agent-coworker/test/prompt.test.ts) for restored project-over-user hot-cache precedence and in [apps/desktop/test/memory-page.test.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/test/memory-page.test.ts) for blank-ID normalization to the hot cache.
+- Verification:
+  - `~/.bun/bin/bun test test/prompt.test.ts --bail` -> pass
+  - `~/.bun/bin/bun test apps/desktop/test/memory-page.test.ts --bail` -> pass
+  - `git diff --check` -> pass
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> pass
+  - `~/.bun/bin/bun test` -> pass (`2242 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass; macOS notarization was skipped because the required Apple credentials were not fully configured in this environment
+
 # Task: Reset memory loading after failed memory_list requests
 
 ## Plan

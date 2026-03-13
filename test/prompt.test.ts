@@ -592,7 +592,7 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("This is the user hot cache content.");
   });
 
-  test("includes both project and user AGENT.md entries when both exist", async () => {
+  test("project AGENT.md takes priority over user AGENT.md", async () => {
     const { tmp } = await makeTmpDirs();
     const projectAgentDir = path.join(tmp, "project", ".agent");
     const userAgentDir = path.join(tmp, "home", ".agent");
@@ -615,7 +615,7 @@ describe("loadSystemPrompt", () => {
 
     const prompt = await loadSystemPrompt(config);
     expect(prompt).toContain("PROJECT cache wins.");
-    expect(prompt).toContain("USER cache loses.");
+    expect(prompt).not.toContain("USER cache loses.");
   });
 
   test("does not inject deep memory entries into the startup prompt", async () => {

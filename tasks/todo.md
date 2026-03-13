@@ -1,3 +1,39 @@
+# Task: Fix memory management review findings on codex/add-memory-management-feature
+
+## Plan
+- [x] Reconcile the memory runtime contract so the tool, prompt injection, and prompt templates agree on hot-cache behavior.
+- [x] Prevent disabled-memory sessions from advertising the memory tool and lock the desktop edit flow so scope changes cannot duplicate entries.
+- [x] Run targeted tests plus full repo verification/build steps and capture results.
+
+## Review
+- Restored hot-cache compatibility in [src/tools/memory.ts](/Users/mweinbach/Projects/agent-coworker/src/tools/memory.ts): `read` now understands both `hot` and `AGENT.md`, blank writes go back to the hot cache, and missing hot-cache reads return a specific message instead of falling through to generic list behavior.
+- Narrowed prompt injection in [src/memoryStore.ts](/Users/mweinbach/Projects/agent-coworker/src/memoryStore.ts) to hot-cache entries only, so deep `.agent/memory/**/*.md` imports remain searchable but are no longer injected into every startup prompt.
+- Added disabled-memory prompt stripping/override logic in [src/prompt.ts](/Users/mweinbach/Projects/agent-coworker/src/prompt.ts), so sessions with `enableMemory: false` no longer instruct the model to use `AGENT.md` or the `memory` tool.
+- Locked scope changes during edits in [apps/desktop/src/ui/settings/pages/MemoryPage.tsx](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/ui/settings/pages/MemoryPage.tsx) and updated the edit copy to direct users to delete/recreate entries when moving across scopes.
+- Added regression coverage in [test/prompt.test.ts](/Users/mweinbach/Projects/agent-coworker/test/prompt.test.ts) for deep-memory exclusion and disabled-memory prompt stripping, and in [test/tools.test.ts](/Users/mweinbach/Projects/agent-coworker/test/tools.test.ts) for restored `AGENT.md` aliases and hot-cache-default writes.
+- Verification:
+  - `~/.bun/bin/bun test test/prompt.test.ts --bail` -> pass
+  - `~/.bun/bin/bun test test/tools.test.ts --bail` -> pass
+  - `~/.bun/bin/bun test` -> pass (`2240 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> pass
+  - `git diff --check` -> pass
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass; notarization explicitly skipped because Apple notarization credentials were not fully configured in this environment
+
+# Task: Review memory-management desktop/server/protocol wiring diff
+
+## Plan
+- [x] Inspect the diff against merge base `49fa806b3967af5704846533daedad4b1d93c162` limited to desktop/server/protocol memory-management wiring.
+- [x] Read the touched implementation files, related tests, and websocket docs to validate any behavioral regressions.
+- [x] Return only discrete actionable findings with file/line references and reasoning.
+
+## Review
+- Finding 1: the desktop memory loading spinner never clears when `memory_list` fails. [apps/desktop/src/app/store.actions/memory.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/app/store.actions/memory.ts) sets `memoriesLoading: true`, but the control-socket error path in [apps/desktop/src/app/store.helpers/controlSocket.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/app/store.helpers/controlSocket.ts) only clears backup-related loading flags. A corrupt or unreadable `memory.sqlite` causes `AgentSession.emitMemories()` to send an `error`, leaving the Memory page stuck in a permanent loading state.
+- Finding 2: editing an existing memory can silently create a second entry in a different scope instead of updating the original. [apps/desktop/src/ui/settings/pages/MemoryPage.tsx](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/ui/settings/pages/MemoryPage.tsx) keeps the scope selector enabled while editing, but save sends `memory_upsert` keyed by `(scope,id)`. Changing scope during edit upserts the other scope and leaves the original entry untouched.
+- Finding 3: websocket protocol docs are stale for `session_settings`. [docs/websocket-protocol.md](/Users/mweinbach/Projects/agent-coworker/docs/websocket-protocol.md) still documents `session_settings` as only `enableMcp`, while [src/server/protocol.ts](/Users/mweinbach/Projects/agent-coworker/src/server/protocol.ts) and [src/server/protocolEventParser.ts](/Users/mweinbach/Projects/agent-coworker/src/server/protocolEventParser.ts) now require `enableMemory` and `memoryRequireApproval` too. This leaves the declared source of truth incorrect for alternative clients.
+
 # Task: Triage open PR review comments on current branch
 
 ## Plan
@@ -3996,3 +4032,9 @@
 - Updated the injected memory prompt block to a dedicated `## Memory` section with cohesive guidance about persistent memories, the `memory` tool responsibilities, and instruction precedence, followed by a `### Saved Memory Entries` list.
 - Preserved SQLite-first runtime semantics; this is prompt-quality/structure improvement only, not a storage behavior regression.
 - Updated prompt tests to assert the new section heading while retaining coverage for imported hot-cache content behavior.
+# Task: Review memory runtime/storage/tooling diff against merge base 49fa806b3967af5704846533daedad4b1d93c162
+
+## Plan
+- [ ] Inspect the branch diff only in the new memory runtime/storage/tooling surfaces and identify behavior changes.
+- [ ] Validate each suspected regression against surrounding code and targeted tests so findings are concrete.
+- [ ] Return only discrete actionable bugs with file/line references and reasoning.

@@ -565,6 +565,7 @@ describe("loadSystemPrompt", () => {
 
     const prompt = await loadSystemPrompt(config);
     expect(prompt).toContain("## Memory");
+    expect(prompt).toContain("### Loaded Hot Cache");
     expect(prompt).toContain("This is the project hot cache content.");
   });
 
@@ -587,6 +588,7 @@ describe("loadSystemPrompt", () => {
 
     const prompt = await loadSystemPrompt(config);
     expect(prompt).toContain("## Memory");
+    expect(prompt).toContain("### Loaded Hot Cache");
     expect(prompt).toContain("This is the user hot cache content.");
   });
 
@@ -616,6 +618,25 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("USER cache loses.");
   });
 
+  test("does not inject deep memory entries into the startup prompt", async () => {
+    const { tmp } = await makeTmpDirs();
+    const projectAgentDir = path.join(tmp, "project", ".agent");
+    const userAgentDir = path.join(tmp, "home", ".agent");
+
+    await writeFile(path.join(projectAgentDir, "AGENT.md"), "Hot cache summary.");
+    await writeFile(path.join(projectAgentDir, "memory", "people", "sarah.md"), "Sarah deep profile.");
+
+    const config = makeConfig({
+      projectAgentDir,
+      userAgentDir,
+      skillsDirs: ["/nonexistent/skills"],
+    });
+
+    const prompt = await loadSystemPrompt(config);
+    expect(prompt).toContain("Hot cache summary.");
+    expect(prompt).not.toContain("Sarah deep profile.");
+  });
+
   test("skips hot cache section when no AGENT.md exists", async () => {
     const { tmp } = await makeTmpDirs();
     const projectAgentDir = path.join(tmp, "project-empty", ".agent");
@@ -629,6 +650,18 @@ describe("loadSystemPrompt", () => {
 
     const prompt = await loadSystemPrompt(config);
     expect(prompt).not.toContain("## Memory");
+  });
+
+  test("removes memory guidance from the prompt when memory is disabled", async () => {
+    const config = makeConfig({
+      enableMemory: false,
+      skillsDirs: ["/nonexistent/skills"],
+    });
+
+    const prompt = await loadSystemPrompt(config);
+    expect(prompt).toContain("## Memory Disabled");
+    expect(prompt).not.toContain("Lookup flow: AGENT.md");
+    expect(prompt).not.toContain("Read, write, or search persistent memory");
   });
 
   test("skips hot cache section when AGENT.md is empty/whitespace", async () => {
@@ -878,6 +911,7 @@ describe("loadHotCache (tested indirectly)", () => {
     const prompt = await loadSystemPrompt(config);
 
     expect(prompt).toContain("## Memory");
+    expect(prompt).toContain("### Loaded Hot Cache");
     expect(prompt).toContain("Hot cache content present.");
   });
 });

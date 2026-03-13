@@ -92,7 +92,9 @@ export function MemoryPage() {
           <CardHeader>
             <CardTitle>{editingId ? `Edit: ${editingId}` : "Add memory"}</CardTitle>
             <CardDescription>
-              {editingId ? "Update an existing memory entry." : "Create a new memory entry in the workspace or user scope."}
+              {editingId
+                ? "Update an existing memory entry. Delete and recreate it to move it to another scope."
+                : "Create a new memory entry in the workspace or user scope."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -105,6 +107,7 @@ export function MemoryPage() {
               />
               <Select
                 value={draft.scope}
+                disabled={!!editingId}
                 onValueChange={(value) => setDraft((prev) => ({ ...prev, scope: value as "workspace" | "user" }))}
               >
                 <SelectTrigger aria-label="Memory scope">

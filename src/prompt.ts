@@ -77,6 +77,27 @@ function renderCapabilitySpecificPrompt(prompt: string, supportedModel: Supporte
   return out;
 }
 
+function renderMemorySpecificPrompt(prompt: string, enabled: boolean): string {
+  if (enabled) return prompt;
+
+  let out = prompt;
+  const memoryBlockPatterns = [
+    /\n### memory\n[\s\S]*?(?=\n## [^\n]+\n|\n# [^\n]+\n|$)/i,
+    /\n<tool name="memory">[\s\S]*?<\/tool>\n?/i,
+    /\n<memory>[\s\S]*?<\/memory>\n?/i,
+  ];
+
+  for (const pattern of memoryBlockPatterns) {
+    out = out.replace(pattern, "\n");
+  }
+
+  out = stripPromptLine(out, /^\s*-\s*Memory:\s*`?\.agent\/AGENT\.md/i);
+  out = stripPromptLine(out, /^\s*Memory:\s*\.agent\/AGENT\.md/i);
+  out = out.replace(/\n{3,}/g, "\n\n").trimEnd();
+
+  return `${out}\n\n## Memory Disabled\n\nPersistent memory is disabled for this workspace. Do not read or write AGENT.md and do not call the memory tool.`;
+}
+
 function buildSkillSearchOrder(config: AgentConfig): string {
   const labels = ["project", "global (~/.cowork/skills)", "user (~/.agent/skills)", "built-in"];
   return config.skillsDirs
@@ -179,6 +200,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
 
   prompt = renderTemplateVariables(prompt, vars);
   prompt = renderCapabilitySpecificPrompt(prompt, supportedModel);
+  prompt = renderMemorySpecificPrompt(prompt, config.enableMemory ?? true);
 
   prompt += `\n\n${buildSkillPolicySection(vars.skillNames, vars.skillExamples, config)}`;
 

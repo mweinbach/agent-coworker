@@ -3023,26 +3023,25 @@ describe("memory tool", () => {
 
     const t: any = createMemoryTool(makeCtx(dir));
     const res: string = await t.execute({ action: "read" });
-    expect(res).toContain("hot");
     expect(res).toContain("Hot cache content");
   });
 
-  test("reads imported AGENT.md using key", async () => {
+  test("reads imported AGENT.md using hot-cache aliases", async () => {
     const dir = await tmpDir();
     const agentDir = path.join(dir, ".agent");
     await fs.mkdir(agentDir, { recursive: true });
     await fs.writeFile(path.join(agentDir, "AGENT.md"), "Hot via AGENT.md key", "utf-8");
 
     const t: any = createMemoryTool(makeCtx(dir));
-    const res: string = await t.execute({ action: "read", key: "hot" });
-    expect(res).toBe("Hot via AGENT.md key");
+    expect(await t.execute({ action: "read", key: "hot" })).toBe("Hot via AGENT.md key");
+    expect(await t.execute({ action: "read", key: "AGENT.md" })).toBe("Hot via AGENT.md key");
   });
 
-  test("returns no memory when store is empty", async () => {
+  test("returns no hot cache when store is empty", async () => {
     const dir = await tmpDir();
     const t: any = createMemoryTool(makeCtx(dir));
     const res: string = await t.execute({ action: "read" });
-    expect(res).toBe("No memory found.");
+    expect(res).toBe("No hot cache found.");
   });
 
   test("writes named memory key", async () => {
@@ -3075,6 +3074,13 @@ describe("memory tool", () => {
     const t: any = createMemoryTool(makeCtx(dir));
     const res: string = await t.execute({ action: "read", key: "missing" });
     expect(res).toContain("not found");
+  });
+
+  test("returns no hot cache found for missing AGENT.md alias", async () => {
+    const dir = await tmpDir();
+    const t: any = createMemoryTool(makeCtx(dir));
+    const res: string = await t.execute({ action: "read", key: "AGENT.md" });
+    expect(res).toBe("No hot cache found.");
   });
 
   test("rejects write when content is missing", async () => {
@@ -3131,16 +3137,26 @@ describe("memory tool", () => {
     expect(res).toContain("User-level hot cache");
   });
 
-  test("write without key generates unique IDs (no collision)", async () => {
+  test("write without key updates the hot cache", async () => {
     const dir = await tmpDir();
     const t: any = createMemoryTool(makeCtx(dir));
 
-    await t.execute({ action: "write", content: "First auto-id entry" });
-    await t.execute({ action: "write", content: "Second auto-id entry" });
+    await t.execute({ action: "write", content: "First hot cache entry" });
+    await t.execute({ action: "write", content: "Second hot cache entry" });
 
     const res: string = await t.execute({ action: "read" });
-    expect(res).toContain("First auto-id entry");
-    expect(res).toContain("Second auto-id entry");
+    expect(res).not.toContain("First hot cache entry");
+    expect(res).toContain("Second hot cache entry");
+  });
+
+  test("write with AGENT.md alias updates the hot cache", async () => {
+    const dir = await tmpDir();
+    const t: any = createMemoryTool(makeCtx(dir));
+
+    await t.execute({ action: "write", key: "AGENT.md", content: "Alias hot cache entry" });
+
+    const res: string = await t.execute({ action: "read", key: "hot" });
+    expect(res).toBe("Alias hot cache entry");
   });
 
   test("returns disabled message when enableMemory is false", async () => {
@@ -3189,8 +3205,8 @@ describe("memory tool", () => {
 
     const t: any = createMemoryTool(makeCtx(dir));
     // Should not throw SQLITE_CONSTRAINT_PRIMARYKEY
-    const res: string = await t.execute({ action: "read" });
-    expect(res).toContain("foo-bar");
+    const res: string = await t.execute({ action: "read", key: "foo-bar" });
+    expect(["First content", "Second content"]).toContain(res);
   });
 });
 

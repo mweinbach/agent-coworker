@@ -11,6 +11,15 @@ function scopeFromInput(scope?: "workspace" | "user"): MemoryScope {
   return scope ?? "workspace";
 }
 
+function isHotCacheAlias(key?: string): boolean {
+  if (!key) return false;
+  return /^(hot|agent\.md)$/i.test(key.trim());
+}
+
+function defaultWriteKey(key?: string): string {
+  return key?.trim() ? key : "hot";
+}
+
 export function createMemoryTool(
   ctx: ToolContext,
   _opts: { execFileImpl?: unknown } = {}
@@ -24,8 +33,8 @@ export function createMemoryTool(
     description: `Read or update persistent memory entries stored in SQLite.
 
 Actions:
-- read: read one memory by key, or list memories when no key is provided
-- write: create/update memory
+- read: read one memory by key; omit key to read the hot cache
+- write: create/update memory; omit key or use hot/AGENT.md to update the hot cache
 - search: search memories by query
 - delete: remove a memory entry`,
     inputSchema: z.object({
@@ -62,7 +71,7 @@ Actions:
             return "Memory save denied by user.";
           }
         }
-        const saved = await memoryStore.upsert(scopeFromInput(scope), { id: key, content });
+        const saved = await memoryStore.upsert(scopeFromInput(scope), { id: defaultWriteKey(key), content });
         return `Memory written: ${saved.id}`;
       }
 
@@ -75,12 +84,14 @@ Actions:
       if (action === "read") {
         if (key?.trim()) {
           const entry = await memoryStore.getById(key, scope);
-          if (!entry) return `Memory key "${key}" not found.`;
+          if (!entry) {
+            return isHotCacheAlias(key) ? "No hot cache found." : `Memory key "${key}" not found.`;
+          }
           return entry.content;
         }
-        const entries = await memoryStore.list(scope);
-        if (entries.length === 0) return "No memory found.";
-        return truncateText(entries.map((entry) => `[${entry.scope}] ${entry.id}: ${entry.content}`).join("\n"), 30000);
+        const hotEntry = await memoryStore.getById("hot", scope);
+        if (!hotEntry) return "No hot cache found.";
+        return hotEntry.content;
       }
 
       if (!query?.trim()) throw new Error("query is required for search action");

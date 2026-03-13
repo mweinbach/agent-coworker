@@ -798,6 +798,40 @@ describe("AgentSession", () => {
       expect(configEvent.config.userProfile.work).toBe("Engineer");
     });
 
+    test("sendUserMessage waits for an in-flight setConfig prompt refresh", async () => {
+      const refreshGate = Promise.withResolvers<void>();
+      const loadSystemPromptWithSkillsImpl = mock(async (config: AgentConfig) => {
+        await refreshGate.promise;
+        return {
+          prompt: `prompt:${config.userName ?? ""}:${config.userProfile?.work ?? ""}`,
+          discoveredSkills: [{ name: "refreshed-skill", description: "Refreshed skill" }],
+        };
+      });
+      const { session } = makeSession({
+        loadSystemPromptWithSkillsImpl,
+        system: "prompt:stale:",
+      });
+
+      const pendingConfig = session.setConfig({
+        userName: "Casey",
+        userProfile: { work: "Engineer" },
+      });
+      const pendingTurn = session.sendUserMessage("hello");
+
+      await flushAsyncWork();
+      expect(mockRunTurn).not.toHaveBeenCalled();
+
+      refreshGate.resolve();
+      await pendingConfig;
+      await pendingTurn;
+
+      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(runTurnArgs.system).toBe("prompt:Casey:Engineer");
+      expect(runTurnArgs.discoveredSkills).toEqual([
+        { name: "refreshed-skill", description: "Refreshed skill" },
+      ]);
+    });
+
     test("setConfig rejects unsupported subAgentModel values before persistence", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({

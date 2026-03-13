@@ -128,6 +128,7 @@ export class AgentSession {
   private readonly metadataManager: SessionMetadataManager;
   private readonly adminManager: SessionAdminManager;
   private readonly backupController: SessionBackupController;
+  private pendingConfigMutation: Promise<void> = Promise.resolve();
   private bufferDisconnectedEvents = false;
   private disconnectedReplayEvents: ServerEvent[] = [];
 
@@ -808,7 +809,9 @@ export class AgentSession {
   }
 
   async setConfig(patch: SessionConfigPatch) {
-    await this.metadataManager.setConfig(patch);
+    await this.enqueueConfigMutation(async () => {
+      await this.metadataManager.setConfig(patch);
+    });
   }
 
   async setBackupsEnabledOverride(backupsEnabledOverride: boolean | null) {
@@ -840,6 +843,7 @@ export class AgentSession {
   }
 
   async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
+    await this.pendingConfigMutation.catch(() => {});
     await this.turnExecutionManager.sendUserMessage(text, clientMessageId, displayText);
   }
 
@@ -897,6 +901,12 @@ export class AgentSession {
 
   private queuePersistSessionSnapshot(reason: string) {
     this.persistenceManager.queuePersistSessionSnapshot(reason);
+  }
+
+  private enqueueConfigMutation(task: () => Promise<void>): Promise<void> {
+    const mutation = this.pendingConfigMutation.catch(() => {}).then(task);
+    this.pendingConfigMutation = mutation;
+    return mutation;
   }
 
   private getCoworkPaths() {

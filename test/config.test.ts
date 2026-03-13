@@ -1093,6 +1093,27 @@ describe("deepMerge (tested indirectly through recognized fields)", () => {
     expect(cfg.knowledgeCutoff).toBe("January 2025");
   });
 
+  test("project config can explicitly clear an inherited userName", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(home, ".agent", "config.json"), {
+      userName: "UserLevel",
+    });
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      userName: "",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.userName).toBe("");
+  });
+
   test("does not mutate original objects (verified by loading twice)", async () => {
     const { cwd, home } = await makeTmpDirs();
 

@@ -2690,6 +2690,20 @@ describe("Protocol Doc Parity", () => {
     } finally {
       server.stop();
     }
+
+    const restarted = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const initialMessages = await collectMessages(restarted.url, 5);
+      const sessionConfig = initialMessages.find((message) => message.type === "session_config");
+      expect(sessionConfig?.config?.userName).toBe("");
+      expect(sessionConfig?.config?.userProfile).toEqual({
+        instructions: "",
+        work: "",
+        details: "",
+      });
+    } finally {
+      restarted.server.stop();
+    }
   });
 
   test("set_config rejects unsupported subAgentModel values before persisting them", async () => {

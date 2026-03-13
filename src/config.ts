@@ -226,6 +226,11 @@ function asString(v: unknown): string | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+function asTrimmedString(v: unknown): string | undefined {
+  const parsed = stringSchema.safeParse(v);
+  return parsed.success ? parsed.data.trim() : undefined;
+}
+
 function asBoolean(v: unknown): boolean | null {
   const parsed = booleanLikeSchema.safeParse(v);
   return parsed.success ? parsed.data : null;
@@ -364,12 +369,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     undefined;
   const uploadsDirectory = uploadsDirRaw ? resolveDir(uploadsDirRaw, cwd) : undefined;
 
-  const userName =
-    asNonEmptyString(env.AGENT_USER_NAME) ||
-    asNonEmptyString(projectConfig.userName) ||
-    asNonEmptyString(userConfig.userName) ||
-    asString(builtInDefaults.userName) ||
-    "";
+  const userName = asTrimmedString(env.AGENT_USER_NAME) ?? asTrimmedString((merged as Record<string, unknown>).userName) ?? "";
   const mergedUserProfile = parseLayer(
     userProfileLayerSchema,
     (merged as Record<string, unknown>).userProfile,

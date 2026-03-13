@@ -218,18 +218,28 @@
 - [x] Add regression coverage and run the required verification commands, then record the results here.
 
 ## Review
-- Added `src/shared/displayCitationMarkers.ts` to normalize stored raw citation markers into display-safe output for both desktop and TUI rendering. Resolvable citations are rendered as superscript links; unresolvable citations are removed entirely so the message text does not keep stray numbers or spacing artifacts.
-- Desktop message rendering now hydrates citation URLs from both inline `webSearch` results and overflow spill files, which fixes missing later-source links in long search outputs. The same shared citation normalization is also wired into the TUI markdown path so both clients present the same user-facing contract.
-- Added regressions in `test/displayCitationMarkers.test.ts` and `apps/desktop/test/message-links.test.ts` covering linked superscripts, missing-link elision, repeated citation handling, and overflow-backed URL recovery.
-- Verification:
-  - `~/.bun/bin/bun test test/displayCitationMarkers.test.ts apps/desktop/test/message-links.test.ts --bail` -> pass (`17 pass, 0 fail`)
-  - `~/.bun/bin/bun test` -> fails only in the external remote MCP coverage: `runTurn + remote MCP (mcp.grep.app) > loads the remote MCP tools and can execute them via the tools passed to streamText` returned `Streamable HTTP error ... 500: Internal Server Error`
-- `~/.bun/bin/bunx tsc --noEmit -p apps/desktop/tsconfig.json` -> pass
+
+# Task: Address unresolved PR #37 review comments
+
+## Plan
+- [x] Identify the open GitHub PR for the current branch and fetch all unresolved review threads/comments that need attention.
+- [x] Summarize each thread into a numbered fix candidate with the concrete code/doc/test surface it would require.
+- [x] Fix the remaining config-layering and `set_config` ordering issues, then rerun the required verification/build lane and update the PR threads.
+
+## Review
+- `src/config.ts` now resolves `userName` from the merged config layers with trimming that preserves explicit empty strings, so a persisted project-level clear (`""`) survives restart instead of falling back to inherited user or built-in defaults.
+- `src/server/session/AgentSession.ts` now serializes pending config mutations before `sendUserMessage()`, which removes the race where a back-to-back `set_config` and `user_message` could run one turn with the stale cached prompt.
+- Added focused regressions in `test/config.test.ts`, `test/session.test.ts`, and `test/server.test.ts` covering explicit-empty `userName` layering, in-flight `setConfig()` prompt refresh ordering, and restart persistence for cleared profile fields.
+
+### Verification
+- `git diff --check` -> pass
+- `HOME=$(mktemp -d) ~/.bun/bin/bun test test/config.test.ts test/session.test.ts test/server.test.ts --bail` -> pass (`344 pass, 0 fail`)
+- `HOME=$(mktemp -d) ~/.bun/bin/bun test` -> pass (`2228 pass, 2 skip, 0 fail`)
 - `~/.bun/bin/bun run typecheck` -> pass
-- `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:248` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:61` (`TS2322`)
+- `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> fails in unchanged TUI code at `apps/TUI/routes/session/index.tsx:248` (`TS2769`) and `apps/TUI/ui/dialog-prompt.tsx:62` (`TS2322`)
 - `~/.bun/bin/bun run build:server-binary` -> pass
 - `~/.bun/bin/bun run build:desktop-resources` -> pass
-- `~/.bun/bin/bun run desktop:build` -> pass
+- `~/.bun/bin/bun run desktop:build` -> pass; macOS notarization skipped because Apple notarization credentials are not configured in this environment
 
 # Task: Ship v0.1.21
 

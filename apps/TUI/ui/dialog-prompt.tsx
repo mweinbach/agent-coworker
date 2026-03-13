@@ -6,6 +6,7 @@ import { keyNameFromEvent } from "../util/keyboard";
 type DialogPromptProps = {
   title: string;
   placeholder?: string;
+  value?: string;
   onSubmit: (value: string) => void;
   onDismiss: () => void;
 };
@@ -21,7 +22,7 @@ export function shouldDismissDialogPromptForKey(key: string): boolean {
 
 export function DialogPrompt(props: DialogPromptProps) {
   const theme = useTheme();
-  const [value, setValue] = createSignal("");
+  const [value, setValue] = createSignal(props.value ?? "");
 
   const submitValue = (raw: string) => {
     const text = resolveDialogPromptSubmitValue(raw);

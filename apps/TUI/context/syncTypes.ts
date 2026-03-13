@@ -82,6 +82,12 @@ export type SyncConfigPatch = {
   maxSteps?: number;
   toolOutputOverflowChars?: number | null;
   providerOptions?: Partial<Record<OpenAICompatibleProviderName, OpenAICompatibleProviderOptions>>;
+  userName?: string;
+  userProfile?: {
+    instructions?: string;
+    work?: string;
+    details?: string;
+  };
 };
 
 export type SyncState = {
@@ -110,6 +116,12 @@ export type SyncState = {
   backup: SessionBackupState;
   contextUsage: ContextUsageSnapshot | null;
   sessionSummaries: Extract<ServerEvent, { type: "sessions" }>["sessions"];
+  userName: string;
+  userProfile: {
+    instructions: string;
+    work: string;
+    details: string;
+  };
   busy: boolean;
   feed: FeedItem[];
   todos: TodoItem[];

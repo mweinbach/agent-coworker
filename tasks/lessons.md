@@ -92,3 +92,5 @@
 - When a review surfaces a missing provider capability, verify the repo’s intended product contract before turning it into a bug; `opencode-go` intentionally has no local pricing or pricing overrides here.
 - When a tool has both saved credentials and environment fallback, match the repo’s standard precedence: user-saved auth should win over ambient shell env unless the product explicitly says otherwise.
 - When the user supplies an authoritative model-cutoff table mid-implementation, stop and update the registry assumptions immediately instead of continuing to churn around older local defaults or partial web results.
+- When adding profile metadata, do not introduce a second name field; keep identity sourced from existing `userName` unless the user explicitly asks for a separate profile-name concept.
+- For optional prompt metadata fields, do not leave placeholder labels like "(if provided)" in templates; injection should conditionally remove whole lines when values are empty.

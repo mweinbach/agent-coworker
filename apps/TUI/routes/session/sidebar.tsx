@@ -1,5 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import { useTheme } from "../../context/theme";
+import { useDialog } from "../../context/dialog";
 import { useSyncActions, useSyncState } from "../../context/sync";
 import { TodoItem } from "../../component/todo-item";
 
@@ -21,6 +22,7 @@ function formatBytes(value: number): string {
 
 export function SessionSidebar() {
   const theme = useTheme();
+  const dialog = useDialog();
   const syncState = useSyncState();
   const syncActions = useSyncActions();
 
@@ -156,6 +158,28 @@ export function SessionSidebar() {
           </box>
         )}
       </Show>
+
+      {/* Settings Section */}
+      <box flexDirection="column" marginBottom={1}>
+        <text fg={theme.text}>
+          <strong>Settings</strong>
+        </text>
+        <box paddingLeft={1} flexDirection="column" gap={1}>
+          <text fg={theme.textMuted}>User profile prompt context</text>
+          <box
+            border
+            borderStyle="single"
+            borderColor={theme.border}
+            paddingLeft={1}
+            paddingRight={1}
+            onMouseDown={() => {
+              import("../../component/dialog-user-profile").then(({ openUserProfileDialog }) => openUserProfileDialog(dialog));
+            }}
+          >
+            <text fg={theme.text}>Manage Profile</text>
+          </box>
+        </box>
+      </box>
 
       {/* Todos Section */}
       <Show when={syncState.todos.length > 0}>

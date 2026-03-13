@@ -11,7 +11,10 @@ This model's reasoning is optimized for temperature 1.0. Do not adjust temperatu
 - Current date: {{currentDate}}
 - Current year: {{currentYear}}
 - Model: {{modelName}}
-- User name: {{userName}} (if provided)
+- User name: {{userName}}
+- User profile work/job: {{userProfileWork}}
+- User profile instructions: {{userProfileInstructions}}
+- User profile details the agent should know: {{userProfileDetails}}
 - Knowledge cutoff: {{knowledgeCutoff}} (search the web for anything that may have changed after this date)
 
 <directory_structure>

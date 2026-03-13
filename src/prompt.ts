@@ -23,6 +23,16 @@ function stripPromptLine(prompt: string, matcher: RegExp): string {
     .join("\n");
 }
 
+function injectTemplateVariable(prompt: string, key: string, value: string): string {
+  if (value.trim().length > 0) {
+    const tokenRegex = new RegExp(`\{\{${key}\}\}`, "g");
+    return prompt.replace(tokenRegex, value);
+  }
+
+  const lineRegex = new RegExp(`^.*\{\{${key}\}\}.*(?:\r?\n|$)`, "gm");
+  return prompt.replace(lineRegex, "");
+}
+
 function renderCapabilitySpecificPrompt(prompt: string, supportedModel: SupportedModel): string {
   if (supportedModel.supportsImageInput) return prompt;
 
@@ -145,6 +155,9 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
     currentYear: new Date().getFullYear().toString(),
     modelName: supportedModel.displayName,
     userName: config.userName || "",
+    userProfileInstructions: config.userProfile?.instructions || "",
+    userProfileWork: config.userProfile?.work || "",
+    userProfileDetails: config.userProfile?.details || "",
     knowledgeCutoff: supportedModel.knowledgeCutoff,
     skillNames: skillNames || '"pdf", "doc", "slides", "spreadsheet"',
     skillExamples:
@@ -157,9 +170,9 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
       ].join("\n"),
   };
 
-  prompt = prompt.replace(/{{(\w+)}}/g, (match, key) => {
-    return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : match;
-  });
+  for (const [key, value] of Object.entries(vars)) {
+    prompt = injectTemplateVariable(prompt, key, value);
+  }
   prompt = renderCapabilitySpecificPrompt(prompt, supportedModel);
 
   prompt += `\n\n${buildSkillPolicySection(vars.skillNames, vars.skillExamples, config)}`;

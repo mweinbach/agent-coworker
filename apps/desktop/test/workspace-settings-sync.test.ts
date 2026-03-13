@@ -439,6 +439,8 @@ describe("workspace settings sync", () => {
         defaultToolOutputOverflowChars: 12000,
         subAgentModel: "gpt-5-mini",
         maxSteps: 75,
+        userName: "Alex",
+        userProfile: { instructions: "", work: "", details: "" },
       },
     });
 
@@ -469,6 +471,8 @@ describe("workspace settings sync", () => {
         toolOutputOverflowChars: 25000,
         subAgentModel: "gpt-5-mini",
         maxSteps: 75,
+        userName: "Alex",
+        userProfile: { instructions: "", work: "", details: "" },
       },
     });
 
@@ -588,6 +592,8 @@ describe("workspace settings sync", () => {
         toolOutputOverflowChars: 25000,
         subAgentModel: "gpt-5-mini",
         maxSteps: 75,
+        userName: "Alex",
+        userProfile: { instructions: "", work: "", details: "" },
       },
     });
 
@@ -690,6 +696,8 @@ describe("workspace settings sync", () => {
         toolOutputOverflowChars: 25000,
         subAgentModel: "gpt-5.2",
         maxSteps: 75,
+        userName: "Alex",
+        userProfile: { instructions: "", work: "", details: "" },
       },
     });
 
@@ -722,6 +730,8 @@ describe("workspace settings sync", () => {
         defaultToolOutputOverflowChars: 12000,
         subAgentModel: "gpt-5.2",
         maxSteps: 75,
+        userName: "Alex",
+        userProfile: { instructions: "", work: "", details: "" },
       },
     });
 
@@ -766,6 +776,8 @@ describe("workspace settings sync", () => {
         defaultToolOutputOverflowChars: 12000,
         subAgentModel: "gpt-5.2",
         maxSteps: 75,
+        userName: "Alex",
+        userProfile: { instructions: "", work: "", details: "" },
       },
     });
 
@@ -783,6 +795,8 @@ describe("workspace settings sync", () => {
         defaultToolOutputOverflowChars: 12000,
         subAgentModel: "gpt-5.2",
         maxSteps: 75,
+        userName: "Alex",
+        userProfile: { instructions: "", work: "", details: "" },
       },
     });
 

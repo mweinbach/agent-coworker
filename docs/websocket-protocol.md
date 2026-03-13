@@ -177,7 +177,7 @@ When a WebSocket connection opens, the server sends these events in order:
 
 1. `server_hello` — session ID, config, protocol version, capabilities
 2. `session_settings` — current runtime settings (e.g. MCP toggle)
-3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `backupsEnabled`, `defaultBackupsEnabled`, `toolOutputOverflowChars`, `defaultToolOutputOverflowChars`, `subAgentModel`, `maxSteps`, `providerOptions`)
+3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `backupsEnabled`, `defaultBackupsEnabled`, `toolOutputOverflowChars`, `defaultToolOutputOverflowChars`, `subAgentModel`, `maxSteps`, `providerOptions`, `userName`, `userProfile`)
 4. `session_info` — session metadata including title
 5. `observability_status` — Langfuse observability state
 6. `provider_catalog` — available providers and models (async)
@@ -1790,6 +1790,11 @@ Update runtime configuration values.
 | `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | Codex CLI reasoning effort |
 | `config.providerOptions.codex-cli.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | No | Codex CLI reasoning summary |
 | `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | No | Codex CLI verbosity |
+| `config.userProfile` | `object` | No | User profile patch merged into persisted workspace config |
+| `config.userName` | `string` | No | User name used for prompt injection |
+| `config.userProfile.instructions` | `string` | No | Custom behavioral instructions the agent should follow |
+| `config.userProfile.work` | `string` | No | Work/job context for prompt injection |
+| `config.userProfile.details` | `string` | No | Extra user details the agent should know |
 
 **Response:** `session_config`
 
@@ -3147,6 +3152,11 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.subAgentModel` | `string` | Sub-agent model identifier |
 | `config.maxSteps` | `number` | Maximum steps per turn |
 | `config.providerOptions` | `object?` | Editable OpenAI-compatible provider options when configured |
+| `config.userName` | `string` | Effective user name |
+| `config.userProfile` | `object` | Effective user profile metadata used for prompt injection |
+| `config.userProfile.instructions` | `string` | Effective profile instructions |
+| `config.userProfile.work` | `string` | Effective profile work/job context |
+| `config.userProfile.details` | `string` | Effective profile details |
 | `config.providerOptions.openai.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable OpenAI reasoning effort |
 | `config.providerOptions.openai.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | Current editable OpenAI reasoning summary |
 | `config.providerOptions.openai.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable OpenAI verbosity |

@@ -58,6 +58,12 @@ export interface ModelRuntimeSettings {
   maxRetries?: number;
 }
 
+export interface UserProfile {
+  instructions?: string;
+  work?: string;
+  details?: string;
+}
+
 export interface AgentConfig {
   provider: ProviderName;
   runtime?: RuntimeName;
@@ -82,6 +88,7 @@ export interface AgentConfig {
   uploadsDirectory?: string;
 
   userName: string;
+  userProfile?: UserProfile;
   knowledgeCutoff: string;
 
   projectAgentDir: string;

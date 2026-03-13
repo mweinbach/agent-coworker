@@ -170,6 +170,38 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("{{userName}}");
   });
 
+  test("omits user identity/profile lines when userName and profile fields are empty", async () => {
+    const config = makeConfig({
+      userName: "",
+      userProfile: {
+        instructions: "",
+        work: "",
+        details: "",
+      },
+    });
+    const prompt = await loadSystemPrompt(config);
+    expect(prompt).not.toContain("User name:");
+    expect(prompt).not.toContain("User profile work/job:");
+    expect(prompt).not.toContain("User profile instructions:");
+    expect(prompt).not.toContain("User profile details the agent should know:");
+  });
+
+  test("keeps user identity/profile lines when values are provided", async () => {
+    const config = makeConfig({
+      userName: "Casey",
+      userProfile: {
+        instructions: "Keep answers concise.",
+        work: "Engineering manager",
+        details: "Prefers bullet points",
+      },
+    });
+    const prompt = await loadSystemPrompt(config);
+    expect(prompt).toContain("- User name: Casey");
+    expect(prompt).toContain("- User profile work/job: Engineering manager");
+    expect(prompt).toContain("- User profile instructions: Keep answers concise.");
+    expect(prompt).toContain("- User profile details the agent should know: Prefers bullet points");
+  });
+
   test("replaces {{currentDate}} template variable", async () => {
     const config = makeConfig();
     const prompt = await loadSystemPrompt(config);

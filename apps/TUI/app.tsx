@@ -173,6 +173,13 @@ function GlobalHotkeys() {
       action: () => import("./component/dialog-mcp").then(({ openMcpDialog }) => openMcpDialog(dialog)),
     },
     {
+      id: "user-profile",
+      name: "User Profile",
+      description: "Manage user profile prompt context",
+      category: "system",
+      action: () => import("./component/dialog-user-profile").then(({ openUserProfileDialog }) => openUserProfileDialog(dialog)),
+    },
+    {
       id: "stash-prompt",
       name: "Stash Prompt",
       description: "Save current prompt text",

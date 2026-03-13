@@ -37,6 +37,12 @@ export type SessionConfigPatch = {
   toolOutputOverflowChars?: number | null;
   clearToolOutputOverflowChars?: boolean;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
+  userName?: string;
+  userProfile?: {
+    instructions?: string;
+    work?: string;
+    details?: string;
+  };
 };
 
 export type SessionConfigState = {
@@ -49,6 +55,12 @@ export type SessionConfigState = {
   toolOutputOverflowChars: number | null;
   defaultToolOutputOverflowChars?: number | null;
   providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
+  userName: string;
+  userProfile: {
+    instructions: string;
+    work: string;
+    details: string;
+  };
 };
 
 export type ClientMessage =

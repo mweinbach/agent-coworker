@@ -172,6 +172,8 @@ export function reduceNonProviderEvent(evt: ServerEvent, deps: SyncEventReducerD
 
     case "session_config":
       deps.setState("backupsEnabled", evt.config.backupsEnabled);
+      deps.setState("userName", evt.config.userName);
+      deps.setState("userProfile", evt.config.userProfile);
       return true;
 
     case "harness_context":

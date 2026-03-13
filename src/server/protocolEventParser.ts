@@ -385,6 +385,12 @@ const serverEventSchema = z.discriminatedUnion("type", [
       toolOutputOverflowChars: z.number().int().nonnegative().nullable(),
       defaultToolOutputOverflowChars: z.number().int().nonnegative().nullable().optional(),
       providerOptions: editableOpenAiProviderOptionsByProviderSchema.optional(),
+      userName: z.string(),
+      userProfile: z.object({
+        instructions: z.string(),
+        work: z.string(),
+        details: z.string(),
+      }).passthrough(),
     }).passthrough(),
   }).passthrough(),
   z.object({

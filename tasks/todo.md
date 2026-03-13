@@ -3791,3 +3791,27 @@
   - `~/.bun/bin/bun run build:server-binary` -> pass
   - `~/.bun/bin/bun run build:desktop-resources` -> pass
   - `~/.bun/bin/bun run desktop:build` -> pass
+
+# Task: Align profile name handling to `userName`
+
+## Plan
+- [x] Refactor profile config/protocol shapes so name is set through `userName` and `userProfile` only carries instructions/work/details.
+- [x] Update prompt variables/templates so name comes from `{{userName}}` only, removing `{{userProfileName}}`.
+- [x] Update TUI profile dialog/state wiring so “Edit Name” updates `userName`, then rerun required verification/build commands.
+
+## Review
+- Reworked config + websocket patch/state types so `set_config` now accepts top-level `userName` for name updates while `userProfile` is now limited to `instructions`, `work`, and `details`.
+- Updated prompt rendering and all shipped system prompt templates to remove `userProfileName` and rely on existing `userName` for user identity injection.
+- Updated the TUI User Profile flow so the name editor writes `userName`, while other fields keep writing `userProfile`.
+
+# Task: Make user profile/name prompt injection conditional via regex line injection
+
+## Plan
+- [x] Update prompt template wording to remove literal "(if provided)" suffixes for user name/profile lines.
+- [x] Refactor prompt variable injection to use regex-based line replacement that removes entire placeholder lines when values are empty.
+- [x] Run targeted prompt tests plus required typecheck/build/test commands and record results.
+
+## Review
+- Implemented regex-based injection behavior so blank `userName`/`userProfile*` values remove their full prompt lines instead of leaving empty labels.
+- Removed `(if provided)` phrasing in shipped prompt templates because conditional visibility is now handled by injection logic.
+- Verified with prompt-focused tests and required build/typecheck commands.

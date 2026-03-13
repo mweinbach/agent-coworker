@@ -67,6 +67,12 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     backup: null,
     contextUsage: null,
     sessionSummaries: [],
+    userName: "",
+    userProfile: {
+      instructions: "",
+      work: "",
+      details: "",
+    },
     busy: false,
     feed: [],
     todos: [],

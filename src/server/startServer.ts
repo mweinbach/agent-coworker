@@ -78,9 +78,10 @@ async function persistProjectConfigPatch(
   patch: Partial<
     Pick<
       AgentConfig,
-      "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+      "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
     >
   > & {
+    userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
     clearToolOutputOverflowChars?: boolean;
     providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
   },
@@ -122,6 +123,14 @@ async function persistProjectConfigPatch(
       next[key] = Object.keys(currentProviderOptions).length > 0 ? currentProviderOptions : undefined;
       continue;
     }
+    if (key === "userProfile" && isPlainObject(value)) {
+      const currentUserProfile = isPlainObject(current.userProfile) ? current.userProfile : {};
+      next[key] = {
+        ...currentUserProfile,
+        ...value,
+      };
+      continue;
+    }
     next[key] = value;
   }
   if (shouldClearToolOutputOverflowChars) {
@@ -137,9 +146,10 @@ function mergeConfigPatch(
   patch: Partial<
     Pick<
       AgentConfig,
-      "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+      "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
     >
   > & {
+    userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
     clearToolOutputOverflowChars?: boolean;
     providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
   }
@@ -159,6 +169,12 @@ function mergeConfigPatch(
   }
   if (patch.providerOptions !== undefined) {
     next.providerOptions = mergeEditableOpenAiCompatibleProviderOptions(config.providerOptions, patch.providerOptions);
+  }
+  if (patch.userProfile !== undefined) {
+    next.userProfile = {
+      ...config.userProfile,
+      ...patch.userProfile,
+    };
   }
   return next;
 }

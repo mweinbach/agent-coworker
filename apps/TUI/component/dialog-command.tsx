@@ -143,6 +143,12 @@ function CommandPaletteDialog(props: { onDismiss: () => void }) {
         description: "View MCP server status",
         category: "System",
       },
+      {
+        label: "User Profile",
+        value: "user_profile",
+        description: "Manage prompt-injected user information",
+        category: "System",
+      },
 
       // Navigation / Help
       {
@@ -245,6 +251,9 @@ function CommandPaletteDialog(props: { onDismiss: () => void }) {
         break;
       case "mcp":
         import("./dialog-mcp").then(({ openMcpDialog }) => openMcpDialog(dialog));
+        break;
+      case "user_profile":
+        import("./dialog-user-profile").then(({ openUserProfileDialog }) => openUserProfileDialog(dialog));
         break;
       case "help":
         import("../ui/dialog-help").then(({ openHelpDialog }) => openHelpDialog(dialog));

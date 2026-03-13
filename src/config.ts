@@ -172,6 +172,11 @@ const harnessLayerSchema = z.object({
 const modelSettingsLayerSchema = z.object({
   maxRetries: nonNegativeIntegerLikeSchema.optional(),
 }).passthrough();
+const userProfileLayerSchema = z.object({
+  instructions: z.string().optional(),
+  work: z.string().optional(),
+  details: z.string().optional(),
+}).passthrough();
 
 function parseCommandConfig(raw: unknown): AgentConfig["command"] | undefined {
   if (raw === undefined) return undefined;
@@ -365,6 +370,16 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asNonEmptyString(userConfig.userName) ||
     asString(builtInDefaults.userName) ||
     "";
+  const mergedUserProfile = parseLayer(
+    userProfileLayerSchema,
+    (merged as Record<string, unknown>).userProfile,
+    {},
+  );
+  const userProfile = {
+    instructions: asString(mergedUserProfile.instructions) ?? "",
+    work: asString(mergedUserProfile.work) ?? "",
+    details: asString(mergedUserProfile.details) ?? "",
+  };
   const knowledgeCutoff = supportedModel.knowledgeCutoff;
 
   const enableMcp =
@@ -459,6 +474,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     outputDirectory,
     uploadsDirectory,
     userName,
+    userProfile,
     knowledgeCutoff,
 
     projectAgentDir,

@@ -90,6 +90,12 @@ describe("agent socket parser", () => {
           defaultToolOutputOverflowChars: 25000,
           subAgentModel: "gpt-5.2",
           maxSteps: 100,
+          userName: "Alex",
+          userProfile: {
+            instructions: "Keep responses concise.",
+            work: "Product manager",
+            details: "Prefers concrete examples",
+          },
           providerOptions: {
             openai: {
               reasoningEffort: "high",

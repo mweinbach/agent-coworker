@@ -202,6 +202,34 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("- User profile details the agent should know: Prefers bullet points");
   });
 
+  test("treats dollar sequences in user profile fields as literal text", async () => {
+    const config = makeConfig({
+      userName: "$&",
+      userProfile: {
+        work: "Shell user with $1 placeholders",
+      },
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expect(prompt).toContain("- User name: $&");
+    expect(prompt).toContain("- User profile work/job: Shell user with $1 placeholders");
+    expect(prompt).not.toContain("- User name: {{userName}}");
+  });
+
+  test("does not expand template-looking text inside user profile fields", async () => {
+    const config = makeConfig({
+      userProfile: {
+        details: "Literal token {{workingDirectory}} should stay as written.",
+      },
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expect(prompt).toContain(
+      "- User profile details the agent should know: Literal token {{workingDirectory}} should stay as written."
+    );
+    expect(prompt).toContain("/test/working");
+  });
+
   test("replaces {{currentDate}} template variable", async () => {
     const config = makeConfig();
     const prompt = await loadSystemPrompt(config);

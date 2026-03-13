@@ -1,3 +1,24 @@
+# Task: Fix remaining PR #37 prompt templating review comments
+
+## Plan
+- [x] Inspect the unresolved `src/prompt.ts` review threads and confirm whether they can be addressed with one templating change.
+- [x] Make user-provided prompt variables literal-safe and non-recursive without changing the rest of the prompt contract.
+- [x] Add focused regressions, run the required verification lane, and resolve the completed PR threads.
+
+## Review
+- Addressed the two remaining PR #37 prompt-template review threads in [prompt.ts](/Users/mweinbach/Projects/agent-coworker/src/prompt.ts) by replacing the iterative `injectTemplateVariable` flow with a single callback-based `renderTemplateVariables()` pass. Empty-value template lines are stripped before substitution, then all remaining `{{...}}` tokens are resolved against the original prompt in one pass so user-provided text is always treated literally.
+- This fixes both reported regressions without changing the broader prompt contract: `$...` sequences in `userName` or `userProfile` no longer trigger replacement-pattern behavior, and `{{...}}` sequences inside user-supplied profile content no longer recurse into later template substitutions.
+- Added focused regressions in [prompt.test.ts](/Users/mweinbach/Projects/agent-coworker/test/prompt.test.ts) that prove literal `$&` and `$1` content survives unchanged and that profile text containing `{{workingDirectory}}` remains verbatim while the real prompt token still resolves elsewhere in the prompt.
+- Verification:
+  - `git diff --check` -> pass
+  - `HOME=$(mktemp -d) ~/.bun/bin/bun test test/prompt.test.ts --bail` -> pass (`51 pass, 0 fail`)
+  - `HOME=$(mktemp -d) ~/.bun/bin/bun test` -> pass (`2233 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> pass
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass; notarization explicitly skipped because notarization credentials are not fully configured in this environment
+
 # Task: Review PR #37 desktop management coverage for user profile context
 
 ## Plan
@@ -3895,3 +3916,27 @@
 - Implemented regex-based injection behavior so blank `userName`/`userProfile*` values remove their full prompt lines instead of leaving empty labels.
 - Removed `(if provided)` phrasing in shipped prompt templates because conditional visibility is now handled by injection logic.
 - Verified with prompt-focused tests and required build/typecheck commands.
+
+# Task: Set up Linear for agent-coworker
+
+## Plan
+- [x] Validate the current Linear connection plus existing `AgentCoworker` team/project state so setup work is based on live workspace data.
+- [x] Create the minimal Linear project-side bootstrap for this repo without inventing a larger workflow structure than the workspace currently has.
+- [x] Verify the created Linear resources and document the outcome plus any remaining gaps here.
+
+## Review
+- Linear MCP was already configured and authenticated for this Codex environment, so setup work started from the live workspace instead of redoing connection setup.
+- Verified the only available team is `AgentCoworker` (`AGE`) and that there was no existing `agent-coworker` project before bootstrap. The workspace already had the default `Bug`, `Feature`, and `Improvement` issue labels plus Linear’s onboarding issues `AGE-1` through `AGE-4`.
+- Created the Linear project `agent-coworker` with Max as lead, attached it to the `AgentCoworker` team, and seeded it with a repo-specific summary/description focused on the WebSocket-first harness architecture and the repo’s default verification lane.
+- Created the project document `agent-coworker project brief` and attached it to the project as the initial source-of-truth note for scope, architecture, main code surfaces, verification commands, and triage guidance.
+- Remaining gap: the project now has a home, but it does not yet have milestones or backlog issues beyond Linear’s default onboarding tickets. That is intentional to avoid inventing roadmap structure the workspace does not already define.
+- Verification:
+  - Linear readback: project `agent-coworker` exists at `https://linear.app/agentcoworker/project/agent-coworker-9dd25d9290a3`
+  - Linear readback: document `agent-coworker project brief` exists at `https://linear.app/agentcoworker/document/agent-coworker-project-brief-76150c26ca36`
+  - `HOME=/tmp/agent-coworker-test-home-$(date +%s) ~/.bun/bin/bun test` -> pass (`2231 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> pass
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass; notarization skipped because Apple notarization credentials are not configured in this environment
+  - `git diff --check` -> pass

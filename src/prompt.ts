@@ -23,14 +23,20 @@ function stripPromptLine(prompt: string, matcher: RegExp): string {
     .join("\n");
 }
 
-function injectTemplateVariable(prompt: string, key: string, value: string): string {
-  if (value.trim().length > 0) {
-    const tokenRegex = new RegExp(`\{\{${key}\}\}`, "g");
-    return prompt.replace(tokenRegex, value);
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function renderTemplateVariables(prompt: string, vars: Record<string, string>): string {
+  let out = prompt;
+
+  for (const [key, value] of Object.entries(vars)) {
+    if (value.trim().length > 0) continue;
+    const lineRegex = new RegExp(`^.*\\{\\{${escapeRegExp(key)}\\}\\}.*(?:\\r?\\n|$)`, "gm");
+    out = out.replace(lineRegex, "");
   }
 
-  const lineRegex = new RegExp(`^.*\{\{${key}\}\}.*(?:\r?\n|$)`, "gm");
-  return prompt.replace(lineRegex, "");
+  return out.replace(/\{\{([A-Za-z0-9_]+)\}\}/g, (match, key: string) => vars[key] ?? match);
 }
 
 function renderCapabilitySpecificPrompt(prompt: string, supportedModel: SupportedModel): string {
@@ -170,9 +176,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
       ].join("\n"),
   };
 
-  for (const [key, value] of Object.entries(vars)) {
-    prompt = injectTemplateVariable(prompt, key, value);
-  }
+  prompt = renderTemplateVariables(prompt, vars);
   prompt = renderCapabilitySpecificPrompt(prompt, supportedModel);
 
   prompt += `\n\n${buildSkillPolicySection(vars.skillNames, vars.skillExamples, config)}`;

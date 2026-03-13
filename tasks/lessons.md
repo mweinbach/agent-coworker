@@ -1,6 +1,7 @@
 # Lessons
 
 - When the user explicitly changes a CI request from “narrow the trigger” to “delete the workflow,” stop refining the trigger and remove the job/workflow exactly as requested.
+- When the user expands a bugfix to include verification failures found during the lane, treat every concrete error you surfaced as in-scope work instead of stopping after the original fix.
 - For expensive environment-backed CI in this repo, never leave the heavy job gated only on `event_name != 'pull_request'`; explicitly scope it to the intended branch or manual dispatch so ordinary `main` pushes do not burn the testing environment.
 - For automated PR review bots in this repo, optimize for unresolved findings only: cancel in-flight review runs when a PR closes, skip drafts, disable public session-share noise, and never post long “everything looks good now” summaries.
 - When finishing PR review work in this repo, do not stop at local code/test changes; reply on each completed GitHub review thread and resolve it in the PR in the same pass.

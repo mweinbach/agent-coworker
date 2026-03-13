@@ -59,8 +59,8 @@ export function DialogPrompt(props: DialogPromptProps) {
             value={value()}
             onChange={(v: any) => setValue(typeof v === "string" ? v : v?.value ?? "")}
             onKeyDown={handleKeyDown}
-            onSubmit={(submittedValue: string) => {
-              submitValue(typeof submittedValue === "string" ? submittedValue : value());
+            onSubmit={() => {
+              submitValue(value());
             }}
             placeholder={props.placeholder ?? "Enter value..."}
             placeholderColor={theme.textMuted}

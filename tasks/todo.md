@@ -219,6 +219,31 @@
 
 ## Review
 
+# Task: Fix desktop user profile context blank screen on input
+
+## Plan
+- [x] Reproduce the desktop renderer failure in the actual Electron workspaces settings flow and isolate the real render loop source.
+- [x] Patch the render loop, then add regressions for both the chat-view loop and the workspaces typing path that triggered it.
+- [x] Fix the standalone TUI typecheck failures surfaced during verification, rerun the repo-required test/build lane, and record the outcome here.
+
+## Review
+- Reproduced the blank-screen bug in the real Electron app by launching desktop dev mode with remote debugging and typing into the `Workspace work context` field in Settings -> Workspaces. The renderer hit React's `Maximum update depth exceeded` warning and the page blanked.
+- Root cause was not the workspace profile form. The loop came from [ChatView.tsx](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/ui/ChatView.tsx): the citation-overflow effect reset `overflowCitationUrlsByMessageId` to a fresh empty `Map()` every render when the derived `citationOverflowFilePathsByMessageId` was empty. Because that derived map is rebuilt during render, the effect kept scheduling a new state update and the renderer never settled.
+- Fixed [ChatView.tsx](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/ui/ChatView.tsx) so the empty-path case preserves the existing empty map instead of creating a new one. That breaks the passive-effect update loop while keeping the citation reset behavior when there is real state to clear.
+- Added a dedicated desktop regression in [chat-view.stability.test.tsx](/Users/mweinbach/Projects/agent-coworker/apps/desktop/test/chat-view.stability.test.tsx) that mounts `ChatView` under `StrictMode` with an empty feed and asserts no max-depth warning is emitted. Extended [workspaces-page.test.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/test/workspaces-page.test.ts) to prove typing in the profile fields no longer triggers a render loop or blanks the settings shell.
+- The repo-required verification lane still surfaced the previously known standalone TUI type errors, and the user explicitly expanded scope to include them. Fixed [index.tsx](/Users/mweinbach/Projects/agent-coworker/apps/TUI/routes/session/index.tsx) by replacing the function-child `Show` branch with a direct rendered node, and fixed [dialog-prompt.tsx](/Users/mweinbach/Projects/agent-coworker/apps/TUI/ui/dialog-prompt.tsx) by aligning `onSubmit` with the OpenTUI input callback shape.
+- Manual Electron verification after the fix showed the Settings -> Workspaces page remained interactive after typing into `Workspace work context`, and the max-depth warning no longer appeared in the renderer console.
+
+### Verification
+- `HOME=$(mktemp -d) ~/.bun/bin/bun test apps/desktop/test/chat-view.stability.test.tsx apps/desktop/test/workspaces-page.test.ts --bail` -> pass (`5 pass, 0 fail`)
+- `HOME=$(mktemp -d) ~/.bun/bin/bun test` -> pass (`2231 pass, 2 skip, 0 fail`)
+- `~/.bun/bin/bun run typecheck` -> pass
+- `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> pass
+- `~/.bun/bin/bun run build:server-binary` -> pass
+- `~/.bun/bin/bun run build:desktop-resources` -> pass
+- `~/.bun/bin/bun run desktop:build` -> pass; macOS notarization skipped because Apple notarization credentials are not configured in this environment
+- `git diff --check` -> pass
+
 # Task: Address unresolved PR #37 review comments
 
 ## Plan

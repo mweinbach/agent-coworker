@@ -480,7 +480,7 @@ export function ChatView() {
 
     const entries = [...citationOverflowFilePathsByMessageId.entries()];
     if (entries.length === 0) {
-      setOverflowCitationUrlsByMessageId(new Map());
+      setOverflowCitationUrlsByMessageId((current) => (current.size === 0 ? current : new Map()));
       return;
     }
 

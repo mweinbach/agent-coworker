@@ -1,0 +1,44 @@
+name: opencode-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run OpenCode review
+        uses: anomalyco/opencode/github@latest
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          model: opencode-go/glm-5
+          agent: plan
+          share: false
+          prompt: |
+            Review this pull request only.
+
+            Focus on:
+            - correctness and likely bugs
+            - security issues
+            - performance regressions
+            - breaking API/schema changes
+            - maintainability and test coverage gaps
+
+            Do not modify code.
+            Keep feedback concise, specific, and actionable.

@@ -1,3 +1,24 @@
+# Task: Reset memory loading after failed memory_list requests
+
+## Plan
+- [x] Trace the desktop memory request flow from `requestWorkspaceMemories()` through control-socket event handling and confirm why `memoriesLoading` can remain stuck after server-side failures.
+- [x] Clear the loading flag when the control session emits an error for a pending memory request without disturbing existing backup-loading error handling.
+- [x] Add a regression test and rerun the required repo verification/build commands.
+
+## Review
+- Updated [apps/desktop/src/app/store.helpers/controlSocket.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/src/app/store.helpers/controlSocket.ts) so control-session `error` events now also clear `memoriesLoading` when a `memory_list` request was still pending. This keeps the settings page from staying on a permanent "Loading..." state after server-side memory failures such as SQLite permission or corruption errors.
+- Added a regression in [apps/desktop/test/protocol-v2-events.test.ts](/Users/mweinbach/Projects/agent-coworker/apps/desktop/test/protocol-v2-events.test.ts) that starts a memory request, emits a control-session `internal_error`, and asserts that the loading flag is reset while the error notification still surfaces.
+- Verification:
+  - `~/.bun/bin/bun test apps/desktop/test/protocol-v2-events.test.ts --bail` -> pass
+  - `~/.bun/bin/bun test apps/desktop/test/workspace-mcp-editor.test.ts --bail` -> pass
+  - `~/.bun/bin/bun test` -> pass (`2241 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> pass
+  - `git diff --check` -> pass
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass; notarization skipped because Apple credentials were not fully configured in this environment
+
 # Task: Fix memory management review findings on codex/add-memory-management-feature
 
 ## Plan

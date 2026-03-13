@@ -378,6 +378,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
         if (evt.type === "error") {
           set((s) => {
             const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
+            const hasPendingMemories = workspaceRuntime.memoriesLoading;
             const hasPendingBackupState =
               workspaceRuntime.workspaceBackupsLoading
               || Object.keys(workspaceRuntime.workspaceBackupPendingActionKeys).length > 0;
@@ -393,22 +394,24 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
               providerStatusRefreshing: false,
               workspaceRuntimeById: {
                 ...s.workspaceRuntimeById,
-                [workspaceId]: hasPendingBackupState
-                  ? {
-                      ...workspaceRuntime,
-                      workspaceBackupsLoading: false,
-                      workspaceBackupsError: evt.message,
-                      workspaceBackupPendingActionKeys: {},
-                      workspaceBackupDeltaLoading: hasPendingBackupDelta ? false : workspaceRuntime.workspaceBackupDeltaLoading,
-                      workspaceBackupDeltaError: hasPendingBackupDelta ? evt.message : workspaceRuntime.workspaceBackupDeltaError,
-                    }
-                  : hasPendingBackupDelta
+                [workspaceId]: {
+                  ...workspaceRuntime,
+                  memoriesLoading: hasPendingMemories ? false : workspaceRuntime.memoriesLoading,
+                  ...(hasPendingBackupState
                     ? {
-                        ...workspaceRuntime,
-                        workspaceBackupDeltaLoading: false,
-                        workspaceBackupDeltaError: evt.message,
+                        workspaceBackupsLoading: false,
+                        workspaceBackupsError: evt.message,
+                        workspaceBackupPendingActionKeys: {},
+                        workspaceBackupDeltaLoading: hasPendingBackupDelta ? false : workspaceRuntime.workspaceBackupDeltaLoading,
+                        workspaceBackupDeltaError: hasPendingBackupDelta ? evt.message : workspaceRuntime.workspaceBackupDeltaError,
                       }
-                    : workspaceRuntime,
+                    : hasPendingBackupDelta
+                      ? {
+                          workspaceBackupDeltaLoading: false,
+                          workspaceBackupDeltaError: evt.message,
+                        }
+                      : {}),
+                },
               },
             };
           });

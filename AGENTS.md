@@ -151,12 +151,12 @@ When given a bug report: just fix it. Don't ask for hand-holding Point at logs, 
 Zero context switching required from the user
 Go fix failing CI tests without being told how
 ## Task Management
-1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
+1. **Plan First**: Write plan with checkable items, use your todo or tasks tool if available.
 2. **Verify Plan**: Check in before starting implementation
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to `tasks/todo.md`
-6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
+5. **Capture Lessons**: Update `tasks/lessons.md` after corrections
+
 ## Core Principles
 **Simplicity First**: Make every change as simple as possible. Impact minimal code.
 **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.

@@ -80,7 +80,7 @@ describe("runtime selection", () => {
     expect(createRuntime(config).name).toBe("pi");
   });
 
-  test("rejects unsupported providers explicitly configured to use the OpenAI Responses runtime", () => {
+  test("normalizes stale OpenAI Responses runtime config away for unsupported providers", () => {
     const config = makeConfig({
       provider: "google",
       model: "gemini-3-flash-preview",
@@ -88,9 +88,7 @@ describe("runtime selection", () => {
       runtime: "openai-responses",
     });
 
-    expect(resolveRuntimeName(config)).toBe("openai-responses");
-    expect(() => createRuntime(config)).toThrow(
-      "Provider google does not support the OpenAI Responses runtime.",
-    );
+    expect(resolveRuntimeName(config)).toBe("pi");
+    expect(createRuntime(config).name).toBe("pi");
   });
 });

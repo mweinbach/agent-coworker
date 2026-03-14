@@ -47,6 +47,19 @@ export function defaultRuntimeNameForProvider(provider: ProviderName): RuntimeNa
   return "pi";
 }
 
+export function normalizeRuntimeNameForProvider(
+  provider: ProviderName,
+  runtime: RuntimeName | null | undefined,
+): RuntimeName {
+  if (provider === "openai" || provider === "codex-cli") {
+    return "openai-responses";
+  }
+  if (runtime === "openai-responses") {
+    return defaultRuntimeNameForProvider(provider);
+  }
+  return runtime ?? defaultRuntimeNameForProvider(provider);
+}
+
 export type CommandSource = "command" | "mcp" | "skill";
 
 export interface CommandInfo {

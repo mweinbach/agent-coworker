@@ -164,6 +164,26 @@ describe("loadConfig", () => {
     expect(cfg.runtime).toBe("openai-responses");
   });
 
+  test("stale OpenAI Responses runtime config is normalized away for non-OpenAI providers", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      runtime: "openai-responses",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.provider).toBe("google");
+    expect(cfg.runtime).toBe("pi");
+  });
+
   // ---- New tests ----
 
   test("defaults loaded from built-in defaults.json", async () => {

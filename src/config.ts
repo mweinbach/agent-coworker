@@ -10,7 +10,7 @@ import { parseConnectionStoreJson } from "./store/connections";
 import { defaultModelForProvider, getModelForProvider, getProviderKeyCandidates } from "./providers";
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
 import {
-  defaultRuntimeNameForProvider,
+  normalizeRuntimeNameForProvider,
   resolveProviderName,
   resolveRuntimeName as resolveRuntimeNameFromValue,
 } from "./types";
@@ -320,10 +320,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asRuntimeName(projectConfig.runtime) ??
     asRuntimeName(userConfig.runtime) ??
     asRuntimeName(builtInDefaults.runtime);
-  const runtime =
-    provider === "openai" || provider === "codex-cli"
-      ? "openai-responses"
-      : rawRuntime ?? defaultRuntimeNameForProvider(provider);
+  const runtime = normalizeRuntimeNameForProvider(provider, rawRuntime);
 
   const workingDirectory = env.AGENT_WORKING_DIR || cwd;
 

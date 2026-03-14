@@ -1,4 +1,4 @@
-import { defaultRuntimeNameForProvider, type AgentConfig, type RuntimeName } from "../types";
+import { normalizeRuntimeNameForProvider, type AgentConfig, type RuntimeName } from "../types";
 
 import { createPiRuntime } from "./piRuntime";
 import { createOpenAiResponsesRuntime } from "./openaiResponsesRuntime";
@@ -6,10 +6,7 @@ import { createOpenAiResponsesRuntime } from "./openaiResponsesRuntime";
 import type { LlmRuntime } from "./types";
 
 export function resolveRuntimeName(config: AgentConfig): RuntimeName {
-  if (config.provider === "openai" || config.provider === "codex-cli") {
-    return "openai-responses";
-  }
-  return config.runtime ?? defaultRuntimeNameForProvider(config.provider);
+  return normalizeRuntimeNameForProvider(config.provider, config.runtime);
 }
 
 export function createRuntime(config: AgentConfig): LlmRuntime {

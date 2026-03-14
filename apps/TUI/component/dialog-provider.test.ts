@@ -50,17 +50,34 @@ describe("provider dialog auth flow helpers", () => {
       selectedMethod: autoOauthMethod,
       currentChallenge: null,
       initialChallenge: null,
+      handledChallenge: null,
     })).toBe(false);
     expect(shouldStartAutoOauthCallback({
       selectedMethod: autoOauthMethod,
       currentChallenge: initialChallenge,
       initialChallenge,
+      handledChallenge: null,
     })).toBe(false);
     expect(shouldStartAutoOauthCallback({
       selectedMethod: autoOauthMethod,
       currentChallenge: nextChallenge,
       initialChallenge,
+      handledChallenge: null,
     })).toBe(true);
+  });
+
+  test("does not restart auto OAuth for a challenge that was already handled", () => {
+    const handledChallenge = {
+      method: "auto" as const,
+      instructions: "Continue in browser",
+    };
+
+    expect(shouldStartAutoOauthCallback({
+      selectedMethod: autoOauthMethod,
+      currentChallenge: handledChallenge,
+      initialChallenge: null,
+      handledChallenge,
+    })).toBe(false);
   });
 
   test("never auto-starts callback for API key or manual-code methods", () => {
@@ -73,11 +90,13 @@ describe("provider dialog auth flow helpers", () => {
       selectedMethod: apiMethod,
       currentChallenge: challenge,
       initialChallenge: null,
+      handledChallenge: null,
     })).toBe(false);
     expect(shouldStartAutoOauthCallback({
       selectedMethod: codeOauthMethod,
       currentChallenge: challenge,
       initialChallenge: null,
+      handledChallenge: null,
     })).toBe(false);
   });
 });

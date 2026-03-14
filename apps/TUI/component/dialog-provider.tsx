@@ -29,11 +29,13 @@ export function shouldStartAutoOauthCallback(opts: {
   selectedMethod: AuthMethod | null;
   currentChallenge: ProviderAuthChallengePayload | null;
   initialChallenge: ProviderAuthChallengePayload | null;
+  handledChallenge: ProviderAuthChallengePayload | null;
 }): boolean {
   if (!opts.selectedMethod || opts.selectedMethod.type !== "oauth" || opts.selectedMethod.oauthMode === "code") {
     return false;
   }
   if (!opts.currentChallenge) return false;
+  if (opts.currentChallenge === opts.handledChallenge) return false;
   return opts.currentChallenge !== opts.initialChallenge;
 }
 
@@ -63,6 +65,7 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
   const [stage, setStage] = createSignal<ProviderDialogStage>(props.initialProvider ? "method" : "provider");
   const [awaitingResult, setAwaitingResult] = createSignal(false);
   const [pendingAutoOauthChallenge, setPendingAutoOauthChallenge] = createSignal<ProviderAuthChallengePayload | null>(null);
+  const [handledAutoOauthChallenge, setHandledAutoOauthChallenge] = createSignal<ProviderAuthChallengePayload | null>(null);
   const [didAutoAdvanceInitial, setDidAutoAdvanceInitial] = createSignal(false);
 
   const providerItems = createMemo((): SelectItem[] => {
@@ -157,8 +160,10 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
       selectedMethod,
       currentChallenge: challenge,
       initialChallenge: pendingAutoOauthChallenge(),
+      handledChallenge: handledAutoOauthChallenge(),
     })) return;
 
+    setHandledAutoOauthChallenge(challenge);
     setPendingAutoOauthChallenge(null);
     setAwaitingResult(true);
     setStage("waiting");
@@ -183,6 +188,7 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     setMethod(selectedMethod);
     setAwaitingResult(false);
     setPendingAutoOauthChallenge(null);
+    setHandledAutoOauthChallenge(null);
     const nextStage = stageAfterAuthMethodSelection(selectedMethod);
     setStage(nextStage);
     if (nextStage === "api_key") {
@@ -202,6 +208,7 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     setProvider(nextProvider);
     setAwaitingResult(false);
     setPendingAutoOauthChallenge(null);
+    setHandledAutoOauthChallenge(null);
 
     if (nextMethods.length === 1) {
       beginMethodFlow(nextProvider, nextMethods[0]!);

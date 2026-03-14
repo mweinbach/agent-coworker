@@ -635,6 +635,36 @@ Results at audit time:
 - `bun run build:desktop-resources`: pass
 - `bun run desktop:build`: pass
 
+## Implementation Details (2026-03-13)
+
+The following changes were implemented to address the audit findings:
+
+1. **Information Architecture & Navigation (Phase 1 & 3)**
+   - Grouped `SettingsShell.tsx` pages into `Account & Models`, `Workspace`, `Recovery & Data`, and `Advanced`.
+   - Added current workspace context summary to the navigation sidebar to help users orient themselves.
+   - *Improvement*: Reduces hunting and gives users a clear mental model of settings categories instead of a flat technical list.
+
+2. **Copy and Intros (Phase 1)**
+   - Rewrote page intros for `ProvidersPage`, `UsagePage`, `McpServersPage`, `MemoryPage`, `UpdatesPage`, and `DeveloperPage`.
+   - Translated technical jargon (e.g., "hot cache", ".ModelScratchpad", "layered control socket messages") into plain language based on user intent (e.g., "Choose what Cowork should remember", "Save oversized tool output to scratch files", "Connect external tools").
+   - *Improvement*: Lowers cognitive load, improves first-run comprehension, and makes the system feel less intimidating.
+
+3. **Context Selectors (Phase 3)**
+   - Added an in-page thread picker to `UsagePage.tsx` along with a stronger "Viewing usage for" context banner.
+   - *Improvement*: Fixes the hidden dependency where Usage was tied to whatever thread was active in the main app window, avoiding the "empty page" trap.
+
+4. **Empty and Disabled States (Phase 1)**
+   - `BackupPage.tsx`: Added a clear empty state explaining *why* it is empty and *how* backups are created.
+   - `UpdatesPage.tsx`: Detected `dev mode` properly and replaced the inert disabled state with a clear message guiding the user to the releases page.
+   - *Improvement*: Removes the "dead-end" feeling and reduces potential support questions by telling users what to do next.
+
+5. **Save and Feedback Patterns (Phase 2)**
+   - Standardized `WorkspaceUserProfileCard` to use an explicit Save button instead of silent blur saves.
+   - Added an optimistic "Saved successfully" toast message beside the save button.
+   - Updated `ProvidersPage` to hide the API key success message while editing a key to avoid confusing conflicting states.
+   - Expanded the warning when checking the `auto-approve commands` checkbox to clearly state it is a high-risk setting that skips confirmation for shell commands.
+   - *Improvement*: Reduces ambiguity, improves trust, and makes settings adjustments feel durable and intentional.
+
 ## Bottom Line
 
 The settings UI is already functional enough for expert users, but it still behaves more like an interface to internal systems than a polished product surface. The biggest opportunity is not adding more settings. It is making the existing settings easier to understand, safer to change, and more obviously organized around user intent.

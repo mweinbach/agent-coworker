@@ -659,7 +659,7 @@ The following changes were implemented to address the audit findings:
    - Transformed `ProvidersPage` to use a tab switcher instead of a flat list, moving Model Providers and Tool Providers into separate tabs.
    - Refined `McpServersPage` to use an inline "Add server" button that opens a dialog modal.
    - Redesigned the server list to use a clean accordion-style UI that expands to show server details, tools, and validation state.
-   - Added automatic connection validation when a new MCP server is saved, and implemented a clean grid to display "Available Tools" fetched from the server.
+   - Added `framer-motion` layout animations to the Tab switchers in `WorkspacesPage.tsx` and `ProvidersPage.tsx` for a native, smooth feel (highlighted boxes smoothly glide between states).
    - Extracted `Exa Search` into the "Tool Providers" tab explicitly.
    - Made default models & tools intelligent to only display when they are configured/available.
 

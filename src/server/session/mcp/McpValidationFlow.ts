@@ -3,7 +3,7 @@ import { resolveMCPServerAuthState } from "../../../mcp/authStore";
 import type { SessionContext } from "../SessionContext";
 import { McpServerResolver } from "./McpServerResolver";
 
-const MCP_VALIDATION_TIMEOUT_MS = 3_000;
+const MCP_VALIDATION_TIMEOUT_MS = 10_000;
 
 export class McpValidationFlow {
   constructor(
@@ -80,6 +80,8 @@ export class McpValidationFlow {
         const latencyMs = Date.now() - startedAt;
         const ok = loaded.errors.length === 0;
         const message = ok ? "MCP server validation succeeded." : loaded.errors[0] ?? "MCP server validation failed.";
+        const tools = Object.values(loaded.tools).map((t: any) => ({ name: t.name, description: t.description }));
+        
         this.context.emit({
           type: "mcp_server_validation",
           sessionId: this.context.id,
@@ -88,6 +90,7 @@ export class McpValidationFlow {
           mode: authState.mode,
           message,
           toolCount,
+          tools,
           latencyMs,
         });
         await loaded.close();

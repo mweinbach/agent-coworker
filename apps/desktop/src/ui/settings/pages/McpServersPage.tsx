@@ -275,7 +275,11 @@ export function McpServersPage() {
                   if (!workspace) return;
                   const next = buildServerFromDraft(draft);
                   if (!next) return;
-                  void upsertWorkspaceMcpServer(workspace.id, next, editingName ?? undefined);
+                  void upsertWorkspaceMcpServer(workspace.id, next, editingName && editingName !== "new" ? editingName : undefined);
+                  // Automatically trigger validation upon save
+                  setTimeout(() => {
+                    void validateWorkspaceMcpServer(workspace.id, next.name);
+                  }, 500);
                   resetDraft();
                 }}
               >
@@ -325,27 +329,27 @@ export function McpServersPage() {
 
                 {isExpanded && (
                   <div className="px-10 pb-4 text-xs space-y-4">
-                    <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
+                    <div className="grid grid-cols-[120px_1fr] gap-2 items-center">
                       <span className="text-muted-foreground uppercase tracking-wider text-[10px]">Command</span>
-                      <span className="font-mono bg-muted/30 px-2 py-1 rounded inline-block w-fit">{formatTransport(server)}</span>
+                      <span className="font-mono bg-muted/30 px-2 py-1 rounded inline-block w-fit text-[11px]">{formatTransport(server)}</span>
                     </div>
                     
-                    <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
+                    <div className="grid grid-cols-[120px_1fr] gap-2 items-center">
                       <span className="text-muted-foreground uppercase tracking-wider text-[10px]">Auth Mode</span>
-                      <span className="text-foreground">{server.authMode}</span>
+                      <span className="text-foreground text-[13px]">{server.authMode}</span>
                     </div>
                     
                     {server.authMessage && (
-                      <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
+                      <div className="grid grid-cols-[120px_1fr] gap-2 items-center">
                         <span className="text-muted-foreground uppercase tracking-wider text-[10px]">Auth Status</span>
-                        <span className="text-foreground">{server.authMessage}</span>
+                        <span className="text-foreground text-[13px]">{server.authMessage}</span>
                       </div>
                     )}
                     
                     {validation && (
-                      <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
+                      <div className="grid grid-cols-[120px_1fr] gap-2 items-center">
                         <span className="text-muted-foreground uppercase tracking-wider text-[10px]">Last Check</span>
-                        <span className="text-foreground">
+                        <span className="text-foreground text-[13px]">
                           {validation.ok ? "Passed" : "Failed"} ({validation.mode})
                           {typeof validation.toolCount === "number" ? ` • ${validation.toolCount} tools` : ""}
                           {typeof validation.latencyMs === "number" ? ` • ${validation.latencyMs}ms` : ""}
@@ -353,12 +357,25 @@ export function McpServersPage() {
                       </div>
                     )}
 
+                    {validation?.ok && Array.isArray(validation.tools) && validation.tools.length > 0 && (
+                      <div className="grid grid-cols-[120px_1fr] gap-2 items-start mt-2">
+                        <span className="text-muted-foreground uppercase tracking-wider text-[10px] mt-1">Available Tools</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {validation.tools.map((t) => (
+                            <div key={t.name} className="px-2 py-0.5 bg-muted/40 border border-border/50 rounded-sm text-xs font-mono text-foreground flex items-center group relative cursor-default" title={t.description || t.name}>
+                              {t.name}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex items-center gap-2 pt-2">
-                      <Button type="button" variant="secondary" size="sm" className="h-7 text-xs" onClick={() => workspace && void validateWorkspaceMcpServer(workspace.id, server.name)}>
+                      <Button type="button" variant="secondary" size="sm" className="h-7 text-xs bg-muted/40 hover:bg-muted/60 text-foreground shadow-none border-transparent" onClick={() => workspace && void validateWorkspaceMcpServer(workspace.id, server.name)}>
                         Validate Connection
                       </Button>
                       {canEdit && (
-                        <Button type="button" variant="destructive" size="sm" className="h-7 text-xs bg-destructive/10 text-destructive hover:bg-destructive hover:text-destructive-foreground" onClick={() => workspace && void deleteWorkspaceMcpServer(workspace.id, server.name)}>
+                        <Button type="button" variant="destructive" size="sm" className="h-7 text-xs bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive shadow-none border-transparent" onClick={() => workspace && void deleteWorkspaceMcpServer(workspace.id, server.name)}>
                           Delete Server
                         </Button>
                       )}

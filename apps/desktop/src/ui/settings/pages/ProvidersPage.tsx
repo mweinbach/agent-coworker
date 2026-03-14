@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useAutoAnimate } from "@formkit/auto-animate/react";
+import { motion } from "framer-motion";
 
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
@@ -647,10 +647,9 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   ];
 
   const [activeTab, setActiveTab] = useState<"models" | "tools">("models");
-  const [parent] = useAutoAnimate();
 
   return (
-    <div className="space-y-5" ref={parent}>
+    <div className="space-y-5">
       <div className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">Providers</h1>
         <p className="text-sm text-muted-foreground">
@@ -679,21 +678,34 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
         </Card>
       ) : null}
 
-      <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2">
-        <button type="button" onClick={() => { setActiveTab("models"); setExpandedSectionId(null); }} className={cn("px-3 py-1.5 text-sm font-medium rounded-md transition-all", activeTab === "models" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>Model Providers</button>
-        <button type="button" onClick={() => { setActiveTab("tools"); setExpandedSectionId(null); }} className={cn("px-3 py-1.5 text-sm font-medium rounded-md transition-all", activeTab === "tools" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>Tool Providers</button>
+      <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2 relative">
+        {(["models", "tools"] as const).map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => { setActiveTab(tab); setExpandedSectionId(null); }}
+            className={cn(
+              "px-3 py-1.5 text-sm font-medium rounded-md transition-colors relative z-10",
+              activeTab === tab ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {activeTab === tab && (
+              <motion.div
+                layoutId="providers-active-tab"
+                className="absolute inset-0 bg-background shadow-sm rounded-md -z-10 border border-border/50"
+                transition={{ type: "spring", stiffness: 500, damping: 30 }}
+              />
+            )}
+            {tab === "models" ? "Model Providers" : "Tool Providers"}
+          </button>
+        ))}
       </div>
 
-      <div className="space-y-3">
-        {activeTab === "models" ? (
-          <div className="space-y-3">
-            {modelProviders.map(renderProviderCard)}
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {allToolElements}
-          </div>
-        )}
+      <div className={cn("space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300", activeTab !== "models" && "hidden")}>
+        {modelProviders.map(renderProviderCard)}
+      </div>
+      <div className={cn("space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300", activeTab !== "tools" && "hidden")}>
+        {allToolElements}
       </div>
     </div>
   );

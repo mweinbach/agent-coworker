@@ -19,10 +19,9 @@ Reviewed areas:
 
 ## Method
 
-The desktop app was launched in dev mode and driven through the repo's desktop browser automation wrapper:
+The desktop app was launched in dev mode and exercised live against the real UI:
 
 - `COWORK_ELECTRON_REMOTE_DEBUG=1 bun run desktop:dev`
-- `bun run desktop:browser -- ...`
 
 The review combines:
 

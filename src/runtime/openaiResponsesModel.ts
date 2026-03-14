@@ -14,8 +14,33 @@ import { pickKnownPiModel, type PiModel } from "./piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "./types";
 
 const OPENAI_RESPONSES_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_CONTEXT_WINDOW = 0;
-const DEFAULT_MAX_TOKENS = 0;
+
+type SupportedResponsesModelLimits = Pick<PiModel, "contextWindow" | "maxTokens">;
+
+// Keep runtime token limits pinned to the supported registry surface so we do not
+// inherit unrelated fallback values from PI's broader model catalog.
+const SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS = {
+  "gpt-5-mini": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.1": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.2": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.2-codex": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.2-pro": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.4": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5-codex": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.1-codex": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.1-codex-mini": { contextWindow: 400_000, maxTokens: 128_000 },
+  "gpt-5.1-codex-max": { contextWindow: 400_000, maxTokens: 128_000 },
+} as const satisfies Record<string, SupportedResponsesModelLimits>;
+
+const SUPPORTED_CODEX_BACKEND_MODEL_LIMITS = {
+  "gpt-5.1": { contextWindow: 272_000, maxTokens: 128_000 },
+  "gpt-5.4": { contextWindow: 272_000, maxTokens: 128_000 },
+  "gpt-5-codex": { contextWindow: 272_000, maxTokens: 128_000 },
+  "gpt-5.1-codex": { contextWindow: 272_000, maxTokens: 128_000 },
+  "gpt-5.1-codex-mini": { contextWindow: 272_000, maxTokens: 128_000 },
+  "gpt-5.1-codex-max": { contextWindow: 272_000, maxTokens: 128_000 },
+  "gpt-5.2-codex": { contextWindow: 272_000, maxTokens: 128_000 },
+} as const satisfies Record<string, SupportedResponsesModelLimits>;
 
 type ResolvedOpenAiResponsesModel = {
   model: PiModel;
@@ -73,11 +98,19 @@ function applySupportedOpenAiResponsesModel(
   model: PiModel,
 ): PiModel {
   const supported = assertSupportedModel(provider, modelId, "model");
+  const supportedLimits =
+    provider === "openai"
+      ? SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS[supported.id]
+      : undefined;
+  if (provider === "openai" && !supportedLimits) {
+    throw new Error(`Missing supported OpenAI Responses model limits for openai model ${supported.id}.`);
+  }
   return {
     ...model,
     id: supported.id,
     name: supported.id,
     input: supported.supportsImageInput ? ["text", "image"] : ["text"],
+    ...(supportedLimits ?? {}),
   };
 }
 
@@ -88,6 +121,15 @@ function buildSupportedCodexResponsesModel(opts: {
   baseUrl: string;
   headers?: Record<string, string>;
 }): PiModel {
+  const supportedLimits =
+    opts.api === "openai-codex-responses"
+      ? SUPPORTED_CODEX_BACKEND_MODEL_LIMITS[opts.modelId]
+      : SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS[opts.modelId];
+
+  if (!supportedLimits) {
+    throw new Error(`Missing supported OpenAI Responses model limits for codex-cli model ${opts.modelId}.`);
+  }
+
   return applySupportedOpenAiResponsesModel("codex-cli", opts.modelId, {
     id: opts.modelId,
     name: opts.modelId,
@@ -96,8 +138,7 @@ function buildSupportedCodexResponsesModel(opts: {
     baseUrl: opts.baseUrl,
     reasoning: true,
     input: ["text"],
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
+    ...supportedLimits,
     ...(opts.headers ? { headers: { ...opts.headers } } : {}),
   });
 }

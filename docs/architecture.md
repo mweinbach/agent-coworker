@@ -80,7 +80,7 @@ User Message → System Prompt + History + Tools → AI Model → Tool Calls →
 5. Update message history
 
 The runtime boundary lives in `src/runtime/`:
-- `createRuntime()` selects either the PI runtime or the OpenAI Responses runtime, depending on provider/runtime config
+- `createRuntime()` selects either the PI runtime or the OpenAI Responses runtime; OpenAI and Codex are always routed through `openai-responses`, and legacy `runtime: "pi"` config is normalized away for those providers
 - `piRuntime` handles Google/Anthropic/OpenCode streaming/tool loops and maps events into the existing stream contract
 - `openaiResponsesRuntime` handles OpenAI and Codex Responses flows, including the ChatGPT Codex backend path
 

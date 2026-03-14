@@ -124,6 +124,46 @@ describe("loadConfig", () => {
     expect(cfg2.runtime).toBe("openai-responses");
   });
 
+  test("legacy pi runtime config is normalized away for openai providers", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      provider: "openai",
+      model: "gpt-5.4",
+      runtime: "pi",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.provider).toBe("openai");
+    expect(cfg.runtime).toBe("openai-responses");
+  });
+
+  test("legacy pi runtime config is normalized away for codex-cli providers", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      runtime: "pi",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.provider).toBe("codex-cli");
+    expect(cfg.runtime).toBe("openai-responses");
+  });
+
   // ---- New tests ----
 
   test("defaults loaded from built-in defaults.json", async () => {

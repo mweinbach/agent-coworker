@@ -49,6 +49,17 @@ describe("runtime selection", () => {
     expect(createRuntime(config).name).toBe("openai-responses");
   });
 
+  test("treats legacy pi runtime config as the OpenAI Responses runtime for codex-cli", () => {
+    const config = makeConfig({
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      subAgentModel: "gpt-5.4",
+      runtime: "pi",
+    });
+    expect(resolveRuntimeName(config)).toBe("openai-responses");
+    expect(createRuntime(config).name).toBe("openai-responses");
+  });
+
   test("routes opencode-go through the pi runtime", () => {
     const config = makeConfig({
       provider: "opencode-go",
@@ -67,5 +78,19 @@ describe("runtime selection", () => {
     });
     expect(resolveRuntimeName(config)).toBe("pi");
     expect(createRuntime(config).name).toBe("pi");
+  });
+
+  test("rejects unsupported providers explicitly configured to use the OpenAI Responses runtime", () => {
+    const config = makeConfig({
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      subAgentModel: "gemini-3-flash-preview",
+      runtime: "openai-responses",
+    });
+
+    expect(resolveRuntimeName(config)).toBe("openai-responses");
+    expect(() => createRuntime(config)).toThrow(
+      "Provider google does not support the OpenAI Responses runtime.",
+    );
   });
 });

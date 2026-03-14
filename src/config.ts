@@ -321,7 +321,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asRuntimeName(userConfig.runtime) ??
     asRuntimeName(builtInDefaults.runtime);
   const runtime =
-    rawRuntime === "pi" && (provider === "openai" || provider === "codex-cli")
+    provider === "openai" || provider === "codex-cli"
       ? "openai-responses"
       : rawRuntime ?? defaultRuntimeNameForProvider(provider);
 

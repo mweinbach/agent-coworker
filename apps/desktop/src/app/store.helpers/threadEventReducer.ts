@@ -609,7 +609,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       url,
       resumeSessionId,
       client: "desktop",
-      version: "0.1.21",
+      version: "0.1.22",
       autoReconnect: true,
       onEvent: (evt) => handleThreadEvent(get, set, threadId, evt, pendingFirstMessage),
       onClose: () => {

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.1.22 - 2026-03-14
+
+### Changed
+
+- Bumped project version metadata to 0.1.22 for the next tagged release.
+
 ## 0.1.21 - 2026-03-12
 
 ### Fixed

@@ -6,7 +6,7 @@ import { Logo } from "../component/logo";
 import { Tips } from "../component/tips";
 import { Prompt } from "../component/prompt/index";
 
-const VERSION = "0.1.21";
+const VERSION = "0.1.22";
 
 export function Home() {
   const theme = useTheme();

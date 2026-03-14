@@ -176,35 +176,33 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const [oauthCodesByMethod, setOauthCodesByMethod] = useState<Record<string, string>>({});
   const [expandedSectionId, setExpandedSectionId] = useState<string | null>(initialExpandedSectionId);
 
-  const providerRows = useMemo(() => {
+  const { modelProviders, toolProviders } = useMemo(() => {
     const fromCatalog = providerCatalog
       .map((entry) => entry.id)
       .filter((provider): provider is ProviderName => isProviderName(provider));
     const source = fromCatalog.length > 0 ? fromCatalog : [...PROVIDER_NAMES];
     const filtered = source.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider));
     
-    // Sort providers: model providers (first) vs other providers (second)
-    // Model providers are ones that have models in MODEL_CHOICES
-    return filtered.sort((a, b) => {
+    const isModelProvider = (p: ProviderName) => p in MODEL_CHOICES && MODEL_CHOICES[p]!.length > 0;
+    
+    const sortProviders = (providers: ProviderName[]) => [...providers].sort((a, b) => {
       const aStatus = providerStatusByName[a];
       const bStatus = providerStatusByName[b];
       const aConnected = aStatus?.verified || aStatus?.authorized;
       const bConnected = bStatus?.verified || bStatus?.authorized;
 
-      // 1. Model Provider vs Non-Model Provider (Exa is a tool provider, others are model providers)
-      const aIsModelProvider = a in MODEL_CHOICES && MODEL_CHOICES[a]!.length > 0;
-      const bIsModelProvider = b in MODEL_CHOICES && MODEL_CHOICES[b]!.length > 0;
-      
-      if (aIsModelProvider && !bIsModelProvider) return -1;
-      if (!aIsModelProvider && bIsModelProvider) return 1;
-
-      // 2. Connected vs Disconnected
+      // 1. Connected vs Disconnected
       if (aConnected && !bConnected) return -1;
       if (!aConnected && bConnected) return 1;
 
-      // 3. Alphabetical tie breaker
+      // 2. Alphabetical tie breaker
       return displayProviderName(a).localeCompare(displayProviderName(b));
     });
+
+    const mProviders = sortProviders(filtered.filter(isModelProvider));
+    const tProviders = sortProviders(filtered.filter(p => !isModelProvider(p)));
+
+    return { modelProviders: mProviders, toolProviders: tProviders };
   }, [providerCatalog, providerStatusByName]);
 
   const catalogNameByProvider = useMemo(() => {
@@ -466,6 +464,189 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     );
   };
 
+  const renderProviderCard = (provider: ProviderName) => {
+    const status = providerStatusByName[provider];
+    const label = providerStatusLabel(status);
+    const sectionId = providerSectionId(provider);
+    const isExpanded = expandedSectionId === sectionId;
+    const methods = visibleAuthMethods(provider, authMethodsForProvider(provider));
+    const connected = Boolean(status?.authorized || status?.verified);
+    const providerDisplayName = catalogNameByProvider.get(provider) ?? displayProviderName(provider);
+    const models = (MODEL_CHOICES[provider] ?? []).slice(0, 8);
+
+    return (
+      <Card key={provider} className={cn("border-border/80 bg-card/85", isExpanded && "border-primary/35")}>
+        <button
+          className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
+          type="button"
+          aria-expanded={isExpanded}
+          aria-controls={`provider-panel-${provider}`}
+          onClick={() => setExpandedSectionId(isExpanded ? null : sectionId)}
+        >
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-foreground">{providerDisplayName}</div>
+            <div className="mt-0.5 truncate text-xs text-muted-foreground">
+              {connected
+                ? status?.account
+                  ? formatAccount(status.account)
+                  : `${models.length} model${models.length !== 1 ? "s" : ""} available`
+                : "Click to set up"}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Badge variant={connected ? "default" : "secondary"}>{label}</Badge>
+            <span className="text-xs text-muted-foreground">{isExpanded ? "▾" : "▸"}</span>
+          </div>
+        </button>
+
+        {isExpanded ? (
+          <CardContent id={`provider-panel-${provider}`} className="space-y-4 border-t border-border/70 px-5 py-4">
+            {methods.map((method) =>
+              renderAuthMethod({
+                provider,
+                providerDisplayName,
+                status,
+                method,
+              }),
+            )}
+
+            {status?.usage ? (
+              <div className="space-y-3 border-t border-border/70 pt-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Usage status</div>
+                <div className="space-y-1 text-sm text-muted-foreground">
+                  {typeof status.usage.planType === "string" && status.usage.planType.trim() ? (
+                    <div>Plan: <span className="text-foreground">{status.usage.planType}</span></div>
+                  ) : null}
+                  {typeof status.usage.accountId === "string" && status.usage.accountId.trim() ? (
+                    <div>Account ID: <span className="font-mono text-foreground">{status.usage.accountId}</span></div>
+                  ) : null}
+                  {typeof status.message === "string" && status.message.trim() ? (
+                    <div>Status: <span className="text-foreground">{status.message}</span></div>
+                  ) : null}
+                </div>
+
+                {Array.isArray(status.usage.rateLimits) && status.usage.rateLimits.length > 0 ? (
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Rate limits</div>
+                    <div className="space-y-2">
+                      {status.usage.rateLimits.map((entry: any, index: number) => {
+                        const creditsSummary = formatCreditsSummary(entry?.credits);
+                        return (
+                          <div key={`${entry?.limitId ?? "limit"}:${index}`} className="rounded-md border border-border/70 bg-muted/20 p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="text-sm font-medium text-foreground">{formatRateLimitName(entry)}</div>
+                              <Badge variant={entry?.limitReached ? "destructive" : entry?.allowed === false ? "secondary" : "outline"}>
+                                {entry?.limitReached ? "Limit reached" : entry?.allowed === false ? "Blocked" : "Allowed"}
+                              </Badge>
+                            </div>
+                            {entry?.primaryWindow ? (
+                              <div className="mt-2 text-xs text-muted-foreground">Primary: {formatWindowSummary(entry.primaryWindow)}</div>
+                            ) : null}
+                            {entry?.secondaryWindow ? (
+                              <div className="mt-1 text-xs text-muted-foreground">Secondary: {formatWindowSummary(entry.secondaryWindow)}</div>
+                            ) : null}
+                            {creditsSummary ? (
+                              <div className="mt-1 text-xs text-muted-foreground">{creditsSummary}</div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : typeof status?.message === "string" && status.message.trim() ? (
+              <div className="border-t border-border/70 pt-4 text-sm text-muted-foreground">{status.message}</div>
+            ) : null}
+
+            {models.length > 0 ? (
+              <div className="space-y-2 border-t border-border/70 pt-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Available models</div>
+                <div className="flex flex-wrap gap-2">
+                  {models.map((model) => (
+                    <Badge key={model} variant="secondary">{model}</Badge>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </CardContent>
+        ) : null}
+      </Card>
+    );
+  };
+
+  const renderExaCard = () => {
+    const provider = "google";
+    const exaMethod = authMethodsForProvider(provider).find((method) => method.id === EXA_AUTH_METHOD_ID) ?? fallbackExaAuthMethod();
+    const exaSavedApiKeyMask = providerStatusByName.google?.savedApiKeyMasks?.[EXA_AUTH_METHOD_ID] ??
+      optimisticApiKeyMaskByMethod[methodStateKey("google", EXA_AUTH_METHOD_ID)];
+    const exaConnected = typeof exaSavedApiKeyMask === "string" && exaSavedApiKeyMask.trim().length > 0;
+    const exaExpanded = expandedSectionId === EXA_SECTION_ID;
+
+    // To place Exa properly with the same top-level "connected" sorting as providers, we calculate its status here
+    // But since the user wants sections split visually, we just always render it in Tool Providers
+
+    return (
+      <Card key="exa" className={cn("border-border/80 bg-card/85", exaExpanded && "border-primary/35")}>
+        <button
+          className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
+          type="button"
+          aria-expanded={exaExpanded}
+          aria-controls="provider-panel-exa-search"
+          onClick={() => setExpandedSectionId(exaExpanded ? null : EXA_SECTION_ID)}
+        >
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-foreground">Exa Search</div>
+            <div className="mt-0.5 truncate text-xs text-muted-foreground">{exaConnectionSummary(exaConnected)}</div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Badge variant={exaConnected ? "default" : "secondary"}>
+              {exaConnected ? "Connected" : "Not connected"}
+            </Badge>
+            <span className="text-xs text-muted-foreground">{exaExpanded ? "▾" : "▸"}</span>
+          </div>
+        </button>
+
+        {exaExpanded ? (
+          <CardContent id="provider-panel-exa-search" className="space-y-4 border-t border-border/70 px-5 py-4">
+            <div className="text-sm text-muted-foreground">
+              Use Exa for better web search results when Cowork searches the web.
+            </div>
+            {renderAuthMethod({
+              provider: "google",
+              providerDisplayName: "Exa Search",
+              status: providerStatusByName.google,
+              method: exaMethod,
+            })}
+          </CardContent>
+        ) : null}
+      </Card>
+    );
+  };
+
+  const exaSavedApiKeyMask = providerStatusByName.google?.savedApiKeyMasks?.[EXA_AUTH_METHOD_ID] ?? optimisticApiKeyMaskByMethod[methodStateKey("google", EXA_AUTH_METHOD_ID)];
+  const isExaConnected = typeof exaSavedApiKeyMask === "string" && exaSavedApiKeyMask.trim().length > 0;
+
+  // Add Exa manually into tool providers sorting if we want, but it's easier to just split render arrays based on connected state.
+  // Since we want connected first, we split toolProviders + exa into connected / disconnected
+  const connectedToolProviders = toolProviders.filter(p => {
+      const s = providerStatusByName[p];
+      return s?.verified || s?.authorized;
+  });
+  const disconnectedToolProviders = toolProviders.filter(p => {
+      const s = providerStatusByName[p];
+      return !(s?.verified || s?.authorized);
+  });
+  
+  const allToolElements = [
+    ...connectedToolProviders.map(renderProviderCard),
+    ...(isExaConnected ? [renderExaCard()] : []),
+    ...disconnectedToolProviders.map(renderProviderCard),
+    ...(!isExaConnected ? [renderExaCard()] : []),
+  ];
+
+  const [activeTab, setActiveTab] = useState<"models" | "tools">("models");
+
   return (
     <div className="space-y-5">
       <div className="space-y-2">
@@ -496,167 +677,21 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
         </Card>
       ) : null}
 
+      <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2">
+        <button type="button" onClick={() => { setActiveTab("models"); setExpandedSectionId(null); }} className={cn("px-3 py-1.5 text-sm font-medium rounded-md transition-all", activeTab === "models" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>Model Providers</button>
+        <button type="button" onClick={() => { setActiveTab("tools"); setExpandedSectionId(null); }} className={cn("px-3 py-1.5 text-sm font-medium rounded-md transition-all", activeTab === "tools" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>Tool Providers</button>
+      </div>
+
       <div className="space-y-3">
-        {providerRows.map((provider) => {
-          const status = providerStatusByName[provider];
-          const label = providerStatusLabel(status);
-          const sectionId = providerSectionId(provider);
-          const isExpanded = expandedSectionId === sectionId;
-          const methods = visibleAuthMethods(provider, authMethodsForProvider(provider));
-          const connected = Boolean(status?.authorized || status?.verified);
-          const providerDisplayName = catalogNameByProvider.get(provider) ?? displayProviderName(provider);
-          const models = (MODEL_CHOICES[provider] ?? []).slice(0, 8);
-          const exaMethod =
-            provider === "google"
-              ? authMethodsForProvider(provider).find((method) => method.id === EXA_AUTH_METHOD_ID) ?? fallbackExaAuthMethod()
-              : null;
-          const exaSavedApiKeyMask =
-            provider === "google"
-              ? providerStatusByName.google?.savedApiKeyMasks?.[EXA_AUTH_METHOD_ID] ??
-                optimisticApiKeyMaskByMethod[methodStateKey("google", EXA_AUTH_METHOD_ID)]
-              : undefined;
-          const exaConnected = typeof exaSavedApiKeyMask === "string" && exaSavedApiKeyMask.trim().length > 0;
-          const exaExpanded = expandedSectionId === EXA_SECTION_ID;
-
-          return (
-            <Fragment key={provider}>
-              <Card className={cn("border-border/80 bg-card/85", isExpanded && "border-primary/35")}>
-                <button
-                  className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
-                  type="button"
-                  aria-expanded={isExpanded}
-                  aria-controls={`provider-panel-${provider}`}
-                  onClick={() => setExpandedSectionId(isExpanded ? null : sectionId)}
-                >
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-foreground">{providerDisplayName}</div>
-                    <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {connected
-                        ? status?.account
-                          ? formatAccount(status.account)
-                          : `${models.length} model${models.length !== 1 ? "s" : ""} available`
-                        : "Click to set up"}
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <Badge variant={connected ? "default" : "secondary"}>{label}</Badge>
-                    <span className="text-xs text-muted-foreground">{isExpanded ? "▾" : "▸"}</span>
-                  </div>
-                </button>
-
-                {isExpanded ? (
-                  <CardContent id={`provider-panel-${provider}`} className="space-y-4 border-t border-border/70 px-5 py-4">
-                    {methods.map((method) =>
-                      renderAuthMethod({
-                        provider,
-                        providerDisplayName,
-                        status,
-                        method,
-                      }),
-                    )}
-
-                    {status?.usage ? (
-                      <div className="space-y-3 border-t border-border/70 pt-4">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Usage status</div>
-                        <div className="space-y-1 text-sm text-muted-foreground">
-                          {typeof status.usage.planType === "string" && status.usage.planType.trim() ? (
-                            <div>Plan: <span className="text-foreground">{status.usage.planType}</span></div>
-                          ) : null}
-                          {typeof status.usage.accountId === "string" && status.usage.accountId.trim() ? (
-                            <div>Account ID: <span className="font-mono text-foreground">{status.usage.accountId}</span></div>
-                          ) : null}
-                          {typeof status.message === "string" && status.message.trim() ? (
-                            <div>Status: <span className="text-foreground">{status.message}</span></div>
-                          ) : null}
-                        </div>
-
-                        {Array.isArray(status.usage.rateLimits) && status.usage.rateLimits.length > 0 ? (
-                          <div className="space-y-2">
-                            <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Rate limits</div>
-                            <div className="space-y-2">
-                              {status.usage.rateLimits.map((entry: any, index: number) => {
-                                const creditsSummary = formatCreditsSummary(entry?.credits);
-                                return (
-                                  <div key={`${entry?.limitId ?? "limit"}:${index}`} className="rounded-md border border-border/70 bg-muted/20 p-3">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                      <div className="text-sm font-medium text-foreground">{formatRateLimitName(entry)}</div>
-                                      <Badge variant={entry?.limitReached ? "destructive" : entry?.allowed === false ? "secondary" : "outline"}>
-                                        {entry?.limitReached ? "Limit reached" : entry?.allowed === false ? "Blocked" : "Allowed"}
-                                      </Badge>
-                                    </div>
-                                    {entry?.primaryWindow ? (
-                                      <div className="mt-2 text-xs text-muted-foreground">Primary: {formatWindowSummary(entry.primaryWindow)}</div>
-                                    ) : null}
-                                    {entry?.secondaryWindow ? (
-                                      <div className="mt-1 text-xs text-muted-foreground">Secondary: {formatWindowSummary(entry.secondaryWindow)}</div>
-                                    ) : null}
-                                    {creditsSummary ? (
-                                      <div className="mt-1 text-xs text-muted-foreground">{creditsSummary}</div>
-                                    ) : null}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : typeof status?.message === "string" && status.message.trim() ? (
-                      <div className="border-t border-border/70 pt-4 text-sm text-muted-foreground">{status.message}</div>
-                    ) : null}
-
-                    {models.length > 0 ? (
-                      <div className="space-y-2 border-t border-border/70 pt-4">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Available models</div>
-                        <div className="flex flex-wrap gap-2">
-                          {models.map((model) => (
-                            <Badge key={model} variant="secondary">{model}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-                  </CardContent>
-                ) : null}
-              </Card>
-
-              {provider === "google" && exaMethod ? (
-                <Card className={cn("border-border/80 bg-card/85", exaExpanded && "border-primary/35")}>
-                  <button
-                    className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
-                    type="button"
-                    aria-expanded={exaExpanded}
-                    aria-controls="provider-panel-exa-search"
-                    onClick={() => setExpandedSectionId(exaExpanded ? null : EXA_SECTION_ID)}
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-foreground">Exa Search</div>
-                      <div className="mt-0.5 truncate text-xs text-muted-foreground">{exaConnectionSummary(exaConnected)}</div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <Badge variant={exaConnected ? "default" : "secondary"}>
-                        {exaConnected ? "Connected" : "Not connected"}
-                      </Badge>
-                      <span className="text-xs text-muted-foreground">{exaExpanded ? "▾" : "▸"}</span>
-                    </div>
-                  </button>
-
-                  {exaExpanded ? (
-                    <CardContent id="provider-panel-exa-search" className="space-y-4 border-t border-border/70 px-5 py-4">
-                      <div className="text-sm text-muted-foreground">
-                        Use Exa for better web search results when Cowork searches the web.
-                      </div>
-                      {renderAuthMethod({
-                        provider: "google",
-                        providerDisplayName: "Exa Search",
-                        status: providerStatusByName.google,
-                        method: exaMethod,
-                      })}
-                    </CardContent>
-                  ) : null}
-                </Card>
-              ) : null}
-            </Fragment>
-          );
-        })}
+        {activeTab === "models" ? (
+          <div className="space-y-3">
+            {modelProviders.map(renderProviderCard)}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {allToolElements}
+          </div>
+        )}
       </div>
     </div>
   );

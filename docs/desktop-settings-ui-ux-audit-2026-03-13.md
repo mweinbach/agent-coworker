@@ -656,7 +656,8 @@ The following changes were implemented to address the audit findings:
 6. **Component Grouping & Cleanup**
    - Split `WorkspacesPage.tsx` into a clean tabbed UI (`General`, `Models`, `Profile`, `Advanced`).
    - Grouped OpenAI-compatible options into side-by-side grid cards instead of a stack.
-   - Refined `ProvidersPage` to automatically sort Model Providers (OpenAI, Anthropic) before Utility/Tool Providers (Exa), and grouped connected vs disconnected nicely.
+   - Transformed `ProvidersPage` to use a tab switcher instead of a flat list, moving Model Providers and Tool Providers into separate tabs.
+   - Extracted `Exa Search` into the "Tool Providers" tab explicitly.
    - Made default models & tools intelligent to only display when they are configured/available.
 
 ## Bottom Line

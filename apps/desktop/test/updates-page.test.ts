@@ -77,10 +77,10 @@ describe("desktop updates page", () => {
     const html = renderToStaticMarkup(createElement(UpdatesPage, { state: MOCK_UPDATE_STATE as any }));
 
     expect(html).toContain("Updates");
-    expect(html).toContain("0.1.9");
+    expect(html).toContain("Current build");
     expect(html).toContain("Updates are only available in packaged builds.");
     expect(html).toContain("Check now");
-    expect(html).toContain("disabled");
+    expect(html).toContain("Not available in dev mode");
   });
 
   test("renders unavailable feed messaging for packaged builds without update metadata", () => {
@@ -96,7 +96,7 @@ describe("desktop updates page", () => {
 
     expect(html).toContain("0.1.9");
     expect(html).toContain("Updates are unavailable for this platform because no update feed is published.");
-    expect(html).toContain("Unavailable");
+    expect(html).toContain("Latest seen version");
     expect(html).toContain("Check now");
   });
 

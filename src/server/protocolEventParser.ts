@@ -159,6 +159,7 @@ const serverEventSchema = z.discriminatedUnion("type", [
     mode: z.string(),
     message: z.string(),
     toolCount: z.number().optional(),
+    tools: z.array(z.object({ name: z.string(), description: z.string().optional() })).optional(),
     latencyMs: z.number().optional(),
   }).passthrough(),
   z.object({

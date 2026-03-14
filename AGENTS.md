@@ -86,14 +86,12 @@ When adding a new supported model:
 - Update any related pricing/catalog tests and docs when model metadata changes.
 - Do not add unsupported/custom model IDs as passthroughs. New models must be added to the registry explicitly before they are selectable.
 
-## agent-browser Skill + Electron
-
-If the project has `.agent/skills/agent-browser/SKILL.md`, use that skill for desktop UI/browser automation tasks.
+## Electron Desktop App
 
 For the Electron desktop app (`apps/desktop`):
 - Start app in dev mode: `bun run desktop:dev`
-- Control it via CDP with: `bun run desktop:browser -- <agent-browser args>`
-- Preferred interaction loop: `snapshot -i` -> use `@eN` refs -> re-snapshot after navigation/DOM changes
+- Set `COWORK_ELECTRON_REMOTE_DEBUG=1` when you need to expose a CDP port for external inspection or automation.
+- Override `COWORK_ELECTRON_REMOTE_DEBUG_PORT` if `9222` is already in use.
 
 ## Cursor Cloud specific instructions
 
@@ -119,7 +117,7 @@ For headless/cloud testing, prefer `bun run serve` and interact via WebSocket (s
 
 ### Desktop App
 
-`bun run desktop:dev` (from repo root) launches the Electron desktop app. It first builds sidecar resources (`build:desktop-resources`), then runs `electron-vite dev`. The app starts its own server process per workspace. D-Bus and GPU errors in logs are cosmetic on headless Linux and do not affect functionality. To test the desktop app visually, use the `computerUse` subagent.
+`bun run desktop:dev` (from repo root) launches the Electron desktop app. It first builds sidecar resources (`build:desktop-resources`), then runs `electron-vite dev`. The app starts its own server process per workspace. D-Bus and GPU errors in logs are cosmetic on headless Linux and do not affect functionality. Set `COWORK_ELECTRON_REMOTE_DEBUG=1` if you need to attach external UI automation or inspection over CDP.
 
 ## Workflow Orchestration
 
@@ -153,12 +151,12 @@ When given a bug report: just fix it. Don't ask for hand-holding Point at logs, 
 Zero context switching required from the user
 Go fix failing CI tests without being told how
 ## Task Management
-1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
+1. **Plan First**: Write plan with checkable items, use your todo or tasks tool if available.
 2. **Verify Plan**: Check in before starting implementation
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to `tasks/todo.md`
-6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
+5. **Capture Lessons**: Update `tasks/lessons.md` after corrections
+
 ## Core Principles
 **Simplicity First**: Make every change as simple as possible. Impact minimal code.
 **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.

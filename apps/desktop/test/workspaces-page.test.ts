@@ -140,6 +140,10 @@ describe("desktop workspaces page", () => {
             },
           },
         },
+        providerStatusByName: {
+          openai: { verified: true },
+          "codex-cli": { authorized: true },
+        },
         updateWorkspaceDefaults: async () => {},
       }),
     );
@@ -150,6 +154,7 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Verbosity");
     expect(html).toContain("Reasoning effort");
     expect(html).toContain("Reasoning summary");
+    expect(html).toContain("Applies when this workspace runs on OpenAI API.");
   });
 
   test("renders workspace controls for user profile context", () => {
@@ -168,11 +173,11 @@ describe("desktop workspaces page", () => {
       }),
     );
 
-    expect(html).toContain("User Profile Context");
+    expect(html).toContain("How Cowork should understand you in this workspace");
     expect(html).toContain("Name");
-    expect(html).toContain("Work / Job");
+    expect(html).toContain("Role or work context");
     expect(html).toContain("Instructions");
-    expect(html).toContain("Details Agent Should Know");
+    expect(html).toContain("Background details");
   });
 
   test("typing into workspace profile fields does not trigger a render loop", async () => {
@@ -220,7 +225,7 @@ describe("desktop workspaces page", () => {
         textarea.dispatchEvent(new harness.dom.window.Event("change", { bubbles: true }));
       });
 
-      expect(container.textContent).toContain("User Profile Context");
+      expect(container.textContent).toContain("How Cowork should understand you in this workspace");
       expect(textarea.value).toBe("Platform engineer");
       expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(false);
 
@@ -241,44 +246,46 @@ describe("desktop workspaces page", () => {
       consoleErrors.push(args.map((arg) => String(arg)).join(" "));
     };
 
-    useAppStore.setState({
-      ready: true,
-      startupError: null,
-      view: "settings",
-      settingsPage: "workspaces",
-      lastNonSettingsView: "chat",
-      workspaces: [
-        {
-          id: "ws-1",
-          name: "Workspace 1",
-          path: "/tmp/workspace-1",
-          createdAt: "2026-03-12T00:00:00.000Z",
-          lastOpenedAt: "2026-03-12T00:00:00.000Z",
-          defaultProvider: "openai",
-          defaultModel: "gpt-5.4",
-          defaultSubAgentModel: "gpt-5.4",
-          defaultEnableMcp: true,
-          defaultBackupsEnabled: true,
-          yolo: false,
-          userName: "",
-          userProfile: {
-            instructions: "",
-            work: "",
-            details: "",
-          },
-        },
-      ],
-      selectedWorkspaceId: "ws-1",
-      selectedThreadId: null,
-      threads: [],
-      threadRuntimeById: {},
-      workspaceRuntimeById: {},
-    });
-
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          ready: true,
+          startupError: null,
+          view: "settings",
+          settingsPage: "workspaces",
+          lastNonSettingsView: "chat",
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace 1",
+              path: "/tmp/workspace-1",
+              createdAt: "2026-03-12T00:00:00.000Z",
+              lastOpenedAt: "2026-03-12T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.4",
+              defaultSubAgentModel: "gpt-5.4",
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: true,
+              yolo: false,
+              userName: "",
+              userProfile: {
+                instructions: "",
+                work: "",
+                details: "",
+              },
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          selectedThreadId: null,
+          threads: [],
+          threadRuntimeById: {},
+          workspaceRuntimeById: {},
+        });
+      });
 
       await act(async () => {
         root.render(
@@ -302,7 +309,7 @@ describe("desktop workspaces page", () => {
         textarea.dispatchEvent(new harness.dom.window.FocusEvent("blur", { bubbles: true }));
       });
 
-      expect(container.textContent).toContain("User Profile Context");
+      expect(container.textContent).toContain("How Cowork should understand you in this workspace");
       expect(container.textContent).toContain("Workspace 1");
       expect(consoleErrors.some((entry) => entry.includes("Maximum update depth exceeded"))).toBe(false);
 

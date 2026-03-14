@@ -135,15 +135,15 @@ export function DeveloperPage() {
 
       <Card className="border-border/80 bg-card/85">
         <CardHeader>
-          <CardTitle>Workspace Tool Output Spill Files</CardTitle>
+          <CardTitle>Large Tool Output Handling</CardTitle>
           <CardDescription>
-            Advanced workspace default for spilling oversized text tool results into <code>.ModelScratchpad</code>.
+            Save very large tool output to scratch files instead of keeping all of it inline.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {!workspace ? (
             <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground">
-              Add a workspace to configure tool output overflow spill files.
+              Add a workspace to configure large tool output handling.
             </div>
           ) : (
             <>
@@ -172,15 +172,14 @@ export function DeveloperPage() {
 
               <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                 <div>
-                  <div className="text-sm font-medium">Enable spill files</div>
+                  <div className="text-sm font-medium">Save oversized tool output to scratch files</div>
                   <div className="text-xs text-muted-foreground">
-                    When enabled, oversized text or JSON-like tool results are saved into workspace-local scratch files
-                    after the threshold is crossed. Cowork keeps a fixed inline preview and writes the full result to disk.
+                    When enabled, oversized text or JSON-like tool results are saved to disk instead of filling up the chat history. Cowork keeps a fixed inline preview.
                   </div>
                 </div>
                 <Checkbox
                   checked={overflowEnabled}
-                  aria-label="Enable tool output overflow spill files"
+                  aria-label="Save oversized tool output to scratch files"
                   onCheckedChange={(checked) => {
                     const nextEnabled = toBoolean(checked);
                     if (nextEnabled) {
@@ -196,27 +195,24 @@ export function DeveloperPage() {
               </div>
 
               <div className="space-y-2">
-                <div className="text-sm font-medium text-foreground">Character threshold</div>
+                <div className="text-sm font-medium text-foreground">Spill after this many characters</div>
                 <Input
                   type="text"
                   inputMode="numeric"
                   pattern="[0-9]*"
-                  aria-label="Tool output overflow character threshold"
+                  aria-label="Spill after this many characters"
                   value={overflowThresholdDraft}
                   disabled={!overflowEnabled}
                   onChange={(event) => setOverflowThresholdDraft(event.target.value)}
                 />
                 <div className="text-xs text-muted-foreground">
-                  Threshold is measured against the serialized tool result that would otherwise be sent back into model
-                  context. Once a result spills, Cowork still keeps the first 5,000 characters inline and saves the
-                  rest. Default trigger: {DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS.toLocaleString()} characters.
+                  Once a result spills, Cowork keeps the first 5,000 characters inline and saves the rest to <code>{workspace.path}/.ModelScratchpad</code>. Default: {DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS.toLocaleString()} characters.
                 </div>
                 {overflowThresholdError ? (
                   <div className="text-xs text-destructive">{overflowThresholdError}</div>
                 ) : (
                   <div className="text-xs text-muted-foreground">
-                    Spill files are written as UTF-8 text into <code>{workspace.path}/.ModelScratchpad</code>. Set the
-                    threshold to <code>0</code> to spill immediately while still keeping that 5,000-character preview.
+                    Set the threshold to <code>0</code> to spill immediately while still keeping the preview.
                   </div>
                 )}
               </div>

@@ -18,6 +18,10 @@ function repoRoot(): string {
   return path.resolve(here, "..");
 }
 
+function fixturePath(name: string): string {
+  return path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", name);
+}
+
 function extractProtocolHeadings(doc: string, startMarker: string, endMarker: string): string[] {
   const startIdx = doc.indexOf(startMarker);
   if (startIdx < 0) return [];
@@ -81,7 +85,8 @@ function sendAndCollect(
   url: string,
   buildMsg: (sessionId: string) => object,
   responseCount: number,
-  timeoutMs = 5000
+  timeoutMs = 5000,
+  options?: { includeEventTypes?: string[] },
 ): Promise<{ hello: any; responses: any[] }> {
   return new Promise((resolve, reject) => {
     const responses: any[] = [];
@@ -103,6 +108,7 @@ function sendAndCollect(
 
     ws.onmessage = (e) => {
       const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+      const explicitlyIncluded = options?.includeEventTypes?.includes(msg.type) ?? false;
 
       if (!hello && msg.type === "server_hello") {
         hello = msg;
@@ -122,18 +128,22 @@ function sendAndCollect(
       }
 
       if (
-        msg.type === "session_settings" ||
-        msg.type === "session_config" ||
-        msg.type === "session_info" ||
-        msg.type === "observability_status" ||
-        msg.type === "provider_catalog" ||
-        msg.type === "provider_auth_methods" ||
-        msg.type === "provider_status" ||
-        msg.type === "mcp_servers" ||
-        msg.type === "mcp_server_validation" ||
-        msg.type === "mcp_server_auth_challenge" ||
-        msg.type === "mcp_server_auth_result" ||
-        msg.type === "model_stream_chunk"
+        !explicitlyIncluded &&
+        (
+          msg.type === "session_settings" ||
+          msg.type === "session_config" ||
+          msg.type === "session_info" ||
+          msg.type === "observability_status" ||
+          msg.type === "provider_catalog" ||
+          msg.type === "provider_auth_methods" ||
+          msg.type === "provider_status" ||
+          msg.type === "mcp_servers" ||
+          msg.type === "mcp_server_validation" ||
+          msg.type === "mcp_server_auth_challenge" ||
+          msg.type === "mcp_server_auth_result" ||
+          msg.type === "model_stream_chunk" ||
+          msg.type === "session_backup_state"
+        )
       ) {
         return;
       }
@@ -175,6 +185,35 @@ function sendAndWaitForEvent(
         return;
       }
       if (!sessionId || msg.sessionId !== sessionId) return;
+      if (!match(msg)) return;
+
+      clearTimeout(timer);
+      ws.close();
+      resolve(msg);
+    };
+
+    ws.onerror = (e) => {
+      clearTimeout(timer);
+      ws.close();
+      reject(new Error(`WebSocket error: ${e}`));
+    };
+  });
+}
+
+function connectAndWaitForEvent(
+  url: string,
+  match: (message: any) => boolean,
+  timeoutMs = 5000,
+): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url);
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("Timed out waiting for matching event"));
+    }, timeoutMs);
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
       if (!match(msg)) return;
 
       clearTimeout(timer);
@@ -1182,7 +1221,8 @@ describe("WebSocket Lifecycle", () => {
         url,
         (sessionId) => ({ type: "session_backup_get", sessionId }),
         1,
-        5000
+        5000,
+        { includeEventTypes: ["session_backup_state"] },
       );
 
       const backupEvt = responses[0];
@@ -1495,7 +1535,13 @@ describe("WebSocket Lifecycle", () => {
       configPath,
       JSON.stringify(
         {
-          servers: [{ name: "broken", transport: { type: "stdio", command: "echo", args: ["hello"] } }],
+          servers: [
+            {
+              name: "broken",
+              transport: { type: "stdio", command: process.execPath, args: ["-e", "process.exit(1)"] },
+              retries: 0,
+            },
+          ],
         },
         null,
         2,
@@ -1513,6 +1559,55 @@ describe("WebSocket Lifecycle", () => {
       expect(response.type).toBe("mcp_server_validation");
       expect(typeof response.ok).toBe("boolean");
       expect(typeof response.message).toBe("string");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("mcp_server_validate includes tool names from MCP tool map keys", async () => {
+    const tmpDir = await makeTmpProject();
+    const configPath = path.join(tmpDir, ".cowork", "mcp-servers.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          servers: [
+            {
+              name: "local",
+              transport: {
+                type: "stdio",
+                command: process.execPath,
+                args: [fixturePath("mcp-echo-server.mjs")],
+              },
+              required: true,
+              retries: 0,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const response = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({ type: "mcp_server_validate", sessionId, name: "local" }),
+        (msg) => msg.type === "mcp_server_validation" && msg.name === "local",
+        15_000,
+      );
+      expect(response.type).toBe("mcp_server_validation");
+      expect(response.ok).toBe(true);
+      expect(response.toolCount).toBe(1);
+      expect(response.tools).toEqual([
+        {
+          name: "mcp__local__echo",
+          description: "Echoes input text back to the caller.",
+        },
+      ]);
     } finally {
       server.stop();
     }
@@ -2509,7 +2604,7 @@ describe("Protocol Doc Parity", () => {
         expect(model.responses[0].config.model).toBe("gpt-5.2");
       }
 
-      const nextSessionHello = (await collectMessages(url, 1))[0];
+      const nextSessionHello = await connectAndWaitForEvent(url, (msg) => msg.type === "server_hello");
       expect(nextSessionHello.type).toBe("server_hello");
       expect(nextSessionHello.config.provider).toBe("openai");
       expect(nextSessionHello.config.model).toBe("gpt-5.2");

@@ -229,6 +229,7 @@ export type ServerEvent =
     mode: MCPServerAuthMode;
     message: string;
     toolCount?: number;
+    tools?: { name: string; description?: string }[];
     latencyMs?: number;
   }
   | {

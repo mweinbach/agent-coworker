@@ -119,26 +119,6 @@ const { DeveloperPage } = await import("../src/ui/settings/pages/DeveloperPage")
 
 describe("desktop developer page", () => {
   test("renders workspace spill-file controls for tool output overflow", async () => {
-    useAppStore.setState({
-      workspaces: [
-        {
-          id: "ws-1",
-          name: "Workspace 1",
-          path: "/tmp/workspace-1",
-          createdAt: "2026-03-12T00:00:00.000Z",
-          lastOpenedAt: "2026-03-12T00:00:00.000Z",
-          defaultProvider: "openai",
-          defaultModel: "gpt-5.2",
-          defaultSubAgentModel: "gpt-5.2",
-          defaultToolOutputOverflowChars: 12000,
-          defaultEnableMcp: true,
-          defaultBackupsEnabled: true,
-          yolo: false,
-        },
-      ],
-      selectedWorkspaceId: "ws-1",
-    });
-
     const harness = setupJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -146,12 +126,34 @@ describe("desktop developer page", () => {
       const root = createRoot(container);
 
       await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace 1",
+              path: "/tmp/workspace-1",
+              createdAt: "2026-03-12T00:00:00.000Z",
+              lastOpenedAt: "2026-03-12T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.2",
+              defaultSubAgentModel: "gpt-5.2",
+              defaultToolOutputOverflowChars: 12000,
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+        });
+      });
+
+      await act(async () => {
         root.render(createElement(DeveloperPage));
       });
 
-      expect(container.textContent).toContain("Workspace Tool Output Spill Files");
-      expect(container.textContent).toContain("Enable spill files");
-      expect(container.textContent).toContain("Character threshold");
+      expect(container.textContent).toContain("Large Tool Output Handling");
+      expect(container.textContent).toContain("Save oversized tool output to scratch files");
+      expect(container.textContent).toContain("Spill after this many characters");
       expect(container.textContent).toContain("Cowork keeps a fixed inline preview");
       expect(container.textContent).toContain("first 5,000 characters inline");
       expect(container.textContent).toContain("Set the threshold to 0 to spill immediately");
@@ -169,32 +171,34 @@ describe("desktop developer page", () => {
 
   test("inherit default clears the persisted overflow override instead of pinning 25000", async () => {
     const updateWorkspaceDefaults = mock(async () => {});
-    useAppStore.setState({
-      workspaces: [
-        {
-          id: "ws-1",
-          name: "Workspace 1",
-          path: "/tmp/workspace-1",
-          createdAt: "2026-03-12T00:00:00.000Z",
-          lastOpenedAt: "2026-03-12T00:00:00.000Z",
-          defaultProvider: "openai",
-          defaultModel: "gpt-5.2",
-          defaultSubAgentModel: "gpt-5.2",
-          defaultToolOutputOverflowChars: 12000,
-          defaultEnableMcp: true,
-          defaultBackupsEnabled: true,
-          yolo: false,
-        },
-      ],
-      selectedWorkspaceId: "ws-1",
-      updateWorkspaceDefaults,
-    });
-
     const harness = setupJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace 1",
+              path: "/tmp/workspace-1",
+              createdAt: "2026-03-12T00:00:00.000Z",
+              lastOpenedAt: "2026-03-12T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.2",
+              defaultSubAgentModel: "gpt-5.2",
+              defaultToolOutputOverflowChars: 12000,
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          updateWorkspaceDefaults,
+        });
+      });
 
       await act(async () => {
         root.render(createElement(DeveloperPage));
@@ -220,32 +224,6 @@ describe("desktop developer page", () => {
   });
 
   test("uses the inherited runtime overflow threshold when the workspace override is unset", async () => {
-    useAppStore.setState({
-      workspaces: [
-        {
-          id: "ws-1",
-          name: "Workspace 1",
-          path: "/tmp/workspace-1",
-          createdAt: "2026-03-12T00:00:00.000Z",
-          lastOpenedAt: "2026-03-12T00:00:00.000Z",
-          defaultProvider: "openai",
-          defaultModel: "gpt-5.2",
-          defaultSubAgentModel: "gpt-5.2",
-          defaultEnableMcp: true,
-          defaultBackupsEnabled: true,
-          yolo: false,
-        },
-      ],
-      selectedWorkspaceId: "ws-1",
-      workspaceRuntimeById: {
-        "ws-1": {
-          controlSessionConfig: {
-            toolOutputOverflowChars: 12000,
-          },
-        } as any,
-      },
-    });
-
     const harness = setupJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -253,12 +231,40 @@ describe("desktop developer page", () => {
       const root = createRoot(container);
 
       await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace 1",
+              path: "/tmp/workspace-1",
+              createdAt: "2026-03-12T00:00:00.000Z",
+              lastOpenedAt: "2026-03-12T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.2",
+              defaultSubAgentModel: "gpt-5.2",
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          workspaceRuntimeById: {
+            "ws-1": {
+              controlSessionConfig: {
+                toolOutputOverflowChars: 12000,
+              },
+            } as any,
+          },
+        });
+      });
+
+      await act(async () => {
         root.render(createElement(DeveloperPage));
       });
 
-      const checkbox = container.querySelector('[aria-label="Enable tool output overflow spill files"]');
+      const checkbox = container.querySelector('[aria-label="Save oversized tool output to scratch files"]');
       if (!(checkbox instanceof harness.dom.window.HTMLElement)) throw new Error("missing overflow checkbox");
-      const thresholdInput = container.querySelector('[aria-label="Tool output overflow character threshold"]');
+      const thresholdInput = container.querySelector('[aria-label="Spill after this many characters"]');
       if (!(thresholdInput instanceof harness.dom.window.HTMLInputElement)) throw new Error("missing threshold input");
       const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.includes("Inherit default"));
       if (!button) throw new Error("missing inherit default button");
@@ -278,32 +284,34 @@ describe("desktop developer page", () => {
 
   test("enable default restores inherited overflow behavior from a disabled workspace override", async () => {
     const updateWorkspaceDefaults = mock(async () => {});
-    useAppStore.setState({
-      workspaces: [
-        {
-          id: "ws-1",
-          name: "Workspace 1",
-          path: "/tmp/workspace-1",
-          createdAt: "2026-03-12T00:00:00.000Z",
-          lastOpenedAt: "2026-03-12T00:00:00.000Z",
-          defaultProvider: "openai",
-          defaultModel: "gpt-5.2",
-          defaultSubAgentModel: "gpt-5.2",
-          defaultToolOutputOverflowChars: null,
-          defaultEnableMcp: true,
-          defaultBackupsEnabled: true,
-          yolo: false,
-        },
-      ],
-      selectedWorkspaceId: "ws-1",
-      updateWorkspaceDefaults,
-    });
-
     const harness = setupJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
       const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace 1",
+              path: "/tmp/workspace-1",
+              createdAt: "2026-03-12T00:00:00.000Z",
+              lastOpenedAt: "2026-03-12T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.2",
+              defaultSubAgentModel: "gpt-5.2",
+              defaultToolOutputOverflowChars: null,
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          updateWorkspaceDefaults,
+        });
+      });
 
       await act(async () => {
         root.render(createElement(DeveloperPage));
@@ -330,33 +338,6 @@ describe("desktop developer page", () => {
 
   test("enable default writes the built-in threshold when the inherited runtime default is disabled", async () => {
     const updateWorkspaceDefaults = mock(async () => {});
-    useAppStore.setState({
-      workspaces: [
-        {
-          id: "ws-1",
-          name: "Workspace 1",
-          path: "/tmp/workspace-1",
-          createdAt: "2026-03-12T00:00:00.000Z",
-          lastOpenedAt: "2026-03-12T00:00:00.000Z",
-          defaultProvider: "openai",
-          defaultModel: "gpt-5.2",
-          defaultSubAgentModel: "gpt-5.2",
-          defaultEnableMcp: true,
-          defaultBackupsEnabled: true,
-          yolo: false,
-        },
-      ],
-      selectedWorkspaceId: "ws-1",
-      workspaceRuntimeById: {
-        "ws-1": {
-          controlSessionConfig: {
-            toolOutputOverflowChars: null,
-          },
-        } as any,
-      },
-      updateWorkspaceDefaults,
-    });
-
     const harness = setupJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -364,12 +345,41 @@ describe("desktop developer page", () => {
       const root = createRoot(container);
 
       await act(async () => {
+        useAppStore.setState({
+          workspaces: [
+            {
+              id: "ws-1",
+              name: "Workspace 1",
+              path: "/tmp/workspace-1",
+              createdAt: "2026-03-12T00:00:00.000Z",
+              lastOpenedAt: "2026-03-12T00:00:00.000Z",
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.2",
+              defaultSubAgentModel: "gpt-5.2",
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: true,
+              yolo: false,
+            },
+          ],
+          selectedWorkspaceId: "ws-1",
+          workspaceRuntimeById: {
+            "ws-1": {
+              controlSessionConfig: {
+                toolOutputOverflowChars: null,
+              },
+            } as any,
+          },
+          updateWorkspaceDefaults,
+        });
+      });
+
+      await act(async () => {
         root.render(createElement(DeveloperPage));
       });
 
-      const checkbox = container.querySelector('[aria-label="Enable tool output overflow spill files"]');
+      const checkbox = container.querySelector('[aria-label="Save oversized tool output to scratch files"]');
       if (!(checkbox instanceof harness.dom.window.HTMLElement)) throw new Error("missing overflow checkbox");
-      const thresholdInput = container.querySelector('[aria-label="Tool output overflow character threshold"]');
+      const thresholdInput = container.querySelector('[aria-label="Spill after this many characters"]');
       if (!(thresholdInput instanceof harness.dom.window.HTMLInputElement)) throw new Error("missing threshold input");
       const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.includes("Enable default"));
       if (!button) throw new Error("missing enable default button");

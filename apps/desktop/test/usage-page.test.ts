@@ -174,14 +174,14 @@ describe("desktop usage page", () => {
     expect(html).toContain("gemini-3-flash-preview");
     expect(html).toContain("est. $0.02");
     expect(html).toContain("Warning triggered");
-    expect(html).toContain("Estimate notice");
+    expect(html).toContain("How estimates work");
   });
 
   test("renders an empty-state prompt when no thread is selected", () => {
     const html = renderToStaticMarkup(createElement(UsagePage, { thread: null, runtime: null }));
 
     expect(html).toContain("No thread selected");
-    expect(html).toContain("Select a thread in the sidebar to inspect its session usage.");
+    expect(html).toContain("Select a thread to inspect its session usage.");
     expect(html).toContain("Choose a thread first to see its model breakdown.");
   });
 

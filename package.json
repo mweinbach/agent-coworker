@@ -16,7 +16,6 @@
     "tui": "bun --preload @opentui/solid/preload src/tui/index.tsx",
     "desktop:dev": "cd apps/desktop && bun run dev",
     "desktop:build": "cd apps/desktop && bun run build",
-    "desktop:browser": "bun scripts/desktop_agent_browser.ts",
     "build:desktop-resources": "bun scripts/build_desktop_resources.ts",
     "docs:check": "bun scripts/check_docs.ts",
     "harness:run": "bun scripts/run_raw_agent_loops.ts --report-only",

@@ -364,6 +364,56 @@ describe("readCodexAuthMaterial fallback behavior", () => {
     expect(material?.refreshToken).toBe("legacy-refresh-token");
   });
 
+  test("token claims override stale persisted account metadata", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-auth-read-stale-account-"));
+    const paths = makePaths(home);
+    const coworkPath = path.join(paths.authDir, "codex-cli", "auth.json");
+    const accessToken = makeJwt({
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      email: "token@example.com",
+    });
+    const idToken = makeJwt({
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "acct_token",
+        chatgpt_plan_type: "pro",
+      },
+      "https://api.openai.com/profile": {
+        email: "token@example.com",
+      },
+    });
+    await fs.mkdir(path.dirname(coworkPath), { recursive: true });
+    await fs.writeFile(
+      coworkPath,
+      JSON.stringify(
+        {
+          version: 1,
+          auth_mode: "chatgpt",
+          issuer: CODEX_OAUTH_ISSUER,
+          client_id: CODEX_OAUTH_CLIENT_ID,
+          tokens: {
+            access_token: accessToken,
+            refresh_token: "refresh-token",
+            id_token: idToken,
+          },
+          account: {
+            account_id: "acct_stale",
+            email: "stale@example.com",
+            plan_type: "free",
+          },
+        },
+        null,
+        2
+      ),
+      "utf-8"
+    );
+
+    const material = await readCodexAuthMaterial(paths);
+
+    expect(material?.accountId).toBe("acct_token");
+    expect(material?.email).toBe("token@example.com");
+    expect(material?.planType).toBe("pro");
+  });
+
   test("imports legacy ~/.codex auth into Cowork auth.json when Cowork auth is missing", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "codex-auth-import-legacy-"));
     const paths = makePaths(home);

@@ -1,0 +1,83 @@
+import { describe, expect, test } from "bun:test";
+
+import {
+  stageAfterAuthMethodSelection,
+  shouldStartAutoOauthCallback,
+  type AuthMethod,
+} from "./dialog-provider";
+
+const apiMethod: AuthMethod = {
+  id: "api_key",
+  type: "api",
+  label: "API key",
+};
+
+const autoOauthMethod: AuthMethod = {
+  id: "oauth_cli",
+  type: "oauth",
+  label: "ChatGPT (browser)",
+  oauthMode: "auto",
+};
+
+const codeOauthMethod: AuthMethod = {
+  id: "oauth_code",
+  type: "oauth",
+  label: "Paste code",
+  oauthMode: "code",
+};
+
+describe("provider dialog auth flow helpers", () => {
+  test("keeps auto OAuth on the method stage until authorization succeeds", () => {
+    expect(stageAfterAuthMethodSelection(autoOauthMethod)).toBe("method");
+  });
+
+  test("routes API key and code OAuth methods to their dedicated stages", () => {
+    expect(stageAfterAuthMethodSelection(apiMethod)).toBe("api_key");
+    expect(stageAfterAuthMethodSelection(codeOauthMethod)).toBe("oauth_code");
+  });
+
+  test("starts auto OAuth callback only for a fresh challenge", () => {
+    const initialChallenge = {
+      method: "auto" as const,
+      instructions: "Continue in browser",
+    };
+    const nextChallenge = {
+      method: "auto" as const,
+      instructions: "Continue in browser",
+    };
+
+    expect(shouldStartAutoOauthCallback({
+      selectedMethod: autoOauthMethod,
+      currentChallenge: null,
+      initialChallenge: null,
+    })).toBe(false);
+    expect(shouldStartAutoOauthCallback({
+      selectedMethod: autoOauthMethod,
+      currentChallenge: initialChallenge,
+      initialChallenge,
+    })).toBe(false);
+    expect(shouldStartAutoOauthCallback({
+      selectedMethod: autoOauthMethod,
+      currentChallenge: nextChallenge,
+      initialChallenge,
+    })).toBe(true);
+  });
+
+  test("never auto-starts callback for API key or manual-code methods", () => {
+    const challenge = {
+      method: "auto" as const,
+      instructions: "Continue in browser",
+    };
+
+    expect(shouldStartAutoOauthCallback({
+      selectedMethod: apiMethod,
+      currentChallenge: challenge,
+      initialChallenge: null,
+    })).toBe(false);
+    expect(shouldStartAutoOauthCallback({
+      selectedMethod: codeOauthMethod,
+      currentChallenge: challenge,
+      initialChallenge: null,
+    })).toBe(false);
+  });
+});

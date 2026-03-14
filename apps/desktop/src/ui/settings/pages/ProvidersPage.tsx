@@ -140,6 +140,17 @@ function exaConnectionSummary(hasSavedApiKey: boolean): string {
   return hasSavedApiKey ? "Web search API key saved" : "Add a key to use Exa-backed web search";
 }
 
+function initialTabForSection(
+  initialExpandedSectionId: string | null,
+  toolProviders: ProviderName[],
+): "models" | "tools" {
+  if (initialExpandedSectionId === EXA_SECTION_ID) return "tools";
+  if (!initialExpandedSectionId?.startsWith("provider:")) return "models";
+
+  const requestedProvider = initialExpandedSectionId.slice("provider:".length);
+  return toolProviders.some((provider) => provider === requestedProvider) ? "tools" : "models";
+}
+
 export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPageProps = {}) {
   const workspacesFromStore = useAppStore((s) => s.workspaces);
   const selectedWorkspaceIdFromStore = useAppStore((s) => s.selectedWorkspaceId);
@@ -646,7 +657,9 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     ...(!isExaConnected ? [renderExaCard()] : []),
   ];
 
-  const [activeTab, setActiveTab] = useState<"models" | "tools">("models");
+  const [activeTab, setActiveTab] = useState<"models" | "tools">(() =>
+    initialTabForSection(initialExpandedSectionId, toolProviders),
+  );
 
   return (
     <div className="space-y-5">

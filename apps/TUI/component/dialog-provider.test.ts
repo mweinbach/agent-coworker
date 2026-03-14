@@ -80,6 +80,35 @@ describe("provider dialog auth flow helpers", () => {
     })).toBe(false);
   });
 
+  test("blocks duplicate auto OAuth callback while awaiting result", () => {
+    const initialChallenge = {
+      method: "auto" as const,
+      instructions: "Continue in browser",
+    };
+    const nextChallenge = {
+      method: "auto" as const,
+      instructions: "Continue in browser",
+    };
+
+    // Without awaitingResult, a fresh challenge triggers the callback
+    expect(shouldStartAutoOauthCallback({
+      selectedMethod: autoOauthMethod,
+      currentChallenge: nextChallenge,
+      initialChallenge,
+      handledChallenge: null,
+      awaitingResult: false,
+    })).toBe(true);
+
+    // With awaitingResult set, the same fresh challenge is blocked
+    expect(shouldStartAutoOauthCallback({
+      selectedMethod: autoOauthMethod,
+      currentChallenge: nextChallenge,
+      initialChallenge,
+      handledChallenge: null,
+      awaitingResult: true,
+    })).toBe(false);
+  });
+
   test("never auto-starts callback for API key or manual-code methods", () => {
     const challenge = {
       method: "auto" as const,

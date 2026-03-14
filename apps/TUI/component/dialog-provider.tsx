@@ -30,7 +30,9 @@ export function shouldStartAutoOauthCallback(opts: {
   currentChallenge: ProviderAuthChallengePayload | null;
   initialChallenge: ProviderAuthChallengePayload | null;
   handledChallenge: ProviderAuthChallengePayload | null;
+  awaitingResult?: boolean;
 }): boolean {
+  if (opts.awaitingResult) return false;
   if (!opts.selectedMethod || opts.selectedMethod.type !== "oauth" || opts.selectedMethod.oauthMode === "code") {
     return false;
   }
@@ -161,6 +163,7 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
       currentChallenge: challenge,
       initialChallenge: pendingAutoOauthChallenge(),
       handledChallenge: handledAutoOauthChallenge(),
+      awaitingResult: awaitingResult(),
     })) return;
 
     setHandledAutoOauthChallenge(challenge);

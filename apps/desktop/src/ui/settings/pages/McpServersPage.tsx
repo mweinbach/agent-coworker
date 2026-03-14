@@ -7,7 +7,7 @@ import {
   ChevronRightIcon
 } from "lucide-react";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 
 import { useAppStore } from "../../../app/store";
@@ -34,6 +34,14 @@ import {
   toBool,
   type DraftState,
 } from "./mcpServerDraft";
+import {
+  createMcpAutoValidateScheduler,
+  getEditingServerName,
+  getMcpEditorSubmitLabel,
+  getMcpEditorTitle,
+  getPreviousNameForUpsert,
+  type EditorState,
+} from "./mcpServerEditorState";
 
 function credentialDraftKey(workspaceId: string, serverName: string): string {
   return `${workspaceId}::${serverName}`;
@@ -60,18 +68,33 @@ export function McpServersPage() {
   );
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
 
-  const [editingName, setEditingName] = useState<string | null>(null);
+  const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [draft, setDraft] = useState<DraftState>(defaultDraftState);
   const [oauthCodeByName, setOauthCodeByName] = useState<Record<string, string>>({});
   const [apiKeyByName, setApiKeyByName] = useState<Record<string, string>>({});
   const [expandedServers, setExpandedServers] = useState<Record<string, boolean>>({});
+  const autoValidateSchedulerRef = useRef(
+    createMcpAutoValidateScheduler((workspaceId: string, name: string) => {
+      void validateWorkspaceMcpServer(workspaceId, name);
+    }),
+  );
+
+  const clearAutoValidateTimer = () => {
+    autoValidateSchedulerRef.current.cancel();
+  };
+
+  const editingName = getEditingServerName(editorState);
+  const isCreating = editorState?.mode === "create";
 
   useEffect(() => {
     if (!workspace) return;
-    setEditingName(null);
+    clearAutoValidateTimer();
+    setEditorState(null);
     setDraft(defaultDraftState());
     void requestWorkspaceMcpServers(workspace.id);
   }, [workspace?.id]);
+
+  useEffect(() => clearAutoValidateTimer, []);
 
   const servers = runtime?.mcpServers ?? [];
   const files = runtime?.mcpFiles ?? [];
@@ -80,8 +103,9 @@ export function McpServersPage() {
   const hasLegacyWorkspace = runtime?.mcpLegacy?.workspace.exists ?? false;
   const hasLegacyUser = runtime?.mcpLegacy?.user.exists ?? false;
 
-  const resetDraft = () => {
-    setEditingName(null);
+  const resetDraft = ({ clearAutoValidate = true }: { clearAutoValidate?: boolean } = {}) => {
+    if (clearAutoValidate) clearAutoValidateTimer();
+    setEditorState(null);
     setDraft(defaultDraftState());
   };
 
@@ -104,8 +128,13 @@ export function McpServersPage() {
         <h2 className="text-lg font-medium">Custom servers</h2>
         {workspace ? (
           <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => {
-            setEditingName(editingName === "new" ? null : "new");
-            if (editingName !== "new") setDraft(defaultDraftState());
+            if (isCreating) {
+              resetDraft();
+              return;
+            }
+            clearAutoValidateTimer();
+            setEditorState({ mode: "create" });
+            setDraft(defaultDraftState());
           }}>
             <PlusIcon className="w-4 h-4 mr-1" />
             Add server
@@ -137,10 +166,10 @@ export function McpServersPage() {
       ) : null}
 
       {workspace ? (
-        <Dialog open={!!editingName} onOpenChange={(open) => { if (!open) resetDraft(); }}>
+        <Dialog open={editorState !== null} onOpenChange={(open) => { if (!open) resetDraft(); }}>
           <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>{editingName && editingName !== "new" ? `Edit ${editingName}` : "Connect to a custom MCP"}</DialogTitle>
+              <DialogTitle>{getMcpEditorTitle(editorState)}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-4">
             <div className="grid gap-3 md:grid-cols-2">
@@ -278,17 +307,16 @@ export function McpServersPage() {
                   if (!workspace) return;
                   const next = buildServerFromDraft(draft);
                   if (!next) return;
-                  void upsertWorkspaceMcpServer(workspace.id, next, editingName && editingName !== "new" ? editingName : undefined);
-                  // Automatically trigger validation upon save
-                  setTimeout(() => {
-                    void validateWorkspaceMcpServer(workspace.id, next.name);
-                  }, 500);
-                  resetDraft();
+                  const workspaceId = workspace.id;
+                  const previousName = getPreviousNameForUpsert(editorState);
+                  void upsertWorkspaceMcpServer(workspaceId, next, previousName);
+                  autoValidateSchedulerRef.current.schedule(workspaceId, next.name);
+                  resetDraft({ clearAutoValidate: false });
                 }}
               >
-                {editingName && editingName !== "new" ? "Save changes" : "Add server"}
+                {getMcpEditorSubmitLabel(editorState)}
               </Button>
-              <Button type="button" variant="outline" onClick={resetDraft}>
+              <Button type="button" variant="outline" onClick={() => resetDraft()}>
                 Cancel
               </Button>
             </div>
@@ -321,7 +349,8 @@ export function McpServersPage() {
                     {canEdit && (
                       <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => {
                         if (!isExpanded) toggleExpand(server.name);
-                        setEditingName(server.name);
+                        clearAutoValidateTimer();
+                        setEditorState({ mode: "edit", name: server.name });
                         setDraft(draftFromServer(server));
                       }}>
                         <SettingsIcon className="w-4 h-4" />

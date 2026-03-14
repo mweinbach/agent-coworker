@@ -132,8 +132,7 @@ export function MemoryPage() {
       <div className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">Memory</h1>
         <p className="text-sm text-muted-foreground">
-          Manage persistent agent memories for this workspace. The hot cache is injected into the system prompt, and
-          named entries stay searchable through the memory tool.
+          Choose what Cowork should remember in this workspace and what it should keep available for later lookup.
         </p>
       </div>
 
@@ -170,8 +169,7 @@ export function MemoryPage() {
               </Select>
             </div>
             <div className="text-xs text-muted-foreground">
-              The hot cache is the prompt-loaded `hot`/`AGENT.md` entry. Named memories like `people/sarah` stay
-              searchable but are not injected automatically.
+              Named memories are not always loaded into context, but Cowork can still find them later.
             </div>
 
             <Textarea

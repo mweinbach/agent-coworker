@@ -76,7 +76,7 @@ export function McpServersPage() {
     <div className="space-y-5">
       <div className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">MCP servers</h1>
-        <p className="text-sm text-muted-foreground">Manage layered MCP servers via control socket messages.</p>
+        <p className="text-sm text-muted-foreground">Connect external tools and services Cowork can use in this workspace.</p>
       </div>
 
       {workspace ? (
@@ -102,7 +102,7 @@ export function McpServersPage() {
             ) : null}
             <div className="text-xs text-muted-foreground">{workspace.path}</div>
             <Button variant="outline" type="button" onClick={() => void requestWorkspaceMcpServers(workspace.id)}>
-              Refresh snapshot
+              Reload server list
             </Button>
           </CardContent>
         </Card>

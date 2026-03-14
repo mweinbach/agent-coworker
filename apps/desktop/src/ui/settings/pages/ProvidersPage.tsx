@@ -306,7 +306,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                 setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: !revealApiKey }))
               }
             >
-              {revealApiKey ? "Hide" : "View"}
+              {revealApiKey ? "Hide" : "Reveal"}
             </Button>
             {!isEditingApiKey ? (
               <Button
@@ -319,7 +319,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                   setRevealApiKeyByMethod((s) => ({ ...s, [stateKey]: false }));
                 }}
               >
-                Edit
+                Replace key
               </Button>
             ) : null}
             {isEditingApiKey && hasSavedApiKey ? (
@@ -434,7 +434,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
           </div>
         ) : null}
 
-        {resultMatch ? (
+        {!isEditingApiKey && resultMatch ? (
           <div className={cn("text-xs", resultMatch.ok ? "text-emerald-600" : "text-destructive")}>
             {resultMatch.message}
           </div>
@@ -448,7 +448,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       <div className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">Providers</h1>
         <p className="text-sm text-muted-foreground">
-          Connect your AI providers to start chatting.{" "}
+          Manage the providers Cowork can use in this app and check whether each one is ready.{" "}
           <Button
             variant="link"
             className="h-auto px-0"
@@ -619,7 +619,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                   {exaExpanded ? (
                     <CardContent id="provider-panel-exa-search" className="space-y-4 border-t border-border/70 px-5 py-4">
                       <div className="text-sm text-muted-foreground">
-                        Configure the Exa API key used for web search without nesting it under the Google provider.
+                        Use Exa for better web search results when Cowork searches the web.
                       </div>
                       {renderAuthMethod({
                         provider: "google",

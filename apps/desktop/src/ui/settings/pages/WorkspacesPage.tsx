@@ -225,9 +225,12 @@ export function WorkspaceUserProfileCard({
   updateWorkspaceDefaults,
 }: WorkspaceUserProfileCardProps) {
   const [draft, setDraft] = useState(() => buildUserProfileDraft(workspace));
+  const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   useEffect(() => {
     setDraft(buildUserProfileDraft(workspace));
+    setSaveSuccess(false);
   }, [
     workspace.id,
     workspace.userName,
@@ -237,25 +240,39 @@ export function WorkspaceUserProfileCard({
   ]);
 
   const currentProfile = normalizeWorkspaceUserProfile(workspace.userProfile);
+  const isDirty = 
+    draft.userName !== (workspace.userName ?? "") ||
+    draft.instructions !== currentProfile.instructions ||
+    draft.work !== currentProfile.work ||
+    draft.details !== currentProfile.details;
 
-  const commitUserName = (value: string) => {
-    const trimmed = value.trim();
-    if (trimmed === (workspace.userName ?? "")) return;
-    void updateWorkspaceDefaults(workspace.id, { userName: trimmed });
-  };
-
-  const commitProfileField = (field: keyof WorkspaceUserProfile, value: string) => {
-    const trimmed = value.trim();
-    if (trimmed === currentProfile[field]) return;
-    void updateWorkspaceDefaults(workspace.id, { userProfile: { [field]: trimmed } });
+  const handleSave = async () => {
+    if (!isDirty) return;
+    setSaving(true);
+    setSaveSuccess(false);
+    
+    try {
+      await updateWorkspaceDefaults(workspace.id, {
+        userName: draft.userName.trim(),
+        userProfile: {
+          instructions: draft.instructions.trim(),
+          work: draft.work.trim(),
+          details: draft.details.trim(),
+        }
+      });
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <Card className="border-border/80 bg-card/85">
       <CardHeader>
-        <CardTitle>User Profile Context</CardTitle>
+        <CardTitle>How Cowork should understand you in this workspace</CardTitle>
         <CardDescription>
-          Workspace-specific identity and prompt context. Changes save when the field loses focus.
+          Workspace-specific identity and prompt context.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -266,30 +283,30 @@ export function WorkspaceUserProfileCard({
             autoComplete="off"
             placeholder="Name used in prompt context"
             value={draft.userName}
-            onChange={(event) =>
+            onChange={(event) => {
               setDraft((current) => ({
                 ...current,
                 userName: event.target.value,
-              }))
-            }
-            onBlur={(event) => commitUserName(event.currentTarget.value)}
+              }));
+              setSaveSuccess(false);
+            }}
           />
         </div>
 
         <div className="space-y-2">
-          <div className="text-sm font-medium text-foreground">Work / Job</div>
+          <div className="text-sm font-medium text-foreground">Role or work context</div>
           <Textarea
             aria-label="Workspace work context"
             className="min-h-24"
             placeholder="Role, team, domain, or responsibilities"
             value={draft.work}
-            onChange={(event) =>
+            onChange={(event) => {
               setDraft((current) => ({
                 ...current,
                 work: event.target.value,
-              }))
-            }
-            onBlur={(event) => commitProfileField("work", event.currentTarget.value)}
+              }));
+              setSaveSuccess(false);
+            }}
           />
         </div>
 
@@ -300,31 +317,38 @@ export function WorkspaceUserProfileCard({
             className="min-h-24"
             placeholder="Behavior instructions the agent should follow"
             value={draft.instructions}
-            onChange={(event) =>
+            onChange={(event) => {
               setDraft((current) => ({
                 ...current,
                 instructions: event.target.value,
-              }))
-            }
-            onBlur={(event) => commitProfileField("instructions", event.currentTarget.value)}
+              }));
+              setSaveSuccess(false);
+            }}
           />
         </div>
 
         <div className="space-y-2">
-          <div className="text-sm font-medium text-foreground">Details Agent Should Know</div>
+          <div className="text-sm font-medium text-foreground">Background details</div>
           <Textarea
             aria-label="Workspace profile details"
             className="min-h-24"
             placeholder="Personal or project details the agent should remember"
             value={draft.details}
-            onChange={(event) =>
+            onChange={(event) => {
               setDraft((current) => ({
                 ...current,
                 details: event.target.value,
-              }))
-            }
-            onBlur={(event) => commitProfileField("details", event.currentTarget.value)}
+              }));
+              setSaveSuccess(false);
+            }}
           />
+        </div>
+
+        <div className="flex items-center gap-3 pt-2">
+          <Button onClick={handleSave} disabled={!isDirty || saving}>
+            {saving ? "Saving..." : "Save changes"}
+          </Button>
+          {saveSuccess && <span className="text-sm text-emerald-600">Saved successfully</span>}
         </div>
       </CardContent>
     </Card>
@@ -526,20 +550,21 @@ export function WorkspacesPage() {
 
               <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
                 <div>
-                  <div className="text-sm font-medium">Auto-approve commands</div>
-                  <div className="text-xs text-muted-foreground">Skip confirmation prompts for shell commands.</div>
+                  <div className="text-sm font-medium">Run shell commands without asking</div>
+                  <div className="text-xs text-muted-foreground">Skip confirmation prompts and run shell commands immediately without review.</div>
                 </div>
                 <Checkbox
                   checked={yolo}
-                  aria-label="Enable auto-approve commands"
+                  aria-label="Run shell commands without asking"
                   onCheckedChange={async (checked) => {
                     if (!ws) return;
                     const next = toBoolean(checked);
                     const confirmed = await confirmAction({
                       title: next ? "Enable auto-approve commands" : "Disable auto-approve commands",
                       message: next
-                        ? "Enable auto-approve? The agent will run commands without asking."
+                        ? "Enable auto-approve? The agent will run shell commands on your machine without asking for review first."
                         : "Disable auto-approve?",
+                      detail: next ? "This is a high-risk setting. The server will restart to apply this change." : undefined,
                       confirmLabel: next ? "Enable" : "Disable",
                       cancelLabel: "Cancel",
                       kind: "warning",
@@ -608,15 +633,6 @@ export function WorkspacesPage() {
               </div>
             </CardContent>
           </Card>
-
-          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-            <span>Current provider:</span>
-            <Badge variant="secondary">{displayProviderName(provider)}</Badge>
-            <span>Model:</span>
-            <Badge variant="secondary">{model}</Badge>
-            <span>Subagent:</span>
-            <Badge variant="secondary">{subAgentModel || model}</Badge>
-          </div>
         </>
       )}
     </div>

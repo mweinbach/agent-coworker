@@ -146,7 +146,7 @@ function BackupSidebar({
         {entries.length === 0 && !loading ? (
           <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
             <ArchiveIcon className="h-8 w-8 mb-3 text-muted-foreground/30" />
-            <p className="text-sm text-muted-foreground">No backups found.</p>
+            <p className="text-sm text-muted-foreground">No backups yet. Backups appear after Cowork creates recovery snapshots for a session in this workspace.</p>
           </div>
         ) : null}
 
@@ -637,7 +637,7 @@ export function BackupPage(props: BackupPageProps = {}) {
               }}
             />
             <span className={canToggleSelectedEntry ? "text-foreground" : "text-muted-foreground"}>
-              Session backups
+              Keep recovery snapshots for this session
             </span>
           </label>
           {workspaceList.length > 1 && props.workspace === undefined && (
@@ -682,7 +682,12 @@ export function BackupPage(props: BackupPageProps = {}) {
           {!selectedEntry ? (
             <div className="flex h-full flex-1 flex-col items-center justify-center space-y-4 bg-background/92 p-8 text-center text-muted-foreground">
               <ArchiveIcon className="h-16 w-16 opacity-20" />
-              <p className="text-sm">Select a backup or checkpoint from the sidebar to inspect it.</p>
+              <div className="space-y-2 max-w-sm">
+                <p className="text-sm font-medium text-foreground">Select a backup to inspect</p>
+                <p className="text-xs">
+                  Cowork creates recovery snapshots when you chat. Select a session to view its checkpoints, or select a checkpoint to see what files changed.
+                </p>
+              </div>
             </div>
           ) : selectedCheckpointId === null ? (
             <BackupDetailView

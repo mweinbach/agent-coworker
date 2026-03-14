@@ -22,6 +22,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "../../../components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../../components/ui/select";
 import { formatCost, formatTokenCount } from "../../../../../../src/session/pricing";
 
 type UsagePageProps = {
@@ -71,12 +78,14 @@ export function UsagePage(props: UsagePageProps = {}) {
   const selectedThreadIdFromStore = useAppStore((s) => s.selectedThreadId);
   const threadsFromStore = useAppStore((s) => s.threads);
   const threadRuntimeByIdFromStore = useAppStore((s) => s.threadRuntimeById);
+  const selectThreadFromStore = useAppStore((s) => s.selectThread);
   const clearThreadUsageHardCapFromStore = useAppStore((s) => s.clearThreadUsageHardCap);
   const serverState = typeof window === "undefined" ? useAppStore.getState() : null;
 
   const selectedThreadId = serverState?.selectedThreadId ?? selectedThreadIdFromStore;
   const threads = serverState?.threads ?? threadsFromStore;
   const threadRuntimeById = serverState?.threadRuntimeById ?? threadRuntimeByIdFromStore;
+  const selectThread = selectThreadFromStore;
 
   const thread = props.thread !== undefined
     ? props.thread
@@ -120,7 +129,7 @@ export function UsagePage(props: UsagePageProps = {}) {
           <DialogTrigger asChild>
             <Button type="button" variant="outline" className="gap-2">
               <AlertTriangleIcon className="h-4 w-4" />
-              Estimate notice
+              How estimates work
             </Button>
           </DialogTrigger>
           <DialogContent showClose className="max-w-lg">
@@ -153,14 +162,30 @@ export function UsagePage(props: UsagePageProps = {}) {
       <Card className="border-border/80 bg-card/85">
         <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 max-[960px]:flex-col">
           <div>
-            <CardTitle>{selectedThreadTitle}</CardTitle>
+            <CardTitle>Viewing usage for: {selectedThreadTitle}</CardTitle>
             <CardDescription>
               {thread
                 ? "Usage is scoped to the currently selected thread."
-                : "Select a thread in the sidebar to inspect its session usage."}
+                : "Select a thread to inspect its session usage."}
             </CardDescription>
           </div>
-          <Badge variant={budgetTone(runtime)}>{sessionSourceLabel(thread, runtime)}</Badge>
+          <div className="flex items-center gap-3">
+            {threads.length > 0 && (
+              <Select value={thread?.id ?? ""} onValueChange={(value) => void selectThread(value)}>
+                <SelectTrigger aria-label="Selected thread" className="w-[200px]">
+                  <SelectValue placeholder="Select a thread" />
+                </SelectTrigger>
+                <SelectContent>
+                  {threads.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>
+                      {t.title || "Untitled Thread"}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <Badge variant={budgetTone(runtime)}>{sessionSourceLabel(thread, runtime)}</Badge>
+          </div>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-3">
           <div>

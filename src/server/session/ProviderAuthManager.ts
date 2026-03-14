@@ -10,7 +10,7 @@ import {
 } from "../../providers/authRegistry";
 import { getOpenCodeDisplayName, isOpenCodeProviderName, isOpenCodeSiblingPair } from "../../providers/opencodeShared";
 import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
-import { isProviderName } from "../../types";
+import { defaultRuntimeNameForProvider, isProviderName } from "../../types";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import type { ServerEvent } from "../protocol";
 import { assertSupportedModel } from "../../models/registry";
@@ -77,12 +77,16 @@ export class ProviderAuthManager {
     const nextSubAgentModel = currentConfig.provider !== nextProvider || currentConfig.subAgentModel === currentConfig.model
       ? modelId
       : currentConfig.subAgentModel;
+    const nextRuntime = currentConfig.provider === nextProvider
+      ? currentConfig.runtime
+      : defaultRuntimeNameForProvider(nextProvider);
     const shouldClearProviderState =
       currentConfig.provider !== nextProvider || currentConfig.model !== modelId;
 
     this.opts.setConfig({
       ...currentConfig,
       provider: nextProvider,
+      ...(nextRuntime !== undefined ? { runtime: nextRuntime } : {}),
       model: modelId,
       subAgentModel: nextSubAgentModel,
     });

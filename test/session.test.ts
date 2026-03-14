@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { createRuntime } from "../src/runtime";
 import { SessionCostTracker } from "../src/session/costTracker";
 import type { AgentConfig, TodoItem } from "../src/types";
 import { ASK_SKIP_TOKEN, type ServerEvent } from "../src/server/protocol";
@@ -1322,6 +1323,24 @@ describe("AgentSession", () => {
         expect(updated.config.model).toBe("claude-sonnet-4-5");
       }
       expect(events.some((e) => e.type === "error")).toBe(false);
+    });
+
+    test("normalizes runtime when switching away from openai-family providers", async () => {
+      const { session } = makeSession({
+        config: {
+          ...makeConfig("/tmp/test-session-openai-runtime"),
+          provider: "openai",
+          runtime: "openai-responses",
+          model: "gpt-5.2",
+          subAgentModel: "gpt-5.2",
+        },
+      });
+
+      await session.setModel("gemini-3-flash-preview", "google");
+
+      expect((session as any).state.config.provider).toBe("google");
+      expect((session as any).state.config.runtime).toBe("pi");
+      expect(createRuntime((session as any).state.config).name).toBe("pi");
     });
 
     test("clears persisted OpenAI continuation state when provider/model changes", async () => {

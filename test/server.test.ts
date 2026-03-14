@@ -2651,6 +2651,62 @@ describe("Protocol Doc Parity", () => {
     }
   });
 
+  test("set_model normalizes runtime for future sessions after provider changes", async () => {
+    const tmpDir = await makeTmpProject();
+    const seenConfigs: Array<{ provider: string; runtime: string | undefined; model: string }> = [];
+    const runTurnImpl = async (params: any) => {
+      seenConfigs.push({
+        provider: params.config.provider,
+        runtime: params.config.runtime,
+        model: params.config.model,
+      });
+      return {
+        text: "ok",
+        responseMessages: [],
+      };
+    };
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      env: {
+        AGENT_WORKING_DIR: tmpDir,
+        AGENT_PROVIDER: "openai",
+        AGENT_MODEL: "gpt-5.2",
+        COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+      },
+      runTurnImpl: runTurnImpl as any,
+    }));
+
+    try {
+      const modelUpdate = await sendAndCollect(
+        url,
+        (sessionId) => ({ type: "set_model", sessionId, provider: "google", model: "gemini-3-flash-preview" }),
+        1,
+      );
+
+      expect(modelUpdate.responses[0].type).toBe("config_updated");
+      if (modelUpdate.responses[0].type === "config_updated") {
+        expect(modelUpdate.responses[0].config.provider).toBe("google");
+        expect(modelUpdate.responses[0].config.model).toBe("gemini-3-flash-preview");
+      }
+
+      const nextSession = await sendAndCollect(
+        url,
+        (sessionId) => ({ type: "user_message", sessionId, text: "runtime please" }),
+        0,
+      );
+
+      expect(nextSession.hello.config.provider).toBe("google");
+      expect(nextSession.hello.config.model).toBe("gemini-3-flash-preview");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(seenConfigs).toContainEqual({
+        provider: "google",
+        runtime: "pi",
+        model: "gemini-3-flash-preview",
+      });
+    } finally {
+      server.stop();
+    }
+  });
+
   test("set_config deep-merges editable providerOptions into project config", async () => {
     const tmpDir = await makeTmpProject();
     await fs.writeFile(

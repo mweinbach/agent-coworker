@@ -337,6 +337,30 @@ describe("desktop protocol v2 mapping", () => {
     });
   });
 
+  test("control errors clear memory loading when memory_list fails", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+
+    await useAppStore.getState().requestWorkspaceMemories(workspaceId);
+    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.memoriesLoading).toBe(true);
+
+    controlSocket.emit({
+      type: "error",
+      sessionId: "control-session",
+      message: "Failed to list memories: SQLITE_CORRUPT",
+      code: "internal_error",
+      source: "session",
+    });
+
+    const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
+    expect(runtime?.memoriesLoading).toBe(false);
+
+    const notification = useAppStore.getState().notifications.at(-1);
+    expect(notification?.title).toBe("Control session error");
+    expect(notification?.detail).toContain("session/internal_error");
+  });
+
   test("connectProvider sends provider_auth_set_api_key for keyed providers", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const controlSocket = socketByClient("desktop-control");

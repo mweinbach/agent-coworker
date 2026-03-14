@@ -32,6 +32,8 @@ export type SessionConfigPatch = {
   yolo?: boolean;
   observabilityEnabled?: boolean;
   backupsEnabled?: boolean;
+  enableMemory?: boolean;
+  memoryRequireApproval?: boolean;
   subAgentModel?: string;
   maxSteps?: number;
   toolOutputOverflowChars?: number | null;
@@ -50,6 +52,8 @@ export type SessionConfigState = {
   observabilityEnabled: boolean;
   backupsEnabled: boolean;
   defaultBackupsEnabled: boolean;
+  enableMemory: boolean;
+  memoryRequireApproval: boolean;
   subAgentModel: string;
   maxSteps: number;
   toolOutputOverflowChars: number | null;
@@ -137,6 +141,9 @@ export type ClientMessage =
   | { type: "set_session_title"; sessionId: string; title: string }
   | { type: "list_sessions"; sessionId: string }
   | { type: "delete_session"; sessionId: string; targetSessionId: string }
+  | { type: "memory_list"; sessionId: string; scope?: "workspace" | "user" }
+  | { type: "memory_upsert"; sessionId: string; scope: "workspace" | "user"; id?: string; content: string }
+  | { type: "memory_delete"; sessionId: string; scope: "workspace" | "user"; id: string }
   | { type: "subagent_create"; sessionId: string; agentType: SubagentAgentType; task: string }
   | { type: "subagent_sessions_get"; sessionId: string }
   | {
@@ -172,7 +179,7 @@ export type ServerEvent =
     parentSessionId?: string;
     agentType?: SubagentAgentType;
   }
-  | { type: "session_settings"; sessionId: string; enableMcp: boolean }
+  | { type: "session_settings"; sessionId: string; enableMcp: boolean; enableMemory: boolean; memoryRequireApproval: boolean }
   | {
     type: "session_info";
     sessionId: string;
@@ -314,6 +321,7 @@ export type ServerEvent =
     config: Pick<AgentConfig, "provider" | "model" | "workingDirectory"> & { outputDirectory?: string };
   }
   | { type: "tools"; sessionId: string; tools: Array<{ name: string; description: string }> }
+  | { type: "memory_list"; sessionId: string; memories: Array<{ id: string; scope: "workspace" | "user"; content: string; createdAt: string; updatedAt: string }> }
   | { type: "commands"; sessionId: string; commands: CommandInfo[] }
   | { type: "skills_list"; sessionId: string; skills: SkillEntry[] }
   | { type: "skill_content"; sessionId: string; skill: SkillEntry; content: string }
@@ -451,6 +459,9 @@ export const CLIENT_MESSAGE_TYPES = [
   "set_session_title",
   "list_sessions",
   "delete_session",
+  "memory_list",
+  "memory_upsert",
+  "memory_delete",
   "subagent_create",
   "subagent_sessions_get",
   "set_config",
@@ -503,6 +514,7 @@ export const SERVER_EVENT_TYPES = [
   "subagent_sessions",
   "session_deleted",
   "session_config",
+  "memory_list",
   "file_uploaded",
   "error",
   "pong",

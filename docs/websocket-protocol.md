@@ -1863,6 +1863,19 @@ At least one of `warnAtUsd` or `stopAtUsd` must be present. If both numeric valu
 
 ---
 
+
+### memory_list
+
+Retrieve stored memory entries (optionally by scope).
+
+### memory_upsert
+
+Create or update a memory entry in workspace/user scope.
+
+### memory_delete
+
+Delete a memory entry from workspace/user scope.
+
 ## Server -> Client Events
 
 ### server_hello
@@ -3163,6 +3176,39 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable Codex CLI reasoning effort |
 | `config.providerOptions.codex-cli.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | Current editable Codex CLI reasoning summary |
 | `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable Codex CLI verbosity |
+
+---
+
+### memory_list
+
+Current memory entries for workspace/user scopes.
+
+```json
+{
+  "type": "memory_list",
+  "sessionId": "...",
+  "memories": [
+    {
+      "id": "coding-style",
+      "scope": "workspace",
+      "content": "Prefer explicit types at module boundaries.",
+      "createdAt": "2026-03-13T00:00:00.000Z",
+      "updatedAt": "2026-03-13T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"memory_list"` | — |
+| `sessionId` | `string` | Session identifier |
+| `memories` | `Array<object>` | Current memory entries |
+| `memories[].id` | `string` | Memory identifier |
+| `memories[].scope` | `"workspace" \| "user"` | Memory scope |
+| `memories[].content` | `string` | Memory text |
+| `memories[].createdAt` | `string` | ISO timestamp |
+| `memories[].updatedAt` | `string` | ISO timestamp |
 
 ---
 

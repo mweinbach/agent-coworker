@@ -564,7 +564,8 @@ describe("loadSystemPrompt", () => {
     });
 
     const prompt = await loadSystemPrompt(config);
-    expect(prompt).toContain("## Memory (loaded from previous sessions)");
+    expect(prompt).toContain("## Memory");
+    expect(prompt).toContain("### Loaded Hot Cache");
     expect(prompt).toContain("This is the project hot cache content.");
   });
 
@@ -586,7 +587,8 @@ describe("loadSystemPrompt", () => {
     });
 
     const prompt = await loadSystemPrompt(config);
-    expect(prompt).toContain("## Memory (loaded from previous sessions)");
+    expect(prompt).toContain("## Memory");
+    expect(prompt).toContain("### Loaded Hot Cache");
     expect(prompt).toContain("This is the user hot cache content.");
   });
 
@@ -616,6 +618,25 @@ describe("loadSystemPrompt", () => {
     expect(prompt).not.toContain("USER cache loses.");
   });
 
+  test("does not inject deep memory entries into the startup prompt", async () => {
+    const { tmp } = await makeTmpDirs();
+    const projectAgentDir = path.join(tmp, "project", ".agent");
+    const userAgentDir = path.join(tmp, "home", ".agent");
+
+    await writeFile(path.join(projectAgentDir, "AGENT.md"), "Hot cache summary.");
+    await writeFile(path.join(projectAgentDir, "memory", "people", "sarah.md"), "Sarah deep profile.");
+
+    const config = makeConfig({
+      projectAgentDir,
+      userAgentDir,
+      skillsDirs: ["/nonexistent/skills"],
+    });
+
+    const prompt = await loadSystemPrompt(config);
+    expect(prompt).toContain("Hot cache summary.");
+    expect(prompt).not.toContain("Sarah deep profile.");
+  });
+
   test("skips hot cache section when no AGENT.md exists", async () => {
     const { tmp } = await makeTmpDirs();
     const projectAgentDir = path.join(tmp, "project-empty", ".agent");
@@ -628,7 +649,19 @@ describe("loadSystemPrompt", () => {
     });
 
     const prompt = await loadSystemPrompt(config);
-    expect(prompt).not.toContain("## Memory (loaded from previous sessions)");
+    expect(prompt).not.toContain("## Memory");
+  });
+
+  test("removes memory guidance from the prompt when memory is disabled", async () => {
+    const config = makeConfig({
+      enableMemory: false,
+      skillsDirs: ["/nonexistent/skills"],
+    });
+
+    const prompt = await loadSystemPrompt(config);
+    expect(prompt).toContain("## Memory Disabled");
+    expect(prompt).not.toContain("Lookup flow: AGENT.md");
+    expect(prompt).not.toContain("Read, write, or search persistent memory");
   });
 
   test("skips hot cache section when AGENT.md is empty/whitespace", async () => {
@@ -645,7 +678,7 @@ describe("loadSystemPrompt", () => {
     });
 
     const prompt = await loadSystemPrompt(config);
-    expect(prompt).not.toContain("## Memory (loaded from previous sessions)");
+    expect(prompt).not.toContain("## Memory");
   });
 
   test("uses real system.md from repo and all variables get replaced", async () => {
@@ -804,6 +837,24 @@ describe("loadHotCache (tested indirectly)", () => {
     expect(prompt).not.toContain("## Memory");
   });
 
+  test("skips memory injection when the memory database is corrupt", async () => {
+    const { tmp } = await makeTmpDirs();
+    const projectAgentDir = path.join(tmp, "corrupt-project", ".agent");
+    const userAgentDir = path.join(tmp, "corrupt-home", ".agent");
+
+    await writeFile(path.join(projectAgentDir, "memory.sqlite"), "not a sqlite db");
+
+    const config = makeConfig({
+      projectAgentDir,
+      userAgentDir,
+      skillsDirs: ["/nonexistent/skills"],
+    });
+
+    const prompt = await loadSystemPrompt(config);
+    expect(prompt).toContain("<environment>");
+    expect(prompt).not.toContain("## Memory");
+  });
+
   test("AGENT.md with rich markdown content is preserved", async () => {
     const { tmp } = await makeTmpDirs();
     const projectAgentDir = path.join(tmp, "rich-project", ".agent");
@@ -859,15 +910,8 @@ describe("loadHotCache (tested indirectly)", () => {
 
     const prompt = await loadSystemPrompt(config);
 
-    // Both sections should be present
-    expect(prompt).toContain("## Available Skills");
-    expect(prompt).toContain("combo-skill");
-    expect(prompt).toContain("## Memory (loaded from previous sessions)");
+    expect(prompt).toContain("## Memory");
+    expect(prompt).toContain("### Loaded Hot Cache");
     expect(prompt).toContain("Hot cache content present.");
-
-    // Skills section should come before memory section
-    const skillsIndex = prompt.indexOf("## Available Skills");
-    const memoryIndex = prompt.indexOf("## Memory (loaded from previous sessions)");
-    expect(skillsIndex).toBeLessThan(memoryIndex);
   });
 });

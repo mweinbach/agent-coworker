@@ -13,6 +13,7 @@ import { BackupPage } from "./pages/BackupPage";
 import { McpServersPage } from "./pages/McpServersPage";
 import { UpdatesPage } from "./pages/UpdatesPage";
 import { DeveloperPage } from "./pages/DeveloperPage";
+import { MemoryPage } from "./pages/MemoryPage";
 
 type SettingsPageDefinition = {
   id: SettingsPageId;
@@ -26,6 +27,7 @@ const SETTINGS_PAGES: SettingsPageDefinition[] = [
   { id: "workspaces", label: "Workspaces", render: () => <WorkspacesPage /> },
   { id: "backup", label: "Backup", render: () => <BackupPage /> },
   { id: "mcp", label: "MCP Servers", render: () => <McpServersPage /> },
+  { id: "memory", label: "Memory", render: () => <MemoryPage /> },
   { id: "updates", label: "Updates", render: () => <UpdatesPage /> },
   { id: "developer", label: "Developer", render: () => <DeveloperPage /> },
 ];

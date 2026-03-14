@@ -184,7 +184,7 @@ function makeSession(
       patch: Partial<
         Pick<
           AgentConfig,
-          "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
+          "provider" | "model" | "subAgentModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
         >
       > & {
         userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -515,6 +515,135 @@ describe("AgentSession", () => {
 
       resolveRunTurn();
       await first;
+    });
+  });
+
+  describe("memory settings", () => {
+    test("setConfig refreshes the cached system prompt when enableMemory changes", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const loadSystemPromptWithSkillsImpl = mock(async (config: AgentConfig) => ({
+        prompt: `prompt:memory-${String(config.enableMemory ?? true)}`,
+        discoveredSkills: [{ name: "memory-skill", description: "Memory skill" }],
+      }));
+      const { session } = makeSession({
+        persistProjectConfigPatchImpl,
+        loadSystemPromptWithSkillsImpl,
+        system: "prompt:memory-true",
+      });
+
+      await session.setConfig({ enableMemory: false });
+      await session.sendUserMessage("hello");
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({ enableMemory: false });
+
+      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(runTurnArgs.system).toBe("prompt:memory-false");
+      expect(runTurnArgs.discoveredSkills).toEqual([
+        { name: "memory-skill", description: "Memory skill" },
+      ]);
+    });
+
+    test("upsertMemory refreshes the cached system prompt for later turns", async () => {
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "prompt:memory-updated",
+        discoveredSkills: [{ name: "memory-skill", description: "Memory skill" }],
+      }));
+      const { session, events } = makeSession({
+        loadSystemPromptWithSkillsImpl,
+        system: "prompt:stale",
+      });
+
+      const memoryStore = (session as any).memoryStore;
+      memoryStore.upsert = mock(async () => ({
+        id: "note",
+        scope: "workspace",
+        content: "Remember this",
+        createdAt: "2026-03-13T00:00:00.000Z",
+        updatedAt: "2026-03-13T00:00:00.000Z",
+      }));
+      memoryStore.list = mock(async () => []);
+
+      await session.upsertMemory("workspace", "note", "Remember this");
+      await session.sendUserMessage("hello");
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      expect(events.some((evt) => evt.type === "memory_list")).toBe(true);
+
+      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(runTurnArgs.system).toBe("prompt:memory-updated");
+    });
+
+    test("deleteMemory refreshes the cached system prompt for later turns", async () => {
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "prompt:memory-deleted",
+        discoveredSkills: [{ name: "memory-skill", description: "Memory skill" }],
+      }));
+      const { session, events } = makeSession({
+        loadSystemPromptWithSkillsImpl,
+        system: "prompt:stale",
+      });
+
+      const memoryStore = (session as any).memoryStore;
+      memoryStore.remove = mock(async () => true);
+      memoryStore.list = mock(async () => []);
+
+      await session.deleteMemory("workspace", "note");
+      await session.sendUserMessage("hello");
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      expect(events.some((evt) => evt.type === "memory_list")).toBe(true);
+
+      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(runTurnArgs.system).toBe("prompt:memory-deleted");
+    });
+
+    test("upsertMemory emits a structured error when the memory store write fails", async () => {
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "prompt:unused",
+        discoveredSkills: [],
+      }));
+      const { session, events } = makeSession({ loadSystemPromptWithSkillsImpl });
+
+      const memoryStore = (session as any).memoryStore;
+      memoryStore.upsert = mock(async () => {
+        throw new Error("db write failed");
+      });
+
+      await session.upsertMemory("workspace", "note", "Remember this");
+
+      expect(loadSystemPromptWithSkillsImpl).not.toHaveBeenCalled();
+      const errEvt = events.find((evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error");
+      expect(errEvt).toBeDefined();
+      if (errEvt) {
+        expect(errEvt.code).toBe("internal_error");
+        expect(errEvt.source).toBe("session");
+        expect(errEvt.message).toContain("Failed to upsert memory: Error: db write failed");
+      }
+    });
+
+    test("deleteMemory emits a structured error when the memory store delete fails", async () => {
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "prompt:unused",
+        discoveredSkills: [],
+      }));
+      const { session, events } = makeSession({ loadSystemPromptWithSkillsImpl });
+
+      const memoryStore = (session as any).memoryStore;
+      memoryStore.remove = mock(async () => {
+        throw new Error("db delete failed");
+      });
+
+      await session.deleteMemory("workspace", "note");
+
+      expect(loadSystemPromptWithSkillsImpl).not.toHaveBeenCalled();
+      const errEvt = events.find((evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error");
+      expect(errEvt).toBeDefined();
+      if (errEvt) {
+        expect(errEvt.code).toBe("internal_error");
+        expect(errEvt.source).toBe("session");
+        expect(errEvt.message).toContain("Failed to delete memory: Error: db delete failed");
+      }
     });
   });
 

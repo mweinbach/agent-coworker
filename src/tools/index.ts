@@ -40,7 +40,7 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     spawnAgent: createSpawnAgentTool(ctx),
     notebookEdit: createNotebookEditTool(ctx),
     skill: createSkillTool(ctx),
-    memory: createMemoryTool(ctx),
+    ...(ctx.config.enableMemory ?? true ? { memory: createMemoryTool(ctx) } : {}),
     usage: createUsageTool(ctx),
   };
 

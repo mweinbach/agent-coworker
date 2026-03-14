@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AgentConfig } from "./types";
 import { discoverSkills } from "./skills";
 import { assertSupportedModel, type SupportedModel } from "./models/registry";
+import { MemoryStore } from "./memoryStore";
 
 async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
   const supportedModel = assertSupportedModel(config.provider, config.model, "model");
@@ -74,6 +75,27 @@ function renderCapabilitySpecificPrompt(prompt: string, supportedModel: Supporte
   }
 
   return out;
+}
+
+function renderMemorySpecificPrompt(prompt: string, enabled: boolean): string {
+  if (enabled) return prompt;
+
+  let out = prompt;
+  const memoryBlockPatterns = [
+    /\n### memory\n[\s\S]*?(?=\n## [^\n]+\n|\n# [^\n]+\n|$)/i,
+    /\n<tool name="memory">[\s\S]*?<\/tool>\n?/i,
+    /\n<memory>[\s\S]*?<\/memory>\n?/i,
+  ];
+
+  for (const pattern of memoryBlockPatterns) {
+    out = out.replace(pattern, "\n");
+  }
+
+  out = stripPromptLine(out, /^\s*-\s*Memory:\s*`?\.agent\/AGENT\.md/i);
+  out = stripPromptLine(out, /^\s*Memory:\s*\.agent\/AGENT\.md/i);
+  out = out.replace(/\n{3,}/g, "\n\n").trimEnd();
+
+  return `${out}\n\n## Memory Disabled\n\nPersistent memory is disabled for this workspace. Do not read or write AGENT.md and do not call the memory tool.`;
 }
 
 function buildSkillSearchOrder(config: AgentConfig): string {
@@ -178,6 +200,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
 
   prompt = renderTemplateVariables(prompt, vars);
   prompt = renderCapabilitySpecificPrompt(prompt, supportedModel);
+  prompt = renderMemorySpecificPrompt(prompt, config.enableMemory ?? true);
 
   prompt += `\n\n${buildSkillPolicySection(vars.skillNames, vars.skillExamples, config)}`;
 
@@ -193,9 +216,19 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
       list;
   }
 
-  const hotCache = await loadHotCache(config);
-  if (hotCache.trim()) {
-    prompt += `\n\n## Memory (loaded from previous sessions)\n\n${hotCache}`;
+  if (config.enableMemory ?? true) {
+    const memoryStore = new MemoryStore(
+      path.join(config.projectAgentDir, "memory.sqlite"),
+      path.join(config.userAgentDir, "memory.sqlite")
+    );
+    try {
+      const memorySection = await memoryStore.renderPromptSection();
+      if (memorySection.trim()) {
+        prompt += `\n\n${memorySection}`;
+      }
+    } catch {
+      // Fail open so a corrupt or unreadable memory DB does not block session startup.
+    }
   }
 
   const discoveredSkills = skills.map((s) => ({ name: s.name, description: s.description }));

@@ -78,7 +78,7 @@ async function persistProjectConfigPatch(
   patch: Partial<
     Pick<
       AgentConfig,
-      "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
+      "provider" | "model" | "subAgentModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
     >
   > & {
     userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -146,7 +146,7 @@ function mergeConfigPatch(
   patch: Partial<
     Pick<
       AgentConfig,
-      "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
+      "provider" | "model" | "subAgentModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
     >
   > & {
     userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -301,7 +301,7 @@ export async function startAgentServer(
           patch: Partial<
             Pick<
               AgentConfig,
-              "provider" | "model" | "subAgentModel" | "enableMcp" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+              "provider" | "model" | "subAgentModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
             >
           > & {
             clearToolOutputOverflowChars?: boolean;
@@ -663,6 +663,8 @@ export async function startAgentServer(
             type: "session_settings",
             sessionId: session.id,
             enableMcp: session.getEnableMcp(),
+            enableMemory: session.getEnableMemory(),
+            memoryRequireApproval: session.getMemoryRequireApproval(),
           };
           ws.send(JSON.stringify(settings));
           ws.send(JSON.stringify(session.getSessionConfigEvent()));

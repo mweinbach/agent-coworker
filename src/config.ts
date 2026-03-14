@@ -389,6 +389,20 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asBoolean(builtInDefaults.enableMcp) ??
     true;
 
+  const enableMemory =
+    asBoolean(env.AGENT_ENABLE_MEMORY) ??
+    asBoolean(projectConfig.enableMemory) ??
+    asBoolean(userConfig.enableMemory) ??
+    asBoolean(builtInDefaults.enableMemory) ??
+    true;
+
+  const memoryRequireApproval =
+    asBoolean(env.AGENT_MEMORY_REQUIRE_APPROVAL) ??
+    asBoolean(projectConfig.memoryRequireApproval) ??
+    asBoolean(userConfig.memoryRequireApproval) ??
+    asBoolean(builtInDefaults.memoryRequireApproval) ??
+    false;
+
   const includeRawChunks =
     asBoolean(env.AGENT_INCLUDE_RAW_CHUNKS) ??
     asBoolean(projectConfig.includeRawChunks) ??
@@ -492,6 +506,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     configDirs: [projectAgentDir, userAgentDir, builtInConfigDir],
 
     enableMcp,
+    enableMemory,
+    memoryRequireApproval,
     includeRawChunks,
     backupsEnabled,
     observabilityEnabled,

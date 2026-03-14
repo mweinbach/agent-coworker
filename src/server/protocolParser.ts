@@ -26,6 +26,8 @@ const setConfigFieldErrorMessages: Record<string, string> = {
   yolo: "set_config config.yolo must be boolean",
   observabilityEnabled: "set_config config.observabilityEnabled must be boolean",
   backupsEnabled: "set_config config.backupsEnabled must be boolean",
+  enableMemory: "set_config config.enableMemory must be boolean",
+  memoryRequireApproval: "set_config config.memoryRequireApproval must be boolean",
   subAgentModel: "set_config config.subAgentModel must be non-empty string",
   maxSteps: "set_config config.maxSteps must be number 1-1000",
   toolOutputOverflowChars: "set_config config.toolOutputOverflowChars must be null or non-negative integer",
@@ -91,6 +93,8 @@ const setConfigPayloadSchema = z.object({
   yolo: z.boolean().optional(),
   observabilityEnabled: z.boolean().optional(),
   backupsEnabled: z.boolean().optional(),
+  enableMemory: z.boolean().optional(),
+  memoryRequireApproval: z.boolean().optional(),
   subAgentModel: z.string().trim().min(1).optional(),
   maxSteps: z.number().min(1).max(1000).optional(),
   toolOutputOverflowChars: z.number().int().nonnegative().nullable().optional(),
@@ -413,6 +417,24 @@ const setEnableMcpSchema = schemaWithType("set_enable_mcp", {
   enableMcp: requiredBoolean("set_enable_mcp missing/invalid enableMcp"),
 });
 
+const memoryListSchema = schemaWithType("memory_list", {
+  sessionId: requiredSessionId("memory_list"),
+  scope: z.enum(["workspace", "user"]).optional(),
+});
+
+const memoryUpsertSchema = schemaWithType("memory_upsert", {
+  sessionId: requiredSessionId("memory_upsert"),
+  scope: z.enum(["workspace", "user"], { error: "memory_upsert missing/invalid scope" }),
+  id: z.string().optional(),
+  content: requiredNonEmptyTrimmedString("memory_upsert missing/invalid content"),
+});
+
+const memoryDeleteSchema = schemaWithType("memory_delete", {
+  sessionId: requiredSessionId("memory_delete"),
+  scope: z.enum(["workspace", "user"], { error: "memory_delete missing/invalid scope" }),
+  id: requiredNonEmptyTrimmedString("memory_delete missing/invalid id"),
+});
+
 const mcpServerUpsertSchema = schemaWithType("mcp_server_upsert", {
   sessionId: requiredSessionId("mcp_server_upsert"),
   server: z.unknown(),
@@ -640,6 +662,9 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   providerAuthSetApiKeySchema,
   providerAuthCopyApiKeySchema,
   setEnableMcpSchema,
+  memoryListSchema,
+  memoryUpsertSchema,
+  memoryDeleteSchema,
   mcpServerUpsertSchema,
   mcpServerAuthCallbackSchema,
   mcpServerAuthSetApiKeySchema,

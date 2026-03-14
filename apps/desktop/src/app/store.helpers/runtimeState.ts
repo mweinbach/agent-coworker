@@ -82,6 +82,8 @@ export function defaultWorkspaceRuntime(): WorkspaceRuntime {
     skills: [],
     selectedSkillName: null,
     selectedSkillContent: null,
+    memories: [],
+    memoriesLoading: false,
     workspaceBackupsPath: null,
     workspaceBackups: [],
     workspaceBackupsLoading: false,

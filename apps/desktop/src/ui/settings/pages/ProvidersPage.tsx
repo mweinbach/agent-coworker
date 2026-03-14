@@ -185,11 +185,27 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     
     // Sort providers: model providers (first) vs other providers (second)
     // Model providers are ones that have models in MODEL_CHOICES
-    const modelProviders = filtered.filter(p => p in MODEL_CHOICES && MODEL_CHOICES[p]!.length > 0);
-    const otherProviders = filtered.filter(p => !(p in MODEL_CHOICES) || MODEL_CHOICES[p]!.length === 0);
-    
-    return [...modelProviders, ...otherProviders];
-  }, [providerCatalog]);
+    return filtered.sort((a, b) => {
+      const aStatus = providerStatusByName[a];
+      const bStatus = providerStatusByName[b];
+      const aConnected = aStatus?.verified || aStatus?.authorized;
+      const bConnected = bStatus?.verified || bStatus?.authorized;
+
+      // 1. Model Provider vs Non-Model Provider (Exa is a tool provider, others are model providers)
+      const aIsModelProvider = a in MODEL_CHOICES && MODEL_CHOICES[a]!.length > 0;
+      const bIsModelProvider = b in MODEL_CHOICES && MODEL_CHOICES[b]!.length > 0;
+      
+      if (aIsModelProvider && !bIsModelProvider) return -1;
+      if (!aIsModelProvider && bIsModelProvider) return 1;
+
+      // 2. Connected vs Disconnected
+      if (aConnected && !bConnected) return -1;
+      if (!aConnected && bConnected) return 1;
+
+      // 3. Alphabetical tie breaker
+      return displayProviderName(a).localeCompare(displayProviderName(b));
+    });
+  }, [providerCatalog, providerStatusByName]);
 
   const catalogNameByProvider = useMemo(() => {
     const map = new Map<ProviderName, string>();

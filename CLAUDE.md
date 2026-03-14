@@ -97,7 +97,7 @@ Tests live in `test/` and use Bun's built-in test runner (`bun:test`). Test file
 
 **Commits & PRs**
 
-- Commit messages: Follow the [Conventional Commits](https://www.conventionalcommits.org/) format. Liberally make commits as you go. 
+- Commit messages: Follow the [Conventional Commits](https://www.conventionalcommits.org/) format (e.g. `fix:`, `feat:`, `refactor:`, `chore:`, `test:`, `docs:`). Liberally make commits as you go.
 - Pull Requests: Ensure all tests pass and provide a clear description of the changes.
 
 ## Workflow Orchestration

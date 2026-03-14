@@ -3,13 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { getModels as getPiModels } from "@mariozechner/pi-ai";
 import { z } from "zod";
 
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../src/types";
 import { getAiCoworkerPaths } from "../src/connect";
+import { defaultSupportedModel } from "../src/models/registry";
 import { CODEX_BACKEND_BASE_URL, writeCodexAuthMaterial } from "../src/providers/codex-auth";
+import { resolveOpenAiResponsesModel } from "../src/runtime/openaiResponsesModel";
 import { __internal as piRuntimeInternal, createPiRuntime } from "../src/runtime/piRuntime";
 import { MODEL_SCRATCHPAD_DIRNAME, TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS } from "../src/shared/toolOutputOverflow";
 
@@ -56,8 +57,7 @@ function makeParams(config: AgentConfig, overrides: Partial<RuntimeRunTurnParams
 }
 
 function pickCodexModelId(): string {
-  const models = (getPiModels("openai-codex" as any) as Array<{ id?: string }> | undefined) ?? [];
-  return models[0]?.id ?? "codex-mini-latest";
+  return defaultSupportedModel("codex-cli").id;
 }
 
 async function withEnv<T>(
@@ -116,7 +116,7 @@ describe("pi runtime regressions", () => {
       subAgentModel: pickCodexModelId(),
     });
 
-    const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
 
     expect(resolved.apiKey).toBe("tok_live");
     expect(resolved.headers).toEqual({ "ChatGPT-Account-ID": "acct_123" });
@@ -149,7 +149,7 @@ describe("pi runtime regressions", () => {
       subAgentModel: pickCodexModelId(),
     });
 
-    const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
 
     expect(resolved.apiKey).toBe("legacy-access-token");
     expect(resolved.accountId).toBe("acct_legacy");

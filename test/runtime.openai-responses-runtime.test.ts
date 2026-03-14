@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { createOpenAiResponsesRuntime } from "../src/runtime/openaiResponsesRuntime";
+import { defaultSupportedModel } from "../src/models/registry";
 import { writeCodexAuthMaterial } from "../src/providers/codex-auth";
-import { getModels as getPiModels } from "@mariozechner/pi-ai";
 import { __internal as openAiNativeInternal } from "../src/runtime/openaiNativeResponses";
 import {
   MODEL_SCRATCHPAD_DIRNAME,
@@ -47,8 +47,7 @@ function makeParams(config: AgentConfig, overrides: Partial<RuntimeRunTurnParams
 }
 
 function pickCodexModelId(): string {
-  const models = (getPiModels("openai-codex" as any) as Array<{ id?: string }> | undefined) ?? [];
-  return models[0]?.id ?? "gpt-5-codex";
+  return defaultSupportedModel("codex-cli").id;
 }
 
 describe("openai responses runtime", () => {

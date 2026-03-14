@@ -9,12 +9,12 @@ import {
   matchingProviderState,
   nextProviderState,
   parseTelemetrySettings,
-  resolvePiModel,
   splitStepOverrides,
   startModelCallSpan,
   supportsProviderManagedContinuation,
   toolMapToPiTools,
 } from "./piRuntime";
+import { resolveOpenAiResponsesModel } from "./openaiResponsesModel";
 import { asNonEmptyString, asRecord, asString, extractToolCallsFromAssistant } from "./piRuntimeOptions";
 import {
   extractPiAssistantText,
@@ -43,7 +43,7 @@ export function createOpenAiResponsesRuntime(
 ): LlmRuntime {
   const runStepImpl = overrides.runStepImpl ?? runOpenAiNativeResponseStep;
   return {
-    name: "pi",
+    name: "openai-responses",
     runTurn: async (params: RuntimeRunTurnParams): Promise<RuntimeRunTurnResult> => {
       const emitPart = async (part: unknown) => {
         if (!params.onModelStreamPart) return;
@@ -51,7 +51,7 @@ export function createOpenAiResponsesRuntime(
       };
 
       try {
-        const resolved = await resolvePiModel(params);
+        const resolved = await resolveOpenAiResponsesModel(params);
         const telemetry = parseTelemetrySettings(params.telemetry);
         const piTools = toolMapToPiTools(params.tools);
         const includeUnknownRawParts = params.includeRawChunks ?? true;

@@ -74,14 +74,15 @@ User Message → System Prompt + History + Tools → AI Model → Tool Calls →
 
 **Turn Lifecycle:**
 1. Build system prompt with skills, memory, and context
-2. Call the configured LLM runtime (`pi`) with model, tools, and history
+2. Call the configured LLM runtime (`pi` for Google/Anthropic/OpenCode, `openai-responses` for OpenAI/Codex) with model, tools, and history
 3. Execute tool calls (with approval for risky operations)
 4. Stream results back to client via WebSocket events
 5. Update message history
 
 The runtime boundary lives in `src/runtime/`:
-- `createRuntime()` selects the PI runtime
-- `piRuntime` handles provider streaming/tool loops and maps events into the existing stream contract
+- `createRuntime()` selects either the PI runtime or the OpenAI Responses runtime, depending on provider/runtime config
+- `piRuntime` handles Google/Anthropic/OpenCode streaming/tool loops and maps events into the existing stream contract
+- `openaiResponsesRuntime` handles OpenAI and Codex Responses flows, including the ChatGPT Codex backend path
 
 ### 3. Tools (`src/tools/`)
 

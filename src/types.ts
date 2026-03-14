@@ -29,6 +29,7 @@ export function resolveProviderName(v: unknown): ProviderName | null {
 
 export const RUNTIME_NAMES = [
   "pi",
+  "openai-responses",
 ] as const;
 
 export type RuntimeName = (typeof RUNTIME_NAMES)[number];
@@ -37,6 +38,13 @@ const runtimeNameSchema = z.enum(RUNTIME_NAMES);
 export function resolveRuntimeName(v: unknown): RuntimeName | null {
   const parsed = runtimeNameSchema.safeParse(v);
   return parsed.success ? parsed.data : null;
+}
+
+export function defaultRuntimeNameForProvider(provider: ProviderName): RuntimeName {
+  if (provider === "openai" || provider === "codex-cli") {
+    return "openai-responses";
+  }
+  return "pi";
 }
 
 export type CommandSource = "command" | "mcp" | "skill";

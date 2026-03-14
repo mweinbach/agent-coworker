@@ -92,7 +92,7 @@ describe("loadConfig", () => {
     expect(cfg.model).toBe("gpt-5.4");
   });
 
-  test("runtime defaults to pi and ignores unsupported AGENT_RUNTIME values", async () => {
+  test("runtime defaults follow the resolved provider and ignore unsupported AGENT_RUNTIME values", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const cfg = await loadConfig({
@@ -103,13 +103,25 @@ describe("loadConfig", () => {
     });
     expect(cfg.runtime).toBe("pi");
 
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    const openAiCfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+    expect(openAiCfg.runtime).toBe("openai-responses");
+
     const cfg2 = await loadConfig({
       cwd,
       homedir: home,
       builtInDir: repoRoot(),
       env: { AGENT_RUNTIME: "legacy-runtime" },
     });
-    expect(cfg2.runtime).toBe("pi");
+    expect(cfg2.runtime).toBe("openai-responses");
   });
 
   // ---- New tests ----

@@ -76,11 +76,13 @@ type OpenAiCompatibleModelSettingsCardProps = {
     workspaceId: string,
     patch: { providerOptions?: ReturnType<typeof mergeWorkspaceProviderOptions> },
   ) => Promise<unknown> | void;
+  providerStatusByName: Record<string, any>;
 };
 
 export function OpenAiCompatibleModelSettingsCard({
   workspace,
   updateWorkspaceDefaults,
+  providerStatusByName,
 }: OpenAiCompatibleModelSettingsCardProps) {
   const openAiVerbosity = getWorkspaceTextVerbosity(workspace.providerOptions, "openai");
   const openAiReasoningEffort = getWorkspaceReasoningEffort(workspace.providerOptions, "openai");
@@ -88,6 +90,28 @@ export function OpenAiCompatibleModelSettingsCard({
   const codexVerbosity = getWorkspaceTextVerbosity(workspace.providerOptions, "codex-cli");
   const codexReasoningEffort = getWorkspaceReasoningEffort(workspace.providerOptions, "codex-cli");
   const codexReasoningSummary = getWorkspaceReasoningSummary(workspace.providerOptions, "codex-cli");
+
+  const sections = ([
+    {
+      key: "openai",
+      label: "OpenAI API",
+      verbosity: openAiVerbosity,
+      reasoningEffort: openAiReasoningEffort,
+      reasoningSummary: openAiReasoningSummary,
+    },
+    {
+      key: "codex-cli",
+      label: "Codex CLI",
+      verbosity: codexVerbosity,
+      reasoningEffort: codexReasoningEffort,
+      reasoningSummary: codexReasoningSummary,
+    },
+  ] as const).filter((section) => {
+    const status = providerStatusByName[section.key];
+    return status?.verified || status?.authorized;
+  });
+
+  if (sections.length === 0) return null;
 
   return (
     <Card className="border-border/80 bg-card/85">
@@ -98,22 +122,7 @@ export function OpenAiCompatibleModelSettingsCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-6 md:grid-cols-2">
-        {([
-          {
-            key: "openai",
-            label: "OpenAI API",
-            verbosity: openAiVerbosity,
-            reasoningEffort: openAiReasoningEffort,
-            reasoningSummary: openAiReasoningSummary,
-          },
-          {
-            key: "codex-cli",
-            label: "Codex CLI",
-            verbosity: codexVerbosity,
-            reasoningEffort: codexReasoningEffort,
-            reasoningSummary: codexReasoningSummary,
-          },
-        ] as const).map((section) => (
+        {sections.map((section) => (
           <div key={section.key} className="space-y-4 rounded-xl border border-border/70 p-4">
             <div className="space-y-1">
               <div className="text-sm font-medium text-foreground">{section.label}</div>
@@ -359,6 +368,7 @@ export function WorkspaceUserProfileCard({
 export function WorkspacesPage() {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
+  const providerStatusByName = useAppStore((s) => s.providerStatusByName);
 
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
@@ -537,7 +547,12 @@ export function WorkspacesPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {PROVIDER_NAMES.filter((entry) => !UI_DISABLED_PROVIDERS.has(entry)).map((entry) => (
+                      {PROVIDER_NAMES.filter((entry) => {
+                        if (UI_DISABLED_PROVIDERS.has(entry)) return false;
+                        if (entry === provider) return true;
+                        const status = providerStatusByName[entry];
+                        return status?.verified || status?.authorized;
+                      }).map((entry) => (
                         <SelectItem key={entry} value={entry}>
                           {displayProviderName(entry)}
                         </SelectItem>
@@ -595,6 +610,7 @@ export function WorkspacesPage() {
             <OpenAiCompatibleModelSettingsCard
               workspace={ws}
               updateWorkspaceDefaults={updateWorkspaceDefaults}
+              providerStatusByName={providerStatusByName}
             />
             
             <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">

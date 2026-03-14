@@ -653,17 +653,11 @@ The following changes were implemented to address the audit findings:
    - Added an in-page thread picker to `UsagePage.tsx` along with a stronger "Viewing usage for" context banner.
    - *Improvement*: Fixes the hidden dependency where Usage was tied to whatever thread was active in the main app window, avoiding the "empty page" trap.
 
-4. **Empty and Disabled States (Phase 1)**
-   - `BackupPage.tsx`: Added a clear empty state explaining *why* it is empty and *how* backups are created.
-   - `UpdatesPage.tsx`: Detected `dev mode` properly and replaced the inert disabled state with a clear message guiding the user to the releases page.
-   - *Improvement*: Removes the "dead-end" feeling and reduces potential support questions by telling users what to do next.
-
-5. **Save and Feedback Patterns (Phase 2)**
-   - Standardized `WorkspaceUserProfileCard` to use an explicit Save button instead of silent blur saves.
-   - Added an optimistic "Saved successfully" toast message beside the save button.
-   - Updated `ProvidersPage` to hide the API key success message while editing a key to avoid confusing conflicting states.
-   - Expanded the warning when checking the `auto-approve commands` checkbox to clearly state it is a high-risk setting that skips confirmation for shell commands.
-   - *Improvement*: Reduces ambiguity, improves trust, and makes settings adjustments feel durable and intentional.
+6. **Component Grouping & Cleanup**
+   - Split `WorkspacesPage.tsx` into a clean tabbed UI (`General`, `Models`, `Profile`, `Advanced`).
+   - Grouped OpenAI-compatible options into side-by-side grid cards instead of a stack.
+   - Refined `ProvidersPage` to automatically sort Model Providers (OpenAI, Anthropic) before Utility/Tool Providers (Exa), and grouped connected vs disconnected nicely.
+   - Made default models & tools intelligent to only display when they are configured/available.
 
 ## Bottom Line
 

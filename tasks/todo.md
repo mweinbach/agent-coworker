@@ -4129,3 +4129,18 @@
 - [ ] Inspect the branch diff only in the new memory runtime/storage/tooling surfaces and identify behavior changes.
 - [ ] Validate each suspected regression against surrounding code and targeted tests so findings are concrete.
 - [ ] Return only discrete actionable bugs with file/line references and reasoning.
+
+# Task: Audit desktop settings UI/UX in the live app
+
+## Plan
+- [x] Launch the Electron desktop app in dev mode and connect to it through the desktop browser wrapper.
+- [x] Walk every reachable settings surface and capture the current information architecture, copy, control patterns, and friction points.
+- [x] Cross-check confusing interactions against the supporting desktop/harness code where needed so recommendations stay grounded in current behavior.
+- [x] Produce a thorough report with prioritized recommendations across copy, flow management, visual hierarchy, affordances, states, and accessibility.
+
+## Review
+- Launched the Electron desktop app in dev mode with `COWORK_ELECTRON_REMOTE_DEBUG=1 bun run desktop:dev` and drove the live settings UI through `bun run desktop:browser`.
+- Walked and captured Providers, Usage, Workspaces, Backup, MCP Servers, Memory, Updates, and Developer pages, plus deeper provider expansion/edit states for OpenAI, Exa Search, and Codex CLI.
+- The biggest UX issues are structural rather than visual polish alone: the settings shell is a flat nav with no grouping or search, Workspaces and MCP pages overload users with long technical forms, and several pages depend on hidden external context (selected thread, selected backup, workspace/server layering) without enough in-page explanation.
+- Copy frequently exposes implementation details instead of user intent, especially in Memory (`hot` / `AGENT.md`), MCP (`control socket messages`, layer paths), and Developer (`.ModelScratchpad`, spill thresholds), which makes advanced functionality feel more brittle and less approachable than it needs to.
+- Feedback and state handling need more confidence-building: many settings save on blur or silently mutate state, empty/disabled states do not explain why actions are unavailable, and some pages in dev mode or stalled-loading conditions can read like dead ends rather than guided next steps.

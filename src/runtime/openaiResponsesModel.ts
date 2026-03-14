@@ -19,7 +19,7 @@ type SupportedResponsesModelLimits = Pick<PiModel, "contextWindow" | "maxTokens"
 
 // Keep runtime token limits pinned to the supported registry surface so we do not
 // inherit unrelated fallback values from PI's broader model catalog.
-const SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS = {
+const SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS: Record<string, SupportedResponsesModelLimits> = {
   "gpt-5-mini": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.1": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.2": { contextWindow: 400_000, maxTokens: 128_000 },
@@ -30,9 +30,9 @@ const SUPPORTED_OPENAI_RESPONSES_MODEL_LIMITS = {
   "gpt-5.1-codex": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.1-codex-mini": { contextWindow: 400_000, maxTokens: 128_000 },
   "gpt-5.1-codex-max": { contextWindow: 400_000, maxTokens: 128_000 },
-} as const satisfies Record<string, SupportedResponsesModelLimits>;
+};
 
-const SUPPORTED_CODEX_BACKEND_MODEL_LIMITS = {
+const SUPPORTED_CODEX_BACKEND_MODEL_LIMITS: Record<string, SupportedResponsesModelLimits> = {
   "gpt-5.1": { contextWindow: 272_000, maxTokens: 128_000 },
   "gpt-5.4": { contextWindow: 272_000, maxTokens: 128_000 },
   "gpt-5-codex": { contextWindow: 272_000, maxTokens: 128_000 },
@@ -40,7 +40,7 @@ const SUPPORTED_CODEX_BACKEND_MODEL_LIMITS = {
   "gpt-5.1-codex-mini": { contextWindow: 272_000, maxTokens: 128_000 },
   "gpt-5.1-codex-max": { contextWindow: 272_000, maxTokens: 128_000 },
   "gpt-5.2-codex": { contextWindow: 272_000, maxTokens: 128_000 },
-} as const satisfies Record<string, SupportedResponsesModelLimits>;
+};
 
 type ResolvedOpenAiResponsesModel = {
   model: PiModel;

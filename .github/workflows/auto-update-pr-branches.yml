@@ -1,0 +1,113 @@
+name: auto-update-pr-branches
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: auto-update-pr-branches-main
+  cancel-in-progress: false
+
+jobs:
+  sync-open-pr-branches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BASE_REF: main
+      GH_TOKEN: ${{ secrets.PR_AUTOSYNC_TOKEN != '' && secrets.PR_AUTOSYNC_TOKEN || github.token }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PR_AUTOSYNC_TOKEN != '' && secrets.PR_AUTOSYNC_TOKEN || github.token }}
+
+      - name: Note workflow-token limitation
+        if: ${{ secrets.PR_AUTOSYNC_TOKEN == '' }}
+        run: |
+          echo "::warning::PR_AUTOSYNC_TOKEN is not configured. The workflow can still push merge commits with GITHUB_TOKEN, but downstream workflows may not run for those sync commits."
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge main into eligible pull request branches
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          pr_rows="$(
+            gh pr list \
+              --repo "$REPOSITORY" \
+              --state open \
+              --base "$BASE_REF" \
+              --limit 500 \
+              --json number,headRefName,isCrossRepository \
+              --jq ".[] | select(.isCrossRepository == false and .headRefName != \"$BASE_REF\") | [.number, .headRefName] | @tsv"
+          )"
+
+          if [ -z "$pr_rows" ]; then
+            echo "No eligible open pull requests targeting $BASE_REF."
+            exit 0
+          fi
+
+          git fetch origin "$BASE_REF"
+
+          updated=0
+          skipped=0
+          conflicted=0
+          failed=0
+
+          while IFS=$'\t' read -r pr_number head_ref; do
+            if [ -z "${pr_number:-}" ] || [ -z "${head_ref:-}" ]; then
+              continue
+            fi
+
+            echo "::group::PR #$pr_number ($head_ref)"
+
+            git reset --hard
+            git clean -fd
+
+            if ! git fetch --no-tags origin "$head_ref"; then
+              failed=$((failed + 1))
+              echo "::warning::Skipping PR #$pr_number because branch $head_ref could not be fetched."
+              echo "::endgroup::"
+              continue
+            fi
+
+            git checkout -B pr-autosync FETCH_HEAD
+
+            if git merge-base --is-ancestor "origin/$BASE_REF" HEAD; then
+              echo "Branch already contains origin/$BASE_REF."
+              skipped=$((skipped + 1))
+              echo "::endgroup::"
+              continue
+            fi
+
+            if git merge --no-ff --no-edit "origin/$BASE_REF"; then
+              if git push origin HEAD:"$head_ref"; then
+                updated=$((updated + 1))
+                echo "Merged origin/$BASE_REF into $head_ref."
+              else
+                failed=$((failed + 1))
+                echo "::warning::Skipping PR #$pr_number because the merged branch could not be pushed back to $head_ref."
+              fi
+            else
+              git merge --abort || true
+              git reset --hard FETCH_HEAD
+              conflicted=$((conflicted + 1))
+              echo "::warning::Skipping PR #$pr_number because merging origin/$BASE_REF into $head_ref produced conflicts."
+            fi
+
+            echo "::endgroup::"
+          done <<<"$pr_rows"
+
+          echo "Updated $updated PR branch(es); skipped $skipped already-current branch(es); encountered $conflicted conflicting branch(es); saw $failed fetch/push failure(s)."

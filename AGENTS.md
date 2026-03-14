@@ -86,14 +86,12 @@ When adding a new supported model:
 - Update any related pricing/catalog tests and docs when model metadata changes.
 - Do not add unsupported/custom model IDs as passthroughs. New models must be added to the registry explicitly before they are selectable.
 
-## agent-browser Skill + Electron
-
-If the project has `.agent/skills/agent-browser/SKILL.md`, use that skill for desktop UI/browser automation tasks.
+## Electron Desktop App
 
 For the Electron desktop app (`apps/desktop`):
 - Start app in dev mode: `bun run desktop:dev`
-- Control it via CDP with: `bun run desktop:browser -- <agent-browser args>`
-- Preferred interaction loop: `snapshot -i` -> use `@eN` refs -> re-snapshot after navigation/DOM changes
+- Set `COWORK_ELECTRON_REMOTE_DEBUG=1` when you need to expose a CDP port for external inspection or automation.
+- Override `COWORK_ELECTRON_REMOTE_DEBUG_PORT` if `9222` is already in use.
 
 ## Cursor Cloud specific instructions
 
@@ -119,7 +117,7 @@ For headless/cloud testing, prefer `bun run serve` and interact via WebSocket (s
 
 ### Desktop App
 
-`bun run desktop:dev` (from repo root) launches the Electron desktop app. It first builds sidecar resources (`build:desktop-resources`), then runs `electron-vite dev`. The app starts its own server process per workspace. D-Bus and GPU errors in logs are cosmetic on headless Linux and do not affect functionality. To test the desktop app visually, use the `computerUse` subagent.
+`bun run desktop:dev` (from repo root) launches the Electron desktop app. It first builds sidecar resources (`build:desktop-resources`), then runs `electron-vite dev`. The app starts its own server process per workspace. D-Bus and GPU errors in logs are cosmetic on headless Linux and do not affect functionality. Set `COWORK_ELECTRON_REMOTE_DEBUG=1` if you need to attach external UI automation or inspection over CDP.
 
 ## Workflow Orchestration
 

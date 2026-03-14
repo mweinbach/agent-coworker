@@ -1,3 +1,25 @@
+# Task: Remove agent-browser skill and desktop wrapper
+
+## Plan
+- [x] Inventory every active `agent-browser` surface and separate live product/instructional references from historical notes.
+- [x] Remove the bundled `.agents/skills/agent-browser` skill, the `desktop:browser` wrapper entrypoints, and the current docs/instructions that advertise that workflow.
+- [x] Run the required verification commands, then record the outcome and any intentional residual historical references.
+
+## Review
+- Removed the repo-local `agent-browser` entrypoints by deleting [scripts/desktop_agent_browser.ts](/Users/mweinbach/Projects/agent-coworker/scripts/desktop_agent_browser.ts), removing root `desktop:browser` from [package.json](/Users/mweinbach/Projects/agent-coworker/package.json), and removing the desktop-local `browser` alias from [apps/desktop/package.json](/Users/mweinbach/Projects/agent-coworker/apps/desktop/package.json). There was no server/protocol/runtime dependency beyond that wrapper.
+- Deleted the bundled skill tree at `.agents/skills/agent-browser/` so the app no longer ships the `agent-browser` skill, its references, or its templates.
+- Rewrote current repo guidance in [AGENTS.md](/Users/mweinbach/Projects/agent-coworker/AGENTS.md), [apps/desktop/README.md](/Users/mweinbach/Projects/agent-coworker/apps/desktop/README.md), and [docs/desktop-settings-ui-ux-audit-2026-03-13.md](/Users/mweinbach/Projects/agent-coworker/docs/desktop-settings-ui-ux-audit-2026-03-13.md) to remove wrapper usage and replace it with generic CDP remote-debugging guidance.
+- Intentionally left historical mentions in older [tasks/todo.md](/Users/mweinbach/Projects/agent-coworker/tasks/todo.md) review logs. Those entries describe past verification runs and are no longer active instructions or product behavior.
+- Verification:
+  - `rmdir .agents/skills/agent-browser/references .agents/skills/agent-browser/templates .agents/skills/agent-browser` -> pass
+  - `git diff --check` -> pass
+  - `~/.bun/bin/bun run typecheck` -> pass
+  - `./node_modules/.bin/tsc --noEmit -p apps/TUI/tsconfig.json` -> pass
+  - `~/.bun/bin/bun test` -> pass (`2249 pass, 2 skip, 0 fail`)
+  - `~/.bun/bin/bun run build:server-binary` -> pass
+  - `~/.bun/bin/bun run build:desktop-resources` -> pass
+  - `~/.bun/bin/bun run desktop:build` -> pass; packaging completed, code signing was skipped because no valid Developer ID identity was configured, and notarization was skipped because the required Apple credentials were not fully configured in this environment
+
 # Task: Debug Apple Event desktop conversation rendering
 
 ## Plan

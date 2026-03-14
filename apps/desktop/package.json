@@ -11,7 +11,6 @@
     "build": "bun run --cwd ../.. build:desktop-resources && electron-vite build && electron-builder --config electron-builder.yml",
     "build:dir": "bun run --cwd ../.. build:desktop-resources && electron-vite build && electron-builder --dir --config electron-builder.yml",
     "preview": "electron-vite preview",
-    "browser": "bun ../../scripts/desktop_agent_browser.ts",
     "test": "bun test"
   },
   "dependencies": {

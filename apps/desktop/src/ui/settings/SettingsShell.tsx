@@ -23,17 +23,17 @@ type SettingsPageDefinition = {
 
 const SETTINGS_GROUPS = [
   {
-    label: "Account & Models",
+    label: "Models & Tools",
     pages: [
       { id: "providers", label: "Providers", render: () => <ProvidersPage /> },
+      { id: "mcp", label: "MCP Servers", render: () => <McpServersPage /> },
     ] as SettingsPageDefinition[],
   },
   {
     label: "Workspace",
     pages: [
-      { id: "workspaces", label: "Workspaces", render: () => <WorkspacesPage /> },
+      { id: "workspaces", label: "General", render: () => <WorkspacesPage /> },
       { id: "memory", label: "Memory", render: () => <MemoryPage /> },
-      { id: "mcp", label: "MCP Servers", render: () => <McpServersPage /> },
     ] as SettingsPageDefinition[],
   },
   {

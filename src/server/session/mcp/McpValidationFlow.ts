@@ -80,8 +80,14 @@ export class McpValidationFlow {
         const latencyMs = Date.now() - startedAt;
         const ok = loaded.errors.length === 0;
         const message = ok ? "MCP server validation succeeded." : loaded.errors[0] ?? "MCP server validation failed.";
-        const tools = Object.values(loaded.tools).map((t: any) => ({ name: t.name, description: t.description }));
-        
+        const tools = Object.entries(loaded.tools).map(([toolName, toolDef]) => ({
+          name: toolName,
+          description:
+            typeof (toolDef as { description?: unknown })?.description === "string"
+              ? (toolDef as { description: string }).description
+              : undefined,
+        }));
+
         this.context.emit({
           type: "mcp_server_validation",
           sessionId: this.context.id,

@@ -456,7 +456,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
           </div>
         ) : null}
 
-        {!isEditingApiKey && resultMatch ? (
+        {resultMatch ? (
           <div className={cn("text-xs", resultMatch.ok ? "text-emerald-600" : "text-destructive")}>
             {resultMatch.message}
           </div>

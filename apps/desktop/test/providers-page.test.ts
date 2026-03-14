@@ -143,6 +143,31 @@ describe("desktop providers page", () => {
     expect(html).toContain("provider-panel-exa-search");
   });
 
+  test("shows provider auth result while API key setup is still in editing mode", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerLastAuthResult: {
+        type: "provider_auth_result",
+        sessionId: "control-session",
+        provider: "google",
+        methodId: "api_key",
+        ok: false,
+        mode: "api_key",
+        message: "Auth failed.",
+      } as any,
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:google",
+      }),
+    );
+
+    expect(html).toContain("Google");
+    expect(html).toContain("Paste your API key");
+    expect(html).toContain("Auth failed.");
+  });
+
   test("auto oauth providers do not render a separate continue step", () => {
     const html = renderToStaticMarkup(
       createElement(ProvidersPage, {

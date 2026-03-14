@@ -18,6 +18,10 @@ function repoRoot(): string {
   return path.resolve(here, "..");
 }
 
+function fixturePath(name: string): string {
+  return path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", name);
+}
+
 function extractProtocolHeadings(doc: string, startMarker: string, endMarker: string): string[] {
   const startIdx = doc.indexOf(startMarker);
   if (startIdx < 0) return [];
@@ -1495,7 +1499,13 @@ describe("WebSocket Lifecycle", () => {
       configPath,
       JSON.stringify(
         {
-          servers: [{ name: "broken", transport: { type: "stdio", command: "echo", args: ["hello"] } }],
+          servers: [
+            {
+              name: "broken",
+              transport: { type: "stdio", command: process.execPath, args: ["-e", "process.exit(1)"] },
+              retries: 0,
+            },
+          ],
         },
         null,
         2,
@@ -1513,6 +1523,55 @@ describe("WebSocket Lifecycle", () => {
       expect(response.type).toBe("mcp_server_validation");
       expect(typeof response.ok).toBe("boolean");
       expect(typeof response.message).toBe("string");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("mcp_server_validate includes tool names from MCP tool map keys", async () => {
+    const tmpDir = await makeTmpProject();
+    const configPath = path.join(tmpDir, ".cowork", "mcp-servers.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          servers: [
+            {
+              name: "local",
+              transport: {
+                type: "stdio",
+                command: process.execPath,
+                args: [fixturePath("mcp-echo-server.mjs")],
+              },
+              required: true,
+              retries: 0,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      const response = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({ type: "mcp_server_validate", sessionId, name: "local" }),
+        (msg) => msg.type === "mcp_server_validation" && msg.name === "local",
+        15_000,
+      );
+      expect(response.type).toBe("mcp_server_validation");
+      expect(response.ok).toBe(true);
+      expect(response.toolCount).toBe(1);
+      expect(response.tools).toEqual([
+        {
+          name: "mcp__local__echo",
+          description: "Echoes input text back to the caller.",
+        },
+      ]);
     } finally {
       server.stop();
     }

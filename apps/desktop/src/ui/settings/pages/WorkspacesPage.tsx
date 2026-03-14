@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useAutoAnimate } from "@formkit/auto-animate/react";
+import { motion } from "framer-motion";
 
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 
@@ -396,10 +396,9 @@ export function WorkspacesPage() {
   const hasCustomSubAgentModel = Boolean(subAgentModel && !curatedModels.includes(subAgentModel));
 
   const [activeTab, setActiveTab] = useState<"general" | "models" | "profile" | "advanced">("general");
-  const [parent] = useAutoAnimate();
 
   return (
-    <div className="space-y-5" ref={parent}>
+    <div className="space-y-5">
       <div className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">Workspaces</h1>
         <p className="text-sm text-muted-foreground">Choose a project folder and configure how the agent behaves in it.</p>
@@ -415,14 +414,30 @@ export function WorkspacesPage() {
         </Card>
       ) : (
         <>
-          <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2">
-            <button type="button" onClick={() => setActiveTab("general")} className={cn("px-3 py-1.5 text-sm font-medium rounded-md transition-all", activeTab === "general" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>General</button>
-            <button type="button" onClick={() => setActiveTab("models")} className={cn("px-3 py-1.5 text-sm font-medium rounded-md transition-all", activeTab === "models" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>Models</button>
-            <button type="button" onClick={() => setActiveTab("profile")} className={cn("px-3 py-1.5 text-sm font-medium rounded-md transition-all", activeTab === "profile" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>Profile</button>
-            <button type="button" onClick={() => setActiveTab("advanced")} className={cn("px-3 py-1.5 text-sm font-medium rounded-md transition-all", activeTab === "advanced" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>Advanced</button>
+          <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2 relative">
+            {(["general", "models", "profile", "advanced"] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={cn(
+                  "px-3 py-1.5 text-sm font-medium rounded-md transition-colors relative z-10",
+                  activeTab === tab ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                {activeTab === tab && (
+                  <motion.div
+                    layoutId="workspaces-active-tab"
+                    className="absolute inset-0 bg-background shadow-sm rounded-md -z-10 border border-border/50"
+                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                  />
+                )}
+                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              </button>
+            ))}
           </div>
 
-          <div className={cn("space-y-5", activeTab !== "general" && "hidden")}>
+          <div className={cn("space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300", activeTab !== "general" && "hidden")}>
             <Card className="border-border/80 bg-card/85">
               <CardHeader className="flex-row items-center justify-between space-y-0">
                 <div>
@@ -523,7 +538,7 @@ export function WorkspacesPage() {
             </Card>
           </div>
 
-          <div className={cn("space-y-5", activeTab !== "models" && "hidden")}>
+          <div className={cn("space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300", activeTab !== "models" && "hidden")}>
             <Card className="border-border/80 bg-card/85">
               <CardHeader>
                 <CardTitle>Model</CardTitle>
@@ -625,14 +640,14 @@ export function WorkspacesPage() {
             </div>
           </div>
 
-          <div className={cn("space-y-5", activeTab !== "profile" && "hidden")}>
+          <div className={cn("space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300", activeTab !== "profile" && "hidden")}>
             <WorkspaceUserProfileCard
               workspace={ws}
               updateWorkspaceDefaults={updateWorkspaceDefaults}
             />
           </div>
 
-          <div className={cn("space-y-5", activeTab !== "advanced" && "hidden")}>
+          <div className={cn("space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300", activeTab !== "advanced" && "hidden")}>
             <Card className="border-border/80 bg-card/85">
               <CardHeader>
                 <CardTitle>Advanced</CardTitle>

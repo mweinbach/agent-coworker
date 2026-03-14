@@ -97,7 +97,7 @@ export function OpenAiCompatibleModelSettingsCard({
           Workspace defaults for OpenAI API and Codex CLI responses models.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-6">
+      <CardContent className="grid gap-6 md:grid-cols-2">
         {([
           {
             key: "openai",

@@ -1648,28 +1648,13 @@ describe("AgentSession", () => {
       expect((session as any).state.providerState).toBeNull();
     });
 
-    test("callbackProviderAuth accepts a manual codex auth code after authorize", async () => {
+    test("callbackProviderAuth rejects pasted auth codes for auto Codex oauth", async () => {
       const getProviderCatalogImpl = mock(async () => ({
         all: [{ id: "codex-cli", name: "Codex CLI", models: ["gpt-5.2"], defaultModel: "gpt-5.2" }],
         default: { "codex-cli": "gpt-5.2" },
         connected: ["codex-cli"],
       }));
       const getProviderStatusesImpl = mock(async () => []);
-      mockConnectModelProvider.mockImplementationOnce(async (opts: any) => {
-        expect(opts.provider).toBe("codex-cli");
-        expect(opts.methodId).toBe("oauth_cli");
-        expect(opts.code).toBe("manual-auth-code");
-        expect(opts.codexBrowserAuthPending).toBeDefined();
-        expect(typeof opts.codexBrowserAuthPending?.authUrl).toBe("string");
-        expect(opts.codexBrowserAuthPending?.authUrl).toContain("https://auth.openai.com/oauth/authorize");
-        return {
-          ok: true,
-          provider: "codex-cli",
-          mode: "oauth",
-          storageFile: "/tmp/mock-home/.cowork/auth/connections.json",
-          message: "OAuth sign-in completed.",
-        };
-      });
       const { session, events } = makeSession({
         connectProviderImpl: mockConnectModelProvider,
         getAiCoworkerPathsImpl: mockGetAiCoworkerPaths,
@@ -1685,24 +1670,17 @@ describe("AgentSession", () => {
       };
 
       await session.authorizeProviderAuth("codex-cli", "oauth_cli");
-
-      const challengeEvt = events.find((e) => e.type === "provider_auth_challenge");
-      expect(challengeEvt).toBeDefined();
-      if (challengeEvt && challengeEvt.type === "provider_auth_challenge") {
-        expect(challengeEvt.challenge.method).toBe("auto");
-        expect(challengeEvt.challenge.url).toBeUndefined();
-      }
-
       await session.callbackProviderAuth("codex-cli", "oauth_cli", "manual-auth-code");
 
       const authEvt = events.findLast((e) => e.type === "provider_auth_result");
       expect(authEvt).toBeDefined();
       if (authEvt && authEvt.type === "provider_auth_result") {
-        expect(authEvt.ok).toBe(true);
+        expect(authEvt.ok).toBe(false);
         expect(authEvt.provider).toBe("codex-cli");
         expect(authEvt.methodId).toBe("oauth_cli");
+        expect(authEvt.message).toContain("does not accept a pasted authorization code");
       }
-      expect((session as any).state.providerState).toBeNull();
+      expect(mockConnectModelProvider).not.toHaveBeenCalled();
     });
 
     test("logoutProviderAuth emits provider_auth_result and clears provider state", async () => {

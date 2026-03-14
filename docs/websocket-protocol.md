@@ -948,7 +948,7 @@ Clear the saved auth state for a provider.
 Complete a provider OAuth callback flow.
 
 ```json
-{ "type": "provider_auth_callback", "sessionId": "...", "provider": "codex-cli", "methodId": "oauth_cli", "code": "abc123" }
+{ "type": "provider_auth_callback", "sessionId": "...", "provider": "codex-cli", "methodId": "oauth_cli" }
 ```
 
 | Field | Type | Required | Description |
@@ -957,7 +957,7 @@ Complete a provider OAuth callback flow.
 | `sessionId` | `string` | Yes | Non-empty session ID |
 | `provider` | `ProviderName` | Yes | Must be a valid provider |
 | `methodId` | `string` | Yes | Non-empty. Must be a registered auth method for the given provider |
-| `code` | `string` | No | Authorization code for OAuth flows that require it |
+| `code` | `string` | No | Authorization code for providers that use a code-paste OAuth flow. Codex browser sign-in does not use this field |
 
 **Response:** `provider_auth_result`, then `provider_status` and `provider_catalog` on success.
 
@@ -2182,10 +2182,8 @@ Auth challenge payload returned after `provider_auth_authorize`.
   "provider": "codex-cli",
   "methodId": "oauth_cli",
   "challenge": {
-    "method": "code",
-    "instructions": "Visit the URL and paste the code.",
-    "url": "https://auth.example.com/authorize?...",
-    "command": null
+    "method": "auto",
+    "instructions": "Cowork will open the browser sign-in flow and save the returned token locally."
   }
 }
 ```

@@ -1,5 +1,4 @@
 import type { getAiCoworkerPaths } from "../../connect";
-import { createCodexBrowserOAuthChallenge, type CodexBrowserOAuthPending } from "../../providers/codex-oauth-flows";
 import {
   type ConnectProviderHandler,
   authorizeProviderAuth,
@@ -17,8 +16,6 @@ import type { ServerEvent } from "../protocol";
 import { assertSupportedModel } from "../../models/registry";
 
 export class ProviderAuthManager {
-  private pendingCodexBrowserAuth: CodexBrowserOAuthPending | null = null;
-
   constructor(
     private readonly opts: {
       sessionId: string;
@@ -52,11 +49,6 @@ export class ProviderAuthManager {
       runProviderConnect: ConnectProviderHandler;
     }
   ) {}
-
-  private clearPendingCodexBrowserAuth(): void {
-    this.pendingCodexBrowserAuth?.close();
-    this.pendingCodexBrowserAuth = null;
-  }
 
   async setModel(modelIdRaw: string, providerRaw?: AgentConfig["provider"]) {
     const modelId = modelIdRaw.trim();
@@ -144,9 +136,6 @@ export class ProviderAuthManager {
       this.opts.emitError("validation_failed", "provider", `Unsupported auth method "${methodId}" for ${providerRaw}.`);
       return;
     }
-    if (providerRaw !== "codex-cli" || methodId !== "oauth_cli") {
-      this.clearPendingCodexBrowserAuth();
-    }
 
     const result = authorizeProviderAuth({ provider: providerRaw, methodId });
     if (!result.ok) {
@@ -159,34 +148,12 @@ export class ProviderAuthManager {
       });
       return;
     }
-    if (providerRaw === "codex-cli" && methodId === "oauth_cli") {
-      try {
-        this.clearPendingCodexBrowserAuth();
-        // Keep manual-code fallback state, but do not bind a localhost server at
-        // authorize time. The live browser-login flow starts during callback.
-        this.pendingCodexBrowserAuth = createCodexBrowserOAuthChallenge();
-      } catch (err) {
-        const message = this.opts.formatError(err);
-        this.opts.emitError("provider_error", "provider", `Codex OAuth initialization failed: ${message}`);
-        this.opts.emitTelemetry("provider.auth.authorize", "error", {
-          sessionId: this.opts.sessionId,
-          provider: providerRaw,
-          methodId,
-          error: message,
-        });
-        return;
-      }
-    }
     this.opts.emit({
       type: "provider_auth_challenge",
       sessionId: this.opts.sessionId,
       provider: providerRaw,
       methodId,
-      challenge: this.pendingCodexBrowserAuth && providerRaw === "codex-cli" && methodId === "oauth_cli"
-        ? {
-            ...result.challenge,
-          }
-        : result.challenge,
+      challenge: result.challenge,
     });
     this.opts.emitTelemetry("provider.auth.authorize", "ok", {
       sessionId: this.opts.sessionId,
@@ -220,8 +187,6 @@ export class ProviderAuthManager {
         provider: providerRaw,
         methodId,
         code,
-        codexBrowserAuthPending:
-          providerRaw === "codex-cli" && methodId === "oauth_cli" ? this.pendingCodexBrowserAuth ?? undefined : undefined,
         cwd: config.workingDirectory,
         paths: this.opts.getCoworkPaths(),
         connect: async (opts) => await this.opts.runProviderConnect(opts),
@@ -272,9 +237,6 @@ export class ProviderAuthManager {
         Date.now() - startedAt
       );
     } finally {
-      if (providerRaw === "codex-cli" && methodId === "oauth_cli") {
-        this.clearPendingCodexBrowserAuth();
-      }
       this.opts.setConnecting(false);
     }
   }
@@ -284,9 +246,6 @@ export class ProviderAuthManager {
     if (!isProviderName(providerRaw)) {
       this.opts.emitError("validation_failed", "provider", `Unsupported provider: ${String(providerRaw)}`);
       return;
-    }
-    if (providerRaw === "codex-cli") {
-      this.clearPendingCodexBrowserAuth();
     }
 
     this.opts.setConnecting(true);

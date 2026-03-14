@@ -8,10 +8,8 @@ import {
   writeCodexAuthMaterial,
 } from "./providers/codex-auth";
 import {
-  completeCodexBrowserOAuth,
   isOauthCliProvider,
   runCodexBrowserOAuth,
-  type CodexBrowserOAuthPending,
 } from "./providers/codex-oauth-flows";
 import {
   getAiCoworkerPaths,
@@ -52,7 +50,6 @@ export type {
 };
 
 const connectOauthDepsDefaults = {
-  completeCodexBrowserOAuth,
   isOauthCliProvider,
   runCodexLogin: runCoworkCodexLogin,
 };
@@ -99,7 +96,6 @@ export type DisconnectProviderResult =
 
 async function runCoworkCodexLogin(opts: {
   paths: AiCoworkerPaths;
-  code?: string;
   onOauthLine?: (line: string) => void;
   openUrl?: UrlOpener;
   fetchImpl?: typeof fetch;
@@ -135,7 +131,6 @@ export async function connectProvider(opts: {
   provider: ConnectService;
   methodId?: string;
   code?: string;
-  codexBrowserAuthPending?: CodexBrowserOAuthPending;
   apiKey?: string;
   cwd?: string;
   paths?: AiCoworkerPaths;
@@ -230,27 +225,15 @@ export async function connectProvider(opts: {
     if (methodId !== "oauth_cli") {
       opts.onOauthLine?.(`[auth] deprecated Codex auth method "${methodId}" requested; using Codex-native browser login.`);
     }
-    const code = opts.code?.trim() || "";
-    let oauthCredentials: CodexAuthMaterial;
-    if (opts.codexBrowserAuthPending && code) {
-      oauthCredentials = await connectOauthDeps.completeCodexBrowserOAuth({
-        paths,
-        pending: opts.codexBrowserAuthPending,
-        fetchImpl,
-        code,
-        onLine: opts.onOauthLine,
-        openUrl: opts.openUrl,
-      });
-    } else if (code) {
-      throw new Error("Authorization code requires an active Codex OAuth challenge. Start authorization first.");
-    } else {
-      oauthCredentials = await connectOauthDeps.runCodexLogin({
-        paths,
-        onOauthLine: opts.onOauthLine,
-        openUrl: opts.openUrl,
-        fetchImpl,
-      });
+    if (opts.code?.trim()) {
+      throw new Error("Codex OAuth is browser-managed by Cowork. Start sign-in without a pasted authorization code.");
     }
+    const oauthCredentials = await connectOauthDeps.runCodexLogin({
+      paths,
+      onOauthLine: opts.onOauthLine,
+      openUrl: opts.openUrl,
+      fetchImpl,
+    });
     const persistedAuth = await persistCoworkCodexAuth(paths, oauthCredentials);
 
     store.services[provider] = {

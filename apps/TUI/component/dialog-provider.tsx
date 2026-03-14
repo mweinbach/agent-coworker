@@ -37,7 +37,7 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
   const syncActions = useSyncActions();
   const [provider, setProvider] = createSignal(props.initialProvider ?? "");
   const [method, setMethod] = createSignal<AuthMethod | null>(null);
-  const [stage, setStage] = createSignal<"provider" | "method" | "api_key" | "oauth_auto" | "oauth_code" | "waiting">(props.initialProvider ? "method" : "provider");
+  const [stage, setStage] = createSignal<"provider" | "method" | "api_key" | "oauth_code" | "waiting">(props.initialProvider ? "method" : "provider");
   const [awaitingResult, setAwaitingResult] = createSignal(false);
   const [didAutoAdvanceInitial, setDidAutoAdvanceInitial] = createSignal(false);
 
@@ -80,14 +80,6 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     return getMethodsForProvider(selected);
   });
 
-  const matchingChallenge = createMemo(() => {
-    const challenge = syncState.providerAuthChallenge;
-    if (!challenge) return null;
-    if (challenge.provider !== provider()) return null;
-    if (challenge.methodId !== method()?.id) return null;
-    return challenge.challenge;
-  });
-
   const matchingResult = createMemo(() => {
     const result = syncState.providerAuthResult;
     if (!result) return null;
@@ -103,24 +95,6 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     const trimmed = mask.trim();
     return trimmed ? trimmed : null;
   };
-
-  const oauthAutoTitle = createMemo(() => {
-    const challenge = matchingChallenge();
-    if (challenge?.url) return `OAuth: ${challenge.url}`;
-    if (challenge?.command) return `OAuth: ${challenge.command}`;
-    return "OAuth: Continue";
-  });
-
-  const oauthAutoPlaceholder = createMemo(() => {
-    const challenge = matchingChallenge();
-    if (!challenge) return "Start OAuth to continue.";
-
-    const extras: string[] = [];
-    if (challenge.url) extras.push(`URL: ${challenge.url}`);
-    if (challenge.command) extras.push(`Command: ${challenge.command}`);
-
-    return [challenge.instructions, extras.join(" ")].filter(Boolean).join(" ");
-  });
 
   const apiKeyPlaceholder = createMemo(() => {
     const selectedMethod = method();
@@ -167,7 +141,13 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
       return;
     }
     syncActions.authorizeProviderAuth(selectedProvider, selectedMethod.id);
-    setStage(selectedMethod.oauthMode === "code" ? "oauth_code" : "oauth_auto");
+    if (selectedMethod.oauthMode === "code") {
+      setStage("oauth_code");
+      return;
+    }
+    setAwaitingResult(true);
+    setStage("waiting");
+    syncActions.callbackProviderAuth(selectedProvider, selectedMethod.id);
   };
 
   const handleProviderSelect = (item: SelectItem) => {
@@ -271,28 +251,6 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
         />
       </Match>
 
-      <Match when={stage() === "oauth_auto"}>
-        <DialogSelect
-          items={[
-            { label: "Continue", value: "continue", description: "Begin or continue OAuth flow" },
-            { label: "Cancel", value: "cancel", description: "Back out of this flow" },
-          ]}
-          onSelect={(item) => {
-            if (item.value === "cancel") {
-              props.onDismiss();
-              return;
-            }
-            const selectedMethod = method();
-            if (!selectedMethod) return;
-            setAwaitingResult(true);
-            setStage("waiting");
-            syncActions.callbackProviderAuth(provider(), selectedMethod.id);
-          }}
-          onDismiss={props.onDismiss}
-          title={oauthAutoTitle()}
-          placeholder={oauthAutoPlaceholder()}
-        />
-      </Match>
     </Switch>
   );
 }

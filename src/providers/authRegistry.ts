@@ -8,7 +8,6 @@ import {
   type DisconnectProviderResult,
   type OauthStdioMode,
 } from "../connect";
-import type { CodexBrowserOAuthPending } from "./codex-oauth-flows";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 
 export type ProviderAuthMethodType = "api" | "oauth";
@@ -31,7 +30,6 @@ export type ConnectProviderHandler = (opts: {
   provider: ProviderName;
   methodId?: string;
   code?: string;
-  codexBrowserAuthPending?: CodexBrowserOAuthPending;
   apiKey?: string;
   cwd?: string;
   paths?: AiCoworkerPaths;
@@ -92,7 +90,7 @@ export function authorizeProviderAuth(opts: {
       ok: true,
       challenge: {
         method: method.oauthMode ?? "auto",
-        instructions: "Continue to open browser-based ChatGPT OAuth and finish sign-in. The app will open the official Codex sign-in flow automatically.",
+        instructions: "Continue to browser-based ChatGPT sign-in. Cowork will open the official Codex OAuth flow and save the returned token locally.",
       },
     };
   }
@@ -201,7 +199,6 @@ export async function callbackProviderAuth(opts: {
   provider: ProviderName;
   methodId: string;
   code?: string;
-  codexBrowserAuthPending?: CodexBrowserOAuthPending;
   cwd?: string;
   paths?: AiCoworkerPaths;
   connect: ConnectProviderHandler;
@@ -215,15 +212,22 @@ export async function callbackProviderAuth(opts: {
   if (method.type !== "oauth") {
     return { ok: false, provider: opts.provider, message: `Method "${opts.methodId}" is not an OAuth method.` };
   }
-  if (method.oauthMode === "code" && !opts.code?.trim()) {
+  const code = opts.code?.trim();
+  if (method.oauthMode === "code" && !code) {
     return { ok: false, provider: opts.provider, message: "Authorization code is required." };
+  }
+  if (method.oauthMode !== "code" && code) {
+    return {
+      ok: false,
+      provider: opts.provider,
+      message: `Method "${opts.methodId}" manages OAuth in-app and does not accept a pasted authorization code.`,
+    };
   }
 
   return await opts.connect({
     provider: opts.provider,
     methodId: opts.methodId,
-    code: opts.code?.trim() || undefined,
-    codexBrowserAuthPending: opts.codexBrowserAuthPending,
+    code,
     cwd: opts.cwd,
     paths: opts.paths,
     oauthStdioMode: opts.oauthStdioMode,

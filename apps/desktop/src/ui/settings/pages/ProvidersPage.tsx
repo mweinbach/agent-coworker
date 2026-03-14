@@ -181,7 +181,14 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       .map((entry) => entry.id)
       .filter((provider): provider is ProviderName => isProviderName(provider));
     const source = fromCatalog.length > 0 ? fromCatalog : [...PROVIDER_NAMES];
-    return source.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider));
+    const filtered = source.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider));
+    
+    // Sort providers: model providers (first) vs other providers (second)
+    // Model providers are ones that have models in MODEL_CHOICES
+    const modelProviders = filtered.filter(p => p in MODEL_CHOICES && MODEL_CHOICES[p]!.length > 0);
+    const otherProviders = filtered.filter(p => !(p in MODEL_CHOICES) || MODEL_CHOICES[p]!.length === 0);
+    
+    return [...modelProviders, ...otherProviders];
   }, [providerCatalog]);
 
   const catalogNameByProvider = useMemo(() => {

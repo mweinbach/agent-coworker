@@ -209,7 +209,7 @@ describe("desktop backup page", () => {
 
     expect(html).toContain("Workspace Backups");
     expect(html).toContain("Backup History");
-    expect(html).toContain("Session backups");
+    expect(html).toContain("Manage backup history and restore points for your workspaces.");
     expect(html).toContain("Deleted session");
     expect(html).toContain("Broken backup");
     expect(html).toContain("cp-0001");
@@ -218,6 +218,7 @@ describe("desktop backup page", () => {
     expect(html).toContain("Restore Original Workspace");
     expect(html).toContain("Delete Backup Entry");
     expect(html).toContain("Reveal Folder");
+    expect(html).toContain("Selected backup");
     expect(html).toContain("No checkpoints");
     expect(html).toContain('data-backup-split="true"');
     expect(html).toContain('data-backup-rail="true"');

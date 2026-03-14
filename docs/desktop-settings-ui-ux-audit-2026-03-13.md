@@ -657,6 +657,7 @@ The following changes were implemented to address the audit findings:
    - Split `WorkspacesPage.tsx` into a clean tabbed UI (`General`, `Models`, `Profile`, `Advanced`).
    - Grouped OpenAI-compatible options into side-by-side grid cards instead of a stack.
    - Transformed `ProvidersPage` to use a tab switcher instead of a flat list, moving Model Providers and Tool Providers into separate tabs.
+   - Refined `McpServersPage` to use an inline "Add server" button that opens a dialog, and an accordion-style expanding server list instead of large flat cards for each server, adopting a much cleaner UX.
    - Extracted `Exa Search` into the "Tool Providers" tab explicitly.
    - Made default models & tools intelligent to only display when they are configured/available.
 

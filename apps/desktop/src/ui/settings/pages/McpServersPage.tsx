@@ -1,9 +1,19 @@
+import {
+  SettingsIcon,
+  CheckCircle2Icon,
+  XCircleIcon,
+  PlusIcon,
+  ChevronDownIcon,
+  ChevronRightIcon
+} from "lucide-react";
+
 import { useEffect, useMemo, useState } from "react";
 
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Input } from "../../../components/ui/input";
 import {
@@ -13,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
+import { cn } from "../../../lib/utils";
 import {
   buildServerFromDraft,
   defaultDraftState,
@@ -52,6 +63,7 @@ export function McpServersPage() {
   const [draft, setDraft] = useState<DraftState>(defaultDraftState);
   const [oauthCodeByName, setOauthCodeByName] = useState<Record<string, string>>({});
   const [apiKeyByName, setApiKeyByName] = useState<Record<string, string>>({});
+  const [expandedServers, setExpandedServers] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!workspace) return;
@@ -72,6 +84,10 @@ export function McpServersPage() {
     setDraft(defaultDraftState());
   };
 
+  const toggleExpand = (name: string) => {
+    setExpandedServers(prev => ({ ...prev, [name]: !prev[name] }));
+  };
+
   return (
     <div className="space-y-5">
       <div className="space-y-2">
@@ -79,34 +95,20 @@ export function McpServersPage() {
         <p className="text-sm text-muted-foreground">Connect external tools and services Cowork can use in this workspace.</p>
       </div>
 
-      {workspace ? (
-        <Card className="border-border/80 bg-card/85">
-          <CardHeader>
-            <CardTitle>Workspace</CardTitle>
-            <CardDescription>Workspace-level entries are editable. User/system layers are read-only.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {workspaces.length > 1 ? (
-              <Select value={workspace.id} onValueChange={(value) => void selectWorkspace(value)}>
-                <SelectTrigger aria-label="Active workspace">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {workspaces.map((entry) => (
-                    <SelectItem key={entry.id} value={entry.id}>
-                      {entry.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : null}
-            <div className="text-xs text-muted-foreground">{workspace.path}</div>
-            <Button variant="outline" type="button" onClick={() => void requestWorkspaceMcpServers(workspace.id)}>
-              Reload server list
-            </Button>
-          </CardContent>
-        </Card>
-      ) : null}
+
+
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-medium">Custom servers</h2>
+        {workspace ? (
+          <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => {
+            setEditingName(editingName === "new" ? null : "new");
+            if (editingName !== "new") setDraft(defaultDraftState());
+          }}>
+            <PlusIcon className="w-4 h-4 mr-1" />
+            Add server
+          </Button>
+        ) : null}
+      </div>
 
       {workspace && (hasLegacyWorkspace || hasLegacyUser) ? (
         <Card className="border-amber-300/60 bg-amber-50/60">
@@ -132,14 +134,12 @@ export function McpServersPage() {
       ) : null}
 
       {workspace ? (
-        <Card className="border-border/80 bg-card/85">
-          <CardHeader>
-            <CardTitle>{editingName ? `Edit: ${editingName}` : "Add workspace MCP server"}</CardTitle>
-            <CardDescription>
-              Writes to <code>{`${workspace.path}/.cowork/mcp-servers.json`}</code>.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
+        <Dialog open={!!editingName} onOpenChange={(open) => { if (!open) resetDraft(); }}>
+          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>{editingName && editingName !== "new" ? `Edit ${editingName}` : "Connect to a custom MCP"}</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
             <div className="grid gap-3 md:grid-cols-2">
               <Input
                 placeholder="Server name"
@@ -279,143 +279,127 @@ export function McpServersPage() {
                   resetDraft();
                 }}
               >
-                {editingName ? "Save changes" : "Add server"}
+                {editingName && editingName !== "new" ? "Save changes" : "Add server"}
               </Button>
-              {editingName ? (
-                <Button type="button" variant="outline" onClick={resetDraft}>
-                  Cancel
-                </Button>
-              ) : null}
+              <Button type="button" variant="outline" onClick={resetDraft}>
+                Cancel
+              </Button>
             </div>
-          </CardContent>
-        </Card>
+            </div>
+          </DialogContent>
+        </Dialog>
       ) : null}
 
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader>
-          <CardTitle>Effective servers</CardTitle>
-          <CardDescription>
-            Merged from workspace `.cowork`, user `.cowork/config`, built-in config, and legacy fallback.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {servers.length === 0 ? <div className="text-xs text-muted-foreground">No MCP servers configured.</div> : null}
+      <div className="rounded-xl border border-border/70 overflow-hidden bg-background/50">
+          {servers.length === 0 ? <div className="text-sm text-muted-foreground p-4 text-center">No custom servers configured.</div> : null}
           {servers.map((server) => {
             const draftKey = workspace ? credentialDraftKey(workspace.id, server.name) : server.name;
             const validation = validationByName[server.name];
             const canEdit = server.source === "workspace";
             const apiKeyDraft = apiKeyByName[draftKey] ?? "";
             const oauthCode = oauthCodeByName[draftKey] ?? "";
+            const isExpanded = expandedServers[server.name] ?? false;
 
             return (
-              <div key={server.name} className="rounded-md border border-border/70 bg-muted/20 p-3 text-xs">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium text-foreground">{server.name}</span>
-                  <Badge variant={canEdit ? "default" : "secondary"}>{sourceLabel(server.source)}</Badge>
-                  <Badge variant="outline">auth: {server.authMode}</Badge>
-                </div>
-                <div className="mt-1 font-mono text-muted-foreground">{formatTransport(server)}</div>
-                <div className="mt-1 text-muted-foreground">{server.authMessage}</div>
-
-                {validation ? (
-                  <div className="mt-2 text-muted-foreground">
-                    Last validation: {validation.ok ? "ok" : "failed"} ({validation.mode})
-                    {typeof validation.toolCount === "number" ? `, tools=${validation.toolCount}` : ""}
-                    {typeof validation.latencyMs === "number" ? `, ${validation.latencyMs}ms` : ""}
+              <div key={server.name} className={cn("border-b border-border/70 last:border-b-0", isExpanded && "bg-card/40")}>
+                <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-card/60 transition-colors" onClick={() => toggleExpand(server.name)}>
+                  <div className="flex items-center gap-3">
+                    {isExpanded ? <ChevronDownIcon className="w-4 h-4 text-muted-foreground" /> : <ChevronRightIcon className="w-4 h-4 text-muted-foreground" />}
+                    <span className="font-medium text-foreground text-sm">{server.name}</span>
+                    {!canEdit && <Badge variant="secondary" className="text-[10px] uppercase h-5">{sourceLabel(server.source)}</Badge>}
+                    {validation && validation.ok ? <CheckCircle2Icon className="w-4 h-4 text-emerald-500" /> : validation && !validation.ok ? <XCircleIcon className="w-4 h-4 text-destructive" /> : null}
                   </div>
-                ) : null}
-
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <Button type="button" variant="outline" onClick={() => workspace && void validateWorkspaceMcpServer(workspace.id, server.name)}>
-                    Validate
-                  </Button>
-                  {canEdit ? (
-                    <>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => {
-                          setEditingName(server.name);
-                          setDraft(draftFromServer(server));
-                        }}
-                      >
-                        Edit
+                  
+                  <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
+                    {canEdit && (
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => {
+                        if (!isExpanded) toggleExpand(server.name);
+                        setEditingName(server.name);
+                        setDraft(draftFromServer(server));
+                      }}>
+                        <SettingsIcon className="w-4 h-4" />
                       </Button>
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        onClick={() => workspace && void deleteWorkspaceMcpServer(workspace.id, server.name)}
-                      >
-                        Delete
-                      </Button>
-                    </>
-                  ) : null}
+                    )}
+                  </div>
                 </div>
 
-                {server.auth?.type === "oauth" ? (
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => workspace && void authorizeWorkspaceMcpServerAuth(workspace.id, server.name)}
-                    >
-                      Sign in
-                    </Button>
-                    <Input
-                      className="max-w-64"
-                      placeholder="Paste OAuth code (optional)"
-                      value={oauthCode}
-                      onChange={(event) =>
-                        setOauthCodeByName((prev) => ({
-                          ...prev,
-                          [draftKey]: event.target.value,
-                        }))
-                      }
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() =>
-                        workspace &&
-                        void callbackWorkspaceMcpServerAuth(
-                          workspace.id,
-                          server.name,
-                          oauthCode.trim() ? oauthCode : undefined,
-                        )
-                      }
-                    >
-                      Continue
-                    </Button>
-                  </div>
-                ) : null}
+                {isExpanded && (
+                  <div className="px-10 pb-4 text-xs space-y-4">
+                    <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
+                      <span className="text-muted-foreground uppercase tracking-wider text-[10px]">Command</span>
+                      <span className="font-mono bg-muted/30 px-2 py-1 rounded inline-block w-fit">{formatTransport(server)}</span>
+                    </div>
+                    
+                    <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
+                      <span className="text-muted-foreground uppercase tracking-wider text-[10px]">Auth Mode</span>
+                      <span className="text-foreground">{server.authMode}</span>
+                    </div>
+                    
+                    {server.authMessage && (
+                      <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
+                        <span className="text-muted-foreground uppercase tracking-wider text-[10px]">Auth Status</span>
+                        <span className="text-foreground">{server.authMessage}</span>
+                      </div>
+                    )}
+                    
+                    {validation && (
+                      <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
+                        <span className="text-muted-foreground uppercase tracking-wider text-[10px]">Last Check</span>
+                        <span className="text-foreground">
+                          {validation.ok ? "Passed" : "Failed"} ({validation.mode})
+                          {typeof validation.toolCount === "number" ? ` • ${validation.toolCount} tools` : ""}
+                          {typeof validation.latencyMs === "number" ? ` • ${validation.latencyMs}ms` : ""}
+                        </span>
+                      </div>
+                    )}
 
-                {server.auth?.type === "api_key" ? (
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <Input
-                      className="max-w-64"
-                      placeholder="Paste API key"
-                      value={apiKeyDraft}
-                      onChange={(event) =>
-                        setApiKeyByName((prev) => ({
-                          ...prev,
-                          [draftKey]: event.target.value,
-                        }))
-                      }
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => workspace && void setWorkspaceMcpServerApiKey(workspace.id, server.name, apiKeyDraft)}
-                    >
-                      Save API key
-                    </Button>
+                    <div className="flex items-center gap-2 pt-2">
+                      <Button type="button" variant="secondary" size="sm" className="h-7 text-xs" onClick={() => workspace && void validateWorkspaceMcpServer(workspace.id, server.name)}>
+                        Validate Connection
+                      </Button>
+                      {canEdit && (
+                        <Button type="button" variant="destructive" size="sm" className="h-7 text-xs bg-destructive/10 text-destructive hover:bg-destructive hover:text-destructive-foreground" onClick={() => workspace && void deleteWorkspaceMcpServer(workspace.id, server.name)}>
+                          Delete Server
+                        </Button>
+                      )}
+                    </div>
+
+                    {server.auth?.type === "oauth" ? (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 pt-2 border-t border-border/50">
+                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => workspace && void authorizeWorkspaceMcpServerAuth(workspace.id, server.name)}>
+                          Sign in
+                        </Button>
+                        <Input
+                          className="max-w-64 h-7 text-xs"
+                          placeholder="Paste OAuth code (optional)"
+                          value={oauthCode}
+                          onChange={(event) => setOauthCodeByName((prev) => ({ ...prev, [draftKey]: event.target.value }))}
+                        />
+                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => workspace && void callbackWorkspaceMcpServerAuth(workspace.id, server.name, oauthCode.trim() ? oauthCode : undefined)}>
+                          Continue
+                        </Button>
+                      </div>
+                    ) : null}
+
+                    {server.auth?.type === "api_key" ? (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 pt-2 border-t border-border/50">
+                        <Input
+                          className="max-w-64 h-7 text-xs"
+                          placeholder="Paste API key"
+                          value={apiKeyDraft}
+                          onChange={(event) => setApiKeyByName((prev) => ({ ...prev, [draftKey]: event.target.value }))}
+                        />
+                        <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => workspace && void setWorkspaceMcpServerApiKey(workspace.id, server.name, apiKeyDraft.trim())}>
+                          Set key
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
+                )}
               </div>
             );
           })}
-        </CardContent>
-      </Card>
+      </div>
 
       <Card className="border-border/80 bg-card/85">
         <CardHeader>

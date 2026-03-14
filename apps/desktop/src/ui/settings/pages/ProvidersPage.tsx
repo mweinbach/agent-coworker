@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
+import { useAutoAnimate } from "@formkit/auto-animate/react";
 
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
@@ -646,9 +647,10 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   ];
 
   const [activeTab, setActiveTab] = useState<"models" | "tools">("models");
+  const [parent] = useAutoAnimate();
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" ref={parent}>
       <div className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">Providers</h1>
         <p className="text-sm text-muted-foreground">

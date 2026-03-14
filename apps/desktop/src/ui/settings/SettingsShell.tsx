@@ -121,7 +121,9 @@ export function SettingsShell() {
             activePage.id === "backup" ? "h-full p-0" : "mx-auto max-w-5xl p-6"
           )}
         >
-          {activePage.render()}
+          <div key={activePage.id} className="animate-in fade-in slide-in-from-bottom-4 duration-300 ease-out h-full">
+            {activePage.render()}
+          </div>
         </div>
       </main>
     </div>

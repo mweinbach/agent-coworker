@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useAutoAnimate } from "@formkit/auto-animate/react";
 
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 
@@ -395,9 +396,10 @@ export function WorkspacesPage() {
   const hasCustomSubAgentModel = Boolean(subAgentModel && !curatedModels.includes(subAgentModel));
 
   const [activeTab, setActiveTab] = useState<"general" | "models" | "profile" | "advanced">("general");
+  const [parent] = useAutoAnimate();
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" ref={parent}>
       <div className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">Workspaces</h1>
         <p className="text-sm text-muted-foreground">Choose a project folder and configure how the agent behaves in it.</p>

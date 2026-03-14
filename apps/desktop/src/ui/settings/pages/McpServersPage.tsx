@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 
 import { useEffect, useMemo, useState } from "react";
+import { useAutoAnimate } from "@formkit/auto-animate/react";
 
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
@@ -88,8 +89,10 @@ export function McpServersPage() {
     setExpandedServers(prev => ({ ...prev, [name]: !prev[name] }));
   };
 
+  const [parent] = useAutoAnimate();
+
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" ref={parent}>
       <div className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">MCP servers</h1>
         <p className="text-sm text-muted-foreground">Connect external tools and services Cowork can use in this workspace.</p>
@@ -294,7 +297,7 @@ export function McpServersPage() {
         </Dialog>
       ) : null}
 
-      <div className="rounded-xl border border-border/70 overflow-hidden bg-background/50">
+      <div className="rounded-xl border border-border/70 overflow-hidden bg-background/50" ref={parent}>
           {servers.length === 0 ? <div className="text-sm text-muted-foreground p-4 text-center">No custom servers configured.</div> : null}
           {servers.map((server) => {
             const draftKey = workspace ? credentialDraftKey(workspace.id, server.name) : server.name;

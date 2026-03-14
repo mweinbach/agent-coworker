@@ -27,14 +27,6 @@ const runCodexLoginMock = mock(async (opts: any) => {
   return buildMockCodexMaterial(opts.paths);
 });
 
-const completeCodexBrowserOAuthMock = mock(async (opts: any) => {
-  return buildMockCodexMaterial(opts.paths, {
-    accessToken: "manual-access-token",
-    refreshToken: "manual-refresh-token",
-    accountId: "acc_manual",
-  });
-});
-
 const {
   connectProvider,
   getAiCoworkerPaths,
@@ -84,16 +76,8 @@ describe("connectProvider", () => {
   beforeEach(() => {
     connectInternal.setOauthDepsForTests({
       isOauthCliProvider: (provider: string) => provider === "codex-cli",
-      completeCodexBrowserOAuth: completeCodexBrowserOAuthMock,
       runCodexLogin: runCodexLoginMock,
     });
-    completeCodexBrowserOAuthMock.mockReset();
-    completeCodexBrowserOAuthMock.mockImplementation(async (opts: any) =>
-      buildMockCodexMaterial(opts.paths, {
-        accessToken: "manual-access-token",
-        refreshToken: "manual-refresh-token",
-        accountId: "acc_manual",
-      }));
     runCodexLoginMock.mockReset();
     runCodexLoginMock.mockImplementation(async (opts: any) => {
       await opts.openUrl?.(mockedAuthorizeUrl);
@@ -410,43 +394,20 @@ describe("connectProvider", () => {
     expect(persisted?.account?.account_id).toBe("acc_rewritten");
   });
 
-  test("codex-cli consumes a manual authorization code when a pending browser challenge exists", async () => {
+  test("codex-cli rejects pasted authorization codes because Cowork owns the browser handoff", async () => {
     const home = await makeTmpHome();
     const paths = getAiCoworkerPaths({ homedir: home });
-    const pending = {
-      authUrl: mockedAuthorizeUrl,
-      redirectUri: `http://${OAUTH_LOOPBACK_HOST}:1455/auth/callback`,
-      codeVerifier: "verifier_123",
-      waitForCode: Promise.resolve("unused-browser-code"),
-      close: () => {},
-    };
 
     const result = await connectProvider({
       provider: "codex-cli",
       code: "manual-auth-code",
-      codexBrowserAuthPending: pending,
       paths,
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.mode).toBe("oauth");
+    expect(result.ok).toBe(false);
     expect(runCodexLoginMock).not.toHaveBeenCalled();
-    expect(completeCodexBrowserOAuthMock).toHaveBeenCalledTimes(1);
-    expect(completeCodexBrowserOAuthMock.mock.calls[0]?.[0]).toMatchObject({
-      code: "manual-auth-code",
-      pending: {
-        redirectUri: pending.redirectUri,
-        codeVerifier: pending.codeVerifier,
-      },
-    });
-
-    const persisted = JSON.parse(
-      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8"),
-    ) as any;
-    expect(persisted?.tokens?.access_token).toBe("manual-access-token");
-    expect(persisted?.tokens?.refresh_token).toBe("manual-refresh-token");
-    expect(persisted?.account?.account_id).toBe("acc_manual");
+    expect(result.message).toContain("browser-managed by Cowork");
+    await expect(fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")).rejects.toThrow();
   });
 
 });

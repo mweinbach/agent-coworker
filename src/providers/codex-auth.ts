@@ -397,19 +397,19 @@ function parseCodexAuthJson(file: string, json: unknown): CodexAuthMaterial {
   const accessClaims = decodeJwtPayload(accessToken);
 
   const accountId =
-    doc.account?.account_id ??
     (idClaims ? extractAccountIdFromClaims(idClaims) : undefined) ??
-    (accessClaims ? extractAccountIdFromClaims(accessClaims) : undefined);
+    (accessClaims ? extractAccountIdFromClaims(accessClaims) : undefined) ??
+    doc.account?.account_id;
 
   const email =
-    doc.account?.email ??
     (idClaims ? extractEmailFromClaims(idClaims) : undefined) ??
-    (accessClaims ? extractEmailFromClaims(accessClaims) : undefined);
+    (accessClaims ? extractEmailFromClaims(accessClaims) : undefined) ??
+    doc.account?.email;
 
   const planType =
-    doc.account?.plan_type ??
     (idClaims ? extractPlanTypeFromClaims(idClaims) : undefined) ??
-    (accessClaims ? extractPlanTypeFromClaims(accessClaims) : undefined);
+    (accessClaims ? extractPlanTypeFromClaims(accessClaims) : undefined) ??
+    doc.account?.plan_type;
 
   return {
     file,
@@ -451,20 +451,20 @@ function parseLegacyCodexAuthJson(file: string, json: unknown): CodexAuthMateria
   const accessClaims = decodeJwtPayload(accessToken);
 
   const accountId =
-    readStringAtPath(json, ["account", "account_id"]) ??
-    readStringAtPath(json, ["chatgpt_account_id"]) ??
     (idClaims ? extractAccountIdFromClaims(idClaims) : undefined) ??
-    (accessClaims ? extractAccountIdFromClaims(accessClaims) : undefined);
+    (accessClaims ? extractAccountIdFromClaims(accessClaims) : undefined) ??
+    readStringAtPath(json, ["account", "account_id"]) ??
+    readStringAtPath(json, ["chatgpt_account_id"]);
 
   const email =
-    readStringAtPath(json, ["account", "email"]) ??
     (idClaims ? extractEmailFromClaims(idClaims) : undefined) ??
-    (accessClaims ? extractEmailFromClaims(accessClaims) : undefined);
+    (accessClaims ? extractEmailFromClaims(accessClaims) : undefined) ??
+    readStringAtPath(json, ["account", "email"]);
 
   const planType =
-    readStringAtPath(json, ["account", "plan_type"]) ??
     (idClaims ? extractPlanTypeFromClaims(idClaims) : undefined) ??
-    (accessClaims ? extractPlanTypeFromClaims(accessClaims) : undefined);
+    (accessClaims ? extractPlanTypeFromClaims(accessClaims) : undefined) ??
+    readStringAtPath(json, ["account", "plan_type"]);
 
   return {
     file,

@@ -1,9 +1,4 @@
-import { loginOpenAICodex } from "@mariozechner/pi-ai";
-
 import {
-  CODEX_OAUTH_CLIENT_ID,
-  CODEX_OAUTH_ISSUER,
-  CODEX_OAUTH_ORIGINATOR,
   clearCodexAuthMaterial,
   codexAuthFilePath,
   isTokenExpiring,
@@ -13,9 +8,8 @@ import {
   writeCodexAuthMaterial,
 } from "./providers/codex-auth";
 import {
-  completeCodexBrowserOAuth,
   isOauthCliProvider,
-  type CodexBrowserOAuthPending,
+  runCodexBrowserOAuth,
 } from "./providers/codex-oauth-flows";
 import {
   getAiCoworkerPaths,
@@ -56,9 +50,8 @@ export type {
 };
 
 const connectOauthDepsDefaults = {
-  completeCodexBrowserOAuth,
   isOauthCliProvider,
-  runCodexLogin: runPiNativeCodexLogin,
+  runCodexLogin: runCoworkCodexLogin,
 };
 
 const connectOauthDeps = {
@@ -101,60 +94,19 @@ export type DisconnectProviderResult =
     }
   | { ok: false; provider: ConnectService; message: string };
 
-async function runPiNativeCodexLogin(opts: {
+async function runCoworkCodexLogin(opts: {
   paths: AiCoworkerPaths;
-  code?: string;
   onOauthLine?: (line: string) => void;
   openUrl?: UrlOpener;
+  fetchImpl?: typeof fetch;
 }): Promise<CodexAuthMaterial> {
-  const opener = opts.openUrl ?? openExternalUrl;
-  const manualCode = opts.code?.trim() || undefined;
-  let openUrlTask: Promise<void> | null = null;
-
-  opts.onOauthLine?.("[auth] starting Codex-native login flow.");
-  const credentials = await loginOpenAICodex({
-    originator: CODEX_OAUTH_ORIGINATOR,
-    onAuth: ({ url, instructions }) => {
-      opts.onOauthLine?.("[auth] opening browser for Codex login");
-      if (instructions?.trim()) {
-        opts.onOauthLine?.(`[auth] ${instructions.trim()}`);
-      }
-      openUrlTask = (async () => {
-        const opened = await opener(url);
-        if (!opened) {
-          opts.onOauthLine?.(`[auth] open this URL to continue: ${url}`);
-        }
-      })().catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        opts.onOauthLine?.(`[auth] failed to open browser automatically: ${message}`);
-      });
-    },
-    onProgress: (message) => {
-      if (message.trim()) opts.onOauthLine?.(`[auth] ${message.trim()}`);
-    },
-    onManualCodeInput: manualCode ? async () => manualCode : undefined,
-    onPrompt: async (prompt) => {
-      if (manualCode) return manualCode;
-      throw new Error(`${prompt.message} Automatic browser callback did not complete.`);
-    },
+  opts.onOauthLine?.("[auth] starting Cowork-owned Codex browser login.");
+  return await runCodexBrowserOAuth({
+    paths: opts.paths,
+    fetchImpl: opts.fetchImpl ?? fetch,
+    onLine: opts.onOauthLine,
+    openUrl: opts.openUrl ?? openExternalUrl,
   });
-
-  if (openUrlTask) {
-    await openUrlTask;
-  }
-
-  return {
-    file: codexAuthFilePath(opts.paths),
-    issuer: CODEX_OAUTH_ISSUER,
-    clientId: CODEX_OAUTH_CLIENT_ID,
-    accessToken: credentials.access,
-    refreshToken: credentials.refresh,
-    expiresAtMs: credentials.expires,
-    accountId:
-      typeof credentials.accountId === "string" && credentials.accountId.trim()
-        ? credentials.accountId.trim()
-        : undefined,
-  };
 }
 
 async function persistCoworkCodexAuth(
@@ -179,7 +131,6 @@ export async function connectProvider(opts: {
   provider: ConnectService;
   methodId?: string;
   code?: string;
-  codexBrowserAuthPending?: CodexBrowserOAuthPending;
   apiKey?: string;
   cwd?: string;
   paths?: AiCoworkerPaths;
@@ -274,26 +225,15 @@ export async function connectProvider(opts: {
     if (methodId !== "oauth_cli") {
       opts.onOauthLine?.(`[auth] deprecated Codex auth method "${methodId}" requested; using Codex-native browser login.`);
     }
-    const code = opts.code?.trim() || "";
-    let oauthCredentials: CodexAuthMaterial;
-    if (opts.codexBrowserAuthPending && code) {
-      oauthCredentials = await connectOauthDeps.completeCodexBrowserOAuth({
-        paths,
-        pending: opts.codexBrowserAuthPending,
-        fetchImpl,
-        code,
-        onLine: opts.onOauthLine,
-        openUrl: opts.openUrl,
-      });
-    } else if (code) {
-      throw new Error("Authorization code requires an active Codex OAuth challenge. Start authorization first.");
-    } else {
-      oauthCredentials = await connectOauthDeps.runCodexLogin({
-        paths,
-        onOauthLine: opts.onOauthLine,
-        openUrl: opts.openUrl,
-      });
+    if (opts.code?.trim()) {
+      throw new Error("Codex OAuth is browser-managed by Cowork. Start sign-in without a pasted authorization code.");
     }
+    const oauthCredentials = await connectOauthDeps.runCodexLogin({
+      paths,
+      onOauthLine: opts.onOauthLine,
+      openUrl: opts.openUrl,
+      fetchImpl,
+    });
     const persistedAuth = await persistCoworkCodexAuth(paths, oauthCredentials);
 
     store.services[provider] = {

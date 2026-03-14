@@ -16,13 +16,6 @@ import {
 import { mapPiEventToRawParts } from "./piStreamParts";
 
 import { getSavedProviderApiKey } from "../config";
-import { getAiCoworkerPaths } from "../connect";
-import {
-  CODEX_BACKEND_BASE_URL,
-  isTokenExpiring,
-  readCodexAuthMaterial,
-  refreshCodexAuthMaterialCoalesced,
-} from "../providers/codex-auth";
 import {
   getOpenCodeModelPricing,
   getOpenCodeModelSpec,
@@ -32,7 +25,7 @@ import {
   resolveOpenCodeApiKey,
   type OpenCodeProviderName,
 } from "../providers/opencodeShared";
-import type { AgentConfig, ModelMessage, ProviderName } from "../types";
+import type { ModelMessage, ProviderName } from "../types";
 import { assertSupportedModel } from "../models/registry";
 import type { TelemetrySettings } from "../observability/runtime";
 import {
@@ -52,7 +45,6 @@ import {
 } from "./piMessageBridge";
 import { maybeSpillToolOutputToWorkspace } from "./toolOutputOverflow";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeStepOverride, RuntimeToolDefinition } from "./types";
-import { resolveCoworkHomedir } from "../utils/coworkHome";
 
 function safeJsonStringify(value: unknown): string {
   try {
@@ -153,19 +145,10 @@ export function isAbortLikeError(error: unknown, signal?: AbortSignal): boolean 
   return false;
 }
 
-function runtimeHomeFromConfig(config: AgentConfig): string | undefined {
-  return resolveCoworkHomedir(config.userAgentDir);
-}
-
 export type ResolvedPiRuntimeModel = {
   model: PiModel;
   apiKey?: string;
   headers?: Record<string, string>;
-  accountId?: string;
-};
-
-type ResolvedCodexAuth = {
-  accessToken: string;
   accountId?: string;
 };
 
@@ -219,40 +202,6 @@ type RuntimeStepState = {
   piMessages: Array<Record<string, unknown>>;
 };
 
-async function resolveCodexAccessToken(
-  config: AgentConfig,
-  log?: (line: string) => void
-): Promise<ResolvedCodexAuth> {
-  const paths = getAiCoworkerPaths({ homedir: runtimeHomeFromConfig(config) });
-  let material = await readCodexAuthMaterial(paths);
-  if (!material?.accessToken) {
-    throw new Error("Codex auth is missing. Run /connect codex-cli to authenticate.");
-  }
-
-  if (isTokenExpiring(material) && material.refreshToken) {
-    try {
-      material = await refreshCodexAuthMaterialCoalesced({
-        paths,
-        material,
-        fetchImpl: fetch,
-      });
-      log?.("[auth] refreshed Codex runtime token");
-    } catch (error) {
-      log?.(`[warn] failed to refresh Codex runtime token: ${String(error)}`);
-    }
-  }
-
-  if (isTokenExpiring(material, 0)) {
-    throw new Error("Codex token is expired. Run /connect codex-cli to re-authenticate.");
-  }
-
-  const accountId = material.accountId?.trim();
-  return {
-    accessToken: material.accessToken,
-    ...(accountId ? { accountId } : {}),
-  };
-}
-
 export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<ResolvedPiRuntimeModel> {
   const modelId = params.config.model;
   const provider = params.config.provider;
@@ -296,47 +245,7 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
   }
 
   if (provider === "codex-cli") {
-    const savedKey = getSavedProviderApiKey(params.config, "codex-cli");
-    if (savedKey) {
-      const openaiModel = pickKnownPiModel("openai", modelId);
-      if (!openaiModel) {
-        throw new Error(`No PI model metadata available for provider codex-cli/openai (model: ${modelId}).`);
-      }
-      return {
-        model: applySupportedModelMetadata({
-          ...openaiModel,
-          id: modelId,
-          name: modelId,
-          provider: "openai",
-          api: "openai-responses",
-        }, provider, modelId),
-        apiKey: savedKey,
-      };
-    }
-
-    const codexModel = pickKnownPiModel("openai-codex", modelId);
-    if (!codexModel) {
-      throw new Error(`No PI model metadata available for provider codex-cli/openai-codex (model: ${modelId}).`);
-    }
-    const codexAuth = await resolveCodexAccessToken(params.config, params.log);
-    const codexHeaders = codexAuth.accountId
-      ? { "ChatGPT-Account-ID": codexAuth.accountId }
-      : undefined;
-
-    return {
-      model: applySupportedModelMetadata({
-        ...codexModel,
-        id: modelId,
-        name: modelId,
-        provider: "openai-codex",
-        api: "openai-codex-responses",
-        baseUrl: CODEX_BACKEND_BASE_URL,
-        ...(codexHeaders ? { headers: { ...(codexModel.headers ?? {}), ...codexHeaders } } : {}),
-      }, provider, modelId),
-      apiKey: codexAuth.accessToken,
-      ...(codexAuth.accountId ? { accountId: codexAuth.accountId } : {}),
-      ...(codexHeaders ? { headers: codexHeaders } : {}),
-    };
+    throw new Error("codex-cli is handled by the OpenAI Responses runtime model resolver.");
   }
 
   const exhaustive: never = provider;

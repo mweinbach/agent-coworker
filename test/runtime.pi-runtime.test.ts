@@ -3,13 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { getModels as getPiModels } from "@mariozechner/pi-ai";
 import { z } from "zod";
 
 import type { RuntimeRunTurnParams } from "../src/runtime/types";
 import type { AgentConfig, ModelMessage } from "../src/types";
 import { getAiCoworkerPaths } from "../src/connect";
+import { defaultSupportedModel } from "../src/models/registry";
 import { CODEX_BACKEND_BASE_URL, writeCodexAuthMaterial } from "../src/providers/codex-auth";
+import { resolveOpenAiResponsesModel } from "../src/runtime/openaiResponsesModel";
 import { __internal as piRuntimeInternal, createPiRuntime } from "../src/runtime/piRuntime";
 import { MODEL_SCRATCHPAD_DIRNAME, TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS } from "../src/shared/toolOutputOverflow";
 
@@ -56,8 +57,7 @@ function makeParams(config: AgentConfig, overrides: Partial<RuntimeRunTurnParams
 }
 
 function pickCodexModelId(): string {
-  const models = (getPiModels("openai-codex" as any) as Array<{ id?: string }> | undefined) ?? [];
-  return models[0]?.id ?? "codex-mini-latest";
+  return defaultSupportedModel("codex-cli").id;
 }
 
 async function withEnv<T>(
@@ -116,12 +116,14 @@ describe("pi runtime regressions", () => {
       subAgentModel: pickCodexModelId(),
     });
 
-    const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
 
     expect(resolved.apiKey).toBe("tok_live");
     expect(resolved.headers).toEqual({ "ChatGPT-Account-ID": "acct_123" });
     expect(resolved.model.baseUrl).toBe(CODEX_BACKEND_BASE_URL);
     expect(resolved.model.headers).toMatchObject({ "ChatGPT-Account-ID": "acct_123" });
+    expect(resolved.model.contextWindow).toBe(272000);
+    expect(resolved.model.maxTokens).toBe(128000);
   });
 
   test("codex runtime model resolution imports legacy ~/.codex auth into Cowork auth", async () => {
@@ -149,7 +151,7 @@ describe("pi runtime regressions", () => {
       subAgentModel: pickCodexModelId(),
     });
 
-    const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
 
     expect(resolved.apiKey).toBe("legacy-access-token");
     expect(resolved.accountId).toBe("acct_legacy");
@@ -161,6 +163,57 @@ describe("pi runtime regressions", () => {
     const imported = JSON.parse(importedRaw) as Record<string, any>;
     expect(imported.tokens?.access_token).toBe("legacy-access-token");
     expect(imported.tokens?.refresh_token).toBe("legacy-refresh-token");
+  });
+
+  test("codex runtime model resolution keeps supported OpenAI token limits when using a saved API key", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-codex-saved-key-"));
+    const paths = getAiCoworkerPaths({ homedir: homeDir });
+    await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
+    await fs.writeFile(
+      paths.connectionsFile,
+      JSON.stringify({
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        services: {
+          "codex-cli": {
+            service: "codex-cli",
+            mode: "api_key",
+            apiKey: "sk-codex",
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const config = makeConfig(homeDir, {
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      subAgentModel: "gpt-5.4",
+    });
+
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
+
+    expect(resolved.apiKey).toBe("sk-codex");
+    expect(resolved.model.api).toBe("openai-responses");
+    expect(resolved.model.baseUrl).toBe("https://api.openai.com/v1");
+    expect(resolved.model.contextWindow).toBe(400000);
+    expect(resolved.model.maxTokens).toBe(128000);
+  });
+
+  test("openai responses model resolution keeps supported token limits for gpt-5.4", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-gpt54-"));
+    const config = makeConfig(homeDir, {
+      provider: "openai",
+      model: "gpt-5.4",
+      subAgentModel: "gpt-5.4",
+    });
+
+    const resolved = await resolveOpenAiResponsesModel(makeParams(config));
+
+    expect(resolved.model.api).toBe("openai-responses");
+    expect(resolved.model.contextWindow).toBe(400000);
+    expect(resolved.model.maxTokens).toBe(128000);
   });
 
   test("opencode-go runtime model resolution returns explicit GLM-5 PI metadata", async () => {

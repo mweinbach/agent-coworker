@@ -5,7 +5,7 @@ import { z } from "zod";
 import { getAiCoworkerPaths as getAiCoworkerPathsDefault } from "../connect";
 import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from "../connect";
 import type { runTurn as runTurnFn } from "../agent";
-import type { AgentConfig } from "../types";
+import { defaultRuntimeNameForProvider, type AgentConfig } from "../types";
 import { loadConfig } from "../config";
 import { loadSubAgentPrompt, loadSystemPromptWithSkills } from "../prompt";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
@@ -156,6 +156,9 @@ function mergeConfigPatch(
 ): AgentConfig {
   const { clearToolOutputOverflowChars: _clearToolOutputOverflowChars, ...configPatch } = patch;
   const next: AgentConfig = { ...config, ...configPatch };
+  if (patch.provider !== undefined && patch.provider !== config.provider) {
+    next.runtime = defaultRuntimeNameForProvider(patch.provider);
+  }
   if (patch.toolOutputOverflowChars !== undefined) {
     next.projectConfigOverrides = {
       ...config.projectConfigOverrides,

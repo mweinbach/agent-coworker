@@ -5,14 +5,41 @@ import { DialogSelect, type SelectItem } from "../ui/dialog-select";
 import { useDialog } from "../context/dialog";
 import { useLocal } from "../context/local";
 import { useSyncActions, useSyncState } from "../context/sync";
+import type { ProviderAuthChallengeState } from "../context/syncTypes";
 import { useTheme } from "../context/theme";
 
-type AuthMethod = {
+type ProviderAuthChallengePayload = NonNullable<ProviderAuthChallengeState>["challenge"];
+
+export type AuthMethod = {
   id: string;
   type: "api" | "oauth";
   label: string;
   oauthMode?: "auto" | "code";
 };
+
+export type ProviderDialogStage = "provider" | "method" | "api_key" | "oauth_code" | "waiting";
+
+export function stageAfterAuthMethodSelection(selectedMethod: AuthMethod): ProviderDialogStage {
+  if (selectedMethod.type === "api") return "api_key";
+  if (selectedMethod.oauthMode === "code") return "oauth_code";
+  return "method";
+}
+
+export function shouldStartAutoOauthCallback(opts: {
+  selectedMethod: AuthMethod | null;
+  currentChallenge: ProviderAuthChallengePayload | null;
+  initialChallenge: ProviderAuthChallengePayload | null;
+  handledChallenge: ProviderAuthChallengePayload | null;
+  awaitingResult?: boolean;
+}): boolean {
+  if (opts.awaitingResult) return false;
+  if (!opts.selectedMethod || opts.selectedMethod.type !== "oauth" || opts.selectedMethod.oauthMode === "code") {
+    return false;
+  }
+  if (!opts.currentChallenge) return false;
+  if (opts.currentChallenge === opts.handledChallenge) return false;
+  return opts.currentChallenge !== opts.initialChallenge;
+}
 
 export function openProviderDialog(dialog: ReturnType<typeof useDialog>) {
   dialog.push(
@@ -37,8 +64,10 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
   const syncActions = useSyncActions();
   const [provider, setProvider] = createSignal(props.initialProvider ?? "");
   const [method, setMethod] = createSignal<AuthMethod | null>(null);
-  const [stage, setStage] = createSignal<"provider" | "method" | "api_key" | "oauth_auto" | "oauth_code" | "waiting">(props.initialProvider ? "method" : "provider");
+  const [stage, setStage] = createSignal<ProviderDialogStage>(props.initialProvider ? "method" : "provider");
   const [awaitingResult, setAwaitingResult] = createSignal(false);
+  const [pendingAutoOauthChallenge, setPendingAutoOauthChallenge] = createSignal<ProviderAuthChallengePayload | null>(null);
+  const [handledAutoOauthChallenge, setHandledAutoOauthChallenge] = createSignal<ProviderAuthChallengePayload | null>(null);
   const [didAutoAdvanceInitial, setDidAutoAdvanceInitial] = createSignal(false);
 
   const providerItems = createMemo((): SelectItem[] => {
@@ -68,7 +97,6 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     }
     if (selected === "codex-cli") {
       base.unshift(
-        { id: "oauth_device", type: "oauth", label: "ChatGPT (device code)", oauthMode: "auto" },
         { id: "oauth_cli", type: "oauth", label: "ChatGPT (browser)", oauthMode: "auto" }
       );
     }
@@ -104,24 +132,6 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     return trimmed ? trimmed : null;
   };
 
-  const oauthAutoTitle = createMemo(() => {
-    const challenge = matchingChallenge();
-    if (challenge?.url) return `OAuth: ${challenge.url}`;
-    if (challenge?.command) return `OAuth: ${challenge.command}`;
-    return "OAuth: Continue";
-  });
-
-  const oauthAutoPlaceholder = createMemo(() => {
-    const challenge = matchingChallenge();
-    if (!challenge) return "Start OAuth to continue.";
-
-    const extras: string[] = [];
-    if (challenge.url) extras.push(`URL: ${challenge.url}`);
-    if (challenge.command) extras.push(`Command: ${challenge.command}`);
-
-    return [challenge.instructions, extras.join(" ")].filter(Boolean).join(" ");
-  });
-
   const apiKeyPlaceholder = createMemo(() => {
     const selectedMethod = method();
     const mask = selectedMethod ? getSavedApiKeyMask(provider(), selectedMethod.id) : null;
@@ -145,6 +155,24 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     });
   });
 
+  createEffect(() => {
+    const selectedMethod = method();
+    const challenge = matchingChallenge();
+    if (!shouldStartAutoOauthCallback({
+      selectedMethod,
+      currentChallenge: challenge,
+      initialChallenge: pendingAutoOauthChallenge(),
+      handledChallenge: handledAutoOauthChallenge(),
+      awaitingResult: awaitingResult(),
+    })) return;
+
+    setHandledAutoOauthChallenge(challenge);
+    setPendingAutoOauthChallenge(null);
+    setAwaitingResult(true);
+    setStage("waiting");
+    syncActions.callbackProviderAuth(provider(), selectedMethod.id);
+  });
+
   const methodItems = createMemo((): SelectItem[] => {
     return methodsForProvider().map((item) => ({
       label: item.label,
@@ -162,12 +190,19 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
   const beginMethodFlow = (selectedProvider: string, selectedMethod: AuthMethod) => {
     setMethod(selectedMethod);
     setAwaitingResult(false);
-    if (selectedMethod.type === "api") {
-      setStage("api_key");
+    setPendingAutoOauthChallenge(null);
+    setHandledAutoOauthChallenge(null);
+    const nextStage = stageAfterAuthMethodSelection(selectedMethod);
+    setStage(nextStage);
+    if (nextStage === "api_key") {
       return;
     }
     syncActions.authorizeProviderAuth(selectedProvider, selectedMethod.id);
-    setStage(selectedMethod.oauthMode === "code" ? "oauth_code" : "oauth_auto");
+    if (nextStage === "oauth_code") {
+      return;
+    }
+    // Only advance auto OAuth once a fresh challenge confirms authorization succeeded.
+    setPendingAutoOauthChallenge(matchingChallenge());
   };
 
   const handleProviderSelect = (item: SelectItem) => {
@@ -175,6 +210,8 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     const nextMethods = getMethodsForProvider(nextProvider);
     setProvider(nextProvider);
     setAwaitingResult(false);
+    setPendingAutoOauthChallenge(null);
+    setHandledAutoOauthChallenge(null);
 
     if (nextMethods.length === 1) {
       beginMethodFlow(nextProvider, nextMethods[0]!);
@@ -271,28 +308,6 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
         />
       </Match>
 
-      <Match when={stage() === "oauth_auto"}>
-        <DialogSelect
-          items={[
-            { label: "Continue", value: "continue", description: "Begin or continue OAuth flow" },
-            { label: "Cancel", value: "cancel", description: "Back out of this flow" },
-          ]}
-          onSelect={(item) => {
-            if (item.value === "cancel") {
-              props.onDismiss();
-              return;
-            }
-            const selectedMethod = method();
-            if (!selectedMethod) return;
-            setAwaitingResult(true);
-            setStage("waiting");
-            syncActions.callbackProviderAuth(provider(), selectedMethod.id);
-          }}
-          onDismiss={props.onDismiss}
-          title={oauthAutoTitle()}
-          placeholder={oauthAutoPlaceholder()}
-        />
-      </Match>
     </Switch>
   );
 }

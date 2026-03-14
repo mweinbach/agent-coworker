@@ -41,7 +41,7 @@ describe("providers/authRegistry", () => {
     if (!result.ok) return;
     expect(result.challenge.method).toBe("auto");
     expect(result.challenge.url).toBeUndefined();
-    expect(result.challenge.instructions).toContain("official Codex sign-in flow automatically");
+    expect(result.challenge.instructions).toContain("save the returned token locally");
   });
 
   test("authorizeProviderAuth fails for api key method", () => {
@@ -177,7 +177,7 @@ describe("providers/authRegistry", () => {
     expect(connect).toHaveBeenCalledTimes(1);
   });
 
-  test("callbackProviderAuth forwards the full oauth callback context to connect handler", async () => {
+  test("callbackProviderAuth rejects pasted codes for auto oauth methods", async () => {
     const connect = mock(async (opts: any) => ({
       ok: true as const,
       provider: opts.provider,
@@ -185,41 +185,17 @@ describe("providers/authRegistry", () => {
       storageFile: "/tmp/connections.json",
       message: "oauth complete",
     }));
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-auth-registry-callback-"));
-    const paths = getAiCoworkerPaths({ homedir: home });
-    const pending = {
-      authUrl: "https://example.test/oauth",
-      redirectUri: "http://localhost:9999/callback",
-      codeVerifier: "verifier-123",
-      waitForCode: Promise.resolve("browser-code"),
-      close: () => {},
-    };
-    const onOauthLine = mock((_line: string) => {});
 
     const result = await callbackProviderAuth({
       provider: "codex-cli",
       methodId: "oauth_cli",
       code: "  auth-code-123  ",
-      codexBrowserAuthPending: pending,
-      cwd: "/tmp/workspace",
-      paths,
       connect,
-      oauthStdioMode: "pipe",
-      onOauthLine,
     });
 
-    expect(result.ok).toBe(true);
-    expect(connect).toHaveBeenCalledTimes(1);
-    expect(connect.mock.calls[0]?.[0]).toMatchObject({
-      provider: "codex-cli",
-      methodId: "oauth_cli",
-      code: "auth-code-123",
-      codexBrowserAuthPending: pending,
-      cwd: "/tmp/workspace",
-      paths,
-      oauthStdioMode: "pipe",
-      onOauthLine,
-    });
+    expect(result.ok).toBe(false);
+    expect(connect).not.toHaveBeenCalled();
+    expect(result.message).toContain("does not accept a pasted authorization code");
   });
 
   test("copyProviderApiKey reuses a saved sibling key without exposing it", async () => {

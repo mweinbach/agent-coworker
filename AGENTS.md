@@ -55,7 +55,7 @@ Before finishing your work, make sure you have run the tests and build the proje
 
 ## Commit & Pull Request Guidelines
 
-- Recent history favors short, imperative commit subjects (“Add …”, “Handle …”, “Refactor …”); use `chore:` for dependency bumps when applicable.
+- Commit messages must use [Conventional Commits](https://www.conventionalcommits.org/) format (e.g. `fix: …`, `feat: …`, `refactor: …`, `chore: …`, `test: …`, `docs: …`). Keep subjects short and imperative.
 - PRs should include: what/why, how to test (`bun test`), and screenshots or a short recording for TUI changes. Keep changes focused and add tests for fixes/features.
 
 ## WebSocket-First Development

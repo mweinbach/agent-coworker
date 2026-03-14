@@ -9,7 +9,11 @@ import { getAiCoworkerPaths } from "./connect";
 import { parseConnectionStoreJson } from "./store/connections";
 import { defaultModelForProvider, getModelForProvider, getProviderKeyCandidates } from "./providers";
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
-import { resolveProviderName, resolveRuntimeName as resolveRuntimeNameFromValue } from "./types";
+import {
+  normalizeRuntimeNameForProvider,
+  resolveProviderName,
+  resolveRuntimeName as resolveRuntimeNameFromValue,
+} from "./types";
 import type { AgentConfig, CommandTemplateConfig, ProviderName, RuntimeName } from "./types";
 import { resolveCoworkHomedir } from "./utils/coworkHome";
 import { assertSupportedModel, defaultSupportedModel, getSupportedModel } from "./models/registry";
@@ -311,12 +315,12 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asProviderName(userConfig.provider) ??
     asProviderName(builtInDefaults.provider) ??
     "google";
-  const runtime =
+  const rawRuntime =
     asRuntimeName(env.AGENT_RUNTIME) ??
     asRuntimeName(projectConfig.runtime) ??
     asRuntimeName(userConfig.runtime) ??
-    asRuntimeName(builtInDefaults.runtime) ??
-    "pi";
+    asRuntimeName(builtInDefaults.runtime);
+  const runtime = normalizeRuntimeNameForProvider(provider, rawRuntime);
 
   const workingDirectory = env.AGENT_WORKING_DIR || cwd;
 

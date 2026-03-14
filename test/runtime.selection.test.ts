@@ -27,16 +27,37 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 }
 
 describe("runtime selection", () => {
-  test("defaults to pi runtime when config.runtime is missing", () => {
+  test("defaults openai provider to the OpenAI Responses runtime when config.runtime is missing", () => {
     const config = makeConfig();
-    expect(resolveRuntimeName(config)).toBe("pi");
-    expect(createRuntime(config).name).toBe("pi");
+    expect(resolveRuntimeName(config)).toBe("openai-responses");
+    expect(createRuntime(config).name).toBe("openai-responses");
   });
 
-  test("respects explicit pi runtime in config", () => {
+  test("treats legacy pi runtime config as the OpenAI Responses runtime for openai", () => {
     const config = makeConfig({ runtime: "pi" });
-    expect(resolveRuntimeName(config)).toBe("pi");
-    expect(createRuntime(config).name).toBe("pi");
+    expect(resolveRuntimeName(config)).toBe("openai-responses");
+    expect(createRuntime(config).name).toBe("openai-responses");
+  });
+
+  test("defaults codex-cli provider to the OpenAI Responses runtime", () => {
+    const config = makeConfig({
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      subAgentModel: "gpt-5.4",
+    });
+    expect(resolveRuntimeName(config)).toBe("openai-responses");
+    expect(createRuntime(config).name).toBe("openai-responses");
+  });
+
+  test("treats legacy pi runtime config as the OpenAI Responses runtime for codex-cli", () => {
+    const config = makeConfig({
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      subAgentModel: "gpt-5.4",
+      runtime: "pi",
+    });
+    expect(resolveRuntimeName(config)).toBe("openai-responses");
+    expect(createRuntime(config).name).toBe("openai-responses");
   });
 
   test("routes opencode-go through the pi runtime", () => {
@@ -55,6 +76,18 @@ describe("runtime selection", () => {
       model: "glm-5",
       subAgentModel: "glm-5",
     });
+    expect(resolveRuntimeName(config)).toBe("pi");
+    expect(createRuntime(config).name).toBe("pi");
+  });
+
+  test("normalizes stale OpenAI Responses runtime config away for unsupported providers", () => {
+    const config = makeConfig({
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      subAgentModel: "gemini-3-flash-preview",
+      runtime: "openai-responses",
+    });
+
     expect(resolveRuntimeName(config)).toBe("pi");
     expect(createRuntime(config).name).toBe("pi");
   });

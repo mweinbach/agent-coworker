@@ -12,6 +12,7 @@ import {
   registerSystemAppearanceListener,
 } from "./services/appearance";
 import { installDesktopApplicationMenu } from "./services/menu";
+import { LoomBridgeManager } from "./services/loomBridgeManager";
 import { PersistenceService } from "./services/persistence";
 import { resolveDesktopRendererUrl } from "./services/rendererUrl";
 import { ServerManager } from "./services/serverManager";
@@ -25,6 +26,11 @@ const PACKAGED_RENDERER_DIR = path.resolve(path.join(__dirname, "../renderer"));
 
 const serverManager = new ServerManager();
 const persistence = new PersistenceService();
+const loomBridgeManager = new LoomBridgeManager({
+  onStateChange: (state) => {
+    emitDesktopEvent(DESKTOP_EVENT_CHANNELS.iosRelayStateChanged, state);
+  },
+});
 const updater = new DesktopUpdaterService({
   currentVersion: app.getVersion(),
   isPackaged: app.isPackaged,
@@ -259,6 +265,7 @@ if (!gotSingleInstanceLock) {
     unregisterIpc = registerDesktopIpc({
       persistence,
       serverManager,
+      loomBridgeManager,
       updater,
     });
     unregisterAppearanceListener = registerSystemAppearanceListener((appearance) => {
@@ -290,9 +297,10 @@ if (!gotSingleInstanceLock) {
       unregisterAppearanceListener: () => unregisterAppearanceListener(),
       stopUpdater: () => updater.dispose(),
       stopAllServers: () => serverManager.stopAll(),
+      stopLoomBridge: () => loomBridgeManager.dispose(),
       quit: () => app.quit(),
       onError: (error) => {
-        console.error(`[desktop] Failed to stop workspace servers during shutdown: ${String(error)}`);
+        console.error(`[desktop] Failed to stop workspace services during shutdown: ${String(error)}`);
       },
     })
   );

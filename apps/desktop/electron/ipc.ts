@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 
 import { DESKTOP_IPC_CHANNELS } from "../src/lib/desktopApi";
 import { registerFilesIpc } from "./ipc/files";
+import { registerIosRelayIpc } from "./ipc/iosRelay";
 import { handleDesktopInvoke } from "./ipc/invoke";
 import { parseWithSchema } from "./ipc/parse";
 import { registerSystemIpc } from "./ipc/system";
@@ -23,6 +24,7 @@ export function registerDesktopIpc(deps: DesktopIpcDeps): () => void {
   registerFilesIpc(context);
   registerWindowIpc(context);
   registerSystemIpc(context);
+  registerIosRelayIpc(context);
 
   return () => {
     for (const channel of Object.values(DESKTOP_IPC_CHANNELS)) {

@@ -20,6 +20,9 @@ describe("desktop shutdown handler", () => {
         await stopPromise;
         calls.push("stop:done");
       },
+      stopLoomBridge: async () => {
+        calls.push("loom:done");
+      },
       quit: () => {
         calls.push("quit");
       },
@@ -39,6 +42,7 @@ describe("desktop shutdown handler", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(calls).toContain("stop:done");
+    expect(calls).toContain("loom:done");
     expect(calls).toContain("quit");
   });
 
@@ -63,12 +67,14 @@ describe("desktop shutdown handler", () => {
       },
     });
     await Promise.resolve();
+    await Promise.resolve();
 
     beforeQuit({
       preventDefault: () => {
         preventCalls += 1;
       },
     });
+    await Promise.resolve();
     await Promise.resolve();
 
     expect(stopCalls).toBe(1);

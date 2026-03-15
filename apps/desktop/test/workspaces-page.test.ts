@@ -52,12 +52,27 @@ mock.module("../src/lib/desktopCommands", () => ({
   showNotification: async () => true,
   getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
   setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  getIosRelayState: async () => ({
+    supported: false,
+    advertising: false,
+    peer: null,
+    publishedWorkspaceId: null,
+    openChannelCount: 0,
+    lastError: "iOS Relay is only available on macOS desktop builds.",
+  }),
+  startIosRelayAdvertising: async () => {},
+  stopIosRelayAdvertising: async () => {},
+  connectIosRelayPeer: async () => {},
+  disconnectIosRelayPeer: async () => {},
+  publishWorkspaceRelay: async () => {},
+  unpublishWorkspaceRelay: async () => {},
   getUpdateState: async () => MOCK_UPDATE_STATE,
   checkForUpdates: async () => {},
   quitAndInstallUpdate: async () => {},
   onSystemAppearanceChanged: () => () => {},
   onMenuCommand: () => () => {},
   onUpdateStateChanged: () => () => {},
+  onIosRelayStateChanged: () => () => {},
 }));
 
 mock.module("../src/lib/agentSocket", () => ({
@@ -116,6 +131,7 @@ function setupJsdom(): JsdomHarness {
 
 const {
   OpenAiCompatibleModelSettingsCard,
+  IosRelayCard,
   WorkspaceUserProfileCard,
 } = await import("../src/ui/settings/pages/WorkspacesPage");
 const App = (await import("../src/App")).default;
@@ -178,6 +194,43 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Role or work context");
     expect(html).toContain("Instructions");
     expect(html).toContain("Background details");
+  });
+
+  test("renders iOS relay controls in the unsupported state", () => {
+    const html = renderToStaticMarkup(
+      createElement(IosRelayCard, {
+        workspace: {
+          id: "ws-1",
+          name: "Workspace 1",
+          iosRelayEnabled: false,
+        },
+        relayState: {
+          supported: false,
+          advertising: false,
+          peer: null,
+          publishedWorkspaceId: null,
+          openChannelCount: 0,
+          lastError: "iOS Relay is only available on macOS desktop builds.",
+        },
+        relayConfig: {
+          rememberedPeerId: null,
+          rememberedPeerName: null,
+          deviceName: null,
+        },
+        updateWorkspaceDefaults: async () => {},
+        updateIosRelayConfig: async () => {},
+        startIosRelayAdvertising: async () => {},
+        stopIosRelayAdvertising: async () => {},
+        connectIosRelayPeer: async () => {},
+        disconnectIosRelayPeer: async () => {},
+      }),
+    );
+
+    expect(html).toContain("iOS Relay");
+    expect(html).toContain("Unavailable on this platform");
+    expect(html).toContain("Start Advertising");
+    expect(html).toContain("Enable iOS relay for workspace");
+    expect(html).toContain("The helper only accepts the explicitly approved Loom peer identity.");
   });
 
   test("typing into workspace profile fields does not trigger a render loop", async () => {

@@ -3,9 +3,11 @@ import { memo, useEffect, useMemo, useRef } from "react";
 import { useAppStore } from "./app/store";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
+  getIosRelayState,
   getUpdateState,
   getSystemAppearance,
   onMenuCommand,
+  onIosRelayStateChanged,
   onSystemAppearanceChanged,
   onUpdateStateChanged,
   setWindowAppearance,
@@ -69,6 +71,7 @@ export default function App() {
   const openSkills = useAppStore((s) => s.openSkills);
   const openSettings = useAppStore((s) => s.openSettings);
   const notifications = useAppStore((s) => s.notifications);
+  const setIosRelayState = useAppStore((s) => s.setIosRelayState);
   const setUpdateState = useAppStore((s) => s.setUpdateState);
   const checkForUpdates = useAppStore((s) => s.checkForUpdates);
 
@@ -157,6 +160,14 @@ export default function App() {
     });
     return unsubscribe;
   }, [setUpdateState]);
+
+  useEffect(() => {
+    const unsubscribe = onIosRelayStateChanged(setIosRelayState);
+    void getIosRelayState().then(setIosRelayState).catch(() => {
+      // Keep the default unsupported state if the relay bridge is unavailable.
+    });
+    return unsubscribe;
+  }, [setIosRelayState]);
 
   useEffect(() => {
     function applySystemAppearance(appearance: SystemAppearance): void {

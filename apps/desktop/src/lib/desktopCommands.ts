@@ -1,12 +1,16 @@
 import type { PersistedState, TranscriptEvent } from "../app/types";
 import type {
+  ConnectIosRelayPeerInput,
   ConfirmActionInput,
   DesktopMenuCommand,
   DesktopNotificationInput,
   ExplorerEntry,
+  IosRelayState,
   SetWindowAppearanceInput,
   SystemAppearance,
   UpdaterState,
+  PublishWorkspaceRelayInput,
+  UnpublishWorkspaceRelayInput,
 } from "./desktopApi";
 
 function requireDesktopApi() {
@@ -160,6 +164,34 @@ export async function setWindowAppearance(opts: SetWindowAppearanceInput): Promi
   return await requireDesktopApi().setWindowAppearance(opts);
 }
 
+export async function getIosRelayState(): Promise<IosRelayState> {
+  return await requireDesktopApi().getIosRelayState();
+}
+
+export async function startIosRelayAdvertising(deviceName?: string): Promise<void> {
+  await requireDesktopApi().startIosRelayAdvertising(deviceName);
+}
+
+export async function stopIosRelayAdvertising(): Promise<void> {
+  await requireDesktopApi().stopIosRelayAdvertising();
+}
+
+export async function connectIosRelayPeer(opts: ConnectIosRelayPeerInput): Promise<void> {
+  await requireDesktopApi().connectIosRelayPeer(opts);
+}
+
+export async function disconnectIosRelayPeer(): Promise<void> {
+  await requireDesktopApi().disconnectIosRelayPeer();
+}
+
+export async function publishWorkspaceRelay(opts: PublishWorkspaceRelayInput): Promise<void> {
+  await requireDesktopApi().publishWorkspaceRelay(opts);
+}
+
+export async function unpublishWorkspaceRelay(opts: UnpublishWorkspaceRelayInput): Promise<void> {
+  await requireDesktopApi().unpublishWorkspaceRelay(opts);
+}
+
 export function onSystemAppearanceChanged(listener: (appearance: SystemAppearance) => void): () => void {
   return requireDesktopApi().onSystemAppearanceChanged(listener);
 }
@@ -170,4 +202,8 @@ export function onUpdateStateChanged(listener: (state: UpdaterState) => void): (
 
 export function onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void {
   return requireDesktopApi().onMenuCommand(listener);
+}
+
+export function onIosRelayStateChanged(listener: (state: IosRelayState) => void): () => void {
+  return requireDesktopApi().onIosRelayStateChanged(listener);
 }

@@ -3,6 +3,7 @@ import type { AppStoreActions, StoreGet, StoreSet } from "./store.helpers";
 import { createWorkspaceBackupActions } from "./store.actions/backup";
 import { createBootstrapActions } from "./store.actions/bootstrap";
 import { createExplorerActions } from "./store.actions/explorer";
+import { createIosRelayActions } from "./store.actions/iosRelay";
 import { createWorkspaceMcpActions } from "./store.actions/mcp";
 import { createWorkspaceMemoryActions } from "./store.actions/memory";
 import { createProviderActions } from "./store.actions/provider";
@@ -14,6 +15,7 @@ import { createWorkspaceDefaultsActions } from "./store.actions/workspaceDefault
 export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions {
   return {
     ...createBootstrapActions(set, get),
+    ...createIosRelayActions(set, get),
     ...createWorkspaceActions(set, get),
     ...createWorkspaceBackupActions(set, get),
     ...createThreadActions(set, get),

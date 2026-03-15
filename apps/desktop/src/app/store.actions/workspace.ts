@@ -90,6 +90,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
         defaultSubAgentModel: defaultModelForProvider("google"),
         defaultEnableMcp: true,
         defaultBackupsEnabled: true,
+        iosRelayEnabled: false,
         yolo: false,
       };
   
@@ -153,6 +154,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       });
       clearWorkspaceStartState(workspaceId);
       await persistNow(get);
+      await get().syncIosRelayPublication();
     },
   
 
@@ -236,6 +238,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
 
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
+      await get().syncIosRelayPublication();
     },
 
   };

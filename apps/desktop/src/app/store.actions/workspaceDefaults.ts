@@ -169,6 +169,12 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const { clearDefaultToolOutputOverflowChars, userProfile: userProfilePatch, ...workspacePatch } = patch;
       set((s) => ({
         workspaces: s.workspaces.map((w) => {
+          if (workspacePatch.iosRelayEnabled === true && w.id !== workspaceId) {
+            return {
+              ...w,
+              iosRelayEnabled: false,
+            };
+          }
           if (w.id !== workspaceId) return w;
           return {
             ...w,
@@ -191,6 +197,10 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         }),
       }));
       await persistNow(get);
+
+      if (workspacePatch.iosRelayEnabled !== undefined) {
+        await get().syncIosRelayPublication();
+      }
 
       const shouldSyncCoreSettings =
         workspacePatch.defaultProvider !== undefined ||

@@ -29,6 +29,7 @@ import {
 } from "../src/lib/desktopApi";
 import type { PersistedState } from "../src/app/types";
 import {
+  connectIosRelayPeerInputSchema,
   confirmActionInputSchema,
   copyPathInputSchema,
   createDirectoryInputSchema,
@@ -36,7 +37,9 @@ import {
   desktopMenuCommandSchema,
   desktopNotificationInputSchema,
   listDirectoryInputSchema,
+  iosRelayStateSchema,
   openPathInputSchema,
+  publishWorkspaceRelayInputSchema,
   previewOSFileInputSchema,
   readFileInputSchema,
   persistedStateInputSchema,
@@ -50,6 +53,7 @@ import {
   systemAppearanceSchema,
   transcriptBatchInputSchema,
   trashPathInputSchema,
+  unpublishWorkspaceRelayInputSchema,
   updaterStateSchema,
 } from "../src/lib/desktopSchemas";
 
@@ -139,8 +143,24 @@ function assertSetWindowAppearanceInput(opts: SetWindowAppearanceInput): void {
   parseWithSchema(setWindowAppearanceInputSchema, opts, "setWindowAppearance options");
 }
 
+function assertConnectIosRelayPeerInput(opts: { peerId: string }): void {
+  parseWithSchema(connectIosRelayPeerInputSchema, opts, "connectIosRelayPeer options");
+}
+
+function assertPublishWorkspaceRelayInput(opts: { workspaceId: string; workspaceName: string; serverUrl: string }): void {
+  parseWithSchema(publishWorkspaceRelayInputSchema, opts, "publishWorkspaceRelay options");
+}
+
+function assertUnpublishWorkspaceRelayInput(opts: { workspaceId: string }): void {
+  parseWithSchema(unpublishWorkspaceRelayInputSchema, opts, "unpublishWorkspaceRelay options");
+}
+
 function assertUpdaterState(value: unknown): asserts value is UpdaterState {
   parseWithSchema(updaterStateSchema, value, "update state");
+}
+
+function assertIosRelayState(value: unknown): asserts value is import("../src/app/iosRelayTypes").IosRelayState {
+  parseWithSchema(iosRelayStateSchema, value, "iOS relay state");
 }
 
 function assertDesktopMenuCommand(value: unknown): asserts value is DesktopMenuCommand {
@@ -282,6 +302,33 @@ const desktopApi = Object.freeze<DesktopApi>({
     return appearance;
   },
 
+  getIosRelayState: async () => {
+    const state = await ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.getIosRelayState);
+    assertIosRelayState(state);
+    return state;
+  },
+
+  startIosRelayAdvertising: (deviceName?: string) => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.startIosRelayAdvertising, deviceName),
+
+  stopIosRelayAdvertising: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.stopIosRelayAdvertising),
+
+  connectIosRelayPeer: (opts) => {
+    assertConnectIosRelayPeerInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.connectIosRelayPeer, opts);
+  },
+
+  disconnectIosRelayPeer: () => ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.disconnectIosRelayPeer),
+
+  publishWorkspaceRelay: (opts) => {
+    assertPublishWorkspaceRelayInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.publishWorkspaceRelay, opts);
+  },
+
+  unpublishWorkspaceRelay: (opts) => {
+    assertUnpublishWorkspaceRelayInput(opts);
+    return ipcRenderer.invoke(DESKTOP_IPC_CHANNELS.unpublishWorkspaceRelay, opts);
+  },
+
   onSystemAppearanceChanged: (listener: (appearance: SystemAppearance) => void) => {
     if (typeof listener !== "function") {
       throw new Error("onSystemAppearanceChanged listener must be a function");
@@ -321,6 +368,20 @@ const desktopApi = Object.freeze<DesktopApi>({
     ipcRenderer.on(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
     return () => {
       ipcRenderer.off(DESKTOP_EVENT_CHANNELS.menuCommand, wrapped);
+    };
+  },
+
+  onIosRelayStateChanged: (listener) => {
+    if (typeof listener !== "function") {
+      throw new Error("onIosRelayStateChanged listener must be a function");
+    }
+    const wrapped = (_event: unknown, payload: unknown) => {
+      assertIosRelayState(payload);
+      listener(payload);
+    };
+    ipcRenderer.on(DESKTOP_EVENT_CHANNELS.iosRelayStateChanged, wrapped);
+    return () => {
+      ipcRenderer.off(DESKTOP_EVENT_CHANNELS.iosRelayStateChanged, wrapped);
     };
   },
 });

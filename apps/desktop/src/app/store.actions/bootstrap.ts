@@ -50,6 +50,7 @@ import {
 } from "../store.helpers";
 import { deriveConnectedProviders, normalizePersistedProviderState } from "../persistedProviderState";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
+import { createDefaultIosRelayConfig } from "../iosRelayTypes";
 import {
   normalizeWorkspaceUserProfile,
   type PersistedProviderState,
@@ -112,6 +113,7 @@ const persistedWorkspaceSchema = z.object({
   }).passthrough().optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
+  iosRelayEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough().transform((workspace): WorkspaceRecord => {
   const model = workspace.defaultModel ?? defaultModelForProvider(workspace.defaultProvider);
@@ -130,6 +132,7 @@ const persistedWorkspaceSchema = z.object({
     userProfile: workspace.userProfile ? normalizeWorkspaceUserProfile(workspace.userProfile) : undefined,
     defaultEnableMcp: workspace.defaultEnableMcp,
     defaultBackupsEnabled: workspace.defaultBackupsEnabled,
+    iosRelayEnabled: workspace.iosRelayEnabled,
     yolo: workspace.yolo,
   };
 });
@@ -161,6 +164,11 @@ const persistedStateSchema = z.object({
   threads: z.preprocess((value) => value ?? [], z.array(persistedThreadSchema)),
   developerMode: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   showHiddenFiles: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+  iosRelayConfig: z.object({
+    rememberedPeerId: optionalStringSchema.nullable().optional(),
+    rememberedPeerName: optionalStringSchema.nullable().optional(),
+    deviceName: optionalStringSchema.nullable().optional(),
+  }).passthrough().optional(),
 }).passthrough().transform((state) => {
   const providerState = normalizePersistedProviderState((state as { providerState?: unknown }).providerState);
   const workspaceByRecency = [...state.workspaces].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
@@ -181,6 +189,10 @@ const persistedStateSchema = z.object({
     selectedThreadId,
     developerMode: state.developerMode,
     showHiddenFiles: state.showHiddenFiles,
+    iosRelayConfig: {
+      ...createDefaultIosRelayConfig(),
+      ...(state.iosRelayConfig ?? {}),
+    },
     providerState,
   };
 });
@@ -207,6 +219,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           providerConnected: deriveConnectedProviders(state.providerState as PersistedProviderState | undefined),
           developerMode: state.developerMode,
           showHiddenFiles: state.showHiddenFiles,
+          iosRelayConfig: state.iosRelayConfig,
           updateState,
           ready: true,
           startupError: null,

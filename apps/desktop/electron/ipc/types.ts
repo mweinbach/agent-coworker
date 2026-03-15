@@ -3,12 +3,14 @@ import type { z } from "zod";
 
 import type { PersistedState } from "../../src/app/types";
 import type { PersistenceService } from "../services/persistence";
+import type { LoomBridgeManager } from "../services/loomBridgeManager";
 import type { ServerManager } from "../services/serverManager";
 import type { DesktopUpdaterService } from "../services/updater";
 
 export type DesktopIpcDeps = {
   persistence: PersistenceService;
   serverManager: ServerManager;
+  loomBridgeManager: LoomBridgeManager;
   updater: DesktopUpdaterService;
 };
 

@@ -25,6 +25,8 @@ async function flushAsyncWork(): Promise<void> {
 const startDeferreds: Deferred<{ url: string }>[] = [];
 const startCalls: Array<{ workspaceId: string; workspacePath: string; yolo: boolean }> = [];
 const stopCalls: string[] = [];
+const publishRelayCalls: Array<{ workspaceId: string; workspaceName: string; serverUrl: string }> = [];
+const unpublishRelayCalls: Array<{ workspaceId: string }> = [];
 const savedStates: any[] = [];
 let pickedWorkspaceDirectory: string | null = null;
 
@@ -96,12 +98,31 @@ mock.module("../src/lib/desktopCommands", () => ({
   showNotification: async () => true,
   getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
   setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  getIosRelayState: async () => ({
+    supported: false,
+    advertising: false,
+    peer: null,
+    publishedWorkspaceId: null,
+    openChannelCount: 0,
+    lastError: "iOS Relay is only available on macOS desktop builds.",
+  }),
+  startIosRelayAdvertising: async () => {},
+  stopIosRelayAdvertising: async () => {},
+  connectIosRelayPeer: async () => {},
+  disconnectIosRelayPeer: async () => {},
+  publishWorkspaceRelay: async (opts: { workspaceId: string; workspaceName: string; serverUrl: string }) => {
+    publishRelayCalls.push(opts);
+  },
+  unpublishWorkspaceRelay: async (opts: { workspaceId: string }) => {
+    unpublishRelayCalls.push(opts);
+  },
   getUpdateState: async () => MOCK_UPDATE_STATE,
   checkForUpdates: async () => {},
   quitAndInstallUpdate: async () => {},
   onSystemAppearanceChanged: () => () => {},
   onMenuCommand: () => () => {},
   onUpdateStateChanged: () => () => {},
+  onIosRelayStateChanged: () => () => {},
 }));
 
 mock.module("../src/lib/agentSocket", () => ({
@@ -116,6 +137,8 @@ describe("workspace startup flow", () => {
     startDeferreds.length = 0;
     startCalls.length = 0;
     stopCalls.length = 0;
+    publishRelayCalls.length = 0;
+    unpublishRelayCalls.length = 0;
     savedStates.length = 0;
     pickedWorkspaceDirectory = null;
     RUNTIME.controlSockets.clear();
@@ -221,5 +244,83 @@ describe("workspace startup flow", () => {
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(runtime?.serverUrl).toBe("ws://fresh");
     expect(runtime?.error).toBeNull();
+  });
+
+  test("selectWorkspace publishes the enabled relay workspace after startup", async () => {
+    const workspaceId = "ws-relay";
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: workspaceId,
+          name: "Relay Workspace",
+          path: "/tmp/relay-workspace",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          iosRelayEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: workspaceId,
+      iosRelayState: {
+        supported: true,
+        advertising: false,
+        peer: null,
+        publishedWorkspaceId: null,
+        openChannelCount: 0,
+        lastError: null,
+      },
+    });
+
+    const selectPromise = useAppStore.getState().selectWorkspace(workspaceId);
+    await flushAsyncWork();
+
+    startDeferreds[0]?.resolve({ url: "ws://relay-workspace" });
+    await selectPromise;
+
+    expect(publishRelayCalls).toEqual([
+      {
+        workspaceId,
+        workspaceName: "Relay Workspace",
+        serverUrl: "ws://relay-workspace",
+      },
+    ]);
+  });
+
+  test("removeWorkspace unpublishes the active relay workspace", async () => {
+    const workspaceId = "ws-relay-remove";
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: workspaceId,
+          name: "Relay Workspace",
+          path: "/tmp/relay-remove",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          iosRelayEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: workspaceId,
+      iosRelayState: {
+        supported: true,
+        advertising: true,
+        peer: {
+          id: "peer-1",
+          name: "My iPhone",
+          state: "connected",
+        },
+        publishedWorkspaceId: workspaceId,
+        openChannelCount: 2,
+        lastError: null,
+      },
+    });
+
+    await useAppStore.getState().removeWorkspace(workspaceId);
+
+    expect(unpublishRelayCalls).toEqual([{ workspaceId }]);
   });
 });

@@ -1,6 +1,7 @@
 import desktopPackage from "../../package.json";
 
 import type { PersistedState, TranscriptEvent } from "../app/types";
+import type { IosRelayConfig, IosRelayState } from "../app/iosRelayTypes";
 
 export type StartWorkspaceServerInput = {
   workspaceId: string;
@@ -187,6 +188,20 @@ export type SetWindowAppearanceInput = {
   backgroundMaterial?: WindowsBackgroundMaterial;
 };
 
+export type ConnectIosRelayPeerInput = {
+  peerId: string;
+};
+
+export type PublishWorkspaceRelayInput = {
+  workspaceId: string;
+  workspaceName: string;
+  serverUrl: string;
+};
+
+export type UnpublishWorkspaceRelayInput = {
+  workspaceId: string;
+};
+
 export interface DesktopApi {
   startWorkspaceServer(opts: StartWorkspaceServerInput): Promise<{ url: string }>;
   stopWorkspaceServer(opts: StopWorkspaceServerInput): Promise<void>;
@@ -218,9 +233,17 @@ export interface DesktopApi {
   quitAndInstallUpdate(): Promise<void>;
   getSystemAppearance(): Promise<SystemAppearance>;
   setWindowAppearance(opts: SetWindowAppearanceInput): Promise<SystemAppearance>;
+  getIosRelayState(): Promise<IosRelayState>;
+  startIosRelayAdvertising(deviceName?: string): Promise<void>;
+  stopIosRelayAdvertising(): Promise<void>;
+  connectIosRelayPeer(opts: ConnectIosRelayPeerInput): Promise<void>;
+  disconnectIosRelayPeer(): Promise<void>;
+  publishWorkspaceRelay(opts: PublishWorkspaceRelayInput): Promise<void>;
+  unpublishWorkspaceRelay(opts: UnpublishWorkspaceRelayInput): Promise<void>;
   onUpdateStateChanged(listener: (state: UpdaterState) => void): () => void;
   onSystemAppearanceChanged(listener: (appearance: SystemAppearance) => void): () => void;
   onMenuCommand(listener: (command: DesktopMenuCommand) => void): () => void;
+  onIosRelayStateChanged(listener: (state: IosRelayState) => void): () => void;
 }
 
 export const DESKTOP_IPC_CHANNELS = {
@@ -254,10 +277,20 @@ export const DESKTOP_IPC_CHANNELS = {
   quitAndInstallUpdate: "desktop:quitAndInstallUpdate",
   getSystemAppearance: "desktop:getSystemAppearance",
   setWindowAppearance: "desktop:setWindowAppearance",
+  getIosRelayState: "desktop:getIosRelayState",
+  startIosRelayAdvertising: "desktop:startIosRelayAdvertising",
+  stopIosRelayAdvertising: "desktop:stopIosRelayAdvertising",
+  connectIosRelayPeer: "desktop:connectIosRelayPeer",
+  disconnectIosRelayPeer: "desktop:disconnectIosRelayPeer",
+  publishWorkspaceRelay: "desktop:publishWorkspaceRelay",
+  unpublishWorkspaceRelay: "desktop:unpublishWorkspaceRelay",
 } as const;
 
 export const DESKTOP_EVENT_CHANNELS = {
   menuCommand: "desktop:event:menuCommand",
   updateStateChanged: "desktop:event:updateState",
   systemAppearanceChanged: "desktop:event:systemAppearanceChanged",
+  iosRelayStateChanged: "desktop:event:iosRelayStateChanged",
 } as const;
+
+export type { IosRelayConfig, IosRelayState };

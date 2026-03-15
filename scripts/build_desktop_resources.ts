@@ -5,6 +5,11 @@ import {
   buildSidecarManifest,
   resolvePackagedSidecarFilename,
 } from "../apps/desktop/electron/services/sidecar";
+import {
+  buildLoomBridgeManifest,
+  LOOM_BRIDGE_MANIFEST_NAME,
+  resolvePackagedLoomBridgeFilename,
+} from "../apps/desktop/electron/services/loomBridgeBinary";
 
 async function rmrf(p: string) {
   await fs.rm(p, { recursive: true, force: true });
@@ -32,6 +37,15 @@ async function copyDir(src: string, dest: string) {
       await fs.copyFile(from, to);
     }
   }
+}
+
+async function removeExistingPackagedBinaryOutputs(dir: string, baseName: string) {
+  const entries = await fs.readdir(dir).catch(() => []);
+  await Promise.all(
+    entries
+      .filter((entry) => entry === baseName || entry.startsWith(`${baseName}-`))
+      .map((entry) => fs.rm(path.join(dir, entry), { force: true }).catch(() => {}))
+  );
 }
 
 async function main() {
@@ -74,6 +88,8 @@ async function main() {
   const desktopBinariesDir = path.join(root, "apps", "desktop", "resources", "binaries");
   await rmrf(desktopBinariesDir);
   await fs.mkdir(desktopBinariesDir, { recursive: true });
+  await removeExistingPackagedBinaryOutputs(desktopBinariesDir, "cowork-server");
+  await removeExistingPackagedBinaryOutputs(desktopBinariesDir, "cowork-loom-bridge");
 
   const manifest = buildSidecarManifest();
   const sidecarOutfile = path.join(desktopBinariesDir, resolvePackagedSidecarFilename());
@@ -103,6 +119,40 @@ async function main() {
   if (sidecarCode !== 0) process.exit(sidecarCode);
 
   await fs.writeFile(path.join(desktopBinariesDir, "cowork-server-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+
+  if (process.platform === "darwin") {
+    const loomPackagePath = path.join(root, "native", "CoworkLoomBridge");
+    const loomBuildProc = Bun.spawn(
+      [
+        "swift",
+        "build",
+        "-c",
+        "release",
+        "--package-path",
+        loomPackagePath,
+        "--product",
+        "cowork-loom-bridge",
+      ],
+      {
+        cwd: root,
+        stdout: "inherit",
+        stderr: "inherit",
+        env: process.env,
+      }
+    );
+    const loomBuildCode = await loomBuildProc.exited;
+    if (loomBuildCode !== 0) process.exit(loomBuildCode);
+
+    const loomManifest = buildLoomBridgeManifest();
+    const loomSourceBinary = path.join(loomPackagePath, ".build", "release", "cowork-loom-bridge");
+    const loomOutfile = path.join(desktopBinariesDir, resolvePackagedLoomBridgeFilename());
+    await fs.copyFile(loomSourceBinary, loomOutfile);
+    await fs.writeFile(path.join(desktopBinariesDir, LOOM_BRIDGE_MANIFEST_NAME), `${JSON.stringify(loomManifest, null, 2)}\n`);
+    await fs.chmod(loomOutfile, 0o755).catch(() => {});
+    console.log(`[resources] built loom bridge sidecar at ${path.relative(root, loomOutfile)}`);
+  } else {
+    await fs.rm(path.join(desktopBinariesDir, LOOM_BRIDGE_MANIFEST_NAME), { force: true }).catch(() => {});
+  }
 
   // The desktop sidecar still needs built-in prompts/config under dist/{prompts,config}.
   // Curated skills are bootstrapped into ~/.cowork/skills on first desktop startup instead

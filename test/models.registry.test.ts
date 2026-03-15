@@ -21,7 +21,7 @@ function repoRoot(): string {
 
 describe("model registry invariants", () => {
   test("every provider has a default supported model", () => {
-    for (const provider of ["google", "openai", "anthropic", "baseten", "opencode-go", "opencode-zen", "codex-cli"] as ProviderName[]) {
+    for (const provider of ["google", "openai", "anthropic", "baseten", "together", "opencode-go", "opencode-zen", "codex-cli"] as ProviderName[]) {
       const models = listSupportedModels(provider);
       expect(models.length).toBeGreaterThan(0);
       expect(defaultSupportedModel(provider).provider).toBe(provider);
@@ -47,7 +47,7 @@ describe("model registry invariants", () => {
       seenDefaults.set(model.provider, (seenDefaults.get(model.provider) ?? 0) + 1);
     }
 
-    for (const provider of ["google", "openai", "anthropic", "baseten", "opencode-go", "opencode-zen", "codex-cli"] as ProviderName[]) {
+    for (const provider of ["google", "openai", "anthropic", "baseten", "together", "opencode-go", "opencode-zen", "codex-cli"] as ProviderName[]) {
       expect(seenDefaults.get(provider)).toBe(1);
     }
   });

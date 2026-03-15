@@ -3288,6 +3288,23 @@ describe("createTools", () => {
     expect((tools.webSearch as any).description).toContain("EXA_API_KEY");
   });
 
+  test("returns an executable webSearch tool for together", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "together",
+          model: "moonshotai/Kimi-K2.5",
+          subAgentModel: "moonshotai/Kimi-K2.5",
+        }),
+      })
+    );
+
+    expect((tools.webSearch as any).type).toBeUndefined();
+    expect(typeof (tools.webSearch as any).execute).toBe("function");
+    expect((tools.webSearch as any).description).toContain("EXA_API_KEY");
+  });
+
   test("each tool is executable or provider-native", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));

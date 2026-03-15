@@ -8,6 +8,7 @@ const TITLE_MODEL_BY_PROVIDER = {
   "codex-cli": "gpt-5.2-codex",
   google: "gemini-3-flash-preview",
   openai: "gpt-5-mini",
+  together: "moonshotai/Kimi-K2.5",
   "opencode-go": "glm-5",
   "opencode-zen": "glm-5",
 } as const satisfies Record<AgentConfig["provider"], string>;

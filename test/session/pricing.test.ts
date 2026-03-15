@@ -45,6 +45,23 @@ describe("pricing", () => {
             expect(resolveModelPricing("baseten", "nvidia/Nemotron-120B-A12B")).toBeNull();
         });
 
+        it("resolves exact match for together models", () => {
+            const kimi = resolveModelPricing("together", "moonshotai/Kimi-K2.5");
+            expect(kimi).not.toBeNull();
+            expect(kimi!.inputPerMillion).toBe(0.5);
+            expect(kimi!.outputPerMillion).toBe(2.8);
+
+            const qwen = resolveModelPricing("together", "Qwen/Qwen3.5-397B-A17B");
+            expect(qwen).not.toBeNull();
+            expect(qwen!.inputPerMillion).toBe(0.6);
+            expect(qwen!.outputPerMillion).toBe(3.6);
+
+            const glm = resolveModelPricing("together", "zai-org/GLM-5");
+            expect(glm).not.toBeNull();
+            expect(glm!.inputPerMillion).toBe(1);
+            expect(glm!.outputPerMillion).toBe(3.2);
+        });
+
         it("returns null for opencode-go models without local pricing", () => {
             expect(resolveModelPricing("opencode-go", "glm-5")).toBeNull();
             expect(resolveModelPricing("opencode-go", "kimi-k2.5")).toBeNull();

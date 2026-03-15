@@ -13,6 +13,7 @@ describe("Cross-provider model creation", () => {
   const providers: { name: ProviderName; providerPrefix: string }[] = [
     { name: "anthropic", providerPrefix: "anthropic.messages" },
     { name: "baseten", providerPrefix: "baseten.completions" },
+    { name: "together", providerPrefix: "together.completions" },
     { name: "openai", providerPrefix: "openai.responses" },
     { name: "google", providerPrefix: "google.generative-ai" },
     { name: "opencode-go", providerPrefix: "opencode-go.completions" },
@@ -79,6 +80,10 @@ describe("Session reasoning kind mapping", () => {
 
   test("baseten provider maps to 'reasoning' kind", () => {
     expect(reasoningModeForProvider("baseten")).toBe("reasoning");
+  });
+
+  test("together provider maps to 'reasoning' kind", () => {
+    expect(reasoningModeForProvider("together")).toBe("reasoning");
   });
 
   test("opencode-go provider maps to 'reasoning' kind", () => {

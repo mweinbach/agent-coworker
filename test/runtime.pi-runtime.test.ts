@@ -298,6 +298,37 @@ describe("pi runtime regressions", () => {
     expect(resolved.model.input).toEqual(["text", "image"]);
   });
 
+  test("together runtime model resolution returns explicit Kimi K2.5 metadata and env-key fallback", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-together-kimi-"));
+    const config = makeConfig(homeDir, {
+      provider: "together",
+      model: "moonshotai/Kimi-K2.5",
+      subAgentModel: "moonshotai/Kimi-K2.5",
+    });
+
+    const resolved = await withEnv("TOGETHER_API_KEY", "env-together-key", async () => (
+      await piRuntimeInternal.resolvePiModel(makeParams(config))
+    ));
+
+    expect(resolved.apiKey).toBe("env-together-key");
+    expect(resolved.model).toMatchObject({
+      id: "moonshotai/Kimi-K2.5",
+      api: "openai-completions",
+      provider: "together",
+      baseUrl: "https://api.together.xyz/v1",
+      reasoning: true,
+      contextWindow: 262_144,
+      maxTokens: 65_536,
+      cost: {
+        input: 0.5,
+        output: 2.8,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    });
+    expect(resolved.model.input).toEqual(["text", "image"]);
+  });
+
   test("opencode-zen runtime model resolution returns explicit GLM-5 PI metadata and env-key fallback", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-zen-"));
     const config = makeConfig(homeDir, {

@@ -8,6 +8,7 @@ import {
   createCodexCliModelAdapter,
   createGoogleModelAdapter,
   createOpenAiModelAdapter,
+  createTogetherModelAdapter,
 } from "../../src/providers/modelAdapter";
 import { makeConfig, makeTmpDirs, withEnv, writeJson } from "./helpers";
 
@@ -84,21 +85,33 @@ describe("provider model adapters", () => {
     });
   });
 
+  test("Together adapter wires Bearer authorization header", async () => {
+    await withEnv("TOGETHER_API_KEY", "tkey", async () => {
+      const adapter = createTogetherModelAdapter("moonshotai/Kimi-K2.5");
+      const headers = await adapter.config.headers();
+      expect(headers.authorization).toBe("Bearer tkey");
+    });
+  });
+
   test("adapters omit auth headers when no key source is available", async () => {
     await withEnv("OPENAI_API_KEY", undefined, async () => {
       await withEnv("GOOGLE_GENERATIVE_AI_API_KEY", undefined, async () => {
         await withEnv("GOOGLE_API_KEY", undefined, async () => {
           await withEnv("ANTHROPIC_API_KEY", undefined, async () => {
             await withEnv("BASETEN_API_KEY", undefined, async () => {
-              const openAiHeaders = await createOpenAiModelAdapter("gpt-5.2").config.headers();
-              const googleHeaders = await createGoogleModelAdapter("gemini-3.1").config.headers();
-              const anthropicHeaders = await createAnthropicModelAdapter("claude-opus-4-6").config.headers();
-              const basetenHeaders = await createBasetenModelAdapter("moonshotai/Kimi-K2.5").config.headers();
+              await withEnv("TOGETHER_API_KEY", undefined, async () => {
+                const openAiHeaders = await createOpenAiModelAdapter("gpt-5.2").config.headers();
+                const googleHeaders = await createGoogleModelAdapter("gemini-3.1").config.headers();
+                const anthropicHeaders = await createAnthropicModelAdapter("claude-opus-4-6").config.headers();
+                const basetenHeaders = await createBasetenModelAdapter("moonshotai/Kimi-K2.5").config.headers();
+                const togetherHeaders = await createTogetherModelAdapter("moonshotai/Kimi-K2.5").config.headers();
 
-              expect(openAiHeaders).toEqual({});
-              expect(googleHeaders).toEqual({});
-              expect(anthropicHeaders).toEqual({});
-              expect(basetenHeaders).toEqual({});
+                expect(openAiHeaders).toEqual({});
+                expect(googleHeaders).toEqual({});
+                expect(anthropicHeaders).toEqual({});
+                expect(basetenHeaders).toEqual({});
+                expect(togetherHeaders).toEqual({});
+              });
             });
           });
         });

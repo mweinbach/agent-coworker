@@ -134,6 +134,38 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
     });
   });
 
+  test("together saved key overrides TOGETHER_API_KEY", async () => {
+    const { home } = await makeTmpDirs();
+    const savedKey = "saved-together-key";
+    const envKey = "env-together-key";
+
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        together: {
+          service: "together",
+          mode: "api_key",
+          apiKey: savedKey,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    await withEnv("TOGETHER_API_KEY", envKey, async () => {
+      const cfg = makeConfig({
+        provider: "together",
+        model: "moonshotai/Kimi-K2.5",
+        subAgentModel: "moonshotai/Kimi-K2.5",
+        userAgentDir: path.join(home, ".agent"),
+      });
+
+      const model = getModel(cfg) as any;
+      const headers = await model.config.headers();
+      expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+    });
+  });
+
   test("opencode-go saved key overrides OPENCODE_API_KEY", async () => {
     const { home } = await makeTmpDirs();
     const savedKey = "saved-opencode-key";
@@ -341,6 +373,36 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const model = getModel(cfg) as any;
       const headers = await model.config.headers();
       expect(headers.authorization).toBe(`Api-Key ${envKey}`);
+    });
+  });
+
+  test("together falls back to TOGETHER_API_KEY when saved entry has no api key", async () => {
+    const { home } = await makeTmpDirs();
+    const envKey = "env-together-fallback";
+
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        together: {
+          service: "together",
+          mode: "oauth_pending",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    await withEnv("TOGETHER_API_KEY", envKey, async () => {
+      const cfg = makeConfig({
+        provider: "together",
+        model: "moonshotai/Kimi-K2.5",
+        subAgentModel: "moonshotai/Kimi-K2.5",
+        userAgentDir: path.join(home, ".agent"),
+      });
+
+      const model = getModel(cfg) as any;
+      const headers = await model.config.headers();
+      expect(headers.authorization).toBe(`Bearer ${envKey}`);
     });
   });
 

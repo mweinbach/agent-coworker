@@ -26,6 +26,7 @@ import {
   resolveOpenCodeApiKey,
   type OpenCodeProviderName,
 } from "../providers/opencodeShared";
+import { getTogetherModelSpec, resolveTogetherApiKey } from "../providers/togetherShared";
 import type { ModelMessage, ProviderName } from "../types";
 import { assertSupportedModel } from "../models/registry";
 import type { TelemetrySettings } from "../observability/runtime";
@@ -221,6 +222,29 @@ function getBasetenPiModel(modelId: string): PiModel | null {
   };
 }
 
+function getTogetherPiModel(modelId: string): PiModel | null {
+  const modelSpec = getTogetherModelSpec(modelId);
+  if (!modelSpec) return null;
+
+  return {
+    id: modelSpec.id,
+    name: modelSpec.name,
+    api: "openai-completions",
+    provider: "together",
+    baseUrl: modelSpec.baseUrl,
+    reasoning: modelSpec.reasoning,
+    input: [...modelSpec.input],
+    cost: {
+      input: modelSpec.pricing.input,
+      output: modelSpec.pricing.output,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: modelSpec.contextWindow,
+    maxTokens: modelSpec.maxTokens,
+  };
+}
+
 type RuntimeStepOverrides = RuntimeStepOverride;
 
 type RuntimeStepState = {
@@ -268,6 +292,17 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
       model: applySupportedModelMetadata(model, provider, modelId),
       apiKey: resolveBasetenApiKey({
         savedKey: getSavedProviderApiKey(params.config, "baseten"),
+      }),
+    };
+  }
+
+  if (provider === "together") {
+    const model = getTogetherPiModel(modelId);
+    if (!model) throw new Error(`No PI model metadata available for provider together (model: ${modelId}).`);
+    return {
+      model: applySupportedModelMetadata(model, provider, modelId),
+      apiKey: resolveTogetherApiKey({
+        savedKey: getSavedProviderApiKey(params.config, "together"),
       }),
     };
   }

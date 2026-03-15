@@ -68,6 +68,10 @@ describe("reasoningModeForProvider", () => {
     expect(reasoningModeForProvider("baseten")).toBe("reasoning");
   });
 
+  test('returns "reasoning" for together', () => {
+    expect(reasoningModeForProvider("together")).toBe("reasoning");
+  });
+
   test('returns "reasoning" for opencode-go', () => {
     expect(reasoningModeForProvider("opencode-go")).toBe("reasoning");
   });

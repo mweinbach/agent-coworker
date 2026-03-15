@@ -1,0 +1,10 @@
+{
+  "id": "Qwen/Qwen3.5-397B-A17B",
+  "provider": "together",
+  "displayName": "Qwen 3.5 397B A17B",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

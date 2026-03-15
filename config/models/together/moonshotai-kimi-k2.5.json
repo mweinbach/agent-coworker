@@ -1,0 +1,10 @@
+{
+  "id": "moonshotai/Kimi-K2.5",
+  "provider": "together",
+  "displayName": "Kimi K2.5",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": true,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": true
+}

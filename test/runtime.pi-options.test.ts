@@ -119,6 +119,25 @@ describe("pi runtime provider option mapping", () => {
     expect(mapped.toolChoice).toBeUndefined();
   });
 
+  test("ignores together providerOptions until they are exposed through the shared editable contract", () => {
+    const params = makeParams(makeConfig({
+      provider: "together",
+      model: "moonshotai/Kimi-K2.5",
+      subAgentModel: "moonshotai/Kimi-K2.5",
+      providerOptions: {
+        together: {
+          reasoningEffort: "high",
+          temperature: 0.4,
+          toolChoice: "auto",
+        },
+      },
+    }));
+    const mapped = __internal.buildPiStreamOptions(params);
+    expect(mapped.reasoningEffort).toBeUndefined();
+    expect(mapped.temperature).toBeUndefined();
+    expect(mapped.toolChoice).toBeUndefined();
+  });
+
   test("uses codex-cli options with openai fallback", () => {
     const codexParams = makeParams(makeConfig({
       provider: "codex-cli",

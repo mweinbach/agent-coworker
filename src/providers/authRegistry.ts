@@ -50,6 +50,7 @@ const PROVIDER_AUTH_METHODS: Record<ProviderName, ProviderAuthMethod[]> = {
   openai: [{ id: "api_key", type: "api", label: "API key" }],
   anthropic: [{ id: "api_key", type: "api", label: "API key" }],
   baseten: [{ id: "api_key", type: "api", label: "API key" }],
+  together: [{ id: "api_key", type: "api", label: "API key" }],
   "opencode-go": [{ id: "api_key", type: "api", label: "API key" }],
   "opencode-zen": [{ id: "api_key", type: "api", label: "API key" }],
   "codex-cli": [

@@ -96,6 +96,17 @@ export function createBasetenModelAdapter(modelId: string, savedKey?: string): P
   });
 }
 
+export function createTogetherModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
+  return createModelAdapter(modelId, "together.completions", async () => {
+    const key = firstNonEmpty(savedKey, envKey("TOGETHER_API_KEY"));
+    const headers: HeaderMap = {};
+    if (key) {
+      headers.authorization = `Bearer ${key}`;
+    }
+    return headers;
+  });
+}
+
 function createOpenCodeModelAdapter(
   provider: OpenCodeProviderName,
   modelId: string,

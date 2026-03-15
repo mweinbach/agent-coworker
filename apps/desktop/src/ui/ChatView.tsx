@@ -327,6 +327,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   openai: "OpenAI",
   anthropic: "Anthropic",
   baseten: "Baseten",
+  together: "Together AI",
   "opencode-go": "OpenCode Go",
   "opencode-zen": "OpenCode Zen",
   "codex-cli": "Codex CLI",

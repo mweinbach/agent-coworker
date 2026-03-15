@@ -46,6 +46,19 @@ describe("src/providers/index.ts", () => {
       expect(headers.authorization).toBe("Api-Key baseten-key");
     });
 
+    test("creates Together AI model with saved key", async () => {
+      const config = makeConfig({
+        provider: "together",
+        model: "moonshotai/Kimi-K2.5",
+        subAgentModel: "moonshotai/Kimi-K2.5",
+      });
+      const model = getModelForProvider(config, "moonshotai/Kimi-K2.5", "together-key") as any;
+      const headers = await model.config.headers();
+      expect(model.modelId).toBe("moonshotai/Kimi-K2.5");
+      expect(model.provider).toBe("together.completions");
+      expect(headers.authorization).toBe("Bearer together-key");
+    });
+
     test("creates OpenCode Go model with saved key", async () => {
       const config = makeConfig({ provider: "opencode-go", model: "glm-5", subAgentModel: "glm-5" });
       const model = getModelForProvider(config, "glm-5", "opencode-key") as any;
@@ -96,6 +109,7 @@ describe("src/providers/index.ts", () => {
       expect(defaultModelForProvider("openai")).toBe(PROVIDERS.openai.defaultModel);
       expect(defaultModelForProvider("anthropic")).toBe(PROVIDERS.anthropic.defaultModel);
       expect(defaultModelForProvider("baseten")).toBe(PROVIDERS.baseten.defaultModel);
+      expect(defaultModelForProvider("together")).toBe(PROVIDERS.together.defaultModel);
       expect(defaultModelForProvider("opencode-go")).toBe(PROVIDERS["opencode-go"].defaultModel);
       expect(defaultModelForProvider("opencode-zen")).toBe(PROVIDERS["opencode-zen"].defaultModel);
       expect(defaultModelForProvider("codex-cli")).toBe(PROVIDERS["codex-cli"].defaultModel);
@@ -117,6 +131,10 @@ describe("src/providers/index.ts", () => {
 
     test("returns key candidates for baseten", () => {
       expect(getProviderKeyCandidates("baseten")).toBe(PROVIDERS.baseten.keyCandidates);
+    });
+
+    test("returns key candidates for together", () => {
+      expect(getProviderKeyCandidates("together")).toBe(PROVIDERS.together.keyCandidates);
     });
 
     test("returns key candidates for opencode-go", () => {

@@ -21,6 +21,7 @@ describe("providers/authRegistry", () => {
     expect(methods.openai?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods.google?.some((m) => m.id === "exa_api_key")).toBe(true);
     expect(methods.baseten?.some((m) => m.id === "api_key")).toBe(true);
+    expect(methods.together?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods["opencode-go"]?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods["opencode-zen"]?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods["codex-cli"]?.some((m) => m.id === "oauth_cli")).toBe(true);

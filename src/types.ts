@@ -5,6 +5,7 @@ export const PROVIDER_NAMES = [
   "openai",
   "anthropic",
   "baseten",
+  "together",
   "opencode-go",
   "opencode-zen",
   "codex-cli",

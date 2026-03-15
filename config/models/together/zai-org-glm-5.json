@@ -1,0 +1,10 @@
+{
+  "id": "zai-org/GLM-5",
+  "provider": "together",
+  "displayName": "GLM-5",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": false
+}

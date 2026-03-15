@@ -144,6 +144,43 @@ describe("providers/connectionCatalog", () => {
     });
   });
 
+  test("lists Together AI in the provider catalog with the expected model set", async () => {
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {},
+      }),
+    });
+
+    expect(payload.default.together).toBe("moonshotai/Kimi-K2.5");
+    expect(payload.all).toContainEqual({
+      id: "together",
+      name: "Together AI",
+      models: [
+        {
+          id: "moonshotai/Kimi-K2.5",
+          displayName: "Kimi K2.5",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: true,
+        },
+        {
+          id: "Qwen/Qwen3.5-397B-A17B",
+          displayName: "Qwen 3.5 397B A17B",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: true,
+        },
+        {
+          id: "zai-org/GLM-5",
+          displayName: "GLM-5",
+          knowledgeCutoff: "Unknown",
+          supportsImageInput: false,
+        },
+      ],
+      defaultModel: "moonshotai/Kimi-K2.5",
+    });
+  });
+
   test("connected providers exclude oauth_pending entries", async () => {
     const payload = await getProviderCatalog({
       readStore: async () => ({

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { MCPServerConfig } from "../src/types";
 import { loadMCPTools } from "../src/mcp";
+import { isTransientRemoteMcpError, noteRemoteMcpSkip, withRemoteMcpRetries } from "./remoteMcpTestHelpers";
 
 const RUN_REMOTE =
   process.env.RUN_REMOTE_MCP_TESTS === "1" ||
@@ -19,12 +20,25 @@ describe("remote MCP (mcp.grep.app)", () => {
           name: "grep",
           transport: { type: "http", url: "https://mcp.grep.app" },
           required: true,
-          retries: 0,
+          retries: 2,
         },
       ];
 
-      const loaded = await loadMCPTools(servers, { log: () => {} });
+      let loaded: Awaited<ReturnType<typeof loadMCPTools>>;
       try {
+        loaded = await withRemoteMcpRetries(() => loadMCPTools(servers, { log: () => {} }));
+      } catch (error) {
+        if (isTransientRemoteMcpError(error)) {
+          noteRemoteMcpSkip("direct remote MCP load", error);
+          return;
+        }
+        throw error;
+      }
+      try {
+        if (loaded.errors.length > 0 && loaded.errors.every((error) => isTransientRemoteMcpError(error))) {
+          noteRemoteMcpSkip("direct remote MCP load", loaded.errors[0]);
+          return;
+        }
         expect(loaded.errors).toEqual([]);
 
         const toolName = "mcp__grep__searchGitHub";
@@ -33,10 +47,21 @@ describe("remote MCP (mcp.grep.app)", () => {
         const tool: any = (loaded.tools as any)[toolName];
         expect(typeof tool.execute).toBe("function");
 
-        const res = await tool.execute({
-          query: "createMCPClient(",
-          language: ["TypeScript", "JavaScript"],
-        });
+        let res: any;
+        try {
+          res = await withRemoteMcpRetries(() =>
+            tool.execute({
+              query: "createMCPClient(",
+              language: ["TypeScript", "JavaScript"],
+            })
+          );
+        } catch (error) {
+          if (isTransientRemoteMcpError(error)) {
+            noteRemoteMcpSkip("direct remote MCP execution", error);
+            return;
+          }
+          throw error;
+        }
 
         expect(res).toBeDefined();
         expect(Array.isArray(res.content)).toBe(true);

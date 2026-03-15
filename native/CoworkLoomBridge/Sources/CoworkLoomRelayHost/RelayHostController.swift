@@ -168,6 +168,9 @@ public actor RelayHostController {
             }
             await sendEnvelope(.socketClosed(.init(channelId: channelId, code: code, reason: reason)))
         case let .error(message, retryable):
+            if let channel = channels.removeValue(forKey: channelId) {
+                channel.task.cancel()
+            }
             await sendEnvelope(.socketError(.init(channelId: channelId, message: message, retryable: retryable)))
         }
     }

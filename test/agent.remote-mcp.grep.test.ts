@@ -5,6 +5,7 @@ import path from "node:path";
 
 import type { AgentConfig } from "../src/types";
 import { runTurnWithDeps } from "../src/agent";
+import { isTransientRemoteMcpError, noteRemoteMcpSkip, withRemoteMcpRetries } from "./remoteMcpTestHelpers";
 
 const RUN_REMOTE =
   process.env.RUN_REMOTE_MCP_TESTS === "1" ||
@@ -45,10 +46,12 @@ describe("runTurn + remote MCP (mcp.grep.app)", () => {
         const tool = args?.tools?.["mcp__grep__searchGitHub"];
         expect(tool).toBeDefined();
 
-        const res = await tool.execute({
-          query: "createMCPClient(",
-          language: ["TypeScript", "JavaScript"],
-        });
+        const res = await withRemoteMcpRetries(() =>
+          tool.execute({
+            query: "createMCPClient(",
+            language: ["TypeScript", "JavaScript"],
+          })
+        );
 
         const firstText = res?.content?.find((c: any) => c?.type === "text")?.text ?? "";
 
@@ -71,7 +74,7 @@ describe("runTurn + remote MCP (mcp.grep.app)", () => {
                   name: "grep",
                   transport: { type: "http", url: "https://mcp.grep.app" },
                   required: true,
-                  retries: 0,
+                  retries: 2,
                 },
               ],
             },
@@ -83,24 +86,33 @@ describe("runTurn + remote MCP (mcp.grep.app)", () => {
 
         const config = makeConfig(tmpDir, tmpDir);
 
-        const res = await runTurnWithDeps(
-          {
-            config,
-            system: "You are a helpful assistant.",
-            messages: [{ role: "user", content: [{ type: "text", text: "use the tool" }] }] as any[],
-            log: mock(() => {}),
-            askUser: mock(async () => "ok"),
-            approveCommand: mock(async () => true),
-            maxSteps: 5,
-          },
-          {
-            streamText: mockStreamText as any,
-            stepCountIs: mock((_n: number) => "step-count-sentinel") as any,
-            getModel: mock((_config: AgentConfig, _id?: string) => "model-sentinel") as any,
-            // Keep only MCP tools in the tools map to reduce accidental coupling to built-ins.
-            createTools: mock((_ctx: any) => ({})) as any,
+        let res: Awaited<ReturnType<typeof runTurnWithDeps>>;
+        try {
+          res = await runTurnWithDeps(
+            {
+              config,
+              system: "You are a helpful assistant.",
+              messages: [{ role: "user", content: [{ type: "text", text: "use the tool" }] }] as any[],
+              log: mock(() => {}),
+              askUser: mock(async () => "ok"),
+              approveCommand: mock(async () => true),
+              maxSteps: 5,
+            },
+            {
+              streamText: mockStreamText as any,
+              stepCountIs: mock((_n: number) => "step-count-sentinel") as any,
+              getModel: mock((_config: AgentConfig, _id?: string) => "model-sentinel") as any,
+              // Keep only MCP tools in the tools map to reduce accidental coupling to built-ins.
+              createTools: mock((_ctx: any) => ({})) as any,
+            }
+          );
+        } catch (error) {
+          if (isTransientRemoteMcpError(error)) {
+            noteRemoteMcpSkip("runTurn remote MCP execution", error);
+            return;
           }
-        );
+          throw error;
+        }
 
         expect(mockStreamText).toHaveBeenCalledTimes(1);
         expect(typeof res.text).toBe("string");

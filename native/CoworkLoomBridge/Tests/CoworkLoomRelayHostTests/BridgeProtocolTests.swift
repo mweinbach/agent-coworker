@@ -1,6 +1,8 @@
 import Foundation
 import Testing
 
+import Loom
+
 @testable import CoworkLoomRelayCore
 @testable import CoworkLoomRelayHost
 
@@ -63,4 +65,54 @@ func relayAdvertisementIncludesIdentityKeyAndPublishedWorkspaceMetadata() {
     #expect(advertisement.metadata[RelayProtocolConstants.protocolMetadataKey] == String(RelayProtocolConstants.protocolVersion))
     #expect(advertisement.metadata[RelayProtocolConstants.workspaceIdMetadataKey] == "workspace-1")
     #expect(advertisement.metadata[RelayProtocolConstants.workspaceNameMetadataKey] == "AIWorkspace")
+}
+
+@MainActor
+@Test
+func approvedPeerTrustProviderOnlyKeepsLatestApprovedPeer() async throws {
+    let storageURL = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true))
+        .appendingPathComponent("CoworkLoomBridge", isDirectory: true)
+        .appendingPathComponent("approved-peer-id.txt")
+    let originalContents = try? Data(contentsOf: storageURL)
+    defer {
+        if let originalContents {
+            try? FileManager.default.createDirectory(at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? originalContents.write(to: storageURL)
+        } else {
+            try? FileManager.default.removeItem(at: storageURL)
+        }
+    }
+
+    let provider = ApprovedPeerTrustProvider()
+    provider.setApprovedPeerID(nil)
+
+    let peerA = LoomPeerIdentity(
+        deviceID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+        name: "Phone A",
+        deviceType: .iPhone,
+        iCloudUserID: nil,
+        identityKeyID: nil,
+        identityPublicKey: nil,
+        isIdentityAuthenticated: true,
+        endpoint: "peer-a.local"
+    )
+    let peerB = LoomPeerIdentity(
+        deviceID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+        name: "Phone B",
+        deviceType: .iPhone,
+        iCloudUserID: nil,
+        identityKeyID: nil,
+        identityPublicKey: nil,
+        isIdentityAuthenticated: true,
+        endpoint: "peer-b.local"
+    )
+
+    try await provider.grantTrust(to: peerA)
+    #expect(await provider.evaluateTrust(for: peerA) == .trusted)
+
+    try await provider.grantTrust(to: peerB)
+
+    #expect(await provider.evaluateTrust(for: peerA) == .requiresApproval)
+    #expect(await provider.evaluateTrust(for: peerB) == .trusted)
 }

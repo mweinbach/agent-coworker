@@ -185,4 +185,30 @@ describe("session managers", () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
+
+  test("SessionAdminManager truncates large workspace file previews", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-session-admin-large-"));
+    const largeContent = "a".repeat(300 * 1024);
+    try {
+      await fs.writeFile(path.join(workspaceDir, "large.log"), largeContent, "utf-8");
+
+      const context = makeBaseContext();
+      context.state.config.workingDirectory = workspaceDir;
+      const emitted: any[] = [];
+      context.emit = (event) => emitted.push(event);
+      const manager = new SessionAdminManager(context);
+
+      await manager.readWorkspaceFile("large.log");
+
+      const fileEvent = emitted.find((event) => event.type === "workspace_file_content");
+      expect(fileEvent).toBeDefined();
+      expect(fileEvent.path).toBe("large.log");
+      expect(fileEvent.binary).toBe(false);
+      expect(fileEvent.truncated).toBe(true);
+      expect(fileEvent.totalBytes).toBe(largeContent.length);
+      expect(fileEvent.content).toBe(largeContent.slice(0, 256 * 1024));
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
 });

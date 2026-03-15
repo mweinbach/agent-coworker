@@ -246,6 +246,32 @@ export class LoomBridgeManager {
     this.child = child;
 
     const rl = readline.createInterface({ input: child.stdout });
+    let childClosed = false;
+    const handleChildTermination = (message: string, level: IosRelayLogEntry["level"]) => {
+      if (childClosed) {
+        return;
+      }
+      childClosed = true;
+      rl.close();
+
+      if (this.child !== child) {
+        return;
+      }
+
+      this.recordLog(level, message);
+      this.updateState({
+        ...this.state,
+        advertising: false,
+        peer: this.state.peer ? { ...this.state.peer, state: "disconnected" } : null,
+        openChannelCount: 0,
+        lastError: message,
+      });
+      this.child = null;
+      this.rejectReady?.(new Error(message));
+      this.readyPromise = null;
+      this.resolveReady = null;
+      this.rejectReady = null;
+    };
     rl.on("line", (line) => {
       this.handleStdoutLine(line.trim());
     });
@@ -258,25 +284,17 @@ export class LoomBridgeManager {
       }
     });
 
+    child.once("error", (error) => {
+      const message = `iOS Relay helper failed to start: ${error.message}`;
+      handleChildTermination(message, "error");
+    });
+
     child.once("exit", (code, signal) => {
-      rl.close();
       const message =
         code === 0
           ? "iOS Relay helper exited."
           : `iOS Relay helper exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
-      this.recordLog(code === 0 ? "info" : "error", message);
-      this.updateState({
-        ...this.state,
-        advertising: false,
-        peer: this.state.peer ? { ...this.state.peer, state: "disconnected" } : null,
-        openChannelCount: 0,
-        lastError: message,
-      });
-      this.rejectReady?.(new Error(message));
-      this.readyPromise = null;
-      this.resolveReady = null;
-      this.rejectReady = null;
-      this.child = null;
+      handleChildTermination(message, code === 0 ? "info" : "error");
     });
 
     await this.readyPromise;

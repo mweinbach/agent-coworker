@@ -48,7 +48,7 @@ final class ApprovedPeerTrustProvider: LoomTrustProvider {
     }
 
     func grantTrust(to peer: LoomPeerIdentity) async throws {
-        approvedDeviceIDs.insert(peer.deviceID)
+        approvedDeviceIDs = [peer.deviceID]
         temporarilyRejectedUntilByDeviceID.removeValue(forKey: peer.deviceID)
         persistApprovedPeerID()
     }
@@ -274,28 +274,36 @@ public final class LoomBridgeService {
             discovery.startDiscovery()
         }
 
+        let previousPeer = peer
+        let previousApprovedPeerID = previousPeer?.id
         trustProvider.setApprovedPeerID(peerId)
         let knownName = discovery.discoveredPeers.first(where: { $0.id.rawValue == peerId || $0.deviceID.uuidString.lowercased() == peerId.lowercased() })?.name ?? "Unknown Peer"
         peer = BridgePeerState(id: peerId, name: knownName, state: "connecting")
         await emitState()
 
-        guard let discoveredPeer = discovery.discoveredPeers.first(where: {
-            $0.id.rawValue == peerId || $0.deviceID.uuidString.lowercased() == peerId.lowercased()
-        }) else {
-            throw RelayError.transport("Requested Loom peer was not found in discovery results.")
-        }
+        do {
+            guard let discoveredPeer = discovery.discoveredPeers.first(where: {
+                $0.id.rawValue == peerId || $0.deviceID.uuidString.lowercased() == peerId.lowercased()
+            }) else {
+                throw RelayError.transport("Requested Loom peer was not found in discovery results.")
+            }
 
-        let session = try await node.connect(
-            to: discoveredPeer.endpoint,
-            using: .tcp,
-            hello: makeHelloRequest()
-        )
-        try await activateSession(
-            session,
-            peerId: discoveredPeer.id.rawValue,
-            peerName: discoveredPeer.name,
-            shouldOpenOutboundStream: true
-        )
+            let session = try await node.connect(
+                to: discoveredPeer.endpoint,
+                using: .tcp,
+                hello: makeHelloRequest()
+            )
+            try await activateSession(
+                session,
+                peerId: discoveredPeer.id.rawValue,
+                peerName: discoveredPeer.name,
+                shouldOpenOutboundStream: true
+            )
+        } catch {
+            trustProvider.setApprovedPeerID(previousApprovedPeerID)
+            peer = previousPeer
+            throw error
+        }
     }
 
     private func publishWorkspace(workspaceId: String, workspaceName: String, serverUrl: String) async throws {

@@ -125,9 +125,18 @@ export class SessionAdminManager {
         return;
       }
 
-      const bytes = await fs.readFile(resolved.absolutePath);
-      const truncated = bytes.length > MAX_WORKSPACE_FILE_BYTES;
-      const previewBytes = truncated ? bytes.subarray(0, MAX_WORKSPACE_FILE_BYTES) : bytes;
+      const truncated = stats.size > MAX_WORKSPACE_FILE_BYTES;
+      const previewBytes = await (async () => {
+        const handle = await fs.open(resolved.absolutePath, "r");
+        try {
+          const byteCount = Math.min(stats.size, MAX_WORKSPACE_FILE_BYTES);
+          const buffer = Buffer.alloc(byteCount);
+          const { bytesRead } = await handle.read(buffer, 0, byteCount, 0);
+          return bytesRead === buffer.byteLength ? buffer : buffer.subarray(0, bytesRead);
+        } finally {
+          await handle.close();
+        }
+      })();
       const binary = previewBytes.includes(0);
       const content = binary ? "" : new TextDecoder().decode(previewBytes);
 
@@ -139,7 +148,7 @@ export class SessionAdminManager {
         content,
         truncated,
         binary,
-        totalBytes: bytes.length,
+        totalBytes: stats.size,
       });
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to read workspace file: ${String(err)}`);

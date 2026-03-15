@@ -85,7 +85,11 @@ describe("desktop loom bridge manager", () => {
       }),
     );
 
-    expect(states).toEqual([{ lastError: null }, { lastError: "Loom helper crashed" }]);
+    expect(states).toHaveLength(2);
+    expect(states[0]).toEqual({
+      lastError: process.platform === "darwin" ? null : "iOS Relay is only available on macOS desktop builds.",
+    });
+    expect(states[1]).toEqual({ lastError: "Loom helper crashed" });
   });
 
   test("forwards approval requests from the bridge helper", async () => {

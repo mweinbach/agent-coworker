@@ -73,6 +73,10 @@ export function createIosRelayActions(
 
     syncIosRelayPublication: async () => {
       const initialState = get();
+      if (!initialState.iosRelayState.supported) {
+        return;
+      }
+
       const candidate = initialState.workspaces.find((workspace) => {
         if (!workspace.iosRelayEnabled) {
           return false;

@@ -328,4 +328,36 @@ describe("workspace startup flow", () => {
 
     expect(unpublishRelayCalls).toEqual([{ workspaceId }]);
   });
+
+  test("syncIosRelayPublication does not start workspace servers when relay is unsupported", async () => {
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: "ws-relay-unsupported",
+          name: "Relay Workspace",
+          path: "/tmp/relay-unsupported",
+          createdAt: "2026-03-08T00:00:00.000Z",
+          lastOpenedAt: "2026-03-08T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          iosRelayEnabled: true,
+          yolo: false,
+        },
+      ],
+      iosRelayState: {
+        supported: false,
+        advertising: false,
+        peer: null,
+        publishedWorkspaceId: null,
+        openChannelCount: 0,
+        lastError: "iOS Relay is only available on macOS desktop builds.",
+      },
+    });
+
+    await useAppStore.getState().syncIosRelayPublication();
+
+    expect(startCalls).toEqual([]);
+    expect(startRelayAdvertisingCalls).toEqual([]);
+    expect(publishRelayCalls).toEqual([]);
+  });
 });

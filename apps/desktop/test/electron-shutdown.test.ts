@@ -81,4 +81,41 @@ describe("desktop shutdown handler", () => {
     expect(quitCalls).toBe(1);
     expect(preventCalls).toBe(1);
   });
+
+  test("stops the Loom bridge even when workspace shutdown fails", async () => {
+    const calls: string[] = [];
+    const errors: string[] = [];
+
+    const beforeQuit = createBeforeQuitHandler({
+      unregisterIpc: () => {
+        calls.push("unregister");
+      },
+      stopAllServers: async () => {
+        calls.push("stop:start");
+        throw new Error("workspace shutdown failed");
+      },
+      stopLoomBridge: async () => {
+        calls.push("loom:done");
+      },
+      quit: () => {
+        calls.push("quit");
+      },
+      onError: (error) => {
+        errors.push(error instanceof Error ? error.message : String(error));
+      },
+    });
+
+    beforeQuit({
+      preventDefault: () => {
+        calls.push("preventDefault");
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(calls).toContain("stop:start");
+    expect(calls).toContain("loom:done");
+    expect(calls).toContain("quit");
+    expect(errors).toEqual(["workspace shutdown failed"]);
+  });
 });

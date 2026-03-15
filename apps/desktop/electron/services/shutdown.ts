@@ -28,15 +28,21 @@ export function createBeforeQuitHandler(deps: ShutdownDeps): (event: QuitEvent) 
     shutdownStarted = true;
     event.preventDefault();
 
-    void deps
-      .stopAllServers()
-      .then(() => deps.stopLoomBridge?.())
-      .catch((error) => {
+    void (async () => {
+      try {
+        await deps.stopAllServers();
+      } catch (error) {
         deps.onError?.(error);
-      })
-      .finally(() => {
+      }
+
+      try {
+        await deps.stopLoomBridge?.();
+      } catch (error) {
+        deps.onError?.(error);
+      } finally {
         shutdownFinished = true;
         deps.quit();
-      });
+      }
+    })();
   };
 }

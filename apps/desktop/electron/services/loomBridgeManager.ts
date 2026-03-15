@@ -42,6 +42,14 @@ const bridgeReadyEventSchema = z.object({
   type: z.literal("bridge_ready"),
 });
 
+const bridgeApprovalRequestEventSchema = z.object({
+  type: z.literal("bridge_approval_requested"),
+  approval: z.object({
+    peerId: z.string().min(1),
+    peerName: z.string().min(1),
+  }),
+});
+
 const bridgeLogEventSchema = z.object({
   type: z.literal("bridge_log"),
   level: z.enum(["info", "warning", "error"]),
@@ -58,6 +66,8 @@ type BridgeCommand =
   | { type: "bridge_stop" }
   | { type: "bridge_connect_peer"; peerId: string }
   | { type: "bridge_disconnect_peer" }
+  | { type: "bridge_approve_peer"; peerId: string }
+  | { type: "bridge_reject_peer"; peerId: string }
   | { type: "bridge_publish_workspace"; workspaceId: string; workspaceName: string; serverUrl: string }
   | { type: "bridge_unpublish_workspace"; workspaceId: string }
   | { type: "bridge_get_state" };
@@ -96,9 +106,14 @@ export class LoomBridgeManager {
   private rejectReady: ((error: unknown) => void) | null = null;
   private state: IosRelayState = createDefaultIosRelayState(process.platform === "darwin");
   private readonly onStateChange: (state: IosRelayState) => void;
+  private readonly onApprovalRequested: (approval: { peerId: string; peerName: string }) => void | Promise<void>;
 
-  constructor(options: { onStateChange?: (state: IosRelayState) => void } = {}) {
+  constructor(options: {
+    onStateChange?: (state: IosRelayState) => void;
+    onApprovalRequested?: (approval: { peerId: string; peerName: string }) => void | Promise<void>;
+  } = {}) {
     this.onStateChange = options.onStateChange ?? (() => {});
+    this.onApprovalRequested = options.onApprovalRequested ?? (() => {});
     if (process.platform !== "darwin") {
       this.state = createUnsupportedState("iOS Relay is only available on macOS desktop builds.");
     }
@@ -143,6 +158,22 @@ export class LoomBridgeManager {
     }
     await this.ensureStarted();
     await this.send({ type: "bridge_disconnect_peer" });
+  }
+
+  async approvePeer(peerId: string): Promise<void> {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    await this.ensureStarted();
+    await this.send({ type: "bridge_approve_peer", peerId });
+  }
+
+  async rejectPeer(peerId: string): Promise<void> {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    await this.ensureStarted();
+    await this.send({ type: "bridge_reject_peer", peerId });
   }
 
   async publishWorkspace(input: { workspaceId: string; workspaceName: string; serverUrl: string }): Promise<void> {
@@ -296,6 +327,14 @@ export class LoomBridgeManager {
         publishedWorkspaceName: state.data.publishedWorkspaceName ?? null,
         openChannelCount: state.data.openChannelCount,
         lastError: state.data.lastError ?? null,
+      });
+      return;
+    }
+
+    const approval = bridgeApprovalRequestEventSchema.safeParse(parsed);
+    if (approval.success) {
+      void Promise.resolve(this.onApprovalRequested(approval.data.approval)).catch((error) => {
+        console.error("[desktop][ios-relay] failed to handle approval request", error);
       });
       return;
     }

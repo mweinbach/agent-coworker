@@ -376,9 +376,6 @@ type IosRelayCardProps = {
     patch: { iosRelayEnabled?: boolean },
   ) => Promise<unknown> | void;
   updateIosRelayConfig: (patch: Partial<IosRelayConfig>) => Promise<void>;
-  startIosRelayAdvertising: () => Promise<void>;
-  stopIosRelayAdvertising: () => Promise<void>;
-  connectIosRelayPeer: (peerId: string) => Promise<void>;
   disconnectIosRelayPeer: () => Promise<void>;
 };
 
@@ -403,28 +400,14 @@ export function IosRelayCard({
   relayConfig,
   updateWorkspaceDefaults,
   updateIosRelayConfig,
-  startIosRelayAdvertising,
-  stopIosRelayAdvertising,
-  connectIosRelayPeer,
   disconnectIosRelayPeer,
 }: IosRelayCardProps) {
   const isPublished = relayState.publishedWorkspaceId === workspace.id;
-  const rememberedPeerId = relayConfig.rememberedPeerId ?? "";
-  const rememberedPeerName = relayConfig.rememberedPeerName ?? "";
   const deviceName = relayConfig.deviceName ?? "";
   const localDeviceId = relayState.localDeviceId ?? "";
   const localDeviceName = (relayState.localDeviceName ?? deviceName) || "Cowork Mac";
-  const discoveredPeers = relayState.discoveredPeers ?? [];
   const publishedWorkspaceName = relayState.publishedWorkspaceName ?? (isPublished ? workspace.name : null);
-  const hasRememberedPeer = rememberedPeerId.trim().length > 0;
-
-  const connectDiscoveredPeer = async (peerId: string, peerName: string) => {
-    await updateIosRelayConfig({
-      rememberedPeerId: peerId,
-      rememberedPeerName: peerName,
-    });
-    await connectIosRelayPeer(peerId);
-  };
+  const isRelayReady = relayState.supported && workspace.iosRelayEnabled && relayState.advertising && isPublished;
 
   return (
     <Card className="border-border/80 bg-card/85">
@@ -444,16 +427,16 @@ export function IosRelayCard({
           <div className="text-sm font-medium text-foreground">Pairing flow</div>
           <div className="mt-2 grid gap-3 text-sm text-muted-foreground md:grid-cols-3">
             <div>
-              <div className="font-medium text-foreground">1. Start the relay</div>
-              <div>Keep this Mac advertising so the iPhone can discover it over Loom.</div>
+              <div className="font-medium text-foreground">1. Enable this workspace</div>
+              <div>Turning on iOS Relay publishes this workspace and makes this Mac discoverable automatically.</div>
             </div>
             <div>
-              <div className="font-medium text-foreground">2. Pair the phone</div>
-              <div>Select a nearby device below or paste the iPhone’s stable Loom device UUID.</div>
+              <div className="font-medium text-foreground">2. Pair from the iPhone</div>
+              <div>Open the iPhone app's Pair Desktop screen and select this Mac. No IDs need to be copied.</div>
             </div>
             <div>
-              <div className="font-medium text-foreground">3. Open this workspace</div>
-              <div>Your iOS app should connect using the workspace ID shown in the publication section.</div>
+              <div className="font-medium text-foreground">3. Approve on the Mac</div>
+              <div>Accept the pairing prompt on this Mac and the iPhone reconnects into the published workspace.</div>
             </div>
           </div>
         </div>
@@ -463,7 +446,7 @@ export function IosRelayCard({
             <div className="rounded-xl border border-border/70 p-4">
               <div className="text-sm font-medium text-foreground">This Mac</div>
               <div className="mt-1 text-xs text-muted-foreground">
-                Share this identity with the iOS app if you want deterministic peer targeting.
+                The iPhone pairing screen discovers this identity over Loom while relay is enabled for the workspace.
               </div>
               <div className="mt-4 space-y-3">
                 <div className="space-y-2">
@@ -481,6 +464,14 @@ export function IosRelayCard({
                   />
                 </div>
                 <div className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Relay status</div>
+                  <Input
+                    readOnly
+                    value={isRelayReady ? "Discoverable and published" : workspace.iosRelayEnabled ? "Preparing relay..." : "Disabled"}
+                    aria-label="Current mac relay status"
+                  />
+                </div>
+                <div className="space-y-2">
                   <div className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Active device name</div>
                   <Input readOnly value={localDeviceName} aria-label="Current mac relay name" />
                 </div>
@@ -494,87 +485,34 @@ export function IosRelayCard({
 
           <div className="space-y-2">
             <div className="rounded-xl border border-border/70 p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-sm font-medium text-foreground">Nearby devices</div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    Pick a discovered peer to remember and connect without manual UUID entry.
+              <div className="text-sm font-medium text-foreground">What the iPhone sees</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                The iPhone uses discovery metadata from this Mac instead of a pasted workspace ID.
+              </div>
+              <div className="mt-4 grid gap-3 text-sm md:grid-cols-2">
+                <div className="rounded-lg border border-border/70 px-3 py-3">
+                  <div className="font-medium text-foreground">Published workspace</div>
+                  <div className="mt-1 text-muted-foreground">
+                    {isPublished ? publishedWorkspaceName ?? workspace.name : "Waiting for workspace server"}
                   </div>
                 </div>
-                <Badge variant="outline">{discoveredPeers.length} found</Badge>
-              </div>
-              <div className="mt-4 space-y-3">
-                {discoveredPeers.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-border/70 px-3 py-4 text-sm text-muted-foreground">
-                    No nearby Loom peers yet. Open the iOS app’s pairing screen, keep this Mac advertising, then refresh the relay state by using any relay action.
+                <div className="rounded-lg border border-border/70 px-3 py-3">
+                  <div className="font-medium text-foreground">Current iPhone</div>
+                  <div className="mt-1 text-muted-foreground">
+                    {relayState.peer ? `${relayState.peer.name} (${relayState.peer.state})` : "No paired iPhone yet"}
                   </div>
-                ) : (
-                  discoveredPeers.map((peer) => {
-                    const peerId = peer.deviceId || peer.id;
-                    const isRemembered = rememberedPeerId.trim() === peerId || rememberedPeerId.trim() === peer.id;
-                    const isConnected =
-                      relayState.peer?.id === peer.id ||
-                      relayState.peer?.id === peer.deviceId;
-                    return (
-                      <div
-                        key={`${peer.id}:${peer.deviceId}`}
-                        className="flex items-center justify-between gap-3 rounded-lg border border-border/70 px-3 py-3"
-                      >
-                        <div className="min-w-0 space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="truncate text-sm font-medium text-foreground">{peer.name}</span>
-                            {isConnected ? <Badge variant="secondary">Connected</Badge> : null}
-                            {!isConnected && isRemembered ? <Badge variant="outline">Remembered</Badge> : null}
-                          </div>
-                          <div className="truncate text-xs text-muted-foreground">{peerId}</div>
-                        </div>
-                        <Button
-                          type="button"
-                          variant={isConnected ? "secondary" : "outline"}
-                          disabled={!relayState.supported}
-                          onClick={() => void connectDiscoveredPeer(peerId, peer.name)}
-                        >
-                          {isConnected ? "Paired" : "Pair"}
-                        </Button>
-                      </div>
-                    );
-                  })
-                )}
+                </div>
+                <div className="rounded-lg border border-border/70 px-3 py-3">
+                  <div className="font-medium text-foreground">Approval</div>
+                  <div className="mt-1 text-muted-foreground">
+                    New iPhone pair attempts prompt on this Mac automatically.
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border/70 px-3 py-3">
+                  <div className="font-medium text-foreground">Open relay channels</div>
+                  <div className="mt-1 text-muted-foreground">{relayState.openChannelCount}</div>
+                </div>
               </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-2">
-            <div className="text-sm font-medium text-foreground">Remembered peer name</div>
-            <Input
-              aria-label="iOS relay peer name"
-              autoComplete="off"
-              placeholder="My iPhone"
-              value={rememberedPeerName}
-              onChange={(event) => {
-                void updateIosRelayConfig({
-                  rememberedPeerName: event.target.value.trim() || null,
-                });
-              }}
-            />
-          </div>
-          <div className="space-y-2">
-            <div className="text-sm font-medium text-foreground">Remembered peer ID</div>
-            <Input
-              aria-label="iOS relay peer id"
-              autoComplete="off"
-              placeholder="Paste the iPhone pairing UUID"
-              value={rememberedPeerId}
-              onChange={(event) => {
-                void updateIosRelayConfig({
-                  rememberedPeerId: event.target.value.trim() || null,
-                });
-              }}
-            />
-            <div className="text-xs text-muted-foreground">
-              The helper only accepts the explicitly approved Loom peer identity. Use the iPhone’s persisted device UUID here.
             </div>
           </div>
         </div>
@@ -582,17 +520,15 @@ export function IosRelayCard({
         <div className="grid gap-3 rounded-xl border border-border/70 p-4 text-sm md:grid-cols-2">
           <div>
             <div className="font-medium text-foreground">Workspace ID for iOS</div>
-            <div className="break-all text-muted-foreground">{workspace.id}</div>
+            <div className="break-all text-muted-foreground">
+              {isPublished ? workspace.id : "Published automatically once the workspace server is ready"}
+            </div>
           </div>
           <div>
             <div className="font-medium text-foreground">Published workspace</div>
             <div className="text-muted-foreground">
               {isPublished ? publishedWorkspaceName ?? workspace.name : "Not currently published"}
             </div>
-          </div>
-          <div>
-            <div className="font-medium text-foreground">Open relay channels</div>
-            <div className="text-muted-foreground">{relayState.openChannelCount}</div>
           </div>
           <div>
             <div className="font-medium text-foreground">Peer</div>
@@ -642,32 +578,18 @@ export function IosRelayCard({
           />
         </div>
 
-        <div className="flex flex-wrap gap-3">
-          <Button
-            type="button"
-            variant={relayState.advertising ? "secondary" : "default"}
-            disabled={!relayState.supported}
-            onClick={() => void (relayState.advertising ? stopIosRelayAdvertising() : startIosRelayAdvertising())}
-          >
-            {relayState.advertising ? "Stop Advertising" : "Start Advertising"}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={!relayState.supported || !hasRememberedPeer}
-            onClick={() => void connectIosRelayPeer(rememberedPeerId.trim())}
-          >
-            Connect
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={!relayState.supported || relayState.peer == null}
-            onClick={() => void disconnectIosRelayPeer()}
-          >
-            Disconnect
-          </Button>
-        </div>
+        {relayState.peer ? (
+          <div className="flex flex-wrap gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!relayState.supported}
+              onClick={() => void disconnectIosRelayPeer()}
+            >
+              Disconnect iPhone
+            </Button>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -685,9 +607,6 @@ export function WorkspacesPage() {
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
   const updateIosRelayConfig = useAppStore((s) => s.updateIosRelayConfig);
-  const startIosRelayAdvertising = useAppStore((s) => s.startIosRelayAdvertising);
-  const stopIosRelayAdvertising = useAppStore((s) => s.stopIosRelayAdvertising);
-  const connectIosRelayPeer = useAppStore((s) => s.connectIosRelayPeer);
   const disconnectIosRelayPeer = useAppStore((s) => s.disconnectIosRelayPeer);
   const restartWorkspaceServer = useAppStore((s) => s.restartWorkspaceServer);
 
@@ -857,9 +776,6 @@ export function WorkspacesPage() {
               relayConfig={iosRelayConfig}
               updateWorkspaceDefaults={updateWorkspaceDefaults}
               updateIosRelayConfig={updateIosRelayConfig}
-              startIosRelayAdvertising={startIosRelayAdvertising}
-              stopIosRelayAdvertising={stopIosRelayAdvertising}
-              connectIosRelayPeer={connectIosRelayPeer}
               disconnectIosRelayPeer={disconnectIosRelayPeer}
             />
           </div>

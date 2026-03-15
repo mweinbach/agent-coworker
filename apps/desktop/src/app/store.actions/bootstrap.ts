@@ -230,6 +230,12 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
         } else if (state.selectedWorkspaceId) {
           await get().selectWorkspace(state.selectedWorkspaceId);
         }
+        try {
+          await get().requestIosRelayState();
+          await get().syncIosRelayPublication();
+        } catch (error) {
+          console.warn("Desktop relay warmup failed:", error);
+        }
         return;
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);

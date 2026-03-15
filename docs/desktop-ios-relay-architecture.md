@@ -34,7 +34,7 @@ The relay does not currently publish a workspace directory/listing or a full pai
 
 ## Build and Packaging
 
-The native helper lives in [`native/CoworkLoomBridge`](/Users/mweinbach/conductor/workspaces/agent-coworker/vienna/native/CoworkLoomBridge).
+The native helper lives in [`native/CoworkLoomBridge`](../native/CoworkLoomBridge).
 
 - `bun run build:desktop-resources` builds the existing `cowork-server` sidecar for all supported desktop targets.
 - On macOS, the same script also runs `swift build -c release --package-path native/CoworkLoomBridge --product cowork-loom-bridge`.

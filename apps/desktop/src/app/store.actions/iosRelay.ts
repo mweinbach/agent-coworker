@@ -11,6 +11,7 @@ import {
   type AppStoreActions,
   type StoreGet,
   type StoreSet,
+  ensureServerRunning,
   persistNow,
 } from "../store.helpers";
 
@@ -39,6 +40,10 @@ export function createIosRelayActions(
         },
       }));
       await persistNow(get);
+      if (patch.deviceName !== undefined && get().iosRelayState.advertising) {
+        await runStartIosRelayAdvertising(get().iosRelayConfig.deviceName ?? undefined);
+        await get().requestIosRelayState();
+      }
     },
 
     requestIosRelayState: async () => {
@@ -67,27 +72,37 @@ export function createIosRelayActions(
     },
 
     syncIosRelayPublication: async () => {
-      const state = get();
-      const candidate = state.workspaces.find((workspace) => {
+      const initialState = get();
+      const candidate = initialState.workspaces.find((workspace) => {
         if (!workspace.iosRelayEnabled) {
           return false;
         }
-        return Boolean(state.workspaceRuntimeById[workspace.id]?.serverUrl);
+        return true;
       });
 
       if (!candidate) {
-        if (state.iosRelayState.publishedWorkspaceId) {
-          await unpublishWorkspaceRelay({ workspaceId: state.iosRelayState.publishedWorkspaceId });
-          await get().requestIosRelayState();
+        if (initialState.iosRelayState.publishedWorkspaceId) {
+          await unpublishWorkspaceRelay({ workspaceId: initialState.iosRelayState.publishedWorkspaceId });
         }
+        if (initialState.iosRelayState.advertising) {
+          await runStopIosRelayAdvertising();
+        }
+        await get().requestIosRelayState();
         return;
       }
 
+      if (!initialState.workspaceRuntimeById[candidate.id]?.serverUrl) {
+        await ensureServerRunning(get, set, candidate.id);
+        return;
+      }
+
+      const state = get();
       const serverUrl = state.workspaceRuntimeById[candidate.id]?.serverUrl;
       if (!serverUrl) {
         return;
       }
 
+      await runStartIosRelayAdvertising(state.iosRelayConfig.deviceName ?? undefined);
       await publishWorkspaceRelay({
         workspaceId: candidate.id,
         workspaceName: candidate.name,

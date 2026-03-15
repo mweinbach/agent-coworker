@@ -25,6 +25,7 @@ async function flushAsyncWork(): Promise<void> {
 const startDeferreds: Deferred<{ url: string }>[] = [];
 const startCalls: Array<{ workspaceId: string; workspacePath: string; yolo: boolean }> = [];
 const stopCalls: string[] = [];
+const startRelayAdvertisingCalls: Array<string | undefined> = [];
 const publishRelayCalls: Array<{ workspaceId: string; workspaceName: string; serverUrl: string }> = [];
 const unpublishRelayCalls: Array<{ workspaceId: string }> = [];
 const savedStates: any[] = [];
@@ -106,7 +107,9 @@ mock.module("../src/lib/desktopCommands", () => ({
     openChannelCount: 0,
     lastError: "iOS Relay is only available on macOS desktop builds.",
   }),
-  startIosRelayAdvertising: async () => {},
+  startIosRelayAdvertising: async (deviceName?: string) => {
+    startRelayAdvertisingCalls.push(deviceName);
+  },
   stopIosRelayAdvertising: async () => {},
   connectIosRelayPeer: async () => {},
   disconnectIosRelayPeer: async () => {},
@@ -137,6 +140,7 @@ describe("workspace startup flow", () => {
     startDeferreds.length = 0;
     startCalls.length = 0;
     stopCalls.length = 0;
+    startRelayAdvertisingCalls.length = 0;
     publishRelayCalls.length = 0;
     unpublishRelayCalls.length = 0;
     savedStates.length = 0;
@@ -286,6 +290,7 @@ describe("workspace startup flow", () => {
         serverUrl: "ws://relay-workspace",
       },
     ]);
+    expect(startRelayAdvertisingCalls).toEqual([undefined]);
   });
 
   test("removeWorkspace unpublishes the active relay workspace", async () => {

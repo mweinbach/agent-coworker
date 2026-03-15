@@ -122,6 +122,14 @@ public final class CoworkLoomRelayClient {
         )
     }
 
+    public func disconnect() async {
+        discovery.stopDiscovery()
+        if let session {
+            await session.cancel()
+        }
+        await handleDisconnect()
+    }
+
     private func ensureRelayStream() async throws {
         if relayStream != nil {
             return
@@ -165,12 +173,19 @@ public final class CoworkLoomRelayClient {
     }
 
     private func resolvePeer() -> LoomPeer? {
+        let eligiblePeers = discovery.discoveredPeers.filter(isEligibleRelayHost(_:))
         if let peerID = configuration.peerID?.lowercased(), !peerID.isEmpty {
-            return discovery.discoveredPeers.first {
+            return eligiblePeers.first {
                 $0.id.rawValue == peerID || $0.deviceID.uuidString.lowercased() == peerID
             }
         }
-        return discovery.discoveredPeers.first
+        return eligiblePeers.first
+    }
+
+    private func isEligibleRelayHost(_ peer: LoomPeer) -> Bool {
+        let metadata = peer.advertisement.metadata
+        return metadata[RelayProtocolConstants.roleMetadataKey] == RelayProtocolConstants.hostMetadataRole
+            && metadata[RelayProtocolConstants.protocolMetadataKey] == String(RelayProtocolConstants.protocolVersion)
     }
 
     private func startConsuming(stream: LoomMultiplexedStream, session: LoomAuthenticatedSession) {
@@ -234,8 +249,8 @@ public final class CoworkLoomRelayClient {
             deviceID: configuration.deviceID,
             deviceType: currentDeviceType(),
             metadata: [
-                "cowork.relay.protocol": String(RelayProtocolConstants.protocolVersion),
-                "cowork.relay.role": RelayProtocolConstants.clientMetadataRole,
+                RelayProtocolConstants.protocolMetadataKey: String(RelayProtocolConstants.protocolVersion),
+                RelayProtocolConstants.roleMetadataKey: RelayProtocolConstants.clientMetadataRole,
             ]
         )
         return LoomSessionHelloRequest(

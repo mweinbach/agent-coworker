@@ -1,13 +1,15 @@
 import Foundation
 
+import CoworkLoomRelayCore
+
 public final class URLSessionRelayTunnel: RelayTunnel, @unchecked Sendable {
     private let task: URLSessionWebSocketTask
     private let events: AsyncStream<RelayTunnelEvent>
     private let continuation: AsyncStream<RelayTunnelEvent>.Continuation
 
-    public init(url: URL) {
+    public init(url: URL, request: RelayOpenSocket? = nil) {
         let session = URLSession(configuration: .default)
-        self.task = session.webSocketTask(with: url)
+        self.task = session.webSocketTask(with: Self.makeWebSocketURL(url: url, request: request))
         let (events, continuation) = AsyncStream.makeStream(of: RelayTunnelEvent.self)
         self.events = events
         self.continuation = continuation
@@ -32,6 +34,26 @@ public final class URLSessionRelayTunnel: RelayTunnel, @unchecked Sendable {
             ?? .normalClosure
         task.cancel(with: closeCode, reason: reason?.data(using: .utf8))
         continuation.finish()
+    }
+
+    static func makeWebSocketURL(url: URL, request: RelayOpenSocket?) -> URL {
+        guard
+            let resumeSessionId = request?.resumeSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !resumeSessionId.isEmpty
+        else {
+            return url
+        }
+
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            let separator = url.absoluteString.contains("?") ? "&" : "?"
+            return URL(string: "\(url.absoluteString)\(separator)resumeSessionId=\(resumeSessionId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? resumeSessionId)") ?? url
+        }
+
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "resumeSessionId" }
+        queryItems.append(URLQueryItem(name: "resumeSessionId", value: resumeSessionId))
+        components.queryItems = queryItems
+        return components.url ?? url
     }
 
     private func receiveNext() {

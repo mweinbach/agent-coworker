@@ -27,3 +27,18 @@ func bridgeStateCodableRoundTripPreservesPairingMetadata() throws {
 
     #expect(decoded == event)
 }
+
+@Test
+func bridgeApprovalRequestRoundTripPreservesPeerIdentity() throws {
+    let event = BridgeEvent.approvalRequested(
+        .init(
+            peerId: "peer-approval",
+            peerName: "My iPhone"
+        )
+    )
+
+    let data = try JSONEncoder().encode(event)
+    let decoded = try JSONDecoder().decode(BridgeEvent.self, from: data)
+
+    #expect(decoded == event)
+}

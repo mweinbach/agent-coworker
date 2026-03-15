@@ -3,29 +3,94 @@ import Loom
 
 import CoworkLoomRelayCore
 
+private func bridgeApplicationSupportDirectory() -> URL {
+    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+    return base.appendingPathComponent("CoworkLoomBridge", isDirectory: true)
+}
+
 @MainActor
 final class ApprovedPeerTrustProvider: LoomTrustProvider {
     private var approvedDeviceIDs: Set<UUID> = []
+    private var temporarilyRejectedUntilByDeviceID: [UUID: Date] = [:]
+    private let approvedPeerStorageURL = bridgeApplicationSupportDirectory().appendingPathComponent("approved-peer-id.txt")
+
+    init() {
+        loadApprovedPeerID()
+    }
 
     func setApprovedPeerID(_ rawPeerID: String?) {
         approvedDeviceIDs.removeAll()
-        guard let rawPeerID else { return }
+        guard let rawPeerID else {
+            persistApprovedPeerID()
+            return
+        }
         let candidate = rawPeerID.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? rawPeerID
         if let uuid = UUID(uuidString: candidate) {
             approvedDeviceIDs.insert(uuid)
+            temporarilyRejectedUntilByDeviceID.removeValue(forKey: uuid)
         }
+        persistApprovedPeerID()
     }
 
     func evaluateTrust(for peer: LoomPeerIdentity) async -> LoomTrustDecision {
-        approvedDeviceIDs.contains(peer.deviceID) ? .trusted : .denied
+        guard peer.isIdentityAuthenticated else {
+            return .denied
+        }
+        pruneRejectedPeers()
+        if approvedDeviceIDs.contains(peer.deviceID) {
+            return .trusted
+        }
+        if let rejectedUntil = temporarilyRejectedUntilByDeviceID[peer.deviceID], rejectedUntil > Date() {
+            return .denied
+        }
+        return .requiresApproval
     }
 
     func grantTrust(to peer: LoomPeerIdentity) async throws {
         approvedDeviceIDs.insert(peer.deviceID)
+        temporarilyRejectedUntilByDeviceID.removeValue(forKey: peer.deviceID)
+        persistApprovedPeerID()
     }
 
     func revokeTrust(for deviceID: UUID) async throws {
         approvedDeviceIDs.remove(deviceID)
+        persistApprovedPeerID()
+    }
+
+    func rejectTrust(for deviceID: UUID, cooldown: TimeInterval = 15) {
+        temporarilyRejectedUntilByDeviceID[deviceID] = Date().addingTimeInterval(cooldown)
+    }
+
+    private func loadApprovedPeerID() {
+        guard
+            let contents = try? String(contentsOf: approvedPeerStorageURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+            let approvedPeerID = UUID(uuidString: contents)
+        else {
+            return
+        }
+        approvedDeviceIDs = [approvedPeerID]
+    }
+
+    private func persistApprovedPeerID() {
+        try? FileManager.default.createDirectory(
+            at: approvedPeerStorageURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        guard let approvedPeerID = approvedDeviceIDs.first else {
+            try? FileManager.default.removeItem(at: approvedPeerStorageURL)
+            return
+        }
+
+        try? approvedPeerID.uuidString.lowercased().write(to: approvedPeerStorageURL, atomically: true, encoding: .utf8)
+    }
+
+    private func pruneRejectedPeers() {
+        let now = Date()
+        temporarilyRejectedUntilByDeviceID = temporarilyRejectedUntilByDeviceID.filter { _, until in
+            until > now
+        }
     }
 }
 
@@ -39,8 +104,8 @@ public final class LoomBridgeService {
         sendEnvelope: { [weak self] envelope in
             try? await self?.sendEnvelope(envelope)
         },
-        tunnelFactory: { url, _request in
-            URLSessionRelayTunnel(url: url)
+        tunnelFactory: { url, request in
+            URLSessionRelayTunnel(url: url, request: request)
         }
     )
 
@@ -54,6 +119,7 @@ public final class LoomBridgeService {
     private var publishedWorkspace: PublishedWorkspace?
     private var lastError: String?
     private var session: LoomAuthenticatedSession?
+    private var pendingApprovalPeer: LoomPeerIdentity?
     private var relayStream: LoomMultiplexedStream?
     private var incomingStreamTask: Task<Void, Never>?
     private var relayReadTask: Task<Void, Never>?
@@ -62,7 +128,7 @@ public final class LoomBridgeService {
     public init(emitEvent: @escaping BridgeEventEmitter) {
         self.emitEvent = emitEvent
         self.localDeviceID = Self.loadOrCreateLocalDeviceID()
-        self.deviceName = Host.current().localizedName ?? "Cowork Mac"
+        self.deviceName = Self.defaultDeviceName()
         self.node = LoomNode(
             configuration: LoomNetworkConfiguration(
                 serviceType: RelayProtocolConstants.serviceType,
@@ -94,6 +160,10 @@ public final class LoomBridgeService {
                 try await connectPeer(peerId: peerId)
             case .disconnectPeer:
                 await disconnectPeer(resetPeerIdentity: false)
+            case let .approvePeer(peerId):
+                try await approvePendingPeer(peerId: peerId)
+            case let .rejectPeer(peerId):
+                await rejectPendingPeer(peerId: peerId)
             case let .publishWorkspace(workspaceId, workspaceName, serverUrl):
                 try await publishWorkspace(workspaceId: workspaceId, workspaceName: workspaceName, serverUrl: serverUrl)
             case let .unpublishWorkspace(workspaceId):
@@ -135,8 +205,17 @@ public final class LoomBridgeService {
     }
 
     private func startAdvertising(deviceName: String?) async throws {
-        if let deviceName, !deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.deviceName = deviceName
+        let trimmedDeviceName = deviceName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextDeviceName = if let trimmedDeviceName, !trimmedDeviceName.isEmpty {
+            trimmedDeviceName
+        } else {
+            Self.defaultDeviceName()
+        }
+        let needsRestart = advertising && nextDeviceName != self.deviceName
+        self.deviceName = nextDeviceName
+
+        if needsRestart {
+            await stopAdvertising()
         }
 
         if !discovery.isSearching {
@@ -164,8 +243,13 @@ public final class LoomBridgeService {
         )
         advertising = true
         lastError = nil
+        await refreshAdvertisement()
         emitEvent(.log(level: .info, message: "Loom relay advertising started."))
         await emitState()
+    }
+
+    private static func defaultDeviceName() -> String {
+        Host.current().localizedName ?? "Cowork Mac"
     }
 
     private func stopAdvertising() async {
@@ -173,6 +257,7 @@ public final class LoomBridgeService {
         discovery.stopDiscovery()
         await node.stopAdvertising()
         await disconnectPeer(resetPeerIdentity: true)
+        clearPendingApproval()
         emitEvent(.log(level: .info, message: "Loom relay advertising stopped."))
         await emitState()
     }
@@ -212,6 +297,7 @@ public final class LoomBridgeService {
         }
         publishedWorkspace = PublishedWorkspace(workspaceId: workspaceId, workspaceName: workspaceName, serverURL: url)
         await relayHost.setPublishedWorkspace(publishedWorkspace)
+        await refreshAdvertisement()
         lastError = nil
         await emitState()
     }
@@ -222,6 +308,7 @@ public final class LoomBridgeService {
         }
         publishedWorkspace = nil
         await relayHost.setPublishedWorkspace(nil)
+        await refreshAdvertisement()
         await emitState()
     }
 
@@ -232,6 +319,30 @@ public final class LoomBridgeService {
             return
         }
         do {
+            let trustDecision = context.trustEvaluation.decision
+            let requiresApproval = if trustDecision == .requiresApproval {
+                true
+            } else if case .unavailable = trustDecision {
+                true
+            } else {
+                false
+            }
+            if requiresApproval {
+                let peerIdentity = context.peerIdentity
+                if pendingApprovalPeer?.deviceID != peerIdentity.deviceID {
+                    pendingApprovalPeer = peerIdentity
+                    emitEvent(
+                        .approvalRequested(
+                            .init(
+                                peerId: peerIdentity.deviceID.uuidString.lowercased(),
+                                peerName: peerIdentity.name
+                            )
+                        )
+                    )
+                }
+                await session.cancel()
+                return
+            }
             try await activateSession(
                 session,
                 peerId: context.peerIdentity.deviceID.uuidString.lowercased(),
@@ -246,6 +357,28 @@ public final class LoomBridgeService {
         }
     }
 
+    private func approvePendingPeer(peerId: String) async throws {
+        guard let pendingApprovalPeer, pendingApprovalPeer.deviceID.uuidString.lowercased() == peerId.lowercased() else {
+            throw RelayError.invalidState("No pending Loom approval request matched that peer.")
+        }
+        try await trustProvider.grantTrust(to: pendingApprovalPeer)
+        self.pendingApprovalPeer = nil
+        lastError = nil
+        emitEvent(.log(level: .info, message: "Approved Loom peer \(pendingApprovalPeer.name)."))
+        await emitState()
+    }
+
+    private func rejectPendingPeer(peerId: String) async {
+        guard let pendingApprovalPeer, pendingApprovalPeer.deviceID.uuidString.lowercased() == peerId.lowercased() else {
+            return
+        }
+        trustProvider.rejectTrust(for: pendingApprovalPeer.deviceID)
+        self.pendingApprovalPeer = nil
+        lastError = "Rejected pairing request from \(pendingApprovalPeer.name)."
+        emitEvent(.log(level: .warning, message: lastError ?? "Rejected Loom pairing request."))
+        await emitState()
+    }
+
     private func activateSession(
         _ session: LoomAuthenticatedSession,
         peerId: String,
@@ -254,6 +387,7 @@ public final class LoomBridgeService {
     ) async throws {
         await disconnectPeer(resetPeerIdentity: false)
 
+        clearPendingApproval()
         self.session = session
         self.peer = BridgePeerState(id: peerId, name: peerName, state: "connected")
         self.lastError = nil
@@ -349,6 +483,7 @@ public final class LoomBridgeService {
 
         if resetPeerIdentity {
             trustProvider.setApprovedPeerID(nil)
+            clearPendingApproval()
             peer = nil
         } else if let currentPeer = peer {
             peer = BridgePeerState(id: currentPeer.id, name: currentPeer.name, state: "disconnected")
@@ -365,20 +500,39 @@ public final class LoomBridgeService {
     }
 
     private func makeHelloRequest() -> LoomSessionHelloRequest {
-        let advertisement = LoomPeerAdvertisement(
-            deviceID: localDeviceID,
-            deviceType: .mac,
-            metadata: [
-                "cowork.relay.protocol": String(RelayProtocolConstants.protocolVersion),
-                "cowork.relay.role": RelayProtocolConstants.hostMetadataRole,
-            ]
-        )
         return LoomSessionHelloRequest(
             deviceID: localDeviceID,
             deviceName: deviceName,
             deviceType: .mac,
-            advertisement: advertisement
+            advertisement: makeAdvertisement()
         )
+    }
+
+    private func makeAdvertisement() -> LoomPeerAdvertisement {
+        var metadata: [String: String] = [
+            RelayProtocolConstants.protocolMetadataKey: String(RelayProtocolConstants.protocolVersion),
+            RelayProtocolConstants.roleMetadataKey: RelayProtocolConstants.hostMetadataRole,
+        ]
+        if let publishedWorkspace {
+            metadata[RelayProtocolConstants.workspaceIdMetadataKey] = publishedWorkspace.workspaceId
+            metadata[RelayProtocolConstants.workspaceNameMetadataKey] = publishedWorkspace.workspaceName
+        }
+        return LoomPeerAdvertisement(
+            deviceID: localDeviceID,
+            deviceType: .mac,
+            metadata: metadata
+        )
+    }
+
+    private func refreshAdvertisement() async {
+        guard advertising else {
+            return
+        }
+        await node.updateAdvertisement(makeAdvertisement())
+    }
+
+    private func clearPendingApproval() {
+        pendingApprovalPeer = nil
     }
 
     private static func loadOrCreateLocalDeviceID() -> UUID {
@@ -395,8 +549,6 @@ public final class LoomBridgeService {
     }
 
     private static func applicationSupportDirectory() -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-        return base.appendingPathComponent("CoworkLoomBridge", isDirectory: true)
+        bridgeApplicationSupportDirectory()
     }
 }

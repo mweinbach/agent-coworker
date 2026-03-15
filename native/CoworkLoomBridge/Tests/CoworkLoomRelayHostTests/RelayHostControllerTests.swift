@@ -97,3 +97,16 @@ func peerDisconnectClosesAllOpenRelayChannels() async throws {
     #expect(await controller.openChannelCount() == 0)
     #expect(tunnel.closeCalls.count == 1)
 }
+
+@Test
+func relayTunnelAppendsResumeSessionQueryItem() {
+    let url = URLSessionRelayTunnel.makeWebSocketURL(
+        url: URL(string: "ws://127.0.0.1:7337/ws?existing=1")!,
+        request: .init(channelId: "channel-1", workspaceId: "workspace-1", resumeSessionId: "session-123")
+    )
+
+    let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+
+    #expect(components?.queryItems?.contains(URLQueryItem(name: "existing", value: "1")) == true)
+    #expect(components?.queryItems?.contains(URLQueryItem(name: "resumeSessionId", value: "session-123")) == true)
+}

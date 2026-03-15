@@ -219,21 +219,18 @@ describe("desktop workspaces page", () => {
         },
         updateWorkspaceDefaults: async () => {},
         updateIosRelayConfig: async () => {},
-        startIosRelayAdvertising: async () => {},
-        stopIosRelayAdvertising: async () => {},
-        connectIosRelayPeer: async () => {},
         disconnectIosRelayPeer: async () => {},
       }),
     );
 
     expect(html).toContain("iOS Relay");
     expect(html).toContain("Pairing flow");
-    expect(html).toContain("Nearby devices");
+    expect(html).toContain("Pair from the iPhone");
     expect(html).toContain("Workspace ID for iOS");
     expect(html).toContain("Unavailable on this platform");
-    expect(html).toContain("Start Advertising");
+    expect(html).toContain("Enable this workspace");
     expect(html).toContain("Enable iOS relay for workspace");
-    expect(html).toContain("Use the iPhone’s persisted device UUID here.");
+    expect(html).toContain("Turning on iOS Relay publishes this workspace");
   });
 
   test("renders pairing metadata for a supported relay state", () => {
@@ -273,9 +270,6 @@ describe("desktop workspaces page", () => {
         },
         updateWorkspaceDefaults: async () => {},
         updateIosRelayConfig: async () => {},
-        startIosRelayAdvertising: async () => {},
-        stopIosRelayAdvertising: async () => {},
-        connectIosRelayPeer: async () => {},
         disconnectIosRelayPeer: async () => {},
       }),
     );
@@ -284,7 +278,8 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Mac relay ID");
     expect(html).toContain("mac-device-id");
     expect(html).toContain("Alex iPhone");
-    expect(html).toContain("Remembered");
+    expect(html).toContain("Disconnect iPhone");
+    expect(html).toContain("Discoverable and published");
     expect(html).toContain("Workspace ID for iOS");
     expect(html).toContain("ws-1");
   });

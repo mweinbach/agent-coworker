@@ -6,6 +6,10 @@ public enum RelayProtocolConstants {
     public static let streamLabel = "cowork-relay.v1"
     public static let hostMetadataRole = "desktop-relay"
     public static let clientMetadataRole = "ios-client"
+    public static let protocolMetadataKey = "cowork.relay.protocol"
+    public static let roleMetadataKey = "cowork.relay.role"
+    public static let workspaceIdMetadataKey = "cowork.relay.workspace_id"
+    public static let workspaceNameMetadataKey = "cowork.relay.workspace_name"
 }
 
 public enum RelayError: Error, LocalizedError, Sendable, Equatable {

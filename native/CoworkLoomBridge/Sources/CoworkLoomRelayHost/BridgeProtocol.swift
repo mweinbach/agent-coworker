@@ -26,6 +26,16 @@ public struct BridgeDiscoveredPeerState: Codable, Sendable, Equatable {
     }
 }
 
+public struct BridgeApprovalRequest: Codable, Sendable, Equatable {
+    public let peerId: String
+    public let peerName: String
+
+    public init(peerId: String, peerName: String) {
+        self.peerId = peerId
+        self.peerName = peerName
+    }
+}
+
 public struct BridgeState: Codable, Sendable, Equatable {
     public let supported: Bool
     public let advertising: Bool
@@ -74,6 +84,8 @@ public enum BridgeCommand: Sendable, Equatable {
     case stop
     case connectPeer(peerId: String)
     case disconnectPeer
+    case approvePeer(peerId: String)
+    case rejectPeer(peerId: String)
     case publishWorkspace(workspaceId: String, workspaceName: String, serverUrl: String)
     case unpublishWorkspace(workspaceId: String)
     case getState
@@ -94,6 +106,8 @@ extension BridgeCommand: Codable {
         case stop = "bridge_stop"
         case connectPeer = "bridge_connect_peer"
         case disconnectPeer = "bridge_disconnect_peer"
+        case approvePeer = "bridge_approve_peer"
+        case rejectPeer = "bridge_reject_peer"
         case publishWorkspace = "bridge_publish_workspace"
         case unpublishWorkspace = "bridge_unpublish_workspace"
         case getState = "bridge_get_state"
@@ -111,6 +125,10 @@ extension BridgeCommand: Codable {
             self = .connectPeer(peerId: try container.decode(String.self, forKey: .peerId))
         case .disconnectPeer:
             self = .disconnectPeer
+        case .approvePeer:
+            self = .approvePeer(peerId: try container.decode(String.self, forKey: .peerId))
+        case .rejectPeer:
+            self = .rejectPeer(peerId: try container.decode(String.self, forKey: .peerId))
         case .publishWorkspace:
             self = .publishWorkspace(
                 workspaceId: try container.decode(String.self, forKey: .workspaceId),
@@ -137,6 +155,12 @@ extension BridgeCommand: Codable {
             try container.encode(peerId, forKey: .peerId)
         case .disconnectPeer:
             try container.encode(Kind.disconnectPeer, forKey: .type)
+        case let .approvePeer(peerId):
+            try container.encode(Kind.approvePeer, forKey: .type)
+            try container.encode(peerId, forKey: .peerId)
+        case let .rejectPeer(peerId):
+            try container.encode(Kind.rejectPeer, forKey: .type)
+            try container.encode(peerId, forKey: .peerId)
         case let .publishWorkspace(workspaceId, workspaceName, serverUrl):
             try container.encode(Kind.publishWorkspace, forKey: .type)
             try container.encode(workspaceId, forKey: .workspaceId)
@@ -154,6 +178,7 @@ extension BridgeCommand: Codable {
 public enum BridgeEvent: Sendable, Equatable {
     case ready
     case state(BridgeState)
+    case approvalRequested(BridgeApprovalRequest)
     case log(level: BridgeLogLevel, message: String)
     case fatal(message: String)
 }
@@ -171,6 +196,7 @@ extension BridgeEvent: Codable {
         case publishedWorkspaceName
         case openChannelCount
         case lastError
+        case approval
         case level
         case message
     }
@@ -178,6 +204,7 @@ extension BridgeEvent: Codable {
     private enum Kind: String, Codable {
         case ready = "bridge_ready"
         case state = "bridge_state"
+        case approvalRequested = "bridge_approval_requested"
         case log = "bridge_log"
         case fatal = "bridge_fatal"
     }
@@ -203,6 +230,8 @@ extension BridgeEvent: Codable {
                     lastError: try container.decodeIfPresent(String.self, forKey: .lastError)
                 )
             )
+        case .approvalRequested:
+            self = .approvalRequested(try container.decode(BridgeApprovalRequest.self, forKey: .approval))
         case .log:
             self = .log(
                 level: try container.decode(BridgeLogLevel.self, forKey: .level),
@@ -230,6 +259,9 @@ extension BridgeEvent: Codable {
             try container.encodeIfPresent(state.publishedWorkspaceName, forKey: .publishedWorkspaceName)
             try container.encode(state.openChannelCount, forKey: .openChannelCount)
             try container.encodeIfPresent(state.lastError, forKey: .lastError)
+        case let .approvalRequested(approval):
+            try container.encode(Kind.approvalRequested, forKey: .type)
+            try container.encode(approval, forKey: .approval)
         case let .log(level, message):
             try container.encode(Kind.log, forKey: .type)
             try container.encode(level, forKey: .level)

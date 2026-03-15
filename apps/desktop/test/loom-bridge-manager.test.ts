@@ -86,4 +86,31 @@ describe("desktop loom bridge manager", () => {
 
     expect(states).toEqual([{ lastError: "Loom helper crashed" }]);
   });
+
+  test("forwards approval requests from the bridge helper", async () => {
+    const approvals: Array<{ peerId: string; peerName: string }> = [];
+    const manager = new LoomBridgeManager({
+      onApprovalRequested: (approval) => {
+        approvals.push(approval);
+      },
+    });
+
+    (manager as any).handleStdoutLine(
+      JSON.stringify({
+        type: "bridge_approval_requested",
+        approval: {
+          peerId: "peer-1",
+          peerName: "My iPhone",
+        },
+      }),
+    );
+
+    await Promise.resolve();
+    expect(approvals).toEqual([
+      {
+        peerId: "peer-1",
+        peerName: "My iPhone",
+      },
+    ]);
+  });
 });

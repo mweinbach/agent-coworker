@@ -34,13 +34,20 @@ export function parseStreamingJson(partialJson: string): Record<string, unknown>
 }
 
 function calculateCost(model: PiModel, usage: Record<string, any>) {
-  if (!model.cost) return undefined;
-  usage.cost.input = (model.cost.input / 1_000_000) * usage.input;
-  usage.cost.output = (model.cost.output / 1_000_000) * usage.output;
-  usage.cost.cacheRead = (model.cost.cacheRead / 1_000_000) * usage.cacheRead;
-  usage.cost.cacheWrite = (model.cost.cacheWrite / 1_000_000) * usage.cacheWrite;
-  usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
-  return usage.cost;
+  const cost = model.cost;
+  if (!cost) return undefined;
+
+  const usageCost = {
+    input: (cost.input / 1_000_000) * (usage.input || 0),
+    output: (cost.output / 1_000_000) * (usage.output || 0),
+    cacheRead: (cost.cacheRead / 1_000_000) * (usage.cacheRead || 0),
+    cacheWrite: (cost.cacheWrite / 1_000_000) * (usage.cacheWrite || 0),
+  };
+
+  return {
+    ...usageCost,
+    total: usageCost.input + usageCost.output + usageCost.cacheRead + usageCost.cacheWrite,
+  };
 }
 
 function mapStopReason(status: unknown): string {
@@ -290,9 +297,9 @@ export function projectResponsesStreamEvent(
         cacheWrite: 0,
         totalTokens: response.usage.total_tokens || 0,
       };
-      if (projector.model?.cost) {
-        output.usage.cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
-        calculateCost(projector.model, output.usage);
+      const projectedCost = projector.model ? calculateCost(projector.model, output.usage) : undefined;
+      if (projectedCost) {
+        output.usage.cost = projectedCost;
       }
     }
     output.stopReason = mapStopReason(response?.status);

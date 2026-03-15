@@ -155,6 +155,36 @@ export type ResolvedPiRuntimeModel = {
   accountId?: string;
 };
 
+const PI_PLACEHOLDER_COST = Object.freeze({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+});
+
+function preparePiModelForStream(model: PiModel): PiModel {
+  if (model.cost) return model;
+  return {
+    ...model,
+    cost: { ...PI_PLACEHOLDER_COST },
+  };
+}
+
+function stripPlaceholderCostFromAssistantRecord(
+  assistant: Record<string, unknown>,
+  model: PiModel,
+): Record<string, unknown> {
+  if (model.cost) return assistant;
+  const usage = asRecord(assistant.usage);
+  if (!usage || !("cost" in usage)) return assistant;
+  const nextUsage = { ...usage };
+  delete nextUsage.cost;
+  return {
+    ...assistant,
+    usage: nextUsage,
+  };
+}
+
 function applySupportedModelMetadata(model: PiModel, provider: ProviderName, modelId: string): PiModel {
   const supported = assertSupportedModel(provider, modelId, "model");
   const input: Array<"text" | "image"> = supported.supportsImageInput ? ["text", "image"] : ["text"];
@@ -900,7 +930,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
           try {
             const runModelStep = async () => {
               const stream = piStreamImpl(
-                resolved.model as any,
+                preparePiModelForStream(resolved.model) as any,
                 {
                   systemPrompt: params.system,
                   messages: stepState.piMessages as any,
@@ -914,7 +944,10 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
               }
 
               const assistant = await (stream as any).result();
-              assistantRecord = asRecord(assistant) ?? {};
+              assistantRecord = stripPlaceholderCostFromAssistantRecord(
+                asRecord(assistant) ?? {},
+                resolved.model,
+              );
             };
 
             if (params.config.provider === "nvidia") {

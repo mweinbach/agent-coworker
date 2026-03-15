@@ -383,6 +383,68 @@ describe("pi runtime regressions", () => {
     });
   });
 
+  test.serial("nvidia PI runtime tolerates missing local pricing metadata without surfacing model.cost errors", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-nvidia-live-stream-"));
+    const runtime = createPiRuntime();
+    const config = makeConfig(homeDir, {
+      provider: "nvidia",
+      model: "nvidia/nemotron-3-super-120b-a12b",
+      subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+    });
+
+    const encoder = new TextEncoder();
+    const requestBodies: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestBodies.push(typeof init?.body === "string" ? init.body : "");
+      const chunks = [
+        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"nvidia/nemotron-3-super-120b-a12b","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}\n\n',
+        'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"nvidia/nemotron-3-super-120b-a12b","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}\n\n',
+        'data: [DONE]\n\n',
+      ];
+      let index = 0;
+      const body = new ReadableStream({
+        pull(controller) {
+          if (index >= chunks.length) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(encoder.encode(chunks[index++]));
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+
+    try {
+      const result = await runtime.runTurn(makeParams(config));
+
+      expect(result.text).toBe("Hello");
+      expect(result.reasoningText).toBeUndefined();
+      expect(result.usage).toEqual({
+        promptTokens: 10,
+        completionTokens: 2,
+        totalTokens: 12,
+      });
+      expect(requestBodies).toHaveLength(1);
+      expect(JSON.parse(requestBodies[0] ?? "{}")).toEqual({
+        model: "nvidia/nemotron-3-super-120b-a12b",
+        messages: [
+          { role: "system", content: "You are helpful." },
+          { role: "user", content: "hello" },
+        ],
+        stream: true,
+        stream_options: { include_usage: true },
+        tools: [],
+        chat_template_kwargs: { enable_thinking: true },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("opencode-zen runtime model resolution returns explicit GLM-5 PI metadata and env-key fallback", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-zen-"));
     const config = makeConfig(homeDir, {

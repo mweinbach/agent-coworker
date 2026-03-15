@@ -28,7 +28,17 @@ describe("desktop loom bridge manager", () => {
           name: "My iPhone",
           state: "connected",
         },
+        localDeviceId: "mac-device-id",
+        localDeviceName: "Cowork Mac",
+        discoveredPeers: [
+          {
+            id: "peer-1",
+            name: "My iPhone",
+            deviceId: "ios-device-id",
+          },
+        ],
         publishedWorkspaceId: "ws_1",
+        publishedWorkspaceName: "Workspace 1",
         openChannelCount: 3,
         lastError: null,
       }),
@@ -43,7 +53,17 @@ describe("desktop loom bridge manager", () => {
         name: "My iPhone",
         state: "connected",
       },
+      localDeviceId: "mac-device-id",
+      localDeviceName: "Cowork Mac",
+      discoveredPeers: [
+        {
+          id: "peer-1",
+          name: "My iPhone",
+          deviceId: "ios-device-id",
+        },
+      ],
       publishedWorkspaceId: "ws_1",
+      publishedWorkspaceName: "Workspace 1",
       openChannelCount: 3,
       lastError: null,
     });

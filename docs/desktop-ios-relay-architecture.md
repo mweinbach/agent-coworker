@@ -14,6 +14,24 @@ Defaults:
 - one published workspace at a time
 - text WebSocket frames only in v1
 
+## Pairing Model
+
+There is no Apple ID, iCloud, or CloudKit account linkage in the current relay design.
+Pairing is local and identity-based:
+
+- the Mac relay has a stable local device ID persisted by the helper
+- the iOS app must persist its own stable Loom device ID
+- desktop approves one peer identity at a time
+- the iOS app must open the specific published `workspaceId`
+
+The desktop pairing UI should surface:
+
+- the Mac relay device ID and advertised name
+- discovered Loom peers that can be remembered/paired without manual UUID typing
+- the exact `workspaceId` the iOS app should pass to `connect(workspaceId:)`
+
+The relay does not currently publish a workspace directory/listing or a full pairing payload to iOS automatically, so the product still needs an out-of-band handoff for the selected workspace ID unless another pairing channel is added.
+
 ## Build and Packaging
 
 The native helper lives in [`native/CoworkLoomBridge`](/Users/mweinbach/conductor/workspaces/agent-coworker/vienna/native/CoworkLoomBridge).
@@ -38,6 +56,7 @@ Renderer ownership:
 
 - The renderer persists `iosRelayConfig` and per-workspace `iosRelayEnabled`.
 - `WorkspacesPage.tsx` exposes the relay controls and status card.
+- The pairing surface shows nearby peers, the local Mac relay identity, and the workspace ID the iOS client must open.
 - Workspace startup and restart call `syncIosRelayPublication()` after the local server URL exists.
 - Workspace removal and relay toggle-off unpublish the workspace when it was the active export.
 
@@ -89,6 +108,12 @@ Public surface:
 - `RelaySocket.send(text:)`
 - `RelaySocket.messages`
 - `RelaySocket.close()`
+
+Important integration requirements for the iOS app:
+
+- Persist `CoworkLoomRelayClientConfiguration.deviceID`; the default initializer creates a new UUID if the app does not save one.
+- If the app does not know the Mac relay ID, `peerID` may be omitted and the client will connect to the first discovered relay peer.
+- The app must know the published `workspaceId` before calling `connect(workspaceId:)`.
 
 This keeps the iOS client as a normal Cowork client speaking the existing workspace WebSocket protocol through the relay tunnel.
 

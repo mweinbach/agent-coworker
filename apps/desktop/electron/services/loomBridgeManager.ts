@@ -18,12 +18,22 @@ const bridgePeerStateSchema = z.object({
   state: z.enum(["disconnected", "connecting", "connected"]),
 });
 
+const bridgeDiscoveredPeerSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  deviceId: z.string().min(1),
+});
+
 const bridgeStateEventSchema = z.object({
   type: z.literal("bridge_state"),
   supported: z.boolean(),
   advertising: z.boolean(),
   peer: bridgePeerStateSchema.nullable().optional(),
+  localDeviceId: z.string().nullable().optional(),
+  localDeviceName: z.string().nullable().optional(),
+  discoveredPeers: z.array(bridgeDiscoveredPeerSchema).optional(),
   publishedWorkspaceId: z.string().nullable().optional(),
+  publishedWorkspaceName: z.string().nullable().optional(),
   openChannelCount: z.number().int().nonnegative(),
   lastError: z.string().nullable().optional(),
 });
@@ -279,7 +289,11 @@ export class LoomBridgeManager {
         supported: state.data.supported,
         advertising: state.data.advertising,
         peer: state.data.peer ?? null,
+        localDeviceId: state.data.localDeviceId ?? null,
+        localDeviceName: state.data.localDeviceName ?? null,
+        discoveredPeers: state.data.discoveredPeers ?? [],
         publishedWorkspaceId: state.data.publishedWorkspaceId ?? null,
+        publishedWorkspaceName: state.data.publishedWorkspaceName ?? null,
         openChannelCount: state.data.openChannelCount,
         lastError: state.data.lastError ?? null,
       });

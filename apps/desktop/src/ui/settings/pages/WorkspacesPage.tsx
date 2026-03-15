@@ -412,6 +412,19 @@ export function IosRelayCard({
   const rememberedPeerId = relayConfig.rememberedPeerId ?? "";
   const rememberedPeerName = relayConfig.rememberedPeerName ?? "";
   const deviceName = relayConfig.deviceName ?? "";
+  const localDeviceId = relayState.localDeviceId ?? "";
+  const localDeviceName = (relayState.localDeviceName ?? deviceName) || "Cowork Mac";
+  const discoveredPeers = relayState.discoveredPeers ?? [];
+  const publishedWorkspaceName = relayState.publishedWorkspaceName ?? (isPublished ? workspace.name : null);
+  const hasRememberedPeer = rememberedPeerId.trim().length > 0;
+
+  const connectDiscoveredPeer = async (peerId: string, peerName: string) => {
+    await updateIosRelayConfig({
+      rememberedPeerId: peerId,
+      rememberedPeerName: peerName,
+    });
+    await connectIosRelayPeer(peerId);
+  };
 
   return (
     <Card className="border-border/80 bg-card/85">
@@ -427,22 +440,112 @@ export function IosRelayCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-xl border border-border/70 bg-muted/35 p-4">
+          <div className="text-sm font-medium text-foreground">Pairing flow</div>
+          <div className="mt-2 grid gap-3 text-sm text-muted-foreground md:grid-cols-3">
+            <div>
+              <div className="font-medium text-foreground">1. Start the relay</div>
+              <div>Keep this Mac advertising so the iPhone can discover it over Loom.</div>
+            </div>
+            <div>
+              <div className="font-medium text-foreground">2. Pair the phone</div>
+              <div>Select a nearby device below or paste the iPhone’s stable Loom device UUID.</div>
+            </div>
+            <div>
+              <div className="font-medium text-foreground">3. Open this workspace</div>
+              <div>Your iOS app should connect using the workspace ID shown in the publication section.</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
           <div className="space-y-2">
-            <div className="text-sm font-medium text-foreground">Device name</div>
-            <Input
-              aria-label="iOS relay device name"
-              autoComplete="off"
-              placeholder="Cowork Mac"
-              value={deviceName}
-              onChange={(event) => {
-                void updateIosRelayConfig({
-                  deviceName: event.target.value.trim() || null,
-                });
-              }}
-            />
+            <div className="rounded-xl border border-border/70 p-4">
+              <div className="text-sm font-medium text-foreground">This Mac</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Share this identity with the iOS app if you want deterministic peer targeting.
+              </div>
+              <div className="mt-4 space-y-3">
+                <div className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Advertised name</div>
+                  <Input
+                    aria-label="iOS relay device name"
+                    autoComplete="off"
+                    placeholder="Cowork Mac"
+                    value={deviceName}
+                    onChange={(event) => {
+                      void updateIosRelayConfig({
+                        deviceName: event.target.value.trim() || null,
+                      });
+                    }}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Active device name</div>
+                  <Input readOnly value={localDeviceName} aria-label="Current mac relay name" />
+                </div>
+                <div className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Mac relay ID</div>
+                  <Input readOnly value={localDeviceId} aria-label="Current mac relay id" placeholder="Available after the helper reports state" />
+                </div>
+              </div>
+            </div>
           </div>
 
+          <div className="space-y-2">
+            <div className="rounded-xl border border-border/70 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-foreground">Nearby devices</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Pick a discovered peer to remember and connect without manual UUID entry.
+                  </div>
+                </div>
+                <Badge variant="outline">{discoveredPeers.length} found</Badge>
+              </div>
+              <div className="mt-4 space-y-3">
+                {discoveredPeers.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border/70 px-3 py-4 text-sm text-muted-foreground">
+                    No nearby Loom peers yet. Open the iOS app’s pairing screen, keep this Mac advertising, then refresh the relay state by using any relay action.
+                  </div>
+                ) : (
+                  discoveredPeers.map((peer) => {
+                    const peerId = peer.deviceId || peer.id;
+                    const isRemembered = rememberedPeerId.trim() === peerId || rememberedPeerId.trim() === peer.id;
+                    const isConnected =
+                      relayState.peer?.id === peer.id ||
+                      relayState.peer?.id === peer.deviceId;
+                    return (
+                      <div
+                        key={`${peer.id}:${peer.deviceId}`}
+                        className="flex items-center justify-between gap-3 rounded-lg border border-border/70 px-3 py-3"
+                      >
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-medium text-foreground">{peer.name}</span>
+                            {isConnected ? <Badge variant="secondary">Connected</Badge> : null}
+                            {!isConnected && isRemembered ? <Badge variant="outline">Remembered</Badge> : null}
+                          </div>
+                          <div className="truncate text-xs text-muted-foreground">{peerId}</div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant={isConnected ? "secondary" : "outline"}
+                          disabled={!relayState.supported}
+                          onClick={() => void connectDiscoveredPeer(peerId, peer.name)}
+                        >
+                          {isConnected ? "Paired" : "Pair"}
+                        </Button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2">
             <div className="text-sm font-medium text-foreground">Remembered peer name</div>
             <Input
@@ -457,31 +560,34 @@ export function IosRelayCard({
               }}
             />
           </div>
-        </div>
-
-        <div className="space-y-2">
-          <div className="text-sm font-medium text-foreground">Remembered peer ID</div>
-          <Input
-            aria-label="iOS relay peer id"
-            autoComplete="off"
-            placeholder="peer UUID"
-            value={rememberedPeerId}
-            onChange={(event) => {
-              void updateIosRelayConfig({
-                rememberedPeerId: event.target.value.trim() || null,
-              });
-            }}
-          />
-          <div className="text-xs text-muted-foreground">
-            The helper only accepts the explicitly approved Loom peer identity.
+          <div className="space-y-2">
+            <div className="text-sm font-medium text-foreground">Remembered peer ID</div>
+            <Input
+              aria-label="iOS relay peer id"
+              autoComplete="off"
+              placeholder="Paste the iPhone pairing UUID"
+              value={rememberedPeerId}
+              onChange={(event) => {
+                void updateIosRelayConfig({
+                  rememberedPeerId: event.target.value.trim() || null,
+                });
+              }}
+            />
+            <div className="text-xs text-muted-foreground">
+              The helper only accepts the explicitly approved Loom peer identity. Use the iPhone’s persisted device UUID here.
+            </div>
           </div>
         </div>
 
         <div className="grid gap-3 rounded-xl border border-border/70 p-4 text-sm md:grid-cols-2">
           <div>
+            <div className="font-medium text-foreground">Workspace ID for iOS</div>
+            <div className="break-all text-muted-foreground">{workspace.id}</div>
+          </div>
+          <div>
             <div className="font-medium text-foreground">Published workspace</div>
             <div className="text-muted-foreground">
-              {isPublished ? workspace.name : "None"}
+              {isPublished ? publishedWorkspaceName ?? workspace.name : "Not currently published"}
             </div>
           </div>
           <div>
@@ -548,7 +654,7 @@ export function IosRelayCard({
           <Button
             type="button"
             variant="outline"
-            disabled={!relayState.supported || rememberedPeerId.trim().length === 0}
+            disabled={!relayState.supported || !hasRememberedPeer}
             onClick={() => void connectIosRelayPeer(rememberedPeerId.trim())}
           >
             Connect

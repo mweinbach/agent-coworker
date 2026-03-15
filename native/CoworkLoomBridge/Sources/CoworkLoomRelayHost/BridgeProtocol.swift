@@ -14,11 +14,27 @@ public struct BridgePeerState: Codable, Sendable, Equatable {
     }
 }
 
+public struct BridgeDiscoveredPeerState: Codable, Sendable, Equatable {
+    public let id: String
+    public let name: String
+    public let deviceId: String
+
+    public init(id: String, name: String, deviceId: String) {
+        self.id = id
+        self.name = name
+        self.deviceId = deviceId
+    }
+}
+
 public struct BridgeState: Codable, Sendable, Equatable {
     public let supported: Bool
     public let advertising: Bool
     public let peer: BridgePeerState?
+    public let localDeviceId: String
+    public let localDeviceName: String
+    public let discoveredPeers: [BridgeDiscoveredPeerState]
     public let publishedWorkspaceId: String?
+    public let publishedWorkspaceName: String?
     public let openChannelCount: Int
     public let lastError: String?
 
@@ -26,14 +42,22 @@ public struct BridgeState: Codable, Sendable, Equatable {
         supported: Bool,
         advertising: Bool,
         peer: BridgePeerState?,
+        localDeviceId: String,
+        localDeviceName: String,
+        discoveredPeers: [BridgeDiscoveredPeerState],
         publishedWorkspaceId: String?,
+        publishedWorkspaceName: String?,
         openChannelCount: Int,
         lastError: String?
     ) {
         self.supported = supported
         self.advertising = advertising
         self.peer = peer
+        self.localDeviceId = localDeviceId
+        self.localDeviceName = localDeviceName
+        self.discoveredPeers = discoveredPeers
         self.publishedWorkspaceId = publishedWorkspaceId
+        self.publishedWorkspaceName = publishedWorkspaceName
         self.openChannelCount = openChannelCount
         self.lastError = lastError
     }
@@ -140,7 +164,11 @@ extension BridgeEvent: Codable {
         case supported
         case advertising
         case peer
+        case localDeviceId
+        case localDeviceName
+        case discoveredPeers
         case publishedWorkspaceId
+        case publishedWorkspaceName
         case openChannelCount
         case lastError
         case level
@@ -166,7 +194,11 @@ extension BridgeEvent: Codable {
                     supported: try container.decode(Bool.self, forKey: .supported),
                     advertising: try container.decode(Bool.self, forKey: .advertising),
                     peer: try container.decodeIfPresent(BridgePeerState.self, forKey: .peer),
+                    localDeviceId: try container.decode(String.self, forKey: .localDeviceId),
+                    localDeviceName: try container.decode(String.self, forKey: .localDeviceName),
+                    discoveredPeers: try container.decodeIfPresent([BridgeDiscoveredPeerState].self, forKey: .discoveredPeers) ?? [],
                     publishedWorkspaceId: try container.decodeIfPresent(String.self, forKey: .publishedWorkspaceId),
+                    publishedWorkspaceName: try container.decodeIfPresent(String.self, forKey: .publishedWorkspaceName),
                     openChannelCount: try container.decode(Int.self, forKey: .openChannelCount),
                     lastError: try container.decodeIfPresent(String.self, forKey: .lastError)
                 )
@@ -191,7 +223,11 @@ extension BridgeEvent: Codable {
             try container.encode(state.supported, forKey: .supported)
             try container.encode(state.advertising, forKey: .advertising)
             try container.encodeIfPresent(state.peer, forKey: .peer)
+            try container.encode(state.localDeviceId, forKey: .localDeviceId)
+            try container.encode(state.localDeviceName, forKey: .localDeviceName)
+            try container.encode(state.discoveredPeers, forKey: .discoveredPeers)
             try container.encodeIfPresent(state.publishedWorkspaceId, forKey: .publishedWorkspaceId)
+            try container.encodeIfPresent(state.publishedWorkspaceName, forKey: .publishedWorkspaceName)
             try container.encode(state.openChannelCount, forKey: .openChannelCount)
             try container.encodeIfPresent(state.lastError, forKey: .lastError)
         case let .log(level, message):

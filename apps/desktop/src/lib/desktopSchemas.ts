@@ -35,6 +35,7 @@ import {
   createDefaultIosRelayConfig,
   createDefaultIosRelayState,
   type IosRelayConfig,
+  type IosRelayDiscoveredPeer,
   type IosRelayPeer,
   type IosRelayState,
 } from "../app/iosRelayTypes";
@@ -183,11 +184,21 @@ const iosRelayPeerSchema: z.ZodType<IosRelayPeer> = z.object({
   state: z.enum(["disconnected", "connecting", "connected"]),
 });
 
+const iosRelayDiscoveredPeerSchema: z.ZodType<IosRelayDiscoveredPeer> = z.object({
+  id: nonEmptyStringSchema,
+  name: nonEmptyStringSchema,
+  deviceId: nonEmptyStringSchema,
+});
+
 export const iosRelayStateSchema: z.ZodType<IosRelayState> = z.object({
   supported: z.preprocess((value) => (typeof value === "boolean" ? value : createDefaultIosRelayState().supported), z.boolean()),
   advertising: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   peer: iosRelayPeerSchema.nullable(),
+  localDeviceId: nullableStringSchema,
+  localDeviceName: nullableStringSchema,
+  discoveredPeers: z.preprocess((value) => (Array.isArray(value) ? value : []), z.array(iosRelayDiscoveredPeerSchema)),
   publishedWorkspaceId: nullableStringSchema,
+  publishedWorkspaceName: nullableStringSchema,
   openChannelCount: z.preprocess(
     (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0),
     z.number().int().nonnegative(),

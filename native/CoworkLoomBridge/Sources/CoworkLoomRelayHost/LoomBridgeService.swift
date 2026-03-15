@@ -113,11 +113,25 @@ public final class LoomBridgeService {
             supported: true,
             advertising: advertising,
             peer: peer,
+            localDeviceId: localDeviceID.uuidString.lowercased(),
+            localDeviceName: deviceName,
+            discoveredPeers: bridgeDiscoveredPeers(),
             publishedWorkspaceId: publishedWorkspace?.workspaceId,
+            publishedWorkspaceName: publishedWorkspace?.workspaceName,
             openChannelCount: await relayHost.openChannelCount(),
             lastError: lastError
         )
         emitEvent(.state(state))
+    }
+
+    private func bridgeDiscoveredPeers() -> [BridgeDiscoveredPeerState] {
+        discovery.discoveredPeers.map { discoveredPeer in
+            BridgeDiscoveredPeerState(
+                id: discoveredPeer.id.rawValue,
+                name: discoveredPeer.name,
+                deviceId: discoveredPeer.deviceID.uuidString.lowercased()
+            )
+        }
     }
 
     private func startAdvertising(deviceName: String?) async throws {

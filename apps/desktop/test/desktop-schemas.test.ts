@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { desktopMenuCommandSchema, persistedStateInputSchema, updaterStateSchema } from "../src/lib/desktopSchemas";
+import { desktopMenuCommandSchema, iosRelayStateSchema, persistedStateInputSchema, updaterStateSchema } from "../src/lib/desktopSchemas";
 
 const TS = "2024-01-01T00:00:00.000Z";
 
@@ -115,5 +115,21 @@ describe("desktop persisted-state schema defaults", () => {
 
   test("accepts openUpdates desktop menu command", () => {
     expect(desktopMenuCommandSchema.parse("openUpdates")).toBe("openUpdates");
+  });
+
+  test("defaults new iOS relay pairing metadata when omitted", () => {
+    const parsed = iosRelayStateSchema.parse({
+      supported: true,
+      advertising: false,
+      peer: null,
+      publishedWorkspaceId: null,
+      openChannelCount: 0,
+      lastError: null,
+    });
+
+    expect(parsed.localDeviceId).toBeNull();
+    expect(parsed.localDeviceName).toBeNull();
+    expect(parsed.discoveredPeers).toEqual([]);
+    expect(parsed.publishedWorkspaceName).toBeNull();
   });
 });

@@ -107,6 +107,17 @@ export function createTogetherModelAdapter(modelId: string, savedKey?: string): 
   });
 }
 
+export function createNvidiaModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
+  return createModelAdapter(modelId, "nvidia.completions", async () => {
+    const key = firstNonEmpty(savedKey, envKey("NVIDIA_API_KEY"));
+    const headers: HeaderMap = {};
+    if (key) {
+      headers.authorization = `Bearer ${key}`;
+    }
+    return headers;
+  });
+}
+
 function createOpenCodeModelAdapter(
   provider: OpenCodeProviderName,
   modelId: string,

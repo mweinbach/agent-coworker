@@ -329,6 +329,60 @@ describe("pi runtime regressions", () => {
     expect(resolved.model.input).toEqual(["text", "image"]);
   });
 
+  test("nvidia runtime model resolution returns explicit Nemotron metadata and env-key fallback", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-nvidia-nemotron-"));
+    const config = makeConfig(homeDir, {
+      provider: "nvidia",
+      model: "nvidia/nemotron-3-super-120b-a12b",
+      subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+    });
+
+    const resolved = await withEnv("NVIDIA_API_KEY", "env-nvidia-key", async () => (
+      await piRuntimeInternal.resolvePiModel(makeParams(config))
+    ));
+
+    expect(resolved.apiKey).toBe("env-nvidia-key");
+    expect(resolved.model).toMatchObject({
+      id: "nvidia/nemotron-3-super-120b-a12b",
+      api: "openai-completions",
+      provider: "nvidia",
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 32_768,
+      compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+        maxTokensField: "max_tokens",
+        thinkingFormat: "qwen",
+      },
+    });
+    expect(resolved.model.input).toEqual(["text"]);
+    expect(resolved.model.cost).toBeUndefined();
+  });
+
+  test("nvidia request normalization forces thinking on and strips explicit token controls", () => {
+    expect(piRuntimeInternal.normalizeNvidiaChatCompletionsBody({
+      model: "nvidia/nemotron-3-super-120b-a12b",
+      max_tokens: 16_384,
+      max_completion_tokens: 8_192,
+      reasoning_budget: 16_384,
+      reasoning_effort: "high",
+      enable_thinking: false,
+      store: false,
+      chat_template_kwargs: { preserve: true },
+      stream: true,
+    })).toEqual({
+      model: "nvidia/nemotron-3-super-120b-a12b",
+      chat_template_kwargs: {
+        preserve: true,
+        enable_thinking: true,
+      },
+      stream: true,
+    });
+  });
+
   test("opencode-zen runtime model resolution returns explicit GLM-5 PI metadata and env-key fallback", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-opencode-zen-"));
     const config = makeConfig(homeDir, {

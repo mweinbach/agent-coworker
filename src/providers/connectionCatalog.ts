@@ -28,6 +28,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   anthropic: "Anthropic",
   baseten: "Baseten",
   together: "Together AI",
+  nvidia: "NVIDIA",
   "opencode-go": getOpenCodeDisplayName("opencode-go"),
   "opencode-zen": getOpenCodeDisplayName("opencode-zen"),
   "codex-cli": "Codex CLI",

@@ -3305,6 +3305,23 @@ describe("createTools", () => {
     expect((tools.webSearch as any).description).toContain("EXA_API_KEY");
   });
 
+  test("returns an executable webSearch tool for nvidia", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "nvidia",
+          model: "nvidia/nemotron-3-super-120b-a12b",
+          subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+        }),
+      })
+    );
+
+    expect((tools.webSearch as any).type).toBeUndefined();
+    expect(typeof (tools.webSearch as any).execute).toBe("function");
+    expect((tools.webSearch as any).description).toContain("EXA_API_KEY");
+  });
+
   test("each tool is executable or provider-native", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));

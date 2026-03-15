@@ -138,6 +138,25 @@ describe("pi runtime provider option mapping", () => {
     expect(mapped.toolChoice).toBeUndefined();
   });
 
+  test("forces NVIDIA reasoning on and ignores manual providerOptions", () => {
+    const params = makeParams(makeConfig({
+      provider: "nvidia",
+      model: "nvidia/nemotron-3-super-120b-a12b",
+      subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+      providerOptions: {
+        nvidia: {
+          reasoningEffort: "none",
+          temperature: 0.1,
+          maxTokens: 1024,
+        },
+      },
+    }));
+    const mapped = __internal.buildPiStreamOptions(params);
+    expect(mapped.reasoningEffort).toBe("high");
+    expect(mapped.temperature).toBeUndefined();
+    expect(mapped.maxTokens).toBeUndefined();
+  });
+
   test("uses codex-cli options with openai fallback", () => {
     const codexParams = makeParams(makeConfig({
       provider: "codex-cli",

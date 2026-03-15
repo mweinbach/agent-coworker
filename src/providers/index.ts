@@ -6,6 +6,7 @@ import { basetenProvider } from "./baseten";
 import { PROVIDER_MODEL_CATALOG } from "./catalog";
 import { codexCliProvider } from "./codex-cli";
 import { googleProvider } from "./google";
+import { nvidiaProvider } from "./nvidia";
 import { opencodeGoProvider } from "./opencode-go";
 import { opencodeZenProvider } from "./opencode-zen";
 import { openaiProvider } from "./openai";
@@ -44,6 +45,7 @@ const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   anthropic: anthropicProvider,
   baseten: basetenProvider,
   together: togetherProvider,
+  nvidia: nvidiaProvider,
   "opencode-go": opencodeGoProvider,
   "opencode-zen": opencodeZenProvider,
   "codex-cli": codexCliProvider,
@@ -55,6 +57,7 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   anthropic: { ...PROVIDER_RUNTIMES.anthropic, ...PROVIDER_MODEL_CATALOG.anthropic },
   baseten: { ...PROVIDER_RUNTIMES.baseten, ...PROVIDER_MODEL_CATALOG.baseten },
   together: { ...PROVIDER_RUNTIMES.together, ...PROVIDER_MODEL_CATALOG.together },
+  nvidia: { ...PROVIDER_RUNTIMES.nvidia, ...PROVIDER_MODEL_CATALOG.nvidia },
   "opencode-go": { ...PROVIDER_RUNTIMES["opencode-go"], ...PROVIDER_MODEL_CATALOG["opencode-go"] },
   "opencode-zen": { ...PROVIDER_RUNTIMES["opencode-zen"], ...PROVIDER_MODEL_CATALOG["opencode-zen"] },
   "codex-cli": { ...PROVIDER_RUNTIMES["codex-cli"], ...PROVIDER_MODEL_CATALOG["codex-cli"] },

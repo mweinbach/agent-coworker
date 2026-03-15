@@ -181,6 +181,31 @@ describe("providers/connectionCatalog", () => {
     });
   });
 
+  test("lists NVIDIA in the provider catalog with the expected model set", async () => {
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {},
+      }),
+    });
+
+    expect(payload.default.nvidia).toBe("nvidia/nemotron-3-super-120b-a12b");
+    expect(payload.all).toContainEqual({
+      id: "nvidia",
+      name: "NVIDIA",
+      models: [
+        {
+          id: "nvidia/nemotron-3-super-120b-a12b",
+          displayName: "Nemotron 3 Super 120B A12B",
+          knowledgeCutoff: "February 2026",
+          supportsImageInput: false,
+        },
+      ],
+      defaultModel: "nvidia/nemotron-3-super-120b-a12b",
+    });
+  });
+
   test("connected providers exclude oauth_pending entries", async () => {
     const payload = await getProviderCatalog({
       readStore: async () => ({

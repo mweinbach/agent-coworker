@@ -7,6 +7,7 @@ const TITLE_MODEL_BY_PROVIDER = {
   baseten: "moonshotai/Kimi-K2.5",
   "codex-cli": "gpt-5.2-codex",
   google: "gemini-3-flash-preview",
+  nvidia: "nvidia/nemotron-3-super-120b-a12b",
   openai: "gpt-5-mini",
   together: "moonshotai/Kimi-K2.5",
   "opencode-go": "glm-5",

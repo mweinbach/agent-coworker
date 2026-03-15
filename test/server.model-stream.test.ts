@@ -72,6 +72,10 @@ describe("reasoningModeForProvider", () => {
     expect(reasoningModeForProvider("together")).toBe("reasoning");
   });
 
+  test('returns "reasoning" for nvidia', () => {
+    expect(reasoningModeForProvider("nvidia")).toBe("reasoning");
+  });
+
   test('returns "reasoning" for opencode-go', () => {
     expect(reasoningModeForProvider("opencode-go")).toBe("reasoning");
   });

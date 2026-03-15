@@ -7,6 +7,7 @@ import {
   createBasetenModelAdapter,
   createCodexCliModelAdapter,
   createGoogleModelAdapter,
+  createNvidiaModelAdapter,
   createOpenAiModelAdapter,
   createTogetherModelAdapter,
 } from "../../src/providers/modelAdapter";
@@ -93,6 +94,14 @@ describe("provider model adapters", () => {
     });
   });
 
+  test("NVIDIA adapter wires Bearer authorization header", async () => {
+    await withEnv("NVIDIA_API_KEY", "nvkey", async () => {
+      const adapter = createNvidiaModelAdapter("nvidia/nemotron-3-super-120b-a12b");
+      const headers = await adapter.config.headers();
+      expect(headers.authorization).toBe("Bearer nvkey");
+    });
+  });
+
   test("adapters omit auth headers when no key source is available", async () => {
     await withEnv("OPENAI_API_KEY", undefined, async () => {
       await withEnv("GOOGLE_GENERATIVE_AI_API_KEY", undefined, async () => {
@@ -100,17 +109,21 @@ describe("provider model adapters", () => {
           await withEnv("ANTHROPIC_API_KEY", undefined, async () => {
             await withEnv("BASETEN_API_KEY", undefined, async () => {
               await withEnv("TOGETHER_API_KEY", undefined, async () => {
-                const openAiHeaders = await createOpenAiModelAdapter("gpt-5.2").config.headers();
-                const googleHeaders = await createGoogleModelAdapter("gemini-3.1").config.headers();
-                const anthropicHeaders = await createAnthropicModelAdapter("claude-opus-4-6").config.headers();
-                const basetenHeaders = await createBasetenModelAdapter("moonshotai/Kimi-K2.5").config.headers();
-                const togetherHeaders = await createTogetherModelAdapter("moonshotai/Kimi-K2.5").config.headers();
+                await withEnv("NVIDIA_API_KEY", undefined, async () => {
+                  const openAiHeaders = await createOpenAiModelAdapter("gpt-5.2").config.headers();
+                  const googleHeaders = await createGoogleModelAdapter("gemini-3.1").config.headers();
+                  const anthropicHeaders = await createAnthropicModelAdapter("claude-opus-4-6").config.headers();
+                  const basetenHeaders = await createBasetenModelAdapter("moonshotai/Kimi-K2.5").config.headers();
+                  const togetherHeaders = await createTogetherModelAdapter("moonshotai/Kimi-K2.5").config.headers();
+                  const nvidiaHeaders = await createNvidiaModelAdapter("nvidia/nemotron-3-super-120b-a12b").config.headers();
 
-                expect(openAiHeaders).toEqual({});
-                expect(googleHeaders).toEqual({});
-                expect(anthropicHeaders).toEqual({});
-                expect(basetenHeaders).toEqual({});
-                expect(togetherHeaders).toEqual({});
+                  expect(openAiHeaders).toEqual({});
+                  expect(googleHeaders).toEqual({});
+                  expect(anthropicHeaders).toEqual({});
+                  expect(basetenHeaders).toEqual({});
+                  expect(togetherHeaders).toEqual({});
+                  expect(nvidiaHeaders).toEqual({});
+                });
               });
             });
           });

@@ -59,6 +59,19 @@ describe("src/providers/index.ts", () => {
       expect(headers.authorization).toBe("Bearer together-key");
     });
 
+    test("creates NVIDIA model with saved key", async () => {
+      const config = makeConfig({
+        provider: "nvidia",
+        model: "nvidia/nemotron-3-super-120b-a12b",
+        subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+      });
+      const model = getModelForProvider(config, "nvidia/nemotron-3-super-120b-a12b", "nvidia-key") as any;
+      const headers = await model.config.headers();
+      expect(model.modelId).toBe("nvidia/nemotron-3-super-120b-a12b");
+      expect(model.provider).toBe("nvidia.completions");
+      expect(headers.authorization).toBe("Bearer nvidia-key");
+    });
+
     test("creates OpenCode Go model with saved key", async () => {
       const config = makeConfig({ provider: "opencode-go", model: "glm-5", subAgentModel: "glm-5" });
       const model = getModelForProvider(config, "glm-5", "opencode-key") as any;
@@ -110,6 +123,7 @@ describe("src/providers/index.ts", () => {
       expect(defaultModelForProvider("anthropic")).toBe(PROVIDERS.anthropic.defaultModel);
       expect(defaultModelForProvider("baseten")).toBe(PROVIDERS.baseten.defaultModel);
       expect(defaultModelForProvider("together")).toBe(PROVIDERS.together.defaultModel);
+      expect(defaultModelForProvider("nvidia")).toBe(PROVIDERS.nvidia.defaultModel);
       expect(defaultModelForProvider("opencode-go")).toBe(PROVIDERS["opencode-go"].defaultModel);
       expect(defaultModelForProvider("opencode-zen")).toBe(PROVIDERS["opencode-zen"].defaultModel);
       expect(defaultModelForProvider("codex-cli")).toBe(PROVIDERS["codex-cli"].defaultModel);
@@ -135,6 +149,10 @@ describe("src/providers/index.ts", () => {
 
     test("returns key candidates for together", () => {
       expect(getProviderKeyCandidates("together")).toBe(PROVIDERS.together.keyCandidates);
+    });
+
+    test("returns key candidates for nvidia", () => {
+      expect(getProviderKeyCandidates("nvidia")).toBe(PROVIDERS.nvidia.keyCandidates);
     });
 
     test("returns key candidates for opencode-go", () => {

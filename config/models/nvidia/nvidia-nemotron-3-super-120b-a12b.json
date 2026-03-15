@@ -1,0 +1,10 @@
+{
+  "id": "nvidia/nemotron-3-super-120b-a12b",
+  "provider": "nvidia",
+  "displayName": "Nemotron 3 Super 120B A12B",
+  "knowledgeCutoff": "February 2026",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": true
+}

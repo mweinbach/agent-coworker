@@ -134,6 +134,10 @@ export function buildPiStreamOptions(
     if (toolChoice) options.toolChoice = toolChoice;
   }
 
+  if (params.config.provider === "nvidia") {
+    options.reasoningEffort = "high";
+  }
+
   return options;
 }
 

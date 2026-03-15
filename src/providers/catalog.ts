@@ -19,6 +19,10 @@ export const PROVIDER_MODEL_CATALOG = {
     defaultModel: defaultModelIdForProvider("together"),
     availableModels: listSupportedModelIds("together"),
   },
+  nvidia: {
+    defaultModel: defaultModelIdForProvider("nvidia"),
+    availableModels: listSupportedModelIds("nvidia"),
+  },
   "opencode-go": {
     defaultModel: defaultModelIdForProvider("opencode-go"),
     availableModels: listSupportedModelIds("opencode-go"),
@@ -53,6 +57,7 @@ export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   anthropic: PROVIDER_MODEL_CATALOG.anthropic.availableModels,
   baseten: PROVIDER_MODEL_CATALOG.baseten.availableModels,
   together: PROVIDER_MODEL_CATALOG.together.availableModels,
+  nvidia: PROVIDER_MODEL_CATALOG.nvidia.availableModels,
   "opencode-go": PROVIDER_MODEL_CATALOG["opencode-go"].availableModels,
   "opencode-zen": PROVIDER_MODEL_CATALOG["opencode-zen"].availableModels,
   "codex-cli": PROVIDER_MODEL_CATALOG["codex-cli"].availableModels,

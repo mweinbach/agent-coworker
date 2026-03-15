@@ -62,6 +62,10 @@ describe("pricing", () => {
             expect(glm!.outputPerMillion).toBe(3.2);
         });
 
+        it("returns null for nvidia models without local pricing", () => {
+            expect(resolveModelPricing("nvidia", "nvidia/nemotron-3-super-120b-a12b")).toBeNull();
+        });
+
         it("returns null for opencode-go models without local pricing", () => {
             expect(resolveModelPricing("opencode-go", "glm-5")).toBeNull();
             expect(resolveModelPricing("opencode-go", "kimi-k2.5")).toBeNull();

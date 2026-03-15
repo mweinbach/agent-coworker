@@ -166,6 +166,38 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
     });
   });
 
+  test("nvidia saved key overrides NVIDIA_API_KEY", async () => {
+    const { home } = await makeTmpDirs();
+    const savedKey = "saved-nvidia-key";
+    const envKey = "env-nvidia-key";
+
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        nvidia: {
+          service: "nvidia",
+          mode: "api_key",
+          apiKey: savedKey,
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    await withEnv("NVIDIA_API_KEY", envKey, async () => {
+      const cfg = makeConfig({
+        provider: "nvidia",
+        model: "nvidia/nemotron-3-super-120b-a12b",
+        subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+        userAgentDir: path.join(home, ".agent"),
+      });
+
+      const model = getModel(cfg) as any;
+      const headers = await model.config.headers();
+      expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+    });
+  });
+
   test("opencode-go saved key overrides OPENCODE_API_KEY", async () => {
     const { home } = await makeTmpDirs();
     const savedKey = "saved-opencode-key";
@@ -397,6 +429,36 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
         provider: "together",
         model: "moonshotai/Kimi-K2.5",
         subAgentModel: "moonshotai/Kimi-K2.5",
+        userAgentDir: path.join(home, ".agent"),
+      });
+
+      const model = getModel(cfg) as any;
+      const headers = await model.config.headers();
+      expect(headers.authorization).toBe(`Bearer ${envKey}`);
+    });
+  });
+
+  test("nvidia falls back to NVIDIA_API_KEY when saved entry has no api key", async () => {
+    const { home } = await makeTmpDirs();
+    const envKey = "env-nvidia-fallback";
+
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        nvidia: {
+          service: "nvidia",
+          mode: "oauth_pending",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    await withEnv("NVIDIA_API_KEY", envKey, async () => {
+      const cfg = makeConfig({
+        provider: "nvidia",
+        model: "nvidia/nemotron-3-super-120b-a12b",
+        subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
         userAgentDir: path.join(home, ".agent"),
       });
 

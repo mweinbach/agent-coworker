@@ -3,6 +3,12 @@ import { startWorkspaceServer } from "../lib/desktopCommands";
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
 import type { MCPServerConfig, ProviderName, ServerEvent, TodoItem } from "../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
+import {
+  createDefaultIosRelayConfig,
+  createDefaultIosRelayState,
+  type IosRelayConfig,
+  type IosRelayState,
+} from "./iosRelayTypes";
 
 import type {
   Notification,
@@ -157,6 +163,8 @@ export type AppStoreState = {
   injectContext: boolean;
   developerMode: boolean;
   showHiddenFiles: boolean;
+  iosRelayState: IosRelayState;
+  iosRelayConfig: IosRelayConfig;
   updateState: UpdaterState;
 
   sidebarCollapsed: boolean;
@@ -191,6 +199,14 @@ export type AppStoreState = {
   setInjectContext: (v: boolean) => void;
   setDeveloperMode: (v: boolean) => void;
   setShowHiddenFiles: (v: boolean) => void;
+  setIosRelayState: (state: IosRelayState) => void;
+  updateIosRelayConfig: (patch: Partial<IosRelayConfig>) => Promise<void>;
+  requestIosRelayState: () => Promise<void>;
+  startIosRelayAdvertising: () => Promise<void>;
+  stopIosRelayAdvertising: () => Promise<void>;
+  connectIosRelayPeer: (peerId: string) => Promise<void>;
+  disconnectIosRelayPeer: () => Promise<void>;
+  syncIosRelayPublication: () => Promise<void>;
   setUpdateState: (state: UpdaterState) => void;
   checkForUpdates: () => Promise<void>;
   quitAndInstallUpdate: () => Promise<void>;
@@ -279,6 +295,7 @@ export type StoreSet = (
 ) => void;
 
 export { createDefaultUpdaterState };
+export { createDefaultIosRelayConfig, createDefaultIosRelayState };
 
 function pushNotification(notifications: Notification[], entry: Notification): Notification[] {
   const next = [...notifications, entry];
@@ -345,6 +362,9 @@ async function ensureServerRunning(
           [workspaceId]: { ...s.workspaceRuntimeById[workspaceId], serverUrl: res.url, starting: false, error: null },
         },
       }));
+      void get().syncIosRelayPublication().catch(() => {
+        // Relay publication is best effort; workspace startup should still succeed.
+      });
     } catch (err) {
       if (getWorkspaceStartGeneration(workspaceId) !== generation) {
         return;

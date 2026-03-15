@@ -1,4 +1,5 @@
 import { saveState } from "../../lib/desktopCommands";
+import { createDefaultIosRelayConfig } from "../iosRelayTypes";
 import { normalizePersistedProviderState } from "../persistedProviderState";
 import type { AppStoreState } from "../store.helpers";
 import type { PersistedState } from "../types";
@@ -14,11 +15,12 @@ function buildPersistedState(state: AppStoreState): PersistedState {
   });
 
   return {
-    version: 2,
+    version: 3,
     workspaces: state.workspaces,
     threads: state.threads,
     developerMode: state.developerMode,
     showHiddenFiles: state.showHiddenFiles,
+    iosRelayConfig: state.iosRelayConfig ?? createDefaultIosRelayConfig(),
     ...(providerState ? { providerState } : {}),
   };
 }

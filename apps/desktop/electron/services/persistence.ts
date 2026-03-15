@@ -11,6 +11,7 @@ import type {
   WorkspaceRecord,
   WorkspaceUserProfile,
 } from "../../src/app/types";
+import { createDefaultIosRelayConfig } from "../../src/app/iosRelayTypes";
 import { normalizeWorkspaceUserProfile } from "../../src/app/types";
 import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibleProviderOptions";
 import { normalizePersistedProviderState } from "../../src/app/persistedProviderState";
@@ -43,11 +44,12 @@ class AsyncLock {
 
 function defaultState(): PersistedState {
   return {
-    version: 2,
+    version: 3,
     workspaces: [],
     threads: [],
     developerMode: false,
     showHiddenFiles: false,
+    iosRelayConfig: createDefaultIosRelayConfig(),
   };
 }
 
@@ -91,6 +93,10 @@ function asTimestamp(value: unknown): string | null {
 function asOptionalString(value: unknown): string | undefined {
   const candidate = asNonEmptyString(value);
   return candidate ?? undefined;
+}
+
+function asNullableString(value: unknown): string | null {
+  return asNonEmptyString(value) ?? null;
 }
 
 function asNonNegativeInteger(value: unknown, fallback = 0): number {
@@ -184,6 +190,7 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
         : undefined,
       defaultEnableMcp: typeof item.defaultEnableMcp === "boolean" ? item.defaultEnableMcp : true,
       defaultBackupsEnabled: typeof item.defaultBackupsEnabled === "boolean" ? item.defaultBackupsEnabled : true,
+      iosRelayEnabled: typeof item.iosRelayEnabled === "boolean" ? item.iosRelayEnabled : false,
       yolo: typeof item.yolo === "boolean" ? item.yolo : false,
     });
     seenWorkspaceIds.add(id);
@@ -246,12 +253,20 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     typeof value.version === "number" && Number.isFinite(value.version)
       ? Math.max(0, Math.floor(value.version))
       : 0;
+  const iosRelayConfig = isRecord(value.iosRelayConfig)
+    ? {
+        rememberedPeerId: asNullableString(value.iosRelayConfig.rememberedPeerId),
+        rememberedPeerName: asNullableString(value.iosRelayConfig.rememberedPeerName),
+        deviceName: asNullableString(value.iosRelayConfig.deviceName),
+      }
+    : createDefaultIosRelayConfig();
   return {
-    version: parsedVersion >= 2 ? parsedVersion : 2,
+    version: parsedVersion >= 3 ? parsedVersion : 3,
     workspaces,
     threads,
     developerMode: typeof value.developerMode === "boolean" ? value.developerMode : false,
     showHiddenFiles: typeof value.showHiddenFiles === "boolean" ? value.showHiddenFiles : false,
+    iosRelayConfig,
     ...(providerState ? { providerState } : {}),
   };
 }
@@ -390,7 +405,7 @@ export class PersistenceService {
 
       const sanitizedState = await sanitizePersistedState(state);
       const tempPath = `${this.stateFilePath}.tmp`;
-      const payload = JSON.stringify({ ...sanitizedState, version: sanitizedState.version || 2 }, null, 2);
+      const payload = JSON.stringify({ ...sanitizedState, version: sanitizedState.version || 3 }, null, 2);
 
       await fs.writeFile(tempPath, payload, { encoding: "utf8", mode: PRIVATE_FILE_MODE });
       await fs.rename(tempPath, this.stateFilePath);

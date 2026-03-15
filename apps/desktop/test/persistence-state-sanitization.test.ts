@@ -329,11 +329,16 @@ describe("desktop persistence state validation", () => {
     );
 
     const loaded = await persistence.loadState();
-    expect(loaded.version).toBe(2);
+    expect(loaded.version).toBe(3);
     expect(loaded.workspaces).toEqual([]);
     expect(loaded.threads).toEqual([]);
     expect(loaded.developerMode).toBe(false);
     expect(loaded.showHiddenFiles).toBe(false);
+    expect(loaded.iosRelayConfig).toEqual({
+      rememberedPeerId: null,
+      rememberedPeerName: null,
+      deviceName: null,
+    });
     expect(loaded.providerState).toBeUndefined();
   });
 
@@ -345,11 +350,16 @@ describe("desktop persistence state validation", () => {
 
     const loaded = await persistence.loadState();
     expect(loaded).toEqual({
-      version: 2,
+      version: 3,
       workspaces: [],
       threads: [],
       developerMode: false,
       showHiddenFiles: false,
+      iosRelayConfig: {
+        rememberedPeerId: null,
+        rememberedPeerName: null,
+        deviceName: null,
+      },
     });
   });
 

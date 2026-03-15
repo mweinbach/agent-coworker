@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type {
+  ConnectIosRelayPeerInput,
   ConfirmActionInput,
   ContextMenuItem,
   CopyPathInput,
@@ -17,10 +18,12 @@ import type {
   RevealPathInput,
   SetWindowAppearanceInput,
   ShowContextMenuInput,
+  PublishWorkspaceRelayInput,
   StartWorkspaceServerInput,
   StopWorkspaceServerInput,
   SystemAppearance,
   TranscriptBatchInput,
+  UnpublishWorkspaceRelayInput,
   UpdaterProgress,
   UpdaterReleaseInfo,
   UpdaterState,
@@ -28,6 +31,14 @@ import type {
 } from "./desktopApi";
 import type { PersistedState } from "../app/types";
 import { workspaceProviderOptionsSchema } from "../app/openaiCompatibleProviderOptions";
+import {
+  createDefaultIosRelayConfig,
+  createDefaultIosRelayState,
+  type IosRelayConfig,
+  type IosRelayDiscoveredPeer,
+  type IosRelayPeer,
+  type IosRelayState,
+} from "../app/iosRelayTypes";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const invalidPathSegmentPattern = /[/\\\0]/;
@@ -40,6 +51,7 @@ const optionalStringSchema = z.preprocess(
 );
 const safeIdSchema = nonEmptyStringSchema.regex(SAFE_ID, "contains invalid characters");
 const directionSchema = z.enum(["server", "client"]);
+const nullableStringSchema = z.preprocess((value) => (typeof value === "string" ? value : null), z.string().nullable());
 
 const contextMenuItemSchema: z.ZodType<ContextMenuItem> = z.object({
   id: safeIdSchema,
@@ -63,6 +75,20 @@ export const startWorkspaceServerInputSchema: z.ZodType<StartWorkspaceServerInpu
 });
 
 export const stopWorkspaceServerInputSchema: z.ZodType<StopWorkspaceServerInput> = z.object({
+  workspaceId: safeIdSchema,
+});
+
+export const connectIosRelayPeerInputSchema: z.ZodType<ConnectIosRelayPeerInput> = z.object({
+  peerId: nonEmptyStringSchema,
+});
+
+export const publishWorkspaceRelayInputSchema: z.ZodType<PublishWorkspaceRelayInput> = z.object({
+  workspaceId: safeIdSchema,
+  workspaceName: nonEmptyStringSchema,
+  serverUrl: nonEmptyStringSchema,
+});
+
+export const unpublishWorkspaceRelayInputSchema: z.ZodType<UnpublishWorkspaceRelayInput> = z.object({
   workspaceId: safeIdSchema,
 });
 
@@ -133,6 +159,7 @@ const persistedWorkspaceSchema = z.object({
   }).passthrough().optional(),
   defaultEnableMcp: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
+  iosRelayEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough();
 
@@ -151,13 +178,51 @@ const persistedThreadSchema = z.object({
   ),
 }).passthrough();
 
+const iosRelayPeerSchema: z.ZodType<IosRelayPeer> = z.object({
+  id: nonEmptyStringSchema,
+  name: nonEmptyStringSchema,
+  state: z.enum(["disconnected", "connecting", "connected"]),
+});
+
+const iosRelayDiscoveredPeerSchema: z.ZodType<IosRelayDiscoveredPeer> = z.object({
+  id: nonEmptyStringSchema,
+  name: nonEmptyStringSchema,
+  deviceId: nonEmptyStringSchema,
+});
+
+export const iosRelayStateSchema: z.ZodType<IosRelayState> = z.object({
+  supported: z.preprocess((value) => (typeof value === "boolean" ? value : createDefaultIosRelayState().supported), z.boolean()),
+  advertising: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+  peer: iosRelayPeerSchema.nullable(),
+  localDeviceId: nullableStringSchema,
+  localDeviceName: nullableStringSchema,
+  discoveredPeers: z.preprocess((value) => (Array.isArray(value) ? value : []), z.array(iosRelayDiscoveredPeerSchema)),
+  publishedWorkspaceId: nullableStringSchema,
+  publishedWorkspaceName: nullableStringSchema,
+  openChannelCount: z.preprocess(
+    (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0),
+    z.number().int().nonnegative(),
+  ),
+  lastError: nullableStringSchema,
+});
+
+export const iosRelayConfigSchema: z.ZodType<IosRelayConfig> = z.object({
+  rememberedPeerId: nullableStringSchema,
+  rememberedPeerName: nullableStringSchema,
+  deviceName: nullableStringSchema,
+}).transform((config) => ({
+  ...createDefaultIosRelayConfig(),
+  ...config,
+}));
+
 export const persistedStateInputSchema: z.ZodType<PersistedState> = z.object({
   workspaces: z.array(persistedWorkspaceSchema),
   threads: z.array(persistedThreadSchema),
   developerMode: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   showHiddenFiles: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+  iosRelayConfig: iosRelayConfigSchema.optional(),
   version: z.preprocess(
-    (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 2),
+    (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 3),
     z.number().int().nonnegative(),
   ),
 }).passthrough() as z.ZodType<PersistedState>;

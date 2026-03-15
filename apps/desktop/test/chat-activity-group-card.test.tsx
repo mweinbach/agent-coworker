@@ -50,12 +50,27 @@ mock.module("../src/lib/desktopCommands", () => ({
   showNotification: async () => true,
   getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
   setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  getIosRelayState: async () => ({
+    supported: false,
+    advertising: false,
+    peer: null,
+    publishedWorkspaceId: null,
+    openChannelCount: 0,
+    lastError: "iOS Relay is only available on macOS desktop builds.",
+  }),
+  startIosRelayAdvertising: async () => {},
+  stopIosRelayAdvertising: async () => {},
+  connectIosRelayPeer: async () => {},
+  disconnectIosRelayPeer: async () => {},
+  publishWorkspaceRelay: async () => {},
+  unpublishWorkspaceRelay: async () => {},
   getUpdateState: async () => MOCK_UPDATE_STATE,
   checkForUpdates: async () => {},
   quitAndInstallUpdate: async () => {},
   onSystemAppearanceChanged: () => () => {},
   onMenuCommand: () => () => {},
   onUpdateStateChanged: () => () => {},
+  onIosRelayStateChanged: () => () => {},
 }));
 
 mock.module("../src/lib/agentSocket", () => ({

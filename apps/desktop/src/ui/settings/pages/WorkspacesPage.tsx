@@ -21,6 +21,7 @@ import {
   type WorkspaceRecord,
   type WorkspaceUserProfile,
 } from "../../../app/types";
+import type { IosRelayConfig, IosRelayState } from "../../../app/iosRelayTypes";
 import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
@@ -366,15 +367,247 @@ export function WorkspaceUserProfileCard({
   );
 }
 
+type IosRelayCardProps = {
+  workspace: Pick<WorkspaceRecord, "id" | "name" | "iosRelayEnabled">;
+  relayState: IosRelayState;
+  relayConfig: IosRelayConfig;
+  updateWorkspaceDefaults: (
+    workspaceId: string,
+    patch: { iosRelayEnabled?: boolean },
+  ) => Promise<unknown> | void;
+  updateIosRelayConfig: (patch: Partial<IosRelayConfig>) => Promise<void>;
+  disconnectIosRelayPeer: () => Promise<void>;
+};
+
+function relayBadgeVariant(relayState: IosRelayState): "secondary" | "destructive" | "outline" {
+  if (relayState.lastError) return "destructive";
+  if (relayState.peer?.state === "connected") return "secondary";
+  return "outline";
+}
+
+function relayBadgeLabel(relayState: IosRelayState): string {
+  if (!relayState.supported) return "Unsupported";
+  if (relayState.lastError) return "Error";
+  if (relayState.peer?.state === "connected") return "Connected";
+  if (relayState.peer?.state === "connecting") return "Connecting";
+  if (relayState.advertising) return "Advertising";
+  return "Idle";
+}
+
+export function IosRelayCard({
+  workspace,
+  relayState,
+  relayConfig,
+  updateWorkspaceDefaults,
+  updateIosRelayConfig,
+  disconnectIosRelayPeer,
+}: IosRelayCardProps) {
+  const isPublished = relayState.publishedWorkspaceId === workspace.id;
+  const deviceName = relayConfig.deviceName ?? "";
+  const localDeviceId = relayState.localDeviceId ?? "";
+  const localDeviceName = (relayState.localDeviceName ?? deviceName) || "Cowork Mac";
+  const publishedWorkspaceName = relayState.publishedWorkspaceName ?? (isPublished ? workspace.name : null);
+  const isRelayReady = relayState.supported && workspace.iosRelayEnabled && relayState.advertising && isPublished;
+
+  return (
+    <Card className="border-border/80 bg-card/85">
+      <CardHeader>
+        <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+          <div className="space-y-2">
+            <CardTitle>iOS Relay</CardTitle>
+            <CardDescription>
+              Publish this workspace server to one paired iOS client over the native Loom helper.
+            </CardDescription>
+          </div>
+          <Badge variant={relayBadgeVariant(relayState)}>{relayBadgeLabel(relayState)}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="rounded-xl border border-border/70 bg-muted/35 p-4">
+          <div className="text-sm font-medium text-foreground">Pairing flow</div>
+          <div className="mt-2 grid gap-3 text-sm text-muted-foreground md:grid-cols-3">
+            <div>
+              <div className="font-medium text-foreground">1. Enable this workspace</div>
+              <div>Turning on iOS Relay publishes this workspace and makes this Mac discoverable automatically.</div>
+            </div>
+            <div>
+              <div className="font-medium text-foreground">2. Pair from the iPhone</div>
+              <div>Open the iPhone app's Pair Desktop screen and select this Mac. No IDs need to be copied.</div>
+            </div>
+            <div>
+              <div className="font-medium text-foreground">3. Approve on the Mac</div>
+              <div>Accept the pairing prompt on this Mac and the iPhone reconnects into the published workspace.</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+          <div className="space-y-2">
+            <div className="rounded-xl border border-border/70 p-4">
+              <div className="text-sm font-medium text-foreground">This Mac</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                The iPhone pairing screen discovers this identity over Loom while relay is enabled for the workspace.
+              </div>
+              <div className="mt-4 space-y-3">
+                <div className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Advertised name</div>
+                  <Input
+                    aria-label="iOS relay device name"
+                    autoComplete="off"
+                    placeholder="Cowork Mac"
+                    value={deviceName}
+                    onChange={(event) => {
+                      void updateIosRelayConfig({
+                        deviceName: event.target.value.trim() || null,
+                      });
+                    }}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Relay status</div>
+                  <Input
+                    readOnly
+                    value={isRelayReady ? "Discoverable and published" : workspace.iosRelayEnabled ? "Preparing relay..." : "Disabled"}
+                    aria-label="Current mac relay status"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Active device name</div>
+                  <Input readOnly value={localDeviceName} aria-label="Current mac relay name" />
+                </div>
+                <div className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">Mac relay ID</div>
+                  <Input readOnly value={localDeviceId} aria-label="Current mac relay id" placeholder="Available after the helper reports state" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="rounded-xl border border-border/70 p-4">
+              <div className="text-sm font-medium text-foreground">What the iPhone sees</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                The iPhone uses discovery metadata from this Mac instead of a pasted workspace ID.
+              </div>
+              <div className="mt-4 grid gap-3 text-sm md:grid-cols-2">
+                <div className="rounded-lg border border-border/70 px-3 py-3">
+                  <div className="font-medium text-foreground">Published workspace</div>
+                  <div className="mt-1 text-muted-foreground">
+                    {isPublished ? publishedWorkspaceName ?? workspace.name : "Waiting for workspace server"}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border/70 px-3 py-3">
+                  <div className="font-medium text-foreground">Current iPhone</div>
+                  <div className="mt-1 text-muted-foreground">
+                    {relayState.peer ? `${relayState.peer.name} (${relayState.peer.state})` : "No paired iPhone yet"}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border/70 px-3 py-3">
+                  <div className="font-medium text-foreground">Approval</div>
+                  <div className="mt-1 text-muted-foreground">
+                    New iPhone pair attempts prompt on this Mac automatically.
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border/70 px-3 py-3">
+                  <div className="font-medium text-foreground">Open relay channels</div>
+                  <div className="mt-1 text-muted-foreground">{relayState.openChannelCount}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 rounded-xl border border-border/70 p-4 text-sm md:grid-cols-2">
+          <div>
+            <div className="font-medium text-foreground">Workspace ID for iOS</div>
+            <div className="break-all text-muted-foreground">
+              {isPublished ? workspace.id : "Published automatically once the workspace server is ready"}
+            </div>
+          </div>
+          <div>
+            <div className="font-medium text-foreground">Published workspace</div>
+            <div className="text-muted-foreground">
+              {isPublished ? publishedWorkspaceName ?? workspace.name : "Not currently published"}
+            </div>
+          </div>
+          <div>
+            <div className="font-medium text-foreground">Peer</div>
+            <div className="text-muted-foreground">
+              {relayState.peer ? `${relayState.peer.name} (${relayState.peer.state})` : "No active peer"}
+            </div>
+          </div>
+          <div>
+            <div className="font-medium text-foreground">Support</div>
+            <div className="text-muted-foreground">{relayState.supported ? "macOS helper available" : "Unavailable on this platform"}</div>
+          </div>
+        </div>
+
+        {relayState.lastError ? (
+          <div className="rounded-xl border border-rose-300/60 bg-rose-50/80 px-4 py-3 text-sm text-rose-700">
+            {relayState.lastError}
+          </div>
+        ) : null}
+
+        <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+          <div>
+            <div className="text-sm font-medium text-foreground">Publish this workspace to iOS</div>
+            <div className="text-xs text-muted-foreground">
+              When enabled, the paired iOS client gets normal Cowork client access to this workspace server.
+            </div>
+          </div>
+          <Checkbox
+            checked={workspace.iosRelayEnabled}
+            aria-label="Enable iOS relay for workspace"
+            disabled={!relayState.supported}
+            onCheckedChange={async (checked) => {
+              const next = toBoolean(checked);
+              if (next) {
+                const confirmed = await confirmAction({
+                  title: "Enable iOS Relay",
+                  message: "Allow a paired iOS client to connect to this workspace server?",
+                  detail: "The iOS client will have normal Cowork client powers against this workspace while relay is enabled.",
+                  confirmLabel: "Enable relay",
+                  cancelLabel: "Cancel",
+                  kind: "warning",
+                  defaultAction: "cancel",
+                });
+                if (!confirmed) return;
+              }
+              await updateWorkspaceDefaults(workspace.id, { iosRelayEnabled: next });
+            }}
+          />
+        </div>
+
+        {relayState.peer ? (
+          <div className="flex flex-wrap gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!relayState.supported}
+              onClick={() => void disconnectIosRelayPeer()}
+            >
+              Disconnect iPhone
+            </Button>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function WorkspacesPage() {
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const providerStatusByName = useAppStore((s) => s.providerStatusByName);
+  const iosRelayState = useAppStore((s) => s.iosRelayState);
+  const iosRelayConfig = useAppStore((s) => s.iosRelayConfig);
 
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
+  const updateIosRelayConfig = useAppStore((s) => s.updateIosRelayConfig);
+  const disconnectIosRelayPeer = useAppStore((s) => s.disconnectIosRelayPeer);
   const restartWorkspaceServer = useAppStore((s) => s.restartWorkspaceServer);
 
   const ws = useMemo(
@@ -536,6 +769,15 @@ export function WorkspacesPage() {
                 </div>
               </CardContent>
             </Card>
+
+            <IosRelayCard
+              workspace={ws}
+              relayState={iosRelayState}
+              relayConfig={iosRelayConfig}
+              updateWorkspaceDefaults={updateWorkspaceDefaults}
+              updateIosRelayConfig={updateIosRelayConfig}
+              disconnectIosRelayPeer={disconnectIosRelayPeer}
+            />
           </div>
 
           <div className={cn("space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300", activeTab !== "models" && "hidden")}>

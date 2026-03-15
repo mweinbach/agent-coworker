@@ -6,6 +6,8 @@ dist/
 coverage/
 .nyc_output/
 *.tsbuildinfo
+.build/
+.swiftpm/
 
 # Frontend tooling caches
 **/.vite/
@@ -34,3 +36,4 @@ uploads/
 *.swp
 *~
 __pycache__/
+/native

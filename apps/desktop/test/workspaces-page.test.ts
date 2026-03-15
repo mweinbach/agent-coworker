@@ -52,12 +52,27 @@ mock.module("../src/lib/desktopCommands", () => ({
   showNotification: async () => true,
   getSystemAppearance: async () => MOCK_SYSTEM_APPEARANCE,
   setWindowAppearance: async () => MOCK_SYSTEM_APPEARANCE,
+  getIosRelayState: async () => ({
+    supported: false,
+    advertising: false,
+    peer: null,
+    publishedWorkspaceId: null,
+    openChannelCount: 0,
+    lastError: "iOS Relay is only available on macOS desktop builds.",
+  }),
+  startIosRelayAdvertising: async () => {},
+  stopIosRelayAdvertising: async () => {},
+  connectIosRelayPeer: async () => {},
+  disconnectIosRelayPeer: async () => {},
+  publishWorkspaceRelay: async () => {},
+  unpublishWorkspaceRelay: async () => {},
   getUpdateState: async () => MOCK_UPDATE_STATE,
   checkForUpdates: async () => {},
   quitAndInstallUpdate: async () => {},
   onSystemAppearanceChanged: () => () => {},
   onMenuCommand: () => () => {},
   onUpdateStateChanged: () => () => {},
+  onIosRelayStateChanged: () => () => {},
 }));
 
 mock.module("../src/lib/agentSocket", () => ({
@@ -116,6 +131,7 @@ function setupJsdom(): JsdomHarness {
 
 const {
   OpenAiCompatibleModelSettingsCard,
+  IosRelayCard,
   WorkspaceUserProfileCard,
 } = await import("../src/ui/settings/pages/WorkspacesPage");
 const App = (await import("../src/App")).default;
@@ -178,6 +194,94 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Role or work context");
     expect(html).toContain("Instructions");
     expect(html).toContain("Background details");
+  });
+
+  test("renders iOS relay controls in the unsupported state", () => {
+    const html = renderToStaticMarkup(
+      createElement(IosRelayCard, {
+        workspace: {
+          id: "ws-1",
+          name: "Workspace 1",
+          iosRelayEnabled: false,
+        },
+        relayState: {
+          supported: false,
+          advertising: false,
+          peer: null,
+          publishedWorkspaceId: null,
+          openChannelCount: 0,
+          lastError: "iOS Relay is only available on macOS desktop builds.",
+        },
+        relayConfig: {
+          rememberedPeerId: null,
+          rememberedPeerName: null,
+          deviceName: null,
+        },
+        updateWorkspaceDefaults: async () => {},
+        updateIosRelayConfig: async () => {},
+        disconnectIosRelayPeer: async () => {},
+      }),
+    );
+
+    expect(html).toContain("iOS Relay");
+    expect(html).toContain("Pairing flow");
+    expect(html).toContain("Pair from the iPhone");
+    expect(html).toContain("Workspace ID for iOS");
+    expect(html).toContain("Unavailable on this platform");
+    expect(html).toContain("Enable this workspace");
+    expect(html).toContain("Enable iOS relay for workspace");
+    expect(html).toContain("Turning on iOS Relay publishes this workspace");
+  });
+
+  test("renders pairing metadata for a supported relay state", () => {
+    const html = renderToStaticMarkup(
+      createElement(IosRelayCard, {
+        workspace: {
+          id: "ws-1",
+          name: "Workspace 1",
+          iosRelayEnabled: true,
+        },
+        relayState: {
+          supported: true,
+          advertising: true,
+          peer: {
+            id: "peer-live",
+            name: "Alex iPhone",
+            state: "connected",
+          },
+          localDeviceId: "mac-device-id",
+          localDeviceName: "Cowork Mac",
+          discoveredPeers: [
+            {
+              id: "peer-discovered",
+              name: "Alex iPhone",
+              deviceId: "ios-device-id",
+            },
+          ],
+          publishedWorkspaceId: "ws-1",
+          publishedWorkspaceName: "Workspace 1",
+          openChannelCount: 2,
+          lastError: null,
+        },
+        relayConfig: {
+          rememberedPeerId: "ios-device-id",
+          rememberedPeerName: "Alex iPhone",
+          deviceName: "Cowork Mac",
+        },
+        updateWorkspaceDefaults: async () => {},
+        updateIosRelayConfig: async () => {},
+        disconnectIosRelayPeer: async () => {},
+      }),
+    );
+
+    expect(html).toContain("This Mac");
+    expect(html).toContain("Mac relay ID");
+    expect(html).toContain("mac-device-id");
+    expect(html).toContain("Alex iPhone");
+    expect(html).toContain("Disconnect iPhone");
+    expect(html).toContain("Discoverable and published");
+    expect(html).toContain("Workspace ID for iOS");
+    expect(html).toContain("ws-1");
   });
 
   test("typing into workspace profile fields does not trigger a render loop", async () => {

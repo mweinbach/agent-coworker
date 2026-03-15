@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { desktopMenuCommandSchema, persistedStateInputSchema, updaterStateSchema } from "../src/lib/desktopSchemas";
+import { desktopMenuCommandSchema, iosRelayStateSchema, persistedStateInputSchema, updaterStateSchema } from "../src/lib/desktopSchemas";
 
 const TS = "2024-01-01T00:00:00.000Z";
 
@@ -22,10 +22,12 @@ describe("desktop persisted-state schema defaults", () => {
 
     expect(parsed.workspaces[0]?.defaultEnableMcp).toBe(true);
     expect(parsed.workspaces[0]?.defaultBackupsEnabled).toBe(true);
+    expect(parsed.workspaces[0]?.iosRelayEnabled).toBe(false);
     expect(parsed.workspaces[0]?.defaultToolOutputOverflowChars).toBeUndefined();
     expect(parsed.workspaces[0]?.yolo).toBe(false);
     expect(parsed.developerMode).toBe(false);
     expect(parsed.showHiddenFiles).toBe(false);
+    expect(parsed.iosRelayConfig).toBeUndefined();
   });
 
   test("keeps explicit workspace booleans", () => {
@@ -40,6 +42,7 @@ describe("desktop persisted-state schema defaults", () => {
           lastOpenedAt: TS,
           defaultEnableMcp: false,
           defaultBackupsEnabled: false,
+          iosRelayEnabled: true,
           defaultToolOutputOverflowChars: null,
           userName: "Alex",
           userProfile: {
@@ -53,10 +56,16 @@ describe("desktop persisted-state schema defaults", () => {
       threads: [],
       developerMode: true,
       showHiddenFiles: true,
+      iosRelayConfig: {
+        rememberedPeerId: "peer-1",
+        rememberedPeerName: "My iPhone",
+        deviceName: "Cowork Mac",
+      },
     });
 
     expect(parsed.workspaces[0]?.defaultEnableMcp).toBe(false);
     expect(parsed.workspaces[0]?.defaultBackupsEnabled).toBe(false);
+    expect(parsed.workspaces[0]?.iosRelayEnabled).toBe(true);
     expect(parsed.workspaces[0]?.defaultToolOutputOverflowChars).toBeNull();
     expect(parsed.workspaces[0]?.userName).toBe("Alex");
     expect(parsed.workspaces[0]?.userProfile).toEqual({
@@ -67,6 +76,11 @@ describe("desktop persisted-state schema defaults", () => {
     expect(parsed.workspaces[0]?.yolo).toBe(true);
     expect(parsed.developerMode).toBe(true);
     expect(parsed.showHiddenFiles).toBe(true);
+    expect(parsed.iosRelayConfig).toEqual({
+      rememberedPeerId: "peer-1",
+      rememberedPeerName: "My iPhone",
+      deviceName: "Cowork Mac",
+    });
   });
 
   test("accepts updater state payloads", () => {
@@ -101,5 +115,21 @@ describe("desktop persisted-state schema defaults", () => {
 
   test("accepts openUpdates desktop menu command", () => {
     expect(desktopMenuCommandSchema.parse("openUpdates")).toBe("openUpdates");
+  });
+
+  test("defaults new iOS relay pairing metadata when omitted", () => {
+    const parsed = iosRelayStateSchema.parse({
+      supported: true,
+      advertising: false,
+      peer: null,
+      publishedWorkspaceId: null,
+      openChannelCount: 0,
+      lastError: null,
+    });
+
+    expect(parsed.localDeviceId).toBeNull();
+    expect(parsed.localDeviceName).toBeNull();
+    expect(parsed.discoveredPeers).toEqual([]);
+    expect(parsed.publishedWorkspaceName).toBeNull();
   });
 });

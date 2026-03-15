@@ -9,6 +9,7 @@ import type {
   TodoItem,
 } from "../lib/wsProtocol";
 import type { WorkspaceProviderOptions } from "./openaiCompatibleProviderOptions";
+import type { IosRelayConfig } from "./iosRelayTypes";
 
 export type WorkspaceUserProfile = {
   instructions: string;
@@ -60,6 +61,7 @@ export type WorkspaceRecord = {
   userProfile?: WorkspaceUserProfile;
   defaultEnableMcp: boolean;
   defaultBackupsEnabled: boolean;
+  iosRelayEnabled: boolean;
   yolo: boolean;
 };
 
@@ -97,6 +99,7 @@ export type PersistedState = {
   threads: ThreadRecord[];
   developerMode?: boolean;
   showHiddenFiles?: boolean;
+  iosRelayConfig?: IosRelayConfig;
   providerState?: PersistedProviderState;
 };
 

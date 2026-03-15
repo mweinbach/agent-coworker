@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { app, BrowserWindow, Menu, Notification, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, Notification, shell, type MessageBoxOptions } from "electron";
 
 import { DESKTOP_EVENT_CHANNELS, type DesktopMenuCommand, type UpdaterState } from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
@@ -12,6 +12,7 @@ import {
   registerSystemAppearanceListener,
 } from "./services/appearance";
 import { installDesktopApplicationMenu } from "./services/menu";
+import { LoomBridgeManager } from "./services/loomBridgeManager";
 import { PersistenceService } from "./services/persistence";
 import { resolveDesktopRendererUrl } from "./services/rendererUrl";
 import { ServerManager } from "./services/serverManager";
@@ -25,6 +26,41 @@ const PACKAGED_RENDERER_DIR = path.resolve(path.join(__dirname, "../renderer"));
 
 const serverManager = new ServerManager();
 const persistence = new PersistenceService();
+let relayApprovalPromptPeerId: string | null = null;
+const loomBridgeManager = new LoomBridgeManager({
+  onStateChange: (state) => {
+    emitDesktopEvent(DESKTOP_EVENT_CHANNELS.iosRelayStateChanged, state);
+  },
+  onApprovalRequested: async ({ peerId, peerName }) => {
+    if (relayApprovalPromptPeerId === peerId) {
+      return;
+    }
+    relayApprovalPromptPeerId = peerId;
+    try {
+      const targetWindow = BrowserWindow.getFocusedWindow() ?? mainWindow;
+      const dialogOptions: MessageBoxOptions = {
+        type: "question",
+        buttons: ["Pair iPhone", "Decline"],
+        defaultId: 0,
+        cancelId: 1,
+        title: "Approve iPhone Pairing",
+        message: `${peerName} wants to pair with this Mac.`,
+        detail: "Approve the nearby iPhone so it can connect to the published Cowork workspace over Loom.",
+        noLink: true,
+      };
+      const response = targetWindow
+        ? await dialog.showMessageBox(targetWindow, dialogOptions)
+        : await dialog.showMessageBox(dialogOptions);
+      if (response.response === 0) {
+        await loomBridgeManager.approvePeer(peerId);
+      } else {
+        await loomBridgeManager.rejectPeer(peerId);
+      }
+    } finally {
+      relayApprovalPromptPeerId = null;
+    }
+  },
+});
 const updater = new DesktopUpdaterService({
   currentVersion: app.getVersion(),
   isPackaged: app.isPackaged,
@@ -259,6 +295,7 @@ if (!gotSingleInstanceLock) {
     unregisterIpc = registerDesktopIpc({
       persistence,
       serverManager,
+      loomBridgeManager,
       updater,
     });
     unregisterAppearanceListener = registerSystemAppearanceListener((appearance) => {
@@ -274,6 +311,9 @@ if (!gotSingleInstanceLock) {
     });
 
     updater.start();
+    void loomBridgeManager.getState().catch((error) => {
+      console.warn(`[desktop][ios-relay] Failed to warm relay helper: ${String(error)}`);
+    });
     void createWindow();
 
     app.on("activate", () => {
@@ -290,9 +330,10 @@ if (!gotSingleInstanceLock) {
       unregisterAppearanceListener: () => unregisterAppearanceListener(),
       stopUpdater: () => updater.dispose(),
       stopAllServers: () => serverManager.stopAll(),
+      stopLoomBridge: () => loomBridgeManager.dispose(),
       quit: () => app.quit(),
       onError: (error) => {
-        console.error(`[desktop] Failed to stop workspace servers during shutdown: ${String(error)}`);
+        console.error(`[desktop] Failed to stop workspace services during shutdown: ${String(error)}`);
       },
     })
   );

@@ -7,6 +7,7 @@ type ShutdownDeps = {
   unregisterAppearanceListener?: () => void;
   stopUpdater?: () => void;
   stopAllServers: () => Promise<void>;
+  stopLoomBridge?: () => Promise<void>;
   quit: () => void;
   onError?: (error: unknown) => void;
 };
@@ -29,6 +30,7 @@ export function createBeforeQuitHandler(deps: ShutdownDeps): (event: QuitEvent) 
 
     void deps
       .stopAllServers()
+      .then(() => deps.stopLoomBridge?.())
       .catch((error) => {
         deps.onError?.(error);
       })

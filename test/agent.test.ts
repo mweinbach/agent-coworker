@@ -703,6 +703,29 @@ describe("runTurn", () => {
     expect(callArg.tools).toHaveProperty("mcp__s__doThing");
   });
 
+  test("read-only child roles only receive read-only MCP tools", async () => {
+    mockCreateTools.mockReturnValue({
+      read: { type: "builtin-read" },
+      write: { type: "builtin-write" },
+    });
+    mockLoadMCPServers.mockResolvedValue([{ name: "s", transport: { type: "stdio", command: "x", args: [] } }]);
+    mockLoadMCPTools.mockResolvedValue({
+      tools: {
+        "mcp__s__search": { type: "mcp-read", annotations: { readOnlyHint: true } },
+        "mcp__s__mutate": { type: "mcp-write", annotations: { destructiveHint: true } },
+      },
+      errors: [],
+    });
+
+    await runTurn(makeParams({ enableMcp: true, agentRole: "research" }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.tools).toEqual({
+      read: { type: "builtin-read" },
+      "mcp__s__search": { type: "mcp-read", annotations: { readOnlyHint: true } },
+    });
+  });
+
   test("MCP tool name collisions are remapped to a safe alias", async () => {
     const log = mock(() => {});
     mockCreateTools.mockReturnValue({ bash: { type: "builtin-bash" } });

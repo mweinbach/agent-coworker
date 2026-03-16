@@ -16,6 +16,9 @@ server.registerTool(
     inputSchema: {
       text: z.string(),
     },
+    annotations: {
+      readOnlyHint: true,
+    },
   },
   async ({ text }) => ({
     content: [

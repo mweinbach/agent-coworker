@@ -12,6 +12,8 @@ import type { AgentConfig, ModelMessage, TodoItem } from "./types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTracker";
 import { loadMCPServers, loadMCPTools } from "./mcp";
 import { createTools } from "./tools";
+import { getAgentRoleDefinition } from "./server/agents/roles";
+import { filterToolsForRole } from "./server/agents/toolPolicy";
 
 const MCP_NAMESPACING_TOKEN = "`mcp__{serverName}__{toolName}`";
 const MAX_STREAM_SETTLE_TICKS = 64;
@@ -252,8 +254,11 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       }
     }
 
-    const tools = mergeToolSets(builtInTools, mcpTools, log);
-    const mcpToolNames = Object.keys(mcpTools).sort();
+    const mergedTools = mergeToolSets(builtInTools, mcpTools, log);
+    const tools = params.agentRole
+      ? filterToolsForRole(mergedTools, getAgentRoleDefinition(params.agentRole))
+      : mergedTools;
+    const mcpToolNames = Object.keys(tools).filter((name) => name.startsWith("mcp__")).sort();
     const turnSystem = buildTurnSystemPrompt(system, mcpToolNames);
     const turnProviderOptions = config.providerOptions;
     const googlePrepareStep =

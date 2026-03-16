@@ -7,6 +7,8 @@ import path from "node:path";
 import { loadConfig } from "../src/config";
 import { runTurnWithDeps } from "../src/agent";
 import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
+import { getProviderCatalog } from "../src/providers/connectionCatalog";
+import { getAiCoworkerPaths } from "../src/connect";
 import { loadSystemPromptWithSkills } from "../src/prompt";
 import { StatusBus } from "../src/server/agents/StatusBus";
 import { DelegateRunner } from "../src/server/agents/DelegateRunner";
@@ -201,6 +203,7 @@ type RawLoopAgentControlState = {
   role: AgentRole;
   requestedModel?: string;
   requestedReasoningEffort?: AgentReasoningEffort;
+  routedConfig: AgentConfig;
   seedMessages?: ModelMessage[];
   abortController: AbortController | null;
   runPromise: Promise<void> | null;
@@ -211,6 +214,7 @@ type RawLoopAgentControlDeps = {
   createDelegateRunner?: () => Pick<DelegateRunner, "run">;
   makeId?: () => string;
   now?: () => string;
+  getConnectedProviders?: () => Promise<readonly ProviderName[]>;
 };
 
 function isoSafeNow() {
@@ -318,6 +322,7 @@ export function createRawLoopAgentControl(
   const delegateRunner = deps.createDelegateRunner?.() ?? new DelegateRunner();
   const makeId = deps.makeId ?? (() => crypto.randomUUID());
   const now = deps.now ?? (() => isoSafeNow());
+  const getConnectedProviders = deps.getConnectedProviders ?? (async () => [opts.config.provider]);
   const states = new Map<string, RawLoopAgentControlState>();
 
   const publish = (
@@ -353,7 +358,7 @@ export function createRawLoopAgentControl(
     });
 
     const run = delegateRunner.run({
-      config: opts.config,
+      config: state.routedConfig,
       role: state.role,
       message,
       spawnDepth: opts.spawnDepth,
@@ -397,13 +402,16 @@ export function createRawLoopAgentControl(
   return {
     spawn: async ({ message, role, model, reasoningEffort, forkContext }) => {
       const effectiveRole = role ?? "default";
+      const connectedProviders = await getConnectedProviders();
       const routed = routeAgentConfig(opts.config, {
         role: getAgentRoleDefinition(effectiveRole),
         ...(model ? { model } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
+        connectedProviders,
       });
       const timestamp = now();
       const state: RawLoopAgentControlState = {
+        routedConfig: routed.config,
         summary: {
           agentId: makeId(),
           parentSessionId: "raw-loop",
@@ -414,7 +422,7 @@ export function createRawLoopAgentControl(
           effectiveModel: routed.effectiveModel,
           ...(routed.requestedReasoningEffort ? { requestedReasoningEffort: routed.requestedReasoningEffort } : {}),
           ...(routed.effectiveReasoningEffort ? { effectiveReasoningEffort: routed.effectiveReasoningEffort } : {}),
-          provider: opts.config.provider,
+          provider: routed.config.provider,
           title: `Raw ${effectiveRole} agent`,
           createdAt: timestamp,
           updatedAt: timestamp,
@@ -1571,6 +1579,10 @@ async function main() {
     }
   }
 
+  const connectedProviders = (await getProviderCatalog({
+    paths: getAiCoworkerPaths(),
+  })).connected;
+
   for (let i = 0; i < runs.length; i++) {
     const runIndex = i + 1;
     const run = runs[i]!;
@@ -1724,6 +1736,8 @@ async function main() {
         approveCommand,
         availableSkills: discoveredSkills,
         parentMessages: inputMessages,
+      }, {
+        getConnectedProviders: async () => connectedProviders,
       });
 
       try {

@@ -135,6 +135,7 @@ async function createRuntimeMcpClient(opts: {
         discovered[entry.name] = {
           description: entry.description ?? `MCP tool ${entry.name}`,
           inputSchema: entry.inputSchema ?? { type: "object", properties: {}, additionalProperties: true },
+          ...(entry.annotations ? { annotations: entry.annotations } : {}),
           execute: async (input: unknown) =>
             await client.callTool({
               name: entry.name,

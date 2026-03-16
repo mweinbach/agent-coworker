@@ -32,6 +32,100 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 }
 
 describe("raw loop child-agent control", () => {
+  test("uses connected providers for cross-provider child routing", async () => {
+    const run = mock(async () => "SUBAGENT_OK");
+    const control = createRawLoopAgentControl(
+      {
+        config: makeConfig({
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          preferredChildModel: "gpt-5.4",
+          childModelRoutingMode: "cross-provider-allowlist",
+          preferredChildModelRef: "codex-cli:gpt-5.4",
+          allowedChildModelRefs: ["opencode-zen:glm-5"],
+        }),
+        log: () => {},
+        askUser: async () => "",
+        approveCommand: async () => true,
+      },
+      {
+        createDelegateRunner: () => ({ run }),
+        getConnectedProviders: async () => ["codex-cli", "opencode-zen"],
+      },
+    );
+
+    const spawned = await control.spawn({
+      role: "worker",
+      model: "opencode-zen:glm-5",
+      message: "Use the child model",
+    });
+    await control.wait({
+      agentIds: [spawned.agentId],
+      timeoutMs: 1000,
+    });
+
+    expect(spawned).toEqual(expect.objectContaining({
+      provider: "opencode-zen",
+      effectiveModel: "glm-5",
+    }));
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        role: "worker",
+        message: "Use the child model",
+        config: expect.objectContaining({
+          provider: "opencode-zen",
+          model: "glm-5",
+        }),
+      }),
+    );
+  });
+
+  test("falls back when requested cross-provider child ref is not connected", async () => {
+    const run = mock(async () => "SUBAGENT_OK");
+    const control = createRawLoopAgentControl(
+      {
+        config: makeConfig({
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          preferredChildModel: "gpt-5.4",
+          childModelRoutingMode: "cross-provider-allowlist",
+          preferredChildModelRef: "codex-cli:gpt-5.4",
+          allowedChildModelRefs: ["opencode-zen:glm-5"],
+        }),
+        log: () => {},
+        askUser: async () => "",
+        approveCommand: async () => true,
+      },
+      {
+        createDelegateRunner: () => ({ run }),
+        getConnectedProviders: async () => ["codex-cli"],
+      },
+    );
+
+    const spawned = await control.spawn({
+      role: "worker",
+      model: "opencode-zen:glm-5",
+      message: "Fallback to parent provider",
+    });
+    await control.wait({
+      agentIds: [spawned.agentId],
+      timeoutMs: 1000,
+    });
+
+    expect(spawned).toEqual(expect.objectContaining({
+      provider: "codex-cli",
+      effectiveModel: "gpt-5.4",
+    }));
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          provider: "codex-cli",
+          model: "gpt-5.4",
+        }),
+      }),
+    );
+  });
+
   test("supports spawnAgent handles plus waitForAgent completion", async () => {
     const run = mock(async () => "SUBAGENT_OK");
     const control = createRawLoopAgentControl(

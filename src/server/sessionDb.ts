@@ -50,6 +50,7 @@ export type PersistedSessionRecord = {
   workingDirectory: string;
   outputDirectory?: string;
   uploadsDirectory?: string;
+  providerOptions?: AgentConfig["providerOptions"];
   enableMcp: boolean;
   backupsEnabledOverride: boolean | null;
   createdAt: string;
@@ -94,6 +95,7 @@ export type PersistedSessionMutation = {
     workingDirectory: string;
     outputDirectory?: string;
     uploadsDirectory?: string;
+    providerOptions?: AgentConfig["providerOptions"];
     enableMcp: boolean;
     backupsEnabledOverride: boolean | null;
     createdAt: string;

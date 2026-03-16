@@ -47,12 +47,13 @@ export function availableProvidersFromCatalog(
       ? PROVIDER_NAMES
       : catalog.map((entry) => entry.id)
   ).filter((provider) => !UI_DISABLED_PROVIDERS.has(provider));
-  if (connectedSet.size === 0) return [...catalogProviders];
-  const providers = catalogProviders.filter((provider) => connectedSet.has(provider));
+  const providers =
+    connectedSet.size === 0
+      ? [...catalogProviders]
+      : catalogProviders.filter((provider) => connectedSet.has(provider));
   if (
     preserveProvider &&
-    !UI_DISABLED_PROVIDERS.has(preserveProvider) &&
-    catalogProviders.includes(preserveProvider) &&
+    PROVIDER_NAMES.includes(preserveProvider) &&
     !providers.includes(preserveProvider)
   ) {
     providers.push(preserveProvider);

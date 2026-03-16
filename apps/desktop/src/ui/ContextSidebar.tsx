@@ -36,8 +36,8 @@ export const ContextSidebar = memo(function ContextSidebar() {
   const threadRuntime = useAppStore((s) => selectedThreadId ? s.threadRuntimeById[selectedThreadId] : null);
   const todos = useAppStore((s) => selectedThreadId ? s.latestTodosByThreadId[selectedThreadId] : null);
   const agents = threadRuntime?.agents ?? [];
-  const scrollSectionCardClassName = "min-h-0 max-h-[30%] overflow-hidden border-border/80 bg-card/80";
-  const scrollSectionContentClassName = "min-h-0 overflow-y-auto overscroll-contain space-y-2 pt-2 px-3 pb-3";
+  const scrollSectionCardClassName = "flex min-h-0 max-h-[30%] flex-col overflow-hidden border-border/80 bg-card/80";
+  const scrollSectionContentClassName = "min-h-0 flex-1 overflow-y-auto overscroll-contain space-y-2 pt-2 px-3 pb-3";
 
   return (
     <aside className="app-context-sidebar flex h-full w-full flex-col gap-3 p-3 overflow-hidden">

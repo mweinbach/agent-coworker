@@ -142,4 +142,29 @@ describe("SessionSnapshotBuilder child execution state", () => {
     expect(erroredBuilder.buildCanonicalSnapshot("2026-03-16T18:01:00.000Z").executionState).toBe("errored");
     expect(closedBuilder.buildCanonicalSnapshot("2026-03-16T18:01:00.000Z").executionState).toBe("closed");
   });
+
+  test("includes providerOptions in persisted snapshots when routed config overrides are present", () => {
+    const providerOptions = {
+      openai: {
+        reasoningEffort: "xhigh",
+        reasoningSummary: "concise",
+      },
+    };
+    const state = makeAgentState({
+      config: makeConfig({ providerOptions }),
+    });
+    const builder = new SessionSnapshotBuilder({
+      sessionId: "child-1",
+      state,
+      harnessContextStore: new HarnessContextStore(),
+      getEnableMcp: () => true,
+      hasPendingAsk: () => false,
+      hasPendingApproval: () => false,
+    });
+
+    const persisted = builder.buildPersistedSnapshotAt("2026-03-16T18:01:00.000Z");
+
+    expect(persisted.version).toBe(7);
+    expect(persisted.config.providerOptions).toEqual(providerOptions);
+  });
 });

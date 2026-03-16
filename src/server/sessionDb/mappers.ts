@@ -38,6 +38,7 @@ const todoItemSchema = z.object({
 }).strict();
 const harnessContextSchema = z.record(z.string(), z.unknown());
 const costTrackerSchema: z.ZodType<SessionUsageSnapshot> = sessionUsageSnapshotSchema;
+const providerOptionsSchema = z.record(z.string(), z.unknown());
 
 const summaryRowSchema = z.object({
   session_id: nonEmptyStringSchema,
@@ -107,6 +108,7 @@ const recordRowSchema = z.object({
   title_model: z.union([nonEmptyStringSchema, z.null()]),
   messages_json: z.string(),
   provider_state_json: z.union([z.string(), z.null()]),
+  provider_options_json: z.union([z.string(), z.null()]),
   todos_json: z.string(),
   harness_context_json: z.union([z.string(), z.null()]),
   cost_tracker_json: z.union([z.string(), z.null()]),
@@ -195,6 +197,9 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
         openAiContinuationStateSchema.nullable(),
         "provider_state_json",
       );
+  const providerOptions = values.provider_options_json === null
+    ? undefined
+    : parseJsonStringWithSchema(values.provider_options_json, providerOptionsSchema, "provider_options_json");
   const todos = parseJsonStringWithSchema(values.todos_json, z.array(todoItemSchema), "todos_json");
   const harnessContext = values.harness_context_json === null
     ? null
@@ -241,6 +246,7 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
     systemPrompt: values.system_prompt,
     messages,
     providerState,
+    providerOptions: providerOptions as PersistedSessionRecord["providerOptions"],
     todos,
     harnessContext: harnessContext as HarnessContextState | null,
     costTracker,

@@ -165,6 +165,7 @@ export class TurnExecutionManager {
     this.updateSessionExecutionState("running");
     const cause: "user_message" | "command" = displayText?.startsWith("/") ? "command" : "user_message";
     let lastStreamError: unknown = null;
+    let lastMessagePreview: string | undefined;
     try {
       this.context.emit({ type: "user_message", sessionId: this.context.id, text: displayText ?? text, clientMessageId });
       this.context.emit({ type: "session_busy", sessionId: this.context.id, busy: true, turnId, cause });
@@ -374,7 +375,10 @@ export class TurnExecutionManager {
       const out =
         (res.text || "").trim() ||
         extractAssistantTextFromResponseMessages(res.responseMessages);
-      if (out) this.context.emit({ type: "assistant_message", sessionId: this.context.id, text: out });
+      if (out) {
+        lastMessagePreview = out;
+        this.context.emit({ type: "assistant_message", sessionId: this.context.id, text: out });
+      }
 
       if (res.usage) {
         this.context.emit({ type: "turn_usage", sessionId: this.context.id, turnId, usage: res.usage });
@@ -443,7 +447,10 @@ export class TurnExecutionManager {
         );
       }
     } finally {
-      this.updateSessionExecutionState(this.settledExecutionState());
+      this.deps.metadataManager.updateSessionInfo({
+        executionState: this.settledExecutionState(),
+        ...(lastMessagePreview ? { lastMessagePreview } : {}),
+      });
       this.context.emit({
         type: "session_busy",
         sessionId: this.context.id,

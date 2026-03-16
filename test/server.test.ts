@@ -200,6 +200,43 @@ function sendAndWaitForEvent(
   });
 }
 
+function sendToExistingSessionAndWaitForEvent(
+  url: string,
+  resumeSessionId: string,
+  buildMsg: (sessionId: string) => object,
+  match: (message: any) => boolean,
+  timeoutMs = 5000,
+): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let sent = false;
+    const ws = new WebSocket(`${url}?resumeSessionId=${resumeSessionId}`);
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("Timed out waiting for matching event"));
+    }, timeoutMs);
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+      if (!sent && msg.type === "server_hello" && msg.sessionId === resumeSessionId) {
+        sent = true;
+        ws.send(JSON.stringify(buildMsg(resumeSessionId)));
+        return;
+      }
+      if (!match(msg)) return;
+
+      clearTimeout(timer);
+      ws.close();
+      resolve(msg);
+    };
+
+    ws.onerror = (e) => {
+      clearTimeout(timer);
+      ws.close();
+      reject(new Error(`WebSocket error: ${e}`));
+    };
+  });
+}
+
 function connectAndWaitForEvent(
   url: string,
   match: (message: any) => boolean,
@@ -896,12 +933,22 @@ describe("WebSocket Lifecycle", () => {
         sessionKind: "agent",
         parentSessionId: created.parentSessionId,
         role: "worker",
+        mode: "collaborative",
+        depth: 1,
+        effectiveModel: "gemini-3-pro-preview",
+        executionState: "completed",
+        lastMessagePreview: "child finished",
       });
       expect(info).toMatchObject({
         sessionId: childId,
         sessionKind: "agent",
         parentSessionId: created.parentSessionId,
         role: "worker",
+        mode: "collaborative",
+        depth: 1,
+        effectiveModel: "gemini-3-pro-preview",
+        executionState: "completed",
+        lastMessagePreview: "child finished",
       });
       expect(
         resumedEvents.some(
@@ -915,6 +962,74 @@ describe("WebSocket Lifecycle", () => {
       expect(resumedEvents.some((msg) => msg.type === "assistant_message" && msg.text === "child finished")).toBe(
         true,
       );
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("agent_resume returns child status instead of reporting resume unavailable", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => ({
+        text: "child finished",
+        responseMessages: [],
+      })) as any,
+    }));
+
+    try {
+      const created = await createPersistentAgent(url, "child task", "worker");
+      const result = await sendToExistingSessionAndWaitForEvent(
+        url,
+        created.parentSessionId,
+        (sessionId) => ({ type: "agent_resume", sessionId, agentId: created.agent.agentId }),
+        (msg) => msg.type === "agent_status" && msg.agent?.agentId === created.agent.agentId,
+        5000,
+      );
+
+      expect(result).toMatchObject({
+        type: "agent_status",
+        sessionId: created.parentSessionId,
+        agent: {
+          agentId: created.agent.agentId,
+          parentSessionId: created.parentSessionId,
+          role: "worker",
+        },
+      });
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("agent_wait emits an explicit agent_wait_result event", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => ({
+        text: "child finished",
+        responseMessages: [],
+      })) as any,
+    }));
+
+    try {
+      const created = await createPersistentAgent(url, "child task", "worker");
+      const result = await sendToExistingSessionAndWaitForEvent(
+        url,
+        created.parentSessionId,
+        (sessionId) => ({ type: "agent_wait", sessionId, agentIds: [created.agent.agentId], timeoutMs: 1000 }),
+        (msg) => msg.type === "agent_wait_result" && msg.agentIds?.includes(created.agent.agentId),
+        5000,
+      );
+
+      expect(result).toMatchObject({
+        type: "agent_wait_result",
+        sessionId: created.parentSessionId,
+        agentIds: [created.agent.agentId],
+        timedOut: false,
+      });
+      expect(result.agents).toHaveLength(1);
+      expect(result.agents[0]).toMatchObject({
+        agentId: created.agent.agentId,
+        executionState: "completed",
+      });
     } finally {
       server.stop();
     }

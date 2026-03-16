@@ -781,6 +781,74 @@ describe("workspace settings sync", () => {
     });
   });
 
+  test("applyWorkspaceDefaultsToThread preserves an existing baseten workspace provider", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultProvider: "baseten",
+              defaultModel: "moonshotai/Kimi-K2.5",
+              defaultPreferredChildModel: "moonshotai/Kimi-K2.5",
+            }
+          : workspace,
+      ),
+    }));
+
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+    threadSocket.sent = [];
+
+    const threadId = useAppStore.getState().threads[0]?.id;
+    if (!threadId) throw new Error("expected thread");
+    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+
+    expect(threadSocket.sent.find((message) => message?.type === "set_model")).toMatchObject({
+      type: "set_model",
+      provider: "baseten",
+      model: "moonshotai/Kimi-K2.5",
+    });
+  });
+
+  test("updateWorkspaceDefaults syncs baseten control-session defaults without rewriting the provider", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultProvider: "baseten",
+              defaultModel: "moonshotai/Kimi-K2.5",
+              defaultPreferredChildModel: "moonshotai/Kimi-K2.5",
+            }
+          : workspace,
+      ),
+    }));
+
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+
+    controlSocket.sent = [];
+    threadSocket.sent = [];
+
+    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      defaultModel: "moonshotai/Kimi-K2.5",
+    });
+
+    expect(controlSocket.sent.find((message) => message?.type === "set_model")).toMatchObject({
+      type: "set_model",
+      provider: "baseten",
+      model: "moonshotai/Kimi-K2.5",
+    });
+  });
+
   test("thread connect does not replay a stale local backup default before the harness sync arrives", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const controlSocket = socketByClient("desktop-control");

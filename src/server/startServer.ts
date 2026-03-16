@@ -578,6 +578,7 @@ export async function startAgentServer(
             }
           };
 
+          const sessionInfo = session.getSessionInfoEvent();
           const hello: ServerEvent = {
             type: "server_hello",
             sessionId: session.id,
@@ -586,9 +587,22 @@ export async function startAgentServer(
               modelStreamChunk: "v1",
             },
             config: session.getPublicConfig(),
-            sessionKind: session.sessionKind,
-            ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
-            ...(session.role ? { role: session.role } : {}),
+            sessionKind: sessionInfo.sessionKind,
+            ...(sessionInfo.parentSessionId ? { parentSessionId: sessionInfo.parentSessionId } : {}),
+            ...(sessionInfo.role ? { role: sessionInfo.role } : {}),
+            ...(sessionInfo.mode ? { mode: sessionInfo.mode } : {}),
+            ...(typeof sessionInfo.depth === "number" ? { depth: sessionInfo.depth } : {}),
+            ...(sessionInfo.nickname ? { nickname: sessionInfo.nickname } : {}),
+            ...(sessionInfo.requestedModel ? { requestedModel: sessionInfo.requestedModel } : {}),
+            ...(sessionInfo.effectiveModel ? { effectiveModel: sessionInfo.effectiveModel } : {}),
+            ...(sessionInfo.requestedReasoningEffort
+              ? { requestedReasoningEffort: sessionInfo.requestedReasoningEffort }
+              : {}),
+            ...(sessionInfo.effectiveReasoningEffort
+              ? { effectiveReasoningEffort: sessionInfo.effectiveReasoningEffort }
+              : {}),
+            ...(sessionInfo.executionState ? { executionState: sessionInfo.executionState } : {}),
+            ...(sessionInfo.lastMessagePreview ? { lastMessagePreview: sessionInfo.lastMessagePreview } : {}),
             ...(isResume
               ? {
                   isResume: true,
@@ -599,11 +613,24 @@ export async function startAgentServer(
                   hasPendingApproval: session.hasPendingApproval,
                 }
               : {}),
-            ...(session.sessionKind !== "root"
+            ...(sessionInfo.sessionKind !== "root"
               ? {
-                  sessionKind: session.sessionKind,
-                  ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
-                  ...(session.role ? { role: session.role } : {}),
+                  sessionKind: sessionInfo.sessionKind,
+                  ...(sessionInfo.parentSessionId ? { parentSessionId: sessionInfo.parentSessionId } : {}),
+                  ...(sessionInfo.role ? { role: sessionInfo.role } : {}),
+                  ...(sessionInfo.mode ? { mode: sessionInfo.mode } : {}),
+                  ...(typeof sessionInfo.depth === "number" ? { depth: sessionInfo.depth } : {}),
+                  ...(sessionInfo.nickname ? { nickname: sessionInfo.nickname } : {}),
+                  ...(sessionInfo.requestedModel ? { requestedModel: sessionInfo.requestedModel } : {}),
+                  ...(sessionInfo.effectiveModel ? { effectiveModel: sessionInfo.effectiveModel } : {}),
+                  ...(sessionInfo.requestedReasoningEffort
+                    ? { requestedReasoningEffort: sessionInfo.requestedReasoningEffort }
+                    : {}),
+                  ...(sessionInfo.effectiveReasoningEffort
+                    ? { effectiveReasoningEffort: sessionInfo.effectiveReasoningEffort }
+                    : {}),
+                  ...(sessionInfo.executionState ? { executionState: sessionInfo.executionState } : {}),
+                  ...(sessionInfo.lastMessagePreview ? { lastMessagePreview: sessionInfo.lastMessagePreview } : {}),
                 }
               : {}),
           };

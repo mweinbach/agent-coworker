@@ -80,7 +80,10 @@ function contentText(value: unknown): string {
 }
 
 function initialCurrentTurnOutcome(hydrated?: HydratedSessionState): SessionRuntimeState["currentTurnOutcome"] {
-  return hydrated?.sessionInfo.executionState === "errored" ? "error" : "completed";
+  if (hydrated?.sessionInfo.executionState === "errored") {
+    return "error";
+  }
+  return "completed";
 }
 
 const MAX_DISCONNECTED_REPLAY_EVENTS = 256;
@@ -163,6 +166,7 @@ export class AgentSession {
     listAgentSessionsImpl?: SessionDependencies["listAgentSessionsImpl"];
     sendAgentInputImpl?: SessionDependencies["sendAgentInputImpl"];
     waitForAgentImpl?: SessionDependencies["waitForAgentImpl"];
+    resumeAgentImpl?: SessionDependencies["resumeAgentImpl"];
     closeAgentImpl?: SessionDependencies["closeAgentImpl"];
     deleteSessionImpl?: SessionDependencies["deleteSessionImpl"];
     listWorkspaceBackupsImpl?: SessionDependencies["listWorkspaceBackupsImpl"];
@@ -263,6 +267,7 @@ export class AgentSession {
       listAgentSessionsImpl: opts.listAgentSessionsImpl,
       sendAgentInputImpl: opts.sendAgentInputImpl,
       waitForAgentImpl: opts.waitForAgentImpl,
+      resumeAgentImpl: opts.resumeAgentImpl,
       closeAgentImpl: opts.closeAgentImpl,
       deleteSessionImpl: opts.deleteSessionImpl,
       listWorkspaceBackupsImpl: opts.listWorkspaceBackupsImpl,
@@ -439,6 +444,7 @@ export class AgentSession {
     listAgentSessionsImpl?: SessionDependencies["listAgentSessionsImpl"];
     sendAgentInputImpl?: SessionDependencies["sendAgentInputImpl"];
     waitForAgentImpl?: SessionDependencies["waitForAgentImpl"];
+    resumeAgentImpl?: SessionDependencies["resumeAgentImpl"];
     closeAgentImpl?: SessionDependencies["closeAgentImpl"];
     deleteSessionImpl?: SessionDependencies["deleteSessionImpl"];
     listWorkspaceBackupsImpl?: SessionDependencies["listWorkspaceBackupsImpl"];
@@ -461,6 +467,7 @@ export class AgentSession {
       enableMcp: persisted.enableMcp,
       outputDirectory: persisted.outputDirectory,
       uploadsDirectory: persisted.uploadsDirectory,
+      ...(persisted.providerOptions !== undefined ? { providerOptions: structuredClone(persisted.providerOptions) } : {}),
     };
 
     const sessionInfo = {
@@ -507,6 +514,7 @@ export class AgentSession {
       listAgentSessionsImpl: opts.listAgentSessionsImpl,
       sendAgentInputImpl: opts.sendAgentInputImpl,
       waitForAgentImpl: opts.waitForAgentImpl,
+      resumeAgentImpl: opts.resumeAgentImpl,
       closeAgentImpl: opts.closeAgentImpl,
       deleteSessionImpl: opts.deleteSessionImpl,
       listWorkspaceBackupsImpl: opts.listWorkspaceBackupsImpl,
@@ -853,6 +861,14 @@ export class AgentSession {
   reopenForHistory() {
     if (this.state.persistenceStatus === "active") return;
     this.state.persistenceStatus = "active";
+    if (
+      (this.state.sessionInfo.sessionKind ?? "root") === "agent"
+      && this.state.sessionInfo.executionState === "closed"
+    ) {
+      this.metadataManager.updateSessionInfo({
+        executionState: this.currentTurnOutcome === "error" ? "errored" : "completed",
+      });
+    }
     this.queuePersistSessionSnapshot("session.reopened");
   }
 

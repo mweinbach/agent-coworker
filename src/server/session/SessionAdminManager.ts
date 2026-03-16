@@ -137,10 +137,17 @@ export class SessionAdminManager {
       return;
     }
     try {
-      await this.context.deps.waitForAgentImpl({
+      const result = await this.context.deps.waitForAgentImpl({
         parentSessionId: this.context.id,
         agentIds,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      });
+      this.context.emit({
+        type: "agent_wait_result",
+        sessionId: this.context.id,
+        agentIds,
+        timedOut: result.timedOut,
+        agents: result.agents,
       });
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to wait on child agents: ${String(err)}`);

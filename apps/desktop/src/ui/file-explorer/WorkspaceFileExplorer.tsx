@@ -544,7 +544,7 @@ export const WorkspaceFileExplorer = memo(function WorkspaceFileExplorer({
         </div>
       </div>
 
-      <div className="relative flex-1 overflow-y-auto p-1.5">
+      <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5" data-file-explorer-scroll-region="true">
         {rootSnapshot?.error ? (
           <div className="rounded bg-destructive/10 p-3 text-center text-xs text-destructive">{rootSnapshot.error}</div>
         ) : treeRows.length === 0 && rootSnapshot?.loading ? (

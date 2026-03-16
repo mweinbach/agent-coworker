@@ -442,6 +442,13 @@ export type ServerEvent =
   | { type: "agent_spawned"; sessionId: string; agent: PersistentAgentSummary }
   | { type: "agent_list"; sessionId: string; agents: PersistentAgentSummary[] }
   | { type: "agent_status"; sessionId: string; agent: PersistentAgentSummary }
+  | {
+    type: "agent_wait_result";
+    sessionId: string;
+    agentIds: string[];
+    timedOut: boolean;
+    agents: PersistentAgentSummary[];
+  }
   | { type: "session_deleted"; sessionId: string; targetSessionId: string }
   | {
     type: "session_config";
@@ -452,7 +459,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.17";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.18";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -563,6 +570,7 @@ export const SERVER_EVENT_TYPES = [
   "agent_spawned",
   "agent_list",
   "agent_status",
+  "agent_wait_result",
   "session_deleted",
   "session_config",
   "memory_list",

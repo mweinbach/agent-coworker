@@ -476,6 +476,27 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       return;
     }
 
+    if (evt.type === "agent_wait_result") {
+      set((s) => {
+        const rt = s.threadRuntimeById[threadId];
+        if (!rt) return {};
+        let nextAgents = rt.agents;
+        for (const agent of evt.agents) {
+          nextAgents = upsertAgentSummary(nextAgents, agent);
+        }
+        return {
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: {
+              ...rt,
+              agents: nextAgents,
+            },
+          },
+        };
+      });
+      return;
+    }
+
     if (evt.type === "ask") {
       const prompt: AskPrompt = { requestId: evt.requestId, question: evt.question, options: evt.options };
       set(() => ({ promptModal: { kind: "ask", threadId, prompt } }));

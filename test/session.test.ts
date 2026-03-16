@@ -369,7 +369,7 @@ describe("AgentSession", () => {
       await flushAsyncWork();
       expect(mockWritePersistedSessionSnapshot).toHaveBeenCalledTimes(1);
       const first = mockWritePersistedSessionSnapshot.mock.calls[0]?.[0] as any;
-      expect(first?.snapshot?.version).toBe(6);
+      expect(first?.snapshot?.version).toBe(7);
       expect(first?.snapshot?.context?.providerState).toBeNull();
       expect(first?.snapshot?.context?.costTracker).toMatchObject({
         totalTurns: 0,
@@ -4408,6 +4408,58 @@ describe("AgentSession", () => {
 
       expect(session.currentTurnOutcome).toBe("error");
       expect(session.getSessionInfoEvent().executionState).toBe("errored");
+    });
+
+    test("restores persisted providerOptions into resumed runtime config", async () => {
+      const { emit } = makeEmit();
+      const providerOptions = {
+        openai: {
+          reasoningEffort: "xhigh",
+          reasoningSummary: "detailed",
+        },
+      };
+
+      const session = AgentSession.fromPersisted({
+        persisted: {
+          sessionId: "persisted-provider-options",
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          title: "Persisted",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "openai",
+          model: "gpt-5.2",
+          workingDirectory: "/tmp/persisted",
+          outputDirectory: undefined,
+          uploadsDirectory: undefined,
+          providerOptions,
+          enableMcp: true,
+          backupsEnabledOverride: null,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:01.000Z",
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          messageCount: 1,
+          lastEventSeq: 1,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }] as any,
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+        baseConfig: makeConfig("/tmp/persisted"),
+        emit,
+        sessionBackupFactory: makeSessionBackupFactory(),
+        getProviderStatusesImpl: async () => [],
+      });
+
+      await session.sendUserMessage("question");
+
+      const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(call.config.providerOptions).toEqual(providerOptions);
     });
 
     test("migrates unsupported persisted models to provider default and persists the upgraded snapshot", async () => {

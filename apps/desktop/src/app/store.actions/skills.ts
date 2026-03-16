@@ -33,7 +33,6 @@ import {
   isProviderName,
   makeId,
   mapTranscriptToFeed,
-  normalizeProviderChoice,
   nowIso,
   persistNow,
   providerAuthMethodsFor,

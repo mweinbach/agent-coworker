@@ -16,9 +16,11 @@ import type {
 } from "./types";
 
 function executionStateForSession(session: AgentSession, fallback: AgentExecutionState = "completed"): AgentExecutionState {
+  const info = session.getSessionInfoEvent();
   if (session.persistenceStatus === "closed") return "closed";
   if (session.isBusy) return "running";
   if (session.currentTurnOutcome === "error") return "errored";
+  if (info.executionState) return info.executionState;
   return fallback;
 }
 

@@ -236,13 +236,26 @@ export type PersistedSessionSnapshotV6 = {
   };
 };
 
+export type PersistedSessionSnapshotV7 = {
+  version: 7;
+  sessionId: string;
+  createdAt: string;
+  updatedAt: string;
+  session: PersistedSessionSnapshotV6["session"];
+  config: PersistedSessionSnapshotV6["config"] & {
+    providerOptions?: AgentConfig["providerOptions"];
+  };
+  context: PersistedSessionSnapshotV6["context"];
+};
+
 export type PersistedSessionSnapshot =
   | PersistedSessionSnapshotV1
   | PersistedSessionSnapshotV2
   | PersistedSessionSnapshotV3
   | PersistedSessionSnapshotV4
   | PersistedSessionSnapshotV5
-  | PersistedSessionSnapshotV6;
+  | PersistedSessionSnapshotV6
+  | PersistedSessionSnapshotV7;
 
 export type PersistedSessionSummary = {
   sessionId: string;
@@ -484,6 +497,18 @@ const persistedSessionSnapshotV6Schema = z.object({
   }).strict(),
 }).strict();
 
+const persistedSessionSnapshotV7Schema = z.object({
+  version: z.literal(7),
+  sessionId: z.string().trim().min(1),
+  createdAt: isoTimestampSchema,
+  updatedAt: isoTimestampSchema,
+  session: persistedSessionSnapshotV6Schema.shape.session,
+  config: persistedSessionSnapshotV6Schema.shape.config.extend({
+    providerOptions: z.record(z.string(), z.unknown()).optional(),
+  }).strict(),
+  context: persistedSessionSnapshotV6Schema.shape.context,
+}).strict();
+
 const persistedSessionSnapshotSchema = z.union([
   persistedSessionSnapshotV1Schema,
   persistedSessionSnapshotV2Schema,
@@ -491,6 +516,7 @@ const persistedSessionSnapshotSchema = z.union([
   persistedSessionSnapshotV4Schema,
   persistedSessionSnapshotV5Schema,
   persistedSessionSnapshotV6Schema,
+  persistedSessionSnapshotV7Schema,
 ]);
 
 export function getPersistedSessionFilePath(paths: Pick<AiCoworkerPaths, "sessionsDir">, sessionId: string): string {
@@ -528,6 +554,53 @@ export function parsePersistedSessionSnapshot(raw: unknown): PersistedSessionSna
   }
 
   const snapshot = parsed.data;
+  if (snapshot.version === 7) {
+    return {
+      version: 7,
+      sessionId: snapshot.sessionId,
+      createdAt: snapshot.createdAt,
+      updatedAt: snapshot.updatedAt,
+      session: {
+        title: snapshot.session.title,
+        titleSource: snapshot.session.titleSource,
+        titleModel: snapshot.session.titleModel,
+        provider: snapshot.session.provider,
+        model: snapshot.session.model,
+        sessionKind: snapshot.session.sessionKind,
+        parentSessionId: snapshot.session.parentSessionId,
+        role: snapshot.session.role,
+        mode: snapshot.session.mode,
+        depth: snapshot.session.depth,
+        nickname: snapshot.session.nickname,
+        requestedModel: snapshot.session.requestedModel,
+        effectiveModel: snapshot.session.effectiveModel,
+        requestedReasoningEffort: snapshot.session.requestedReasoningEffort,
+        effectiveReasoningEffort: snapshot.session.effectiveReasoningEffort,
+        executionState: snapshot.session.executionState,
+        lastMessagePreview: snapshot.session.lastMessagePreview,
+      },
+      config: {
+        provider: snapshot.config.provider,
+        model: snapshot.config.model,
+        enableMcp: snapshot.config.enableMcp,
+        backupsEnabledOverride: snapshot.config.backupsEnabledOverride,
+        workingDirectory: snapshot.config.workingDirectory,
+        outputDirectory: snapshot.config.outputDirectory,
+        uploadsDirectory: snapshot.config.uploadsDirectory,
+        ...(snapshot.config.providerOptions !== undefined
+          ? { providerOptions: snapshot.config.providerOptions as AgentConfig["providerOptions"] }
+          : {}),
+      },
+      context: {
+        system: snapshot.context.system,
+        messages: snapshot.context.messages,
+        providerState: snapshot.context.providerState,
+        todos: snapshot.context.todos,
+        harnessContext: snapshot.context.harnessContext,
+        costTracker: snapshot.context.costTracker as SessionUsageSnapshot | null,
+      },
+    };
+  }
   if (snapshot.version === 6) {
     return {
       version: 6,
@@ -833,7 +906,7 @@ export async function listPersistedSessionSnapshots(
       continue;
     }
 
-    const sessionKind = parsed.version === 3 || parsed.version === 4 || parsed.version === 5 || parsed.version === 6
+    const sessionKind = parsed.version === 3 || parsed.version === 4 || parsed.version === 5 || parsed.version === 6 || parsed.version === 7
       ? parsed.session.sessionKind
       : "root";
     if (sessionKind !== "root") continue;

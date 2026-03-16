@@ -35,6 +35,12 @@ describe("sessionDb", () => {
           provider: "google",
           model: "gemini-3-flash-preview",
           workingDirectory: "/tmp/project",
+          providerOptions: {
+            openai: {
+              reasoningEffort: "high",
+              reasoningSummary: "detailed",
+            },
+          },
           enableMcp: true,
           createdAt: now,
           updatedAt: now,
@@ -92,6 +98,12 @@ describe("sessionDb", () => {
         model: "gpt-5.2",
         responseId: "resp_123",
         updatedAt: now,
+      });
+      expect(persisted?.providerOptions).toEqual({
+        openai: {
+          reasoningEffort: "high",
+          reasoningSummary: "detailed",
+        },
       });
       expect(persisted?.costTracker).toEqual({
         sessionId: "s-1",
@@ -236,6 +248,76 @@ describe("sessionDb", () => {
       expect(persisted?.title).toBe("Legacy Session");
       expect(persisted?.messages).toHaveLength(1);
       expect(persisted?.providerState).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  test("imports providerOptions from version 7 legacy snapshots", async () => {
+    const paths = await makeTmpCoworkHome();
+    const now = new Date().toISOString();
+
+    await fs.writeFile(
+      path.join(paths.sessionsDir, "legacy-7.json"),
+      JSON.stringify({
+        version: 7,
+        sessionId: "legacy-7",
+        createdAt: now,
+        updatedAt: now,
+        session: {
+          title: "Legacy Agent",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "openai",
+          model: "gpt-5.2",
+          sessionKind: "agent",
+          parentSessionId: "root-1",
+          role: "worker",
+          mode: "collaborative",
+          depth: 1,
+          nickname: null,
+          requestedModel: null,
+          effectiveModel: "gpt-5.2",
+          requestedReasoningEffort: null,
+          effectiveReasoningEffort: null,
+          executionState: "completed",
+          lastMessagePreview: "done",
+        },
+        config: {
+          provider: "openai",
+          model: "gpt-5.2",
+          enableMcp: true,
+          backupsEnabledOverride: null,
+          workingDirectory: "/tmp/legacy-7",
+          providerOptions: {
+            openai: {
+              reasoningEffort: "xhigh",
+              textVerbosity: "low",
+            },
+          },
+        },
+        context: {
+          system: "legacy",
+          messages: [{ role: "assistant", content: "done" }],
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+      }),
+      "utf-8",
+    );
+
+    const db = await SessionDb.create({ paths });
+    try {
+      const persisted = db.getSessionRecord("legacy-7");
+      expect(persisted?.providerOptions).toEqual({
+        openai: {
+          reasoningEffort: "xhigh",
+          textVerbosity: "low",
+        },
+      });
+      expect(db.listAgentSessions("root-1")[0]?.executionState).toBe("completed");
     } finally {
       db.close();
     }

@@ -197,12 +197,21 @@ describe("desktop context sidebar", () => {
 
       const tasksSection = container.querySelector('[data-sidebar-section="tasks"]');
       const agentsSection = container.querySelector('[data-sidebar-section="agents"]');
+      const scrollCards = Array.from(container.querySelectorAll('[data-slot="card"]')).slice(0, 2);
 
       expect(tasksSection?.className).toContain("overflow-y-auto");
+      expect(tasksSection?.className).toContain("flex-1");
       expect(tasksSection?.className).toContain("overscroll-contain");
       expect(agentsSection?.className).toContain("overflow-y-auto");
+      expect(agentsSection?.className).toContain("flex-1");
       expect(agentsSection?.className).toContain("overscroll-contain");
-      expect(container.innerHTML).toContain("max-h-[30%]");
+      expect(scrollCards).toHaveLength(2);
+      for (const card of scrollCards) {
+        expect(card.className).toContain("flex");
+        expect(card.className).toContain("flex-col");
+        expect(card.className).toContain("max-h-[30%]");
+        expect(card.className).toContain("overflow-hidden");
+      }
 
       await act(async () => {
         root.unmount();

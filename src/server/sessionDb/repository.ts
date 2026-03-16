@@ -145,6 +145,7 @@ export class SessionDbRepository {
            st.system_prompt,
            st.messages_json,
            st.provider_state_json,
+           st.provider_options_json,
            st.todos_json,
            st.harness_context_json,
            st.cost_tracker_json
@@ -172,6 +173,8 @@ export class SessionDbRepository {
       const uploadsDirectory = snapshot.uploadsDirectory ?? null;
       const providerStateJson =
         snapshot.providerState === null ? null : toJsonString(snapshot.providerState);
+      const providerOptionsJson =
+        snapshot.providerOptions === undefined ? null : toJsonString(snapshot.providerOptions);
       const costTrackerJson =
         snapshot.costTracker === null ? null : toJsonString(snapshot.costTracker);
       const backupsEnabledOverride =
@@ -300,14 +303,16 @@ export class SessionDbRepository {
              system_prompt,
              messages_json,
              provider_state_json,
+             provider_options_json,
              todos_json,
              harness_context_json,
              cost_tracker_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
              system_prompt = excluded.system_prompt,
              messages_json = excluded.messages_json,
              provider_state_json = excluded.provider_state_json,
+             provider_options_json = excluded.provider_options_json,
              todos_json = excluded.todos_json,
              harness_context_json = excluded.harness_context_json,
              cost_tracker_json = excluded.cost_tracker_json`,
@@ -317,6 +322,7 @@ export class SessionDbRepository {
           snapshot.systemPrompt,
           toJsonString(snapshot.messages),
           providerStateJson,
+          providerOptionsJson,
           toJsonString(snapshot.todos),
           toJsonString(snapshot.harnessContext),
           costTrackerJson,
@@ -455,6 +461,7 @@ export class SessionDbRepository {
              system_prompt TEXT NOT NULL,
              messages_json TEXT NOT NULL,
              provider_state_json TEXT NULL,
+             provider_options_json TEXT NULL,
              todos_json TEXT NOT NULL,
              harness_context_json TEXT NULL,
              cost_tracker_json TEXT NULL
@@ -524,6 +531,11 @@ export class SessionDbRepository {
   addCostTrackerColumn(): void {
     if (this.hasSessionStateColumn("cost_tracker_json")) return;
     this.db.exec("ALTER TABLE session_state ADD COLUMN cost_tracker_json TEXT NULL");
+  }
+
+  addProviderOptionsColumn(): void {
+    if (this.hasSessionStateColumn("provider_options_json")) return;
+    this.db.exec("ALTER TABLE session_state ADD COLUMN provider_options_json TEXT NULL");
   }
 
   hasSessionsColumn(columnName: string): boolean {
@@ -644,31 +656,36 @@ export class SessionDbRepository {
       const costTracker =
         "costTracker" in legacy.context ? legacy.context.costTracker : null;
       const backupsEnabledOverride =
-        legacy.version === 5 ? legacy.config.backupsEnabledOverride : null;
+        legacy.version === 5 || legacy.version === 6 || legacy.version === 7
+          ? legacy.config.backupsEnabledOverride
+          : null;
+      const providerOptions =
+        legacy.version === 7 ? legacy.config.providerOptions : undefined;
       const hasSubagentMetadata =
-        legacy.version === 3 || legacy.version === 4 || legacy.version === 5 || legacy.version === 6;
+        legacy.version === 3 || legacy.version === 4 || legacy.version === 5 || legacy.version === 6 || legacy.version === 7;
+      const hasAgentExecutionMetadata = legacy.version === 6 || legacy.version === 7;
       const sessionKind = hasSubagentMetadata ? legacy.session.sessionKind : "root";
       const parentSessionId = hasSubagentMetadata ? legacy.session.parentSessionId : null;
       const role = hasSubagentMetadata ? legacy.session.role : null;
       const effectiveModel =
-        legacy.version === 6 ? legacy.session.effectiveModel : legacy.config.model;
+        hasAgentExecutionMetadata ? legacy.session.effectiveModel : legacy.config.model;
       const requestedModel =
-        legacy.version === 6 ? legacy.session.requestedModel : null;
+        hasAgentExecutionMetadata ? legacy.session.requestedModel : null;
       const requestedReasoningEffort =
-        legacy.version === 6 ? legacy.session.requestedReasoningEffort : null;
+        hasAgentExecutionMetadata ? legacy.session.requestedReasoningEffort : null;
       const effectiveReasoningEffort =
-        legacy.version === 6 ? legacy.session.effectiveReasoningEffort : null;
-      const mode = legacy.version === 6 ? legacy.session.mode : null;
-      const depth = legacy.version === 6 ? legacy.session.depth : null;
-      const nickname = legacy.version === 6 ? legacy.session.nickname : null;
+        hasAgentExecutionMetadata ? legacy.session.effectiveReasoningEffort : null;
+      const mode = hasAgentExecutionMetadata ? legacy.session.mode : null;
+      const depth = hasAgentExecutionMetadata ? legacy.session.depth : null;
+      const nickname = hasAgentExecutionMetadata ? legacy.session.nickname : null;
       const executionState =
-        legacy.version === 6
+        hasAgentExecutionMetadata
           ? legacy.session.executionState
           : status === "closed"
             ? "closed"
             : "completed";
       const lastMessagePreview =
-        legacy.version === 6 ? legacy.session.lastMessagePreview : null;
+        hasAgentExecutionMetadata ? legacy.session.lastMessagePreview : null;
       const createdAt = parseRequiredIsoTimestamp(legacy.createdAt, "legacy.createdAt");
       const updatedAt = parseRequiredIsoTimestamp(legacy.updatedAt, "legacy.updatedAt");
 
@@ -780,14 +797,16 @@ export class SessionDbRepository {
              system_prompt,
              messages_json,
              provider_state_json,
+             provider_options_json,
              todos_json,
              harness_context_json,
              cost_tracker_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
              system_prompt = excluded.system_prompt,
              messages_json = excluded.messages_json,
              provider_state_json = excluded.provider_state_json,
+             provider_options_json = excluded.provider_options_json,
              todos_json = excluded.todos_json,
              harness_context_json = excluded.harness_context_json,
              cost_tracker_json = excluded.cost_tracker_json`,
@@ -797,6 +816,7 @@ export class SessionDbRepository {
           legacy.context.system,
           toJsonString(legacy.context.messages),
           providerState === null ? null : toJsonString(providerState),
+          providerOptions === undefined ? null : toJsonString(providerOptions),
           toJsonString(legacy.context.todos),
           toJsonString(legacy.context.harnessContext),
           costTracker === null ? null : toJsonString(costTracker),

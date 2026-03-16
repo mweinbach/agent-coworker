@@ -391,6 +391,16 @@ export function reduceNonProviderEvent(evt: ServerEvent, deps: SyncEventReducerD
       deps.setState("agents", (agents) => upsertAgentSummary(agents, evt.agent));
       return true;
 
+    case "agent_wait_result":
+      deps.setState("agents", (agents) => {
+        let nextAgents = agents;
+        for (const agent of evt.agents) {
+          nextAgents = upsertAgentSummary(nextAgents, agent);
+        }
+        return nextAgents;
+      });
+      return true;
+
     case "error":
       appendFeed({
         id: deps.nextFeedId(),

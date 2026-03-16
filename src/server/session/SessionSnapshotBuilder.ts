@@ -29,7 +29,7 @@ export class SessionSnapshotBuilder {
   buildPersistedSnapshotAt(updatedAt: string): PersistedSessionSnapshot {
     const executionState = this.resolvePersistedExecutionState();
     return {
-      version: 6,
+      version: 7,
       sessionId: this.opts.sessionId,
       createdAt: this.opts.state.sessionInfo.createdAt,
       updatedAt,
@@ -60,6 +60,9 @@ export class SessionSnapshotBuilder {
         workingDirectory: this.opts.state.config.workingDirectory,
         ...(this.opts.state.config.outputDirectory ? { outputDirectory: this.opts.state.config.outputDirectory } : {}),
         ...(this.opts.state.config.uploadsDirectory ? { uploadsDirectory: this.opts.state.config.uploadsDirectory } : {}),
+        ...(this.opts.state.config.providerOptions !== undefined
+          ? { providerOptions: structuredClone(this.opts.state.config.providerOptions) }
+          : {}),
       },
       context: {
         system: this.opts.state.system,
@@ -95,6 +98,9 @@ export class SessionSnapshotBuilder {
       workingDirectory: this.opts.state.config.workingDirectory,
       ...(this.opts.state.config.outputDirectory ? { outputDirectory: this.opts.state.config.outputDirectory } : {}),
       ...(this.opts.state.config.uploadsDirectory ? { uploadsDirectory: this.opts.state.config.uploadsDirectory } : {}),
+      ...(this.opts.state.config.providerOptions !== undefined
+        ? { providerOptions: structuredClone(this.opts.state.config.providerOptions) }
+        : {}),
       enableMcp: this.opts.getEnableMcp(),
       backupsEnabledOverride: this.opts.state.backupsEnabledOverride,
       createdAt: this.opts.state.sessionInfo.createdAt,

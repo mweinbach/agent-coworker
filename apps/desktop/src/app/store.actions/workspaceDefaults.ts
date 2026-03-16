@@ -34,7 +34,6 @@ import {
   isProviderName,
   makeId,
   mapTranscriptToFeed,
-  normalizeProviderChoice,
   nowIso,
   persistNow,
   providerAuthMethodsFor,
@@ -110,7 +109,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
             ? ((rt.config as any).provider as ProviderName)
             : "google";
 
-      const provider = normalizeProviderChoice(inferredProvider);
+      const provider = inferredProvider;
       const model = (ws.defaultModel?.trim() || rt.config?.model?.trim() || "") || undefined;
       const preferredChildModel =
         (ws.defaultPreferredChildModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.preferredChildModel?.trim() || "") || undefined;
@@ -234,7 +233,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
 
-      const provider = normalizeProviderChoice(
+      const provider = (
         workspace.defaultProvider && isProviderName(workspace.defaultProvider)
           ? workspace.defaultProvider
           : "google"

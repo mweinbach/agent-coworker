@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.17`
+- Current protocol version: `7.18`
 
 ## Table of Contents
 
@@ -42,12 +42,17 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Provider: [provider_catalog](#provider_catalog) | [provider_auth_methods](#provider_auth_methods) | [provider_auth_challenge](#provider_auth_challenge) | [provider_auth_result](#provider_auth_result) | [provider_status](#provider_status) | [config_updated](#config_updated)
   - Tools & Skills: [tools](#tools) | [commands](#commands) | [skills_list](#skills_list) | [skill_content](#skill_content)
   - MCP: [mcp_servers](#mcp_servers) | [mcp_server_validation](#mcp_server_validation) | [mcp_server_auth_challenge](#mcp_server_auth_challenge) | [mcp_server_auth_result](#mcp_server_auth_result)
-  - Session Data: [messages](#messages) | [sessions](#sessions) | [agent_spawned](#agent_spawned) | [agent_list](#agent_list) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage) | [session_usage](#session_usage) | [budget_warning](#budget_warning) | [budget_exceeded](#budget_exceeded)
+  - Session Data: [messages](#messages) | [sessions](#sessions) | [agent_spawned](#agent_spawned) | [agent_list](#agent_list) | [agent_wait_result](#agent_wait_result) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage) | [session_usage](#session_usage) | [budget_warning](#budget_warning) | [budget_exceeded](#budget_exceeded)
   - Backup & Observability: [session_backup_state](#session_backup_state) | [workspace_backups](#workspace_backups) | [workspace_backup_delta](#workspace_backup_delta) | [observability_status](#observability_status)
   - Harness: [harness_context](#harness_context)
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.18`:
+
+- `agent_wait` now completes with an explicit `agent_wait_result` event so websocket clients can distinguish timeout from terminal child completion without inferring it from `agent_status`.
+- `server_hello` now includes the documented child-session metadata already exposed via `session_info`, including mode, depth, requested/effective model and reasoning fields, execution state, and the latest assistant preview when available.
 
 Changes in `7.17`:
 
@@ -1797,7 +1802,7 @@ Wait for one or more child agents to reach a terminal state.
 | `agentIds` | `string[]` | Yes | One or more child-agent session identifiers |
 | `timeoutMs` | `number` | No | Max time to wait before timing out |
 
-**Response:** none. Any child agents that reach a terminal state during the wait window are emitted through `agent_status`.
+**Response:** `agent_wait_result`, plus any `agent_status` updates emitted during the wait window.
 **Error:** `validation_failed` when called from a child session.
 
 ### agent_resume
@@ -3248,6 +3253,46 @@ Live child-agent status update emitted on spawn, resume, close, and state transi
   }
 }
 ```
+
+---
+
+### agent_wait_result
+
+Result event emitted after an `agent_wait` request resolves or times out.
+
+```json
+{
+  "type": "agent_wait_result",
+  "sessionId": "root-123",
+  "agentIds": ["child-456"],
+  "timedOut": false,
+  "agents": [
+    {
+      "agentId": "child-456",
+      "parentSessionId": "root-123",
+      "role": "worker",
+      "mode": "collaborative",
+      "depth": 1,
+      "effectiveModel": "gpt-5.4-mini",
+      "title": "Child task",
+      "provider": "openai",
+      "createdAt": "2026-03-08T12:00:00.000Z",
+      "updatedAt": "2026-03-08T12:05:00.000Z",
+      "lifecycleState": "active",
+      "executionState": "completed",
+      "busy": false
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"agent_wait_result"` | — |
+| `sessionId` | `string` | Root session identifier |
+| `agentIds` | `string[]` | Requested child-agent identifiers from the matching `agent_wait` call |
+| `timedOut` | `boolean` | `true` when the wait window elapsed before any requested child reached a terminal state |
+| `agents` | `PersistentAgentSummary[]` | Terminal child summaries observed before the wait resolved. Empty on timeout |
 
 ---
 

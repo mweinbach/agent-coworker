@@ -362,6 +362,11 @@ describe("AgentControl persisted child control", () => {
   test("wait publishes hydrated terminal child status immediately", async () => {
     const config = makeConfig();
     const childSession = makeChildSession(config);
+    const getSessionInfoEvent = childSession.getSessionInfoEvent;
+    childSession.getSessionInfoEvent = () => ({
+      ...getSessionInfoEvent(),
+      executionState: "completed",
+    });
     const emitParentAgentStatus = mock(() => {});
     const control = new AgentControl({
       sessionBindings: new Map(),
@@ -396,6 +401,16 @@ describe("AgentControl persisted child control", () => {
     const config = makeConfig();
     const childSession = makeChildSession(config);
     childSession.persistenceStatus = "closed";
+    const getSessionInfoEvent = childSession.getSessionInfoEvent;
+    let executionState: "closed" | "completed" = "closed";
+    childSession.getSessionInfoEvent = () => ({
+      ...getSessionInfoEvent(),
+      executionState,
+    });
+    childSession.reopenForHistory = mock(() => {
+      childSession.persistenceStatus = "active";
+      executionState = "completed";
+    });
     const control = new AgentControl({
       sessionBindings: new Map(),
       sessionDb: {

@@ -77,6 +77,7 @@ export type HydratedSessionState = {
   harnessContext: HarnessContextState | null;
   backupsEnabledOverride: boolean | null;
   costTracker: SessionUsageSnapshot | null;
+  providerOptions?: AgentConfig["providerOptions"];
 };
 
 export type SeededSessionContext = {
@@ -213,13 +214,7 @@ export type SessionContext = {
   getMcpServerByName: (nameRaw: string) => Promise<MCPRegistryServer | null>;
   queuePersistSessionSnapshot: (reason: string) => void;
   updateSessionInfo: (
-    patch: Partial<{
-      title: string;
-      titleSource: SessionTitleSource;
-      titleModel: string | null;
-      provider: AgentConfig["provider"];
-      model: string;
-    }>
+    patch: Partial<SessionInfoState>
   ) => void;
   emitConfigUpdated: () => void;
   syncSessionBackupAvailability: () => Promise<void>;

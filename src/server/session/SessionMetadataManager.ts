@@ -119,28 +119,18 @@ export class SessionMetadataManager {
     };
   }
 
-  updateSessionInfo(
-    patch: Partial<{
-      title: string;
-      titleSource: SessionTitleSource;
-      titleModel: string | null;
-      provider: AgentConfig["provider"];
-      model: string;
-      executionState: import("../../shared/agents").AgentExecutionState;
-    }>
-  ) {
+  updateSessionInfo(patch: Partial<import("./SessionContext").SessionInfoState>) {
     const next = {
       ...this.context.state.sessionInfo,
       ...patch,
       updatedAt: new Date().toISOString(),
     };
-    const changed =
-      next.title !== this.context.state.sessionInfo.title ||
-      next.titleSource !== this.context.state.sessionInfo.titleSource ||
-      next.titleModel !== this.context.state.sessionInfo.titleModel ||
-      next.provider !== this.context.state.sessionInfo.provider ||
-      next.model !== this.context.state.sessionInfo.model ||
-      next.executionState !== this.context.state.sessionInfo.executionState;
+    const changed = Object.entries(patch).some(([key, value]) => {
+      return !Object.is(
+        this.context.state.sessionInfo[key as keyof typeof this.context.state.sessionInfo],
+        value,
+      );
+    });
 
     if (!changed) return;
 

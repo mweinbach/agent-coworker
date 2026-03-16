@@ -410,6 +410,13 @@ const serverEventSchema = z.discriminatedUnion("type", [
     agent: persistentAgentSummarySchema,
   }).passthrough(),
   z.object({
+    type: z.literal("agent_wait_result"),
+    sessionId: nonEmptyTrimmedStringSchema,
+    agentIds: z.array(nonEmptyTrimmedStringSchema),
+    timedOut: z.boolean(),
+    agents: z.array(persistentAgentSummarySchema),
+  }).passthrough(),
+  z.object({
     type: z.literal("session_deleted"),
     sessionId: nonEmptyTrimmedStringSchema,
     targetSessionId: z.string(),
@@ -519,6 +526,7 @@ const KNOWN_SERVER_EVENT_TYPES = new Set<string>([
   "agent_spawned",
   "agent_list",
   "agent_status",
+  "agent_wait_result",
   "session_deleted",
   "session_config",
   "file_uploaded",

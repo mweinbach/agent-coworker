@@ -3,6 +3,7 @@ import {
   ASK_SKIP_TOKEN,
   CLIENT_MESSAGE_TYPES,
   SERVER_EVENT_TYPES,
+  safeParseServerEvent,
   type ServerEvent,
 } from "../src/server/protocol";
 import { safeParseClientMessage } from "../src/server/protocolParser";
@@ -1898,6 +1899,7 @@ describe("safeParseClientMessage", () => {
       expect(SERVER_EVENT_TYPES.includes("agent_spawned")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("agent_list")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("agent_status")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("agent_wait_result")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("model_stream_chunk")).toBe(true);
     });
 
@@ -1921,6 +1923,35 @@ describe("safeParseClientMessage", () => {
         expect(evt.protocolVersion).toBe("4.0");
         expect(evt.capabilities?.modelStreamChunk).toBe("v1");
       }
+    });
+
+    test("safeParseServerEvent accepts agent_wait_result", () => {
+      const evt = safeParseServerEvent({
+        type: "agent_wait_result",
+        sessionId: "root-1",
+        agentIds: ["child-1"],
+        timedOut: false,
+        agents: [
+          {
+            agentId: "child-1",
+            parentSessionId: "root-1",
+            role: "worker",
+            mode: "collaborative",
+            depth: 1,
+            effectiveModel: "gpt-5.4",
+            title: "Done",
+            provider: "openai",
+            createdAt: "2026-03-16T18:00:00.000Z",
+            updatedAt: "2026-03-16T18:01:00.000Z",
+            lifecycleState: "active",
+            executionState: "completed",
+            busy: false,
+          },
+        ],
+      });
+
+      expect(evt).not.toBeNull();
+      expect(evt?.type).toBe("agent_wait_result");
     });
 
     test("error requires code/source", () => {

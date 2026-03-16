@@ -3,6 +3,7 @@ import type { SessionDb } from "../sessionDb";
 import type { AgentConfig } from "../../types";
 import type { AgentMode, AgentReasoningEffort, AgentRole, PersistentAgentSummary } from "../../shared/agents";
 import type { SessionBinding } from "../startServer/types";
+import type { SeededSessionContext } from "../session/SessionContext";
 
 export type AgentSpawnOptions = {
   parentSessionId: string;
@@ -56,6 +57,7 @@ export type AgentControlDeps = {
     overrides?: {
       config?: AgentConfig;
       system?: string;
+      seedContext?: SeededSessionContext;
       sessionInfoPatch?: Record<string, unknown>;
     },
   ) => {

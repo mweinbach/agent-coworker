@@ -28,7 +28,7 @@ import {
 import { decodeClientMessage } from "./startServer/decodeClientMessage";
 import { dispatchClientMessage } from "./startServer/dispatchClientMessage";
 import { type SessionBinding, type StartServerSocketData } from "./startServer/types";
-import type { SessionDependencies, SessionInfoState } from "./session/SessionContext";
+import type { SeededSessionContext, SessionDependencies, SessionInfoState } from "./session/SessionContext";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z.object({
@@ -419,6 +419,7 @@ export async function startAgentServer(
     overrides?: {
       config?: AgentConfig;
       system?: string;
+      seedContext?: SeededSessionContext;
       sessionInfoPatch?: Partial<SessionInfoState>;
     },
   ): {
@@ -444,6 +445,7 @@ export async function startAgentServer(
     const session = new AgentSession({
       config: { ...(overrides?.config ?? config) },
       system: overrides?.system ?? system,
+      ...(overrides?.seedContext ? { seedContext: overrides.seedContext } : {}),
       ...(overrides?.sessionInfoPatch ? { sessionInfoPatch: overrides.sessionInfoPatch } : {}),
       ...common,
     });

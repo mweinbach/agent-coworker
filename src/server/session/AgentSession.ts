@@ -43,6 +43,7 @@ import type {
   HydratedSessionState,
   PersistedModelSelection,
   PersistedProjectConfigPatch,
+  SeededSessionContext,
   SessionBackupFactory,
   SessionContext,
   SessionDependencies,
@@ -167,9 +168,14 @@ export class AgentSession {
     deleteWorkspaceBackupEntryImpl?: SessionDependencies["deleteWorkspaceBackupEntryImpl"];
     getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
     hydratedState?: HydratedSessionState;
+    seedContext?: SeededSessionContext;
     skipInitialPersist?: boolean;
   }) {
     const hydrated = opts.hydratedState;
+    const seededMessages = hydrated?.messages ?? (opts.seedContext ? structuredClone(opts.seedContext.messages) : []);
+    const seededTodos = hydrated?.todos ?? (opts.seedContext ? structuredClone(opts.seedContext.todos) : []);
+    const seededHarnessContext = hydrated?.harnessContext
+      ?? (opts.seedContext?.harnessContext ? structuredClone(opts.seedContext.harnessContext) : null);
     this.id = hydrated?.sessionId ?? makeId();
 
     const now = new Date().toISOString();
@@ -179,7 +185,7 @@ export class AgentSession {
       discoveredSkills: opts.discoveredSkills ?? [],
       yolo: opts.yolo === true,
       messages: [],
-      allMessages: [...(hydrated?.messages ?? [])],
+      allMessages: [...seededMessages],
       providerState: hydrated?.providerState ?? null,
       running: false,
       connecting: false,
@@ -187,7 +193,7 @@ export class AgentSession {
       currentTurnId: null,
       currentTurnOutcome: "completed",
       maxSteps: 100,
-      todos: hydrated?.todos ?? [],
+      todos: seededTodos,
       sessionInfo: hydrated?.sessionInfo ?? {
         title: DEFAULT_SESSION_TITLE,
         titleSource: "default",
@@ -263,8 +269,8 @@ export class AgentSession {
       getWorkspaceBackupDeltaImpl: opts.getWorkspaceBackupDeltaImpl,
     };
 
-    if (hydrated?.harnessContext) {
-      this.deps.harnessContextStore.set(this.id, hydrated.harnessContext);
+    if (seededHarnessContext) {
+      this.deps.harnessContextStore.set(this.id, seededHarnessContext);
     }
 
     const emit = (evt: ServerEvent) => {
@@ -855,6 +861,14 @@ export class AgentSession {
 
   getMessages(offset = 0, limit = 100) {
     this.adminManager.getMessages(offset, limit);
+  }
+
+  buildForkContextSeed(): SeededSessionContext {
+    return {
+      messages: structuredClone(this.state.allMessages),
+      todos: structuredClone(this.state.todos),
+      harnessContext: this.deps.harnessContextStore.get(this.id),
+    };
   }
 
   setSessionTitle(title: string) {

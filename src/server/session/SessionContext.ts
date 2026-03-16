@@ -63,6 +63,12 @@ export type HydratedSessionState = {
   costTracker: SessionUsageSnapshot | null;
 };
 
+export type SeededSessionContext = {
+  messages: ModelMessage[];
+  todos: TodoItem[];
+  harnessContext: HarnessContextState | null;
+};
+
 export type SessionRuntimeState = {
   config: AgentConfig;
   system: string;

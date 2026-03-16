@@ -46,7 +46,11 @@ export class StatusBus {
       return { timedOut: false, agents: immediate };
     }
 
-    const clampedTimeoutMs = Math.max(10_000, Math.floor(timeoutMs));
+    const resolvedTimeoutMs = Number.isFinite(timeoutMs) ? Math.max(0, Math.floor(timeoutMs)) : 30_000;
+    if (resolvedTimeoutMs === 0) {
+      return { timedOut: true, agents: [] };
+    }
+
     return await new Promise((resolve) => {
       const onStatus = () => {
         const terminal = findTerminal();
@@ -66,7 +70,7 @@ export class StatusBus {
       const timer = setTimeout(() => {
         cleanup();
         resolve({ timedOut: true, agents: [] });
-      }, clampedTimeoutMs);
+      }, resolvedTimeoutMs);
     });
   }
 }

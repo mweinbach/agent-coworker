@@ -93,6 +93,9 @@ describe("agent socket parser", () => {
           toolOutputOverflowChars: 25000,
           defaultToolOutputOverflowChars: 25000,
           preferredChildModel: "gpt-5.2",
+          childModelRoutingMode: "same-provider",
+          preferredChildModelRef: "openai:gpt-5.2",
+          allowedChildModelRefs: [],
           maxSteps: 100,
           userName: "Alex",
           userProfile: {

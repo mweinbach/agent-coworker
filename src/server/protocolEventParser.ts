@@ -5,6 +5,7 @@ import {
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
 } from "../shared/openaiCompatibleOptions";
+import { CHILD_MODEL_ROUTING_MODES } from "../types";
 import {
   agentExecutionStateSchema,
   agentModeSchema,
@@ -35,6 +36,7 @@ const editableOpenAiProviderOptionsByProviderSchema = z.object({
   openai: openAiCompatibleProviderOptionsSchema.optional(),
   "codex-cli": openAiCompatibleProviderOptionsSchema.optional(),
 }).passthrough();
+const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
 
 export type ServerEventParseErrorReason = "invalid_json" | "invalid_envelope" | "unknown_type" | "invalid_event";
 
@@ -420,7 +422,12 @@ const serverEventSchema = z.discriminatedUnion("type", [
       observabilityEnabled: z.boolean(),
       backupsEnabled: z.boolean(),
       defaultBackupsEnabled: z.boolean(),
+      enableMemory: z.boolean().optional(),
+      memoryRequireApproval: z.boolean().optional(),
       preferredChildModel: z.string(),
+      childModelRoutingMode: childModelRoutingModeSchema,
+      preferredChildModelRef: z.string(),
+      allowedChildModelRefs: z.array(z.string()),
       maxSteps: z.number(),
       toolOutputOverflowChars: z.number().int().nonnegative().nullable(),
       defaultToolOutputOverflowChars: z.number().int().nonnegative().nullable().optional(),

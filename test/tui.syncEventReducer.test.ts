@@ -259,7 +259,7 @@ describe("syncEventReducer", () => {
           role: "worker",
           mode: "collaborative",
           depth: 1,
-          effectiveModel: "gpt-5.4-mini",
+          effectiveModel: "gpt-5-mini",
           title: "Patch worker",
           provider: "openai",
           createdAt: "2026-03-15T10:00:00.000Z",

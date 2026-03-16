@@ -14,6 +14,7 @@ import { defaultRuntimeNameForProvider, isProviderName } from "../../types";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import type { ServerEvent } from "../protocol";
 import { assertSupportedModel } from "../../models/registry";
+import { normalizeChildRoutingConfig } from "../../models/childModelRouting";
 
 export class ProviderAuthManager {
   constructor(
@@ -39,6 +40,9 @@ export class ProviderAuthManager {
         provider: AgentConfig["provider"];
         model: string;
         preferredChildModel: string;
+        childModelRoutingMode?: AgentConfig["childModelRoutingMode"];
+        preferredChildModelRef?: string;
+        allowedChildModelRefs?: string[];
       }) => Promise<void> | void;
       updateSessionInfo: (patch: Partial<{ provider: AgentConfig["provider"]; model: string }>) => void;
       queuePersistSessionSnapshot: (reason: string) => void;
@@ -74,9 +78,17 @@ export class ProviderAuthManager {
       this.opts.emitError("validation_failed", "provider", error instanceof Error ? error.message : String(error));
       return;
     }
-    const nextSubAgentModel = currentConfig.provider !== nextProvider || currentConfig.preferredChildModel === currentConfig.model
-      ? modelId
-      : currentConfig.preferredChildModel;
+    const normalizedChildRouting = normalizeChildRoutingConfig({
+      provider: nextProvider,
+      model: modelId,
+      childModelRoutingMode: currentConfig.childModelRoutingMode,
+      preferredChildModelRef:
+        currentConfig.provider !== nextProvider || currentConfig.preferredChildModel === currentConfig.model
+          ? `${nextProvider}:${modelId}`
+          : currentConfig.preferredChildModelRef ?? currentConfig.preferredChildModel,
+      allowedChildModelRefs: currentConfig.allowedChildModelRefs,
+      source: "model selection",
+    });
     const nextRuntime = currentConfig.provider === nextProvider
       ? currentConfig.runtime
       : defaultRuntimeNameForProvider(nextProvider);
@@ -88,7 +100,10 @@ export class ProviderAuthManager {
       provider: nextProvider,
       ...(nextRuntime !== undefined ? { runtime: nextRuntime } : {}),
       model: modelId,
-      preferredChildModel: nextSubAgentModel,
+      preferredChildModel: normalizedChildRouting.preferredChildModel,
+      childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
+      preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
+      allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
     });
     if (shouldClearProviderState) {
       this.opts.clearProviderState();
@@ -100,7 +115,10 @@ export class ProviderAuthManager {
         await this.opts.persistModelSelection({
           provider: nextProvider,
           model: modelId,
-          preferredChildModel: nextSubAgentModel,
+          preferredChildModel: normalizedChildRouting.preferredChildModel,
+          childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
+          preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
+          allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
         });
       } catch (err) {
         persistError = err;

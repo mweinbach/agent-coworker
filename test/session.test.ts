@@ -885,9 +885,15 @@ describe("AgentSession", () => {
       expect(cfgEvt.config.toolOutputOverflowChars).toBeNull();
       expect(cfgEvt.config.defaultToolOutputOverflowChars).toBeNull();
       expect(cfgEvt.config.maxSteps).toBe(25);
+      expect(cfgEvt.config.childModelRoutingMode).toBe("same-provider");
+      expect(cfgEvt.config.preferredChildModelRef).toBe("google:gemini-3-pro-preview");
+      expect(cfgEvt.config.allowedChildModelRefs).toEqual([]);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
         preferredChildModel: "gemini-3-pro-preview",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "google:gemini-3-pro-preview",
+        allowedChildModelRefs: [],
         observabilityEnabled: true,
         backupsEnabled: false,
         toolOutputOverflowChars: null,
@@ -987,7 +993,7 @@ describe("AgentSession", () => {
       if (errEvt) {
         expect(errEvt.code).toBe("validation_failed");
         expect(errEvt.source).toBe("session");
-        expect(errEvt.message).toContain('Unsupported preferred child model "gemini-3-pro-preview" for provider openai');
+        expect(errEvt.message).toContain('Unsupported session config preferred child target "gemini-3-pro-preview" for provider openai');
       }
     });
 
@@ -1379,6 +1385,9 @@ describe("AgentSession", () => {
         provider: "openai",
         model: "gpt-5.2",
         preferredChildModel: "gpt-5.2",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5.2",
+        allowedChildModelRefs: [],
       });
     });
 

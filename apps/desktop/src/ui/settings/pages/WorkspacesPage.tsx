@@ -79,6 +79,49 @@ function updateProviderOption(
   });
 }
 
+type ChildTargetGroup = {
+  provider: ProviderName;
+  refs: string[];
+};
+
+function childTargetGroupsFromCatalog(
+  catalog: Parameters<typeof modelChoicesFromCatalog>[0],
+  preserveRefs: readonly string[],
+): ChildTargetGroup[] {
+  const choices = modelChoicesFromCatalog(catalog);
+  const preserveByProvider = new Map<ProviderName, Set<string>>();
+  for (const ref of preserveRefs) {
+    const colonIndex = ref.indexOf(":");
+    if (colonIndex <= 0) continue;
+    const provider = ref.slice(0, colonIndex) as ProviderName;
+    const model = ref.slice(colonIndex + 1).trim();
+    if (!model || UI_DISABLED_PROVIDERS.has(provider)) continue;
+    const set = preserveByProvider.get(provider) ?? new Set<string>();
+    set.add(model);
+    preserveByProvider.set(provider, set);
+  }
+
+  return PROVIDER_NAMES
+    .filter((provider) => !UI_DISABLED_PROVIDERS.has(provider))
+    .map((provider) => {
+      const models = new Set(choices[provider] ?? []);
+      for (const model of preserveByProvider.get(provider) ?? []) {
+        models.add(model);
+      }
+      return {
+        provider,
+        refs: [...models].map((model) => `${provider}:${model}`),
+      };
+    })
+    .filter((group) => group.refs.length > 0);
+}
+
+function childTargetLabel(ref: string): string {
+  const colonIndex = ref.indexOf(":");
+  if (colonIndex <= 0) return ref;
+  return ref.slice(colonIndex + 1);
+}
+
 type OpenAiCompatibleModelSettingsCardProps = {
   workspace: Pick<WorkspaceRecord, "id" | "providerOptions">;
   updateWorkspaceDefaults: (
@@ -396,6 +439,9 @@ export function WorkspacesPage() {
   const provider = (ws?.defaultProvider ?? "google") as ProviderName;
   const model = (ws?.defaultModel ?? "").trim();
   const preferredChildModel = (ws?.defaultPreferredChildModel ?? ws?.defaultModel ?? "").trim();
+  const childModelRoutingMode = ws?.defaultChildModelRoutingMode ?? "same-provider";
+  const preferredChildModelRef = (ws?.defaultPreferredChildModelRef ?? `${provider}:${preferredChildModel || model}`).trim();
+  const allowedChildModelRefs = ws?.defaultAllowedChildModelRefs ?? [];
   const enableMcp = ws?.defaultEnableMcp ?? true;
   const backupsEnabled = ws?.defaultBackupsEnabled ?? true;
   const yolo = ws?.yolo ?? false;
@@ -411,6 +457,20 @@ export function WorkspacesPage() {
   const hasCustomModel = Boolean(model && !curatedModels.includes(model));
   const preferredChildModelOptions = modelOptionsFromCatalog(providerCatalog, effectiveProvider, preferredChildModel);
   const hasCustomChildModel = Boolean(preferredChildModel && !curatedModels.includes(preferredChildModel));
+  const childTargetGroups = useMemo(
+    () => childTargetGroupsFromCatalog(providerCatalog, [...allowedChildModelRefs, preferredChildModelRef]),
+    [allowedChildModelRefs, preferredChildModelRef, providerCatalog],
+  );
+  const preferredChildTargetOptions = useMemo(() => {
+    if (childModelRoutingMode === "cross-provider-allowlist") {
+      return allowedChildModelRefs.includes(preferredChildModelRef)
+        ? allowedChildModelRefs
+        : preferredChildModelRef
+          ? [preferredChildModelRef, ...allowedChildModelRefs]
+          : allowedChildModelRefs;
+    }
+    return preferredChildModelRef ? [preferredChildModelRef] : [];
+  }, [allowedChildModelRefs, childModelRoutingMode, preferredChildModelRef]);
 
   const [activeTab, setActiveTab] = useState<"general" | "models" | "profile" | "advanced">("general");
 
@@ -575,6 +635,10 @@ export function WorkspacesPage() {
                         defaultProvider: nextProvider,
                         defaultModel: nextDefault,
                         defaultPreferredChildModel: nextDefault,
+                        defaultPreferredChildModelRef:
+                          childModelRoutingMode === "same-provider"
+                            ? `${nextProvider}:${nextDefault}`
+                            : preferredChildModelRef,
                       });
                     }}
                   >
@@ -597,7 +661,14 @@ export function WorkspacesPage() {
                     value={model}
                     onValueChange={(value) => {
                       if (!ws) return;
-                      void updateWorkspaceDefaults(ws.id, { defaultModel: value });
+                      void updateWorkspaceDefaults(ws.id, {
+                        defaultModel: value,
+                        ...(childModelRoutingMode === "same-provider"
+                          ? {
+                              defaultPreferredChildModelRef: `${effectiveProvider}:${preferredChildModel || value}`,
+                            }
+                          : {}),
+                      });
                     }}
                   >
                     <SelectTrigger aria-label="Default model">
@@ -614,29 +685,136 @@ export function WorkspacesPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <div className="text-sm font-medium text-foreground">Preferred child model</div>
+                  <div className="text-sm font-medium text-foreground">Child routing mode</div>
                   <Select
-                    value={preferredChildModel}
+                    value={childModelRoutingMode}
                     onValueChange={(value) => {
                       if (!ws) return;
-                      void updateWorkspaceDefaults(ws.id, { defaultPreferredChildModel: value });
+                      const nextMode = value as "same-provider" | "cross-provider-allowlist";
+                      void updateWorkspaceDefaults(ws.id, {
+                        defaultChildModelRoutingMode: nextMode,
+                        ...(nextMode === "same-provider"
+                          ? {
+                              defaultPreferredChildModelRef: `${effectiveProvider}:${preferredChildModel || model}`,
+                            }
+                          : {}),
+                      });
                     }}
                   >
-                    <SelectTrigger aria-label="Preferred child model">
+                    <SelectTrigger aria-label="Child routing mode">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {preferredChildModelOptions.map((entry) => (
-                        <SelectItem key={entry} value={entry}>
-                          {hasCustomChildModel && entry === preferredChildModel ? `${entry} (custom)` : entry}
-                        </SelectItem>
-                      ))}
+                      <SelectItem value="same-provider">Same provider only</SelectItem>
+                      <SelectItem value="cross-provider-allowlist">Cross-provider allowlist</SelectItem>
                     </SelectContent>
                   </Select>
                   <div className="text-xs text-muted-foreground">
-                    Child agents inherit the live parent model unless a spawn request overrides it. This workspace default only preselects the suggested override.
+                    Cross-provider mode lets child agents target exact `provider:modelId` refs from the workspace allowlist.
                   </div>
                 </div>
+
+                {childModelRoutingMode === "same-provider" ? (
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium text-foreground">Preferred child model</div>
+                    <Select
+                      value={preferredChildModel}
+                      onValueChange={(value) => {
+                        if (!ws) return;
+                        void updateWorkspaceDefaults(ws.id, {
+                          defaultPreferredChildModel: value,
+                          defaultPreferredChildModelRef: `${effectiveProvider}:${value}`,
+                        });
+                      }}
+                    >
+                      <SelectTrigger aria-label="Preferred child model">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {preferredChildModelOptions.map((entry) => (
+                          <SelectItem key={entry} value={entry}>
+                            {hasCustomChildModel && entry === preferredChildModel ? `${entry} (custom)` : entry}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <div className="text-xs text-muted-foreground">
+                      Child agents inherit the live parent provider/model unless a spawn request overrides it. This workspace default only preselects the suggested same-provider override.
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-3">
+                      <div className="text-sm font-medium text-foreground">Allowed child targets</div>
+                      <div className="rounded-xl border border-border/70 p-3 space-y-3 max-h-72 overflow-auto">
+                        {childTargetGroups.map((group) => (
+                          <div key={group.provider} className="space-y-2">
+                            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                              {displayProviderName(group.provider)}
+                            </div>
+                            <div className="grid gap-2 md:grid-cols-2">
+                              {group.refs.map((ref) => {
+                                const checked = allowedChildModelRefs.includes(ref);
+                                return (
+                                  <label
+                                    key={ref}
+                                    className="flex items-center gap-2 rounded-lg border border-border/60 px-3 py-2 text-sm"
+                                  >
+                                    <Checkbox
+                                      checked={checked}
+                                      onCheckedChange={(nextChecked) => {
+                                        if (!ws) return;
+                                        const nextRefs = nextChecked === true
+                                          ? [...allowedChildModelRefs, ref]
+                                          : allowedChildModelRefs.filter((entry) => entry !== ref);
+                                        const dedupedRefs = [...new Set(nextRefs)];
+                                        const nextPreferred = dedupedRefs.includes(preferredChildModelRef)
+                                          ? preferredChildModelRef
+                                          : (dedupedRefs[0] ?? `${effectiveProvider}:${preferredChildModel || model}`);
+                                        void updateWorkspaceDefaults(ws.id, {
+                                          defaultAllowedChildModelRefs: dedupedRefs,
+                                          defaultPreferredChildModelRef: nextPreferred,
+                                        });
+                                      }}
+                                      aria-label={`Allow child target ${ref}`}
+                                    />
+                                    <span>{childTargetLabel(ref)}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Explicit cross-provider child requests fall back to the live parent provider/model when the target ref is not allowlisted or the provider is disconnected.
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-foreground">Preferred child target</div>
+                      <Select
+                        value={preferredChildTargetOptions[0] ? preferredChildModelRef : ""}
+                        onValueChange={(value) => {
+                          if (!ws) return;
+                          void updateWorkspaceDefaults(ws.id, { defaultPreferredChildModelRef: value });
+                        }}
+                        disabled={preferredChildTargetOptions.length === 0}
+                      >
+                        <SelectTrigger aria-label="Preferred child target">
+                          <SelectValue placeholder={preferredChildTargetOptions.length === 0 ? "Select allowed targets first" : undefined} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {preferredChildTargetOptions.map((entry) => (
+                            <SelectItem key={entry} value={entry}>
+                              {entry}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
 
@@ -651,8 +829,10 @@ export function WorkspacesPage() {
               <Badge variant="secondary">{displayProviderName(provider)}</Badge>
               <span>Model:</span>
               <Badge variant="secondary">{model}</Badge>
+              <span>Child routing:</span>
+              <Badge variant="secondary">{childModelRoutingMode}</Badge>
               <span>Preferred child:</span>
-              <Badge variant="secondary">{preferredChildModel || model}</Badge>
+              <Badge variant="secondary">{childModelRoutingMode === "same-provider" ? (preferredChildModel || model) : preferredChildModelRef}</Badge>
             </div>
           </div>
 

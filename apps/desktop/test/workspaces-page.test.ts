@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import { createElement, StrictMode } from "react";
 import { act } from "react";
@@ -116,12 +116,27 @@ function setupJsdom(): JsdomHarness {
 
 const {
   OpenAiCompatibleModelSettingsCard,
+  WorkspacesPage,
   WorkspaceUserProfileCard,
 } = await import("../src/ui/settings/pages/WorkspacesPage");
 const App = (await import("../src/App")).default;
 const { useAppStore } = await import("../src/app/store");
 
 describe("desktop workspaces page", () => {
+  beforeEach(() => {
+    useAppStore.setState((state) => ({
+      ...state,
+      ready: true,
+      settingsPage: "workspaces",
+      workspaces: [],
+      selectedWorkspaceId: null,
+      providerCatalog: [],
+      providerConnected: [],
+      providerDefaultModelByProvider: {},
+      providerStatusByName: {},
+    }));
+  });
+
   test("renders workspace controls for openai-compatible verbosity, reasoning effort, and reasoning summary", () => {
     const html = renderToStaticMarkup(
       createElement(OpenAiCompatibleModelSettingsCard, {
@@ -178,6 +193,93 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Role or work context");
     expect(html).toContain("Instructions");
     expect(html).toContain("Background details");
+  });
+
+  test("renders cross-provider child routing controls for workspace defaults", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-16T00:00:00.000Z",
+          lastOpenedAt: "2026-03-16T00:00:00.000Z",
+          defaultProvider: "codex-cli",
+          defaultModel: "gpt-5.4",
+          defaultPreferredChildModel: "gpt-5.4",
+          defaultChildModelRoutingMode: "cross-provider-allowlist",
+          defaultPreferredChildModelRef: "opencode-zen:glm-5",
+          defaultAllowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: "ws-1",
+      providerCatalog: [
+        {
+          id: "codex-cli",
+          name: "Codex CLI",
+          defaultModel: "gpt-5.4",
+          models: [{ id: "gpt-5.4", displayName: "GPT-5.4", knowledgeCutoff: "unknown", supportsImageInput: true }],
+        },
+        {
+          id: "opencode-zen",
+          name: "OpenCode Zen",
+          defaultModel: "glm-5",
+          models: [{ id: "glm-5", displayName: "GLM-5", knowledgeCutoff: "unknown", supportsImageInput: false }],
+        },
+        {
+          id: "opencode-go",
+          name: "OpenCode Go",
+          defaultModel: "glm-5",
+          models: [{ id: "glm-5", displayName: "GLM-5", knowledgeCutoff: "unknown", supportsImageInput: false }],
+        },
+      ],
+      providerConnected: ["codex-cli", "opencode-zen", "opencode-go"],
+      providerDefaultModelByProvider: {
+        "codex-cli": "gpt-5.4",
+        "opencode-zen": "glm-5",
+        "opencode-go": "glm-5",
+      },
+    }));
+
+    const harness = setupJsdom();
+    let root: ReturnType<typeof createRoot> | null = null;
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(WorkspacesPage));
+      });
+
+      const modelsTab = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Models");
+      if (!(modelsTab instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing Models tab");
+      }
+
+      await act(async () => {
+        modelsTab.click();
+      });
+
+      const text = container.textContent ?? "";
+      expect(text).toContain("Child routing mode");
+      expect(text).toContain("cross-provider-allowlist");
+      expect(text).toContain("Allowed child targets");
+      expect(text).toContain("Preferred child target");
+      expect(text).toContain("opencode-zen:glm-5");
+    } finally {
+      if (root) {
+        await act(async () => {
+          root?.unmount();
+        });
+      }
+      harness.restore();
+    }
   });
 
   test("typing into workspace profile fields does not trigger a render loop", async () => {

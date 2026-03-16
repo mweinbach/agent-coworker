@@ -4,7 +4,8 @@ import path from "node:path";
 import type { AgentConfig } from "./types";
 import { discoverSkills } from "./skills";
 import { assertSupportedModel, type SupportedModel } from "./models/registry";
-import { listChildAgentModelsWithInfo } from "./models/childAgentModelInfo";
+import { getChildAgentModelInfo, listChildAgentModelsWithInfo } from "./models/childAgentModelInfo";
+import { parseChildModelRef } from "./models/childModelRouting";
 import { MemoryStore } from "./memoryStore";
 import { AGENT_ROLE_DEFINITIONS } from "./server/agents/roles";
 import type { AgentRole } from "./shared/agents";
@@ -123,12 +124,27 @@ function buildSpawnAgentPromptBody(config: AgentConfig): string {
     .map((role) => `- **${role.id}**: ${role.description}`)
     .join("\n");
 
+  const crossProviderRefs = (config.allowedChildModelRefs ?? [])
+    .map((ref) => {
+      try {
+        const parsed = parseChildModelRef(ref, config.provider, "child target");
+        const supported = assertSupportedModel(parsed.provider, parsed.modelId, "child target");
+        const bestFor = getChildAgentModelInfo(parsed.provider, parsed.modelId)?.bestFor ?? "general-purpose work on this provider";
+        const displayProvider = PROVIDER_DISPLAY_NAMES[parsed.provider] ?? parsed.provider;
+        return `- **${displayProvider} / ${supported.displayName}** (\`${parsed.ref}\`): ${bestFor}.`;
+      } catch {
+        return null;
+      }
+    })
+    .filter((line): line is string => Boolean(line));
   const providerSupportsUserFacingModels = isUserFacingProviderEnabled(config.provider);
-  const modelLines = !providerSupportsUserFacingModels
-    ? "- No user-facing child model overrides are available for this provider."
-    : listChildAgentModelsWithInfo(config.provider)
-        .map((model) => `- **${model.displayName}** (\`${model.id}\`): ${model.bestFor ?? "general-purpose work on this provider"}.`)
-        .join("\n");
+  const modelLines = config.childModelRoutingMode === "cross-provider-allowlist" && crossProviderRefs.length > 0
+    ? crossProviderRefs.join("\n")
+    : !providerSupportsUserFacingModels
+      ? "- No user-facing child model overrides are available for this provider."
+      : listChildAgentModelsWithInfo(config.provider)
+          .map((model) => `- **${model.displayName}** (\`${model.id}\`): ${model.bestFor ?? "general-purpose work on this provider"}.`)
+          .join("\n");
 
   return [
     "Launch a collaborative child agent for a well-scoped task. It returns a durable child handle to use with follow-up agent tools; it does not return the child agent's final answer text directly.",
@@ -141,14 +157,18 @@ function buildSpawnAgentPromptBody(config: AgentConfig): string {
     "Rules:",
     "- Provide detailed, self-contained prompts with the exact files, ownership, and expected output.",
     "- If `model` is omitted, the child inherits the live parent provider/model.",
-    "- `preferredChildModel` is only a workspace/UI suggestion; it does not override the spawn request automatically.",
+    "- `model` may be a same-provider model id or a full `provider:modelId` child target ref.",
+    "- `preferredChildModelRef` is only a workspace/UI suggestion; it does not override the spawn request automatically.",
+    "- If a cross-provider target is disallowed for this workspace or its provider is disconnected, the child falls back to the live parent provider/model.",
     "- Child-agent results are not visible to the user unless you summarize them.",
     "- Child agents should stay bounded; do not use them for vague or open-ended delegation.",
     "",
     "Available child-agent roles:",
     roleLines,
     "",
-    `Available model overrides for the current provider (${providerLabel}):`,
+    config.childModelRoutingMode === "cross-provider-allowlist" && crossProviderRefs.length > 0
+      ? "Available allowed child target refs for this workspace:"
+      : `Available model overrides for the current provider (${providerLabel}):`,
     modelLines,
     providerSupportsUserFacingModels
       ? `- If you omit \`model\`, the child stays on **${currentModel.displayName}** (\`${currentModel.id}\`).`

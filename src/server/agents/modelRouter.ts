@@ -1,7 +1,12 @@
-import { providerOptionsDefaultsForModel } from "../../models/registry";
+import { assertSupportedModel, providerOptionsDefaultsForModel } from "../../models/registry";
+import {
+  childModelRef,
+  normalizeChildRoutingConfig,
+  parseChildModelRef,
+} from "../../models/childModelRouting";
 import { OPENAI_COMPATIBLE_PROVIDER_NAMES, isOpenAiReasoningEffort } from "../../shared/openaiCompatibleOptions";
-import type { AgentConfig } from "../../types";
 import type { AgentReasoningEffort } from "../../shared/agents";
+import { defaultRuntimeNameForProvider, type AgentConfig, type ProviderName } from "../../types";
 
 import type { AgentRoleDefinition } from "./roles";
 
@@ -26,28 +31,35 @@ function currentReasoningEffort(config: AgentConfig): AgentReasoningEffort | und
   return isOpenAiReasoningEffort(section?.reasoningEffort) ? section.reasoningEffort : undefined;
 }
 
-function modelDefaultReasoningEffort(config: AgentConfig, model: string): AgentReasoningEffort | undefined {
-  const defaults = providerOptionsDefaultsForModel(config.provider, model);
+function modelDefaultReasoningEffort(provider: ProviderName, model: string): AgentReasoningEffort | undefined {
+  const defaults = providerOptionsDefaultsForModel(provider, model);
   const section = isPlainObject(defaults) ? defaults : {};
   return isOpenAiReasoningEffort(section.reasoningEffort) ? section.reasoningEffort : undefined;
 }
 
 function applyReasoningEffort(
   config: AgentConfig,
+  provider: ProviderName,
   effectiveReasoningEffort: AgentReasoningEffort | undefined,
 ): AgentConfig["providerOptions"] {
-  if (!effectiveReasoningEffort) {
-    return config.providerOptions;
-  }
-  if (!OPENAI_COMPATIBLE_PROVIDER_NAMES.includes(config.provider as (typeof OPENAI_COMPATIBLE_PROVIDER_NAMES)[number])) {
-    return config.providerOptions;
-  }
   const nextProviderOptions = isPlainObject(config.providerOptions) ? { ...config.providerOptions } : {};
-  const providerKey = config.provider;
-  const nextSection = isPlainObject(nextProviderOptions[providerKey])
-    ? { ...(nextProviderOptions[providerKey] as Record<string, unknown>) }
+  const modelDefaults = providerOptionsDefaultsForModel(provider, config.model);
+  if (Object.keys(modelDefaults).length > 0) {
+    const nextSection = isPlainObject(nextProviderOptions[provider])
+      ? { ...(nextProviderOptions[provider] as Record<string, unknown>) }
+      : {};
+    nextProviderOptions[provider] = mergeObjects(modelDefaults, nextSection);
+  }
+  if (!effectiveReasoningEffort) {
+    return Object.keys(nextProviderOptions).length > 0 ? nextProviderOptions as AgentConfig["providerOptions"] : config.providerOptions;
+  }
+  if (!OPENAI_COMPATIBLE_PROVIDER_NAMES.includes(provider as (typeof OPENAI_COMPATIBLE_PROVIDER_NAMES)[number])) {
+    return Object.keys(nextProviderOptions).length > 0 ? nextProviderOptions as AgentConfig["providerOptions"] : config.providerOptions;
+  }
+  const nextSection = isPlainObject(nextProviderOptions[provider])
+    ? { ...(nextProviderOptions[provider] as Record<string, unknown>) }
     : {};
-  nextProviderOptions[config.provider] = mergeObjects(nextSection, { reasoningEffort: effectiveReasoningEffort });
+  nextProviderOptions[provider] = mergeObjects(nextSection, { reasoningEffort: effectiveReasoningEffort });
   return nextProviderOptions as AgentConfig["providerOptions"];
 }
 
@@ -57,33 +69,91 @@ export function routeAgentConfig(
     role: AgentRoleDefinition;
     model?: string;
     reasoningEffort?: AgentReasoningEffort;
+    connectedProviders?: readonly ProviderName[];
   },
 ): {
   config: AgentConfig;
   requestedModel?: string;
+  effectiveProvider: ProviderName;
   effectiveModel: string;
   requestedReasoningEffort?: AgentReasoningEffort;
   effectiveReasoningEffort?: AgentReasoningEffort;
+  fallbackLine?: string;
 } {
   const requestedModel = opts.model?.trim() || undefined;
   const requestedReasoningEffort = opts.reasoningEffort;
+  const connectedProviders = new Set(opts.connectedProviders ?? []);
 
-  const effectiveModel = opts.role.modelPolicy?.fixedModel ?? requestedModel ?? parentConfig.model;
+  let effectiveProvider = parentConfig.provider;
+  let effectiveModel = parentConfig.model;
+  let fallbackLine: string | undefined;
+
+  if (opts.role.modelPolicy?.fixedModel) {
+    effectiveModel = assertSupportedModel(parentConfig.provider, opts.role.modelPolicy.fixedModel, "child role model").id;
+  } else if (requestedModel) {
+    const requestedTarget = parseChildModelRef(requestedModel, parentConfig.provider, "child model");
+    if (requestedTarget.provider === parentConfig.provider) {
+      effectiveModel = requestedTarget.modelId;
+    } else {
+      const allowedRefs = new Set(parentConfig.allowedChildModelRefs ?? []);
+      const crossProviderEnabled = (parentConfig.childModelRoutingMode ?? "same-provider") === "cross-provider-allowlist";
+      const connected = connectedProviders.has(requestedTarget.provider);
+      if (crossProviderEnabled && allowedRefs.has(requestedTarget.ref) && connected) {
+        effectiveProvider = requestedTarget.provider;
+        effectiveModel = requestedTarget.modelId;
+      } else {
+        const reason = !crossProviderEnabled
+          ? "cross-provider routing is disabled for this workspace"
+          : !allowedRefs.has(requestedTarget.ref)
+            ? "the requested child target is not in this workspace allowlist"
+            : "the requested provider is not connected";
+        fallbackLine =
+          `[agent] Requested child target ${requestedTarget.ref} could not be used because ${reason}; falling back to ${childModelRef(parentConfig.provider, parentConfig.model)}.`;
+      }
+    }
+  }
+
   const effectiveReasoningEffort =
     opts.role.modelPolicy?.fixedReasoningEffort
     ?? requestedReasoningEffort
-    ?? (requestedModel ? modelDefaultReasoningEffort(parentConfig, effectiveModel) : undefined)
+    ?? (requestedModel || effectiveProvider !== parentConfig.provider || effectiveModel !== parentConfig.model
+      ? modelDefaultReasoningEffort(effectiveProvider, effectiveModel)
+      : undefined)
     ?? currentReasoningEffort(parentConfig);
+
+  const supportedEffectiveModel = assertSupportedModel(effectiveProvider, effectiveModel, "child model");
+  const normalizedChildRouting = normalizeChildRoutingConfig({
+    provider: effectiveProvider,
+    model: supportedEffectiveModel.id,
+    childModelRoutingMode: parentConfig.childModelRoutingMode,
+    preferredChildModelRef: parentConfig.preferredChildModelRef,
+    allowedChildModelRefs: parentConfig.allowedChildModelRefs,
+    preferredChildModel: parentConfig.preferredChildModel,
+    source: "child agent",
+  });
 
   return {
     config: {
       ...parentConfig,
-      model: effectiveModel,
-      providerOptions: applyReasoningEffort(parentConfig, effectiveReasoningEffort),
+      provider: effectiveProvider,
+      runtime: defaultRuntimeNameForProvider(effectiveProvider),
+      model: supportedEffectiveModel.id,
+      preferredChildModel: normalizedChildRouting.preferredChildModel,
+      childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
+      preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
+      allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
+      knowledgeCutoff: supportedEffectiveModel.knowledgeCutoff,
+      providerOptions: applyReasoningEffort(
+        { ...parentConfig, provider: effectiveProvider, model: supportedEffectiveModel.id },
+        effectiveProvider,
+        effectiveReasoningEffort,
+      ),
     },
     ...(requestedModel ? { requestedModel } : {}),
-    effectiveModel,
+    effectiveProvider,
+    effectiveModel: supportedEffectiveModel.id,
     ...(requestedReasoningEffort ? { requestedReasoningEffort } : {}),
     ...(effectiveReasoningEffort ? { effectiveReasoningEffort } : {}),
+    ...(fallbackLine ? { fallbackLine } : {}),
   };
 }

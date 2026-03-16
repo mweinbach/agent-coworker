@@ -1,6 +1,7 @@
 import type { AgentSession } from "../session/AgentSession";
 import type { SessionDb } from "../sessionDb";
 import type { AgentConfig } from "../../types";
+import type { ProviderName } from "../../types";
 import type { AgentMode, AgentReasoningEffort, AgentRole, PersistentAgentSummary } from "../../shared/agents";
 import type { SessionBinding } from "../startServer/types";
 import type { SeededSessionContext } from "../session/SessionContext";
@@ -51,6 +52,7 @@ export type AgentControlSummaryOverrides = {
 export type AgentControlDeps = {
   sessionBindings: Map<string, SessionBinding>;
   sessionDb: SessionDb | null;
+  getConnectedProviders: () => Promise<ProviderName[]>;
   buildSession: (
     binding: SessionBinding,
     persistedSessionId?: string,
@@ -68,4 +70,5 @@ export type AgentControlDeps = {
   loadAgentPrompt: (config: AgentConfig, role: AgentRole) => Promise<string>;
   disposeBinding: (binding: SessionBinding, reason: string) => void;
   emitParentAgentStatus: (parentSessionId: string, agent: PersistentAgentSummary) => void;
+  emitParentLog: (parentSessionId: string, line: string) => void;
 };

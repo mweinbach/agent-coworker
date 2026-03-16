@@ -169,7 +169,7 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("Available model overrides for the current provider (OpenAI):");
     expect(prompt).toContain("**GPT-5.4** (`gpt-5.4`)");
     expect(prompt).toContain("**GPT-5 Mini** (`gpt-5-mini`)");
-    expect(prompt).toContain("`preferredChildModel` is only a workspace/UI suggestion");
+    expect(prompt).toContain("`preferredChildModelRef` is only a workspace/UI suggestion");
     expect(prompt).toContain("spawnAgent with `role: \"explorer\"`");
     expect(prompt).not.toContain("spawnAgent (explore type)");
     expect(prompt).not.toContain("**explore**: Fast codebase exploration.");

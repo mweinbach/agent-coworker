@@ -121,7 +121,11 @@ export class AgentControl {
       role: roleDefinition,
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
+      connectedProviders: await this.deps.getConnectedProviders(),
     });
+    if (routed.fallbackLine) {
+      this.deps.emitParentLog(opts.parentSessionId, routed.fallbackLine);
+    }
     const childSystem = await this.deps.loadAgentPrompt(routed.config, role);
     const binding: SessionBinding = { session: null, socket: null };
     const built = this.deps.buildSession(binding, undefined, {

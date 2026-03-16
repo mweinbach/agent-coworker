@@ -8,7 +8,7 @@ import {
   OPENAI_TEXT_VERBOSITY_VALUES,
 } from "../shared/openaiCompatibleOptions";
 import { AGENT_ROLE_VALUES, agentReasoningEffortSchema } from "../shared/agents";
-import { isProviderName } from "../types";
+import { CHILD_MODEL_ROUTING_MODES, isProviderName } from "../types";
 
 import type { ClientMessage } from "./protocol";
 
@@ -29,6 +29,9 @@ const setConfigFieldErrorMessages: Record<string, string> = {
   enableMemory: "set_config config.enableMemory must be boolean",
   memoryRequireApproval: "set_config config.memoryRequireApproval must be boolean",
   preferredChildModel: "set_config config.preferredChildModel must be non-empty string",
+  childModelRoutingMode: `set_config config.childModelRoutingMode must be one of ${CHILD_MODEL_ROUTING_MODES.join(", ")}`,
+  preferredChildModelRef: "set_config config.preferredChildModelRef must be non-empty string",
+  allowedChildModelRefs: "set_config config.allowedChildModelRefs must be an array of non-empty strings",
   maxSteps: "set_config config.maxSteps must be number 1-1000",
   toolOutputOverflowChars: "set_config config.toolOutputOverflowChars must be null or non-negative integer",
   clearToolOutputOverflowChars: "set_config config.clearToolOutputOverflowChars must be boolean",
@@ -96,6 +99,9 @@ const setConfigPayloadSchema = z.object({
   enableMemory: z.boolean().optional(),
   memoryRequireApproval: z.boolean().optional(),
   preferredChildModel: z.string().trim().min(1).optional(),
+  childModelRoutingMode: z.enum(CHILD_MODEL_ROUTING_MODES).optional(),
+  preferredChildModelRef: z.string().trim().min(1).optional(),
+  allowedChildModelRefs: z.array(z.string().trim().min(1)).optional(),
   maxSteps: z.number().min(1).max(1000).optional(),
   toolOutputOverflowChars: z.number().int().nonnegative().nullable().optional(),
   clearToolOutputOverflowChars: z.boolean().optional(),

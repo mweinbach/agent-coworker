@@ -114,6 +114,18 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const model = (ws.defaultModel?.trim() || rt.config?.model?.trim() || "") || undefined;
       const preferredChildModel =
         (ws.defaultPreferredChildModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.preferredChildModel?.trim() || "") || undefined;
+      const childModelRoutingMode =
+        ws.defaultChildModelRoutingMode
+        ?? rt.sessionConfig?.childModelRoutingMode
+        ?? "same-provider";
+      const preferredChildModelRef =
+        ws.defaultPreferredChildModelRef?.trim()
+        || rt.sessionConfig?.preferredChildModelRef?.trim()
+        || (provider && preferredChildModel ? `${provider}:${preferredChildModel}` : undefined);
+      const allowedChildModelRefs =
+        ws.defaultAllowedChildModelRefs
+        ?? rt.sessionConfig?.allowedChildModelRefs
+        ?? [];
       const providerOptions = ws.providerOptions;
       const userName = ws.userName;
       const userProfile = ws.userProfile ? normalizeWorkspaceUserProfile(ws.userProfile) : undefined;
@@ -129,12 +141,15 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         if (ok) appendThreadTranscript(threadId, "client", { type: "set_model", sessionId: rt.sessionId, provider, model });
       }
 
-      if (preferredChildModel || providerOptions || hasProfileDefaults) {
+      if (preferredChildModel || preferredChildModelRef || providerOptions || hasProfileDefaults) {
         const okConfig = sendThread(get, threadId, (sessionId) => ({
           type: "set_config",
           sessionId,
           config: {
             ...(preferredChildModel ? { preferredChildModel } : {}),
+            childModelRoutingMode,
+            ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
+            allowedChildModelRefs,
             ...(providerOptions ? { providerOptions: providerOptions as OpenAiCompatibleProviderOptionsByProvider } : {}),
             ...(userName !== undefined ? { userName } : {}),
             ...(userProfile !== undefined ? { userProfile } : {}),
@@ -146,6 +161,9 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
             sessionId: rt.sessionId,
             config: {
               ...(preferredChildModel ? { preferredChildModel } : {}),
+              childModelRoutingMode,
+              ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
+              allowedChildModelRefs,
               ...(providerOptions ? { providerOptions } : {}),
               ...(userName !== undefined ? { userName } : {}),
               ...(userProfile !== undefined ? { userProfile } : {}),
@@ -196,6 +214,9 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         workspacePatch.defaultProvider !== undefined ||
         workspacePatch.defaultModel !== undefined ||
         workspacePatch.defaultPreferredChildModel !== undefined ||
+        workspacePatch.defaultChildModelRoutingMode !== undefined ||
+        workspacePatch.defaultPreferredChildModelRef !== undefined ||
+        workspacePatch.defaultAllowedChildModelRefs !== undefined ||
         workspacePatch.defaultToolOutputOverflowChars !== undefined ||
         clearDefaultToolOutputOverflowChars === true ||
         workspacePatch.defaultEnableMcp !== undefined ||
@@ -220,6 +241,9 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       );
       const model = workspace.defaultModel?.trim() || defaultModelForProvider(provider);
       const preferredChildModel = workspace.defaultPreferredChildModel?.trim() || model;
+      const childModelRoutingMode = workspace.defaultChildModelRoutingMode ?? "same-provider";
+      const preferredChildModelRef = workspace.defaultPreferredChildModelRef?.trim() || `${provider}:${preferredChildModel}`;
+      const allowedChildModelRefs = workspace.defaultAllowedChildModelRefs ?? [];
       const toolOutputOverflowChars = workspace.defaultToolOutputOverflowChars;
       const providerOptions = workspace.providerOptions;
       const userName = workspace.userName;
@@ -238,6 +262,9 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         config: {
           backupsEnabled: workspace.defaultBackupsEnabled,
           preferredChildModel,
+          childModelRoutingMode,
+          preferredChildModelRef,
+          allowedChildModelRefs,
           ...(toolOutputOverflowChars !== undefined
             ? { toolOutputOverflowChars }
             : clearToolOutputOverflowChars

@@ -515,6 +515,30 @@ describe("loadConfig", () => {
     expect(cfg.preferredChildModel).toBe("gemini-3-pro-preview");
   });
 
+  test("preferredChildModelRef and allowlist normalize cross-provider child routing config", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      childModelRoutingMode: "cross-provider-allowlist",
+      preferredChildModelRef: "opencode-zen:glm-5",
+      allowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.childModelRoutingMode).toBe("cross-provider-allowlist");
+    expect(cfg.preferredChildModelRef).toBe("opencode-zen:glm-5");
+    expect(cfg.allowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
+    expect(cfg.preferredChildModel).toBe("gpt-5.4");
+  });
+
   test("knowledgeCutoff config values are ignored in favor of the selected model registry entry", async () => {
     const { cwd, home } = await makeTmpDirs();
 

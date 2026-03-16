@@ -16,6 +16,7 @@ import {
 } from "../shared/openaiCompatibleOptions";
 import { ensureDefaultGlobalSkillsReady } from "../skills/defaultGlobalSkills";
 import { writeTextFileAtomic } from "../utils/atomicFile";
+import { getProviderCatalog } from "../providers/connectionCatalog";
 
 import { AgentControl } from "./agents/AgentControl";
 import { AgentSession } from "./session/AgentSession";
@@ -79,7 +80,19 @@ async function persistProjectConfigPatch(
   patch: Partial<
     Pick<
       AgentConfig,
-      "provider" | "model" | "preferredChildModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
+      | "provider"
+      | "model"
+      | "preferredChildModel"
+      | "childModelRoutingMode"
+      | "preferredChildModelRef"
+      | "allowedChildModelRefs"
+      | "enableMcp"
+      | "enableMemory"
+      | "memoryRequireApproval"
+      | "observabilityEnabled"
+      | "backupsEnabled"
+      | "toolOutputOverflowChars"
+      | "userName"
     >
   > & {
     userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -147,7 +160,19 @@ function mergeConfigPatch(
   patch: Partial<
     Pick<
       AgentConfig,
-      "provider" | "model" | "preferredChildModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
+      | "provider"
+      | "model"
+      | "preferredChildModel"
+      | "childModelRoutingMode"
+      | "preferredChildModelRef"
+      | "allowedChildModelRefs"
+      | "enableMcp"
+      | "enableMemory"
+      | "memoryRequireApproval"
+      | "observabilityEnabled"
+      | "backupsEnabled"
+      | "toolOutputOverflowChars"
+      | "userName"
     >
   > & {
     userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -297,6 +322,9 @@ export async function startAgentServer(
             provider: AgentConfig["provider"];
             model: string;
             preferredChildModel: string;
+            childModelRoutingMode?: import("../types").ChildModelRoutingMode;
+            preferredChildModelRef?: string;
+            allowedChildModelRefs?: string[];
           }) => {
             await persistProjectConfigPatch(config.projectAgentDir, selection, config.providerOptions);
             config = mergeConfigPatch(config, selection);
@@ -307,7 +335,18 @@ export async function startAgentServer(
           patch: Partial<
             Pick<
               AgentConfig,
-              "provider" | "model" | "preferredChildModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+              | "provider"
+              | "model"
+              | "preferredChildModel"
+              | "childModelRoutingMode"
+              | "preferredChildModelRef"
+              | "allowedChildModelRefs"
+              | "enableMcp"
+              | "enableMemory"
+              | "memoryRequireApproval"
+              | "observabilityEnabled"
+              | "backupsEnabled"
+              | "toolOutputOverflowChars"
             >
           > & {
             clearToolOutputOverflowChars?: boolean;
@@ -455,6 +494,7 @@ export async function startAgentServer(
   agentControl = new AgentControl({
     sessionBindings,
     sessionDb,
+    getConnectedProviders: async () => (await getProviderCatalog({ paths: getAiCoworkerPathsImpl({ homedir: opts.homedir }) })).connected as AgentConfig["provider"][],
     buildSession,
     loadAgentPrompt,
     disposeBinding,
@@ -464,6 +504,16 @@ export async function startAgentServer(
       if (!socket) return;
       try {
         socket.send(JSON.stringify({ type: "agent_status", sessionId: parentSessionId, agent }));
+      } catch {
+        // ignore
+      }
+    },
+    emitParentLog: (parentSessionId, line) => {
+      const parentBinding = sessionBindings.get(parentSessionId);
+      const socket = parentBinding?.socket;
+      if (!socket) return;
+      try {
+        socket.send(JSON.stringify({ type: "log", sessionId: parentSessionId, line }));
       } catch {
         // ignore
       }

@@ -116,6 +116,9 @@ const persistedWorkspaceSchema = z.object({
   defaultProvider: optionalNonEmptyStringSchema,
   defaultModel: optionalNonEmptyStringSchema,
   defaultPreferredChildModel: optionalNonEmptyStringSchema,
+  defaultChildModelRoutingMode: z.enum(["same-provider", "cross-provider-allowlist"]).optional(),
+  defaultPreferredChildModelRef: optionalNonEmptyStringSchema,
+  defaultAllowedChildModelRefs: z.array(nonEmptyStringSchema).optional(),
   defaultToolOutputOverflowChars: z.preprocess((value) => {
     if (value === undefined) return undefined;
     if (value === null) return null;

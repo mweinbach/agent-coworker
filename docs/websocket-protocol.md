@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.16`
+- Current protocol version: `7.17`
 
 ## Table of Contents
 
@@ -49,11 +49,16 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 ## Protocol v7 Notes
 
+Changes in `7.17`:
+
+- Child-agent routing now supports canonical `provider:modelId` refs for explicit cross-provider child targets.
+- `set_config` / `session_config` now expose `childModelRoutingMode`, `preferredChildModelRef`, and `allowedChildModelRefs` for workspace-scoped child routing policy.
+
 Changes in `7.16`:
 
 - Child-agent websocket control is now fully normalized around `agent_*` messages and `agent_spawned` / `agent_list` / `agent_status` events.
 - Child sessions now report `sessionKind: "agent"` plus role, mode, depth, effective model, and effective reasoning metadata in `server_hello` and `session_info`.
-- `preferredChildModel` is the canonical workspace/session config field for suggested child-model overrides.
+- `preferredChildModel` remains as the legacy same-provider suggestion field; `preferredChildModelRef` is the canonical child target reference field.
 
 Changes in `7.15`:
 
@@ -183,7 +188,7 @@ When a WebSocket connection opens, the server sends these events in order:
 
 1. `server_hello` — session ID, config, protocol version, capabilities
 2. `session_settings` — current runtime settings (e.g. MCP toggle)
-3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `backupsEnabled`, `defaultBackupsEnabled`, `toolOutputOverflowChars`, `defaultToolOutputOverflowChars`, `preferredChildModel`, `maxSteps`, `providerOptions`, `userName`, `userProfile`)
+3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `backupsEnabled`, `defaultBackupsEnabled`, `toolOutputOverflowChars`, `defaultToolOutputOverflowChars`, `preferredChildModel`, `childModelRoutingMode`, `preferredChildModelRef`, `allowedChildModelRefs`, `maxSteps`, `providerOptions`, `userName`, `userProfile`)
 4. `session_info` — session metadata including title
 5. `observability_status` — Langfuse observability state
 6. `provider_catalog` — available providers and models (async)
@@ -229,7 +234,7 @@ Returned in `server_hello` and `config_updated`:
 ```json
 {
   "provider": "openai",
-  "model": "gpt-5.4",
+  "model": "opencode-zen:glm-5",
   "workingDirectory": "/path/to/project"
 }
 ```
@@ -1731,7 +1736,7 @@ Create a durable child session for the current root session and queue its initia
 | `sessionId` | `string` | Yes | Root session identifier |
 | `message` | `string` | Yes | Initial message queued for the child session |
 | `role` | `"default" \| "explorer" \| "research" \| "worker" \| "reviewer"` | No | Child-agent role. Defaults to `"default"` |
-| `model` | `string` | No | Requested child model override |
+| `model` | `string` | No | Requested child model override. Accepts either a same-provider model id or a canonical `provider:modelId` child target ref |
 | `reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | Requested reasoning level override |
 | `forkContext` | `boolean` | No | When `true`, request that the child inherit the current parent context snapshot |
 
@@ -1866,7 +1871,10 @@ Update runtime configuration values.
 | `config.backupsEnabled` | `boolean` | No | Toggle session backups for the current session and persist the workspace default for future sessions |
 | `config.toolOutputOverflowChars` | `number \| null` | No | Workspace-scoped character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
 | `config.clearToolOutputOverflowChars` | `boolean` | No | When `true`, delete the persisted workspace overflow override and resume inheriting the built-in or user-level default. Cannot be combined with `config.toolOutputOverflowChars`. |
-| `config.preferredChildModel` | `string` | No | Non-empty preferred child model ID for the current provider. Unsupported values are rejected with a `validation_failed` session error. |
+| `config.preferredChildModel` | `string` | No | Legacy same-provider preferred child model ID. Unsupported values are rejected with a `validation_failed` session error. |
+| `config.childModelRoutingMode` | `"same-provider" \| "cross-provider-allowlist"` | No | Workspace child-routing policy. Cross-provider refs only route when this is `"cross-provider-allowlist"` |
+| `config.preferredChildModelRef` | `string` | No | Preferred child target ref. Accepts either a plain same-provider model id or a canonical `provider:modelId` ref |
+| `config.allowedChildModelRefs` | `string[]` | No | Exact cross-provider child target refs allowed for this workspace |
 | `config.maxSteps` | `number` | No | Max steps per turn (1-1000) |
 | `config.providerOptions` | `object` | No | Editable OpenAI-compatible provider option patch. Only `openai` and `codex-cli` are allowed |
 | `config.providerOptions.openai.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | OpenAI reasoning effort |
@@ -3275,6 +3283,9 @@ Current runtime config. Sent on connection and after `set_config`.
     "toolOutputOverflowChars": 25000,
     "defaultToolOutputOverflowChars": 25000,
     "preferredChildModel": "gpt-5.4",
+    "childModelRoutingMode": "cross-provider-allowlist",
+    "preferredChildModelRef": "opencode-zen:glm-5",
+    "allowedChildModelRefs": ["opencode-zen:glm-5", "opencode-go:glm-5"],
     "maxSteps": 100,
     "providerOptions": {
       "openai": {
@@ -3303,6 +3314,9 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
 | `config.defaultToolOutputOverflowChars` | `number \| null` | Persisted workspace overflow default when explicitly configured; omitted when the session is inheriting the built-in or user-level default |
 | `config.preferredChildModel` | `string` | Preferred child model identifier used as the default override suggestion |
+| `config.childModelRoutingMode` | `"same-provider" \| "cross-provider-allowlist"` | Workspace child-routing policy |
+| `config.preferredChildModelRef` | `string` | Canonical preferred child target ref shown in workspace/UI suggestions |
+| `config.allowedChildModelRefs` | `string[]` | Exact cross-provider child target refs allowed for this workspace |
 | `config.maxSteps` | `number` | Maximum steps per turn |
 | `config.providerOptions` | `object?` | Editable OpenAI-compatible provider options when configured |
 | `config.userName` | `string` | Effective user name |

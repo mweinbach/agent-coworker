@@ -19,6 +19,7 @@ import {
   trashPath,
 } from "../../lib/desktopCommands";
 import type { ProviderName } from "../../lib/wsProtocol";
+import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
 
 import {
   type AppStoreActions,
@@ -95,6 +96,9 @@ const persistedWorkspaceSchema = z.object({
   defaultProvider: normalizedProviderSchema,
   defaultModel: optionalStringWithContentSchema,
   defaultPreferredChildModel: optionalStringWithContentSchema,
+  defaultChildModelRoutingMode: z.enum(["same-provider", "cross-provider-allowlist"]).optional(),
+  defaultPreferredChildModelRef: optionalStringWithContentSchema,
+  defaultAllowedChildModelRefs: z.array(z.string().trim().min(1)).optional(),
   defaultToolOutputOverflowChars: z.preprocess((value) => {
     if (value === undefined) return undefined;
     if (value === null) return null;
@@ -120,6 +124,11 @@ const persistedWorkspaceSchema = z.object({
     return legacy.length > 0 ? legacy : undefined;
   })();
   const model = workspace.defaultModel ?? defaultModelForProvider(workspace.defaultProvider);
+  const childModelRoutingMode = (workspace.defaultChildModelRoutingMode ?? "same-provider") as ChildModelRoutingMode;
+  const legacyPreferredValue = workspace.defaultPreferredChildModel ?? legacySubAgentModel ?? model;
+  const preferredChildModelRef =
+    workspace.defaultPreferredChildModelRef
+    ?? (legacyPreferredValue.includes(":") ? legacyPreferredValue : `${workspace.defaultProvider}:${legacyPreferredValue}`);
   return {
     id: workspace.id,
     name: workspace.name,
@@ -128,8 +137,10 @@ const persistedWorkspaceSchema = z.object({
     lastOpenedAt: workspace.lastOpenedAt,
     defaultProvider: workspace.defaultProvider,
     defaultModel: model,
-    defaultPreferredChildModel:
-      workspace.defaultPreferredChildModel ?? legacySubAgentModel ?? model,
+    defaultPreferredChildModel: legacyPreferredValue,
+    defaultChildModelRoutingMode: childModelRoutingMode,
+    defaultPreferredChildModelRef: preferredChildModelRef,
+    defaultAllowedChildModelRefs: workspace.defaultAllowedChildModelRefs ?? [],
     defaultToolOutputOverflowChars: workspace.defaultToolOutputOverflowChars,
     providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
     userName: workspace.userName,

@@ -11,6 +11,7 @@ import type { OpenAiCompatibleProviderOptionsByProvider } from "../../shared/ope
 import type { AgentReasoningEffort, PersistentAgentSummary, AgentRole } from "../../shared/agents";
 import type {
   AgentConfig,
+  ChildModelRoutingMode,
   HarnessContextState,
   ModelMessage,
   ServerErrorCode,
@@ -35,12 +36,27 @@ export type PersistedModelSelection = {
   provider: AgentConfig["provider"];
   model: string;
   preferredChildModel: string;
+  childModelRoutingMode?: ChildModelRoutingMode;
+  preferredChildModelRef?: string;
+  allowedChildModelRefs?: string[];
 };
 
 export type PersistedProjectConfigPatch = Partial<
   Pick<
     AgentConfig,
-    "provider" | "model" | "preferredChildModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
+    | "provider"
+    | "model"
+    | "preferredChildModel"
+    | "childModelRoutingMode"
+    | "preferredChildModelRef"
+    | "allowedChildModelRefs"
+    | "enableMcp"
+    | "enableMemory"
+    | "memoryRequireApproval"
+    | "observabilityEnabled"
+    | "backupsEnabled"
+    | "toolOutputOverflowChars"
+    | "userName"
   >
 > & {
   userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;

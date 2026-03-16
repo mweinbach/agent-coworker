@@ -506,6 +506,9 @@ describe("workspace settings sync", () => {
         toolOutputOverflowChars: 12000,
         defaultToolOutputOverflowChars: 12000,
         preferredChildModel: "gpt-5-mini",
+        childModelRoutingMode: "cross-provider-allowlist",
+        preferredChildModelRef: "opencode-zen:glm-5",
+        allowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -515,11 +518,17 @@ describe("workspace settings sync", () => {
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(workspace?.defaultPreferredChildModel).toBe("gpt-5-mini");
+    expect(workspace?.defaultChildModelRoutingMode).toBe("cross-provider-allowlist");
+    expect(workspace?.defaultPreferredChildModelRef).toBe("opencode-zen:glm-5");
+    expect(workspace?.defaultAllowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
     expect(workspace?.defaultBackupsEnabled).toBe(false);
     expect(workspace?.defaultToolOutputOverflowChars).toBe(12000);
     expect(workspace?.userName).toBe("Alex");
     expect(workspace?.userProfile).toEqual({ instructions: "", work: "", details: "" });
     expect(runtime?.controlSessionConfig?.preferredChildModel).toBe("gpt-5-mini");
+    expect(runtime?.controlSessionConfig?.childModelRoutingMode).toBe("cross-provider-allowlist");
+    expect(runtime?.controlSessionConfig?.preferredChildModelRef).toBe("opencode-zen:glm-5");
+    expect(runtime?.controlSessionConfig?.allowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
     expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultBackupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.toolOutputOverflowChars).toBe(12000);
@@ -564,6 +573,9 @@ describe("workspace settings sync", () => {
         workspace.id === workspaceId
           ? {
               ...workspace,
+              defaultChildModelRoutingMode: "cross-provider-allowlist",
+              defaultPreferredChildModelRef: "opencode-zen:glm-5",
+              defaultAllowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
               userName: "Alex",
               userProfile: {
                 instructions: "Keep answers terse.",
@@ -694,6 +706,9 @@ describe("workspace settings sync", () => {
         workspace.id === workspaceId
           ? {
               ...workspace,
+              defaultChildModelRoutingMode: "cross-provider-allowlist",
+              defaultPreferredChildModelRef: "opencode-zen:glm-5",
+              defaultAllowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
               userName: "Alex",
               userProfile: {
                 instructions: "Keep answers terse.",
@@ -742,6 +757,9 @@ describe("workspace settings sync", () => {
       type: "set_config",
       config: {
         preferredChildModel: "gpt-5.2",
+        childModelRoutingMode: "cross-provider-allowlist",
+        preferredChildModelRef: "opencode-zen:glm-5",
+        allowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
         userName: "Alex",
         userProfile: {
           instructions: "Keep answers terse.",

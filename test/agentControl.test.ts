@@ -12,7 +12,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     provider: "openai",
     model: "gpt-5.4",
-    preferredChildModel: "gpt-5.4-mini",
+    preferredChildModel: "gpt-5-mini",
     workingDirectory: dir,
     outputDirectory: path.join(dir, "output"),
     uploadsDirectory: path.join(dir, "uploads"),
@@ -121,7 +121,7 @@ function makePersistedChildRecord(config: AgentConfig, overrides: Partial<Persis
 describe("AgentControl.spawn", () => {
   test("passes a forked parent context seed into child session creation", async () => {
     const parentConfig = makeConfig();
-    const childConfig = makeConfig({ model: "gpt-5.4-mini" });
+    const childConfig = makeConfig({ model: "gpt-5-mini", preferredChildModel: "gpt-5-mini" });
     const seedContext: SeededSessionContext = {
       messages: [
         { role: "user", content: "Investigate this failure" },
@@ -147,10 +147,12 @@ describe("AgentControl.spawn", () => {
         ["root-1", { session: { buildForkContextSeed }, socket: null }],
       ]) as Map<string, SessionBinding>,
       sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
       buildSession: buildSession as any,
       loadAgentPrompt: async () => "child system prompt",
       disposeBinding: () => {},
       emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
     });
 
     await control.spawn({
@@ -189,10 +191,12 @@ describe("AgentControl.spawn", () => {
         ["root-1", { session: { buildForkContextSeed }, socket: null }],
       ]) as Map<string, SessionBinding>,
       sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
       buildSession: buildSession as any,
       loadAgentPrompt: async () => "child system prompt",
       disposeBinding: () => {},
       emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
     });
 
     await control.spawn({
@@ -211,6 +215,114 @@ describe("AgentControl.spawn", () => {
       }),
     );
   });
+
+  test("routes an allowlisted cross-provider child target when the provider is connected", async () => {
+    const parentConfig = makeConfig({
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      preferredChildModel: "gpt-5.4",
+      childModelRoutingMode: "cross-provider-allowlist",
+      preferredChildModelRef: "opencode-zen:glm-5",
+      allowedChildModelRefs: ["opencode-zen:glm-5"],
+    });
+    const childConfig = makeConfig({
+      provider: "opencode-zen",
+      model: "glm-5",
+      preferredChildModel: "glm-5",
+      preferredChildModelRef: "opencode-zen:glm-5",
+      childModelRoutingMode: "cross-provider-allowlist",
+      allowedChildModelRefs: ["opencode-zen:glm-5"],
+    });
+    const childSession = makeChildSession(childConfig);
+    const buildSession = mock((binding: SessionBinding, _persistedSessionId?: string, overrides?: Record<string, unknown>) => {
+      binding.session = childSession;
+      return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
+    });
+    const control = new AgentControl({
+      sessionBindings: new Map([
+        ["root-1", { session: { buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }) }, socket: null }],
+      ]) as Map<string, SessionBinding>,
+      sessionDb: null,
+      getConnectedProviders: async () => ["codex-cli", "opencode-zen"],
+      buildSession: buildSession as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    await control.spawn({
+      parentSessionId: "root-1",
+      parentConfig,
+      role: "worker",
+      model: "opencode-zen:glm-5",
+      message: "Investigate with glm-5",
+    });
+
+    expect(buildSession).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      expect.objectContaining({
+        config: expect.objectContaining({
+          provider: "opencode-zen",
+          model: "glm-5",
+        }),
+      }),
+    );
+    expect(childSession.sendUserMessage).toHaveBeenCalledWith("Investigate with glm-5");
+  });
+
+  test("falls back to the parent target and logs when a cross-provider ref is not allowlisted", async () => {
+    const parentConfig = makeConfig({
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      preferredChildModel: "gpt-5.4",
+      childModelRoutingMode: "cross-provider-allowlist",
+      preferredChildModelRef: "codex-cli:gpt-5.4",
+      allowedChildModelRefs: [],
+    });
+    const childSession = makeChildSession(parentConfig);
+    const buildSession = mock((binding: SessionBinding, _persistedSessionId?: string, overrides?: Record<string, unknown>) => {
+      binding.session = childSession;
+      return { session: childSession, isResume: false, resumedFromStorage: false, overrides };
+    });
+    const emitParentLog = mock(() => {});
+    const control = new AgentControl({
+      sessionBindings: new Map([
+        ["root-1", { session: { buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }) }, socket: null }],
+      ]) as Map<string, SessionBinding>,
+      sessionDb: null,
+      getConnectedProviders: async () => ["codex-cli", "opencode-go"],
+      buildSession: buildSession as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog,
+    });
+
+    await control.spawn({
+      parentSessionId: "root-1",
+      parentConfig,
+      role: "worker",
+      model: "opencode-go:glm-5",
+      message: "Investigate with fallback",
+    });
+
+    expect(buildSession).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      expect.objectContaining({
+        config: expect.objectContaining({
+          provider: "codex-cli",
+          model: "gpt-5.4",
+        }),
+      }),
+    );
+    expect(emitParentLog).toHaveBeenCalledWith(
+      "root-1",
+      expect.stringContaining("falling back to codex-cli:gpt-5.4"),
+    );
+  });
 });
 
 describe("AgentControl persisted child control", () => {
@@ -227,10 +339,12 @@ describe("AgentControl persisted child control", () => {
         getSessionRecord: (sessionId: string) =>
           sessionId === "child-1" ? makePersistedChildRecord(config) : null,
       } as any,
+      getConnectedProviders: async () => ["openai"],
       buildSession: buildSession as any,
       loadAgentPrompt: async () => "child system prompt",
       disposeBinding: () => {},
       emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
     });
 
     await control.sendInput({
@@ -255,6 +369,7 @@ describe("AgentControl persisted child control", () => {
         getSessionRecord: (sessionId: string) =>
           sessionId === "child-1" ? makePersistedChildRecord(config) : null,
       } as any,
+      getConnectedProviders: async () => ["openai"],
       buildSession: ((binding: SessionBinding) => {
         binding.session = childSession;
         return { session: childSession, isResume: true, resumedFromStorage: true };
@@ -262,6 +377,7 @@ describe("AgentControl persisted child control", () => {
       loadAgentPrompt: async () => "child system prompt",
       disposeBinding: () => {},
       emitParentAgentStatus,
+      emitParentLog: () => {},
     });
 
     const result = await control.wait({
@@ -288,6 +404,7 @@ describe("AgentControl persisted child control", () => {
             ? makePersistedChildRecord(config, { status: "closed", executionState: "closed" })
             : null,
       } as any,
+      getConnectedProviders: async () => ["openai"],
       buildSession: ((binding: SessionBinding) => {
         binding.session = childSession;
         return { session: childSession, isResume: true, resumedFromStorage: true };
@@ -295,6 +412,7 @@ describe("AgentControl persisted child control", () => {
       loadAgentPrompt: async () => "child system prompt",
       disposeBinding: () => {},
       emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
     });
 
     const summary = await control.resume({
@@ -317,6 +435,7 @@ describe("AgentControl persisted child control", () => {
         getSessionRecord: (sessionId: string) =>
           sessionId === "child-1" ? makePersistedChildRecord(config) : null,
       } as any,
+      getConnectedProviders: async () => ["openai"],
       buildSession: ((binding: SessionBinding) => {
         binding.session = childSession;
         return { session: childSession, isResume: true, resumedFromStorage: true };
@@ -324,6 +443,7 @@ describe("AgentControl persisted child control", () => {
       loadAgentPrompt: async () => "child system prompt",
       disposeBinding,
       emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
     });
 
     const summary = await control.close({

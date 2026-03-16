@@ -1108,10 +1108,31 @@ describe("safeParseClientMessage", () => {
         expect(msg.config.backupsEnabled).toBe(true);
         expect(msg.config.toolOutputOverflowChars).toBeNull();
         expect(msg.config.preferredChildModel).toBe("gpt-5.2");
+        expect(msg.config.childModelRoutingMode).toBeUndefined();
         expect(msg.config.maxSteps).toBe(25);
         expect(msg.config.providerOptions?.openai?.reasoningEffort).toBe("xhigh");
         expect(msg.config.providerOptions?.openai?.reasoningSummary).toBe("concise");
         expect(msg.config.providerOptions?.openai?.textVerbosity).toBe("medium");
+      }
+    });
+
+    test("valid set_config accepts cross-provider child routing fields", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_config",
+          sessionId: "s1",
+          config: {
+            childModelRoutingMode: "cross-provider-allowlist",
+            preferredChildModelRef: "opencode-zen:glm-5",
+            allowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
+          },
+        }),
+      );
+      expect(msg.type).toBe("set_config");
+      if (msg.type === "set_config") {
+        expect(msg.config.childModelRoutingMode).toBe("cross-provider-allowlist");
+        expect(msg.config.preferredChildModelRef).toBe("opencode-zen:glm-5");
+        expect(msg.config.allowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
       }
     });
 
@@ -1171,6 +1192,15 @@ describe("safeParseClientMessage", () => {
       expect(
         expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { preferredChildModel: "" } })),
       ).toBe("set_config config.preferredChildModel must be non-empty string");
+      expect(
+        expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { childModelRoutingMode: "cross-provider" } })),
+      ).toBe("set_config config.childModelRoutingMode must be one of same-provider, cross-provider-allowlist");
+      expect(
+        expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { preferredChildModelRef: "" } })),
+      ).toBe("set_config config.preferredChildModelRef must be non-empty string");
+      expect(
+        expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { allowedChildModelRefs: [""] } })),
+      ).toBe("set_config config.allowedChildModelRefs must be an array of non-empty strings");
       expect(
         expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { maxSteps: 0 } })),
       ).toBe("set_config config.maxSteps must be number 1-1000");

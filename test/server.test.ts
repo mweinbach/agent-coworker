@@ -2891,7 +2891,7 @@ describe("Protocol Doc Parity", () => {
 
       expect(errorEvent.code).toBe("validation_failed");
       expect(errorEvent.source).toBe("session");
-      expect(errorEvent.message).toContain('Unsupported preferred child model "gemini-3-pro-preview" for provider openai');
+      expect(errorEvent.message).toContain('Unsupported session config preferred child target "gemini-3-pro-preview" for provider openai');
 
       const persistedConfig = JSON.parse(
         await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),

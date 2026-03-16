@@ -1,5 +1,6 @@
 import type {
   ApprovalRiskCode,
+  ChildModelRoutingMode,
   ConfigSubset,
   ProviderName,
   ServerErrorCode,
@@ -54,6 +55,9 @@ export type WorkspaceRecord = {
   defaultProvider?: ProviderName;
   defaultModel?: string;
   defaultPreferredChildModel?: string;
+  defaultChildModelRoutingMode?: ChildModelRoutingMode;
+  defaultPreferredChildModelRef?: string;
+  defaultAllowedChildModelRefs?: string[];
   defaultToolOutputOverflowChars?: number | null;
   providerOptions?: WorkspaceProviderOptions;
   userName?: string;

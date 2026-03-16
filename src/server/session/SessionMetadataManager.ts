@@ -1,5 +1,5 @@
 import { getObservabilityHealth } from "../../observability/runtime";
-import { assertSupportedModel } from "../../models/registry";
+import { normalizeChildRoutingConfig } from "../../models/childModelRouting";
 import {
   mergeEditableOpenAiCompatibleProviderOptions,
   pickEditableOpenAiCompatibleProviderOptions,
@@ -72,6 +72,11 @@ export class SessionMetadataManager {
         memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? false,
         defaultBackupsEnabled,
         preferredChildModel: this.context.state.config.preferredChildModel,
+        childModelRoutingMode: this.context.state.config.childModelRoutingMode ?? "same-provider",
+        preferredChildModelRef:
+          this.context.state.config.preferredChildModelRef
+          ?? `${this.context.state.config.provider}:${this.context.state.config.preferredChildModel}`,
+        allowedChildModelRefs: this.context.state.config.allowedChildModelRefs ?? [],
         maxSteps: this.context.state.maxSteps,
         toolOutputOverflowChars,
         ...(defaultToolOutputOverflowChars !== undefined ? { defaultToolOutputOverflowChars } : {}),
@@ -205,14 +210,30 @@ export class SessionMetadataManager {
       return;
     }
 
-    let normalizedSubAgentModel: string | undefined;
-    if (patch.preferredChildModel !== undefined) {
+    let normalizedChildRouting:
+      | ReturnType<typeof normalizeChildRoutingConfig>
+      | undefined;
+    if (
+      patch.preferredChildModel !== undefined
+      || patch.childModelRoutingMode !== undefined
+      || patch.preferredChildModelRef !== undefined
+      || patch.allowedChildModelRefs !== undefined
+    ) {
       try {
-        normalizedSubAgentModel = assertSupportedModel(
-          this.context.state.config.provider,
-          patch.preferredChildModel,
-          "preferred child model",
-        ).id;
+        normalizedChildRouting = normalizeChildRoutingConfig({
+          provider: this.context.state.config.provider,
+          model: this.context.state.config.model,
+          childModelRoutingMode: patch.childModelRoutingMode ?? this.context.state.config.childModelRoutingMode,
+          preferredChildModel: patch.preferredChildModel ?? this.context.state.config.preferredChildModel,
+          preferredChildModelRef:
+            patch.preferredChildModelRef !== undefined
+              ? patch.preferredChildModelRef
+              : patch.preferredChildModel !== undefined
+                ? undefined
+                : this.context.state.config.preferredChildModelRef,
+          allowedChildModelRefs: patch.allowedChildModelRefs ?? this.context.state.config.allowedChildModelRefs,
+          source: "session config",
+        });
       } catch (err) {
         this.context.emitError("validation_failed", "session", err instanceof Error ? err.message : String(err));
         return;
@@ -234,8 +255,11 @@ export class SessionMetadataManager {
     }
 
     const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
-    if (normalizedSubAgentModel !== undefined) {
-      persistPatch.preferredChildModel = normalizedSubAgentModel;
+    if (normalizedChildRouting !== undefined) {
+      persistPatch.preferredChildModel = normalizedChildRouting.preferredChildModel;
+      persistPatch.childModelRoutingMode = normalizedChildRouting.childModelRoutingMode;
+      persistPatch.preferredChildModelRef = normalizedChildRouting.preferredChildModelRef;
+      persistPatch.allowedChildModelRefs = normalizedChildRouting.allowedChildModelRefs;
     }
     if (patch.observabilityEnabled !== undefined) {
       persistPatch.observabilityEnabled = patch.observabilityEnabled;
@@ -292,8 +316,14 @@ export class SessionMetadataManager {
     if (patch.memoryRequireApproval !== undefined) {
       this.context.state.config = { ...this.context.state.config, memoryRequireApproval: patch.memoryRequireApproval };
     }
-    if (normalizedSubAgentModel !== undefined) {
-      this.context.state.config = { ...this.context.state.config, preferredChildModel: normalizedSubAgentModel };
+    if (normalizedChildRouting !== undefined) {
+      this.context.state.config = {
+        ...this.context.state.config,
+        preferredChildModel: normalizedChildRouting.preferredChildModel,
+        childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
+        preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
+        allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
+      };
     }
     if (patch.toolOutputOverflowChars !== undefined) {
       this.context.state.config = {

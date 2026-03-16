@@ -11,7 +11,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     provider: "openai",
     model: "gpt-5.4",
-    preferredChildModel: "gpt-5.4-mini",
+    preferredChildModel: "gpt-5-mini",
     workingDirectory: dir,
     outputDirectory: path.join(dir, "output"),
     uploadsDirectory: path.join(dir, "uploads"),
@@ -35,7 +35,7 @@ function makeSummary(overrides: Partial<PersistentAgentSummary> = {}): Persisten
     role: "worker",
     mode: "collaborative",
     depth: 1,
-    effectiveModel: "gpt-5.4-mini",
+    effectiveModel: "gpt-5-mini",
     title: "Investigate",
     provider: "openai",
     createdAt: "2026-03-15T00:00:00.000Z",

@@ -1,6 +1,7 @@
 import type {
   ApprovalRiskCode,
   AgentConfig,
+  ChildModelRoutingMode,
   CommandInfo,
   HarnessContextPayload,
   MCPServerConfig,
@@ -42,6 +43,9 @@ export type SessionConfigPatch = {
   enableMemory?: boolean;
   memoryRequireApproval?: boolean;
   preferredChildModel?: string;
+  childModelRoutingMode?: ChildModelRoutingMode;
+  preferredChildModelRef?: string;
+  allowedChildModelRefs?: string[];
   maxSteps?: number;
   toolOutputOverflowChars?: number | null;
   clearToolOutputOverflowChars?: boolean;
@@ -62,6 +66,9 @@ export type SessionConfigState = {
   enableMemory: boolean;
   memoryRequireApproval: boolean;
   preferredChildModel: string;
+  childModelRoutingMode: ChildModelRoutingMode;
+  preferredChildModelRef: string;
+  allowedChildModelRefs: string[];
   maxSteps: number;
   toolOutputOverflowChars: number | null;
   defaultToolOutputOverflowChars?: number | null;
@@ -445,7 +452,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.16";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.17";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",

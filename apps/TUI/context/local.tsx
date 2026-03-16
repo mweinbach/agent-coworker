@@ -1,10 +1,12 @@
-import { createContext, createMemo, useContext, type JSX, type Accessor } from "solid-js";
+import { createContext, createMemo, useContext, type JSX } from "solid-js";
 import { createStore } from "solid-js/store";
 import { isUserFacingProviderEnabled, modelChoicesByProvider, userFacingProviders } from "../../../src/providers";
 import type { ProviderName } from "../../../src/types";
 import { useSyncState } from "./sync";
+import type { ProviderCatalogState } from "./syncTypes";
 
 export type ModelChoice = { provider: string; model: string };
+export type ProviderChoice = ReturnType<typeof userFacingProviders>[number];
 
 type LocalState = {
   selectedProvider: string;
@@ -20,6 +22,92 @@ type LocalContextValue = {
 
 const LocalContext = createContext<LocalContextValue>();
 
+function normalizeTrimmedString(value: string): string {
+  return value.trim();
+}
+
+function connectedProviderSet(providerConnected: readonly string[]): Set<ProviderName> {
+  return new Set(
+    providerConnected
+      .map((provider) => provider as ProviderName)
+      .filter((provider): provider is ProviderName => isUserFacingProviderEnabled(provider))
+  );
+}
+
+function catalogProvidersFromState(catalog: ProviderCatalogState): ProviderChoice[] {
+  if (catalog.length === 0) return userFacingProviders();
+  return catalog.map((entry) => entry.id).filter((provider) => isUserFacingProviderEnabled(provider));
+}
+
+export function availableProvidersFromCatalogState(
+  catalog: ProviderCatalogState,
+  providerConnected: readonly string[],
+  preserveProvider: string,
+): ProviderChoice[] {
+  const connected = connectedProviderSet(providerConnected);
+  const providers = catalogProvidersFromState(catalog);
+  const base = connected.size === 0
+    ? [...providers]
+    : providers.filter((provider) => connected.has(provider));
+
+  const normalizedPreserveProvider = normalizeTrimmedString(preserveProvider);
+  if (
+    normalizedPreserveProvider
+    && isUserFacingProviderEnabled(normalizedPreserveProvider as ProviderName)
+    && providers.includes(normalizedPreserveProvider as ProviderName)
+    && !base.includes(normalizedPreserveProvider as ProviderName)
+  ) {
+    base.push(normalizedPreserveProvider as ProviderName);
+  }
+
+  return base;
+}
+
+export function modelChoicesFromSyncState(
+  catalog: ProviderCatalogState,
+  providerConnected: readonly string[],
+  preserveProvider: string,
+  preserveModel: string,
+): ModelChoice[] {
+  const providers = availableProvidersFromCatalogState(catalog, providerConnected, preserveProvider);
+  const fallback = modelChoicesByProvider();
+  const normalizedPreserveModel = normalizeTrimmedString(preserveModel);
+  const normalizedPreserveProvider = normalizeTrimmedString(preserveProvider) as ProviderName;
+
+  if (catalog.length === 0) {
+    const choices = providers.flatMap((provider) =>
+      (fallback[provider] ?? []).map((model) => ({ provider, model }))
+    );
+    if (
+      normalizedPreserveProvider
+      && normalizedPreserveModel
+      && isUserFacingProviderEnabled(normalizedPreserveProvider)
+      && providers.includes(normalizedPreserveProvider)
+      && !choices.some((entry) => entry.provider === normalizedPreserveProvider && entry.model === normalizedPreserveModel)
+    ) {
+      choices.push({ provider: normalizedPreserveProvider, model: normalizedPreserveModel });
+    }
+    return choices;
+  }
+
+  const choices = catalog.flatMap((entry) => {
+    if (!providers.includes(entry.id)) return [];
+    return (entry.models ?? []).map((model) => ({ provider: entry.id, model: model.id }));
+  });
+
+  if (
+    normalizedPreserveProvider
+    && normalizedPreserveModel
+    && isUserFacingProviderEnabled(normalizedPreserveProvider)
+    && providers.includes(normalizedPreserveProvider)
+    && !choices.some((entry) => entry.provider === normalizedPreserveProvider && entry.model === normalizedPreserveModel)
+  ) {
+    choices.push({ provider: normalizedPreserveProvider, model: normalizedPreserveModel });
+  }
+
+  return choices;
+}
+
 export function LocalProvider(props: { children: JSX.Element }) {
   const syncState = useSyncState();
   const [state, setState] = createStore<LocalState>({
@@ -27,31 +115,15 @@ export function LocalProvider(props: { children: JSX.Element }) {
     selectedModel: "",
   });
 
-  const fallbackChoices = (() => {
-    const byProvider = modelChoicesByProvider();
-    return userFacingProviders().flatMap((p) =>
-      (byProvider[p] ?? []).map((m) => ({ provider: p, model: m }))
-    );
-  })();
-
-  const modelChoices = createMemo(() => {
-    if (syncState.providerCatalog.length === 0) return fallbackChoices;
-    const connected = new Set(
-      syncState.providerConnected.filter((provider): provider is ProviderName => isUserFacingProviderEnabled(provider as ProviderName))
-    );
-    return syncState.providerCatalog
-      .filter((entry) => isUserFacingProviderEnabled(entry.id) && (connected.size === 0 || connected.has(entry.id)))
-      .flatMap((entry) => (entry.models ?? []).map((model) => ({ provider: entry.id, model: model.id })));
-  });
+  const modelChoices = createMemo(() => modelChoicesFromSyncState(
+    syncState.providerCatalog,
+    syncState.providerConnected,
+    syncState.provider,
+    syncState.model,
+  ));
 
   const providerNames = createMemo(() => {
-    if (syncState.providerCatalog.length === 0) return userFacingProviders() as readonly string[];
-    const connected = new Set(
-      syncState.providerConnected.filter((provider): provider is ProviderName => isUserFacingProviderEnabled(provider as ProviderName))
-    );
-    return syncState.providerCatalog
-      .map((entry) => entry.id)
-      .filter((provider) => isUserFacingProviderEnabled(provider) && (connected.size === 0 || connected.has(provider)));
+    return availableProvidersFromCatalogState(syncState.providerCatalog, syncState.providerConnected, syncState.provider);
   });
 
   const value: LocalContextValue = {

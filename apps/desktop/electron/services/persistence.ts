@@ -93,6 +93,10 @@ function asOptionalString(value: unknown): string | undefined {
   return candidate ?? undefined;
 }
 
+function asLegacyPreferredChildModel(item: Record<string, unknown>): string | undefined {
+  return asOptionalString(item.defaultSubAgentModel);
+}
+
 function asNonNegativeInteger(value: unknown, fallback = 0): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return Math.max(0, Math.floor(value));
@@ -175,7 +179,7 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       lastOpenedAt,
       defaultProvider: asOptionalString(item.defaultProvider) as WorkspaceRecord["defaultProvider"],
       defaultModel: asOptionalString(item.defaultModel),
-      defaultPreferredChildModel: asOptionalString(item.defaultPreferredChildModel),
+      defaultPreferredChildModel: asOptionalString(item.defaultPreferredChildModel) ?? asLegacyPreferredChildModel(item),
       defaultToolOutputOverflowChars: asOptionalNullableNonNegativeInteger(item.defaultToolOutputOverflowChars),
       providerOptions: normalizeWorkspaceProviderOptions(item.providerOptions),
       userName: asDefinedString(item.userName),

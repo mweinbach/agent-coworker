@@ -337,6 +337,46 @@ describe("desktop persistence state validation", () => {
     expect(loaded.providerState).toBeUndefined();
   });
 
+  test("loadState migrates legacy defaultSubAgentModel values from disk", async () => {
+    const persistence = new PersistenceService();
+    const validWorkspace = path.join(userDataDir, "workspace-legacy-child-model");
+    await fs.mkdir(validWorkspace, { recursive: true });
+
+    const statePath = path.join(userDataDir, "state.json");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 2,
+          workspaces: [
+            {
+              id: "ws_legacy_child_model",
+              name: "Legacy child model workspace",
+              path: validWorkspace,
+              createdAt: TS,
+              lastOpenedAt: TS,
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.2",
+              defaultSubAgentModel: "gpt-5.2-mini",
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: true,
+              yolo: false,
+            },
+          ],
+          threads: [],
+          developerMode: false,
+          showHiddenFiles: false,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const loaded = await persistence.loadState();
+    expect(loaded.workspaces[0]?.defaultPreferredChildModel).toBe("gpt-5.2-mini");
+  });
+
   test("loadState recovers from invalid JSON", async () => {
     const persistence = new PersistenceService();
 

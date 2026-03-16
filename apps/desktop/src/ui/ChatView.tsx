@@ -350,8 +350,8 @@ function ThreadModelSelector({
   const providerConnected = useAppStore((s) => s.providerConnected);
   const choices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
   const providers = useMemo(
-    () => availableProvidersFromCatalog(providerCatalog, providerConnected),
-    [providerCatalog, providerConnected],
+    () => availableProvidersFromCatalog(providerCatalog, providerConnected, provider),
+    [providerCatalog, providerConnected, provider],
   );
   const value = `${provider}:${model}`;
 

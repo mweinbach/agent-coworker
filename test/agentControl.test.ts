@@ -5,6 +5,7 @@ import { AgentControl } from "../src/server/agents/AgentControl";
 import type { SeededSessionContext } from "../src/server/session/SessionContext";
 import type { AgentConfig } from "../src/types";
 import type { SessionBinding } from "../src/server/startServer/types";
+import type { PersistedSessionRecord } from "../src/server/sessionDb";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const dir = "/tmp/agent-control";
@@ -30,7 +31,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 
 function makeChildSession(config: AgentConfig) {
   const sendUserMessage = mock(async () => {});
-  return {
+  const session = {
     id: "child-1",
     sessionKind: "agent",
     parentSessionId: "root-1",
@@ -40,6 +41,16 @@ function makeChildSession(config: AgentConfig) {
     currentTurnOutcome: "completed",
     beginDisconnectedReplayBuffer: mock(() => {}),
     sendUserMessage,
+    reopenForHistory: mock(() => {
+      session.persistenceStatus = "active";
+    }),
+    closeForHistory: mock(async () => {
+      session.persistenceStatus = "closed";
+    }),
+    cancel: mock(() => {
+      session.isBusy = false;
+    }),
+    isAgentOf: (parentSessionId: string) => parentSessionId === session.parentSessionId,
     getSessionInfoEvent: () => ({
       type: "session_info",
       sessionId: "child-1",
@@ -61,6 +72,50 @@ function makeChildSession(config: AgentConfig) {
     getPublicConfig: () => config,
     getLatestAssistantText: () => null,
   } as any;
+  return session;
+}
+
+function makePersistedChildRecord(config: AgentConfig, overrides: Partial<PersistedSessionRecord> = {}): PersistedSessionRecord {
+  const now = "2026-03-16T15:00:00.000Z";
+  return {
+    sessionId: "child-1",
+    sessionKind: "agent",
+    parentSessionId: "root-1",
+    role: "worker",
+    mode: "collaborative",
+    depth: 1,
+    nickname: null,
+    requestedModel: null,
+    effectiveModel: config.model,
+    requestedReasoningEffort: null,
+    effectiveReasoningEffort: null,
+    executionState: "completed",
+    lastMessagePreview: null,
+    title: "Child session",
+    titleSource: "default",
+    titleModel: null,
+    provider: config.provider,
+    model: config.model,
+    workingDirectory: config.workingDirectory,
+    outputDirectory: config.outputDirectory,
+    uploadsDirectory: config.uploadsDirectory,
+    enableMcp: true,
+    backupsEnabledOverride: null,
+    createdAt: now,
+    updatedAt: now,
+    status: "active",
+    hasPendingAsk: false,
+    hasPendingApproval: false,
+    messageCount: 1,
+    lastEventSeq: 1,
+    systemPrompt: "child system prompt",
+    messages: [],
+    providerState: null,
+    todos: [],
+    harnessContext: null,
+    costTracker: null,
+    ...overrides,
+  };
 }
 
 describe("AgentControl.spawn", () => {
@@ -155,5 +210,129 @@ describe("AgentControl.spawn", () => {
         seedContext: expect.anything(),
       }),
     );
+  });
+});
+
+describe("AgentControl persisted child control", () => {
+  test("sendInput hydrates a persisted child session before dispatching", async () => {
+    const config = makeConfig();
+    const childSession = makeChildSession(config);
+    const buildSession = mock((binding: SessionBinding, persistedSessionId?: string) => {
+      binding.session = childSession;
+      return { session: childSession, isResume: true, resumedFromStorage: true, persistedSessionId };
+    });
+    const control = new AgentControl({
+      sessionBindings: new Map(),
+      sessionDb: {
+        getSessionRecord: (sessionId: string) =>
+          sessionId === "child-1" ? makePersistedChildRecord(config) : null,
+      } as any,
+      buildSession: buildSession as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+    });
+
+    await control.sendInput({
+      parentSessionId: "root-1",
+      agentId: "child-1",
+      message: "Continue the task",
+    });
+
+    expect(buildSession).toHaveBeenCalledTimes(1);
+    expect(buildSession.mock.calls[0]?.[1]).toBe("child-1");
+    expect(childSession.beginDisconnectedReplayBuffer).toHaveBeenCalledTimes(1);
+    expect(childSession.sendUserMessage).toHaveBeenCalledWith("Continue the task");
+  });
+
+  test("wait publishes hydrated terminal child status immediately", async () => {
+    const config = makeConfig();
+    const childSession = makeChildSession(config);
+    const emitParentAgentStatus = mock(() => {});
+    const control = new AgentControl({
+      sessionBindings: new Map(),
+      sessionDb: {
+        getSessionRecord: (sessionId: string) =>
+          sessionId === "child-1" ? makePersistedChildRecord(config) : null,
+      } as any,
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: true, resumedFromStorage: true };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus,
+    });
+
+    const result = await control.wait({
+      parentSessionId: "root-1",
+      agentIds: ["child-1"],
+      timeoutMs: 10,
+    });
+
+    expect(result.timedOut).toBe(false);
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0]?.executionState).toBe("completed");
+    expect(emitParentAgentStatus).toHaveBeenCalled();
+  });
+
+  test("resume reopens a hydrated closed child session", async () => {
+    const config = makeConfig();
+    const childSession = makeChildSession(config);
+    childSession.persistenceStatus = "closed";
+    const control = new AgentControl({
+      sessionBindings: new Map(),
+      sessionDb: {
+        getSessionRecord: (sessionId: string) =>
+          sessionId === "child-1"
+            ? makePersistedChildRecord(config, { status: "closed", executionState: "closed" })
+            : null,
+      } as any,
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: true, resumedFromStorage: true };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+    });
+
+    const summary = await control.resume({
+      parentSessionId: "root-1",
+      agentId: "child-1",
+    });
+
+    expect(childSession.reopenForHistory).toHaveBeenCalledTimes(1);
+    expect(summary.lifecycleState).toBe("active");
+    expect(summary.executionState).toBe("completed");
+  });
+
+  test("close hydrates a persisted child session before closing it", async () => {
+    const config = makeConfig();
+    const childSession = makeChildSession(config);
+    const disposeBinding = mock(() => {});
+    const control = new AgentControl({
+      sessionBindings: new Map(),
+      sessionDb: {
+        getSessionRecord: (sessionId: string) =>
+          sessionId === "child-1" ? makePersistedChildRecord(config) : null,
+      } as any,
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: true, resumedFromStorage: true };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding,
+      emitParentAgentStatus: () => {},
+    });
+
+    const summary = await control.close({
+      parentSessionId: "root-1",
+      agentId: "child-1",
+    });
+
+    expect(childSession.closeForHistory).toHaveBeenCalledTimes(1);
+    expect(disposeBinding).toHaveBeenCalledWith(expect.anything(), "parent closed child agent");
+    expect(summary.executionState).toBe("closed");
   });
 });

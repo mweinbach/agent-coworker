@@ -216,6 +216,35 @@ describe("workspace settings sync", () => {
     expect(loaded?.defaultPreferredChildModel).toBe("gpt-5.2");
   });
 
+  test("init migrates legacy defaultSubAgentModel into defaultPreferredChildModel", async () => {
+    mockedLoadedState = {
+      version: 2,
+      workspaces: [
+        {
+          id: "ws-migrate",
+          name: "Legacy migration",
+          path: "/tmp/workspace",
+          createdAt: "2026-02-19T00:00:00.000Z",
+          lastOpenedAt: "2026-02-19T00:00:00.000Z",
+          defaultProvider: "openai",
+          defaultSubAgentModel: "gpt-5.2-mini",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+    };
+
+    await useAppStore.getState().init();
+
+    const loaded = useAppStore.getState().workspaces[0];
+    expect(loaded?.defaultModel).toBe("gpt-5.4");
+    expect(loaded?.defaultPreferredChildModel).toBe("gpt-5.2-mini");
+  });
+
   test("init preserves workspace user profile defaults during rehydration", async () => {
     mockedLoadedState = {
       version: 2,

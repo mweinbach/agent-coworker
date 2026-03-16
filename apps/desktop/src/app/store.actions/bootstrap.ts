@@ -114,6 +114,11 @@ const persistedWorkspaceSchema = z.object({
   defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough().transform((workspace): WorkspaceRecord => {
+  const legacySubAgentModel = (() => {
+    const asRecord = workspace as Record<string, unknown>;
+    const legacy = typeof asRecord.defaultSubAgentModel === "string" ? asRecord.defaultSubAgentModel.trim() : "";
+    return legacy.length > 0 ? legacy : undefined;
+  })();
   const model = workspace.defaultModel ?? defaultModelForProvider(workspace.defaultProvider);
   return {
     id: workspace.id,
@@ -123,7 +128,8 @@ const persistedWorkspaceSchema = z.object({
     lastOpenedAt: workspace.lastOpenedAt,
     defaultProvider: workspace.defaultProvider,
     defaultModel: model,
-    defaultPreferredChildModel: workspace.defaultPreferredChildModel ?? model,
+    defaultPreferredChildModel:
+      workspace.defaultPreferredChildModel ?? legacySubAgentModel ?? model,
     defaultToolOutputOverflowChars: workspace.defaultToolOutputOverflowChars,
     providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
     userName: workspace.userName,

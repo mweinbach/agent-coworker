@@ -293,7 +293,7 @@ Act directly when: single-line or few-line fixes, adding a single function with 
 </when_to_act>
 
 <how_to_plan>
-1. Explore: Use read, glob, grep, and spawnAgent (explore type) to understand the codebase.
+1. Explore: Use read, glob, grep, and spawnAgent with `role: "explorer"` to understand the codebase.
 2. Design: Write a plan with files to change, approach, and tradeoffs.
 3. Present: Use ask to show the plan and get approval with key decision points.
 4. Implement: Execute on approval, revise on rejection.

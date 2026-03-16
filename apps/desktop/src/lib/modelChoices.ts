@@ -39,6 +39,7 @@ export function modelChoicesFromCatalog(
 export function availableProvidersFromCatalog(
   catalog: readonly ProviderCatalogEntry[],
   connected: readonly ProviderName[],
+  preserveProvider?: ProviderName,
 ): ProviderName[] {
   const connectedSet = new Set(connected.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider)));
   const catalogProviders = (
@@ -47,7 +48,16 @@ export function availableProvidersFromCatalog(
       : catalog.map((entry) => entry.id)
   ).filter((provider) => !UI_DISABLED_PROVIDERS.has(provider));
   if (connectedSet.size === 0) return [...catalogProviders];
-  return catalogProviders.filter((provider) => connectedSet.has(provider));
+  const providers = catalogProviders.filter((provider) => connectedSet.has(provider));
+  if (
+    preserveProvider &&
+    !UI_DISABLED_PROVIDERS.has(preserveProvider) &&
+    catalogProviders.includes(preserveProvider) &&
+    !providers.includes(preserveProvider)
+  ) {
+    providers.push(preserveProvider);
+  }
+  return providers;
 }
 
 export function modelOptionsFromCatalog(

@@ -402,8 +402,8 @@ export function WorkspacesPage() {
 
   const modelChoices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
   const availableProviders = useMemo(
-    () => availableProvidersFromCatalog(providerCatalog, providerConnected),
-    [providerCatalog, providerConnected],
+    () => availableProvidersFromCatalog(providerCatalog, providerConnected, provider),
+    [providerCatalog, providerConnected, provider],
   );
   const effectiveProvider = availableProviders.includes(provider) ? provider : (availableProviders[0] ?? provider);
   const curatedModels = modelChoices[effectiveProvider] ?? [];

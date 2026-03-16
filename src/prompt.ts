@@ -174,6 +174,12 @@ function renderSpawnAgentSpecificPrompt(prompt: string, config: AgentConfig): st
   return prompt;
 }
 
+function normalizeLegacySpawnAgentGuidance(prompt: string): string {
+  return prompt
+    .replaceAll("spawnAgent (explore type)", "spawnAgent with `role: \"explorer\"`")
+    .replaceAll("spawnAgent (general type)", "spawnAgent with `role: \"worker\"`");
+}
+
 function buildSkillSearchOrder(config: AgentConfig): string {
   const labels = ["project", "global (~/.cowork/skills)", "user (~/.agent/skills)", "built-in"];
   return config.skillsDirs
@@ -278,6 +284,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = renderCapabilitySpecificPrompt(prompt, supportedModel);
   prompt = renderMemorySpecificPrompt(prompt, config.enableMemory ?? true);
   prompt = renderSpawnAgentSpecificPrompt(prompt, config);
+  prompt = normalizeLegacySpawnAgentGuidance(prompt);
 
   prompt += `\n\n${buildSkillPolicySection(vars.skillNames, vars.skillExamples, config)}`;
 

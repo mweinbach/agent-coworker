@@ -75,4 +75,27 @@ describe("modelOptionsForProvider", () => {
 
     expect(providers).toEqual(["openai"]);
   });
+
+  test("preserves disconnected provider in provider options", () => {
+    const providers = availableProvidersFromCatalog(
+      [
+        {
+          id: "google",
+          name: "Google",
+          models: [],
+          defaultModel: "gemini-3-pro",
+        },
+        {
+          id: "openai",
+          name: "OpenAI",
+          models: [],
+          defaultModel: "gpt-5.4",
+        },
+      ],
+      ["google"],
+      "openai",
+    );
+
+    expect(providers).toEqual(["google", "openai"]);
+  });
 });

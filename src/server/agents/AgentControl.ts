@@ -28,12 +28,29 @@ export class AgentControl {
 
   constructor(private readonly deps: AgentControlDeps) {}
 
-  private ensureAgentSession(parentSessionId: string, agentId: string): AgentSession {
-    const binding = this.deps.sessionBindings.get(agentId);
-    if (!binding?.session || !binding.session.isAgentOf(parentSessionId)) {
+  private hydrateAgentSession(parentSessionId: string, agentId: string): AgentSession {
+    const persisted = this.deps.sessionDb?.getSessionRecord(agentId);
+    if (!persisted || persisted.parentSessionId !== parentSessionId || persisted.sessionKind !== "agent") {
       throw new Error(`Unknown child agent: ${agentId}`);
     }
-    return binding.session;
+
+    const binding: SessionBinding = { session: null, socket: null };
+    const built = this.deps.buildSession(binding, agentId);
+    binding.session = built.session;
+    built.session.beginDisconnectedReplayBuffer();
+    this.deps.sessionBindings.set(built.session.id, binding);
+    return built.session;
+  }
+
+  private ensureAgentSession(parentSessionId: string, agentId: string): AgentSession {
+    const binding = this.deps.sessionBindings.get(agentId);
+    if (binding?.session) {
+      if (!binding.session.isAgentOf(parentSessionId)) {
+        throw new Error(`Unknown child agent: ${agentId}`);
+      }
+      return binding.session;
+    }
+    return this.hydrateAgentSession(parentSessionId, agentId);
   }
 
   private buildAgentSummary(
@@ -156,6 +173,9 @@ export class AgentControl {
 
   async sendInput(opts: AgentSendInputOptions): Promise<void> {
     const session = this.ensureAgentSession(opts.parentSessionId, opts.agentId);
+    if (session.persistenceStatus === "closed") {
+      session.reopenForHistory();
+    }
     if (opts.interrupt && session.isBusy) {
       session.cancel();
       await this.inFlightByAgentId.get(opts.agentId);
@@ -167,32 +187,23 @@ export class AgentControl {
 
   async wait(opts: AgentWaitOptions): Promise<{ timedOut: boolean; agents: PersistentAgentSummary[] }> {
     for (const agentId of opts.agentIds) {
-      this.ensureAgentSession(opts.parentSessionId, agentId);
+      const session = this.ensureAgentSession(opts.parentSessionId, agentId);
+      this.publish(opts.parentSessionId, session);
     }
     return await this.statusBus.wait(opts.agentIds, opts.timeoutMs);
   }
 
   async resume(opts: AgentResumeOptions): Promise<PersistentAgentSummary> {
-    const existing = this.deps.sessionBindings.get(opts.agentId);
-    if (existing?.session && existing.session.isAgentOf(opts.parentSessionId)) {
-      return this.publish(opts.parentSessionId, existing.session);
+    const session = this.ensureAgentSession(opts.parentSessionId, opts.agentId);
+    if (session.persistenceStatus === "closed") {
+      session.reopenForHistory();
     }
-
-    const persisted = this.deps.sessionDb?.getSessionRecord(opts.agentId);
-    if (!persisted || persisted.parentSessionId !== opts.parentSessionId || persisted.sessionKind !== "agent") {
-      throw new Error(`Unknown child agent: ${opts.agentId}`);
-    }
-
-    const binding: SessionBinding = { session: null, socket: null };
-    const built = this.deps.buildSession(binding, opts.agentId);
-    binding.session = built.session;
-    built.session.beginDisconnectedReplayBuffer();
-    this.deps.sessionBindings.set(built.session.id, binding);
-    return this.publish(opts.parentSessionId, built.session);
+    return this.publish(opts.parentSessionId, session);
   }
 
   async close(opts: AgentCloseOptions): Promise<PersistentAgentSummary> {
-    const binding = this.deps.sessionBindings.get(opts.agentId);
+    const session = this.ensureAgentSession(opts.parentSessionId, opts.agentId);
+    const binding = this.deps.sessionBindings.get(session.id);
     if (!binding?.session || !binding.session.isAgentOf(opts.parentSessionId)) {
       throw new Error(`Unknown child agent: ${opts.agentId}`);
     }

@@ -237,6 +237,42 @@ describe("desktop persistence state validation", () => {
     });
   });
 
+  test("saveState preserves workspace cross-provider child routing defaults", async () => {
+    const persistence = new PersistenceService();
+    const routingWorkspace = path.join(userDataDir, "workspace-child-routing");
+    await fs.mkdir(routingWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_child_routing",
+          name: "Child routing workspace",
+          path: routingWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultProvider: "codex-cli",
+          defaultModel: "gpt-5.4",
+          defaultPreferredChildModel: "gpt-5.4",
+          defaultChildModelRoutingMode: "cross-provider-allowlist",
+          defaultPreferredChildModelRef: "opencode-zen:glm-5",
+          defaultAllowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.workspaces[0]?.defaultChildModelRoutingMode).toBe("cross-provider-allowlist");
+    expect(loaded.workspaces[0]?.defaultPreferredChildModelRef).toBe("opencode-zen:glm-5");
+    expect(loaded.workspaces[0]?.defaultAllowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
+  });
+
   test("saveState drops recoverable expired codex status snapshots that would look disconnected on restart", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-provider-recoverable");

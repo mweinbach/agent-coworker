@@ -97,6 +97,19 @@ function asLegacyPreferredChildModel(item: Record<string, unknown>): string | un
   return asOptionalString(item.defaultSubAgentModel);
 }
 
+function asChildModelRoutingMode(value: unknown): WorkspaceRecord["defaultChildModelRoutingMode"] {
+  return value === "same-provider" || value === "cross-provider-allowlist" ? value : undefined;
+}
+
+function asOptionalStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value
+    .map((entry) => asNonEmptyString(entry))
+    .filter((entry): entry is string => entry !== null);
+}
+
 function asNonNegativeInteger(value: unknown, fallback = 0): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return Math.max(0, Math.floor(value));
@@ -180,6 +193,9 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       defaultProvider: asOptionalString(item.defaultProvider) as WorkspaceRecord["defaultProvider"],
       defaultModel: asOptionalString(item.defaultModel),
       defaultPreferredChildModel: asOptionalString(item.defaultPreferredChildModel) ?? asLegacyPreferredChildModel(item),
+      defaultChildModelRoutingMode: asChildModelRoutingMode(item.defaultChildModelRoutingMode),
+      defaultPreferredChildModelRef: asOptionalString(item.defaultPreferredChildModelRef),
+      defaultAllowedChildModelRefs: asOptionalStringArray(item.defaultAllowedChildModelRefs),
       defaultToolOutputOverflowChars: asOptionalNullableNonNegativeInteger(item.defaultToolOutputOverflowChars),
       providerOptions: normalizeWorkspaceProviderOptions(item.providerOptions),
       userName: asDefinedString(item.userName),

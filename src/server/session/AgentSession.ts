@@ -79,6 +79,10 @@ function contentText(value: unknown): string {
     .trim();
 }
 
+function initialCurrentTurnOutcome(hydrated?: HydratedSessionState): SessionRuntimeState["currentTurnOutcome"] {
+  return hydrated?.sessionInfo.executionState === "errored" ? "error" : "completed";
+}
+
 const MAX_DISCONNECTED_REPLAY_EVENTS = 256;
 const DISCONNECTED_REPLAY_EVENT_TYPES = new Set<ServerEvent["type"]>([
   "user_message",
@@ -191,7 +195,7 @@ export class AgentSession {
       connecting: false,
       abortController: null,
       currentTurnId: null,
-      currentTurnOutcome: "completed",
+      currentTurnOutcome: initialCurrentTurnOutcome(hydrated),
       maxSteps: 100,
       todos: seededTodos,
       sessionInfo: hydrated?.sessionInfo ?? {

@@ -5,6 +5,7 @@ import {
   reasoningModeForProvider,
 } from "../modelStream";
 import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
+import type { AgentExecutionState } from "../../shared/agents";
 import {
   SERVER_ERROR_CODES,
   SERVER_ERROR_SOURCES,
@@ -125,6 +126,16 @@ export class TurnExecutionManager {
     }
   ) { }
 
+  private updateSessionExecutionState(executionState: AgentExecutionState) {
+    if (this.context.state.sessionInfo.executionState === undefined) return;
+    this.deps.metadataManager.updateSessionInfo({ executionState });
+  }
+
+  private settledExecutionState(): AgentExecutionState {
+    if (this.context.state.persistenceStatus === "closed") return "closed";
+    return this.context.state.currentTurnOutcome === "error" ? "errored" : "completed";
+  }
+
   async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
     if (this.context.state.running) {
       this.context.emitError("busy", "session", "Agent is busy");
@@ -151,6 +162,7 @@ export class TurnExecutionManager {
     const turnId = makeId();
     this.context.state.currentTurnId = turnId;
     this.context.state.currentTurnOutcome = "completed";
+    this.updateSessionExecutionState("running");
     const cause: "user_message" | "command" = displayText?.startsWith("/") ? "command" : "user_message";
     let lastStreamError: unknown = null;
     try {
@@ -431,6 +443,7 @@ export class TurnExecutionManager {
         );
       }
     } finally {
+      this.updateSessionExecutionState(this.settledExecutionState());
       this.context.emit({
         type: "session_busy",
         sessionId: this.context.id,

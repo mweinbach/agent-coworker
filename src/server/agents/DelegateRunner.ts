@@ -4,15 +4,33 @@ import { buildGooglePrepareStep } from "../../providers/googleReplay";
 import { createRuntime } from "../../runtime";
 import { createTools } from "../../tools";
 import type { ToolContext } from "../../tools";
-import type { AgentConfig } from "../../types";
 import type { ModelMessage } from "../../types";
+import type { AgentConfig, ProviderName } from "../../types";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 
 import { routeAgentConfig } from "./modelRouter";
 import { getAgentRoleDefinition } from "./roles";
 import { filterToolsForRole } from "./toolPolicy";
 
+type DelegateRunnerDeps = {
+  loadAgentPrompt: typeof loadAgentPrompt;
+  buildRuntimeTelemetrySettings: typeof buildRuntimeTelemetrySettings;
+  buildGooglePrepareStep: typeof buildGooglePrepareStep;
+  createRuntime: typeof createRuntime;
+  createTools: typeof createTools;
+};
+
+const defaultDelegateRunnerDeps: DelegateRunnerDeps = {
+  loadAgentPrompt,
+  buildRuntimeTelemetrySettings,
+  buildGooglePrepareStep,
+  createRuntime,
+  createTools,
+};
+
 export class DelegateRunner {
+  constructor(private readonly deps: DelegateRunnerDeps = defaultDelegateRunnerDeps) {}
+
   async run(opts: {
     config: AgentConfig;
     role: AgentRole;
@@ -26,14 +44,19 @@ export class DelegateRunner {
     seedMessages?: ModelMessage[];
     model?: string;
     reasoningEffort?: AgentReasoningEffort;
+    connectedProviders?: readonly ProviderName[];
   }): Promise<string> {
     const roleDefinition = getAgentRoleDefinition(opts.role);
     const routed = routeAgentConfig(opts.config, {
       role: roleDefinition,
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
+      ...(opts.connectedProviders ? { connectedProviders: opts.connectedProviders } : {}),
     });
-    const system = await loadAgentPrompt(routed.config, opts.role);
+    if (routed.fallbackLine) {
+      opts.log(`[delegate:${opts.role}] ${routed.fallbackLine}`);
+    }
+    const system = await this.deps.loadAgentPrompt(routed.config, opts.role);
     const delegateContext: ToolContext = {
       config: routed.config,
       log: (line) => opts.log(`[delegate:${opts.role}] ${line}`),
@@ -45,12 +68,12 @@ export class DelegateRunner {
       turnUserPrompt: opts.message,
       agentRole: opts.role,
     };
-    const tools = filterToolsForRole(createTools(delegateContext), roleDefinition);
+    const tools = filterToolsForRole(this.deps.createTools(delegateContext), roleDefinition);
     const googlePrepareStep =
       routed.config.provider === "google" && Object.keys(tools).length > 0
-        ? buildGooglePrepareStep(routed.config.providerOptions, delegateContext.log)
+        ? this.deps.buildGooglePrepareStep(routed.config.providerOptions, delegateContext.log)
         : undefined;
-    const telemetry = await buildRuntimeTelemetrySettings(routed.config, {
+    const telemetry = await this.deps.buildRuntimeTelemetrySettings(routed.config, {
       functionId: "agent.delegate",
       metadata: {
         role: opts.role,
@@ -58,7 +81,7 @@ export class DelegateRunner {
       },
     });
 
-    const runtime = createRuntime(routed.config);
+    const runtime = this.deps.createRuntime(routed.config);
     const result = await runtime.runTurn({
       config: routed.config,
       system,

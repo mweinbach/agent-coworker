@@ -72,6 +72,7 @@ describe("raw loop child-agent control", () => {
       expect.objectContaining({
         role: "worker",
         message: "Use the child model",
+        connectedProviders: ["codex-cli", "opencode-zen"],
         config: expect.objectContaining({
           provider: "opencode-zen",
           model: "glm-5",
@@ -122,6 +123,7 @@ describe("raw loop child-agent control", () => {
           provider: "codex-cli",
           model: "gpt-5.4",
         }),
+        connectedProviders: ["codex-cli"],
       }),
     );
   });
@@ -199,6 +201,53 @@ describe("raw loop child-agent control", () => {
       expect.objectContaining({
         message: "Use the parent context",
         seedMessages: parentMessages,
+      }),
+    );
+  });
+
+  test("reopens a closed child summary on resume", async () => {
+    const run = mock(async () => "SUBAGENT_OK");
+    const control = createRawLoopAgentControl(
+      {
+        config: makeConfig(),
+        log: () => {},
+        askUser: async () => "",
+        approveCommand: async () => true,
+      },
+      {
+        createDelegateRunner: () => ({ run }),
+        makeId: () => "child-1",
+      },
+    );
+
+    const spawned = await control.spawn({
+      role: "worker",
+      message: "Reply with exactly SUBAGENT_OK",
+    });
+    await control.wait({
+      agentIds: [spawned.agentId],
+      timeoutMs: 1000,
+    });
+
+    const closed = await control.close({
+      agentId: spawned.agentId,
+    });
+    expect(closed).toEqual(
+      expect.objectContaining({
+        agentId: "child-1",
+        lifecycleState: "closed",
+        executionState: "closed",
+      }),
+    );
+
+    const resumed = await control.resume({
+      agentId: spawned.agentId,
+    });
+    expect(resumed).toEqual(
+      expect.objectContaining({
+        agentId: "child-1",
+        lifecycleState: "active",
+        executionState: "completed",
       }),
     );
   });

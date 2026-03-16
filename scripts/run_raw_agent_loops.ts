@@ -205,7 +205,7 @@ type RawLoopAgentControlState = {
   requestedReasoningEffort?: AgentReasoningEffort;
   routedConfig: AgentConfig;
   connectedProviders: readonly ProviderName[];
-  seedMessages?: ModelMessage[];
+  historyMessages: ModelMessage[];
   abortController: AbortController | null;
   runPromise: Promise<void> | null;
   runToken: number;
@@ -351,6 +351,8 @@ export function createRawLoopAgentControl(
     state.runToken += 1;
     const runToken = state.runToken;
     const controller = new AbortController();
+    const priorMessages = structuredClone(state.historyMessages);
+    state.historyMessages.push({ role: "user", content: message });
     state.abortController = controller;
     publish(state, {
       lifecycleState: "active",
@@ -368,15 +370,16 @@ export function createRawLoopAgentControl(
       approveCommand: opts.approveCommand,
       abortSignal: controller.signal,
       discoveredSkills: opts.availableSkills,
-      ...(state.seedMessages ? { seedMessages: state.seedMessages } : {}),
+      ...(priorMessages.length > 0 ? { seedMessages: priorMessages } : {}),
       ...(state.requestedModel ? { model: state.requestedModel } : {}),
       ...(state.requestedReasoningEffort ? { reasoningEffort: state.requestedReasoningEffort } : {}),
       ...(state.connectedProviders.length > 0 ? { connectedProviders: state.connectedProviders } : {}),
-    }).then((text) => {
+    }).then((result) => {
       if (state.runToken !== runToken || state.abortController !== controller || state.summary.lifecycleState === "closed") {
         return;
       }
-      const trimmed = text.trim();
+      state.historyMessages.push(...structuredClone(result.responseMessages));
+      const trimmed = result.text.trim();
       publish(state, {
         executionState: "completed",
         busy: false,
@@ -447,10 +450,10 @@ export function createRawLoopAgentControl(
         requestedModel: routed.requestedModel,
         requestedReasoningEffort: routed.requestedReasoningEffort,
         connectedProviders,
-        seedMessages:
+        historyMessages:
           forkContext && opts.parentMessages
             ? structuredClone(opts.parentMessages)
-            : undefined,
+            : [],
         abortController: null,
         runPromise: null,
         runToken: 0,

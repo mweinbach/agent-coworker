@@ -12,6 +12,11 @@ import { routeAgentConfig } from "./modelRouter";
 import { getAgentRoleDefinition } from "./roles";
 import { filterToolsForRole } from "./toolPolicy";
 
+export type DelegateRunResult = {
+  text: string;
+  responseMessages: ModelMessage[];
+};
+
 type DelegateRunnerDeps = {
   loadAgentPrompt: typeof loadAgentPrompt;
   buildRuntimeTelemetrySettings: typeof buildRuntimeTelemetrySettings;
@@ -45,7 +50,7 @@ export class DelegateRunner {
     model?: string;
     reasoningEffort?: AgentReasoningEffort;
     connectedProviders?: readonly ProviderName[];
-  }): Promise<string> {
+  }): Promise<DelegateRunResult> {
     const roleDefinition = getAgentRoleDefinition(opts.role);
     const routed = routeAgentConfig(opts.config, {
       role: roleDefinition,
@@ -100,6 +105,9 @@ export class DelegateRunner {
       ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
       enableMcp: routed.config.enableMcp,
     } as any);
-    return result.text;
+    return {
+      text: result.text,
+      responseMessages: structuredClone(result.responseMessages),
+    };
   }
 }

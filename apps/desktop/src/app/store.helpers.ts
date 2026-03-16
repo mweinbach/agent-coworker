@@ -6,6 +6,7 @@ import { PROVIDER_NAMES } from "../lib/wsProtocol";
 
 import type {
   Notification,
+  OnboardingStep,
   PromptModalState,
   SettingsPageId,
   ThreadRecord,
@@ -165,6 +166,10 @@ export type AppStoreState = {
   contextSidebarWidth: number;
   messageBarHeight: number;
 
+  onboardingVisible: boolean;
+  onboardingStep: OnboardingStep;
+  onboardingState?: import("./types").OnboardingState;
+
   init: () => Promise<void>;
 
   openSettings: (page?: SettingsPageId) => void;
@@ -265,11 +270,18 @@ export type AppStoreState = {
   createWorkspaceDirectory: (workspaceId: string, parentPath: string, name: string) => Promise<void>;
   renameWorkspacePath: (workspaceId: string, path: string, newName: string) => Promise<void>;
   trashWorkspacePath: (workspaceId: string, path: string) => Promise<void>;
+
+  startOnboarding: () => void;
+  dismissOnboarding: () => void;
+  completeOnboarding: () => void;
+  setOnboardingStep: (step: OnboardingStep) => void;
+  nextOnboardingStep: () => void;
+  previousOnboardingStep: () => void;
 };
 
 export type AppStoreActionKeys = {
   [K in keyof AppStoreState]: AppStoreState[K] extends (...args: any[]) => any ? K : never;
-}[keyof AppStoreState];
+}[keyof AppStoreState] & keyof AppStoreState;
 
 export type AppStoreActions = Pick<AppStoreState, AppStoreActionKeys>;
 export type AppStoreDataState = Omit<AppStoreState, AppStoreActionKeys>;

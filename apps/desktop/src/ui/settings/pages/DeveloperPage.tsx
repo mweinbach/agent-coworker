@@ -32,6 +32,7 @@ export function DeveloperPage() {
 
   const showHiddenFiles = useAppStore((s) => s.showHiddenFiles);
   const setShowHiddenFiles = useAppStore((s) => s.setShowHiddenFiles);
+  const startOnboarding = useAppStore((s) => s.startOnboarding);
   const workspaces = useAppStore((s) => s.workspaces);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
@@ -130,6 +131,18 @@ export function DeveloperPage() {
               onCheckedChange={(checked) => setDeveloperMode(toBoolean(checked))}
             />
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/80 bg-card/85">
+        <CardHeader>
+          <CardTitle>Onboarding</CardTitle>
+          <CardDescription>Run the first-time setup flow again.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button variant="outline" onClick={startOnboarding}>
+            Run onboarding again
+          </Button>
         </CardContent>
       </Card>
 

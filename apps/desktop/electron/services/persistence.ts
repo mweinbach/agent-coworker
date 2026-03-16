@@ -13,6 +13,7 @@ import type {
 } from "../../src/app/types";
 import { normalizeWorkspaceUserProfile } from "../../src/app/types";
 import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibleProviderOptions";
+import { normalizePersistedOnboardingState } from "../../src/app/persistedOnboardingState";
 import { normalizePersistedProviderState } from "../../src/app/persistedProviderState";
 import type { TranscriptBatchInput } from "../../src/lib/desktopApi";
 
@@ -242,6 +243,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
   const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
   const threads = sanitizeThreads(value.threads, workspaceIds);
   const providerState = normalizePersistedProviderState(value.providerState);
+  const onboardingState = normalizePersistedOnboardingState(value.onboarding);
   const parsedVersion =
     typeof value.version === "number" && Number.isFinite(value.version)
       ? Math.max(0, Math.floor(value.version))
@@ -253,6 +255,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     developerMode: typeof value.developerMode === "boolean" ? value.developerMode : false,
     showHiddenFiles: typeof value.showHiddenFiles === "boolean" ? value.showHiddenFiles : false,
     ...(providerState ? { providerState } : {}),
+    ...(onboardingState ? { onboarding: onboardingState } : {}),
   };
 }
 

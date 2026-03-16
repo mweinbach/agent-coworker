@@ -47,6 +47,10 @@ const initialState: AppStoreDataState = {
   contextSidebarWidth: 300,
   messageBarHeight: 120,
   sidebarWidth: 248,
+
+  onboardingVisible: false,
+  onboardingStep: "welcome",
+  onboardingState: undefined,
 };
 
 export const useAppStore = create<AppStoreState>((set, get) => ({

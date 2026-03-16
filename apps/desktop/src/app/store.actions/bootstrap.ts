@@ -48,6 +48,7 @@ import {
   normalizeThreadTitleSource,
   truncateTitle,
 } from "../store.helpers";
+import { normalizePersistedOnboardingState, shouldShowOnboarding } from "../persistedOnboardingState";
 import { deriveConnectedProviders, normalizePersistedProviderState } from "../persistedProviderState";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import {
@@ -163,6 +164,7 @@ const persistedStateSchema = z.object({
   showHiddenFiles: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough().transform((state) => {
   const providerState = normalizePersistedProviderState((state as { providerState?: unknown }).providerState);
+  const onboardingState = normalizePersistedOnboardingState((state as { onboarding?: unknown }).onboarding);
   const workspaceByRecency = [...state.workspaces].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
   const selectedWorkspaceId = workspaceByRecency[0]?.id ?? null;
   const workspaceThreads = selectedWorkspaceId
@@ -182,6 +184,7 @@ const persistedStateSchema = z.object({
     developerMode: state.developerMode,
     showHiddenFiles: state.showHiddenFiles,
     providerState,
+    onboardingState,
   };
 });
 
@@ -197,6 +200,24 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
         } catch (error) {
           console.warn("Desktop updater state load failed:", error);
         }
+        const hasWorkspaces = state.workspaces.length > 0;
+        const hasThreads = state.threads.length > 0;
+        const hasConnectedProviders = deriveConnectedProviders(state.providerState as PersistedProviderState | undefined).length > 0;
+
+        const loadedOnboardingState = state.onboardingState;
+
+        const shouldShow = shouldShowOnboarding({
+          onboardingState: loadedOnboardingState,
+          hasWorkspaces,
+          hasThreads,
+          hasConnectedProviders,
+        });
+
+        // If user has existing usage but onboarding state is missing, mark as completed
+        const finalOnboardingState = loadedOnboardingState ?? (hasWorkspaces || hasThreads || hasConnectedProviders
+          ? { status: "completed" as const, completedAt: null, dismissedAt: null }
+          : undefined);
+
         set({
           workspaces: state.workspaces,
           threads: state.threads,
@@ -208,9 +229,16 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           developerMode: state.developerMode,
           showHiddenFiles: state.showHiddenFiles,
           updateState,
+          onboardingVisible: shouldShow,
+          onboardingState: finalOnboardingState,
           ready: true,
           startupError: null,
         });
+
+        // Persist onboarding state if we auto-completed it for existing users
+        if (finalOnboardingState && !loadedOnboardingState) {
+          void persistNow(get);
+        }
 
         if (state.selectedThreadId) {
           await get().selectThread(state.selectedThreadId);

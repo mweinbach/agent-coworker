@@ -15,6 +15,7 @@ import { ASK_SKIP_TOKEN } from "./lib/wsProtocol";
 import { ContextSidebar } from "./ui/ContextSidebar";
 import { PromptModal } from "./ui/PromptModal";
 import { Sidebar } from "./ui/Sidebar";
+import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
 import { AppTopBar } from "./ui/layout/AppTopBar";
 import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
@@ -210,6 +211,7 @@ export default function App() {
           <SettingsContent init={init} ready={ready} startupError={startupError} />
         </div>
         <PromptModal />
+        <DesktopOnboarding />
       </div>
     );
   }
@@ -240,6 +242,7 @@ export default function App() {
       </div>
 
       <PromptModal />
+      <DesktopOnboarding />
     </div>
   );
 }

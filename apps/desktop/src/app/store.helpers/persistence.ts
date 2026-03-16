@@ -1,7 +1,8 @@
 import { saveState } from "../../lib/desktopCommands";
+import { normalizePersistedOnboardingState } from "../persistedOnboardingState";
 import { normalizePersistedProviderState } from "../persistedProviderState";
 import type { AppStoreState } from "../store.helpers";
-import type { PersistedState } from "../types";
+import type { OnboardingState, PersistedState } from "../types";
 
 const PERSIST_DEBOUNCE_MS = 300;
 
@@ -13,6 +14,10 @@ function buildPersistedState(state: AppStoreState): PersistedState {
     statusLastUpdatedAt: state.providerStatusLastUpdatedAt,
   });
 
+  const onboardingState = state.onboardingState
+    ? normalizePersistedOnboardingState(state.onboardingState)
+    : undefined;
+
   return {
     version: 2,
     workspaces: state.workspaces,
@@ -20,6 +25,7 @@ function buildPersistedState(state: AppStoreState): PersistedState {
     developerMode: state.developerMode,
     showHiddenFiles: state.showHiddenFiles,
     ...(providerState ? { providerState } : {}),
+    ...(onboardingState ? { onboarding: onboardingState } : {}),
   };
 }
 

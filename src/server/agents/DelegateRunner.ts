@@ -86,6 +86,7 @@ export class DelegateRunner {
       config: routed.config,
       system,
       messages: [...(opts.seedMessages ? structuredClone(opts.seedMessages) : []), { role: "user", content: opts.message }] as any,
+      tools,
       agentControl: undefined,
       spawnDepth: delegateContext.spawnDepth,
       abortSignal: opts.abortSignal,

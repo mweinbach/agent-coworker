@@ -36,12 +36,15 @@ describe("DelegateRunner", () => {
       responseMessages: [],
     }));
     const createRuntime = mock(() => ({ runTurn }));
+    const createTools = mock(() => ({
+      read: { type: "builtin" },
+    }));
     const runner = new DelegateRunner({
       loadAgentPrompt: async () => "delegate system prompt",
       buildRuntimeTelemetrySettings: async () => null,
       buildGooglePrepareStep: () => undefined,
       createRuntime,
-      createTools: () => ({}),
+      createTools,
     });
 
     await runner.run({
@@ -59,6 +62,14 @@ describe("DelegateRunner", () => {
       expect.objectContaining({
         provider: "opencode-zen",
         model: "glm-5",
+      }),
+    );
+    expect(createTools).toHaveBeenCalledTimes(1);
+    expect(runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.objectContaining({
+          read: expect.objectContaining({ type: "builtin" }),
+        }),
       }),
     );
   });

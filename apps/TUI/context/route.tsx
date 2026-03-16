@@ -2,6 +2,7 @@ import { createContext, useContext, createSignal, type JSX, type Accessor } from
 
 export type RouteState =
   | { route: "home"; initialPrompt?: string }
+  | { route: "onboarding" }
   | { route: "session"; sessionId: string };
 
 type RouteContextValue = {

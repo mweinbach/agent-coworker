@@ -10,6 +10,7 @@ import { useRoute } from "./context/route";
 import { useSyncActions, useSyncState } from "./context/sync";
 import { useTheme } from "./context/theme";
 import { Home } from "./routes/home";
+import { Onboarding } from "./routes/onboarding/index";
 import { Session } from "./routes/session/index";
 import { Toast, showToast } from "./ui/toast";
 import { resolveCtrlCAction } from "./util/ctrl-c";
@@ -21,6 +22,7 @@ export function App() {
   const dialog = useDialog();
 
   const isHome = createMemo(() => current().route === "home");
+  const isOnboarding = createMemo(() => current().route === "onboarding");
   const sessionId = createMemo(() => {
     const c = current();
     return c.route === "session" ? c.sessionId : null;
@@ -37,6 +39,9 @@ export function App() {
 
       <Show when={isHome()}>
         <Home />
+      </Show>
+      <Show when={isOnboarding()}>
+        <Onboarding />
       </Show>
       <Show when={sessionId()}>
         {(sid) => <Session sessionId={sid()} />}
@@ -209,6 +214,14 @@ function GlobalHotkeys() {
   ];
 
   onMount(() => {
+    const isComplete = kv.get("onboarding_complete");
+    if (isComplete !== "true") {
+        const currentRoute = route.current();
+        if (currentRoute.route !== "onboarding") {
+          route.navigate({ route: "onboarding" });
+        }
+    }
+
     keybind.registerMany(commands);
   });
 

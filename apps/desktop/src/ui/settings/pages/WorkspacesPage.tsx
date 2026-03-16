@@ -36,7 +36,12 @@ import {
 } from "../../../components/ui/select";
 import { Textarea } from "../../../components/ui/textarea";
 import { confirmAction } from "../../../lib/desktopCommands";
-import { modelChoicesFromCatalog, modelOptionsFromCatalog, UI_DISABLED_PROVIDERS } from "../../../lib/modelChoices";
+import {
+  availableProvidersFromCatalog,
+  modelChoicesFromCatalog,
+  modelOptionsFromCatalog,
+  UI_DISABLED_PROVIDERS,
+} from "../../../lib/modelChoices";
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { cn } from "../../../lib/utils";
@@ -374,6 +379,7 @@ export function WorkspacesPage() {
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const providerStatusByName = useAppStore((s) => s.providerStatusByName);
   const providerCatalog = useAppStore((s) => s.providerCatalog);
+  const providerConnected = useAppStore((s) => s.providerConnected);
   const providerDefaultModelByProvider = useAppStore((s) => s.providerDefaultModelByProvider);
 
   const addWorkspace = useAppStore((s) => s.addWorkspace);
@@ -389,17 +395,22 @@ export function WorkspacesPage() {
 
   const provider = (ws?.defaultProvider ?? "google") as ProviderName;
   const model = (ws?.defaultModel ?? "").trim();
-  const subAgentModel = (ws?.defaultSubAgentModel ?? ws?.defaultModel ?? "").trim();
+  const preferredChildModel = (ws?.defaultPreferredChildModel ?? ws?.defaultModel ?? "").trim();
   const enableMcp = ws?.defaultEnableMcp ?? true;
   const backupsEnabled = ws?.defaultBackupsEnabled ?? true;
   const yolo = ws?.yolo ?? false;
 
   const modelChoices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
-  const curatedModels = modelChoices[provider] ?? [];
-  const modelOptions = modelOptionsFromCatalog(providerCatalog, provider, model);
+  const availableProviders = useMemo(
+    () => availableProvidersFromCatalog(providerCatalog, providerConnected),
+    [providerCatalog, providerConnected],
+  );
+  const effectiveProvider = availableProviders.includes(provider) ? provider : (availableProviders[0] ?? provider);
+  const curatedModels = modelChoices[effectiveProvider] ?? [];
+  const modelOptions = modelOptionsFromCatalog(providerCatalog, effectiveProvider, model);
   const hasCustomModel = Boolean(model && !curatedModels.includes(model));
-  const subAgentModelOptions = modelOptionsFromCatalog(providerCatalog, provider, subAgentModel);
-  const hasCustomSubAgentModel = Boolean(subAgentModel && !curatedModels.includes(subAgentModel));
+  const preferredChildModelOptions = modelOptionsFromCatalog(providerCatalog, effectiveProvider, preferredChildModel);
+  const hasCustomChildModel = Boolean(preferredChildModel && !curatedModels.includes(preferredChildModel));
 
   const [activeTab, setActiveTab] = useState<"general" | "models" | "profile" | "advanced">("general");
 
@@ -554,7 +565,7 @@ export function WorkspacesPage() {
                 <div className="space-y-2">
                   <div className="text-sm font-medium text-foreground">Provider</div>
                   <Select
-                    value={provider}
+                    value={effectiveProvider}
                     onValueChange={(value) => {
                       if (!ws) return;
                       const nextProvider = value as ProviderName;
@@ -563,7 +574,7 @@ export function WorkspacesPage() {
                       void updateWorkspaceDefaults(ws.id, {
                         defaultProvider: nextProvider,
                         defaultModel: nextDefault,
-                        defaultSubAgentModel: nextDefault,
+                        defaultPreferredChildModel: nextDefault,
                       });
                     }}
                   >
@@ -571,12 +582,7 @@ export function WorkspacesPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {PROVIDER_NAMES.filter((entry) => {
-                        if (UI_DISABLED_PROVIDERS.has(entry)) return false;
-                        if (entry === provider) return true;
-                        const status = providerStatusByName[entry];
-                        return status?.verified || status?.authorized;
-                      }).map((entry) => (
+                      {availableProviders.map((entry) => (
                         <SelectItem key={entry} value={entry}>
                           {displayProviderName(entry)}
                         </SelectItem>
@@ -608,25 +614,28 @@ export function WorkspacesPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <div className="text-sm font-medium text-foreground">Subagent model</div>
+                  <div className="text-sm font-medium text-foreground">Preferred child model</div>
                   <Select
-                    value={subAgentModel}
+                    value={preferredChildModel}
                     onValueChange={(value) => {
                       if (!ws) return;
-                      void updateWorkspaceDefaults(ws.id, { defaultSubAgentModel: value });
+                      void updateWorkspaceDefaults(ws.id, { defaultPreferredChildModel: value });
                     }}
                   >
-                    <SelectTrigger aria-label="Default subagent model">
+                    <SelectTrigger aria-label="Preferred child model">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {subAgentModelOptions.map((entry) => (
+                      {preferredChildModelOptions.map((entry) => (
                         <SelectItem key={entry} value={entry}>
-                          {hasCustomSubAgentModel && entry === subAgentModel ? `${entry} (custom)` : entry}
+                          {hasCustomChildModel && entry === preferredChildModel ? `${entry} (custom)` : entry}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  <div className="text-xs text-muted-foreground">
+                    Child agents inherit the live parent model unless a spawn request overrides it. This workspace default only preselects the suggested override.
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -642,8 +651,8 @@ export function WorkspacesPage() {
               <Badge variant="secondary">{displayProviderName(provider)}</Badge>
               <span>Model:</span>
               <Badge variant="secondary">{model}</Badge>
-              <span>Subagent:</span>
-              <Badge variant="secondary">{subAgentModel || model}</Badge>
+              <span>Preferred child:</span>
+              <Badge variant="secondary">{preferredChildModel || model}</Badge>
             </div>
           </div>
 

@@ -18,7 +18,7 @@ function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): Agen
   return {
     provider: "openai",
     model: "gpt-5.2",
-    subAgentModel: "gpt-5.2",
+    preferredChildModel: "gpt-5.2",
     workingDirectory: homeDir,
     outputDirectory: path.join(homeDir, "output"),
     uploadsDirectory: path.join(homeDir, "uploads"),
@@ -386,7 +386,7 @@ describe("openai responses runtime", () => {
       makeParams(makeConfig(homeDir, {
         provider: "codex-cli",
         model: pickCodexModelId(),
-        subAgentModel: pickCodexModelId(),
+        preferredChildModel: pickCodexModelId(),
       }), {
         messages: [{ role: "user", content: "latest" }],
         allMessages: [
@@ -466,7 +466,7 @@ describe("openai responses runtime", () => {
       makeParams(makeConfig(homeDir, {
         provider: "codex-cli",
         model: modelId,
-        subAgentModel: modelId,
+        preferredChildModel: modelId,
       }), {
         messages: [{ role: "user", content: "find it" }],
         allMessages: [{ role: "user", content: "find it" }] as ModelMessage[],

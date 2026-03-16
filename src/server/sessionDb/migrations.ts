@@ -9,6 +9,7 @@ const SUBAGENT_METADATA_MIGRATION = 4;
 const MODEL_STREAM_CHUNKS_MIGRATION = 5;
 const COST_TRACKER_MIGRATION = 6;
 const BACKUPS_ENABLED_OVERRIDE_MIGRATION = 7;
+const AGENT_REALIGNMENT_MIGRATION = 8;
 
 type BootstrapSessionDbOptions = {
   db: Database;
@@ -70,6 +71,11 @@ export async function bootstrapSessionDb(opts: BootstrapSessionDbOptions): Promi
   if (!appliedMigrations.has(BACKUPS_ENABLED_OVERRIDE_MIGRATION)) {
     opts.repository.addBackupsEnabledOverrideColumn();
     opts.repository.markMigration(BACKUPS_ENABLED_OVERRIDE_MIGRATION);
+  }
+
+  if (!appliedMigrations.has(AGENT_REALIGNMENT_MIGRATION)) {
+    opts.repository.addSubagentMetadataColumns();
+    opts.repository.markMigration(AGENT_REALIGNMENT_MIGRATION);
   }
 
   if (!appliedMigrations.has(LEGACY_IMPORT_MIGRATION)) {

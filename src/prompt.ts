@@ -4,7 +4,12 @@ import path from "node:path";
 import type { AgentConfig } from "./types";
 import { discoverSkills } from "./skills";
 import { assertSupportedModel, type SupportedModel } from "./models/registry";
+import { listChildAgentModelsWithInfo } from "./models/childAgentModelInfo";
 import { MemoryStore } from "./memoryStore";
+import { AGENT_ROLE_DEFINITIONS } from "./server/agents/roles";
+import type { AgentRole } from "./shared/agents";
+import { isUserFacingProviderEnabled } from "./providers/catalog";
+import type { ProviderName } from "./types";
 
 async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
   const supportedModel = assertSupportedModel(config.provider, config.model, "model");
@@ -96,6 +101,77 @@ function renderMemorySpecificPrompt(prompt: string, enabled: boolean): string {
   out = out.replace(/\n{3,}/g, "\n\n").trimEnd();
 
   return `${out}\n\n## Memory Disabled\n\nPersistent memory is disabled for this workspace. Do not read or write AGENT.md and do not call the memory tool.`;
+}
+
+const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
+  google: "Google",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  baseten: "Baseten",
+  together: "Together AI",
+  nvidia: "NVIDIA",
+  "opencode-go": "OpenCode Go",
+  "opencode-zen": "OpenCode Zen",
+  "codex-cli": "Codex CLI",
+};
+
+function buildSpawnAgentPromptBody(config: AgentConfig): string {
+  const providerLabel = PROVIDER_DISPLAY_NAMES[config.provider] ?? config.provider;
+  const currentModel = assertSupportedModel(config.provider, config.model, "model");
+
+  const roleLines = Object.values(AGENT_ROLE_DEFINITIONS)
+    .map((role) => `- **${role.id}**: ${role.description}`)
+    .join("\n");
+
+  const providerSupportsUserFacingModels = isUserFacingProviderEnabled(config.provider);
+  const modelLines = !providerSupportsUserFacingModels
+    ? "- No user-facing child model overrides are available for this provider."
+    : listChildAgentModelsWithInfo(config.provider)
+        .map((model) => `- **${model.displayName}** (\`${model.id}\`): ${model.bestFor ?? "general-purpose work on this provider"}.`)
+        .join("\n");
+
+  return [
+    "Launch a collaborative child agent for a well-scoped task. It returns a durable child handle to use with follow-up agent tools; it does not return the child agent's final answer text directly.",
+    "",
+    "When to use:",
+    "- **Parallelization**: Independent work that can proceed concurrently.",
+    "- **Context isolation**: Large codebase reads, heavy research, or deep analysis that would bloat the parent context.",
+    "- **Verification**: Focused review, testing, or validation after implementation.",
+    "",
+    "Rules:",
+    "- Provide detailed, self-contained prompts with the exact files, ownership, and expected output.",
+    "- If `model` is omitted, the child inherits the live parent provider/model.",
+    "- `preferredChildModel` is only a workspace/UI suggestion; it does not override the spawn request automatically.",
+    "- Child-agent results are not visible to the user unless you summarize them.",
+    "- Child agents should stay bounded; do not use them for vague or open-ended delegation.",
+    "",
+    "Available child-agent roles:",
+    roleLines,
+    "",
+    `Available model overrides for the current provider (${providerLabel}):`,
+    modelLines,
+    providerSupportsUserFacingModels
+      ? `- If you omit \`model\`, the child stays on **${currentModel.displayName}** (\`${currentModel.id}\`).`
+      : "- If you omit `model`, the child stays on the session's current provider/model.",
+  ].join("\n");
+}
+
+function renderSpawnAgentSpecificPrompt(prompt: string, config: AgentConfig): string {
+  const body = buildSpawnAgentPromptBody(config);
+  const markdownSection = `### spawnAgent\n${body}`;
+  const toolSection = `<tool name="spawnAgent">\n${body}\n</tool>`;
+  const xmlSection = `<spawnAgent>\n${body}\n</spawnAgent>`;
+
+  if (prompt.includes('<tool name="spawnAgent">')) {
+    return prompt.replace(/<tool name="spawnAgent">[\s\S]*?<\/tool>/i, toolSection);
+  }
+  if (prompt.includes("<spawnAgent>")) {
+    return prompt.replace(/<spawnAgent>[\s\S]*?<\/spawnAgent>/i, xmlSection);
+  }
+  if (prompt.includes("### spawnAgent")) {
+    return prompt.replace(/### spawnAgent[\s\S]*?(?=\n### notebookEdit\b)/i, markdownSection);
+  }
+  return prompt;
 }
 
 function buildSkillSearchOrder(config: AgentConfig): string {
@@ -201,6 +277,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = renderTemplateVariables(prompt, vars);
   prompt = renderCapabilitySpecificPrompt(prompt, supportedModel);
   prompt = renderMemorySpecificPrompt(prompt, config.enableMemory ?? true);
+  prompt = renderSpawnAgentSpecificPrompt(prompt, config);
 
   prompt += `\n\n${buildSkillPolicySection(vars.skillNames, vars.skillExamples, config)}`;
 
@@ -245,8 +322,28 @@ export async function loadSystemPrompt(config: AgentConfig): Promise<string> {
 
 export async function loadSubAgentPrompt(
   config: AgentConfig,
-  agentType: "explore" | "research" | "general"
+  role: "explore" | "explorer" | "research" | "general"
 ): Promise<string> {
-  const p = path.join(config.builtInDir, "prompts", "sub-agents", `${agentType}.md`);
-  return fs.readFile(p, "utf-8");
+  const mappedRole: AgentRole =
+    role === "general"
+      ? "worker"
+      : role === "explorer" || role === "explore"
+        ? "explorer"
+        : "research";
+  return await loadAgentPrompt(config, mappedRole);
+}
+
+export async function loadAgentPrompt(config: AgentConfig, role: AgentRole): Promise<string> {
+  const basePath = path.join(config.builtInDir, "prompts", "sub-agents", "base.md");
+  const rolePath = path.join(
+    config.builtInDir,
+    "prompts",
+    "sub-agents",
+    AGENT_ROLE_DEFINITIONS[role].promptFile,
+  );
+  const [basePrompt, rolePrompt] = await Promise.all([
+    fs.readFile(basePath, "utf-8"),
+    fs.readFile(rolePath, "utf-8"),
+  ]);
+  return `${basePrompt.trimEnd()}\n\n${rolePrompt.trim()}\n`;
 }

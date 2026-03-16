@@ -94,7 +94,7 @@ const persistedWorkspaceSchema = z.object({
   lastOpenedAt: z.string(),
   defaultProvider: normalizedProviderSchema,
   defaultModel: optionalStringWithContentSchema,
-  defaultSubAgentModel: optionalStringWithContentSchema,
+  defaultPreferredChildModel: optionalStringWithContentSchema,
   defaultToolOutputOverflowChars: z.preprocess((value) => {
     if (value === undefined) return undefined;
     if (value === null) return null;
@@ -123,7 +123,7 @@ const persistedWorkspaceSchema = z.object({
     lastOpenedAt: workspace.lastOpenedAt,
     defaultProvider: workspace.defaultProvider,
     defaultModel: model,
-    defaultSubAgentModel: workspace.defaultSubAgentModel ?? model,
+    defaultPreferredChildModel: workspace.defaultPreferredChildModel ?? model,
     defaultToolOutputOverflowChars: workspace.defaultToolOutputOverflowChars,
     providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
     userName: workspace.userName,

@@ -150,7 +150,7 @@ describe("workspace settings sync", () => {
           lastOpenedAt: "2026-02-19T00:00:00.000Z",
           defaultProvider: "openai",
           defaultModel: "gpt-5.2",
-          defaultSubAgentModel: "gpt-5.2",
+          defaultPreferredChildModel: "gpt-5.2",
           defaultToolOutputOverflowChars: 25000,
           defaultEnableMcp: true,
           defaultBackupsEnabled: true,
@@ -187,7 +187,7 @@ describe("workspace settings sync", () => {
     });
   });
 
-  test("init normalizes workspace defaultSubAgentModel fallback", async () => {
+  test("init normalizes workspace defaultPreferredChildModel fallback", async () => {
     mockedLoadedState = {
       version: 2,
       workspaces: [
@@ -213,7 +213,7 @@ describe("workspace settings sync", () => {
 
     const loaded = useAppStore.getState().workspaces[0];
     expect(loaded?.defaultModel).toBe("gpt-5.2");
-    expect(loaded?.defaultSubAgentModel).toBe("gpt-5.2");
+    expect(loaded?.defaultPreferredChildModel).toBe("gpt-5.2");
   });
 
   test("init preserves workspace user profile defaults during rehydration", async () => {
@@ -476,7 +476,7 @@ describe("workspace settings sync", () => {
         defaultBackupsEnabled: false,
         toolOutputOverflowChars: 12000,
         defaultToolOutputOverflowChars: 12000,
-        subAgentModel: "gpt-5-mini",
+        preferredChildModel: "gpt-5-mini",
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -485,12 +485,12 @@ describe("workspace settings sync", () => {
 
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(workspace?.defaultSubAgentModel).toBe("gpt-5-mini");
+    expect(workspace?.defaultPreferredChildModel).toBe("gpt-5-mini");
     expect(workspace?.defaultBackupsEnabled).toBe(false);
     expect(workspace?.defaultToolOutputOverflowChars).toBe(12000);
     expect(workspace?.userName).toBe("Alex");
     expect(workspace?.userProfile).toEqual({ instructions: "", work: "", details: "" });
-    expect(runtime?.controlSessionConfig?.subAgentModel).toBe("gpt-5-mini");
+    expect(runtime?.controlSessionConfig?.preferredChildModel).toBe("gpt-5-mini");
     expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultBackupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.toolOutputOverflowChars).toBe(12000);
@@ -512,7 +512,7 @@ describe("workspace settings sync", () => {
         backupsEnabled: false,
         defaultBackupsEnabled: true,
         toolOutputOverflowChars: 25000,
-        subAgentModel: "gpt-5-mini",
+        preferredChildModel: "gpt-5-mini",
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -569,7 +569,7 @@ describe("workspace settings sync", () => {
         backupsEnabled: true,
         defaultBackupsEnabled: true,
         toolOutputOverflowChars: 25000,
-        subAgentModel: "gpt-5-mini",
+        preferredChildModel: "gpt-5-mini",
         providerOptions: {
           openai: {
             reasoningSummary: "concise",
@@ -645,7 +645,7 @@ describe("workspace settings sync", () => {
         backupsEnabled: true,
         defaultBackupsEnabled: true,
         toolOutputOverflowChars: 25000,
-        subAgentModel: "gpt-5-mini",
+        preferredChildModel: "gpt-5-mini",
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -712,7 +712,7 @@ describe("workspace settings sync", () => {
     expect(threadSocket.sent[2]).toMatchObject({
       type: "set_config",
       config: {
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         userName: "Alex",
         userProfile: {
           instructions: "Keep answers terse.",
@@ -761,7 +761,7 @@ describe("workspace settings sync", () => {
         backupsEnabled: false,
         defaultBackupsEnabled: false,
         toolOutputOverflowChars: 25000,
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -795,7 +795,7 @@ describe("workspace settings sync", () => {
         defaultBackupsEnabled: false,
         toolOutputOverflowChars: 12000,
         defaultToolOutputOverflowChars: 12000,
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -861,7 +861,7 @@ describe("workspace settings sync", () => {
       type: "set_config",
       config: {
         backupsEnabled: true,
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         userName: "Taylor",
         userProfile: {
           instructions: "Keep answers terse.",
@@ -880,7 +880,7 @@ describe("workspace settings sync", () => {
     expect(threadSocket.sent[2]).toMatchObject({
       type: "set_config",
       config: {
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         userName: "Taylor",
         userProfile: {
           instructions: "Keep answers terse.",
@@ -917,7 +917,7 @@ describe("workspace settings sync", () => {
         defaultBackupsEnabled: true,
         toolOutputOverflowChars: 12000,
         defaultToolOutputOverflowChars: 12000,
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -936,7 +936,7 @@ describe("workspace settings sync", () => {
         defaultBackupsEnabled: true,
         toolOutputOverflowChars: 12000,
         defaultToolOutputOverflowChars: 12000,
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -957,7 +957,7 @@ describe("workspace settings sync", () => {
       type: "set_config",
       config: {
         backupsEnabled: true,
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         clearToolOutputOverflowChars: true,
       },
     });
@@ -1019,7 +1019,7 @@ describe("workspace settings sync", () => {
     await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
       defaultProvider: "openai",
       defaultModel: "gpt-5.2",
-      defaultSubAgentModel: "gpt-5.2-mini",
+      defaultPreferredChildModel: "gpt-5.2-mini",
       defaultToolOutputOverflowChars: 12000,
       defaultEnableMcp: false,
       defaultBackupsEnabled: false,
@@ -1043,7 +1043,7 @@ describe("workspace settings sync", () => {
       type: "set_config",
       config: {
         backupsEnabled: false,
-        subAgentModel: "gpt-5.2-mini",
+        preferredChildModel: "gpt-5.2-mini",
         toolOutputOverflowChars: 12000,
         providerOptions: {
           openai: {
@@ -1077,7 +1077,7 @@ describe("workspace settings sync", () => {
     expect(idleThreadSocket.sent[2]).toMatchObject({
       type: "set_config",
       config: {
-        subAgentModel: "gpt-5.2-mini",
+        preferredChildModel: "gpt-5.2-mini",
         providerOptions: {
           openai: {
             reasoningEffort: "high",
@@ -1119,7 +1119,7 @@ describe("workspace settings sync", () => {
     expect(busyThreadSocket.sent[1]).toMatchObject({
       type: "set_config",
       config: {
-        subAgentModel: "gpt-5.2-mini",
+        preferredChildModel: "gpt-5.2-mini",
         providerOptions: {
           openai: {
             reasoningEffort: "high",

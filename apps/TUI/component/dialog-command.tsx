@@ -144,6 +144,12 @@ function CommandPaletteDialog(props: { onDismiss: () => void }) {
         category: "System",
       },
       {
+        label: "Agents",
+        value: "agents",
+        description: "Open child agent viewer",
+        category: "System",
+      },
+      {
         label: "User Profile",
         value: "user_profile",
         description: "Manage prompt-injected user information",
@@ -251,6 +257,9 @@ function CommandPaletteDialog(props: { onDismiss: () => void }) {
         break;
       case "mcp":
         import("./dialog-mcp").then(({ openMcpDialog }) => openMcpDialog(dialog));
+        break;
+      case "agents":
+        import("../routes/session/dialog-subagent").then(({ openSubagentDialog }) => openSubagentDialog(dialog));
         break;
       case "user_profile":
         import("./dialog-user-profile").then(({ openUserProfileDialog }) => openUserProfileDialog(dialog));

@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.15`
+- Current protocol version: `7.16`
 
 ## Table of Contents
 
@@ -31,7 +31,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Tools & Commands: [list_tools](#list_tools) | [list_commands](#list_commands) | [execute_command](#execute_command)
   - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill)
   - MCP: [set_enable_mcp](#set_enable_mcp) | [mcp_servers_get](#mcp_servers_get) | [mcp_server_upsert](#mcp_server_upsert) | [mcp_server_delete](#mcp_server_delete) | [mcp_server_validate](#mcp_server_validate) | [mcp_server_auth_authorize](#mcp_server_auth_authorize) | [mcp_server_auth_callback](#mcp_server_auth_callback) | [mcp_server_auth_set_api_key](#mcp_server_auth_set_api_key) | [mcp_servers_migrate_legacy](#mcp_servers_migrate_legacy)
-  - Session Management: [session_close](#session_close) | [get_messages](#get_messages) | [set_session_title](#set_session_title) | [list_sessions](#list_sessions) | [delete_session](#delete_session) | [subagent_create](#subagent_create) | [subagent_sessions_get](#subagent_sessions_get) | [set_config](#set_config) | [upload_file](#upload_file) | [get_session_usage](#get_session_usage) | [set_session_usage_budget](#set_session_usage_budget)
+  - Session Management: [session_close](#session_close) | [get_messages](#get_messages) | [set_session_title](#set_session_title) | [list_sessions](#list_sessions) | [delete_session](#delete_session) | [agent_spawn](#agent_spawn) | [agent_list_get](#agent_list_get) | [set_config](#set_config) | [upload_file](#upload_file) | [get_session_usage](#get_session_usage) | [set_session_usage_budget](#set_session_usage_budget)
   - Backup: [session_backup_get](#session_backup_get) | [session_backup_checkpoint](#session_backup_checkpoint) | [session_backup_restore](#session_backup_restore) | [session_backup_delete_checkpoint](#session_backup_delete_checkpoint) | [workspace_backups_get](#workspace_backups_get) | [workspace_backup_checkpoint](#workspace_backup_checkpoint) | [workspace_backup_restore](#workspace_backup_restore) | [workspace_backup_delete_checkpoint](#workspace_backup_delete_checkpoint) | [workspace_backup_delete_entry](#workspace_backup_delete_entry) | [workspace_backup_delta_get](#workspace_backup_delta_get)
   - Harness: [harness_context_get](#harness_context_get) | [harness_context_set](#harness_context_set)
   - Keepalive: [ping](#ping)
@@ -42,12 +42,18 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Provider: [provider_catalog](#provider_catalog) | [provider_auth_methods](#provider_auth_methods) | [provider_auth_challenge](#provider_auth_challenge) | [provider_auth_result](#provider_auth_result) | [provider_status](#provider_status) | [config_updated](#config_updated)
   - Tools & Skills: [tools](#tools) | [commands](#commands) | [skills_list](#skills_list) | [skill_content](#skill_content)
   - MCP: [mcp_servers](#mcp_servers) | [mcp_server_validation](#mcp_server_validation) | [mcp_server_auth_challenge](#mcp_server_auth_challenge) | [mcp_server_auth_result](#mcp_server_auth_result)
-  - Session Data: [messages](#messages) | [sessions](#sessions) | [subagent_created](#subagent_created) | [subagent_sessions](#subagent_sessions) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage) | [session_usage](#session_usage) | [budget_warning](#budget_warning) | [budget_exceeded](#budget_exceeded)
+  - Session Data: [messages](#messages) | [sessions](#sessions) | [agent_spawned](#agent_spawned) | [agent_list](#agent_list) | [session_deleted](#session_deleted) | [file_uploaded](#file_uploaded) | [turn_usage](#turn_usage) | [session_usage](#session_usage) | [budget_warning](#budget_warning) | [budget_exceeded](#budget_exceeded)
   - Backup & Observability: [session_backup_state](#session_backup_state) | [workspace_backups](#workspace_backups) | [workspace_backup_delta](#workspace_backup_delta) | [observability_status](#observability_status)
   - Harness: [harness_context](#harness_context)
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.16`:
+
+- Child-agent websocket control is now fully normalized around `agent_*` messages and `agent_spawned` / `agent_list` / `agent_status` events.
+- Child sessions now report `sessionKind: "agent"` plus role, mode, depth, effective model, and effective reasoning metadata in `server_hello` and `session_info`.
+- `preferredChildModel` is the canonical workspace/session config field for suggested child-model overrides.
 
 Changes in `7.15`:
 
@@ -115,10 +121,10 @@ Changes in `7.4`:
 
 Changes in `7.3`:
 
-- New client messages: `subagent_create`, `subagent_sessions_get`.
-- New server events: `subagent_created`, `subagent_sessions`.
-- `server_hello` and `session_info` can now identify child sessions via `sessionKind`, `parentSessionId`, and `agentType`.
-- `list_sessions` remains root-only; persistent subagents are discovered separately.
+- New client messages: `agent_spawn`, `agent_list_get`, `agent_input_send`, `agent_wait`, `agent_resume`, `agent_close`.
+- New server events: `agent_spawned`, `agent_list`, `agent_status`.
+- `server_hello` and `session_info` can now identify child sessions via `sessionKind`, `parentSessionId`, `role`, `mode`, `depth`, and effective model/reasoning metadata.
+- `list_sessions` remains root-only; child agents are managed through the dedicated `agent_*` controls.
 
 - Added session-level cost tracking support.
 - New client message: `get_session_usage`.
@@ -177,7 +183,7 @@ When a WebSocket connection opens, the server sends these events in order:
 
 1. `server_hello` — session ID, config, protocol version, capabilities
 2. `session_settings` — current runtime settings (e.g. MCP toggle)
-3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `backupsEnabled`, `defaultBackupsEnabled`, `toolOutputOverflowChars`, `defaultToolOutputOverflowChars`, `subAgentModel`, `maxSteps`, `providerOptions`, `userName`, `userProfile`)
+3. `session_config` — current runtime config (`yolo`, `observabilityEnabled`, `backupsEnabled`, `defaultBackupsEnabled`, `toolOutputOverflowChars`, `defaultToolOutputOverflowChars`, `preferredChildModel`, `maxSteps`, `providerOptions`, `userName`, `userProfile`)
 4. `session_info` — session metadata including title
 5. `observability_status` — Langfuse observability state
 6. `provider_catalog` — available providers and models (async)
@@ -188,7 +194,7 @@ When a WebSocket connection opens, the server sends these events in order:
 
 If connecting with `?resumeSessionId=<id>`, the server resumes the existing session instead of creating a new one (warm in-memory attach or cold rehydrate from persisted storage). `session_close` disposes active runtime bindings but retains persisted history for later resume/view. On resume, `server_hello` includes additional fields (`isResume`, `busy`, `messageCount`, `hasPendingAsk`, `hasPendingApproval`) and may include `resumedFromStorage: true` for cold rehydrate.
 
-Child sessions created through `subagent_create` are normal persisted sessions. They can be resumed directly with `?resumeSessionId=<childSessionId>`, and the server identifies them with `sessionKind: "subagent"` plus `parentSessionId` and `agentType`.
+Child sessions created through `agent_spawn` are normal persisted sessions. They can be resumed directly with `?resumeSessionId=<childSessionId>`, and the server identifies them with `sessionKind: "agent"` plus `parentSessionId`, `role`, `mode`, and `depth`.
 
 ## Validation Rules
 
@@ -1668,7 +1674,7 @@ Manually set the session title.
 
 ### list_sessions
 
-Enumerate persisted root sessions from the server's canonical session store. Persistent child subagents are not included here.
+Enumerate persisted root sessions from the server's canonical session store. Child agents are listed separately via `agent_list_get`.
 
 ```json
 { "type": "list_sessions", "sessionId": "..." }
@@ -1703,45 +1709,124 @@ Delete a persisted session by its ID. Cannot delete the active session.
 
 ---
 
-### subagent_create
+### agent_spawn
 
-Create a durable child session for the current root session and queue its initial task immediately.
+Create a durable child session for the current root session and queue its initial message immediately.
 
 ```json
 {
-  "type": "subagent_create",
+  "type": "agent_spawn",
   "sessionId": "...",
-  "agentType": "general",
-  "task": "Investigate the flaky parser test"
+  "role": "worker",
+  "message": "Investigate the flaky parser test",
+  "model": "gpt-5.4",
+  "reasoningEffort": "high",
+  "forkContext": true
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `type` | `"subagent_create"` | Yes | — |
+| `type` | `"agent_spawn"` | Yes | — |
 | `sessionId` | `string` | Yes | Root session identifier |
-| `agentType` | `"explore" \| "research" \| "general"` | Yes | Child-session mode |
-| `task` | `string` | Yes | Initial task queued for the child session |
+| `message` | `string` | Yes | Initial message queued for the child session |
+| `role` | `"default" \| "explorer" \| "research" \| "worker" \| "reviewer"` | No | Child-agent role. Defaults to `"default"` |
+| `model` | `string` | No | Requested child model override |
+| `reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | Requested reasoning level override |
+| `forkContext` | `boolean` | No | When `true`, request that the child inherit the current parent context snapshot |
 
-**Response:** `subagent_created`
+**Response:** `agent_spawned`
 **Error:** `validation_failed` when called from a child session.
 
 ---
 
-### subagent_sessions_get
+### agent_list_get
 
 List persistent child sessions for the current root session.
 
 ```json
-{ "type": "subagent_sessions_get", "sessionId": "..." }
+{ "type": "agent_list_get", "sessionId": "..." }
 ```
 
 | Field | Type | Required |
 |-------|------|----------|
-| `type` | `"subagent_sessions_get"` | Yes |
+| `type` | `"agent_list_get"` | Yes |
 | `sessionId` | `string` | Yes |
 
-**Response:** `subagent_sessions`
+**Response:** `agent_list`
+**Error:** `validation_failed` when called from a child session.
+
+---
+
+### agent_input_send
+
+Send a follow-up message to an existing child agent.
+
+```json
+{ "type": "agent_input_send", "sessionId": "...", "agentId": "child-456", "message": "Continue", "interrupt": true }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"agent_input_send"` | Yes | — |
+| `sessionId` | `string` | Yes | Root session identifier |
+| `agentId` | `string` | Yes | Child-agent session identifier |
+| `message` | `string` | Yes | Follow-up message queued for the child agent |
+| `interrupt` | `boolean` | No | When `true`, interrupt queued work and prioritize this input immediately |
+
+**Response:** none. Child state changes are emitted via `agent_status`.
+**Error:** `validation_failed` when called from a child session.
+
+### agent_wait
+
+Wait for one or more child agents to reach a terminal state.
+
+```json
+{ "type": "agent_wait", "sessionId": "...", "agentIds": ["child-456"], "timeoutMs": 30000 }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"agent_wait"` | Yes | — |
+| `sessionId` | `string` | Yes | Root session identifier |
+| `agentIds` | `string[]` | Yes | One or more child-agent session identifiers |
+| `timeoutMs` | `number` | No | Max time to wait before timing out |
+
+**Response:** none. Any child agents that reach a terminal state during the wait window are emitted through `agent_status`.
+**Error:** `validation_failed` when called from a child session.
+
+### agent_resume
+
+Resume a previously closed child agent.
+
+```json
+{ "type": "agent_resume", "sessionId": "...", "agentId": "child-456" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"agent_resume"` | Yes | — |
+| `sessionId` | `string` | Yes | Root session identifier |
+| `agentId` | `string` | Yes | Child-agent session identifier |
+
+**Response:** none. Updated agent state is emitted via `agent_status`.
+**Error:** `validation_failed` when called from a child session.
+
+### agent_close
+
+Close a child agent and stop routing new work to it.
+
+```json
+{ "type": "agent_close", "sessionId": "...", "agentId": "child-456" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"agent_close"` | Yes | — |
+| `sessionId` | `string` | Yes | Root session identifier |
+| `agentId` | `string` | Yes | Child-agent session identifier |
+
+**Response:** none. Updated agent state is emitted via `agent_status`.
 **Error:** `validation_failed` when called from a child session.
 
 ---
@@ -1781,7 +1866,7 @@ Update runtime configuration values.
 | `config.backupsEnabled` | `boolean` | No | Toggle session backups for the current session and persist the workspace default for future sessions |
 | `config.toolOutputOverflowChars` | `number \| null` | No | Workspace-scoped character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
 | `config.clearToolOutputOverflowChars` | `boolean` | No | When `true`, delete the persisted workspace overflow override and resume inheriting the built-in or user-level default. Cannot be combined with `config.toolOutputOverflowChars`. |
-| `config.subAgentModel` | `string` | No | Non-empty sub-agent model ID for the current provider. Unsupported values are rejected with a `validation_failed` session error. |
+| `config.preferredChildModel` | `string` | No | Non-empty preferred child model ID for the current provider. Unsupported values are rejected with a `validation_failed` session error. |
 | `config.maxSteps` | `number` | No | Max steps per turn (1-1000) |
 | `config.providerOptions` | `object` | No | Editable OpenAI-compatible provider option patch. Only `openai` and `codex-cli` are allowed |
 | `config.providerOptions.openai.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | OpenAI reasoning effort |
@@ -1895,9 +1980,13 @@ Initial handshake event sent immediately on WebSocket connection.
     "model": "gpt-5.4",
     "workingDirectory": "/path/to/project"
   },
-  "sessionKind": "subagent",
+  "sessionKind": "agent",
   "parentSessionId": "root-123",
-  "agentType": "general",
+  "role": "worker",
+  "mode": "collaborative",
+  "depth": 1,
+  "effectiveModel": "gpt-5.4",
+  "executionState": "running",
   "isResume": true,
   "resumedFromStorage": true,
   "busy": false,
@@ -1911,12 +2000,16 @@ Initial handshake event sent immediately on WebSocket connection.
 |-------|------|-------------|
 | `type` | `"server_hello"` | — |
 | `sessionId` | `string` | The session identifier. Use this for all subsequent messages |
-| `protocolVersion` | `string?` | Protocol version (currently `"7.14"`) |
+| `protocolVersion` | `string?` | Protocol version |
 | `capabilities` | `object?` | Optional capabilities object. Currently: `{ modelStreamChunk: "v1" }` |
 | `config` | `PublicConfig` | Session config: `provider`, `model`, `workingDirectory`, and optionally `outputDirectory` |
-| `sessionKind` | `"root" \| "subagent"` | Session identity. Present for both root and child sessions |
+| `sessionKind` | `"root" \| "agent"` | Session identity. Present for both root and child sessions |
 | `parentSessionId` | `string?` | Present only for child sessions |
-| `agentType` | `"explore" \| "research" \| "general"?` | Present only for child sessions |
+| `role` | `"default" \| "explorer" \| "research" \| "worker" \| "reviewer"?` | Present only for child sessions |
+| `mode` | `"collaborative" \| "delegate"?` | Child-agent mode |
+| `depth` | `number?` | Child-agent nesting depth |
+| `effectiveModel` | `string?` | Effective child model |
+| `executionState` | `"pending_init" \| "running" \| "completed" \| "errored" \| "closed"?` | Child-agent execution state |
 | `isResume` | `boolean?` | Present and `true` only when resuming a disconnected session |
 | `resumedFromStorage` | `boolean?` | Present and `true` on cold resume (rehydrated from persisted store) |
 | `busy` | `boolean?` | Whether the session is mid-turn (only on resume) |
@@ -1961,9 +2054,13 @@ Canonical session metadata snapshot. Sent on connection and whenever title, prov
   "updatedAt": "2026-02-19T18:10:03.000Z",
   "provider": "openai",
   "model": "gpt-5.4",
-  "sessionKind": "subagent",
+  "sessionKind": "agent",
   "parentSessionId": "root-123",
-  "agentType": "general"
+  "role": "worker",
+  "mode": "collaborative",
+  "depth": 1,
+  "effectiveModel": "gpt-5.4",
+  "executionState": "running"
 }
 ```
 
@@ -1978,9 +2075,13 @@ Canonical session metadata snapshot. Sent on connection and whenever title, prov
 | `updatedAt` | `string` | ISO 8601 last update timestamp |
 | `provider` | `ProviderName` | Current provider |
 | `model` | `string` | Current model |
-| `sessionKind` | `"root" \| "subagent"?` | Session identity |
+| `sessionKind` | `"root" \| "agent"?` | Session identity |
 | `parentSessionId` | `string?` | Present only for child sessions |
-| `agentType` | `"explore" \| "research" \| "general"?` | Present only for child sessions |
+| `role` | `"default" \| "explorer" \| "research" \| "worker" \| "reviewer"?` | Present only for child sessions |
+| `mode` | `"collaborative" \| "delegate"?` | Child-agent mode |
+| `depth` | `number?` | Child-agent nesting depth |
+| `effectiveModel` | `string?` | Effective child model |
+| `executionState` | `"pending_init" \| "running" \| "completed" \| "errored" \| "closed"?` | Child-agent execution state |
 
 ---
 
@@ -3022,24 +3123,27 @@ Persisted session list response to `list_sessions`.
 
 ---
 
-### subagent_created
+### agent_spawned
 
 Confirmation that a persistent child session was created.
 
 ```json
 {
-  "type": "subagent_created",
+  "type": "agent_spawned",
   "sessionId": "root-123",
-  "subagent": {
-    "sessionId": "child-456",
+  "agent": {
+    "agentId": "child-456",
     "parentSessionId": "root-123",
-    "agentType": "general",
+    "role": "worker",
+    "mode": "collaborative",
+    "depth": 1,
+    "effectiveModel": "gpt-5.4-mini",
     "title": "New session",
     "provider": "openai",
-    "model": "gpt-5.4-mini",
     "createdAt": "2026-03-08T12:00:00.000Z",
     "updatedAt": "2026-03-08T12:00:00.000Z",
-    "status": "active",
+    "lifecycleState": "active",
+    "executionState": "running",
     "busy": true
   }
 }
@@ -3047,31 +3151,34 @@ Confirmation that a persistent child session was created.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | `"subagent_created"` | — |
+| `type` | `"agent_spawned"` | — |
 | `sessionId` | `string` | Parent session identifier |
-| `subagent` | `PersistentSubagentSummary` | Newly created child session |
+| `agent` | `PersistentAgentSummary` | Newly created child session |
 
 ---
 
-### subagent_sessions
+### agent_list
 
-Persistent child-session list response to `subagent_sessions_get`.
+Persistent child-session list response to `agent_list_get`.
 
 ```json
 {
-  "type": "subagent_sessions",
+  "type": "agent_list",
   "sessionId": "root-123",
-  "subagents": [
+  "agents": [
     {
-      "sessionId": "child-456",
+      "agentId": "child-456",
       "parentSessionId": "root-123",
-      "agentType": "research",
+      "role": "research",
+      "mode": "collaborative",
+      "depth": 1,
+      "effectiveModel": "gpt-5.4",
       "title": "Research queue",
       "provider": "openai",
-      "model": "gpt-5.4",
       "createdAt": "2026-03-08T12:00:00.000Z",
       "updatedAt": "2026-03-08T12:05:00.000Z",
-      "status": "active",
+      "lifecycleState": "active",
+      "executionState": "completed",
       "busy": false
     }
   ]
@@ -3080,24 +3187,59 @@ Persistent child-session list response to `subagent_sessions_get`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | `"subagent_sessions"` | — |
+| `type` | `"agent_list"` | — |
 | `sessionId` | `string` | Parent session identifier |
-| `subagents` | `PersistentSubagentSummary[]` | Child sessions sorted by `updatedAt` descending |
+| `agents` | `PersistentAgentSummary[]` | Child sessions sorted by `updatedAt` descending |
 
-**PersistentSubagentSummary:**
+**PersistentAgentSummary:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `sessionId` | `string` | Child session identifier |
+| `agentId` | `string` | Child session identifier |
 | `parentSessionId` | `string` | Parent/root session identifier |
-| `agentType` | `"explore" \| "research" \| "general"` | Child-session mode |
+| `role` | `"default" \| "explorer" \| "research" \| "worker" \| "reviewer"` | Child-agent role |
+| `mode` | `"collaborative" \| "delegate"` | Agent mode |
+| `depth` | `number` | Child-agent nesting depth |
+| `requestedModel` | `string?` | Requested child model override |
+| `effectiveModel` | `string` | Effective child model |
+| `requestedReasoningEffort` | `string?` | Requested reasoning override |
+| `effectiveReasoningEffort` | `string?` | Effective reasoning setting |
 | `title` | `string` | Current child-session title |
 | `provider` | `ProviderName` | Current provider |
-| `model` | `string` | Current model |
 | `createdAt` | `string` | ISO 8601 creation timestamp |
 | `updatedAt` | `string` | ISO 8601 last update timestamp |
-| `status` | `"active" \| "closed"` | Persisted child-session state |
+| `lifecycleState` | `"active" \| "closed"` | Persisted child-session state |
+| `executionState` | `"pending_init" \| "running" \| "completed" \| "errored" \| "closed"` | Current execution state |
 | `busy` | `boolean` | Whether the child session is mid-turn in memory |
+| `lastMessagePreview` | `string?` | Latest assistant preview text |
+
+---
+
+### agent_status
+
+Live child-agent status update emitted on spawn, resume, close, and state transitions.
+
+```json
+{
+  "type": "agent_status",
+  "sessionId": "root-123",
+  "agent": {
+    "agentId": "child-456",
+    "parentSessionId": "root-123",
+    "role": "worker",
+    "mode": "collaborative",
+    "depth": 1,
+    "effectiveModel": "gpt-5.4-mini",
+    "title": "New session",
+    "provider": "openai",
+    "createdAt": "2026-03-08T12:00:00.000Z",
+    "updatedAt": "2026-03-08T12:05:00.000Z",
+    "lifecycleState": "active",
+    "executionState": "completed",
+    "busy": false
+  }
+}
+```
 
 ---
 
@@ -3132,7 +3274,7 @@ Current runtime config. Sent on connection and after `set_config`.
     "defaultBackupsEnabled": true,
     "toolOutputOverflowChars": 25000,
     "defaultToolOutputOverflowChars": 25000,
-    "subAgentModel": "gpt-5.4",
+    "preferredChildModel": "gpt-5.4",
     "maxSteps": 100,
     "providerOptions": {
       "openai": {
@@ -3160,7 +3302,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.defaultBackupsEnabled` | `boolean` | The persisted workspace backup default from the harness/core config, before any live session override is applied |
 | `config.toolOutputOverflowChars` | `number \| null` | Effective character threshold for when oversized tool outputs start spilling into `.ModelScratchpad`; `null` disables spill files. Spill results still keep a fixed inline preview (currently the first 5,000 characters). |
 | `config.defaultToolOutputOverflowChars` | `number \| null` | Persisted workspace overflow default when explicitly configured; omitted when the session is inheriting the built-in or user-level default |
-| `config.subAgentModel` | `string` | Sub-agent model identifier |
+| `config.preferredChildModel` | `string` | Preferred child model identifier used as the default override suggestion |
 | `config.maxSteps` | `number` | Maximum steps per turn |
 | `config.providerOptions` | `object?` | Editable OpenAI-compatible provider options when configured |
 | `config.userName` | `string` | Effective user name |

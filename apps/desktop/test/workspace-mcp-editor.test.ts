@@ -130,7 +130,7 @@ describe("workspace MCP editor flow", () => {
           lastOpenedAt: "2026-02-19T00:00:00.000Z",
           defaultProvider: "openai",
           defaultModel: "gpt-5.2",
-          defaultSubAgentModel: "gpt-5.2",
+          defaultPreferredChildModel: "gpt-5.2",
           defaultEnableMcp: true,
           yolo: false,
         },

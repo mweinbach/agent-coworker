@@ -13,6 +13,22 @@ type SyncState = {
   pendingApproval: unknown | null;
   backup: unknown | null;
   tools: unknown[];
+  agents: unknown[];
+  sessionKind: unknown;
+  parentSessionId: unknown;
+  role: unknown;
+  mode: unknown;
+  depth: number;
+  nickname: unknown;
+  requestedModel: unknown;
+  effectiveModel: unknown;
+  requestedReasoningEffort: unknown;
+  effectiveReasoningEffort: unknown;
+  executionState: unknown;
+  lastMessagePreview: unknown;
+  sessionTitle: string | null;
+  provider: string;
+  model: string;
 };
 
 function createDeps() {
@@ -27,6 +43,22 @@ function createDeps() {
     pendingApproval: { requestId: "old" },
     backup: null,
     tools: [],
+    agents: [],
+    sessionKind: "root",
+    parentSessionId: null,
+    role: null,
+    mode: null,
+    depth: 0,
+    nickname: null,
+    requestedModel: null,
+    effectiveModel: null,
+    requestedReasoningEffort: null,
+    effectiveReasoningEffort: null,
+    executionState: null,
+    lastMessagePreview: null,
+    sessionTitle: null,
+    provider: "",
+    model: "",
   };
 
   const setState = (key: any, value?: any) => {
@@ -186,5 +218,62 @@ describe("syncEventReducer", () => {
       { name: "secondary", description: "desc" },
       { name: "fallback", description: "fallback" },
     ]);
+  });
+
+  test("agent events replace and upsert tracked child-agent summaries", () => {
+    const { state, deps } = createDeps();
+
+    reduceNonProviderEvent(
+      {
+        type: "agent_list",
+        agents: [
+          {
+            agentId: "child-2",
+            parentSessionId: "root-1",
+            role: "research",
+            mode: "collaborative",
+            depth: 1,
+            effectiveModel: "gpt-5.4",
+            title: "Research queue",
+            provider: "openai",
+            createdAt: "2026-03-15T10:00:00.000Z",
+            updatedAt: "2026-03-15T10:10:00.000Z",
+            lifecycleState: "active",
+            executionState: "completed",
+            busy: false,
+          },
+        ],
+      } as any,
+      deps as any
+    );
+
+    expect(state.agents).toHaveLength(1);
+    expect((state.agents[0] as any).agentId).toBe("child-2");
+
+    reduceNonProviderEvent(
+      {
+        type: "agent_status",
+        agent: {
+          agentId: "child-1",
+          parentSessionId: "root-1",
+          role: "worker",
+          mode: "collaborative",
+          depth: 1,
+          effectiveModel: "gpt-5.4-mini",
+          title: "Patch worker",
+          provider: "openai",
+          createdAt: "2026-03-15T10:00:00.000Z",
+          updatedAt: "2026-03-15T10:11:00.000Z",
+          lifecycleState: "active",
+          executionState: "running",
+          busy: true,
+        },
+      } as any,
+      deps as any
+    );
+
+    expect(state.agents).toHaveLength(2);
+    expect((state.agents[0] as any).agentId).toBe("child-1");
+    expect((state.agents[0] as any).busy).toBe(true);
   });
 });

@@ -92,7 +92,7 @@ export interface AgentConfig {
   provider: ProviderName;
   runtime?: RuntimeName;
   model: string;
-  subAgentModel: string;
+  preferredChildModel: string;
   toolOutputOverflowChars?: number | null;
   /**
    * Effective non-project fallback for tool overflow spilling after built-in

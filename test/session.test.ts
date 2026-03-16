@@ -74,7 +74,7 @@ function makeConfig(dir: string): AgentConfig {
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
-    subAgentModel: "gemini-3-flash-preview",
+    preferredChildModel: "gemini-3-flash-preview",
     workingDirectory: dir,
     outputDirectory: path.join(dir, "output"),
     uploadsDirectory: path.join(dir, "uploads"),
@@ -179,13 +179,13 @@ function makeSession(
     persistModelSelectionImpl: (selection: {
       provider: AgentConfig["provider"];
       model: string;
-      subAgentModel: string;
+      preferredChildModel: string;
     }) => Promise<void> | void;
     persistProjectConfigPatchImpl: (
       patch: Partial<
         Pick<
           AgentConfig,
-          "provider" | "model" | "subAgentModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
+          "provider" | "model" | "preferredChildModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
         >
       > & {
         userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -202,11 +202,11 @@ function makeSession(
       model: string | null;
     }>;
     writePersistedSessionSnapshotImpl: (opts: any) => Promise<string>;
-    createSubagentSessionImpl: (opts: any) => Promise<any>;
-    listSubagentSessionsImpl: (parentSessionId: string) => Promise<any[]>;
-    sendSubagentInputImpl: (opts: any) => Promise<void>;
-    waitForSubagentImpl: (opts: any) => Promise<any>;
-    closeSubagentImpl: (opts: any) => Promise<any>;
+    createAgentSessionImpl: (opts: any) => Promise<any>;
+    listAgentSessionsImpl: (parentSessionId: string) => Promise<any[]>;
+    sendAgentInputImpl: (opts: any) => Promise<void>;
+    waitForAgentImpl: (opts: any) => Promise<any>;
+    closeAgentImpl: (opts: any) => Promise<any>;
     deleteSessionImpl: (opts: any) => Promise<void>;
   }>
 ) {
@@ -230,11 +230,11 @@ function makeSession(
     generateSessionTitleImpl: overrides?.generateSessionTitleImpl ?? mockGenerateSessionTitle,
     writePersistedSessionSnapshotImpl:
       overrides?.writePersistedSessionSnapshotImpl ?? mockWritePersistedSessionSnapshot,
-    createSubagentSessionImpl: overrides?.createSubagentSessionImpl,
-    listSubagentSessionsImpl: overrides?.listSubagentSessionsImpl,
-    sendSubagentInputImpl: overrides?.sendSubagentInputImpl,
-    waitForSubagentImpl: overrides?.waitForSubagentImpl,
-    closeSubagentImpl: overrides?.closeSubagentImpl,
+    createAgentSessionImpl: overrides?.createAgentSessionImpl,
+    listAgentSessionsImpl: overrides?.listAgentSessionsImpl,
+    sendAgentInputImpl: overrides?.sendAgentInputImpl,
+    waitForAgentImpl: overrides?.waitForAgentImpl,
+    closeAgentImpl: overrides?.closeAgentImpl,
     deleteSessionImpl: overrides?.deleteSessionImpl,
   });
   return { session, emit, events, sessionBackupFactory };
@@ -366,7 +366,7 @@ describe("AgentSession", () => {
       await flushAsyncWork();
       expect(mockWritePersistedSessionSnapshot).toHaveBeenCalledTimes(1);
       const first = mockWritePersistedSessionSnapshot.mock.calls[0]?.[0] as any;
-      expect(first?.snapshot?.version).toBe(5);
+      expect(first?.snapshot?.version).toBe(6);
       expect(first?.snapshot?.context?.providerState).toBeNull();
       expect(first?.snapshot?.context?.costTracker).toMatchObject({
         totalTurns: 0,
@@ -427,10 +427,10 @@ describe("AgentSession", () => {
       expect(pub.providerOptions).toBeUndefined();
     });
 
-    test("does not include subAgentModel", () => {
+    test("does not include preferredChildModel", () => {
       const { session } = makeSession();
       const pub = session.getPublicConfig() as any;
-      expect(pub.subAgentModel).toBeUndefined();
+      expect(pub.preferredChildModel).toBeUndefined();
     });
 
     test("does not include userName", () => {
@@ -820,7 +820,7 @@ describe("AgentSession", () => {
       expect(evt.config.defaultBackupsEnabled).toBe(true);
       expect(evt.config.toolOutputOverflowChars).toBe(25000);
       expect("defaultToolOutputOverflowChars" in evt.config).toBe(false);
-      expect(evt.config.subAgentModel).toBe("gemini-3-flash-preview");
+      expect(evt.config.preferredChildModel).toBe("gemini-3-flash-preview");
       expect(evt.config.maxSteps).toBe(100);
     });
 
@@ -864,12 +864,12 @@ describe("AgentSession", () => {
       expect((evt.config.providerOptions as any)?.google).toBeUndefined();
     });
 
-    test("setConfig emits session_config and persists subAgentModel/observability/backupsEnabled/toolOutputOverflowChars", async () => {
+    test("setConfig emits session_config and persists preferredChildModel/observability/backupsEnabled/toolOutputOverflowChars", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
       await session.setConfig({
-        subAgentModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3-pro-preview",
         observabilityEnabled: true,
         backupsEnabled: false,
         toolOutputOverflowChars: null,
@@ -878,7 +878,7 @@ describe("AgentSession", () => {
 
       const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
       expect(cfgEvt).toBeDefined();
-      expect(cfgEvt.config.subAgentModel).toBe("gemini-3-pro-preview");
+      expect(cfgEvt.config.preferredChildModel).toBe("gemini-3-pro-preview");
       expect(cfgEvt.config.observabilityEnabled).toBe(true);
       expect(cfgEvt.config.backupsEnabled).toBe(false);
       expect(cfgEvt.config.defaultBackupsEnabled).toBe(false);
@@ -887,7 +887,7 @@ describe("AgentSession", () => {
       expect(cfgEvt.config.maxSteps).toBe(25);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
-        subAgentModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3-pro-preview",
         observabilityEnabled: true,
         backupsEnabled: false,
         toolOutputOverflowChars: null,
@@ -962,24 +962,24 @@ describe("AgentSession", () => {
       ]);
     });
 
-    test("setConfig rejects unsupported subAgentModel values before persistence", async () => {
+    test("setConfig rejects unsupported preferredChildModel values before persistence", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({
         config: {
           ...makeConfig("/tmp/test-session"),
           provider: "openai",
           model: "gpt-5.2",
-          subAgentModel: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
         },
         persistProjectConfigPatchImpl,
       });
 
       await session.setConfig({
-        subAgentModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3-pro-preview",
       });
 
       expect(persistProjectConfigPatchImpl).not.toHaveBeenCalled();
-      expect(session.getSessionConfigEvent().config.subAgentModel).toBe("gpt-5.2");
+      expect(session.getSessionConfigEvent().config.preferredChildModel).toBe("gpt-5.2");
       expect(events.some((evt) => evt.type === "session_config")).toBe(false);
 
       const errEvt = events.find((evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error");
@@ -987,7 +987,7 @@ describe("AgentSession", () => {
       if (errEvt) {
         expect(errEvt.code).toBe("validation_failed");
         expect(errEvt.source).toBe("session");
-        expect(errEvt.message).toContain('Unsupported sub-agent model "gemini-3-pro-preview" for provider openai');
+        expect(errEvt.message).toContain('Unsupported preferred child model "gemini-3-pro-preview" for provider openai');
       }
     });
 
@@ -1036,13 +1036,13 @@ describe("AgentSession", () => {
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
       await session.setConfig({
-        subAgentModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3-pro-preview",
         observabilityEnabled: true,
         maxSteps: 25,
       });
 
       const cfg = session.getSessionConfigEvent().config;
-      expect(cfg.subAgentModel).toBe("gemini-3-flash-preview");
+      expect(cfg.preferredChildModel).toBe("gemini-3-flash-preview");
       expect(cfg.observabilityEnabled).toBe(false);
       expect(cfg.maxSteps).toBe(100);
 
@@ -1332,7 +1332,7 @@ describe("AgentSession", () => {
           provider: "openai",
           runtime: "openai-responses",
           model: "gpt-5.2",
-          subAgentModel: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
         },
       });
 
@@ -1378,7 +1378,7 @@ describe("AgentSession", () => {
       expect(persistModelSelectionImpl).toHaveBeenCalledWith({
         provider: "openai",
         model: "gpt-5.2",
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
       });
     });
 
@@ -2679,7 +2679,7 @@ describe("AgentSession", () => {
         }));
 
       const dir = "/tmp/test-session";
-      const config = { ...makeConfig(dir), provider: "openai" as const, model: "gpt-5.2", subAgentModel: "gpt-5.2" };
+      const config = { ...makeConfig(dir), provider: "openai" as const, model: "gpt-5.2", preferredChildModel: "gpt-5.2" };
       const { session } = makeSession({ config });
       (session as any).state.providerState = {
         provider: "openai",
@@ -4026,7 +4026,7 @@ describe("AgentSession", () => {
           ...makeConfig(dir),
           provider: "openai",
           model: "gpt-5.2",
-          subAgentModel: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
         },
       });
 
@@ -4068,7 +4068,7 @@ describe("AgentSession", () => {
           ...makeConfig(dir),
           provider: "openai",
           model: "gpt-5.2",
-          subAgentModel: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
         },
       });
 
@@ -4110,7 +4110,7 @@ describe("AgentSession", () => {
           ...makeConfig("/tmp/test-session-compact-usage"),
           provider: "openai",
           model: "gpt-5.2",
-          subAgentModel: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
         },
       });
 
@@ -4143,7 +4143,7 @@ describe("AgentSession", () => {
           ...makeConfig("/tmp/test-session-budget-alerts"),
           provider: "openai",
           model: "gpt-5.2",
-          subAgentModel: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
         },
       });
 
@@ -4237,7 +4237,7 @@ describe("AgentSession", () => {
           sessionId: "persisted-session",
           sessionKind: "root",
           parentSessionId: null,
-          agentType: null,
+          role: null,
           title: "Persisted",
           titleSource: "manual",
           titleModel: null,
@@ -4286,7 +4286,7 @@ describe("AgentSession", () => {
           sessionId: "persisted-legacy-model",
           sessionKind: "root",
           parentSessionId: null,
-          agentType: null,
+          role: null,
           title: "Legacy",
           titleSource: "manual",
           titleModel: null,
@@ -4567,14 +4567,14 @@ describe("AgentSession", () => {
       expect(assistantEvt.text).toBe("simple string content");
     });
 
-    test("passes persistentAgentControl to root session turns when child-session callbacks exist", async () => {
+    test("passes agentControl to root session turns when child-session callbacks exist", async () => {
       mockRunTurn.mockImplementation(async (params: any) => {
-        expect(params.persistentAgentControl).toBeDefined();
-        expect(typeof params.persistentAgentControl.spawn).toBe("function");
-        expect(typeof params.persistentAgentControl.list).toBe("function");
-        expect(typeof params.persistentAgentControl.sendInput).toBe("function");
-        expect(typeof params.persistentAgentControl.wait).toBe("function");
-        expect(typeof params.persistentAgentControl.close).toBe("function");
+        expect(params.agentControl).toBeDefined();
+        expect(typeof params.agentControl.spawn).toBe("function");
+        expect(typeof params.agentControl.list).toBe("function");
+        expect(typeof params.agentControl.sendInput).toBe("function");
+        expect(typeof params.agentControl.wait).toBe("function");
+        expect(typeof params.agentControl.close).toBe("function");
         return {
           text: "ok",
           reasoningText: undefined,
@@ -4582,10 +4582,10 @@ describe("AgentSession", () => {
         };
       });
 
-      const createSubagentSessionImpl = mock(async () => ({
+      const createAgentSessionImpl = mock(async () => ({
         sessionId: "sub-1",
         parentSessionId: "parent-1",
-        agentType: "general" as const,
+        role: "worker" as const,
         title: "Child",
         provider: "google" as const,
         model: "gemini-3-flash-preview",
@@ -4596,14 +4596,14 @@ describe("AgentSession", () => {
       }));
 
       const { session } = makeSession({
-        createSubagentSessionImpl,
-        listSubagentSessionsImpl: async () => [],
-        sendSubagentInputImpl: async () => {},
-        waitForSubagentImpl: async () => ({ sessionId: "sub-1", status: "completed" as const, busy: false }),
-        closeSubagentImpl: async () => ({
+        createAgentSessionImpl,
+        listAgentSessionsImpl: async () => [],
+        sendAgentInputImpl: async () => {},
+        waitForAgentImpl: async () => ({ sessionId: "sub-1", status: "completed" as const, busy: false }),
+        closeAgentImpl: async () => ({
           sessionId: "sub-1",
           parentSessionId: "parent-1",
-          agentType: "general" as const,
+          role: "worker" as const,
           title: "Child",
           provider: "google" as const,
           model: "gemini-3-flash-preview",

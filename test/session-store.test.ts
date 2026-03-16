@@ -26,7 +26,7 @@ function makeSnapshot(sessionId: string): PersistedSessionSnapshot {
       model: "gpt-5.2",
       sessionKind: "root",
       parentSessionId: null,
-      agentType: null,
+      role: null,
     },
     config: {
       provider: "openai",
@@ -171,7 +171,7 @@ describe("sessionStore", () => {
           ...makeSnapshot("child-session").session,
           sessionKind: "subagent",
           parentSessionId: "root-session",
-          agentType: "general",
+          role: "worker",
         },
       },
     });
@@ -194,7 +194,7 @@ describe("sessionStore", () => {
         ...makeSnapshot("sess-child").session,
         sessionKind: "subagent" as const,
         parentSessionId: "sess-a",
-        agentType: "general" as const,
+        role: "worker" as const,
       },
     };
 

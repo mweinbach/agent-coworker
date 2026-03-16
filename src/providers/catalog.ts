@@ -6,6 +6,13 @@ type ProviderModelDefinition = {
   availableModels: readonly string[];
 };
 
+export const USER_FACING_DISABLED_PROVIDERS = ["baseten"] as const satisfies readonly ProviderName[];
+const USER_FACING_DISABLED_PROVIDER_SET = new Set<ProviderName>(USER_FACING_DISABLED_PROVIDERS);
+
+export function isUserFacingProviderEnabled(provider: ProviderName): boolean {
+  return !USER_FACING_DISABLED_PROVIDER_SET.has(provider);
+}
+
 export const PROVIDER_MODEL_CATALOG = {
   anthropic: {
     defaultModel: defaultModelIdForProvider("anthropic"),
@@ -53,6 +60,10 @@ export function availableModelsForProvider(provider: ProviderName): readonly str
   return PROVIDER_MODEL_CATALOG[provider].availableModels;
 }
 
+export function userFacingAvailableModelsForProvider(provider: ProviderName): readonly string[] {
+  return isUserFacingProviderEnabled(provider) ? availableModelsForProvider(provider) : [];
+}
+
 export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   anthropic: PROVIDER_MODEL_CATALOG.anthropic.availableModels,
   baseten: PROVIDER_MODEL_CATALOG.baseten.availableModels,
@@ -67,4 +78,8 @@ export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
 
 export function modelChoicesByProvider(): Record<ProviderName, readonly string[]> {
   return PROVIDER_MODEL_CHOICES;
+}
+
+export function userFacingProviders(): ProviderName[] {
+  return (Object.keys(PROVIDER_MODEL_CATALOG) as ProviderName[]).filter((provider) => isUserFacingProviderEnabled(provider));
 }

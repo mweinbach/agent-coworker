@@ -28,7 +28,7 @@ describe("sessionDb", () => {
         snapshot: {
           sessionKind: "root",
           parentSessionId: null,
-          agentType: null,
+          role: null,
           title: "Session One",
           titleSource: "default",
           titleModel: null,
@@ -133,7 +133,7 @@ describe("sessionDb", () => {
         snapshot: {
           sessionKind: "root",
           parentSessionId: null,
-          agentType: null,
+          role: null,
           title: "Raw Session",
           titleSource: "default",
           titleModel: null,
@@ -241,7 +241,7 @@ describe("sessionDb", () => {
     }
   });
 
-  test("lists subagent sessions separately and cascades deletion from the parent", async () => {
+  test("lists child-agent sessions separately and cascades deletion from the parent", async () => {
     const paths = await makeTmpCoworkHome();
     const db = await SessionDb.create({ paths });
     try {
@@ -252,7 +252,7 @@ describe("sessionDb", () => {
         snapshot: {
           sessionKind: "root",
           parentSessionId: null,
-          agentType: null,
+          role: null,
           title: "Root Session",
           titleSource: "default",
           titleModel: null,
@@ -277,9 +277,9 @@ describe("sessionDb", () => {
         sessionId: "child-1",
         eventType: "session.created",
         snapshot: {
-          sessionKind: "subagent",
+          sessionKind: "agent",
           parentSessionId: "root-1",
-          agentType: "general",
+          role: "worker",
           title: "Child Session",
           titleSource: "default",
           titleModel: null,
@@ -302,19 +302,21 @@ describe("sessionDb", () => {
       });
 
       expect(db.listSessions().map((session) => session.sessionId)).toEqual(["root-1"]);
-      const subagents = db.listSubagentSessions("root-1");
-      expect(subagents).toHaveLength(1);
-      expect(subagents[0]).toMatchObject({
-        sessionId: "child-1",
+      const agents = db.listAgentSessions("root-1");
+      expect(agents).toHaveLength(1);
+      expect(agents[0]).toMatchObject({
+        agentId: "child-1",
         parentSessionId: "root-1",
-        agentType: "general",
-        status: "active",
+        role: "worker",
+        mode: "collaborative",
+        depth: 1,
+        lifecycleState: "active",
       });
 
       db.deleteSession("root-1");
       expect(db.getSessionRecord("root-1")).toBeNull();
       expect(db.getSessionRecord("child-1")).toBeNull();
-      expect(db.listSubagentSessions("root-1")).toEqual([]);
+      expect(db.listAgentSessions("root-1")).toEqual([]);
     } finally {
       db.close();
     }
@@ -435,7 +437,7 @@ describe("sessionDb", () => {
         snapshot: {
           sessionKind: "root",
           parentSessionId: null,
-          agentType: null,
+          role: null,
           title: "Session with bad messages",
           titleSource: "default",
           titleModel: null,

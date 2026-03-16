@@ -71,7 +71,7 @@ export class SessionMetadataManager {
         enableMemory: this.context.state.config.enableMemory ?? true,
         memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? false,
         defaultBackupsEnabled,
-        subAgentModel: this.context.state.config.subAgentModel,
+        preferredChildModel: this.context.state.config.preferredChildModel,
         maxSteps: this.context.state.maxSteps,
         toolOutputOverflowChars,
         ...(defaultToolOutputOverflowChars !== undefined ? { defaultToolOutputOverflowChars } : {}),
@@ -206,12 +206,12 @@ export class SessionMetadataManager {
     }
 
     let normalizedSubAgentModel: string | undefined;
-    if (patch.subAgentModel !== undefined) {
+    if (patch.preferredChildModel !== undefined) {
       try {
         normalizedSubAgentModel = assertSupportedModel(
           this.context.state.config.provider,
-          patch.subAgentModel,
-          "sub-agent model",
+          patch.preferredChildModel,
+          "preferred child model",
         ).id;
       } catch (err) {
         this.context.emitError("validation_failed", "session", err instanceof Error ? err.message : String(err));
@@ -235,7 +235,7 @@ export class SessionMetadataManager {
 
     const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
     if (normalizedSubAgentModel !== undefined) {
-      persistPatch.subAgentModel = normalizedSubAgentModel;
+      persistPatch.preferredChildModel = normalizedSubAgentModel;
     }
     if (patch.observabilityEnabled !== undefined) {
       persistPatch.observabilityEnabled = patch.observabilityEnabled;
@@ -293,7 +293,7 @@ export class SessionMetadataManager {
       this.context.state.config = { ...this.context.state.config, memoryRequireApproval: patch.memoryRequireApproval };
     }
     if (normalizedSubAgentModel !== undefined) {
-      this.context.state.config = { ...this.context.state.config, subAgentModel: normalizedSubAgentModel };
+      this.context.state.config = { ...this.context.state.config, preferredChildModel: normalizedSubAgentModel };
     }
     if (patch.toolOutputOverflowChars !== undefined) {
       this.context.state.config = {

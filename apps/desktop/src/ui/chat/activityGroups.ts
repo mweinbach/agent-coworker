@@ -151,8 +151,8 @@ function toolMergeKey(name: string, args: unknown): string | null {
     return null;
   }
   if (base === "spawnagent") {
-    const agentType = getRecordValue(args, ["agentType"]);
-    return typeof agentType === "string" ? `agentType:${agentType}` : null;
+    const role = getRecordValue(args, ["role"]);
+    return typeof role === "string" ? `role:${role}` : null;
   }
   if (base === "ask") {
     const question = getRecordValue(args, ["question"]);

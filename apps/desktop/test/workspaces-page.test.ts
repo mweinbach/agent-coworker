@@ -267,7 +267,7 @@ describe("desktop workspaces page", () => {
               lastOpenedAt: "2026-03-12T00:00:00.000Z",
               defaultProvider: "openai",
               defaultModel: "gpt-5.4",
-              defaultSubAgentModel: "gpt-5.4",
+              defaultPreferredChildModel: "gpt-5.4",
               defaultEnableMcp: true,
               defaultBackupsEnabled: true,
               yolo: false,

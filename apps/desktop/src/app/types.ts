@@ -53,7 +53,7 @@ export type WorkspaceRecord = {
   lastOpenedAt: string;
   defaultProvider?: ProviderName;
   defaultModel?: string;
-  defaultSubAgentModel?: string;
+  defaultPreferredChildModel?: string;
   defaultToolOutputOverflowChars?: number | null;
   providerOptions?: WorkspaceProviderOptions;
   userName?: string;
@@ -146,6 +146,12 @@ export type TurnUsageSnapshot = Pick<Extract<ServerEvent, { type: "turn_usage" }
 export type WorkspaceBackupsEvent = Extract<ServerEvent, { type: "workspace_backups" }>;
 export type WorkspaceBackupDeltaEvent = Extract<ServerEvent, { type: "workspace_backup_delta" }>;
 export type WorkspaceBackupEntry = WorkspaceBackupsEvent["backups"][number];
+export type ThreadAgentSummary = Extract<ServerEvent, { type: "agent_status" }>["agent"];
+export type ThreadSessionKind = Extract<ServerEvent, { type: "server_hello" }>["sessionKind"];
+export type ThreadAgentRole = Extract<ServerEvent, { type: "server_hello" }>["role"];
+export type ThreadAgentMode = Extract<ServerEvent, { type: "server_hello" }>["mode"];
+export type ThreadAgentReasoningEffort = Extract<ServerEvent, { type: "server_hello" }>["effectiveReasoningEffort"];
+export type ThreadAgentExecutionState = Extract<ServerEvent, { type: "server_hello" }>["executionState"];
 
 export type MemoryListEntry = {
   id: string;
@@ -191,6 +197,19 @@ export type ThreadRuntime = {
   sessionId: string | null;
   config: ConfigSubset | null;
   sessionConfig: SessionConfigSubset | null;
+  sessionKind: ThreadSessionKind | null;
+  parentSessionId: string | null;
+  role: ThreadAgentRole | null;
+  mode: ThreadAgentMode | null;
+  depth: number;
+  nickname: string | null;
+  requestedModel: string | null;
+  effectiveModel: string | null;
+  requestedReasoningEffort: ThreadAgentReasoningEffort | null;
+  effectiveReasoningEffort: ThreadAgentReasoningEffort | null;
+  executionState: ThreadAgentExecutionState | null;
+  lastMessagePreview: string | null;
+  agents: ThreadAgentSummary[];
   sessionUsage: SessionUsageSnapshot | null;
   lastTurnUsage: TurnUsageSnapshot | null;
   enableMcp: boolean | null;

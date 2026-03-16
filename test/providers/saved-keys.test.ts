@@ -124,7 +124,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const cfg = makeConfig({
         provider: "baseten",
         model: "moonshotai/Kimi-K2.5",
-        subAgentModel: "moonshotai/Kimi-K2.5",
+        preferredChildModel: "moonshotai/Kimi-K2.5",
         userAgentDir: path.join(home, ".agent"),
       });
 
@@ -156,7 +156,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const cfg = makeConfig({
         provider: "together",
         model: "moonshotai/Kimi-K2.5",
-        subAgentModel: "moonshotai/Kimi-K2.5",
+        preferredChildModel: "moonshotai/Kimi-K2.5",
         userAgentDir: path.join(home, ".agent"),
       });
 
@@ -188,7 +188,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const cfg = makeConfig({
         provider: "nvidia",
         model: "nvidia/nemotron-3-super-120b-a12b",
-        subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+        preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
         userAgentDir: path.join(home, ".agent"),
       });
 
@@ -220,7 +220,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const cfg = makeConfig({
         provider: "opencode-go",
         model: "glm-5",
-        subAgentModel: "glm-5",
+        preferredChildModel: "glm-5",
         userAgentDir: path.join(home, ".agent"),
       });
 
@@ -252,7 +252,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const cfg = makeConfig({
         provider: "opencode-zen",
         model: "glm-5",
-        subAgentModel: "glm-5",
+        preferredChildModel: "glm-5",
         userAgentDir: path.join(home, ".agent"),
       });
 
@@ -368,7 +368,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const cfg = makeConfig({
         provider: "opencode-go",
         model: "glm-5",
-        subAgentModel: "glm-5",
+        preferredChildModel: "glm-5",
         userAgentDir: path.join(home, ".agent"),
       });
 
@@ -398,7 +398,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const cfg = makeConfig({
         provider: "baseten",
         model: "moonshotai/Kimi-K2.5",
-        subAgentModel: "moonshotai/Kimi-K2.5",
+        preferredChildModel: "moonshotai/Kimi-K2.5",
         userAgentDir: path.join(home, ".agent"),
       });
 
@@ -428,7 +428,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const cfg = makeConfig({
         provider: "together",
         model: "moonshotai/Kimi-K2.5",
-        subAgentModel: "moonshotai/Kimi-K2.5",
+        preferredChildModel: "moonshotai/Kimi-K2.5",
         userAgentDir: path.join(home, ".agent"),
       });
 
@@ -458,7 +458,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const cfg = makeConfig({
         provider: "nvidia",
         model: "nvidia/nemotron-3-super-120b-a12b",
-        subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+        preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
         userAgentDir: path.join(home, ".agent"),
       });
 
@@ -488,7 +488,7 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       const cfg = makeConfig({
         provider: "opencode-zen",
         model: "glm-5",
-        subAgentModel: "glm-5",
+        preferredChildModel: "glm-5",
         userAgentDir: path.join(home, ".agent"),
       });
 

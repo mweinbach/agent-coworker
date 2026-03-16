@@ -22,7 +22,14 @@ import type {
   WorkspaceBackupDeltaPreview,
   WorkspaceBackupPublicEntry,
 } from "./sessionBackup";
-import type { PersistentSubagentSummary, SessionKind, SubagentAgentType } from "../shared/persistentSubagents";
+import type {
+  AgentExecutionState,
+  AgentMode,
+  AgentReasoningEffort,
+  AgentRole,
+  PersistentAgentSummary,
+  SessionKind,
+} from "../shared/agents";
 export { ASK_SKIP_TOKEN } from "../shared/ask";
 
 export type MCPServerEventSource = "workspace" | "user" | "system" | "workspace_legacy" | "user_legacy";
@@ -34,7 +41,7 @@ export type SessionConfigPatch = {
   backupsEnabled?: boolean;
   enableMemory?: boolean;
   memoryRequireApproval?: boolean;
-  subAgentModel?: string;
+  preferredChildModel?: string;
   maxSteps?: number;
   toolOutputOverflowChars?: number | null;
   clearToolOutputOverflowChars?: boolean;
@@ -54,7 +61,7 @@ export type SessionConfigState = {
   defaultBackupsEnabled: boolean;
   enableMemory: boolean;
   memoryRequireApproval: boolean;
-  subAgentModel: string;
+  preferredChildModel: string;
   maxSteps: number;
   toolOutputOverflowChars: number | null;
   defaultToolOutputOverflowChars?: number | null;
@@ -144,8 +151,20 @@ export type ClientMessage =
   | { type: "memory_list"; sessionId: string; scope?: "workspace" | "user" }
   | { type: "memory_upsert"; sessionId: string; scope: "workspace" | "user"; id?: string; content: string }
   | { type: "memory_delete"; sessionId: string; scope: "workspace" | "user"; id: string }
-  | { type: "subagent_create"; sessionId: string; agentType: SubagentAgentType; task: string }
-  | { type: "subagent_sessions_get"; sessionId: string }
+  | {
+    type: "agent_spawn";
+    sessionId: string;
+    message: string;
+    role?: AgentRole;
+    model?: string;
+    reasoningEffort?: AgentReasoningEffort;
+    forkContext?: boolean;
+  }
+  | { type: "agent_list_get"; sessionId: string }
+  | { type: "agent_input_send"; sessionId: string; agentId: string; message: string; interrupt?: boolean }
+  | { type: "agent_wait"; sessionId: string; agentIds: string[]; timeoutMs?: number }
+  | { type: "agent_resume"; sessionId: string; agentId: string }
+  | { type: "agent_close"; sessionId: string; agentId: string }
   | {
     type: "set_config";
     sessionId: string;
@@ -177,7 +196,16 @@ export type ServerEvent =
     hasPendingApproval?: boolean;
     sessionKind?: SessionKind;
     parentSessionId?: string;
-    agentType?: SubagentAgentType;
+    role?: AgentRole;
+    mode?: AgentMode;
+    depth?: number;
+    nickname?: string;
+    requestedModel?: string;
+    effectiveModel?: string;
+    requestedReasoningEffort?: AgentReasoningEffort;
+    effectiveReasoningEffort?: AgentReasoningEffort;
+    executionState?: AgentExecutionState;
+    lastMessagePreview?: string;
   }
   | { type: "session_settings"; sessionId: string; enableMcp: boolean; enableMemory: boolean; memoryRequireApproval: boolean }
   | {
@@ -192,7 +220,16 @@ export type ServerEvent =
     model: string;
     sessionKind?: SessionKind;
     parentSessionId?: string;
-    agentType?: SubagentAgentType;
+    role?: AgentRole;
+    mode?: AgentMode;
+    depth?: number;
+    nickname?: string;
+    requestedModel?: string;
+    effectiveModel?: string;
+    requestedReasoningEffort?: AgentReasoningEffort;
+    effectiveReasoningEffort?: AgentReasoningEffort;
+    executionState?: AgentExecutionState;
+    lastMessagePreview?: string;
   }
   | {
     type: "mcp_servers";
@@ -395,8 +432,9 @@ export type ServerEvent =
     limit: number;
   }
   | { type: "sessions"; sessionId: string; sessions: PersistedSessionSummary[] }
-  | { type: "subagent_created"; sessionId: string; subagent: PersistentSubagentSummary }
-  | { type: "subagent_sessions"; sessionId: string; subagents: PersistentSubagentSummary[] }
+  | { type: "agent_spawned"; sessionId: string; agent: PersistentAgentSummary }
+  | { type: "agent_list"; sessionId: string; agents: PersistentAgentSummary[] }
+  | { type: "agent_status"; sessionId: string; agent: PersistentAgentSummary }
   | { type: "session_deleted"; sessionId: string; targetSessionId: string }
   | {
     type: "session_config";
@@ -407,7 +445,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.15";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.16";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
@@ -463,8 +501,12 @@ export const CLIENT_MESSAGE_TYPES = [
   "memory_list",
   "memory_upsert",
   "memory_delete",
-  "subagent_create",
-  "subagent_sessions_get",
+  "agent_spawn",
+  "agent_list_get",
+  "agent_input_send",
+  "agent_wait",
+  "agent_resume",
+  "agent_close",
   "set_config",
   "upload_file",
   "get_session_usage",
@@ -511,8 +553,9 @@ export const SERVER_EVENT_TYPES = [
   "budget_exceeded",
   "messages",
   "sessions",
-  "subagent_created",
-  "subagent_sessions",
+  "agent_spawned",
+  "agent_list",
+  "agent_status",
   "session_deleted",
   "session_config",
   "memory_list",

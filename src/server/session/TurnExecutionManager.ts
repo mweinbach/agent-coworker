@@ -175,55 +175,63 @@ export class TurnExecutionManager {
           messages: this.context.state.messages,
           allMessages: this.context.state.allMessages,
           providerState: providerStateOverride,
-          persistentAgentControl: this.context.state.sessionInfo.sessionKind === "subagent"
-            ? undefined
-            : this.context.deps.createSubagentSessionImpl
-            ? {
-                spawn: async ({ task, agentType }) =>
-                  await this.context.deps.createSubagentSessionImpl!({
-                    parentSessionId: this.context.id,
-                    parentConfig: this.context.state.config,
-                    agentType: agentType ?? "general",
-                    task,
-                  }),
-                list: async () =>
-                  await (this.context.deps.listSubagentSessionsImpl?.(this.context.id) ?? Promise.resolve([])),
-                sendInput: async ({ agentId, task }) => {
-                  await this.context.deps.sendSubagentInputImpl?.({
-                    parentSessionId: this.context.id,
-                    agentId,
-                    task,
-                  });
+          agentControl:
+            this.context.state.sessionInfo.sessionKind === "agent" || !this.context.deps.createAgentSessionImpl
+              ? undefined
+              : {
+                  spawn: async ({ message, role, model, reasoningEffort, forkContext }) =>
+                    await this.context.deps.createAgentSessionImpl!({
+                      parentSessionId: this.context.id,
+                      parentConfig: this.context.state.config,
+                      message,
+                      ...(role ? { role } : {}),
+                      ...(model ? { model } : {}),
+                      ...(reasoningEffort ? { reasoningEffort } : {}),
+                      ...(forkContext !== undefined ? { forkContext } : {}),
+                      parentDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
+                    }),
+                  list: async () =>
+                    await (this.context.deps.listAgentSessionsImpl?.(this.context.id) ?? Promise.resolve([])),
+                  sendInput: async ({ agentId, message, interrupt }) => {
+                    if (!this.context.deps.sendAgentInputImpl) {
+                      throw new Error("Child-agent input is unavailable.");
+                    }
+                    await this.context.deps.sendAgentInputImpl({
+                      parentSessionId: this.context.id,
+                      agentId,
+                      message,
+                      ...(interrupt !== undefined ? { interrupt } : {}),
+                    });
+                  },
+                  wait: async ({ agentIds, timeoutMs }) => {
+                    if (!this.context.deps.waitForAgentImpl) {
+                      throw new Error("Child-agent waiting is unavailable.");
+                    }
+                    return await this.context.deps.waitForAgentImpl({
+                      parentSessionId: this.context.id,
+                      agentIds,
+                      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+                    });
+                  },
+                  resume: async ({ agentId }) => {
+                    if (!this.context.deps.resumeAgentImpl) {
+                      throw new Error("Child-agent resume is unavailable.");
+                    }
+                    return await this.context.deps.resumeAgentImpl({
+                      parentSessionId: this.context.id,
+                      agentId,
+                    });
+                  },
+                  close: async ({ agentId }) => {
+                    if (!this.context.deps.closeAgentImpl) {
+                      throw new Error("Child-agent closing is unavailable.");
+                    }
+                    return await this.context.deps.closeAgentImpl({
+                      parentSessionId: this.context.id,
+                      agentId,
+                    });
+                  },
                 },
-                wait: async ({ agentId, timeoutMs }) => {
-                  const result = await this.context.deps.waitForSubagentImpl?.({
-                    parentSessionId: this.context.id,
-                    agentId,
-                    timeoutMs,
-                  });
-                  if (!result) {
-                    throw new Error("Persistent subagent waiting is unavailable.");
-                  }
-                  return {
-                    agentId,
-                    sessionId: result.sessionId,
-                    status: result.status,
-                    busy: result.busy,
-                    ...(result.text ? { text: result.text } : {}),
-                  };
-                },
-                close: async ({ agentId }) => {
-                  const result = await this.context.deps.closeSubagentImpl?.({
-                    parentSessionId: this.context.id,
-                    agentId,
-                  });
-                  if (!result) {
-                    throw new Error("Persistent subagent closing is unavailable.");
-                  }
-                  return result;
-                },
-              }
-            : undefined,
           log: (line) => this.log(line),
           askUser: (q, opts) => this.askUser(q, opts),
           approveCommand: (cmd) => this.approveCommand(cmd),
@@ -231,7 +239,8 @@ export class TurnExecutionManager {
           discoveredSkills: this.context.state.discoveredSkills,
           maxSteps: this.context.state.maxSteps,
           enableMcp: this.context.state.config.enableMcp,
-          spawnDepth: 0,
+          spawnDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
+          agentRole: this.context.state.sessionInfo.role,
           telemetryContext: {
             functionId: "session.turn",
             metadata: {

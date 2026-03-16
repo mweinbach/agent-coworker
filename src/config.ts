@@ -112,11 +112,11 @@ function resolveSupportedConfiguredModel(provider: ProviderName, modelId: string
   return fallback;
 }
 
-function resolveSupportedConfiguredSubAgentModel(provider: ProviderName, subAgentModelId: string, fallbackModelId: string): string {
-  const supported = getSupportedModel(provider, subAgentModelId);
+function resolveSupportedConfiguredSubAgentModel(provider: ProviderName, preferredChildModelId: string, fallbackModelId: string): string {
+  const supported = getSupportedModel(provider, preferredChildModelId);
   if (supported) return supported.id;
   console.warn(
-    `[config] Ignoring unsupported sub-agent model "${subAgentModelId}" for provider ${provider}; using "${fallbackModelId}".`
+    `[config] Ignoring unsupported preferred child model "${preferredChildModelId}" for provider ${provider}; using "${fallbackModelId}".`
   );
   return fallbackModelId;
 }
@@ -332,12 +332,12 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     defaultModelForProvider(provider);
   const supportedModel = resolveSupportedConfiguredModel(provider, model, "model");
 
-  const subAgentModel =
-    asNonEmptyString(projectConfig.subAgentModel) ||
-    asNonEmptyString(userConfig.subAgentModel) ||
-    asNonEmptyString(builtInDefaults.subAgentModel) ||
+  const preferredChildModel =
+    asNonEmptyString(projectConfig.preferredChildModel) ||
+    asNonEmptyString(userConfig.preferredChildModel) ||
+    asNonEmptyString(builtInDefaults.preferredChildModel) ||
     supportedModel.id;
-  const supportedSubAgentModelId = resolveSupportedConfiguredSubAgentModel(provider, subAgentModel, supportedModel.id);
+  const supportedSubAgentModelId = resolveSupportedConfiguredSubAgentModel(provider, preferredChildModel, supportedModel.id);
 
   const parsedToolOutputOverflowChars = normalizeNullableNonNegativeInt(
     (merged as Record<string, unknown>).toolOutputOverflowChars
@@ -478,7 +478,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     provider,
     runtime,
     model: supportedModel.id,
-    subAgentModel: supportedSubAgentModelId,
+    preferredChildModel: supportedSubAgentModelId,
     toolOutputOverflowChars,
     inheritedToolOutputOverflowChars,
     ...(projectToolOutputOverflowChars !== undefined

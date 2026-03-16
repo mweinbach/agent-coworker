@@ -112,8 +112,8 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
 
       const provider = normalizeProviderChoice(inferredProvider);
       const model = (ws.defaultModel?.trim() || rt.config?.model?.trim() || "") || undefined;
-      const subAgentModel =
-        (ws.defaultSubAgentModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.subAgentModel?.trim() || "") || undefined;
+      const preferredChildModel =
+        (ws.defaultPreferredChildModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.preferredChildModel?.trim() || "") || undefined;
       const providerOptions = ws.providerOptions;
       const userName = ws.userName;
       const userProfile = ws.userProfile ? normalizeWorkspaceUserProfile(ws.userProfile) : undefined;
@@ -129,12 +129,12 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         if (ok) appendThreadTranscript(threadId, "client", { type: "set_model", sessionId: rt.sessionId, provider, model });
       }
 
-      if (subAgentModel || providerOptions || hasProfileDefaults) {
+      if (preferredChildModel || providerOptions || hasProfileDefaults) {
         const okConfig = sendThread(get, threadId, (sessionId) => ({
           type: "set_config",
           sessionId,
           config: {
-            ...(subAgentModel ? { subAgentModel } : {}),
+            ...(preferredChildModel ? { preferredChildModel } : {}),
             ...(providerOptions ? { providerOptions: providerOptions as OpenAiCompatibleProviderOptionsByProvider } : {}),
             ...(userName !== undefined ? { userName } : {}),
             ...(userProfile !== undefined ? { userProfile } : {}),
@@ -145,7 +145,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
             type: "set_config",
             sessionId: rt.sessionId,
             config: {
-              ...(subAgentModel ? { subAgentModel } : {}),
+              ...(preferredChildModel ? { preferredChildModel } : {}),
               ...(providerOptions ? { providerOptions } : {}),
               ...(userName !== undefined ? { userName } : {}),
               ...(userProfile !== undefined ? { userProfile } : {}),
@@ -195,7 +195,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const shouldSyncCoreSettings =
         workspacePatch.defaultProvider !== undefined ||
         workspacePatch.defaultModel !== undefined ||
-        workspacePatch.defaultSubAgentModel !== undefined ||
+        workspacePatch.defaultPreferredChildModel !== undefined ||
         workspacePatch.defaultToolOutputOverflowChars !== undefined ||
         clearDefaultToolOutputOverflowChars === true ||
         workspacePatch.defaultEnableMcp !== undefined ||
@@ -219,7 +219,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           : "google"
       );
       const model = workspace.defaultModel?.trim() || defaultModelForProvider(provider);
-      const subAgentModel = workspace.defaultSubAgentModel?.trim() || model;
+      const preferredChildModel = workspace.defaultPreferredChildModel?.trim() || model;
       const toolOutputOverflowChars = workspace.defaultToolOutputOverflowChars;
       const providerOptions = workspace.providerOptions;
       const userName = workspace.userName;
@@ -237,7 +237,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         sessionId,
         config: {
           backupsEnabled: workspace.defaultBackupsEnabled,
-          subAgentModel,
+          preferredChildModel,
           ...(toolOutputOverflowChars !== undefined
             ? { toolOutputOverflowChars }
             : clearToolOutputOverflowChars

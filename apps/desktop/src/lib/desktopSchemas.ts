@@ -115,7 +115,7 @@ const persistedWorkspaceSchema = z.object({
   lastOpenedAt: nonEmptyStringSchema,
   defaultProvider: optionalNonEmptyStringSchema,
   defaultModel: optionalNonEmptyStringSchema,
-  defaultSubAgentModel: optionalNonEmptyStringSchema,
+  defaultPreferredChildModel: optionalNonEmptyStringSchema,
   defaultToolOutputOverflowChars: z.preprocess((value) => {
     if (value === undefined) return undefined;
     if (value === null) return null;

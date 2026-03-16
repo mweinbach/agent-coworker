@@ -27,7 +27,7 @@ async function main() {
     ...loaded,
     provider: "google" as const,
     model: "gemini-3.1-pro-preview-customtools",
-    subAgentModel: "gemini-3.1-pro-preview-customtools",
+    preferredChildModel: "gemini-3.1-pro-preview-customtools",
   };
   const runtime = createRuntime(config);
 

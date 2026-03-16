@@ -59,6 +59,12 @@ export type HarnessContextState = Extract<ServerEvent, { type: "harness_context"
 export type SkillsState = Extract<ServerEvent, { type: "skills_list" }>["skills"];
 export type SessionBackupState = Extract<ServerEvent, { type: "session_backup_state" }>["backup"] | null;
 export type ToolDescriptor = Extract<ServerEvent, { type: "tools" }>["tools"][number];
+export type AgentSummaryState = Extract<ServerEvent, { type: "agent_status" }>["agent"];
+export type SessionKindState = Extract<ServerEvent, { type: "server_hello" }>["sessionKind"];
+export type AgentRoleState = Extract<ServerEvent, { type: "server_hello" }>["role"];
+export type AgentModeState = Extract<ServerEvent, { type: "server_hello" }>["mode"];
+export type AgentReasoningEffortState = Extract<ServerEvent, { type: "server_hello" }>["effectiveReasoningEffort"];
+export type AgentExecutionState = Extract<ServerEvent, { type: "server_hello" }>["executionState"];
 export type ContextUsageSnapshot = {
   inputTokens: number | null;
   outputTokens: number | null;
@@ -78,7 +84,7 @@ export type SyncConfigPatch = {
   yolo?: boolean;
   observabilityEnabled?: boolean;
   backupsEnabled?: boolean;
-  subAgentModel?: string;
+  preferredChildModel?: string;
   maxSteps?: number;
   toolOutputOverflowChars?: number | null;
   providerOptions?: Partial<Record<OpenAICompatibleProviderName, OpenAICompatibleProviderOptions>>;
@@ -94,6 +100,18 @@ export type SyncState = {
   status: "connecting" | "connected" | "disconnected";
   sessionId: string | null;
   sessionTitle: string | null;
+  sessionKind: SessionKindState | null;
+  parentSessionId: string | null;
+  role: AgentRoleState | null;
+  mode: AgentModeState | null;
+  depth: number;
+  nickname: string | null;
+  requestedModel: string | null;
+  effectiveModel: string | null;
+  requestedReasoningEffort: AgentReasoningEffortState | null;
+  effectiveReasoningEffort: AgentReasoningEffortState | null;
+  executionState: AgentExecutionState | null;
+  lastMessagePreview: string | null;
   provider: string;
   model: string;
   cwd: string;
@@ -116,6 +134,7 @@ export type SyncState = {
   backup: SessionBackupState;
   contextUsage: ContextUsageSnapshot | null;
   sessionSummaries: Extract<ServerEvent, { type: "sessions" }>["sessions"];
+  agents: AgentSummaryState[];
   userName: string;
   userProfile: {
     instructions: string;
@@ -148,6 +167,10 @@ export type SyncActions = {
   setHarnessContext: (context: HarnessContextPayload) => void;
   executeCommand: (name: string, args?: string, displayText?: string) => boolean;
   requestSessions: () => void;
+  requestAgentList: () => void;
+  waitForAgents: (agentIds: string[], timeoutMs?: number) => boolean;
+  resumeAgent: (agentId: string) => boolean;
+  closeAgent: (agentId: string) => boolean;
   resumeSession: (sessionId: string) => void;
   reset: () => void;
   cancel: () => void;

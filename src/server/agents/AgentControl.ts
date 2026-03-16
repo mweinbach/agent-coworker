@@ -1,0 +1,199 @@
+import type { AgentSession } from "../session/AgentSession";
+import type { AgentExecutionState, AgentMode, PersistentAgentSummary } from "../../shared/agents";
+import type { SessionBinding } from "../startServer/types";
+
+import { routeAgentConfig } from "./modelRouter";
+import { getAgentRoleDefinition } from "./roles";
+import { StatusBus } from "./StatusBus";
+import type {
+  AgentCloseOptions,
+  AgentControlDeps,
+  AgentControlSummaryOverrides,
+  AgentResumeOptions,
+  AgentSendInputOptions,
+  AgentSpawnOptions,
+  AgentWaitOptions,
+} from "./types";
+
+function executionStateForSession(session: AgentSession, fallback: AgentExecutionState = "completed"): AgentExecutionState {
+  if (session.persistenceStatus === "closed") return "closed";
+  if (session.isBusy) return "running";
+  if (session.currentTurnOutcome === "error") return "errored";
+  return fallback;
+}
+
+export class AgentControl {
+  private readonly statusBus = new StatusBus();
+  private readonly inFlightByAgentId = new Map<string, Promise<void>>();
+
+  constructor(private readonly deps: AgentControlDeps) {}
+
+  private ensureAgentSession(parentSessionId: string, agentId: string): AgentSession {
+    const binding = this.deps.sessionBindings.get(agentId);
+    if (!binding?.session || !binding.session.isAgentOf(parentSessionId)) {
+      throw new Error(`Unknown child agent: ${agentId}`);
+    }
+    return binding.session;
+  }
+
+  private buildAgentSummary(
+    session: AgentSession,
+    overrides: AgentControlSummaryOverrides = {},
+  ): PersistentAgentSummary {
+    if (session.sessionKind !== "agent" || !session.parentSessionId || !session.role) {
+      throw new Error(`Session ${session.id} is not a collaborative child agent`);
+    }
+    const info = session.getSessionInfoEvent();
+    const executionState = overrides.executionState ?? executionStateForSession(session);
+    const summary: PersistentAgentSummary = {
+      agentId: session.id,
+      parentSessionId: session.parentSessionId,
+      role: session.role,
+      mode: (info.mode ?? overrides.mode ?? "collaborative") as AgentMode,
+      depth: typeof info.depth === "number" ? info.depth : (overrides.depth ?? 1),
+      ...(info.nickname ? { nickname: info.nickname } : {}),
+      ...(info.requestedModel ? { requestedModel: info.requestedModel } : {}),
+      effectiveModel: info.effectiveModel ?? session.getPublicConfig().model,
+      ...(info.requestedReasoningEffort ? { requestedReasoningEffort: info.requestedReasoningEffort } : {}),
+      ...(info.effectiveReasoningEffort ? { effectiveReasoningEffort: info.effectiveReasoningEffort } : {}),
+      title: info.title,
+      provider: info.provider,
+      createdAt: info.createdAt,
+      updatedAt: info.updatedAt,
+      lifecycleState: session.persistenceStatus === "closed" ? "closed" : "active",
+      executionState,
+      busy: session.isBusy,
+      ...(info.lastMessagePreview ?? session.getLatestAssistantText()
+        ? { lastMessagePreview: info.lastMessagePreview ?? session.getLatestAssistantText()! }
+        : {}),
+    };
+    return summary;
+  }
+
+  private publish(parentSessionId: string, session: AgentSession, overrides: AgentControlSummaryOverrides = {}): PersistentAgentSummary {
+    const summary = this.buildAgentSummary(session, overrides);
+    this.statusBus.publish(summary);
+    this.deps.emitParentAgentStatus(parentSessionId, summary);
+    return summary;
+  }
+
+  private trackRun(parentSessionId: string, session: AgentSession, message: string, displayState: AgentExecutionState): void {
+    const run = session.sendUserMessage(message)
+      .catch(() => {
+        // Child session surfaces its own error event/history; parent notification is published below.
+      })
+      .finally(() => {
+        this.inFlightByAgentId.delete(session.id);
+        this.publish(parentSessionId, session);
+      });
+    this.inFlightByAgentId.set(session.id, run);
+    this.publish(parentSessionId, session, { executionState: displayState });
+  }
+
+  async spawn(opts: AgentSpawnOptions): Promise<PersistentAgentSummary> {
+    const role = opts.role ?? "default";
+    const roleDefinition = getAgentRoleDefinition(role);
+    const depth = (opts.parentDepth ?? 0) + 1;
+    const routed = routeAgentConfig(opts.parentConfig, {
+      role: roleDefinition,
+      ...(opts.model ? { model: opts.model } : {}),
+      ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
+    });
+    const childSystem = await this.deps.loadAgentPrompt(routed.config, role);
+    const binding: SessionBinding = { session: null, socket: null };
+    const built = this.deps.buildSession(binding, undefined, {
+      config: routed.config,
+      system: childSystem,
+      sessionInfoPatch: {
+        sessionKind: "agent",
+        parentSessionId: opts.parentSessionId,
+        role,
+        mode: roleDefinition.defaultMode,
+        depth,
+        requestedModel: routed.requestedModel ?? null,
+        effectiveModel: routed.effectiveModel,
+        requestedReasoningEffort: routed.requestedReasoningEffort ?? null,
+        effectiveReasoningEffort: routed.effectiveReasoningEffort ?? null,
+        executionState: "pending_init",
+      },
+    });
+    binding.session = built.session;
+    built.session.beginDisconnectedReplayBuffer();
+    this.deps.sessionBindings.set(built.session.id, binding);
+    const summary = this.publish(opts.parentSessionId, built.session, {
+      mode: roleDefinition.defaultMode,
+      depth,
+      requestedModel: routed.requestedModel,
+      requestedReasoningEffort: routed.requestedReasoningEffort,
+      effectiveReasoningEffort: routed.effectiveReasoningEffort,
+      executionState: "pending_init",
+    });
+    this.trackRun(opts.parentSessionId, built.session, opts.message, "running");
+    return summary;
+  }
+
+  async list(parentSessionId: string): Promise<PersistentAgentSummary[]> {
+    const summaries = new Map<string, PersistentAgentSummary>();
+    if (this.deps.sessionDb) {
+      for (const persisted of this.deps.sessionDb.listAgentSessions(parentSessionId)) {
+        summaries.set(persisted.agentId, persisted);
+      }
+    }
+    for (const binding of this.deps.sessionBindings.values()) {
+      const session = binding.session;
+      if (!session?.isAgentOf(parentSessionId)) continue;
+      summaries.set(session.id, this.publish(parentSessionId, session));
+    }
+    return [...summaries.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async sendInput(opts: AgentSendInputOptions): Promise<void> {
+    const session = this.ensureAgentSession(opts.parentSessionId, opts.agentId);
+    if (opts.interrupt && session.isBusy) {
+      session.cancel();
+      await this.inFlightByAgentId.get(opts.agentId);
+    } else if (session.isBusy) {
+      throw new Error(`Child agent ${opts.agentId} is busy`);
+    }
+    this.trackRun(opts.parentSessionId, session, opts.message, "running");
+  }
+
+  async wait(opts: AgentWaitOptions): Promise<{ timedOut: boolean; agents: PersistentAgentSummary[] }> {
+    for (const agentId of opts.agentIds) {
+      this.ensureAgentSession(opts.parentSessionId, agentId);
+    }
+    return await this.statusBus.wait(opts.agentIds, opts.timeoutMs);
+  }
+
+  async resume(opts: AgentResumeOptions): Promise<PersistentAgentSummary> {
+    const existing = this.deps.sessionBindings.get(opts.agentId);
+    if (existing?.session && existing.session.isAgentOf(opts.parentSessionId)) {
+      return this.publish(opts.parentSessionId, existing.session);
+    }
+
+    const persisted = this.deps.sessionDb?.getSessionRecord(opts.agentId);
+    if (!persisted || persisted.parentSessionId !== opts.parentSessionId || persisted.sessionKind !== "agent") {
+      throw new Error(`Unknown child agent: ${opts.agentId}`);
+    }
+
+    const binding: SessionBinding = { session: null, socket: null };
+    const built = this.deps.buildSession(binding, opts.agentId);
+    binding.session = built.session;
+    built.session.beginDisconnectedReplayBuffer();
+    this.deps.sessionBindings.set(built.session.id, binding);
+    return this.publish(opts.parentSessionId, built.session);
+  }
+
+  async close(opts: AgentCloseOptions): Promise<PersistentAgentSummary> {
+    const binding = this.deps.sessionBindings.get(opts.agentId);
+    if (!binding?.session || !binding.session.isAgentOf(opts.parentSessionId)) {
+      throw new Error(`Unknown child agent: ${opts.agentId}`);
+    }
+    binding.session.cancel();
+    await this.inFlightByAgentId.get(opts.agentId);
+    await binding.session.closeForHistory();
+    this.deps.disposeBinding(binding, "parent closed child agent");
+    this.deps.sessionBindings.delete(binding.session.id);
+    return this.publish(opts.parentSessionId, binding.session, { executionState: "closed" });
+  }
+}

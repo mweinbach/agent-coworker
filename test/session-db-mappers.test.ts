@@ -38,7 +38,7 @@ describe("sessionDb mappers", () => {
     ).toThrow("Invalid session summary row");
   });
 
-  test("mapPersistedSessionRecordRow parses strict row shape and JSON payloads", () => {
+  test("mapPersistedSessionRecordRow normalizes legacy child-session rows into the current shape", () => {
     const mapped = mapPersistedSessionRecordRow({
       session_id: "sess-2",
       session_kind: "subagent",
@@ -71,9 +71,12 @@ describe("sessionDb mappers", () => {
 
     expect(mapped).toMatchObject({
       sessionId: "sess-2",
-      sessionKind: "subagent",
+      sessionKind: "agent",
       parentSessionId: "sess-1",
-      agentType: "general",
+      role: "worker",
+      mode: null,
+      depth: null,
+      effectiveModel: null,
       title: "Session Title",
       provider: "openai",
       model: "gpt-5",
@@ -89,6 +92,7 @@ describe("sessionDb mappers", () => {
       status: "closed",
       titleSource: "manual",
       titleModel: "gpt-5",
+      backupsEnabledOverride: null,
       providerState: {
         provider: "openai",
         model: "gpt-5",
@@ -124,7 +128,7 @@ describe("sessionDb mappers", () => {
     expect(Number.isNaN(Date.parse(mapped.updatedAt))).toBeFalse();
   });
 
-  test("mapPersistedSessionSubagentSummaryRow parses valid child-session rows", () => {
+  test("mapPersistedSessionSubagentSummaryRow parses valid child-agent rows", () => {
     const mapped = mapPersistedSessionSubagentSummaryRow({
       session_id: "child-1",
       parent_session_id: "root-1",
@@ -138,15 +142,18 @@ describe("sessionDb mappers", () => {
     });
 
     expect(mapped).toEqual({
-      sessionId: "child-1",
+      agentId: "child-1",
       parentSessionId: "root-1",
-      agentType: "research",
+      role: "research",
+      mode: "collaborative",
+      depth: 1,
+      effectiveModel: "gpt-5.2",
       title: "Research Child",
       provider: "openai",
-      model: "gpt-5.2",
       createdAt: "2026-02-19T00:00:00.000Z",
       updatedAt: "2026-02-19T00:00:01.000Z",
-      status: "closed",
+      lifecycleState: "closed",
+      executionState: "closed",
       busy: false,
     });
   });

@@ -175,7 +175,7 @@ async function sanitizeWorkspaces(value: unknown): Promise<WorkspaceRecord[]> {
       lastOpenedAt,
       defaultProvider: asOptionalString(item.defaultProvider) as WorkspaceRecord["defaultProvider"],
       defaultModel: asOptionalString(item.defaultModel),
-      defaultSubAgentModel: asOptionalString(item.defaultSubAgentModel),
+      defaultPreferredChildModel: asOptionalString(item.defaultPreferredChildModel),
       defaultToolOutputOverflowChars: asOptionalNullableNonNegativeInteger(item.defaultToolOutputOverflowChars),
       providerOptions: normalizeWorkspaceProviderOptions(item.providerOptions),
       userName: asDefinedString(item.userName),

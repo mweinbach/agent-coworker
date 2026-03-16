@@ -246,6 +246,16 @@ export function createLocalSlashCommands(deps: LocalSlashDependencies): LocalSla
       },
     },
     {
+      name: "agents",
+      aliases: ["children"],
+      description: "Open child agent viewer",
+      icon: "a",
+      execute: async () => {
+        const { openSubagentDialog } = await import("../../routes/session/dialog-subagent");
+        openSubagentDialog(deps.dialog as any);
+      },
+    },
+    {
       name: "hctx",
       aliases: ["harness-context"],
       description: "Get harness context or set defaults (/hctx set)",

@@ -47,7 +47,7 @@ describe("desktop persistence state validation", () => {
           path: validWorkspace,
           createdAt: TS,
           lastOpenedAt: TS,
-          defaultSubAgentModel: "gpt-5.2-mini",
+          defaultPreferredChildModel: "gpt-5.2-mini",
           defaultEnableMcp: true,
           defaultBackupsEnabled: false,
           yolo: false,

@@ -6,10 +6,13 @@ import {
   OPENAI_TEXT_VERBOSITY_VALUES,
 } from "../shared/openaiCompatibleOptions";
 import {
-  persistentSubagentSummarySchema,
+  agentExecutionStateSchema,
+  agentModeSchema,
+  agentReasoningEffortSchema,
+  persistentAgentSummarySchema,
   sessionKindSchema,
-  subagentAgentTypeSchema,
-} from "../shared/persistentSubagents";
+  agentRoleSchema,
+} from "../shared/agents";
 import { sessionUsageSnapshotSchema } from "../session/sessionUsageSchema";
 import type { ServerEvent } from "./protocol";
 
@@ -120,7 +123,16 @@ const serverEventSchema = z.discriminatedUnion("type", [
     hasPendingApproval: z.boolean().optional(),
     sessionKind: sessionKindSchema.optional(),
     parentSessionId: z.string().optional(),
-    agentType: subagentAgentTypeSchema.optional(),
+    role: agentRoleSchema.optional(),
+    mode: agentModeSchema.optional(),
+    depth: z.number().int().min(0).optional(),
+    nickname: z.string().optional(),
+    requestedModel: z.string().optional(),
+    effectiveModel: z.string().optional(),
+    requestedReasoningEffort: agentReasoningEffortSchema.optional(),
+    effectiveReasoningEffort: agentReasoningEffortSchema.optional(),
+    executionState: agentExecutionStateSchema.optional(),
+    lastMessagePreview: z.string().optional(),
   }).passthrough(),
   z.object({
     type: z.literal("session_settings"),
@@ -141,7 +153,16 @@ const serverEventSchema = z.discriminatedUnion("type", [
     model: z.string(),
     sessionKind: sessionKindSchema.optional(),
     parentSessionId: z.string().optional(),
-    agentType: subagentAgentTypeSchema.optional(),
+    role: agentRoleSchema.optional(),
+    mode: agentModeSchema.optional(),
+    depth: z.number().int().min(0).optional(),
+    nickname: z.string().optional(),
+    requestedModel: z.string().optional(),
+    effectiveModel: z.string().optional(),
+    requestedReasoningEffort: agentReasoningEffortSchema.optional(),
+    effectiveReasoningEffort: agentReasoningEffortSchema.optional(),
+    executionState: agentExecutionStateSchema.optional(),
+    lastMessagePreview: z.string().optional(),
   }).passthrough(),
   z.object({
     type: z.literal("mcp_servers"),
@@ -372,14 +393,19 @@ const serverEventSchema = z.discriminatedUnion("type", [
     sessions: unknownArraySchema,
   }).passthrough(),
   z.object({
-    type: z.literal("subagent_created"),
+    type: z.literal("agent_spawned"),
     sessionId: nonEmptyTrimmedStringSchema,
-    subagent: persistentSubagentSummarySchema,
+    agent: persistentAgentSummarySchema,
   }).passthrough(),
   z.object({
-    type: z.literal("subagent_sessions"),
+    type: z.literal("agent_list"),
     sessionId: nonEmptyTrimmedStringSchema,
-    subagents: z.array(persistentSubagentSummarySchema),
+    agents: z.array(persistentAgentSummarySchema),
+  }).passthrough(),
+  z.object({
+    type: z.literal("agent_status"),
+    sessionId: nonEmptyTrimmedStringSchema,
+    agent: persistentAgentSummarySchema,
   }).passthrough(),
   z.object({
     type: z.literal("session_deleted"),
@@ -394,7 +420,7 @@ const serverEventSchema = z.discriminatedUnion("type", [
       observabilityEnabled: z.boolean(),
       backupsEnabled: z.boolean(),
       defaultBackupsEnabled: z.boolean(),
-      subAgentModel: z.string(),
+      preferredChildModel: z.string(),
       maxSteps: z.number(),
       toolOutputOverflowChars: z.number().int().nonnegative().nullable(),
       defaultToolOutputOverflowChars: z.number().int().nonnegative().nullable().optional(),
@@ -483,8 +509,9 @@ const KNOWN_SERVER_EVENT_TYPES = new Set<string>([
   "session_usage",
   "messages",
   "sessions",
-  "subagent_created",
-  "subagent_sessions",
+  "agent_spawned",
+  "agent_list",
+  "agent_status",
   "session_deleted",
   "session_config",
   "file_uploaded",

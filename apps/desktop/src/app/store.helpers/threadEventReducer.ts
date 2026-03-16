@@ -16,7 +16,7 @@ import {
   type ThreadModelStreamRuntime,
 } from "../store.feedMapping";
 import type { StoreGet, StoreSet } from "../store.helpers";
-import type { ApprovalPrompt, AskPrompt, FeedItem, Notification, ThreadTitleSource } from "../types";
+import type { ApprovalPrompt, AskPrompt, FeedItem, Notification, ThreadAgentSummary, ThreadTitleSource } from "../types";
 import {
   RUNTIME,
   drainPendingThreadMessages,
@@ -26,6 +26,20 @@ import {
 } from "./runtimeState";
 
 const MAX_FEED_ITEMS = 2000;
+
+function sortAgentSummaries(agents: ThreadAgentSummary[]): ThreadAgentSummary[] {
+  return [...agents].sort((left, right) => {
+    const updatedDiff = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+    if (Number.isFinite(updatedDiff) && updatedDiff !== 0) return updatedDiff;
+    return left.title.localeCompare(right.title);
+  });
+}
+
+function upsertAgentSummary(agents: ThreadAgentSummary[], nextAgent: ThreadAgentSummary): ThreadAgentSummary[] {
+  const nextAgents = agents.filter((agent) => agent.agentId !== nextAgent.agentId);
+  nextAgents.push(nextAgent);
+  return sortAgentSummaries(nextAgents);
+}
 
 type ThreadEventReducerDeps = {
   nowIso: () => string;
@@ -221,6 +235,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         const rt = s.threadRuntimeById[threadId];
         if (!rt) return {};
         const resumedBusy = evt.isResume ? Boolean(evt.busy) : false;
+        const sessionKind = evt.sessionKind ?? "root";
         return {
           threadRuntimeById: {
             ...s.threadRuntimeById,
@@ -229,6 +244,19 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               connected: true,
               sessionId: evt.sessionId,
               config: evt.config,
+              sessionKind,
+              parentSessionId: evt.parentSessionId ?? null,
+              role: evt.role ?? null,
+              mode: evt.mode ?? null,
+              depth: typeof evt.depth === "number" ? evt.depth : 0,
+              nickname: evt.nickname ?? null,
+              requestedModel: evt.requestedModel ?? null,
+              effectiveModel: evt.effectiveModel ?? null,
+              requestedReasoningEffort: evt.requestedReasoningEffort ?? null,
+              effectiveReasoningEffort: evt.effectiveReasoningEffort ?? null,
+              executionState: evt.executionState ?? null,
+              lastMessagePreview: evt.lastMessagePreview ?? null,
+              agents: sessionKind === "agent" ? [] : (evt.isResume ? rt.agents : []),
               busy: resumedBusy,
               busySince: resumedBusy ? rt.busySince ?? deps.nowIso() : null,
               transcriptOnly: false,
@@ -246,6 +274,12 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         type: "get_session_usage",
         sessionId: evt.sessionId,
       });
+      if ((evt.sessionKind ?? "root") !== "agent") {
+        RUNTIME.threadSockets.get(threadId)?.send({
+          type: "agent_list_get",
+          sessionId: evt.sessionId,
+        });
+      }
 
       if (pendingFirstMessage && pendingFirstMessage.trim()) {
         sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
@@ -370,7 +404,23 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             ? {
                 threadRuntimeById: {
                   ...s.threadRuntimeById,
-                  [threadId]: { ...rt, config: nextConfig },
+                  [threadId]: {
+                    ...rt,
+                    config: nextConfig,
+                    sessionKind: evt.sessionKind ?? rt.sessionKind,
+                    parentSessionId: evt.parentSessionId ?? rt.parentSessionId,
+                    role: evt.role ?? rt.role,
+                    mode: evt.mode ?? rt.mode,
+                    depth: typeof evt.depth === "number" ? evt.depth : rt.depth,
+                    nickname: evt.nickname ?? rt.nickname,
+                    requestedModel: evt.requestedModel ?? rt.requestedModel,
+                    effectiveModel: evt.effectiveModel ?? rt.effectiveModel,
+                    requestedReasoningEffort: evt.requestedReasoningEffort ?? rt.requestedReasoningEffort,
+                    effectiveReasoningEffort: evt.effectiveReasoningEffort ?? rt.effectiveReasoningEffort,
+                    executionState: evt.executionState ?? rt.executionState,
+                    lastMessagePreview: evt.lastMessagePreview ?? rt.lastMessagePreview,
+                    agents: (evt.sessionKind ?? rt.sessionKind) === "agent" ? [] : rt.agents,
+                  },
                 },
               }
             : {}),
@@ -388,6 +438,40 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         kind: "system",
         ts: deps.nowIso(),
         line: developerDiagnosticSystemLineFromServerEvent(evt),
+      });
+      return;
+    }
+
+    if (evt.type === "agent_list") {
+      set((s) => {
+        const rt = s.threadRuntimeById[threadId];
+        if (!rt) return {};
+        return {
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: {
+              ...rt,
+              agents: sortAgentSummaries(evt.agents),
+            },
+          },
+        };
+      });
+      return;
+    }
+
+    if (evt.type === "agent_spawned" || evt.type === "agent_status") {
+      set((s) => {
+        const rt = s.threadRuntimeById[threadId];
+        if (!rt) return {};
+        return {
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: {
+              ...rt,
+              agents: upsertAgentSummary(rt.agents, evt.agent),
+            },
+          },
+        };
       });
       return;
     }

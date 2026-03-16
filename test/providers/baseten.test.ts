@@ -13,7 +13,7 @@ describe("Baseten provider", () => {
     const cfg = makeConfig({
       provider: "baseten",
       model: "moonshotai/Kimi-K2.5",
-      subAgentModel: "moonshotai/Kimi-K2.5",
+      preferredChildModel: "moonshotai/Kimi-K2.5",
     });
     const model = getModel(cfg);
 
@@ -43,7 +43,7 @@ describe("Baseten provider", () => {
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       provider: "baseten",
       model: "nvidia/Nemotron-120B-A12B",
-      subAgentModel: "nvidia/Nemotron-120B-A12B",
+      preferredChildModel: "nvidia/Nemotron-120B-A12B",
     });
 
     const cfg = await loadConfig({

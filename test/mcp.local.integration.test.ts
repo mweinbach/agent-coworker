@@ -15,7 +15,7 @@ function makeConfig(baseDir: string, configDir: string): AgentConfig {
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
-    subAgentModel: "gemini-3-flash-preview",
+    preferredChildModel: "gemini-3-flash-preview",
     workingDirectory: baseDir,
     outputDirectory: path.join(baseDir, "output"),
     uploadsDirectory: path.join(baseDir, "uploads"),

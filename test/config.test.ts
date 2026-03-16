@@ -198,7 +198,7 @@ describe("loadConfig", () => {
 
     expect(cfg.provider).toBe("google");
     expect(cfg.model).toBe(defaultModelForProvider("google"));
-    expect(cfg.subAgentModel).toBe(defaultModelForProvider("google"));
+    expect(cfg.preferredChildModel).toBe(defaultModelForProvider("google"));
     expect(cfg.knowledgeCutoff).toBe("January 2025");
     expect(cfg.userName).toBe("");
     expect(cfg.observabilityEnabled).toBe(true);
@@ -327,7 +327,7 @@ describe("loadConfig", () => {
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       provider: "google",
       model: "gemini-legacy-preview",
-      subAgentModel: "gemini-legacy-research",
+      preferredChildModel: "gemini-legacy-research",
     });
 
     const cfg = await loadConfig({
@@ -339,7 +339,7 @@ describe("loadConfig", () => {
 
     expect(cfg.provider).toBe("google");
     expect(cfg.model).toBe(defaultModelForProvider("google"));
-    expect(cfg.subAgentModel).toBe(cfg.model);
+    expect(cfg.preferredChildModel).toBe(cfg.model);
   });
 
   test("AGENT_WORKING_DIR env var overrides cwd", async () => {
@@ -475,7 +475,7 @@ describe("loadConfig", () => {
     expect(cfg.workingDirectory).toBe(cwd);
   });
 
-  test("subAgentModel falls back to main model when not configured", async () => {
+  test("preferredChildModel falls back to main model when not configured", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const customBuiltIn = path.join(os.tmpdir(), "builtin-nosub-" + Date.now());
@@ -491,18 +491,18 @@ describe("loadConfig", () => {
       env: {},
     });
 
-    expect(cfg.subAgentModel).toBe("gpt-5.2");
+    expect(cfg.preferredChildModel).toBe("gpt-5.2");
   });
 
-  test("subAgentModel from project config overrides user config", async () => {
+  test("preferredChildModel from project config overrides user config", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     await writeJson(path.join(home, ".agent", "config.json"), {
-      subAgentModel: "gemini-3-flash-preview",
+      preferredChildModel: "gemini-3-flash-preview",
     });
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
-      subAgentModel: "gemini-3-pro-preview",
+      preferredChildModel: "gemini-3-pro-preview",
     });
 
     const cfg = await loadConfig({
@@ -512,7 +512,7 @@ describe("loadConfig", () => {
       env: {},
     });
 
-    expect(cfg.subAgentModel).toBe("gemini-3-pro-preview");
+    expect(cfg.preferredChildModel).toBe("gemini-3-pro-preview");
   });
 
   test("knowledgeCutoff config values are ignored in favor of the selected model registry entry", async () => {
@@ -1121,7 +1121,7 @@ describe("getModel", () => {
     });
 
     expect(cfg.model).toBe(defaultModelForProvider("google"));
-    expect(cfg.subAgentModel).toBe(defaultModelForProvider("google"));
+    expect(cfg.preferredChildModel).toBe(defaultModelForProvider("google"));
   });
 });
 

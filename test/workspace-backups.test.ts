@@ -27,7 +27,7 @@ function makeSessionRecord(sessionId: string, status: PersistedSessionRecord["st
     sessionId,
     sessionKind: "root",
     parentSessionId: null,
-    agentType: null,
+    role: null,
     title: `Session ${sessionId}`,
     titleSource: "manual",
     titleModel: null,

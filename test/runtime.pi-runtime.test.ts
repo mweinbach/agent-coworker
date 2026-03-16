@@ -28,7 +28,7 @@ function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): Agen
   return {
     provider: "openai",
     model: "gpt-5.2",
-    subAgentModel: "gpt-5.2",
+    preferredChildModel: "gpt-5.2",
     workingDirectory: homeDir,
     outputDirectory: path.join(homeDir, "output"),
     uploadsDirectory: path.join(homeDir, "uploads"),
@@ -113,7 +113,7 @@ describe("pi runtime regressions", () => {
     const config = makeConfig(homeDir, {
       provider: "codex-cli",
       model: pickCodexModelId(),
-      subAgentModel: pickCodexModelId(),
+      preferredChildModel: pickCodexModelId(),
     });
 
     const resolved = await resolveOpenAiResponsesModel(makeParams(config));
@@ -148,7 +148,7 @@ describe("pi runtime regressions", () => {
     const config = makeConfig(homeDir, {
       provider: "codex-cli",
       model: pickCodexModelId(),
-      subAgentModel: pickCodexModelId(),
+      preferredChildModel: pickCodexModelId(),
     });
 
     const resolved = await resolveOpenAiResponsesModel(makeParams(config));
@@ -189,7 +189,7 @@ describe("pi runtime regressions", () => {
     const config = makeConfig(homeDir, {
       provider: "codex-cli",
       model: "gpt-5.4",
-      subAgentModel: "gpt-5.4",
+      preferredChildModel: "gpt-5.4",
     });
 
     const resolved = await resolveOpenAiResponsesModel(makeParams(config));
@@ -206,7 +206,7 @@ describe("pi runtime regressions", () => {
     const config = makeConfig(homeDir, {
       provider: "openai",
       model: "gpt-5.4",
-      subAgentModel: "gpt-5.4",
+      preferredChildModel: "gpt-5.4",
     });
 
     const resolved = await resolveOpenAiResponsesModel(makeParams(config));
@@ -221,7 +221,7 @@ describe("pi runtime regressions", () => {
     const config = makeConfig(homeDir, {
       provider: "opencode-go",
       model: "glm-5",
-      subAgentModel: "glm-5",
+      preferredChildModel: "glm-5",
     });
 
     const resolved = await withEnv("OPENCODE_API_KEY", undefined, async () => (
@@ -246,7 +246,7 @@ describe("pi runtime regressions", () => {
     const config = makeConfig(homeDir, {
       provider: "opencode-go",
       model: "kimi-k2.5",
-      subAgentModel: "kimi-k2.5",
+      preferredChildModel: "kimi-k2.5",
     });
 
     const resolved = await withEnv("OPENCODE_API_KEY", undefined, async () => (
@@ -272,7 +272,7 @@ describe("pi runtime regressions", () => {
     const config = makeConfig(homeDir, {
       provider: "baseten",
       model: "moonshotai/Kimi-K2.5",
-      subAgentModel: "moonshotai/Kimi-K2.5",
+      preferredChildModel: "moonshotai/Kimi-K2.5",
     });
 
     const resolved = await withEnv("BASETEN_API_KEY", "env-baseten-key", async () => (
@@ -303,7 +303,7 @@ describe("pi runtime regressions", () => {
     const config = makeConfig(homeDir, {
       provider: "together",
       model: "moonshotai/Kimi-K2.5",
-      subAgentModel: "moonshotai/Kimi-K2.5",
+      preferredChildModel: "moonshotai/Kimi-K2.5",
     });
 
     const resolved = await withEnv("TOGETHER_API_KEY", "env-together-key", async () => (
@@ -334,7 +334,7 @@ describe("pi runtime regressions", () => {
     const config = makeConfig(homeDir, {
       provider: "nvidia",
       model: "nvidia/nemotron-3-super-120b-a12b",
-      subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+      preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
     });
 
     const resolved = await withEnv("NVIDIA_API_KEY", "env-nvidia-key", async () => (
@@ -390,7 +390,7 @@ describe("pi runtime regressions", () => {
       const config = makeConfig(homeDir, {
         provider: "nvidia",
         model: "nvidia/nemotron-3-super-120b-a12b",
-        subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+        preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
       });
 
       const encoder = new TextEncoder();
@@ -452,7 +452,7 @@ describe("pi runtime regressions", () => {
     const config = makeConfig(homeDir, {
       provider: "opencode-zen",
       model: "glm-5",
-      subAgentModel: "glm-5",
+      preferredChildModel: "glm-5",
     });
 
     const previous = process.env.OPENCODE_ZEN_API_KEY;
@@ -490,7 +490,7 @@ describe("pi runtime regressions", () => {
     const config = makeConfig(homeDir, {
       provider: "opencode-zen",
       model: "minimax-m2.5",
-      subAgentModel: "glm-5",
+      preferredChildModel: "glm-5",
     });
 
     const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));

@@ -10,7 +10,7 @@ function makeConfig(workspaceRoot: string, userHome: string, builtInConfigDir: s
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
-    subAgentModel: "gemini-3-flash-preview",
+    preferredChildModel: "gemini-3-flash-preview",
     workingDirectory: workspaceRoot,
     outputDirectory: path.join(workspaceRoot, "output"),
     uploadsDirectory: path.join(workspaceRoot, "uploads"),

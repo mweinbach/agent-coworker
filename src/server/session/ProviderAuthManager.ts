@@ -38,7 +38,7 @@ export class ProviderAuthManager {
       persistModelSelection?: (selection: {
         provider: AgentConfig["provider"];
         model: string;
-        subAgentModel: string;
+        preferredChildModel: string;
       }) => Promise<void> | void;
       updateSessionInfo: (patch: Partial<{ provider: AgentConfig["provider"]; model: string }>) => void;
       queuePersistSessionSnapshot: (reason: string) => void;
@@ -74,9 +74,9 @@ export class ProviderAuthManager {
       this.opts.emitError("validation_failed", "provider", error instanceof Error ? error.message : String(error));
       return;
     }
-    const nextSubAgentModel = currentConfig.provider !== nextProvider || currentConfig.subAgentModel === currentConfig.model
+    const nextSubAgentModel = currentConfig.provider !== nextProvider || currentConfig.preferredChildModel === currentConfig.model
       ? modelId
-      : currentConfig.subAgentModel;
+      : currentConfig.preferredChildModel;
     const nextRuntime = currentConfig.provider === nextProvider
       ? currentConfig.runtime
       : defaultRuntimeNameForProvider(nextProvider);
@@ -88,7 +88,7 @@ export class ProviderAuthManager {
       provider: nextProvider,
       ...(nextRuntime !== undefined ? { runtime: nextRuntime } : {}),
       model: modelId,
-      subAgentModel: nextSubAgentModel,
+      preferredChildModel: nextSubAgentModel,
     });
     if (shouldClearProviderState) {
       this.opts.clearProviderState();
@@ -100,7 +100,7 @@ export class ProviderAuthManager {
         await this.opts.persistModelSelection({
           provider: nextProvider,
           model: modelId,
-          subAgentModel: nextSubAgentModel,
+          preferredChildModel: nextSubAgentModel,
         });
       } catch (err) {
         persistError = err;

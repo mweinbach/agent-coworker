@@ -1,7 +1,7 @@
 import { createContext, createMemo, useContext, type JSX, type Accessor } from "solid-js";
 import { createStore } from "solid-js/store";
-import { modelChoicesByProvider } from "../../../src/providers";
-import { PROVIDER_NAMES } from "../../../src/types";
+import { isUserFacingProviderEnabled, modelChoicesByProvider, userFacingProviders } from "../../../src/providers";
+import type { ProviderName } from "../../../src/types";
 import { useSyncState } from "./sync";
 
 export type ModelChoice = { provider: string; model: string };
@@ -29,21 +29,29 @@ export function LocalProvider(props: { children: JSX.Element }) {
 
   const fallbackChoices = (() => {
     const byProvider = modelChoicesByProvider();
-    return PROVIDER_NAMES.flatMap((p) =>
+    return userFacingProviders().flatMap((p) =>
       (byProvider[p] ?? []).map((m) => ({ provider: p, model: m }))
     );
   })();
 
   const modelChoices = createMemo(() => {
     if (syncState.providerCatalog.length === 0) return fallbackChoices;
-    return syncState.providerCatalog.flatMap((entry) =>
-      (entry.models ?? []).map((model) => ({ provider: entry.id, model: model.id }))
+    const connected = new Set(
+      syncState.providerConnected.filter((provider): provider is ProviderName => isUserFacingProviderEnabled(provider as ProviderName))
     );
+    return syncState.providerCatalog
+      .filter((entry) => isUserFacingProviderEnabled(entry.id) && (connected.size === 0 || connected.has(entry.id)))
+      .flatMap((entry) => (entry.models ?? []).map((model) => ({ provider: entry.id, model: model.id })));
   });
 
   const providerNames = createMemo(() => {
-    if (syncState.providerCatalog.length === 0) return PROVIDER_NAMES as readonly string[];
-    return syncState.providerCatalog.map((entry) => entry.id);
+    if (syncState.providerCatalog.length === 0) return userFacingProviders() as readonly string[];
+    const connected = new Set(
+      syncState.providerConnected.filter((provider): provider is ProviderName => isUserFacingProviderEnabled(provider as ProviderName))
+    );
+    return syncState.providerCatalog
+      .map((entry) => entry.id)
+      .filter((provider) => isUserFacingProviderEnabled(provider) && (connected.size === 0 || connected.has(provider)));
   });
 
   const value: LocalContextValue = {

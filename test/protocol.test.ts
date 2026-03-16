@@ -987,35 +987,92 @@ describe("safeParseClientMessage", () => {
     });
   });
 
-  describe("subagent messages", () => {
-    test("valid subagent_create message", () => {
+  describe("child-agent messages", () => {
+    test("valid agent_spawn message", () => {
       const msg = expectOk(
-        JSON.stringify({ type: "subagent_create", sessionId: "s1", agentType: "general", task: "Investigate this" }),
+        JSON.stringify({
+          type: "agent_spawn",
+          sessionId: "s1",
+          role: "worker",
+          message: "Investigate this",
+          model: "gpt-5.4",
+          reasoningEffort: "high",
+          forkContext: true,
+        }),
       );
-      expect(msg.type).toBe("subagent_create");
-      if (msg.type === "subagent_create") {
+      expect(msg.type).toBe("agent_spawn");
+      if (msg.type === "agent_spawn") {
         expect(msg.sessionId).toBe("s1");
-        expect(msg.agentType).toBe("general");
-        expect(msg.task).toBe("Investigate this");
+        expect(msg.role).toBe("worker");
+        expect(msg.message).toBe("Investigate this");
+        expect(msg.model).toBe("gpt-5.4");
+        expect(msg.reasoningEffort).toBe("high");
+        expect(msg.forkContext).toBe(true);
       }
     });
 
-    test("subagent_create validates agentType and task", () => {
-      expect(expectErr(JSON.stringify({ type: "subagent_create", sessionId: "s1", task: "do it" }))).toBe(
-        "subagent_create missing/invalid agentType",
+    test("agent_spawn validates message and optional role", () => {
+      expect(expectErr(JSON.stringify({ type: "agent_spawn", sessionId: "s1", message: "" }))).toBe(
+        "agent_spawn missing/invalid message",
       );
-      expect(expectErr(JSON.stringify({ type: "subagent_create", sessionId: "s1", agentType: "invalid", task: "do it" }))).toBe(
-        "subagent_create missing/invalid agentType",
-      );
-      expect(expectErr(JSON.stringify({ type: "subagent_create", sessionId: "s1", agentType: "general", task: "" }))).toBe(
-        "subagent_create missing/invalid task",
+      expect(expectErr(JSON.stringify({ type: "agent_spawn", sessionId: "s1", role: "invalid", message: "do it" }))).toBe(
+        "agent_spawn invalid role",
       );
     });
 
-    test("valid subagent_sessions_get message", () => {
-      const msg = expectOk(JSON.stringify({ type: "subagent_sessions_get", sessionId: "s1" }));
-      expect(msg.type).toBe("subagent_sessions_get");
-      if (msg.type === "subagent_sessions_get") {
+    test("valid agent lifecycle messages", () => {
+      const input = expectOk(JSON.stringify({
+        type: "agent_input_send",
+        sessionId: "s1",
+        agentId: "child-1",
+        message: "continue",
+        interrupt: true,
+      }));
+      expect(input.type).toBe("agent_input_send");
+      if (input.type === "agent_input_send") {
+        expect(input.agentId).toBe("child-1");
+        expect(input.message).toBe("continue");
+        expect(input.interrupt).toBe(true);
+      }
+
+      const wait = expectOk(JSON.stringify({
+        type: "agent_wait",
+        sessionId: "s1",
+        agentIds: ["child-1", "child-2"],
+        timeoutMs: 50,
+      }));
+      expect(wait.type).toBe("agent_wait");
+      if (wait.type === "agent_wait") {
+        expect(wait.agentIds).toEqual(["child-1", "child-2"]);
+        expect(wait.timeoutMs).toBe(50);
+      }
+
+      const resume = expectOk(JSON.stringify({ type: "agent_resume", sessionId: "s1", agentId: "child-1" }));
+      expect(resume.type).toBe("agent_resume");
+
+      const close = expectOk(JSON.stringify({ type: "agent_close", sessionId: "s1", agentId: "child-1" }));
+      expect(close.type).toBe("agent_close");
+    });
+
+    test("agent lifecycle messages validate required fields", () => {
+      expect(expectErr(JSON.stringify({ type: "agent_input_send", sessionId: "s1", agentId: "child-1" }))).toBe(
+        "agent_input_send missing/invalid message",
+      );
+      expect(expectErr(JSON.stringify({ type: "agent_wait", sessionId: "s1", agentIds: [] }))).toBe(
+        "agent_wait missing/invalid agentIds",
+      );
+      expect(expectErr(JSON.stringify({ type: "agent_resume", sessionId: "s1" }))).toBe(
+        "agent_resume missing/invalid agentId",
+      );
+      expect(expectErr(JSON.stringify({ type: "agent_close", sessionId: "s1" }))).toBe(
+        "agent_close missing/invalid agentId",
+      );
+    });
+
+    test("valid agent_list_get message", () => {
+      const msg = expectOk(JSON.stringify({ type: "agent_list_get", sessionId: "s1" }));
+      expect(msg.type).toBe("agent_list_get");
+      if (msg.type === "agent_list_get") {
         expect(msg.sessionId).toBe("s1");
       }
     });
@@ -1032,7 +1089,7 @@ describe("safeParseClientMessage", () => {
             observabilityEnabled: false,
             backupsEnabled: true,
             toolOutputOverflowChars: null,
-            subAgentModel: "gpt-5.2",
+            preferredChildModel: "gpt-5.2",
             maxSteps: 25,
             providerOptions: {
               openai: {
@@ -1050,7 +1107,7 @@ describe("safeParseClientMessage", () => {
         expect(msg.config.observabilityEnabled).toBe(false);
         expect(msg.config.backupsEnabled).toBe(true);
         expect(msg.config.toolOutputOverflowChars).toBeNull();
-        expect(msg.config.subAgentModel).toBe("gpt-5.2");
+        expect(msg.config.preferredChildModel).toBe("gpt-5.2");
         expect(msg.config.maxSteps).toBe(25);
         expect(msg.config.providerOptions?.openai?.reasoningEffort).toBe("xhigh");
         expect(msg.config.providerOptions?.openai?.reasoningSummary).toBe("concise");
@@ -1112,8 +1169,8 @@ describe("safeParseClientMessage", () => {
         ),
       ).toBe("set_config config.toolOutputOverflowChars cannot be combined with clearToolOutputOverflowChars");
       expect(
-        expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { subAgentModel: "" } })),
-      ).toBe("set_config config.subAgentModel must be non-empty string");
+        expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { preferredChildModel: "" } })),
+      ).toBe("set_config config.preferredChildModel must be non-empty string");
       expect(
         expectErr(JSON.stringify({ type: "set_config", sessionId: "s1", config: { maxSteps: 0 } })),
       ).toBe("set_config config.maxSteps must be number 1-1000");
@@ -1791,8 +1848,12 @@ describe("safeParseClientMessage", () => {
       expect(CLIENT_MESSAGE_TYPES.includes("mcp_server_auth_callback")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("mcp_server_auth_set_api_key")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("mcp_servers_migrate_legacy")).toBe(true);
-      expect(CLIENT_MESSAGE_TYPES.includes("subagent_create")).toBe(true);
-      expect(CLIENT_MESSAGE_TYPES.includes("subagent_sessions_get")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("agent_spawn")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("agent_list_get")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("agent_input_send")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("agent_wait")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("agent_resume")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("agent_close")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("commands")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_catalog")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_auth_methods")).toBe(true);
@@ -1804,8 +1865,9 @@ describe("safeParseClientMessage", () => {
       expect(SERVER_EVENT_TYPES.includes("mcp_server_auth_result")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("session_info")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("session_config")).toBe(true);
-      expect(SERVER_EVENT_TYPES.includes("subagent_created")).toBe(true);
-      expect(SERVER_EVENT_TYPES.includes("subagent_sessions")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("agent_spawned")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("agent_list")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("agent_status")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("model_stream_chunk")).toBe(true);
     });
 

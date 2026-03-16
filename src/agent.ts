@@ -6,7 +6,8 @@ import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
 import type { RuntimeModelRawEvent } from "./runtime/types";
 import type { OpenAiContinuationState } from "./shared/openaiContinuation";
-import type { PersistentAgentControl } from "./tools";
+import type { AgentRole } from "./shared/agents";
+import type { AgentControl } from "./tools";
 import type { AgentConfig, ModelMessage, TodoItem } from "./types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTracker";
 import { loadMCPServers, loadMCPTools } from "./mcp";
@@ -51,7 +52,7 @@ export interface RunTurnParams {
   messages: ModelMessage[];
   allMessages?: ModelMessage[];
   providerState?: OpenAiContinuationState | null;
-  persistentAgentControl?: PersistentAgentControl;
+  agentControl?: AgentControl;
 
   log: (line: string) => void;
   askUser: (question: string, options?: string[]) => Promise<string>;
@@ -63,6 +64,7 @@ export interface RunTurnParams {
 
   /** Sub-agent nesting depth (0 for root session turn). */
   spawnDepth?: number;
+  agentRole?: AgentRole;
 
   maxSteps?: number;
   enableMcp?: boolean;
@@ -231,7 +233,8 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       abortSignal,
       availableSkills: discoveredSkills,
       turnUserPrompt: extractTurnUserPrompt(messages),
-      persistentAgentControl: params.persistentAgentControl,
+      agentRole: params.agentRole,
+      agentControl: params.agentControl,
       costTracker: params.costTracker,
       onSessionUsageBudgetUpdated: params.onSessionUsageBudgetUpdated,
     };

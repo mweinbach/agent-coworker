@@ -3,6 +3,7 @@ import { useTheme } from "../../context/theme";
 import { useDialog } from "../../context/dialog";
 import { useSyncActions, useSyncState } from "../../context/sync";
 import { TodoItem } from "../../component/todo-item";
+import { openSubagentDialog } from "./dialog-subagent";
 
 const SIDEBAR_WIDTH = 42;
 
@@ -36,6 +37,7 @@ export function SessionSidebar() {
   const contextUsage = createMemo(() => syncState.contextUsage);
   const enabledSkillsCount = createMemo(() => syncState.skills.filter((skill) => skill.enabled).length);
   const backup = createMemo(() => syncState.backup);
+  const agents = createMemo(() => syncState.agents);
   const latestCheckpoint = createMemo(() => {
     const checkpoints = backup()?.checkpoints ?? [];
     if (checkpoints.length === 0) return null;
@@ -87,6 +89,32 @@ export function SessionSidebar() {
           </box>
           <Show when={syncState.busy}>
             <text fg={theme.warning}>▸ working...</text>
+          </Show>
+        </box>
+      </box>
+
+      {/* Agents Section */}
+      <box flexDirection="column" marginBottom={1}>
+        <text fg={theme.text}>
+          <strong>Agents</strong>
+        </text>
+        <box paddingLeft={1} flexDirection="column" gap={1}>
+          <text fg={theme.textMuted}>
+            {syncState.sessionKind === "agent"
+              ? "child session"
+              : `${agents().length} child agent${agents().length === 1 ? "" : "s"}`}
+          </text>
+          <Show when={syncState.sessionKind !== "agent"}>
+            <box
+              border
+              borderStyle="single"
+              borderColor={theme.border}
+              paddingLeft={1}
+              paddingRight={1}
+              onMouseDown={() => openSubagentDialog(dialog)}
+            >
+              <text fg={theme.text}>Open Agents</text>
+            </box>
           </Show>
         </box>
       </box>

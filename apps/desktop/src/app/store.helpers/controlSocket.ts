@@ -135,7 +135,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
                 ? {
                     ...workspace,
                     defaultBackupsEnabled: evt.config.defaultBackupsEnabled,
-                    defaultSubAgentModel: evt.config.subAgentModel,
+                    defaultPreferredChildModel: evt.config.preferredChildModel,
                     defaultToolOutputOverflowChars: evt.config.defaultToolOutputOverflowChars,
                     providerOptions,
                     ...(typeof evt.config.userName === "string" ? { userName: evt.config.userName } : {}),

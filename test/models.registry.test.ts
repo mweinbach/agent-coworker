@@ -12,6 +12,8 @@ import {
   supportsImageInput,
   providerOptionsDefaultsForModel,
 } from "../src/models/registry";
+import { listMissingChildAgentModelInfo } from "../src/models/childAgentModelInfo";
+import { isUserFacingProviderEnabled } from "../src/providers/catalog";
 import type { ProviderName } from "../src/types";
 
 function repoRoot(): string {
@@ -68,5 +70,12 @@ describe("model registry helpers", () => {
 
   test("providerOptionsDefaultsForModel returns an empty object for unknown models", () => {
     expect(providerOptionsDefaultsForModel("anthropic", "missing-model")).toEqual({});
+  });
+
+  test("every user-facing model has child-agent guidance metadata", () => {
+    const userFacingProviders = (
+      ["google", "openai", "anthropic", "baseten", "together", "nvidia", "opencode-go", "opencode-zen", "codex-cli"] as ProviderName[]
+    ).filter((provider) => isUserFacingProviderEnabled(provider));
+    expect(listMissingChildAgentModelInfo(userFacingProviders)).toEqual([]);
   });
 });

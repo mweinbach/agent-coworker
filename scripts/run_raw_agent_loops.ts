@@ -919,7 +919,7 @@ label: <selected label>
 Task: Exercise spawnAgent + grep + edit deterministically.
 
 Steps (must use tools):
-1) Use spawnAgent with agentType="general" and task: "Reply with exactly SUBAGENT_OK".
+1) Use spawnAgent with role="general" and task: "Reply with exactly SUBAGENT_OK".
 2) Use write to create "gct04_source.txt" containing lines:
 - alpha
 - beta
@@ -1220,7 +1220,7 @@ dataset: <dataset>
 Task: Use a research sub-agent, then write and lightly edit a short report.
 
 Steps (must use tools):
-1) Use spawnAgent with agentType="research" and task:
+1) Use spawnAgent with role="research" and task:
 "Find the latest stable Bun release version (as of today) and one authoritative URL. Return JSON: {version, url}."
 2) Use webFetch on the returned URL (maxLength=6000).
 3) Use write to create "bun_release_report.md" with:
@@ -1397,7 +1397,7 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
     config.enableMcp = false;
     config.provider = run.provider;
     config.model = resolved.resolvedModel;
-    config.subAgentModel = resolved.resolvedModel;
+    config.preferredChildModel = resolved.resolvedModel;
     config.harness = { reportOnly: cliArgs.reportOnly, strictMode: false };
 
     // Keep memory local to the run folder so artifacts can be captured per-run.

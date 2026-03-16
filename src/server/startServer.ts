@@ -7,9 +7,9 @@ import type { connectProvider as connectModelProvider, getAiCoworkerPaths } from
 import type { runTurn as runTurnFn } from "../agent";
 import { defaultRuntimeNameForProvider, type AgentConfig } from "../types";
 import { loadConfig } from "../config";
-import { loadSubAgentPrompt, loadSystemPromptWithSkills } from "../prompt";
+import { loadAgentPrompt, loadSystemPromptWithSkills } from "../prompt";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
-import type { PersistentSubagentSummary, SessionKind, SubagentAgentType } from "../shared/persistentSubagents";
+import type { SessionKind } from "../shared/agents";
 import {
   OPENAI_COMPATIBLE_PROVIDER_NAMES,
   mergeEditableOpenAiCompatibleProviderOptions,
@@ -17,6 +17,7 @@ import {
 import { ensureDefaultGlobalSkillsReady } from "../skills/defaultGlobalSkills";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 
+import { AgentControl } from "./agents/AgentControl";
 import { AgentSession } from "./session/AgentSession";
 import { SessionDb } from "./sessionDb";
 import { WorkspaceBackupService } from "./workspaceBackups";
@@ -27,7 +28,7 @@ import {
 import { decodeClientMessage } from "./startServer/decodeClientMessage";
 import { dispatchClientMessage } from "./startServer/dispatchClientMessage";
 import { type SessionBinding, type StartServerSocketData } from "./startServer/types";
-import type { SessionInfoState } from "./session/SessionContext";
+import type { SessionDependencies, SessionInfoState } from "./session/SessionContext";
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const errorWithCodeSchema = z.object({
@@ -78,7 +79,7 @@ async function persistProjectConfigPatch(
   patch: Partial<
     Pick<
       AgentConfig,
-      "provider" | "model" | "subAgentModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
+      "provider" | "model" | "preferredChildModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
     >
   > & {
     userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -146,7 +147,7 @@ function mergeConfigPatch(
   patch: Partial<
     Pick<
       AgentConfig,
-      "provider" | "model" | "subAgentModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
+      "provider" | "model" | "preferredChildModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
     >
   > & {
     userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -272,6 +273,8 @@ export async function startAgentServer(
     },
   });
 
+  let agentControl: AgentControl;
+
   const buildSessionCommon = (binding: SessionBinding, sessionKind: SessionKind = "root") => {
     const emit = (evt: ServerEvent) => {
       const socket = binding.socket;
@@ -293,7 +296,7 @@ export async function startAgentServer(
         ? async (selection: {
             provider: AgentConfig["provider"];
             model: string;
-            subAgentModel: string;
+            preferredChildModel: string;
           }) => {
             await persistProjectConfigPatch(config.projectAgentDir, selection, config.providerOptions);
             config = mergeConfigPatch(config, selection);
@@ -304,7 +307,7 @@ export async function startAgentServer(
           patch: Partial<
             Pick<
               AgentConfig,
-              "provider" | "model" | "subAgentModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
+              "provider" | "model" | "preferredChildModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars"
             >
           > & {
             clearToolOutputOverflowChars?: boolean;
@@ -317,12 +320,42 @@ export async function startAgentServer(
         : undefined,
       sessionDb,
       emit,
-      createSubagentSessionImpl: subagentOps.create,
-      listSubagentSessionsImpl: subagentOps.list,
-      sendSubagentInputImpl: subagentOps.sendInput,
-      waitForSubagentImpl: subagentOps.wait,
-      closeSubagentImpl: subagentOps.close,
-      deleteSessionImpl: subagentOps.deleteSession,
+      createAgentSessionImpl: async (
+        agentOpts: Parameters<NonNullable<SessionDependencies["createAgentSessionImpl"]>>[0],
+      ) => await agentControl.spawn(agentOpts),
+      listAgentSessionsImpl: async (
+        parentSessionId: Parameters<NonNullable<SessionDependencies["listAgentSessionsImpl"]>>[0],
+      ) => await agentControl.list(parentSessionId),
+      sendAgentInputImpl: async (
+        agentOpts: Parameters<NonNullable<SessionDependencies["sendAgentInputImpl"]>>[0],
+      ) => await agentControl.sendInput(agentOpts),
+      waitForAgentImpl: async (
+        agentOpts: Parameters<NonNullable<SessionDependencies["waitForAgentImpl"]>>[0],
+      ) => await agentControl.wait(agentOpts),
+      resumeAgentImpl: async (
+        agentOpts: Parameters<NonNullable<SessionDependencies["resumeAgentImpl"]>>[0],
+      ) => await agentControl.resume(agentOpts),
+      closeAgentImpl: async (
+        agentOpts: Parameters<NonNullable<SessionDependencies["closeAgentImpl"]>>[0],
+      ) => await agentControl.close(agentOpts),
+      deleteSessionImpl: async (opts: { requesterSessionId: string; targetSessionId: string }): Promise<void> => {
+        void opts.requesterSessionId;
+        const liveChildIds = [...sessionBindings.values()]
+          .map((childBinding) => childBinding.session)
+          .filter((session): session is AgentSession => !!session && session.isAgentOf(opts.targetSessionId))
+          .map((session) => session.id);
+        const persistedChildIds = sessionDb.listAgentSessions(opts.targetSessionId).map((summary) => summary.agentId);
+        const sessionIdsToDispose = new Set([opts.targetSessionId, ...persistedChildIds, ...liveChildIds]);
+
+        for (const sessionId of sessionIdsToDispose) {
+          const candidateBinding = sessionBindings.get(sessionId);
+          if (!candidateBinding?.session) continue;
+          disposeBinding(candidateBinding, `session ${opts.targetSessionId} deleted`);
+          sessionBindings.delete(sessionId);
+        }
+
+        sessionDb.deleteSession(opts.targetSessionId);
+      },
       listWorkspaceBackupsImpl: async (opts: { requesterSessionId: string; workingDirectory: string }) =>
         await workspaceBackupService.listWorkspaceBackups(opts.workingDirectory),
       createWorkspaceBackupCheckpointImpl: async (opts: {
@@ -361,25 +394,6 @@ export async function startAgentServer(
     };
   };
 
-  const buildSubagentSummary = (session: AgentSession, busy = session.isBusy): PersistentSubagentSummary => {
-    if (session.sessionKind !== "subagent" || !session.parentSessionId || !session.agentType) {
-      throw new Error(`Session ${session.id} is not a persistent subagent`);
-    }
-    const info = session.getSessionInfoEvent();
-    return {
-      sessionId: session.id,
-      parentSessionId: session.parentSessionId,
-      agentType: session.agentType,
-      title: info.title,
-      provider: info.provider,
-      model: info.model,
-      createdAt: info.createdAt,
-      updatedAt: info.updatedAt,
-      status: session.persistenceStatus,
-      busy,
-    };
-  };
-
   const disposeBinding = (binding: SessionBinding, reason: string) => {
     if (!binding.session) return;
     try {
@@ -397,25 +411,6 @@ export async function startAgentServer(
     } catch {
       // ignore
     }
-  };
-
-  const ensurePersistentSessionBinding = (sessionId: string): SessionBinding | null => {
-    const existing = sessionBindings.get(sessionId);
-    if (existing?.session) return existing;
-
-    const persisted = sessionDb.getSessionRecord(sessionId);
-    if (!persisted) return null;
-
-    const binding: SessionBinding = { session: null, socket: null };
-    const session = AgentSession.fromPersisted({
-      persisted,
-      baseConfig: { ...config },
-      ...buildSessionCommon(binding, persisted.sessionKind),
-    });
-    binding.session = session;
-    session.beginDisconnectedReplayBuffer();
-    sessionBindings.set(session.id, binding);
-    return binding;
   };
 
   const buildSession = (
@@ -455,122 +450,23 @@ export async function startAgentServer(
     return { session, isResume: false, resumedFromStorage: false };
   };
 
-  const subagentOps = {
-    create: async (opts: {
-      parentSessionId: string;
-      parentConfig: AgentConfig;
-      agentType: SubagentAgentType;
-      task: string;
-    }): Promise<PersistentSubagentSummary> => {
-      const childModel = opts.agentType === "research" ? opts.parentConfig.model : opts.parentConfig.subAgentModel;
-      const childConfig: AgentConfig = {
-        ...opts.parentConfig,
-        model: childModel,
-      };
-      const childSystem = await loadSubAgentPrompt(opts.parentConfig, opts.agentType);
-      const binding: SessionBinding = { session: null, socket: null };
-      const built = buildSession(binding, undefined, {
-        config: childConfig,
-        system: childSystem,
-        sessionInfoPatch: {
-          sessionKind: "subagent",
-          parentSessionId: opts.parentSessionId,
-          agentType: opts.agentType,
-        },
-      });
-      binding.session = built.session;
-      built.session.beginDisconnectedReplayBuffer();
-      sessionBindings.set(built.session.id, binding);
-      void built.session.sendUserMessage(opts.task);
-      return buildSubagentSummary(built.session);
+  agentControl = new AgentControl({
+    sessionBindings,
+    sessionDb,
+    buildSession,
+    loadAgentPrompt,
+    disposeBinding,
+    emitParentAgentStatus: (parentSessionId, agent) => {
+      const parentBinding = sessionBindings.get(parentSessionId);
+      const socket = parentBinding?.socket;
+      if (!socket) return;
+      try {
+        socket.send(JSON.stringify({ type: "agent_status", sessionId: parentSessionId, agent }));
+      } catch {
+        // ignore
+      }
     },
-    list: async (parentSessionId: string): Promise<PersistentSubagentSummary[]> => {
-      const summaries = new Map(
-        sessionDb.listSubagentSessions(parentSessionId).map((summary) => [summary.sessionId, summary] as const),
-      );
-      for (const binding of sessionBindings.values()) {
-        const session = binding.session;
-        if (!session?.isSubagentOf(parentSessionId)) continue;
-        summaries.set(session.id, buildSubagentSummary(session));
-      }
-      return [...summaries.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    },
-    sendInput: async (opts: { parentSessionId: string; agentId: string; task: string }): Promise<void> => {
-      const binding = ensurePersistentSessionBinding(opts.agentId);
-      if (!binding?.session || !binding.session.isSubagentOf(opts.parentSessionId)) {
-        throw new Error(`Unknown subagent session: ${opts.agentId}`);
-      }
-      if (binding.session.isBusy) {
-        throw new Error(`Subagent ${opts.agentId} is busy`);
-      }
-      void binding.session.sendUserMessage(opts.task);
-    },
-    wait: async (opts: {
-      parentSessionId: string;
-      agentId: string;
-      timeoutMs?: number;
-    }): Promise<{ sessionId: string; status: "completed" | "running" | "error" | "closed"; busy: boolean; text?: string }> => {
-      const binding = ensurePersistentSessionBinding(opts.agentId);
-      if (!binding?.session || !binding.session.isSubagentOf(opts.parentSessionId)) {
-        throw new Error(`Unknown subagent session: ${opts.agentId}`);
-      }
-
-      const timeoutMs = opts.timeoutMs ?? 30_000;
-      const startedAt = Date.now();
-      while (binding.session.isBusy && Date.now() - startedAt < timeoutMs) {
-        await Bun.sleep(50);
-      }
-
-      const busy = binding.session.isBusy;
-      const status = busy
-        ? "running"
-        : binding.session.persistenceStatus === "closed"
-          ? "closed"
-          : binding.session.currentTurnOutcome === "error"
-            ? "error"
-            : "completed";
-
-      return {
-        sessionId: binding.session.id,
-        status,
-        busy,
-        ...(binding.session.getLatestAssistantText() ? { text: binding.session.getLatestAssistantText() } : {}),
-      };
-    },
-    close: async (opts: { parentSessionId: string; agentId: string }): Promise<PersistentSubagentSummary> => {
-      const binding = ensurePersistentSessionBinding(opts.agentId);
-      if (!binding?.session || !binding.session.isSubagentOf(opts.parentSessionId)) {
-        throw new Error(`Unknown subagent session: ${opts.agentId}`);
-      }
-      binding.session.cancel();
-      await binding.session.closeForHistory();
-      disposeBinding(binding, "parent closed subagent");
-      sessionBindings.delete(binding.session.id);
-      return {
-        ...buildSubagentSummary(binding.session, false),
-        status: "closed",
-        busy: false,
-      };
-    },
-    deleteSession: async (opts: { requesterSessionId: string; targetSessionId: string }): Promise<void> => {
-      void opts.requesterSessionId;
-      const liveChildIds = [...sessionBindings.values()]
-        .map((binding) => binding.session)
-        .filter((session): session is AgentSession => !!session && session.isSubagentOf(opts.targetSessionId))
-        .map((session) => session.id);
-      const persistedChildIds = sessionDb.listSubagentSessions(opts.targetSessionId).map((summary) => summary.sessionId);
-      const sessionIdsToDispose = new Set([opts.targetSessionId, ...persistedChildIds, ...liveChildIds]);
-
-      for (const sessionId of sessionIdsToDispose) {
-        const binding = sessionBindings.get(sessionId);
-        if (!binding?.session) continue;
-        disposeBinding(binding, `session ${opts.targetSessionId} deleted`);
-        sessionBindings.delete(sessionId);
-      }
-
-      sessionDb.deleteSession(opts.targetSessionId);
-    },
-  };
+  });
 
   function createServer(port: number): ReturnType<typeof Bun.serve> {
     return Bun.serve<StartServerSocketData>({
@@ -640,7 +536,7 @@ export async function startAgentServer(
             config: session.getPublicConfig(),
             sessionKind: session.sessionKind,
             ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
-            ...(session.agentType ? { agentType: session.agentType } : {}),
+            ...(session.role ? { role: session.role } : {}),
             ...(isResume
               ? {
                   isResume: true,
@@ -655,7 +551,7 @@ export async function startAgentServer(
               ? {
                   sessionKind: session.sessionKind,
                   ...(session.parentSessionId ? { parentSessionId: session.parentSessionId } : {}),
-                  ...(session.agentType ? { agentType: session.agentType } : {}),
+                  ...(session.role ? { role: session.role } : {}),
                 }
               : {}),
           };

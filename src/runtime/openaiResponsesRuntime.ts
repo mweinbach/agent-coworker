@@ -1,4 +1,5 @@
 import {
+  buildInvalidToolCallFormatReminderMessage,
   buildInitialStepMessages,
   buildStepState,
   emitPiEventAsRawPart,
@@ -9,6 +10,7 @@ import {
   matchingProviderState,
   nextProviderState,
   parseTelemetrySettings,
+  shouldAddInvalidToolCallFormatReminder,
   splitStepOverrides,
   startModelCallSpan,
   supportsProviderManagedContinuation,
@@ -167,6 +169,7 @@ export function createOpenAiResponsesRuntime(
           }
 
           const toolResultMessages: ModelMessage[] = [];
+          let needsInvalidToolCallReminder = false;
           for (const toolCall of toolCalls) {
             if (params.abortSignal?.aborted) {
               throw new Error("Model turn aborted.");
@@ -174,6 +177,11 @@ export function createOpenAiResponsesRuntime(
             const toolResult = await executeToolCall(toolCall, params, emitPart);
             turnMessages.push(toolResult);
             toolResultMessages.push(...piTurnMessagesToModelMessages([toolResult as any]));
+            needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(toolCall, toolResult, params.tools);
+          }
+
+          if (needsInvalidToolCallReminder) {
+            toolResultMessages.push(buildInvalidToolCallFormatReminderMessage());
           }
 
           stepMessages = providerManagedContinuation

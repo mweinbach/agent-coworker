@@ -97,6 +97,92 @@ function extractAssistantTextFromResponseMessages(messages: Array<{ role: string
   return chunks.join("\n\n");
 }
 
+type ToolExecutionDiagnostics = {
+  totalResults: number;
+  successfulResults: number;
+  unknownToolErrors: number;
+  invalidToolInputErrors: number;
+  malformedToolNameErrors: number;
+  errorMessages: string[];
+};
+
+function normalizePreviewText(text: string, maxChars = 800): string | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length <= maxChars) return trimmed;
+  return `${trimmed.slice(0, maxChars - 1)}…`;
+}
+
+function extractToolExecutionDiagnostics(messages: Array<{ role: string; content: unknown }>): ToolExecutionDiagnostics {
+  const diagnostics: ToolExecutionDiagnostics = {
+    totalResults: 0,
+    successfulResults: 0,
+    unknownToolErrors: 0,
+    invalidToolInputErrors: 0,
+    malformedToolNameErrors: 0,
+    errorMessages: [],
+  };
+
+  for (const message of messages) {
+    if (message.role !== "tool" || !Array.isArray(message.content)) continue;
+
+    for (const part of message.content) {
+      if (!part || typeof part !== "object") continue;
+      const record = part as Record<string, unknown>;
+      if (record.type !== "tool-result") continue;
+
+      diagnostics.totalResults += 1;
+      const isError = record.isError === true;
+      if (!isError) {
+        diagnostics.successfulResults += 1;
+        continue;
+      }
+
+      const toolName = typeof record.toolName === "string" ? record.toolName : "";
+      const output = typeof record.output === "object" && record.output !== null
+        ? record.output as Record<string, unknown>
+        : null;
+      const messageText = typeof output?.value === "string" ? output.value.trim() : "";
+      if (messageText) {
+        diagnostics.errorMessages.push(messageText);
+      }
+      if (/^tool(?:[<\s]|$)/i.test(toolName)) {
+        diagnostics.malformedToolNameErrors += 1;
+      }
+      if (/tool .* not found/i.test(messageText)) {
+        diagnostics.unknownToolErrors += 1;
+      }
+      if (/invalid input|expected .* received|too small:/i.test(messageText)) {
+        diagnostics.invalidToolInputErrors += 1;
+      }
+    }
+  }
+
+  return diagnostics;
+}
+
+function detectMalformedToolCallFailure(
+  messages: Array<{ role: string; content: unknown }>,
+  assistantText: string,
+): string | null {
+  const diagnostics = extractToolExecutionDiagnostics(messages);
+  if (diagnostics.totalResults === 0) return null;
+  if (diagnostics.successfulResults > 0) return null;
+  if (diagnostics.errorMessages.length < 3) return null;
+
+  const hasFormattingComplaint = /function call format|tool call format|proper parameters/i.test(assistantText);
+  const repeatedToolFailures =
+    diagnostics.unknownToolErrors + diagnostics.invalidToolInputErrors + diagnostics.malformedToolNameErrors >= 3;
+  if (!hasFormattingComplaint && !repeatedToolFailures) return null;
+
+  const sampleErrors = [...new Set(diagnostics.errorMessages)]
+    .slice(0, 2)
+    .join("; ");
+  return sampleErrors
+    ? `Model failed to produce valid tool calls after repeated attempts: ${sampleErrors}`
+    : "Model failed to produce valid tool calls after repeated attempts.";
+}
+
 function isInvalidOpenAiContinuationError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   const normalized = text.toLowerCase();
@@ -363,6 +449,17 @@ export class TurnExecutionManager {
         this.context.state.providerState = res.providerState ?? null;
       }
 
+      const out =
+        (res.text || "").trim() ||
+        extractAssistantTextFromResponseMessages(res.responseMessages);
+      const malformedToolCallFailure = detectMalformedToolCallFailure(res.responseMessages, out);
+      if (malformedToolCallFailure) {
+        throw Object.assign(new Error(malformedToolCallFailure), {
+          code: "provider_error" as const,
+          source: "provider" as const,
+        });
+      }
+
       this.deps.historyManager.appendMessagesToHistory(res.responseMessages);
       this.context.queuePersistSessionSnapshot("session.turn_response");
 
@@ -372,11 +469,8 @@ export class TurnExecutionManager {
         this.context.emit({ type: "reasoning", sessionId: this.context.id, kind, text: reasoning });
       }
 
-      const out =
-        (res.text || "").trim() ||
-        extractAssistantTextFromResponseMessages(res.responseMessages);
       if (out) {
-        lastMessagePreview = out;
+        lastMessagePreview = normalizePreviewText(out);
         this.context.emit({ type: "assistant_message", sessionId: this.context.id, text: out });
       }
 
@@ -422,6 +516,7 @@ export class TurnExecutionManager {
         this.context.state.currentTurnOutcome = "error";
         const classified = this.classifyTurnError(actualErr);
         this.context.emitError(classified.code, classified.source, msg);
+        lastMessagePreview = normalizePreviewText(msg);
         this.context.emitTelemetry(
           "agent.turn.failed",
           "error",
@@ -449,7 +544,7 @@ export class TurnExecutionManager {
     } finally {
       this.deps.metadataManager.updateSessionInfo({
         executionState: this.settledExecutionState(),
-        ...(lastMessagePreview ? { lastMessagePreview } : {}),
+        lastMessagePreview,
       });
       this.context.emit({
         type: "session_busy",

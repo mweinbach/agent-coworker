@@ -16,7 +16,12 @@ import type {
   WorkspaceRuntime,
   WorkspaceExplorerState,
 } from "./types";
-import { buildContextPreamble, extractUsageStateFromTranscript, mapTranscriptToFeed } from "./store.feedMapping";
+import {
+  buildContextPreamble,
+  extractAgentStateFromTranscript,
+  extractUsageStateFromTranscript,
+  mapTranscriptToFeed,
+} from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
 import { persist, persistNow } from "./store.helpers/persistence";
 import {
@@ -386,6 +391,7 @@ export {
   truncateTitle,
   normalizeThreadTitleSource,
   buildContextPreamble,
+  extractAgentStateFromTranscript,
   extractUsageStateFromTranscript,
   isProviderName,
   providerAuthMethodsFor,

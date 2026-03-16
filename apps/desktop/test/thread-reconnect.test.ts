@@ -496,6 +496,68 @@ describe("thread reconnect", () => {
     ]);
   });
 
+  test("selectThread transcript hydration restores child agent summaries without feed noise", async () => {
+    mockedTranscript = [
+      {
+        ts: "2024-01-01T00:00:00.000Z",
+        threadId,
+        direction: "server",
+        payload: {
+          type: "agent_spawned",
+          sessionId: "thread-session",
+          agent: {
+            agentId: "agent-1",
+            parentSessionId: "thread-session",
+            role: "research",
+            mode: "collaborative",
+            depth: 1,
+            effectiveModel: "gpt-5.4",
+            title: "Review notes",
+            provider: "codex-cli",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:00.000Z",
+            lifecycleState: "active",
+            executionState: "running",
+            busy: true,
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId,
+        direction: "server",
+        payload: {
+          type: "agent_status",
+          sessionId: "thread-session",
+          agent: {
+            agentId: "agent-1",
+            parentSessionId: "thread-session",
+            role: "research",
+            mode: "collaborative",
+            depth: 1,
+            effectiveModel: "gpt-5.4",
+            title: "Review notes",
+            provider: "codex-cli",
+            createdAt: "2024-01-01T00:00:00.000Z",
+            updatedAt: "2024-01-01T00:00:01.000Z",
+            lifecycleState: "active",
+            executionState: "errored",
+            busy: false,
+            lastMessagePreview: "Failed to finish.",
+          },
+        },
+      },
+    ];
+
+    await useAppStore.getState().selectThread(threadId);
+
+    const runtime = useAppStore.getState().threadRuntimeById[threadId];
+    expect(runtime?.agents).toHaveLength(1);
+    expect(runtime?.agents[0]?.executionState).toBe("errored");
+    expect(runtime?.agents[0]?.lastMessagePreview).toBe("Failed to finish.");
+    expect(runtime?.feed).toEqual([]);
+  });
+
   test("selectThread handles transcript read failures without crashing", async () => {
     mockedTranscriptError = new Error("boom");
 

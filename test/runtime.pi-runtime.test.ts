@@ -648,6 +648,63 @@ describe("pi runtime regressions", () => {
     expect(result.content).toEqual([{ type: "text", text: "permission denied" }]);
   });
 
+  test("pi runtime injects a reminder message after malformed tool-call format errors", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-tool-format-reminder-"));
+    const stepMessages: ModelMessage[][] = [];
+    let step = 0;
+    const runtime = createPiRuntime({
+      piStreamImpl: (() => ({
+        async *[Symbol.asyncIterator]() {
+          return;
+        },
+        async result() {
+          step += 1;
+          if (step === 1) {
+            return {
+              role: "assistant",
+              content: [{ type: "toolCall", id: "call_bad", name: "tool", arguments: {} }],
+              usage: { input: 1, output: 1, totalTokens: 2 },
+              stopReason: "toolUse",
+            };
+          }
+          return {
+            role: "assistant",
+            content: [{ type: "text", text: "fixed" }],
+            usage: { input: 1, output: 1, totalTokens: 2 },
+            stopReason: "stop",
+          };
+        },
+      })) as any,
+    });
+
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(homeDir, {
+        provider: "opencode-zen",
+        model: "glm-5",
+        preferredChildModel: "glm-5",
+      }), {
+        maxSteps: 2,
+        tools: {
+          read: {
+            inputSchema: z.object({ filePath: z.string() }),
+            execute: async () => "unused",
+          },
+        },
+        prepareStep: async ({ messages }) => {
+          stepMessages.push(messages);
+          return undefined;
+        },
+      }),
+    );
+
+    expect(stepMessages).toHaveLength(2);
+    expect(stepMessages[1]?.some((message) => {
+      if (message.role !== "assistant") return false;
+      return JSON.stringify(message.content).includes("Possible invalid tool call format detected");
+    })).toBe(true);
+    expect(JSON.stringify(result.responseMessages)).not.toContain("Possible invalid tool call format detected");
+  });
+
   test("executeToolCall leaves short tool output inline when under the overflow threshold", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-tool-inline-"));
     const emitted: Array<Record<string, unknown>> = [];

@@ -2512,6 +2512,86 @@ describe("AgentSession", () => {
       ).toBe(true);
     });
 
+    test("replaces a stale child preview with the latest error text on a failed rerun", async () => {
+      const { session } = makeSession({
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "root-1",
+          role: "worker",
+          mode: "delegate",
+          depth: 1,
+          executionState: "pending_init",
+        },
+      });
+
+      mockRunTurn
+        .mockImplementationOnce(async () => ({
+          text: "First child result",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: [{ type: "text", text: "First child result" }] }],
+        }))
+        .mockImplementationOnce(async () => {
+          throw new Error("delegate failed");
+        });
+
+      await session.sendUserMessage("first");
+      expect(session.getSessionInfoEvent().lastMessagePreview).toBe("First child result");
+
+      await session.sendUserMessage("second");
+      expect(session.getSessionInfoEvent().executionState).toBe("errored");
+      expect(session.getSessionInfoEvent().lastMessagePreview).toBe("delegate failed");
+    });
+
+    test("marks malformed repeated tool-call churn as a provider error", async () => {
+      const { session, events } = makeSession({
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "root-1",
+          role: "worker",
+          mode: "delegate",
+          depth: 1,
+          executionState: "pending_init",
+        },
+      });
+
+      mockRunTurn.mockImplementationOnce(async () => ({
+        text: "I'm having trouble with the function call format. Let me try again.",
+        reasoningText: undefined,
+        responseMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "I'm having trouble with the function call format. Let me try again." }],
+          },
+          {
+            role: "tool",
+            content: [{ type: "tool-result", toolName: "tool", output: { value: "Tool tool not found" }, isError: true }],
+          },
+          {
+            role: "tool",
+            content: [{ type: "tool-result", toolName: "tool", output: { value: "Tool tool not found" }, isError: true }],
+          },
+          {
+            role: "tool",
+            content: [{ type: "tool-result", toolName: "read", output: { value: "Invalid input: expected string, received undefined" }, isError: true }],
+          },
+        ],
+      }));
+
+      await session.sendUserMessage("go");
+
+      expect(session.getSessionInfoEvent().executionState).toBe("errored");
+      expect(session.getSessionInfoEvent().lastMessagePreview).toContain("Model failed to produce valid tool calls");
+      expect(
+        events.some(
+          (event) => event.type === "error"
+            && event.sessionId === session.id
+            && event.code === "provider_error"
+            && event.message.includes("Model failed to produce valid tool calls")
+        )
+      ).toBe(true);
+      expect(events.some((event) => event.type === "assistant_message")).toBe(false);
+    });
+
     test("clears busy and allows follow-up even when auto-checkpoint never resolves", async () => {
       const sessionBackupFactory = mock(async (opts: SessionBackupInitOptions): Promise<SessionBackupHandle> => {
         const createdAt = new Date().toISOString();

@@ -90,6 +90,10 @@ function isModelMessageArray(value: unknown): value is ModelMessage[] {
   });
 }
 
+const VALID_TOOL_NAME_PATTERN = /^[A-Za-z0-9_.:-]+$/;
+const INVALID_TOOL_CALL_FORMAT_REMINDER =
+  "Possible invalid tool call format detected. Use the exact tool name from the provided tool list and pass arguments as a structured object matching that tool schema. Do not include XML tags, arg markers, or prose in the tool name.";
+
 export function splitStepOverrides(raw: unknown): RuntimeStepOverrides {
   const parsed = asRecord(raw);
   if (!parsed) return {};
@@ -839,6 +843,37 @@ export async function executeToolCall(
   }
 }
 
+export function shouldAddInvalidToolCallFormatReminder(
+  toolCall: PiToolCallLike,
+  toolResult: Record<string, unknown>,
+  tools: RuntimeRunTurnParams["tools"],
+): boolean {
+  if (toolResult.isError !== true) return false;
+
+  const toolName = toolCall.name.trim();
+  const errorMessage = extractToolExecutionErrorMessage(toolResult)?.trim() ?? "";
+  if (!toolName || !errorMessage) return false;
+
+  const hasKnownTool = Object.prototype.hasOwnProperty.call(tools, toolName);
+  if (!hasKnownTool) {
+    if (!VALID_TOOL_NAME_PATTERN.test(toolName)) return true;
+    if (/^tool(?:[<\s]|$)/i.test(toolName)) return true;
+    if (/[<>]/.test(toolName) || /arg_(?:key|value)|tool_call/i.test(toolName)) return true;
+    return toolName === "tool" && /tool .* not found/i.test(errorMessage);
+  }
+
+  const input = asRecord(toolCall.arguments);
+  const inputKeys = input ? Object.keys(input) : [];
+  return inputKeys.length === 0 && /invalid input|expected .* received|too small:/i.test(errorMessage);
+}
+
+export function buildInvalidToolCallFormatReminderMessage(): ModelMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: INVALID_TOOL_CALL_FORMAT_REMINDER }],
+  };
+}
+
 type PiRuntimeOverrides = {
   piStreamImpl?: typeof piStream;
 };
@@ -987,18 +1022,26 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
             break;
           }
 
+          const toolResultMessages: ModelMessage[] = [];
+          let needsInvalidToolCallReminder = false;
           for (const toolCall of toolCalls) {
             if (params.abortSignal?.aborted) {
               throw new Error("Model turn aborted.");
             }
             const toolResult = await executeToolCall(toolCall, params, emitPart);
             turnMessages.push(toolResult);
-            const responseToolMessages = piTurnMessagesToModelMessages([toolResult as any]);
-            stepMessages = [
-              ...stepMessages,
-              ...responseToolMessages,
-            ];
+            toolResultMessages.push(...piTurnMessagesToModelMessages([toolResult as any]));
+            needsInvalidToolCallReminder ||= shouldAddInvalidToolCallFormatReminder(toolCall, toolResult, params.tools);
           }
+
+          if (needsInvalidToolCallReminder) {
+            toolResultMessages.push(buildInvalidToolCallFormatReminderMessage());
+          }
+
+          stepMessages = [
+            ...stepMessages,
+            ...toolResultMessages,
+          ];
         }
 
         return {

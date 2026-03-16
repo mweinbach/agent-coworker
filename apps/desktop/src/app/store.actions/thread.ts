@@ -25,6 +25,7 @@ import {
   appendThreadTranscript,
   basename,
   buildContextPreamble,
+  extractAgentStateFromTranscript,
   extractUsageStateFromTranscript,
   ensureControlSocket,
   ensureServerRunning,
@@ -229,11 +230,12 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         try {
           const transcript = await readTranscript({ threadId });
           const feed = mapTranscriptToFeed(transcript);
+          const agents = extractAgentStateFromTranscript(transcript);
           const usageState = extractUsageStateFromTranscript(transcript);
           set((s) => ({
             threadRuntimeById: {
               ...s.threadRuntimeById,
-              [threadId]: { ...s.threadRuntimeById[threadId], ...usageState, feed, transcriptOnly: false },
+              [threadId]: { ...s.threadRuntimeById[threadId], ...usageState, agents, feed, transcriptOnly: false },
             },
           }));
         } catch (error) {

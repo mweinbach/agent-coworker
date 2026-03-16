@@ -3,8 +3,9 @@ import { z } from "zod";
 import { parseStructuredToolInput } from "../../../../src/shared/structuredInput";
 import { sessionUsageSnapshotSchema } from "../../../../src/session/sessionUsageSchema";
 
+import { safeParseServerEvent } from "../lib/wsProtocol";
 import type { ServerEvent } from "../lib/wsProtocol";
-import type { FeedItem, ThreadRuntime, TranscriptEvent } from "./types";
+import type { FeedItem, ThreadAgentSummary, ThreadRuntime, TranscriptEvent } from "./types";
 import {
   clearModelStreamReplayRuntime,
   createModelStreamReplayRuntime,
@@ -179,6 +180,20 @@ export function clearThreadModelStreamRuntime(runtime: ThreadModelStreamRuntime)
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sortAgentSummaries(agents: ThreadAgentSummary[]): ThreadAgentSummary[] {
+  return [...agents].sort((left, right) => {
+    const updatedDiff = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+    if (Number.isFinite(updatedDiff) && updatedDiff !== 0) return updatedDiff;
+    return left.title.localeCompare(right.title);
+  });
+}
+
+function upsertAgentSummary(agents: ThreadAgentSummary[], nextAgent: ThreadAgentSummary): ThreadAgentSummary[] {
+  const nextAgents = agents.filter((agent) => agent.agentId !== nextAgent.agentId);
+  nextAgents.push(nextAgent);
+  return sortAgentSummaries(nextAgents);
 }
 
 function isTurnUsagePayload(payload: unknown): payload is {
@@ -837,12 +852,43 @@ const transcriptFeedPayloadSchema = z.discriminatedUnion("type", [
 ]);
 
 const transcriptFeedSuppressedTypes = new Set([
+  "agent_spawned",
+  "agent_list",
+  "agent_status",
+  "agent_wait_result",
   "set_session_usage_budget",
   "turn_usage",
   "session_usage",
   "budget_warning",
   "budget_exceeded",
 ]);
+
+export function extractAgentStateFromTranscript(events: TranscriptEvent[]): ThreadAgentSummary[] {
+  let agents: ThreadAgentSummary[] = [];
+
+  for (const evt of events) {
+    const parsed = safeParseServerEvent(evt.payload);
+    if (!parsed) continue;
+
+    if (parsed.type === "agent_spawned" || parsed.type === "agent_status") {
+      agents = upsertAgentSummary(agents, parsed.agent);
+      continue;
+    }
+
+    if (parsed.type === "agent_list") {
+      agents = sortAgentSummaries(parsed.agents);
+      continue;
+    }
+
+    if (parsed.type === "agent_wait_result") {
+      for (const agent of parsed.agents) {
+        agents = upsertAgentSummary(agents, agent);
+      }
+    }
+  }
+
+  return agents;
+}
 
 export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
   const out: FeedItem[] = [];

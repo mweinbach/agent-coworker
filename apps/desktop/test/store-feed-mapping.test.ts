@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
 import type { TranscriptEvent } from "../src/app/types";
-import { extractUsageStateFromTranscript, mapTranscriptToFeed } from "../src/app/store.feedMapping";
+import {
+  extractAgentStateFromTranscript,
+  extractUsageStateFromTranscript,
+  mapTranscriptToFeed,
+} from "../src/app/store.feedMapping";
 
 describe("desktop transcript feed mapping", () => {
   test("dedupes streamed reasoning against legacy reasoning finals while preserving trace order", () => {
@@ -108,6 +112,76 @@ describe("desktop transcript feed mapping", () => {
     expect(feed[0]?.kind).toBe("message");
     expect(feed[1]?.kind).toBe("reasoning");
     expect(feed[2]?.kind).toBe("message");
+  });
+
+  test("suppresses agent lifecycle transcript events from feed and rebuilds latest agent state", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "agent_spawned",
+          sessionId: "thread-session",
+          agent: {
+            agentId: "agent-1",
+            parentSessionId: "thread-session",
+            role: "research",
+            mode: "collaborative",
+            depth: 1,
+            effectiveModel: "gpt-5.4",
+            title: "Review notes",
+            provider: "codex-cli",
+            createdAt: "2024-01-01T00:00:01.000Z",
+            updatedAt: "2024-01-01T00:00:01.000Z",
+            lifecycleState: "active",
+            executionState: "running",
+            busy: true,
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "agent_status",
+          sessionId: "thread-session",
+          agent: {
+            agentId: "agent-1",
+            parentSessionId: "thread-session",
+            role: "research",
+            mode: "collaborative",
+            depth: 1,
+            effectiveModel: "gpt-5.4",
+            title: "Review notes",
+            provider: "codex-cli",
+            createdAt: "2024-01-01T00:00:01.000Z",
+            updatedAt: "2024-01-01T00:00:02.000Z",
+            lifecycleState: "active",
+            executionState: "completed",
+            busy: false,
+            lastMessagePreview: "Done.",
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: { type: "assistant_message", text: "Parent reply." },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    const agents = extractAgentStateFromTranscript(transcript);
+
+    expect(feed).toHaveLength(1);
+    expect(feed[0]?.kind).toBe("message");
+    expect(agents).toHaveLength(1);
+    expect(agents[0]?.agentId).toBe("agent-1");
+    expect(agents[0]?.executionState).toBe("completed");
+    expect(agents[0]?.lastMessagePreview).toBe("Done.");
   });
 
   test("replays raw model stream events and ignores stale normalized reasoning chunks", () => {

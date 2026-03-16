@@ -8,6 +8,7 @@
 - For automated PR review bots in this repo, optimize for unresolved findings only: cancel in-flight review runs when a PR closes, skip drafts, disable public session-share noise, and never post long “everything looks good now” summaries.
 - When finishing PR review work in this repo, do not stop at local code/test changes; reply on each completed GitHub review thread and resolve it in the PR in the same pass.
 - Before telling the user a review comment is already fixed, re-check the exact current branch code path the comment points at; unresolved PR findings can stay live even when nearby related work landed earlier in the branch.
+- For child-agent persistence, do not snapshot `executionState` from seeded `sessionInfo` alone; derive it from live runtime state (`running`, turn outcome, closed status) or restarted agents can come back as stale `pending_init`.
 - Before doing multi-commit feature work in this repo, confirm the active branch is based on current `main`; if it is not, rebase or restart from current `main` before building the stack.
 - For settings that can be explicitly set, explicitly disabled, or inherited, never overload `undefined` for both “no-op” and “inherit”; add a dedicated clear/inherit path end-to-end so reset-to-default actions delete persisted overrides instead of pinning the current built-in value.
 - When the user narrows a protocol or compatibility requirement, apply that exact direction to the fix; do not keep broader backward-compat or provider-scope assumptions alive in the implementation.

@@ -1,3 +1,4 @@
+import type { AgentExecutionState } from "../../shared/agents";
 import type { HarnessContextStore } from "../../harness/contextStore";
 import type { PersistedSessionMutation } from "../sessionDb";
 import type { PersistedSessionSnapshot } from "../sessionStore";
@@ -15,7 +16,18 @@ export class SessionSnapshotBuilder {
     }
   ) {}
 
+  private resolvePersistedExecutionState(): AgentExecutionState | null {
+    if ((this.opts.state.sessionInfo.sessionKind ?? "root") !== "agent") {
+      return this.opts.state.sessionInfo.executionState ?? null;
+    }
+    if (this.opts.state.persistenceStatus === "closed") return "closed";
+    if (this.opts.state.running) return "running";
+    if (this.opts.state.currentTurnOutcome === "error") return "errored";
+    return "completed";
+  }
+
   buildPersistedSnapshotAt(updatedAt: string): PersistedSessionSnapshot {
+    const executionState = this.resolvePersistedExecutionState();
     return {
       version: 6,
       sessionId: this.opts.sessionId,
@@ -37,7 +49,7 @@ export class SessionSnapshotBuilder {
         effectiveModel: this.opts.state.sessionInfo.effectiveModel ?? null,
         requestedReasoningEffort: this.opts.state.sessionInfo.requestedReasoningEffort ?? null,
         effectiveReasoningEffort: this.opts.state.sessionInfo.effectiveReasoningEffort ?? null,
-        executionState: this.opts.state.sessionInfo.executionState ?? null,
+        executionState,
         lastMessagePreview: this.opts.state.sessionInfo.lastMessagePreview ?? null,
       },
       config: {
@@ -61,6 +73,7 @@ export class SessionSnapshotBuilder {
   }
 
   buildCanonicalSnapshot(updatedAt: string): PersistedSessionMutation["snapshot"] {
+    const executionState = this.resolvePersistedExecutionState();
     return {
       sessionKind: this.opts.state.sessionInfo.sessionKind ?? "root",
       parentSessionId: this.opts.state.sessionInfo.parentSessionId ?? null,
@@ -72,7 +85,7 @@ export class SessionSnapshotBuilder {
       effectiveModel: this.opts.state.sessionInfo.effectiveModel ?? null,
       requestedReasoningEffort: this.opts.state.sessionInfo.requestedReasoningEffort ?? null,
       effectiveReasoningEffort: this.opts.state.sessionInfo.effectiveReasoningEffort ?? null,
-      executionState: this.opts.state.sessionInfo.executionState ?? null,
+      executionState,
       lastMessagePreview: this.opts.state.sessionInfo.lastMessagePreview ?? null,
       title: this.opts.state.sessionInfo.title,
       titleSource: this.opts.state.sessionInfo.titleSource,

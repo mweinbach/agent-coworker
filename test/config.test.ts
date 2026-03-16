@@ -515,6 +515,26 @@ describe("loadConfig", () => {
     expect(cfg.preferredChildModel).toBe("gemini-3-pro-preview");
   });
 
+  test("legacy subAgentModel config still seeds the preferred child model", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      provider: "openai",
+      model: "gpt-5.4",
+      subAgentModel: "gpt-5-mini",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.preferredChildModel).toBe("gpt-5-mini");
+    expect(cfg.preferredChildModelRef).toBe("openai:gpt-5-mini");
+  });
+
   test("preferredChildModelRef and allowlist normalize cross-provider child routing config", async () => {
     const { cwd, home } = await makeTmpDirs();
 

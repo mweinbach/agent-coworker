@@ -201,6 +201,7 @@ type RawLoopAgentControlState = {
   role: AgentRole;
   requestedModel?: string;
   requestedReasoningEffort?: AgentReasoningEffort;
+  seedMessages?: ModelMessage[];
   abortController: AbortController | null;
   runPromise: Promise<void> | null;
   runToken: number;
@@ -309,7 +310,8 @@ function withExecuteGuard(
 }
 
 export function createRawLoopAgentControl(
-  opts: Pick<ToolContext, "config" | "log" | "askUser" | "approveCommand" | "availableSkills" | "spawnDepth" | "abortSignal">,
+  opts: Pick<ToolContext, "config" | "log" | "askUser" | "approveCommand" | "availableSkills" | "spawnDepth" | "abortSignal">
+    & { parentMessages?: ModelMessage[] },
   deps: RawLoopAgentControlDeps = {},
 ): NonNullable<ToolContext["agentControl"]> {
   const statusBus = new StatusBus();
@@ -360,6 +362,7 @@ export function createRawLoopAgentControl(
       approveCommand: opts.approveCommand,
       abortSignal: controller.signal,
       discoveredSkills: opts.availableSkills,
+      ...(state.seedMessages ? { seedMessages: state.seedMessages } : {}),
       ...(state.requestedModel ? { model: state.requestedModel } : {}),
       ...(state.requestedReasoningEffort ? { reasoningEffort: state.requestedReasoningEffort } : {}),
     }).then((text) => {
@@ -392,7 +395,7 @@ export function createRawLoopAgentControl(
   };
 
   return {
-    spawn: async ({ message, role, model, reasoningEffort }) => {
+    spawn: async ({ message, role, model, reasoningEffort, forkContext }) => {
       const effectiveRole = role ?? "default";
       const routed = routeAgentConfig(opts.config, {
         role: getAgentRoleDefinition(effectiveRole),
@@ -422,6 +425,10 @@ export function createRawLoopAgentControl(
         role: effectiveRole,
         requestedModel: routed.requestedModel,
         requestedReasoningEffort: routed.requestedReasoningEffort,
+        seedMessages:
+          forkContext && opts.parentMessages
+            ? structuredClone(opts.parentMessages)
+            : undefined,
         abortController: null,
         runPromise: null,
         runToken: 0,
@@ -1716,6 +1723,7 @@ async function main() {
         askUser,
         approveCommand,
         availableSkills: discoveredSkills,
+        parentMessages: inputMessages,
       });
 
       try {

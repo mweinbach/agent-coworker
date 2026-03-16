@@ -341,6 +341,9 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     asNonEmptyString(projectConfig.preferredChildModel) ||
     asNonEmptyString(userConfig.preferredChildModel) ||
     asNonEmptyString(builtInDefaults.preferredChildModel) ||
+    asNonEmptyString(projectConfig.subAgentModel) ||
+    asNonEmptyString(userConfig.subAgentModel) ||
+    asNonEmptyString(builtInDefaults.subAgentModel) ||
     supportedModel.id;
   let normalizedChildRouting = {
     childModelRoutingMode,

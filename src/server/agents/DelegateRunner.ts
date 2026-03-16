@@ -5,6 +5,7 @@ import { createRuntime } from "../../runtime";
 import { createTools } from "../../tools";
 import type { ToolContext } from "../../tools";
 import type { AgentConfig } from "../../types";
+import type { ModelMessage } from "../../types";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 
 import { routeAgentConfig } from "./modelRouter";
@@ -22,6 +23,7 @@ export class DelegateRunner {
     approveCommand: ToolContext["approveCommand"];
     abortSignal?: AbortSignal;
     discoveredSkills?: ToolContext["availableSkills"];
+    seedMessages?: ModelMessage[];
     model?: string;
     reasoningEffort?: AgentReasoningEffort;
   }): Promise<string> {
@@ -60,7 +62,7 @@ export class DelegateRunner {
     const result = await runtime.runTurn({
       config: routed.config,
       system,
-      messages: [{ role: "user", content: opts.message }] as any,
+      messages: [...(opts.seedMessages ? structuredClone(opts.seedMessages) : []), { role: "user", content: opts.message }] as any,
       agentControl: undefined,
       spawnDepth: delegateContext.spawnDepth,
       abortSignal: opts.abortSignal,

@@ -6,6 +6,7 @@ import {
   buildMixedRuns,
   createRawLoopAgentControl,
 } from "../scripts/run_raw_agent_loops";
+import type { ModelMessage } from "../src/types";
 import type { AgentConfig } from "../src/types";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -73,6 +74,39 @@ describe("raw loop child-agent control", () => {
         }),
       ],
     });
+  });
+
+  test("passes parent messages into delegate runs when forkContext is requested", async () => {
+    const run = mock(async () => "SUBAGENT_OK");
+    const parentMessages: ModelMessage[] = [
+      { role: "user", content: "Root context" },
+      { role: "assistant", content: "Current findings" },
+    ];
+    const control = createRawLoopAgentControl(
+      {
+        config: makeConfig(),
+        log: () => {},
+        askUser: async () => "",
+        approveCommand: async () => true,
+        parentMessages,
+      },
+      {
+        createDelegateRunner: () => ({ run }),
+      },
+    );
+
+    await control.spawn({
+      role: "worker",
+      message: "Use the parent context",
+      forkContext: true,
+    });
+
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Use the parent context",
+        seedMessages: parentMessages,
+      }),
+    );
   });
 });
 

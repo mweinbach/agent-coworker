@@ -126,6 +126,7 @@ export class SessionMetadataManager {
       titleModel: string | null;
       provider: AgentConfig["provider"];
       model: string;
+      executionState: import("../../shared/agents").AgentExecutionState;
     }>
   ) {
     const next = {
@@ -138,7 +139,8 @@ export class SessionMetadataManager {
       next.titleSource !== this.context.state.sessionInfo.titleSource ||
       next.titleModel !== this.context.state.sessionInfo.titleModel ||
       next.provider !== this.context.state.sessionInfo.provider ||
-      next.model !== this.context.state.sessionInfo.model;
+      next.model !== this.context.state.sessionInfo.model ||
+      next.executionState !== this.context.state.sessionInfo.executionState;
 
     if (!changed) return;
 

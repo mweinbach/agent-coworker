@@ -15,6 +15,7 @@ import type {
   SessionBackupPublicCheckpoint,
   SessionBackupPublicState,
 } from "../src/server/sessionBackup";
+import type { SessionInfoState } from "../src/server/session/SessionContext";
 import * as REAL_AGENT from "../src/agent";
 
 // ---------------------------------------------------------------------------
@@ -208,6 +209,7 @@ function makeSession(
     waitForAgentImpl: (opts: any) => Promise<any>;
     closeAgentImpl: (opts: any) => Promise<any>;
     deleteSessionImpl: (opts: any) => Promise<void>;
+    sessionInfoPatch: Partial<SessionInfoState>;
   }>
 ) {
   const dir = "/tmp/test-session";
@@ -236,6 +238,7 @@ function makeSession(
     waitForAgentImpl: overrides?.waitForAgentImpl,
     closeAgentImpl: overrides?.closeAgentImpl,
     deleteSessionImpl: overrides?.deleteSessionImpl,
+    sessionInfoPatch: overrides?.sessionInfoPatch,
   });
   return { session, emit, events, sessionBackupFactory };
 }
@@ -2436,6 +2439,77 @@ describe("AgentSession", () => {
 
       const busyFalseIdxAfter = events.findIndex((e) => e.type === "session_busy" && (e as any).busy === false);
       expect(busyFalseIdxAfter).toBeGreaterThan(busyTrueIdx);
+    });
+
+    test("updates child session_info executionState across a successful turn", async () => {
+      const { session, events } = makeSession({
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "root-1",
+          role: "worker",
+          mode: "delegate",
+          depth: 1,
+          executionState: "pending_init",
+        },
+      });
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          })
+      );
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(
+        events.some(
+          (event) => event.type === "session_info" && event.sessionId === session.id && event.executionState === "running"
+        )
+      ).toBe(true);
+
+      resolveRunTurn();
+      await sendPromise;
+
+      expect(session.getSessionInfoEvent().executionState).toBe("completed");
+      expect(
+        events.some(
+          (event) => event.type === "session_info" && event.sessionId === session.id && event.executionState === "completed"
+        )
+      ).toBe(true);
+    });
+
+    test("updates child session_info executionState to errored when a turn fails", async () => {
+      const { session, events } = makeSession({
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "root-1",
+          role: "worker",
+          mode: "delegate",
+          depth: 1,
+          executionState: "pending_init",
+        },
+      });
+
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("delegate failed");
+      });
+
+      await session.sendUserMessage("go");
+
+      expect(session.getSessionInfoEvent().executionState).toBe("errored");
+      expect(
+        events.some(
+          (event) => event.type === "session_info" && event.sessionId === session.id && event.executionState === "running"
+        )
+      ).toBe(true);
+      expect(
+        events.some(
+          (event) => event.type === "session_info" && event.sessionId === session.id && event.executionState === "errored"
+        )
+      ).toBe(true);
     });
 
     test("clears busy and allows follow-up even when auto-checkpoint never resolves", async () => {

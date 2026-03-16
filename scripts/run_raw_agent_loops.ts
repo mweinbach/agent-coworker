@@ -204,7 +204,8 @@ type RawLoopAgentControlState = {
   requestedModel?: string;
   requestedReasoningEffort?: AgentReasoningEffort;
   routedConfig: AgentConfig;
-  seedMessages?: ModelMessage[];
+  connectedProviders: readonly ProviderName[];
+  historyMessages: ModelMessage[];
   abortController: AbortController | null;
   runPromise: Promise<void> | null;
   runToken: number;
@@ -350,6 +351,8 @@ export function createRawLoopAgentControl(
     state.runToken += 1;
     const runToken = state.runToken;
     const controller = new AbortController();
+    const priorMessages = structuredClone(state.historyMessages);
+    state.historyMessages.push({ role: "user", content: message });
     state.abortController = controller;
     publish(state, {
       lifecycleState: "active",
@@ -367,14 +370,16 @@ export function createRawLoopAgentControl(
       approveCommand: opts.approveCommand,
       abortSignal: controller.signal,
       discoveredSkills: opts.availableSkills,
-      ...(state.seedMessages ? { seedMessages: state.seedMessages } : {}),
+      ...(priorMessages.length > 0 ? { seedMessages: priorMessages } : {}),
       ...(state.requestedModel ? { model: state.requestedModel } : {}),
       ...(state.requestedReasoningEffort ? { reasoningEffort: state.requestedReasoningEffort } : {}),
-    }).then((text) => {
+      ...(state.connectedProviders.length > 0 ? { connectedProviders: state.connectedProviders } : {}),
+    }).then((result) => {
       if (state.runToken !== runToken || state.abortController !== controller || state.summary.lifecycleState === "closed") {
         return;
       }
-      const trimmed = text.trim();
+      state.historyMessages.push(...structuredClone(result.responseMessages));
+      const trimmed = result.text.trim();
       publish(state, {
         executionState: "completed",
         busy: false,
@@ -399,6 +404,14 @@ export function createRawLoopAgentControl(
     state.runPromise = run;
   };
 
+  const reopenClosed = (state: RawLoopAgentControlState): void => {
+    if (state.summary.lifecycleState !== "closed") return;
+    publish(state, {
+      lifecycleState: "active",
+      ...(state.summary.executionState === "closed" ? { executionState: "completed" } : {}),
+    });
+  };
+
   return {
     spawn: async ({ message, role, model, reasoningEffort, forkContext }) => {
       const effectiveRole = role ?? "default";
@@ -409,6 +422,9 @@ export function createRawLoopAgentControl(
         ...(reasoningEffort ? { reasoningEffort } : {}),
         connectedProviders,
       });
+      if (routed.fallbackLine) {
+        opts.log(routed.fallbackLine);
+      }
       const timestamp = now();
       const state: RawLoopAgentControlState = {
         routedConfig: routed.config,
@@ -433,10 +449,11 @@ export function createRawLoopAgentControl(
         role: effectiveRole,
         requestedModel: routed.requestedModel,
         requestedReasoningEffort: routed.requestedReasoningEffort,
-        seedMessages:
+        connectedProviders,
+        historyMessages:
           forkContext && opts.parentMessages
             ? structuredClone(opts.parentMessages)
-            : undefined,
+            : [],
         abortController: null,
         runPromise: null,
         runToken: 0,
@@ -449,13 +466,7 @@ export function createRawLoopAgentControl(
     list: async () => [...states.values()].map((state) => state.summary).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     sendInput: async ({ agentId, message, interrupt }) => {
       const state = getState(agentId);
-      if (state.summary.lifecycleState === "closed") {
-        publish(state, {
-          lifecycleState: "active",
-          executionState: "completed",
-          busy: false,
-        });
-      }
+      reopenClosed(state);
       if (state.summary.busy) {
         if (!interrupt) {
           throw new Error(`Child agent ${agentId} is busy`);
@@ -472,7 +483,11 @@ export function createRawLoopAgentControl(
       }
       return await statusBus.wait(agentIds, timeoutMs);
     },
-    resume: async ({ agentId }) => getState(agentId).summary,
+    resume: async ({ agentId }) => {
+      const state = getState(agentId);
+      reopenClosed(state);
+      return state.summary;
+    },
     close: async ({ agentId }) => {
       const state = getState(agentId);
       state.runToken += 1;

@@ -109,3 +109,4 @@
 - When users ask for prompt UX polish, prioritize cohesive narrative copy in injected sections (not just raw data dumps) and keep the section self-explanatory about tool usage and precedence.
 - When adding a provider without local pricing metadata, never assume `model.cost` exists in runtime projection paths; cost calculation must be optional so unsupported pricing data does not crash the agent.
 - When a tool requires session-only runtime control, hide it from non-session tool registries and update any raw-loop prompt fixtures in the same pass; otherwise scripted coverage drifts from the live `spawnAgent` contract.
+- When the user broadens PR follow-up scope from specific review threads to "every comment that needs work," sweep both unresolved review threads and newer top-level review/comment bodies on the latest commit before declaring PR feedback handled.

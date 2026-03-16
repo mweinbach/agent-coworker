@@ -31,9 +31,16 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   };
 }
 
+function makeDelegateRunResult(text: string) {
+  return {
+    text,
+    responseMessages: [{ role: "assistant", content: text }] as ModelMessage[],
+  };
+}
+
 describe("raw loop child-agent control", () => {
   test("uses connected providers for cross-provider child routing", async () => {
-    const run = mock(async () => "SUBAGENT_OK");
+    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
     const control = createRawLoopAgentControl(
       {
         config: makeConfig({
@@ -72,6 +79,7 @@ describe("raw loop child-agent control", () => {
       expect.objectContaining({
         role: "worker",
         message: "Use the child model",
+        connectedProviders: ["codex-cli", "opencode-zen"],
         config: expect.objectContaining({
           provider: "opencode-zen",
           model: "glm-5",
@@ -81,7 +89,7 @@ describe("raw loop child-agent control", () => {
   });
 
   test("falls back when requested cross-provider child ref is not connected", async () => {
-    const run = mock(async () => "SUBAGENT_OK");
+    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
     const control = createRawLoopAgentControl(
       {
         config: makeConfig({
@@ -122,12 +130,13 @@ describe("raw loop child-agent control", () => {
           provider: "codex-cli",
           model: "gpt-5.4",
         }),
+        connectedProviders: ["codex-cli"],
       }),
     );
   });
 
   test("supports spawnAgent handles plus waitForAgent completion", async () => {
-    const run = mock(async () => "SUBAGENT_OK");
+    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
     const control = createRawLoopAgentControl(
       {
         config: makeConfig(),
@@ -171,7 +180,7 @@ describe("raw loop child-agent control", () => {
   });
 
   test("passes parent messages into delegate runs when forkContext is requested", async () => {
-    const run = mock(async () => "SUBAGENT_OK");
+    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
     const parentMessages: ModelMessage[] = [
       { role: "user", content: "Root context" },
       { role: "assistant", content: "Current findings" },
@@ -199,6 +208,100 @@ describe("raw loop child-agent control", () => {
       expect.objectContaining({
         message: "Use the parent context",
         seedMessages: parentMessages,
+      }),
+    );
+  });
+
+  test("carries child history into subsequent sendInput runs", async () => {
+    const run = mock()
+      .mockResolvedValueOnce(makeDelegateRunResult("First reply"))
+      .mockResolvedValueOnce(makeDelegateRunResult("Second reply"));
+    const control = createRawLoopAgentControl(
+      {
+        config: makeConfig(),
+        log: () => {},
+        askUser: async () => "",
+        approveCommand: async () => true,
+      },
+      {
+        createDelegateRunner: () => ({ run }),
+        makeId: () => "child-1",
+      },
+    );
+
+    const spawned = await control.spawn({
+      role: "worker",
+      message: "First task",
+    });
+    await control.wait({
+      agentIds: [spawned.agentId],
+      timeoutMs: 1000,
+    });
+
+    await control.sendInput({
+      agentId: spawned.agentId,
+      message: "Second task",
+    });
+    await control.wait({
+      agentIds: [spawned.agentId],
+      timeoutMs: 1000,
+    });
+
+    expect(run).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        message: "Second task",
+        seedMessages: [
+          { role: "user", content: "First task" },
+          { role: "assistant", content: "First reply" },
+        ],
+      }),
+    );
+  });
+
+  test("reopens a closed child summary on resume", async () => {
+    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
+    const control = createRawLoopAgentControl(
+      {
+        config: makeConfig(),
+        log: () => {},
+        askUser: async () => "",
+        approveCommand: async () => true,
+      },
+      {
+        createDelegateRunner: () => ({ run }),
+        makeId: () => "child-1",
+      },
+    );
+
+    const spawned = await control.spawn({
+      role: "worker",
+      message: "Reply with exactly SUBAGENT_OK",
+    });
+    await control.wait({
+      agentIds: [spawned.agentId],
+      timeoutMs: 1000,
+    });
+
+    const closed = await control.close({
+      agentId: spawned.agentId,
+    });
+    expect(closed).toEqual(
+      expect.objectContaining({
+        agentId: "child-1",
+        lifecycleState: "closed",
+        executionState: "closed",
+      }),
+    );
+
+    const resumed = await control.resume({
+      agentId: spawned.agentId,
+    });
+    expect(resumed).toEqual(
+      expect.objectContaining({
+        agentId: "child-1",
+        lifecycleState: "active",
+        executionState: "completed",
       }),
     );
   });

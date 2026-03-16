@@ -39,7 +39,7 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     ask: askTool,
     AskUserQuestion: askTool,
     todoWrite: createTodoWriteTool(ctx),
-    spawnAgent: createSpawnAgentTool(ctx),
+    ...(ctx.agentControl ? { spawnAgent: createSpawnAgentTool(ctx) } : {}),
     notebookEdit: createNotebookEditTool(ctx),
     skill: createSkillTool(ctx),
     ...(ctx.config.enableMemory ?? true ? { memory: createMemoryTool(ctx) } : {}),

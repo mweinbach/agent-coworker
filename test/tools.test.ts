@@ -3215,7 +3215,7 @@ describe("memory tool", () => {
 // ---------------------------------------------------------------------------
 
 describe("createTools", () => {
-  test("returns object with all tool names", async () => {
+  test("returns base tool names when child-agent control is unavailable", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));
     const expected = [
@@ -3230,7 +3230,6 @@ describe("createTools", () => {
       "ask",
       "AskUserQuestion",
       "todoWrite",
-      "spawnAgent",
       "notebookEdit",
       "skill",
       "memory",
@@ -3241,17 +3240,28 @@ describe("createTools", () => {
     }
   });
 
-  test("returns exactly 16 tools", async () => {
+  test("returns exactly 15 tools without child-agent control", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir));
-    expect(Object.keys(tools).length).toBe(16);
+    expect(Object.keys(tools).length).toBe(15);
   });
 
   test("omits memory tool when enableMemory is false", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir, { config: makeConfig(dir, { enableMemory: false }) }));
     expect(tools).not.toHaveProperty("memory");
-    expect(Object.keys(tools).length).toBe(15);
+    expect(Object.keys(tools).length).toBe(14);
+  });
+
+  test("omits child-agent lifecycle tools when child-agent control is unavailable", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(makeCtx(dir));
+    expect(tools).not.toHaveProperty("spawnAgent");
+    expect(tools).not.toHaveProperty("listAgents");
+    expect(tools).not.toHaveProperty("sendAgentInput");
+    expect(tools).not.toHaveProperty("waitForAgent");
+    expect(tools).not.toHaveProperty("resumeAgent");
+    expect(tools).not.toHaveProperty("closeAgent");
   });
 
   test("returns an executable webSearch tool for opencode-go", async () => {

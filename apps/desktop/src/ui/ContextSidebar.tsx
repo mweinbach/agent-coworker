@@ -36,14 +36,16 @@ export const ContextSidebar = memo(function ContextSidebar() {
   const threadRuntime = useAppStore((s) => selectedThreadId ? s.threadRuntimeById[selectedThreadId] : null);
   const todos = useAppStore((s) => selectedThreadId ? s.latestTodosByThreadId[selectedThreadId] : null);
   const agents = threadRuntime?.agents ?? [];
+  const scrollSectionCardClassName = "min-h-0 max-h-[30%] overflow-hidden border-border/80 bg-card/80";
+  const scrollSectionContentClassName = "min-h-0 overflow-y-auto overscroll-contain space-y-2 pt-2 px-3 pb-3";
 
   return (
     <aside className="app-context-sidebar flex h-full w-full flex-col gap-3 p-3 overflow-hidden">
-      <Card className="border-border/80 bg-card/80">
+      <Card className={scrollSectionCardClassName}>
         <CardHeader className="pb-0 pt-3 px-3 flex-none">
           <CardTitle className="text-xs font-semibold tracking-wide text-muted-foreground/80">TASKS</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2 pt-2 px-3 pb-3">
+        <CardContent className={scrollSectionContentClassName} data-sidebar-section="tasks">
           {!todos || todos.length === 0 ? (
             <div className="py-3 text-center text-xs text-muted-foreground">No active tasks</div>
           ) : (
@@ -63,11 +65,11 @@ export const ContextSidebar = memo(function ContextSidebar() {
         </CardContent>
       </Card>
 
-      <Card className="border-border/80 bg-card/80">
+      <Card className={scrollSectionCardClassName}>
         <CardHeader className="pb-0 pt-3 px-3 flex-none">
           <CardTitle className="text-xs font-semibold tracking-wide text-muted-foreground/80">AGENTS</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2 pt-2 px-3 pb-3">
+        <CardContent className={scrollSectionContentClassName} data-sidebar-section="agents">
           {!selectedThreadId ? (
             <div className="py-3 text-center text-xs text-muted-foreground">Select a thread to inspect agents</div>
           ) : threadRuntime?.sessionKind === "agent" ? (

@@ -36,6 +36,7 @@
 - For live desktop UI testing in this repo, default to the Playwright/CDP workflow first; relaunch Electron with `COWORK_ELECTRON_REMOTE_DEBUG=1` instead of relying only on lighter wrappers.
 - For desktop UI bugs in the shadcn/ai-elements surface, fix the component composition and spacing locally before adding new state/layout plumbing.
 - For dense desktop agent timelines, collapse reasoning and tool traces into a shared secondary disclosure before trying to restyle dozens of inline cards.
+- For stacked desktop sidebar panels, never leave the upper cards on pure auto height when a lower panel needs to stay usable; cap the upper sections and put overflow on their internal content so the bottom explorer keeps a meaningful minimum height.
 - For grouped desktop tool traces, do not nest the full `ToolCard` disclosure stack inside the `Thinking` disclosure; use a flat, readable step list and visually verify the expanded state, not just the collapsed summary.
 - For grouped desktop reasoning summaries, do not stack a preview disclosure on top of the full rendered note; render the summary once in the trace and avoid duplicate preview/body text.
 - For grouped desktop trace cleanup, merge adjacent tool rows by lifecycle compatibility and result shape, not just by matching tool name, and verify the header layout inside the real three-column shell because viewport breakpoints alone can hide narrow-panel collisions.

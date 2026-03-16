@@ -126,4 +126,89 @@ describe("desktop context sidebar", () => {
       harness.restore();
     }
   });
+
+  test("keeps tasks and agents in scrollable sections so files can keep the remaining height", async () => {
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      useAppStore.setState((state) => ({
+        ...state,
+        selectedThreadId: "thread-1",
+        selectedWorkspaceId: null,
+        latestTodosByThreadId: {
+          "thread-1": Array.from({ length: 8 }, (_, index) => ({
+            content: `Todo ${index + 1}`,
+            status: index < 2 ? "completed" : index === 2 ? "in_progress" : "pending",
+          })),
+        },
+        threadRuntimeById: {
+          "thread-1": {
+            wsUrl: null,
+            connected: true,
+            sessionId: "root-123",
+            config: null,
+            sessionConfig: null,
+            sessionKind: "root",
+            parentSessionId: null,
+            role: null,
+            mode: null,
+            depth: 0,
+            nickname: null,
+            requestedModel: null,
+            effectiveModel: null,
+            requestedReasoningEffort: null,
+            effectiveReasoningEffort: null,
+            executionState: null,
+            lastMessagePreview: null,
+            agents: Array.from({ length: 6 }, (_, index) => ({
+              agentId: `child-${index + 1}`,
+              parentSessionId: "root-123",
+              role: "worker",
+              mode: "collaborative",
+              depth: 1,
+              effectiveModel: "gpt-5.4",
+              title: `Investigate item ${index + 1}`,
+              provider: "openai",
+              createdAt: "2026-03-15T10:00:00.000Z",
+              updatedAt: "2026-03-15T10:05:00.000Z",
+              lifecycleState: "active",
+              executionState: index === 0 ? "running" : "completed",
+              busy: index === 0,
+              lastMessagePreview: `Preview ${index + 1}`,
+            })),
+            sessionUsage: null,
+            lastTurnUsage: null,
+            enableMcp: true,
+            busy: false,
+            busySince: null,
+            feed: [],
+            transcriptOnly: false,
+          },
+        },
+      }) as any);
+
+      await act(async () => {
+        root.render(createElement(ContextSidebar));
+      });
+
+      const tasksSection = container.querySelector('[data-sidebar-section="tasks"]');
+      const agentsSection = container.querySelector('[data-sidebar-section="agents"]');
+
+      expect(tasksSection?.className).toContain("overflow-y-auto");
+      expect(tasksSection?.className).toContain("overscroll-contain");
+      expect(agentsSection?.className).toContain("overflow-y-auto");
+      expect(agentsSection?.className).toContain("overscroll-contain");
+      expect(container.innerHTML).toContain("max-h-[30%]");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
 });

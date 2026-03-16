@@ -3,7 +3,11 @@
   "private": true,
   "version": "0.1.24",
   "description": "Cowork desktop app",
-  "author": "Cowork",
+  "author": {
+    "name": "Max Weinbach",
+    "email": "max@weinbach.co"
+  },
+  "homepage": "https://github.com/mweinbach/agent-coworker",
   "type": "module",
   "main": "out/main/main.js",
   "scripts": {

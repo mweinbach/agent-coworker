@@ -32,4 +32,10 @@ win:
   verifyUpdateCodeSignature: false
   target:
     - nsis
-artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+linux:
+  icon: build/icons
+  target:
+    - AppImage
+    - deb
+  category: Development
+  artifactName: ${productName}-${version}-${os}-${arch}.${ext}

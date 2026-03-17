@@ -161,7 +161,9 @@ export function getComposerSubmitState(opts: {
   sessionId: string | null;
   threadStatus: ThreadStatus;
 }): { status: "ready" | "streaming"; disabled: boolean } {
-  if (opts.busy) {
+  const hasComposerText = opts.composerText.trim().length > 0;
+
+  if (opts.busy && !hasComposerText) {
     return {
       status: "streaming",
       disabled: opts.hasPromptModal || !opts.sessionId || opts.threadStatus !== "active",
@@ -170,8 +172,15 @@ export function getComposerSubmitState(opts: {
 
   return {
     status: "ready",
-    disabled: opts.hasPromptModal || !opts.composerText.trim(),
+    disabled:
+      opts.hasPromptModal
+      || !hasComposerText
+      || (opts.busy && (!opts.sessionId || opts.threadStatus !== "active")),
   };
+}
+
+export function resolveComposerBusyPolicy(busy: boolean): "reject" | "steer" {
+  return busy ? "steer" : "reject";
 }
 
 export function ChatThreadHeader(props: {
@@ -531,10 +540,10 @@ export function ChatView() {
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
-        void sendMessage(composerText);
+        void sendMessage(composerText, resolveComposerBusyPolicy(rt?.busy === true));
       }
     },
-    [composerText, sendMessage],
+    [composerText, rt?.busy, sendMessage],
   );
 
   if (!selectedThreadId || !thread) {
@@ -556,7 +565,7 @@ export function ChatView() {
   }
 
   const busy = rt?.busy === true;
-  const disabled = busy || hasPromptModal;
+  const disabled = hasPromptModal;
   const transcriptOnly = rt?.transcriptOnly === true;
   const disconnected = !transcriptOnly && thread.status !== "active";
   const modelSelectorConfig = visibleFeed.length === 0 && rt?.config?.provider && rt?.config?.model ? rt.config : null;
@@ -585,7 +594,7 @@ export function ChatView() {
     : disconnected
       ? "Reconnect to continue..."
       : busy
-        ? "Working..."
+        ? "Type to steer the current run..."
         : "Message...";
 
   return (
@@ -657,7 +666,7 @@ export function ChatView() {
               onSubmit={(event) => {
                 event.preventDefault();
                 if (!composerText.trim()) return;
-                void sendMessage(composerText);
+                void sendMessage(composerText, resolveComposerBusyPolicy(busy));
               }}
             >
               <PromptInputBody>
@@ -684,7 +693,11 @@ export function ChatView() {
                 </PromptInputTools>
                 <div className={cn("flex shrink-0 items-center gap-2", busy ? "opacity-100" : "opacity-70")}>
                   <span className="hidden max-w-[18rem] text-right text-xs leading-tight text-muted-foreground sm:block">
-                    {busy ? "Agent is working..." : "Press Enter to send, Shift+Enter for newline."}
+                    {busy
+                      ? (composerText.trim()
+                        ? "Press Enter to steer, or clear the draft to stop."
+                        : "Type to steer, or use stop to cancel.")
+                      : "Press Enter to send, Shift+Enter for newline."}
                   </span>
                   <PromptInputSubmit
                     status={composerSubmitState.status}

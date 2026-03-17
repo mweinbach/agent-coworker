@@ -11,6 +11,7 @@ import {
   getComposerSubmitState,
   reasoningLabelForMode,
   reasoningPreviewText,
+  resolveComposerBusyPolicy,
   sessionUsageTone,
   shouldToggleReasoningExpanded,
 } from "../src/ui/ChatView";
@@ -196,7 +197,7 @@ describe("desktop reasoning UI helpers", () => {
     })).toBe(true);
   });
 
-  test("keeps the stop action enabled while a run is active", () => {
+  test("keeps the stop action enabled while a run is active and the composer is empty", () => {
     expect(getComposerSubmitState({
       busy: true,
       hasPromptModal: false,
@@ -214,12 +215,25 @@ describe("desktop reasoning UI helpers", () => {
     })).toEqual({ status: "streaming", disabled: true });
 
     expect(getComposerSubmitState({
+      busy: true,
+      hasPromptModal: false,
+      composerText: "tighten scope",
+      sessionId: "session-1",
+      threadStatus: "active",
+    })).toEqual({ status: "ready", disabled: false });
+
+    expect(getComposerSubmitState({
       busy: false,
       hasPromptModal: false,
       composerText: "",
       sessionId: "session-1",
       threadStatus: "active",
     })).toEqual({ status: "ready", disabled: true });
+  });
+
+  test("routes busy composer submits through steer mode", () => {
+    expect(resolveComposerBusyPolicy(true)).toBe("steer");
+    expect(resolveComposerBusyPolicy(false)).toBe("reject");
   });
 
   test("renders usage stats as a title hover/focus reveal instead of an always-on header row", () => {

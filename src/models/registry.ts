@@ -14,6 +14,7 @@ import codexCliGpt51Codex from "../../config/models/codex-cli/gpt-5.1-codex.json
 import codexCliGpt51 from "../../config/models/codex-cli/gpt-5.1.json";
 import codexCliGpt52Codex from "../../config/models/codex-cli/gpt-5.2-codex.json";
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
+import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
 import googleGemini3FlashPreview from "../../config/models/google/gemini-3-flash-preview.json";
 import googleGemini3ProPreview from "../../config/models/google/gemini-3-pro-preview.json";
 import openaiGpt5Mini from "../../config/models/openai/gpt-5-mini.json";
@@ -22,6 +23,7 @@ import openaiGpt52Codex from "../../config/models/openai/gpt-5.2-codex.json";
 import openaiGpt52Pro from "../../config/models/openai/gpt-5.2-pro.json";
 import openaiGpt52 from "../../config/models/openai/gpt-5.2.json";
 import openaiGpt54 from "../../config/models/openai/gpt-5.4.json";
+import openaiGpt54Mini from "../../config/models/openai/gpt-5.4-mini.json";
 import nvidiaNemotron3Super120bA12b from "../../config/models/nvidia/nvidia-nemotron-3-super-120b-a12b.json";
 import opencodeGoGlm5 from "../../config/models/opencode-go/glm-5.json";
 import opencodeGoKimiK25 from "../../config/models/opencode-go/kimi-k2.5.json";
@@ -78,6 +80,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   codexCliGpt51,
   codexCliGpt52Codex,
   codexCliGpt54,
+  codexCliGpt54Mini,
   googleGemini3FlashPreview,
   googleGemini3ProPreview,
   openaiGpt5Mini,
@@ -86,6 +89,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   openaiGpt52Pro,
   openaiGpt52,
   openaiGpt54,
+  openaiGpt54Mini,
   nvidiaNemotron3Super120bA12b,
   opencodeGoGlm5,
   opencodeGoKimiK25,

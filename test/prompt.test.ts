@@ -168,6 +168,7 @@ describe("loadSystemPrompt", () => {
     expect(prompt).toContain("**reviewer**");
     expect(prompt).toContain("Available model overrides for the current provider (OpenAI):");
     expect(prompt).toContain("**GPT-5.4** (`gpt-5.4`)");
+    expect(prompt).toContain("**GPT-5.4 Mini** (`gpt-5.4-mini`)");
     expect(prompt).toContain("**GPT-5 Mini** (`gpt-5-mini`)");
     expect(prompt).toContain("`preferredChildModelRef` is only a workspace/UI suggestion");
     expect(prompt).toContain("spawnAgent with `role: \"explorer\"`");
@@ -350,6 +351,33 @@ describe("loadSystemPrompt", () => {
     const prompt = await loadSystemPrompt(config);
 
     expect(prompt).toContain("GPT-5.4 SYSTEM TEMPLATE GPT-5.4");
+    expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
+  });
+
+  test("uses the gpt-5.4 system template for gpt-5.4-mini", async () => {
+    const { builtIn } = await makeTmpDirs();
+
+    await writeFile(
+      path.join(builtIn, "prompts", "system.md"),
+      "DEFAULT SYSTEM TEMPLATE {{modelName}}"
+    );
+    await writeFile(
+      path.join(builtIn, "prompts", "system-models", "gpt-5.4.md"),
+      "Base system prompt.\nMini marker.",
+    );
+
+    const prompt = await loadSystemPrompt(
+      makeConfig({
+        builtInDir: builtIn,
+        builtInConfigDir: path.join(builtIn, "config"),
+        provider: "openai",
+        model: "gpt-5.4-mini",
+        preferredChildModel: "gpt-5.4-mini",
+        skillsDirs: ["/nonexistent/skills"],
+      }),
+    );
+
+    expect(prompt).toContain("Mini marker.");
     expect(prompt).not.toContain("DEFAULT SYSTEM TEMPLATE");
   });
 

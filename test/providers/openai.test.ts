@@ -109,6 +109,15 @@ describe("OpenAI provider (gpt-5.4 with reasoning)", () => {
     expect(cfg.model).toBe("gpt-5.2-pro");
   });
 
+  test("getModel supports gpt-5.4-mini", () => {
+    const cfg = makeConfig({ provider: "openai", model: "gpt-5.4-mini" });
+    const model = getModel(cfg);
+
+    expect(model.modelId).toBe("gpt-5.4-mini");
+    expect(model.provider).toBe("openai.responses");
+    expect(model.specificationVersion).toBe("v3");
+  });
+
   test("loadConfig openai from project config file", async () => {
     const { cwd, home } = await makeTmpDirs();
 

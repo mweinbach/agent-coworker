@@ -2268,7 +2268,7 @@ Provider catalog metadata. Sent on connection and after model changes.
   "type": "provider_catalog",
   "sessionId": "...",
   "all": [
-    { "id": "openai", "name": "OpenAI", "models": ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex"], "defaultModel": "gpt-5.4" },
+    { "id": "openai", "name": "OpenAI", "models": ["gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.2-codex"], "defaultModel": "gpt-5.4" },
     { "id": "opencode-go", "name": "OpenCode Go", "models": ["glm-5", "kimi-k2.5"], "defaultModel": "glm-5" },
     { "id": "opencode-zen", "name": "OpenCode Zen", "models": ["glm-5", "kimi-k2.5", "nemotron-3-super-free", "mimo-v2-flash-free", "big-pickle", "minimax-m2.5-free", "minimax-m2.5"], "defaultModel": "glm-5" }
   ],

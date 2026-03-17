@@ -73,4 +73,33 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
     expect(cfg.provider).toBe("codex-cli");
     expect(cfg.model).toBe(DEFAULT_CODEX_MODEL);
   });
+
+  test("getModel supports gpt-5.4-mini", async () => {
+    const { home } = await makeTmpDirs();
+    await writeJson(path.join(home, ".cowork", "auth", "connections.json"), {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      services: {
+        "codex-cli": {
+          service: "codex-cli",
+          mode: "api_key",
+          apiKey: "test_codex_key",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    await withEnv("HOME", home, async () => {
+      const cfg = makeConfig({
+        provider: "codex-cli",
+        model: "gpt-5.4-mini",
+        userAgentDir: path.join(home, ".agent"),
+      });
+      const model = getModel(cfg);
+
+      expect(model.modelId).toBe("gpt-5.4-mini");
+      expect(model.provider).toBe("codex-cli.responses");
+      expect(model.specificationVersion).toBe("v3");
+    });
+  });
 });

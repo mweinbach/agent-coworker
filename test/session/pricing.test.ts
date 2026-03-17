@@ -25,6 +25,14 @@ describe("pricing", () => {
             expect(pricing!.cachedInputPerMillion).toBe(0.175);
         });
 
+        it("resolves exact match for openai gpt-5.4-mini pricing", () => {
+            const pricing = resolveModelPricing("openai", "gpt-5.4-mini");
+            expect(pricing).not.toBeNull();
+            expect(pricing!.inputPerMillion).toBe(0.75);
+            expect(pricing!.outputPerMillion).toBe(4.5);
+            expect(pricing!.cachedInputPerMillion).toBe(0.075);
+        });
+
         it("resolves exact match for google model", () => {
             const pricing = resolveModelPricing("google", "gemini-3-flash-preview");
             expect(pricing).not.toBeNull();
@@ -130,6 +138,14 @@ describe("pricing", () => {
             expect(pricing!.inputPerMillion).toBe(1.75);
             expect(pricing!.outputPerMillion).toBe(14);
             expect(pricing!.cachedInputPerMillion).toBe(0.175);
+        });
+
+        it("resolves exact match for codex-cli gpt-5.4-mini pricing", () => {
+            const pricing = resolveModelPricing("codex-cli", "gpt-5.4-mini");
+            expect(pricing).not.toBeNull();
+            expect(pricing!.inputPerMillion).toBe(0.75);
+            expect(pricing!.outputPerMillion).toBe(4.5);
+            expect(pricing!.cachedInputPerMillion).toBe(0.075);
         });
 
         it("returns null for unknown provider/model", () => {

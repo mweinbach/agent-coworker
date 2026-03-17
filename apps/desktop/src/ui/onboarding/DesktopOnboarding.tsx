@@ -637,7 +637,15 @@ const STARTER_PROMPTS = [
   { label: "Plan first tasks", message: "Based on the current state of this repo, suggest 3-5 actionable first tasks I could work on." },
 ];
 
-function FirstThreadStep({ onComplete }: { onComplete: (firstMessage?: string) => void }) {
+function FirstThreadStep({ onComplete }: { onComplete: (firstMessage?: string) => Promise<void> }) {
+  const [creating, setCreating] = useState(false);
+
+  const handleClick = (firstMessage?: string) => {
+    if (creating) return;
+    setCreating(true);
+    void onComplete(firstMessage).finally(() => setCreating(false));
+  };
+
   return (
     <div className="space-y-6">
       <div className="space-y-2">
@@ -652,8 +660,9 @@ function FirstThreadStep({ onComplete }: { onComplete: (firstMessage?: string) =
           <button
             key={prompt.label}
             type="button"
-            className="w-full rounded-lg border border-border/80 bg-card/85 px-4 py-3 text-left transition-colors hover:border-primary/40 hover:bg-card"
-            onClick={() => onComplete(prompt.message)}
+            disabled={creating}
+            className="w-full rounded-lg border border-border/80 bg-card/85 px-4 py-3 text-left transition-colors hover:border-primary/40 hover:bg-card disabled:opacity-50"
+            onClick={() => handleClick(prompt.message)}
           >
             <div className="text-sm font-medium">{prompt.label}</div>
             <div className="mt-0.5 text-xs text-muted-foreground line-clamp-1">{prompt.message}</div>
@@ -661,8 +670,8 @@ function FirstThreadStep({ onComplete }: { onComplete: (firstMessage?: string) =
         ))}
       </div>
 
-      <Button variant="outline" onClick={() => onComplete()}>
-        Start blank thread
+      <Button variant="outline" disabled={creating} onClick={() => handleClick()}>
+        {creating ? "Creating..." : "Start blank thread"}
       </Button>
     </div>
   );
@@ -773,12 +782,18 @@ export function DesktopOnboarding() {
   );
 
   const handleComplete = useCallback(
-    (firstMessage?: string) => {
-      complete();
-      if (firstMessage) {
-        void newThread({ firstMessage, titleHint: firstMessage.slice(0, 40) });
-      } else {
-        void newThread();
+    async (firstMessage?: string) => {
+      try {
+        if (firstMessage) {
+          await newThread({ firstMessage, titleHint: firstMessage.slice(0, 40) });
+        } else {
+          await newThread();
+        }
+        complete();
+      } catch {
+        // Thread creation failed — leave onboarding open so the user
+        // can retry or dismiss manually instead of being silently
+        // marked as completed with no usable chat session.
       }
     },
     [complete, newThread],

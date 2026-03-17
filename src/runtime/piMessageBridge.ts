@@ -21,6 +21,15 @@ function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function asAnnotationArray(value: unknown): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const next = value.filter(
+    (entry): entry is Record<string, unknown> =>
+      typeof entry === "object" && entry !== null && !Array.isArray(entry),
+  );
+  return next.length > 0 ? next : undefined;
+}
+
 function assistantTextPhase(record: Record<string, unknown>): string | undefined {
   return asNonEmptyString(record.phase);
 }
@@ -125,6 +134,7 @@ function assistantContentFromModelContent(content: unknown): Array<Record<string
         type: "text",
         text,
         ...(phase ? { phase } : {}),
+        ...(asAnnotationArray(record.annotations) ? { annotations: asAnnotationArray(record.annotations) } : {}),
       });
     }
   }
@@ -325,6 +335,7 @@ function modelContentFromAssistantPart(part: Record<string, unknown>): Record<st
       type: "text",
       text,
       ...(phase ? { phase } : {}),
+      ...(asAnnotationArray(part.annotations) ? { annotations: asAnnotationArray(part.annotations) } : {}),
     };
   }
   if (partType === "thinking") {

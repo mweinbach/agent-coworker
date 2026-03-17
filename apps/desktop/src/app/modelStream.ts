@@ -1,12 +1,12 @@
 export type {
   ModelStreamChunkEvent,
+  ModelStreamRawEvent,
   ModelStreamUpdate,
 } from "@cowork/client/modelStream";
 export type {
-  ModelStreamRawEvent,
   ModelStreamReplayRuntime,
 } from "@cowork/client/modelStreamReplay";
-export { mapModelStreamChunk } from "@cowork/client/modelStream";
+export { mapModelStreamChunk, mapModelStreamRawEvent } from "@cowork/client/modelStream";
 export {
   clearModelStreamReplayRuntime,
   createModelStreamReplayRuntime,

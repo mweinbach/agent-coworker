@@ -111,6 +111,12 @@ mock.module("../src/lib/agentSocket", () => ({
 const { useAppStore } = await import("../src/app/store");
 const { RUNTIME } = await import("../src/app/store.helpers");
 
+const defaultProviderActions = {
+  requestProviderCatalog: useAppStore.getState().requestProviderCatalog,
+  requestProviderAuthMethods: useAppStore.getState().requestProviderAuthMethods,
+  refreshProviderStatus: useAppStore.getState().refreshProviderStatus,
+};
+
 describe("workspace startup flow", () => {
   beforeEach(() => {
     startDeferreds.length = 0;
@@ -152,6 +158,7 @@ describe("workspace startup flow", () => {
       providerAuthMethodsByProvider: {},
       providerLastAuthChallenge: null,
       providerLastAuthResult: null,
+      ...defaultProviderActions,
       composerText: "",
       injectContext: false,
       developerMode: false,
@@ -221,5 +228,35 @@ describe("workspace startup flow", () => {
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(runtime?.serverUrl).toBe("ws://fresh");
     expect(runtime?.error).toBeNull();
+  });
+
+  test("provider auth method refresh stays quiet while the control socket is still handshaking", async () => {
+    const workspaceId = "ws-provider";
+    useAppStore.setState({
+      workspaces: [
+        {
+          id: workspaceId,
+          name: "Workspace",
+          path: "/tmp/workspace",
+          createdAt: "2026-03-17T00:00:00.000Z",
+          lastOpenedAt: "2026-03-17T00:00:00.000Z",
+          defaultEnableMcp: true,
+          yolo: false,
+        },
+      ],
+      selectedWorkspaceId: workspaceId,
+    });
+
+    const refreshPromise = useAppStore.getState().requestProviderAuthMethods();
+    await flushAsyncWork();
+
+    expect(startCalls).toHaveLength(1);
+    startDeferreds[0]?.resolve({ url: "ws://provider" });
+    await refreshPromise;
+
+    expect(useAppStore.getState().notifications).toEqual([]);
+    expect(useAppStore.getState().workspaceRuntimeById[workspaceId]?.controlSessionId).toBeNull();
+    expect(useAppStore.getState().providerStatusRefreshing).toBeFalse();
+    expect(RUNTIME.controlSockets.has(workspaceId)).toBeTrue();
   });
 });

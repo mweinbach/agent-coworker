@@ -23,6 +23,16 @@ type OpenAiNativeStreamOptions = {
   reasoningEffort?: string;
   reasoningSummary?: string;
   textVerbosity?: string;
+  webSearchBackend?: string;
+  webSearchMode?: string;
+  webSearchContextSize?: string;
+  webSearchAllowedDomains?: string[];
+  webSearchLocation?: {
+    country?: string;
+    region?: string;
+    city?: string;
+    timezone?: string;
+  };
 };
 
 export type OpenAiNativeStepRequest = {
@@ -181,9 +191,96 @@ function convertPiToolsToResponsesTools(
   });
 }
 
+function mergeUniqueStrings(...groups: Array<unknown>): string[] | undefined {
+  const merged: string[] = [];
+  for (const group of groups) {
+    if (!Array.isArray(group)) continue;
+    for (const entry of group) {
+      const value = asNonEmptyString(entry);
+      if (!value || merged.includes(value)) continue;
+      merged.push(value);
+    }
+  }
+  return merged.length > 0 ? merged : undefined;
+}
+
+function normalizeAllowedDomains(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const entry of value) {
+    const raw = asNonEmptyString(entry);
+    if (!raw) continue;
+
+    let domain = raw
+      .replace(/^[a-z]+:\/\//i, "")
+      .replace(/^\/+/, "")
+      .split(/[/?#]/, 1)[0] ?? "";
+    domain = domain.trim().replace(/\/+$/g, "").toLowerCase();
+    if (!domain || seen.has(domain)) continue;
+    seen.add(domain);
+    normalized.push(domain);
+  }
+
+  return normalized;
+}
+
+function normalizeWebSearchLocation(value: unknown): Record<string, string> | undefined {
+  const location = asRecord(value);
+  if (!location) return undefined;
+
+  const normalized = {
+    ...(asNonEmptyString(location.country) ? { country: asNonEmptyString(location.country)! } : {}),
+    ...(asNonEmptyString(location.region) ? { region: asNonEmptyString(location.region)! } : {}),
+    ...(asNonEmptyString(location.city) ? { city: asNonEmptyString(location.city)! } : {}),
+    ...(asNonEmptyString(location.timezone) ? { timezone: asNonEmptyString(location.timezone)! } : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function resolveCodexWebSearchBackend(opts: OpenAiNativeStepRequest): "native" | "exa" {
+  const configured = asNonEmptyString(opts.streamOptions.webSearchBackend)?.toLowerCase();
+  return configured === "exa" ? "exa" : "native";
+}
+
+function resolveCodexNativeWebSearchMode(opts: OpenAiNativeStepRequest): "disabled" | "cached" | "live" {
+  if (resolveCodexWebSearchBackend(opts) !== "native") {
+    return "disabled";
+  }
+
+  const configured = asNonEmptyString(opts.streamOptions.webSearchMode)?.toLowerCase();
+  if (configured === "disabled" || configured === "cached" || configured === "live") {
+    return configured;
+  }
+  return "live";
+}
+
+function buildCodexNativeWebSearchTool(opts: OpenAiNativeStepRequest): Record<string, unknown> | null {
+  if (opts.provider !== "codex-cli") return null;
+  if (resolveCodexWebSearchBackend(opts) !== "native") return null;
+
+  const mode = resolveCodexNativeWebSearchMode(opts);
+  if (mode === "disabled") return null;
+
+  const allowedDomains = normalizeAllowedDomains(opts.streamOptions.webSearchAllowedDomains);
+  const location = normalizeWebSearchLocation(opts.streamOptions.webSearchLocation);
+  const contextSize = asNonEmptyString(opts.streamOptions.webSearchContextSize);
+
+  return {
+    type: "web_search",
+    external_web_access: mode === "live",
+    ...(contextSize ? { search_context_size: contextSize } : {}),
+    ...(allowedDomains.length > 0 ? { filters: { allowed_domains: allowedDomains } } : {}),
+    ...(location ? { user_location: { type: "approximate", ...location } } : {}),
+  };
+}
+
 export function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<string, unknown> {
   const input = convertPiMessagesToResponsesInput(opts.model, opts.piMessages);
   const useCodexChatGptBackend = usesCodexChatGptBackend(opts);
+  const nativeWebSearchTool = buildCodexNativeWebSearchTool(opts);
+  const stripLegacyWebSearch = opts.provider === "codex-cli" && resolveCodexWebSearchBackend(opts) === "native";
   const continuationOptions = useCodexChatGptBackend
     ? {}
     : buildOpenAiContinuationRequestOptions(opts.previousResponseId);
@@ -223,15 +320,26 @@ export function buildOpenAiNativeRequest(opts: OpenAiNativeStepRequest): Record<
     request.text = { verbosity: "medium" };
   }
 
-  if (opts.tools.length > 0) {
-    request.tools = convertPiToolsToResponsesTools(opts.provider, opts.tools);
+  const functionTools = convertPiToolsToResponsesTools(
+    opts.provider,
+    stripLegacyWebSearch
+      ? opts.tools.filter((tool) => asNonEmptyString(tool.name) !== "webSearch")
+      : opts.tools,
+  );
+  const requestTools = [
+    ...functionTools,
+    ...(nativeWebSearchTool ? [nativeWebSearchTool] : []),
+  ];
+  if (requestTools.length > 0) {
+    request.tools = requestTools;
   }
 
   if (opts.provider === "codex-cli") {
     request.parallel_tool_calls = true;
     request.tool_choice = "auto";
-    if (!Array.isArray(request.include)) {
-      request.include = ["reasoning.encrypted_content"];
+    const include = mergeUniqueStrings(request.include, nativeWebSearchTool ? ["web_search_call.action.sources"] : []);
+    if (include) {
+      request.include = include;
     }
   } else if (!reasoning && opts.model.reasoning && opts.model.name.startsWith("gpt-5")) {
     input.push({
@@ -392,8 +500,14 @@ export const runOpenAiNativeResponseStep: RunOpenAiNativeResponseStep = async (
 
 export const __internal = {
   buildOpenAiNativeRequest,
+  buildCodexNativeWebSearchTool,
   convertPiMessagesToResponsesInput,
   convertPiToolsToResponsesTools,
+  mergeUniqueStrings,
+  normalizeAllowedDomains,
+  normalizeWebSearchLocation,
+  resolveCodexWebSearchBackend,
+  resolveCodexNativeWebSearchMode,
   resolveCodexClientBaseUrl,
   resolveOpenAiClientBaseUrl,
   resolveOpenAiClientHeaders,

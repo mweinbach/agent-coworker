@@ -7,14 +7,26 @@ import {
   getWorkspaceReasoningEffort,
   getWorkspaceReasoningSummary,
   getWorkspaceTextVerbosity,
+  getWorkspaceWebSearchAllowedDomains,
+  getWorkspaceWebSearchBackend,
+  getWorkspaceWebSearchContextSize,
+  getWorkspaceWebSearchLocation,
+  getWorkspaceWebSearchMode,
   mergeWorkspaceProviderOptions,
   REASONING_EFFORT_VALUES,
   REASONING_SUMMARY_VALUES,
   TEXT_VERBOSITY_VALUES,
+  WEB_SEARCH_BACKEND_VALUES,
+  WEB_SEARCH_CONTEXT_SIZE_VALUES,
+  WEB_SEARCH_MODE_VALUES,
+  type CodexCliProviderOptions,
   type OpenAICompatibleProviderName,
   type ReasoningEffortValue,
   type ReasoningSummaryValue,
   type TextVerbosityValue,
+  type WebSearchBackendValue,
+  type WebSearchContextSizeValue,
+  type WebSearchModeValue,
 } from "../../../app/openaiCompatibleProviderOptions";
 import {
   normalizeWorkspaceUserProfile,
@@ -62,6 +74,15 @@ function updateProviderOption(
 ) {
   return mergeWorkspaceProviderOptions(providerOptions, {
     [provider]: patch,
+  });
+}
+
+function updateCodexProviderOption(
+  providerOptions: ReturnType<typeof mergeWorkspaceProviderOptions>,
+  patch: Partial<CodexCliProviderOptions>,
+) {
+  return mergeWorkspaceProviderOptions(providerOptions, {
+    "codex-cli": patch,
   });
 }
 
@@ -128,6 +149,12 @@ export function OpenAiCompatibleModelSettingsCard({
   const codexVerbosity = getWorkspaceTextVerbosity(workspace.providerOptions, "codex-cli");
   const codexReasoningEffort = getWorkspaceReasoningEffort(workspace.providerOptions, "codex-cli");
   const codexReasoningSummary = getWorkspaceReasoningSummary(workspace.providerOptions, "codex-cli");
+  const codexWebSearchBackend = getWorkspaceWebSearchBackend(workspace.providerOptions);
+  const codexUsesNativeWebSearch = codexWebSearchBackend === "native";
+  const codexWebSearchMode = getWorkspaceWebSearchMode(workspace.providerOptions);
+  const codexWebSearchContextSize = getWorkspaceWebSearchContextSize(workspace.providerOptions);
+  const codexWebSearchAllowedDomains = getWorkspaceWebSearchAllowedDomains(workspace.providerOptions).join("\n");
+  const codexWebSearchLocation = getWorkspaceWebSearchLocation(workspace.providerOptions);
 
   const sections = ([
     {
@@ -243,6 +270,211 @@ export function OpenAiCompatibleModelSettingsCard({
                 </SelectContent>
               </Select>
             </div>
+
+            {section.key === "codex-cli" ? (
+              <div className="space-y-4 rounded-lg border border-border/60 bg-muted/20 p-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium text-foreground">Web search</div>
+                  <div className="text-xs text-muted-foreground">
+                    Choose whether Codex uses the built-in native search tool or the local Exa tool. Native is the default.
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-sm font-medium text-foreground">Search backend</div>
+                  <Select
+                    value={codexWebSearchBackend}
+                    onValueChange={(value) => {
+                      void updateWorkspaceDefaults(workspace.id, {
+                        providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                          webSearchBackend: value as WebSearchBackendValue,
+                        }),
+                      });
+                    }}
+                  >
+                    <SelectTrigger aria-label="Codex web search backend">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {WEB_SEARCH_BACKEND_VALUES.map((entry) => (
+                        <SelectItem key={entry} value={entry}>
+                          {entry === "native" ? "Native Codex" : "Exa"}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <div className="text-xs text-muted-foreground">
+                    Native uses Responses `web_search`. Exa uses the local `webSearch` tool and requires Exa access.
+                  </div>
+                </div>
+
+                {codexUsesNativeWebSearch ? (
+                  <>
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-foreground">Web search mode</div>
+                      <Select
+                        value={codexWebSearchMode}
+                        onValueChange={(value) => {
+                          void updateWorkspaceDefaults(workspace.id, {
+                            providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                              webSearchMode: value as WebSearchModeValue,
+                            }),
+                          });
+                        }}
+                      >
+                        <SelectTrigger aria-label="Codex web search mode">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {WEB_SEARCH_MODE_VALUES.map((entry) => (
+                            <SelectItem key={entry} value={entry}>
+                              {entry}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <div className="text-xs text-muted-foreground">
+                        Cached uses indexed results only. Live allows live internet access. Domains should omit protocol.
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-foreground">Context size</div>
+                      <Select
+                        value={codexWebSearchContextSize}
+                        onValueChange={(value) => {
+                          void updateWorkspaceDefaults(workspace.id, {
+                            providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                              webSearch: {
+                                contextSize: value as WebSearchContextSizeValue,
+                              },
+                            }),
+                          });
+                        }}
+                      >
+                        <SelectTrigger aria-label="Codex web search context size">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {WEB_SEARCH_CONTEXT_SIZE_VALUES.map((entry) => (
+                            <SelectItem key={entry} value={entry}>
+                              {entry}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-sm font-medium text-foreground">Allowed domains</div>
+                      <Textarea
+                        aria-label="Codex allowed domains"
+                        className="min-h-24"
+                        placeholder={"example.com\nopenai.com"}
+                        value={codexWebSearchAllowedDomains}
+                        onChange={(event) => {
+                          const allowedDomains = event.target.value
+                            .split(/\r?\n/)
+                            .map((entry) => entry.trim())
+                            .filter(Boolean);
+                          void updateWorkspaceDefaults(workspace.id, {
+                            providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                              webSearch: {
+                                allowedDomains,
+                              },
+                            }),
+                          });
+                        }}
+                      />
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium text-foreground">Country</div>
+                        <Input
+                          aria-label="Codex web search country"
+                          autoComplete="off"
+                          value={codexWebSearchLocation.country ?? ""}
+                          onChange={(event) => {
+                            void updateWorkspaceDefaults(workspace.id, {
+                              providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                                webSearch: {
+                                  location: {
+                                    country: event.target.value,
+                                  },
+                                },
+                              }),
+                            });
+                          }}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium text-foreground">Region</div>
+                        <Input
+                          aria-label="Codex web search region"
+                          autoComplete="off"
+                          value={codexWebSearchLocation.region ?? ""}
+                          onChange={(event) => {
+                            void updateWorkspaceDefaults(workspace.id, {
+                              providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                                webSearch: {
+                                  location: {
+                                    region: event.target.value,
+                                  },
+                                },
+                              }),
+                            });
+                          }}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium text-foreground">City</div>
+                        <Input
+                          aria-label="Codex web search city"
+                          autoComplete="off"
+                          value={codexWebSearchLocation.city ?? ""}
+                          onChange={(event) => {
+                            void updateWorkspaceDefaults(workspace.id, {
+                              providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                                webSearch: {
+                                  location: {
+                                    city: event.target.value,
+                                  },
+                                },
+                              }),
+                            });
+                          }}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium text-foreground">Timezone</div>
+                        <Input
+                          aria-label="Codex web search timezone"
+                          autoComplete="off"
+                          placeholder="America/New_York"
+                          value={codexWebSearchLocation.timezone ?? ""}
+                          onChange={(event) => {
+                            void updateWorkspaceDefaults(workspace.id, {
+                              providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                                webSearch: {
+                                  location: {
+                                    timezone: event.target.value,
+                                  },
+                                },
+                              }),
+                            });
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-lg border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground">
+                    Exa mode keeps the local `webSearch` tool enabled. Native-only mode, context, domain, and location settings do not apply.
+                  </div>
+                )}
+              </div>
+            ) : null}
           </div>
         ))}
       </CardContent>

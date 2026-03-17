@@ -24,9 +24,16 @@ import { createWebSearchTool } from "./webSearch";
 import { createWriteTool } from "./write";
 import { filterToolsForRole } from "../server/agents/toolPolicy";
 import { getAgentRoleDefinition } from "../server/agents/roles";
+import { getCodexWebSearchBackendFromProviderOptions } from "../shared/openaiCompatibleOptions";
+
+function usesLegacyCodexWebSearch(ctx: ToolContext): boolean {
+  if (ctx.config.provider !== "codex-cli") return false;
+  return getCodexWebSearchBackendFromProviderOptions(ctx.config.providerOptions) === "exa";
+}
 
 export function createTools(ctx: ToolContext): Record<string, any> {
   const askTool = createAskTool(ctx);
+  const includeLegacyWebSearch = ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx);
   const baseTools = {
     bash: createBashTool(ctx),
     read: createReadTool(ctx),
@@ -34,7 +41,7 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     edit: createEditTool(ctx),
     glob: createGlobTool(ctx),
     grep: createGrepTool(ctx),
-    webSearch: createWebSearchTool(ctx),
+    ...(includeLegacyWebSearch ? { webSearch: createWebSearchTool(ctx) } : {}),
     webFetch: createWebFetchTool(ctx),
     ask: askTool,
     AskUserQuestion: askTool,

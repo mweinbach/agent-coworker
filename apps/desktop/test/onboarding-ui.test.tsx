@@ -13,6 +13,15 @@ function setupJsdom(): JsdomHarness {
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", {
     url: "http://localhost",
   });
+  class MockResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  const requestAnimationFrame = (callback: FrameRequestCallback) => {
+    callback(0);
+    return 0;
+  };
   const saved = {
     window: globalThis.window,
     document: globalThis.document,
@@ -20,6 +29,9 @@ function setupJsdom(): JsdomHarness {
     HTMLElement: globalThis.HTMLElement,
     Node: globalThis.Node,
     getComputedStyle: globalThis.getComputedStyle,
+    requestAnimationFrame: globalThis.requestAnimationFrame,
+    cancelAnimationFrame: globalThis.cancelAnimationFrame,
+    ResizeObserver: globalThis.ResizeObserver,
     actEnv: (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT,
   };
 
@@ -30,6 +42,9 @@ function setupJsdom(): JsdomHarness {
     HTMLElement: dom.window.HTMLElement,
     Node: dom.window.Node,
     getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+    requestAnimationFrame,
+    cancelAnimationFrame: () => {},
+    ResizeObserver: MockResizeObserver,
   });
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -42,6 +57,9 @@ function setupJsdom(): JsdomHarness {
       globalThis.HTMLElement = saved.HTMLElement;
       globalThis.Node = saved.Node;
       globalThis.getComputedStyle = saved.getComputedStyle;
+      globalThis.requestAnimationFrame = saved.requestAnimationFrame;
+      globalThis.cancelAnimationFrame = saved.cancelAnimationFrame;
+      globalThis.ResizeObserver = saved.ResizeObserver;
       (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = saved.actEnv;
       dom.window.close();
     },
@@ -115,7 +133,14 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
+const { DesktopOnboarding } = await import("../src/ui/onboarding/DesktopOnboarding");
 const { DeveloperPage } = await import("../src/ui/settings/pages/DeveloperPage");
+
+const defaultProviderActions = {
+  requestProviderCatalog: useAppStore.getState().requestProviderCatalog,
+  requestProviderAuthMethods: useAppStore.getState().requestProviderAuthMethods,
+  refreshProviderStatus: useAppStore.getState().refreshProviderStatus,
+};
 
 describe("DeveloperPage rerun onboarding button", () => {
   test("renders the 'Run onboarding again' button", async () => {
@@ -152,6 +177,49 @@ describe("DeveloperPage rerun onboarding button", () => {
 
       expect(container.textContent).toContain("Onboarding");
       expect(container.textContent).toContain("Run onboarding again");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  test("provider step only triggers the consolidated provider refresh", async () => {
+    const requestProviderCatalog = mock(async () => {});
+    const requestProviderAuthMethods = mock(async () => {});
+    const refreshProviderStatus = mock(async () => {});
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          onboardingVisible: true,
+          onboardingStep: "provider",
+          providerCatalog: [
+            { id: "openai", name: "OpenAI" },
+            { id: "codex-cli", name: "Codex CLI" },
+          ] as any,
+          providerConnected: [],
+          ...defaultProviderActions,
+          requestProviderCatalog,
+          requestProviderAuthMethods,
+          refreshProviderStatus,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(DesktopOnboarding));
+      });
+
+      expect(refreshProviderStatus).toHaveBeenCalledTimes(1);
+      expect(requestProviderCatalog).not.toHaveBeenCalled();
+      expect(requestProviderAuthMethods).not.toHaveBeenCalled();
 
       await act(async () => {
         root.unmount();

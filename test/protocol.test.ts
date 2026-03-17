@@ -1196,6 +1196,53 @@ describe("safeParseClientMessage", () => {
       }
     });
 
+    test("valid set_config accepts codex native web search provider options", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_config",
+          sessionId: "s1",
+          config: {
+            providerOptions: {
+              "codex-cli": {
+                reasoningEffort: "high",
+                webSearchBackend: "native",
+                webSearchMode: "live",
+                webSearch: {
+                  contextSize: "medium",
+                  allowedDomains: ["openai.com", "docs.example.com"],
+                  location: {
+                    country: "US",
+                    region: "NY",
+                    city: "New York",
+                    timezone: "America/New_York",
+                  },
+                },
+              },
+            },
+          },
+        }),
+      );
+
+      expect(msg.type).toBe("set_config");
+      if (msg.type === "set_config") {
+        expect(msg.config.providerOptions?.["codex-cli"]).toEqual({
+          reasoningEffort: "high",
+          webSearchBackend: "native",
+          webSearchMode: "live",
+          webSearch: {
+            contextSize: "medium",
+            allowedDomains: ["openai.com", "docs.example.com"],
+            location: {
+              country: "US",
+              region: "NY",
+              city: "New York",
+              timezone: "America/New_York",
+            },
+          },
+        });
+      }
+    });
+
     test("valid set_config accepts clearToolOutputOverflowChars", () => {
       const msg = expectOk(
         JSON.stringify({
@@ -1240,6 +1287,15 @@ describe("safeParseClientMessage", () => {
           JSON.stringify({ type: "set_config", sessionId: "s1", config: { clearToolOutputOverflowChars: "yes" } }),
         ),
       ).toBe("set_config config.clearToolOutputOverflowChars must be boolean");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { providerOptions: { "codex-cli": { webSearchBackend: "google" } } },
+          }),
+        ),
+      ).toBe("set_config config.providerOptions.codex-cli.webSearchBackend must be one of native, exa");
       expect(
         expectErr(
           JSON.stringify({
@@ -1315,6 +1371,42 @@ describe("safeParseClientMessage", () => {
           }),
         ),
       ).toBe("set_config config.providerOptions.codex-cli.textVerbosity must be one of low, medium, high");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { providerOptions: { "codex-cli": { webSearchMode: "internet" } } },
+          }),
+        ),
+      ).toBe("set_config config.providerOptions.codex-cli.webSearchMode must be one of disabled, cached, live");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { providerOptions: { "codex-cli": { webSearch: { unsupported: true } } } },
+          }),
+        ),
+      ).toBe("set_config config.providerOptions.codex-cli.webSearch only supports contextSize, allowedDomains, and location");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { providerOptions: { "codex-cli": { webSearch: { allowedDomains: ["", "openai.com"] } } } },
+          }),
+        ),
+      ).toBe("set_config config.providerOptions.codex-cli.webSearch.allowedDomains must be an array of non-empty strings");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { providerOptions: { "codex-cli": { webSearch: { location: { country: "" } } } } },
+          }),
+        ),
+      ).toBe("set_config config.providerOptions.codex-cli.webSearch.location.country must be a non-empty string");
     });
 
     test("set_config accepts userName with non-empty string", () => {

@@ -278,6 +278,7 @@ export function reduceNonProviderEvent(evt: ServerEvent, deps: SyncEventReducerD
       return true;
 
     case "model_stream_raw":
+      deps.modelStreamLifecycle.handleRawEvent(evt);
       return true;
 
     case "log": {

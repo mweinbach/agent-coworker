@@ -283,6 +283,7 @@ const FeedRow = memo(function FeedRow(props: {
         <MessageContent>
           {item.role === "assistant" ? (
             <MessageResponse
+              citationAnnotations={item.annotations}
               citationUrlsByIndex={props.citationUrlsByIndex}
               normalizeDisplayCitations
             >

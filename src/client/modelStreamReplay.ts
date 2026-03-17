@@ -7,7 +7,12 @@ import { mapPiEventToRawParts } from "../runtime/piStreamParts";
 import { normalizeModelStreamPart } from "../server/modelStream";
 import type { ServerEvent } from "../server/protocol";
 
-import { mapModelStreamChunk, type ModelStreamChunkEvent, type ModelStreamUpdate } from "./modelStream";
+import {
+  mapModelStreamChunk,
+  mapModelStreamRawEvent,
+  type ModelStreamChunkEvent,
+  type ModelStreamUpdate,
+} from "./modelStream";
 
 export type ModelStreamRawEvent = Extract<ServerEvent, { type: "model_stream_raw" }>;
 
@@ -51,6 +56,7 @@ export function replayModelStreamRawEvent(
   runtime: ModelStreamReplayRuntime,
   evt: ModelStreamRawEvent,
 ): ModelStreamUpdate[] {
+  const directUpdates = mapModelStreamRawEvent(evt);
   const projector = getOrCreateProjector(runtime, evt);
   const piEvents: Array<Record<string, unknown>> = [];
 
@@ -64,7 +70,7 @@ export function replayModelStreamRawEvent(
     return [];
   }
 
-  const updates: ModelStreamUpdate[] = [];
+  const updates: ModelStreamUpdate[] = [...directUpdates];
   let derivedIndex = 0;
   for (const piEvent of piEvents) {
     for (const rawPart of mapPiEventToRawParts(piEvent, evt.provider, true)) {
@@ -89,7 +95,7 @@ export function replayModelStreamRawEvent(
     }
   }
 
-  if (updates.length > 0) {
+  if (updates.some((update) => update.kind !== "tool_input_start" && update.kind !== "tool_result")) {
     runtime.rawBackedTurns.add(evt.turnId);
   }
 

@@ -2,9 +2,17 @@ import { parse as partialParse } from "partial-json";
 
 import type { PiModel } from "./piRuntimeOptions";
 
+export type ResponsesTextAnnotation = Record<string, unknown>;
+
 type AssistantContentBlock =
   | { type: "thinking"; thinking?: string; thinkingSignature?: string }
-  | { type: "text"; text: string; textSignature?: string; phase?: string }
+  | {
+      type: "text";
+      text: string;
+      textSignature?: string;
+      phase?: string;
+      annotations?: ResponsesTextAnnotation[];
+    }
   | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown>; partialJson?: string };
 
 type ResponsesProjectorOutput = Record<string, any> & {
@@ -254,11 +262,23 @@ export function projectResponsesStreamEvent(
       });
       projector.currentBlock = null;
     } else if (item.type === "message" && projector.currentBlock?.type === "text") {
+      const annotations = Array.isArray(item.content)
+        ? item.content.flatMap((content: Record<string, unknown>) => {
+            if (content.type !== "output_text" || !Array.isArray(content.annotations)) {
+              return [];
+            }
+            return content.annotations.filter(
+              (annotation): annotation is ResponsesTextAnnotation =>
+                typeof annotation === "object" && annotation !== null && !Array.isArray(annotation),
+            );
+          })
+        : [];
       projector.currentBlock.text = item.content
         .map((content: { type: string; text?: string; refusal?: string }) =>
           content.type === "output_text" ? content.text : content.refusal)
         .join("");
       projector.currentBlock.textSignature = item.id;
+      projector.currentBlock.annotations = annotations;
       if (typeof item.phase === "string") {
         projector.currentBlock.phase = item.phase;
       }
@@ -266,6 +286,7 @@ export function projectResponsesStreamEvent(
         type: "text_end",
         contentIndex: blockIndex(),
         content: projector.currentBlock.text,
+        ...(annotations.length > 0 ? { annotations } : {}),
         partial: output,
         ...(typeof projector.currentBlock.phase === "string" ? { phase: projector.currentBlock.phase } : {}),
       });

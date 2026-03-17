@@ -745,6 +745,290 @@ describe("desktop transcript feed mapping", () => {
     expect(assistant[0]?.text).toBe("final answer");
   });
 
+  test("attaches native annotations to streamed assistant messages", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:00.000Z",
+        threadId: "thread-1",
+        direction: "client",
+        payload: { type: "user_message", text: "What changed?" },
+      },
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-annotations",
+          index: 0,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          partType: "text_delta",
+          part: { id: "txt_1", text: "Answer" },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-annotations",
+          index: 1,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          partType: "text_end",
+          part: {
+            id: "txt_1",
+            annotations: [
+              {
+                type: "url_citation",
+                start_index: 0,
+                end_index: 6,
+                url: "https://example.com/source",
+              },
+            ],
+          },
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    const assistant = feed.find((item) => item.kind === "message" && item.role === "assistant");
+    expect(assistant?.kind).toBe("message");
+    if (!assistant || assistant.kind !== "message") throw new Error("Expected assistant message");
+    expect(assistant.text).toBe("Answer");
+    expect(assistant.annotations).toEqual([
+      {
+        type: "url_citation",
+        start_index: 0,
+        end_index: 6,
+        url: "https://example.com/source",
+      },
+    ]);
+  });
+
+  test("maps native web search raw events into visible tool feed activity", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:00.000Z",
+        threadId: "thread-1",
+        direction: "client",
+        payload: { type: "user_message", text: "Search the web" },
+      },
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-native-web",
+          index: 0,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_item.added",
+            item: {
+              id: "ws_1",
+              type: "web_search_call",
+              action: {
+                type: "search",
+                query: "latest OpenAI",
+              },
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-native-web",
+          index: 1,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_item.done",
+            item: {
+              id: "ws_1",
+              type: "web_search_call",
+              status: "completed",
+              action: {
+                type: "search",
+                query: "latest OpenAI",
+                sources: [{ url: "https://example.com/news" }],
+              },
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: { type: "assistant_message", text: "Here is the latest." },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    const tool = feed.find((item) => item.kind === "tool");
+    expect(tool?.kind).toBe("tool");
+    if (!tool || tool.kind !== "tool") throw new Error("Expected tool item");
+    expect(tool.name).toBe("nativeWebSearch");
+    expect(tool.state).toBe("output-available");
+    expect(tool.result).toEqual({
+      status: "completed",
+      action: {
+        type: "search",
+        query: "latest OpenAI",
+        sources: [{ url: "https://example.com/news" }],
+      },
+      sources: [{ url: "https://example.com/news" }],
+      raw: {
+        id: "ws_1",
+        type: "web_search_call",
+        status: "completed",
+        action: {
+          type: "search",
+          query: "latest OpenAI",
+          sources: [{ url: "https://example.com/news" }],
+        },
+      },
+    });
+  });
+
+  test("keeps separate feed cards for distinct native web search calls", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:00.000Z",
+        threadId: "thread-1",
+        direction: "client",
+        payload: { type: "user_message", text: "Research it" },
+      },
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-native-web",
+          index: 0,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_item.added",
+            item: {
+              id: "ws_1",
+              type: "web_search_call",
+              action: { type: "search", query: "latest OpenAI" },
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-native-web",
+          index: 1,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_item.done",
+            item: {
+              id: "ws_1",
+              type: "web_search_call",
+              status: "completed",
+              action: { type: "search", query: "latest OpenAI" },
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-native-web",
+          index: 2,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_item.added",
+            item: {
+              id: "ws_2",
+              type: "web_search_call",
+              action: { type: "open_page", url: "https://example.com/openai" },
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:04.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-native-web",
+          index: 3,
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          format: "openai-responses-v1",
+          normalizerVersion: 1,
+          event: {
+            type: "response.output_item.done",
+            item: {
+              id: "ws_2",
+              type: "web_search_call",
+              status: "completed",
+              action: { type: "open_page", url: "https://example.com/openai" },
+            },
+          },
+        },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    const tools = feed.filter((item) => item.kind === "tool");
+
+    expect(tools).toHaveLength(2);
+    expect(tools.every((item) => item.kind === "tool" && item.name === "nativeWebSearch")).toBeTrue();
+    if (tools[0]?.kind !== "tool" || tools[1]?.kind !== "tool") {
+      throw new Error("Expected tool items");
+    }
+    expect(tools[0].result).toMatchObject({
+      status: "completed",
+      action: { type: "search", query: "latest OpenAI" },
+    });
+    expect(tools[1].result).toMatchObject({
+      status: "completed",
+      action: { type: "open_page", url: "https://example.com/openai" },
+    });
+  });
+
   test("skips a merged assistant_message when streamed multi-step assistant text already exists", () => {
     const transcript: TranscriptEvent[] = [
       {

@@ -36,6 +36,14 @@ export function asFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+export function asNonEmptyStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const next = value
+    .map((entry) => asNonEmptyString(entry))
+    .filter((entry): entry is string => !!entry);
+  return next.length > 0 ? next : undefined;
+}
+
 export function pickKnownPiModel(provider: string, modelId: string): PiModel | null {
   const direct = getPiModel(provider as any, modelId as any) as unknown;
   const directRecord = asRecord(direct);
@@ -100,6 +108,36 @@ export function buildPiStreamOptions(
     if (textVerbosity) options.textVerbosity = textVerbosity;
     const temperature = asFiniteNumber(providerSection.temperature);
     if (temperature !== undefined) options.temperature = temperature;
+  }
+
+  if (params.config.provider === "codex-cli") {
+    const webSearchBackend = asNonEmptyString(providerSection.webSearchBackend);
+    if (webSearchBackend) options.webSearchBackend = webSearchBackend;
+
+    const webSearchMode = asNonEmptyString(providerSection.webSearchMode);
+    if (webSearchMode) options.webSearchMode = webSearchMode;
+
+    const webSearch = asRecord(providerSection.webSearch);
+    const contextSize = asNonEmptyString(webSearch?.contextSize);
+    if (contextSize) options.webSearchContextSize = contextSize;
+
+    const allowedDomains = asNonEmptyStringArray(webSearch?.allowedDomains);
+    if (allowedDomains) {
+      options.webSearchAllowedDomains = allowedDomains;
+    }
+
+    const location = asRecord(webSearch?.location);
+    if (location) {
+      const webSearchLocation = {
+        ...(asNonEmptyString(location.country) ? { country: asNonEmptyString(location.country)! } : {}),
+        ...(asNonEmptyString(location.region) ? { region: asNonEmptyString(location.region)! } : {}),
+        ...(asNonEmptyString(location.city) ? { city: asNonEmptyString(location.city)! } : {}),
+        ...(asNonEmptyString(location.timezone) ? { timezone: asNonEmptyString(location.timezone)! } : {}),
+      };
+      if (Object.keys(webSearchLocation).length > 0) {
+        options.webSearchLocation = webSearchLocation;
+      }
+    }
   }
 
   if (params.config.provider === "anthropic") {

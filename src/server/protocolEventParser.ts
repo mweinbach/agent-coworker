@@ -1,6 +1,9 @@
 import { z } from "zod";
 
 import {
+  CODEX_WEB_SEARCH_BACKEND_VALUES,
+  CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
+  CODEX_WEB_SEARCH_MODE_VALUES,
   OPENAI_REASONING_EFFORT_VALUES,
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
@@ -31,11 +34,27 @@ const openAiCompatibleProviderOptionsSchema = z.object({
   reasoningEffort: z.enum(OPENAI_REASONING_EFFORT_VALUES).optional(),
   reasoningSummary: z.enum(OPENAI_REASONING_SUMMARY_VALUES).optional(),
   textVerbosity: z.enum(OPENAI_TEXT_VERBOSITY_VALUES).optional(),
-}).passthrough();
+}).strict();
+const codexWebSearchLocationSchema = z.object({
+  country: z.string().trim().min(1).optional(),
+  region: z.string().trim().min(1).optional(),
+  city: z.string().trim().min(1).optional(),
+  timezone: z.string().trim().min(1).optional(),
+}).strict();
+const codexWebSearchSchema = z.object({
+  contextSize: z.enum(CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES).optional(),
+  allowedDomains: z.array(z.string().trim().min(1)).optional(),
+  location: codexWebSearchLocationSchema.optional(),
+}).strict();
+const codexCliProviderOptionsSchema = openAiCompatibleProviderOptionsSchema.extend({
+  webSearchBackend: z.enum(CODEX_WEB_SEARCH_BACKEND_VALUES).optional(),
+  webSearchMode: z.enum(CODEX_WEB_SEARCH_MODE_VALUES).optional(),
+  webSearch: codexWebSearchSchema.optional(),
+}).strict();
 const editableOpenAiProviderOptionsByProviderSchema = z.object({
   openai: openAiCompatibleProviderOptionsSchema.optional(),
-  "codex-cli": openAiCompatibleProviderOptionsSchema.optional(),
-}).passthrough();
+  "codex-cli": codexCliProviderOptionsSchema.optional(),
+}).strict();
 const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
 
 export type ServerEventParseErrorReason = "invalid_json" | "invalid_envelope" | "unknown_type" | "invalid_event";

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { mapModelStreamChunk } from "../apps/TUI/context/modelStream";
+import { mapModelStreamChunk, mapModelStreamRawEvent } from "../apps/TUI/context/modelStream";
 
 describe("TUI model stream mapper", () => {
   const base = {
@@ -13,6 +13,20 @@ describe("TUI model stream mapper", () => {
 
   function chunk(partType: any, part: Record<string, unknown>, index = 0) {
     return { ...base, index, partType, part };
+  }
+
+  function raw(event: Record<string, unknown>, index = 0) {
+    return {
+      type: "model_stream_raw" as const,
+      sessionId: "s1",
+      turnId: "t1",
+      index,
+      provider: "codex-cli" as const,
+      model: "gpt-5.4",
+      format: "openai-responses-v1" as const,
+      normalizerVersion: 1,
+      event,
+    };
   }
 
   test("maps turn boundaries and step parts", () => {
@@ -317,5 +331,69 @@ describe("TUI model stream mapper", () => {
       partType: "tool_input_delta",
       payload: { id: "tool_1" },
     });
+  });
+
+  test("maps native web search raw events into tool activity updates", () => {
+    expect(mapModelStreamRawEvent(raw({
+      type: "response.output_item.added",
+      item: {
+        id: "ws_tui",
+        type: "web_search_call",
+        action: {
+          type: "search",
+          query: "latest openai news",
+        },
+      },
+    }))).toEqual([{
+      kind: "tool_input_start",
+      turnId: "t1",
+      key: "ws_tui",
+      name: "nativeWebSearch",
+      args: {
+        type: "search",
+        query: "latest openai news",
+      },
+    }]);
+
+    expect(mapModelStreamRawEvent(raw({
+      type: "response.output_item.done",
+      item: {
+        id: "ws_tui",
+        type: "web_search_call",
+        status: "completed",
+        action: {
+          type: "find_in_page",
+          url: "https://example.com",
+          pattern: "GPT-5",
+          sources: [{ url: "https://example.com" }],
+        },
+      },
+    }, 1))).toEqual([{
+      kind: "tool_result",
+      turnId: "t1",
+      key: "ws_tui",
+      name: "nativeWebSearch",
+      result: {
+        status: "completed",
+        action: {
+          type: "find_in_page",
+          url: "https://example.com",
+          pattern: "GPT-5",
+          sources: [{ url: "https://example.com" }],
+        },
+        sources: [{ url: "https://example.com" }],
+        raw: {
+          id: "ws_tui",
+          type: "web_search_call",
+          status: "completed",
+          action: {
+            type: "find_in_page",
+            url: "https://example.com",
+            pattern: "GPT-5",
+            sources: [{ url: "https://example.com" }],
+          },
+        },
+      },
+    }]);
   });
 });

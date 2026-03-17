@@ -130,10 +130,11 @@ const streamPartNormalizers: Record<string, (ctx: PartNormalizerContext) => Norm
       providerMetadata,
       ...(asString(parsedRaw.phase) ? { phase: asString(parsedRaw.phase) } : {}),
     }),
-  "text-end": ({ emit, id, parsedRaw, providerMetadata }) =>
+  "text-end": ({ emit, id, parsedRaw, providerMetadata, san }) =>
     emit("text_end", {
       id: id(),
       providerMetadata,
+      ...(Array.isArray(parsedRaw.annotations) ? { annotations: san(parsedRaw.annotations) } : {}),
       ...(asString(parsedRaw.phase) ? { phase: asString(parsedRaw.phase) } : {}),
     }),
   "reasoning-start": ({ emit, id, mode, providerMetadata }) =>

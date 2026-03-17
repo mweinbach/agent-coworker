@@ -3,6 +3,9 @@ import { z } from "zod";
 import { parseMCPServerConfig, parseMCPServersDocument } from "../mcp/configRegistry";
 import { resolveProviderAuthMethod } from "../providers/authRegistry";
 import {
+  CODEX_WEB_SEARCH_BACKEND_VALUES,
+  CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
+  CODEX_WEB_SEARCH_MODE_VALUES,
   OPENAI_REASONING_EFFORT_VALUES,
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
@@ -87,9 +90,28 @@ const openAiCompatibleProviderOptionsSchema = z.object({
   textVerbosity: z.enum(OPENAI_TEXT_VERBOSITY_VALUES).optional(),
 }).strict();
 
+const codexWebSearchLocationSchema = z.object({
+  country: z.string().trim().min(1).optional(),
+  region: z.string().trim().min(1).optional(),
+  city: z.string().trim().min(1).optional(),
+  timezone: z.string().trim().min(1).optional(),
+}).strict();
+
+const codexWebSearchSchema = z.object({
+  contextSize: z.enum(CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES).optional(),
+  allowedDomains: z.array(z.string().trim().min(1)).optional(),
+  location: codexWebSearchLocationSchema.optional(),
+}).strict();
+
+const codexCliProviderOptionsSchema = openAiCompatibleProviderOptionsSchema.extend({
+  webSearchBackend: z.enum(CODEX_WEB_SEARCH_BACKEND_VALUES).optional(),
+  webSearchMode: z.enum(CODEX_WEB_SEARCH_MODE_VALUES).optional(),
+  webSearch: codexWebSearchSchema.optional(),
+}).strict();
+
 const editableOpenAiProviderOptionsByProviderSchema = z.object({
   openai: openAiCompatibleProviderOptionsSchema.optional(),
-  "codex-cli": openAiCompatibleProviderOptionsSchema.optional(),
+  "codex-cli": codexCliProviderOptionsSchema.optional(),
 }).strict();
 
 const setConfigPayloadSchema = z.object({
@@ -184,12 +206,21 @@ function validateProviderAuthTarget(
 
 function setConfigIssueMessage(issue: z.ZodIssue): string {
   const path = issue.path.map((part) => String(part));
-  const [field, provider, option] = path;
+  const [field, provider, option, nestedOption, nestedField] = path;
 
   if (field === "providerOptions") {
     if (issue.code === "unrecognized_keys") {
       if (provider === undefined) {
         return "set_config config.providerOptions only supports openai and codex-cli";
+      }
+      if (provider === "codex-cli" && option === "webSearch" && nestedOption === "location") {
+        return "set_config config.providerOptions.codex-cli.webSearch.location only supports country, region, city, and timezone";
+      }
+      if (provider === "codex-cli" && option === "webSearch") {
+        return "set_config config.providerOptions.codex-cli.webSearch only supports contextSize, allowedDomains, and location";
+      }
+      if (provider === "codex-cli") {
+        return "set_config config.providerOptions.codex-cli only supports reasoningEffort, reasoningSummary, textVerbosity, webSearchBackend, webSearchMode, and webSearch";
       }
       return `set_config config.providerOptions.${provider} only supports reasoningEffort, reasoningSummary, and textVerbosity`;
     }
@@ -200,6 +231,33 @@ function setConfigIssueMessage(issue: z.ZodIssue): string {
 
     if (!option) {
       return `set_config config.providerOptions.${provider} must be an object`;
+    }
+
+    if (option === "webSearchBackend") {
+      return `set_config config.providerOptions.${provider}.webSearchBackend must be one of ${CODEX_WEB_SEARCH_BACKEND_VALUES.join(", ")}`;
+    }
+
+    if (option === "webSearchMode") {
+      return `set_config config.providerOptions.${provider}.webSearchMode must be one of ${CODEX_WEB_SEARCH_MODE_VALUES.join(", ")}`;
+    }
+
+    if (option === "webSearch") {
+      if (!nestedOption) {
+        return `set_config config.providerOptions.${provider}.webSearch must be an object`;
+      }
+      if (nestedOption === "contextSize") {
+        return `set_config config.providerOptions.${provider}.webSearch.contextSize must be one of ${CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES.join(", ")}`;
+      }
+      if (nestedOption === "allowedDomains") {
+        return `set_config config.providerOptions.${provider}.webSearch.allowedDomains must be an array of non-empty strings`;
+      }
+      if (nestedOption === "location" && !nestedField) {
+        return `set_config config.providerOptions.${provider}.webSearch.location must be an object`;
+      }
+      if (nestedOption === "location") {
+        return `set_config config.providerOptions.${provider}.webSearch.location.${nestedField} must be a non-empty string`;
+      }
+      return `set_config config.providerOptions.${provider}.webSearch must be an object`;
     }
 
     if (option === "reasoningEffort") {

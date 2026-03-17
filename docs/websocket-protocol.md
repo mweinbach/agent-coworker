@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.19`
+- Current protocol version: `7.21`
 
 ## Table of Contents
 
@@ -48,6 +48,15 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.21`:
+
+- `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support `webSearchBackend: "native" | "exa"` so Codex workspaces can deliberately choose between built-in Responses web search and the local Exa tool. Native is the default when the field is omitted.
+
+Changes in `7.20`:
+
+- `set_config.config.providerOptions.codex-cli` and `session_config.config.providerOptions.codex-cli` now support native web-search fields: `webSearchMode`, `webSearch.contextSize`, `webSearch.allowedDomains`, and `webSearch.location`.
+- `model_stream_raw` may now carry OpenAI Responses `web_search_call` items so clients can synthesize native web-search activity alongside normalized stream chunks.
 
 Changes in `7.19`:
 
@@ -1887,7 +1896,18 @@ Update runtime configuration values.
         "textVerbosity": "medium"
       },
       "codex-cli": {
-        "reasoningEffort": "xhigh"
+        "reasoningEffort": "xhigh",
+        "webSearchBackend": "native",
+        "webSearchMode": "live",
+        "webSearch": {
+          "contextSize": "high",
+          "allowedDomains": ["openai.com", "developer.mozilla.org"],
+          "location": {
+            "country": "US",
+            "city": "New York",
+            "timezone": "America/New_York"
+          }
+        }
       }
     }
   }
@@ -1916,6 +1936,14 @@ Update runtime configuration values.
 | `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | Codex CLI reasoning effort |
 | `config.providerOptions.codex-cli.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | No | Codex CLI reasoning summary |
 | `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | No | Codex CLI verbosity |
+| `config.providerOptions.codex-cli.webSearchBackend` | `"native" \| "exa"` | No | Selects Codex built-in web search vs the local Exa `webSearch` tool. Defaults to `"native"` when omitted |
+| `config.providerOptions.codex-cli.webSearchMode` | `"disabled" \| "cached" \| "live"` | No | Codex native web-search mode |
+| `config.providerOptions.codex-cli.webSearch.contextSize` | `"low" \| "medium" \| "high"` | No | Codex native web-search context size |
+| `config.providerOptions.codex-cli.webSearch.allowedDomains` | `string[]` | No | Optional Codex native web-search domain allowlist |
+| `config.providerOptions.codex-cli.webSearch.location.country` | `string` | No | Approximate country hint for Codex native web search |
+| `config.providerOptions.codex-cli.webSearch.location.region` | `string` | No | Approximate region/state hint for Codex native web search |
+| `config.providerOptions.codex-cli.webSearch.location.city` | `string` | No | Approximate city hint for Codex native web search |
+| `config.providerOptions.codex-cli.webSearch.location.timezone` | `string` | No | Approximate timezone hint for Codex native web search |
 | `config.userProfile` | `object` | No | User profile patch merged into persisted workspace config. Empty-string fields clear the corresponding prompt context |
 | `config.userName` | `string` | No | User name used for prompt injection. An empty string clears it |
 | `config.userProfile.instructions` | `string` | No | Custom behavioral instructions the agent should follow. An empty string clears it |
@@ -2530,6 +2558,8 @@ Provider-native raw model stream event. Emitted before any derived `model_stream
 | `format` | `"openai-responses-v1"` | Raw event envelope format |
 | `normalizerVersion` | `number` | Version identifier for the client/server raw-event normalizer |
 | `event` | `object` | Provider-native raw event payload. If a non-object payload is received, it is normalized to `{ "value": <original> }` |
+
+For OpenAI Responses providers, `event.item.type` may be `web_search_call`. Clients may surface these raw events as synthetic native web-search activity (for example `nativeWebSearch`) without treating them as executable local function tools.
 
 ---
 
@@ -3389,7 +3419,17 @@ Current runtime config. Sent on connection and after `set_config`.
       "codex-cli": {
         "reasoningEffort": "high",
         "reasoningSummary": "detailed",
-        "textVerbosity": "medium"
+        "textVerbosity": "medium",
+        "webSearchBackend": "native",
+        "webSearchMode": "live",
+        "webSearch": {
+          "contextSize": "medium",
+          "allowedDomains": ["openai.com"],
+          "location": {
+            "country": "US",
+            "timezone": "America/New_York"
+          }
+        }
       }
     }
   }
@@ -3423,6 +3463,14 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.providerOptions.codex-cli.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | Current editable Codex CLI reasoning effort |
 | `config.providerOptions.codex-cli.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | Current editable Codex CLI reasoning summary |
 | `config.providerOptions.codex-cli.textVerbosity` | `"low" \| "medium" \| "high"` | Current editable Codex CLI verbosity |
+| `config.providerOptions.codex-cli.webSearchBackend` | `"native" \| "exa"` | Current Codex web search backend. Omitted means the workspace is using the default `"native"` backend |
+| `config.providerOptions.codex-cli.webSearchMode` | `"disabled" \| "cached" \| "live"` | Current editable Codex native web-search mode |
+| `config.providerOptions.codex-cli.webSearch.contextSize` | `"low" \| "medium" \| "high"` | Current editable Codex native web-search context size |
+| `config.providerOptions.codex-cli.webSearch.allowedDomains` | `string[]` | Current editable Codex native web-search domain allowlist |
+| `config.providerOptions.codex-cli.webSearch.location.country` | `string` | Current editable Codex native web-search country |
+| `config.providerOptions.codex-cli.webSearch.location.region` | `string` | Current editable Codex native web-search region/state |
+| `config.providerOptions.codex-cli.webSearch.location.city` | `string` | Current editable Codex native web-search city |
+| `config.providerOptions.codex-cli.webSearch.location.timezone` | `string` | Current editable Codex native web-search timezone |
 
 ---
 

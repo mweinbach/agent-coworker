@@ -1,50 +1,53 @@
-import { z } from "zod";
+import {
+  CODEX_WEB_SEARCH_BACKEND_VALUES,
+  CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
+  CODEX_WEB_SEARCH_MODE_VALUES,
+  getCodexWebSearchBackendFromProviderOptions,
+  mergeEditableOpenAiCompatibleProviderOptions,
+  OPENAI_COMPATIBLE_PROVIDER_NAMES,
+  OPENAI_REASONING_EFFORT_VALUES,
+  OPENAI_REASONING_SUMMARY_VALUES,
+  OPENAI_TEXT_VERBOSITY_VALUES,
+  pickEditableOpenAiCompatibleProviderOptions,
+  type CodexCliProviderOptions as SharedCodexCliProviderOptions,
+  type CodexWebSearchBackend,
+  type CodexWebSearchContextSize,
+  type CodexWebSearchLocation,
+  type CodexWebSearchMode,
+  type OpenAiCompatibleProviderName as SharedOpenAiCompatibleProviderName,
+  type OpenAiCompatibleProviderOptions as SharedOpenAiCompatibleProviderOptions,
+  type OpenAiCompatibleProviderOptionsByProvider,
+  type OpenAiReasoningEffort,
+  type OpenAiReasoningSummary,
+  type OpenAiTextVerbosity,
+} from "../../../../src/shared/openaiCompatibleOptions";
 
-export const OPENAI_COMPATIBLE_PROVIDER_NAMES = [
-  "openai",
-  "codex-cli",
-] as const;
+export const REASONING_EFFORT_VALUES = OPENAI_REASONING_EFFORT_VALUES;
+export const REASONING_SUMMARY_VALUES = OPENAI_REASONING_SUMMARY_VALUES;
+export const TEXT_VERBOSITY_VALUES = OPENAI_TEXT_VERBOSITY_VALUES;
+export const WEB_SEARCH_BACKEND_VALUES = CODEX_WEB_SEARCH_BACKEND_VALUES;
+export const WEB_SEARCH_MODE_VALUES = CODEX_WEB_SEARCH_MODE_VALUES;
+export const WEB_SEARCH_CONTEXT_SIZE_VALUES = CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES;
+export const DEFAULT_CODEX_WEB_SEARCH_BACKEND: CodexWebSearchBackend = "native";
+export const DEFAULT_CODEX_WEB_SEARCH_MODE: CodexWebSearchMode = "live";
 
-export type OpenAICompatibleProviderName = (typeof OPENAI_COMPATIBLE_PROVIDER_NAMES)[number];
+export type OpenAICompatibleProviderName = SharedOpenAiCompatibleProviderName;
+export type ReasoningEffortValue = OpenAiReasoningEffort;
+export type ReasoningSummaryValue = OpenAiReasoningSummary;
+export type TextVerbosityValue = OpenAiTextVerbosity;
+export type WebSearchBackendValue = CodexWebSearchBackend;
+export type WebSearchModeValue = CodexWebSearchMode;
+export type WebSearchContextSizeValue = CodexWebSearchContextSize;
+export type WebSearchLocationValue = CodexWebSearchLocation;
 
-export const REASONING_EFFORT_VALUES = [
-  "none",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-] as const;
+export type OpenAICompatibleProviderOptions = SharedOpenAiCompatibleProviderOptions;
+export type CodexCliProviderOptions = SharedCodexCliProviderOptions;
+export type WorkspaceProviderOptions = OpenAiCompatibleProviderOptionsByProvider;
 
-export type ReasoningEffortValue = (typeof REASONING_EFFORT_VALUES)[number];
-
-export const REASONING_SUMMARY_VALUES = [
-  "auto",
-  "concise",
-  "detailed",
-] as const;
-
-export type ReasoningSummaryValue = (typeof REASONING_SUMMARY_VALUES)[number];
-
-export const TEXT_VERBOSITY_VALUES = [
-  "low",
-  "medium",
-  "high",
-] as const;
-
-export type TextVerbosityValue = (typeof TEXT_VERBOSITY_VALUES)[number];
-
-export type OpenAICompatibleProviderOptions = {
-  reasoningEffort?: ReasoningEffortValue;
-  reasoningSummary?: ReasoningSummaryValue;
-  textVerbosity?: TextVerbosityValue;
-};
-
-export type WorkspaceProviderOptions = Partial<Record<OpenAICompatibleProviderName, OpenAICompatibleProviderOptions>>;
-
-export const DEFAULT_WORKSPACE_PROVIDER_OPTIONS: Record<
-  OpenAICompatibleProviderName,
-  Required<OpenAICompatibleProviderOptions>
-> = {
+export const DEFAULT_WORKSPACE_PROVIDER_OPTIONS: {
+  openai: Required<OpenAICompatibleProviderOptions>;
+  "codex-cli": Required<OpenAICompatibleProviderOptions>;
+} = {
   openai: {
     reasoningEffort: "high",
     reasoningSummary: "detailed",
@@ -57,84 +60,86 @@ export const DEFAULT_WORKSPACE_PROVIDER_OPTIONS: Record<
   },
 };
 
-export const reasoningEffortSchema = z.enum(REASONING_EFFORT_VALUES);
-export const reasoningSummarySchema = z.enum(REASONING_SUMMARY_VALUES);
-export const textVerbositySchema = z.enum(TEXT_VERBOSITY_VALUES);
-
-const providerOptionsSchema = z.object({
-  reasoningEffort: reasoningEffortSchema.optional(),
-  reasoningSummary: reasoningSummarySchema.optional(),
-  textVerbosity: textVerbositySchema.optional(),
-});
-
-export const workspaceProviderOptionsSchema = z.object({
-  openai: providerOptionsSchema.optional(),
-  "codex-cli": providerOptionsSchema.optional(),
-});
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function cleanProviderOptions(
-  value: OpenAICompatibleProviderOptions | undefined
-): OpenAICompatibleProviderOptions | undefined {
-  if (!value) return undefined;
-  const next: OpenAICompatibleProviderOptions = {};
-  if (value.reasoningEffort) next.reasoningEffort = value.reasoningEffort;
-  if (value.reasoningSummary) next.reasoningSummary = value.reasoningSummary;
-  if (value.textVerbosity) next.textVerbosity = value.textVerbosity;
-  return Object.keys(next).length > 0 ? next : undefined;
+function cloneLocation(location?: CodexWebSearchLocation): CodexWebSearchLocation | undefined {
+  if (!location) return undefined;
+  return {
+    ...(location.country ? { country: location.country } : {}),
+    ...(location.region ? { region: location.region } : {}),
+    ...(location.city ? { city: location.city } : {}),
+    ...(location.timezone ? { timezone: location.timezone } : {}),
+  };
 }
 
 export function normalizeWorkspaceProviderOptions(value: unknown): WorkspaceProviderOptions | undefined {
-  if (!isRecord(value)) return undefined;
-  const parsed = workspaceProviderOptionsSchema.safeParse(value);
-  if (!parsed.success) return undefined;
-
-  const next: WorkspaceProviderOptions = {};
-  for (const provider of OPENAI_COMPATIBLE_PROVIDER_NAMES) {
-    const cleaned = cleanProviderOptions(parsed.data[provider]);
-    if (cleaned) next[provider] = cleaned;
-  }
-
-  return Object.keys(next).length > 0 ? next : undefined;
+  return pickEditableOpenAiCompatibleProviderOptions(value) as WorkspaceProviderOptions | undefined;
 }
 
 export function mergeWorkspaceProviderOptions(
   base?: WorkspaceProviderOptions,
-  patch?: WorkspaceProviderOptions
+  patch?: WorkspaceProviderOptions,
 ): WorkspaceProviderOptions | undefined {
-  const next: WorkspaceProviderOptions = {};
-
-  for (const provider of OPENAI_COMPATIBLE_PROVIDER_NAMES) {
-    const merged = cleanProviderOptions({
-      ...(base?.[provider] ?? {}),
-      ...(patch?.[provider] ?? {}),
-    });
-    if (merged) next[provider] = merged;
-  }
-
-  return Object.keys(next).length > 0 ? next : undefined;
+  const merged = mergeEditableOpenAiCompatibleProviderOptions(base, patch);
+  return normalizeWorkspaceProviderOptions(merged);
 }
 
 export function getWorkspaceReasoningEffort(
   options: WorkspaceProviderOptions | undefined,
-  provider: OpenAICompatibleProviderName
+  provider: OpenAICompatibleProviderName,
 ): ReasoningEffortValue {
   return options?.[provider]?.reasoningEffort ?? DEFAULT_WORKSPACE_PROVIDER_OPTIONS[provider].reasoningEffort;
 }
 
 export function getWorkspaceTextVerbosity(
   options: WorkspaceProviderOptions | undefined,
-  provider: OpenAICompatibleProviderName
+  provider: OpenAICompatibleProviderName,
 ): TextVerbosityValue {
   return options?.[provider]?.textVerbosity ?? DEFAULT_WORKSPACE_PROVIDER_OPTIONS[provider].textVerbosity;
 }
 
 export function getWorkspaceReasoningSummary(
   options: WorkspaceProviderOptions | undefined,
-  provider: OpenAICompatibleProviderName
+  provider: OpenAICompatibleProviderName,
 ): ReasoningSummaryValue {
   return options?.[provider]?.reasoningSummary ?? DEFAULT_WORKSPACE_PROVIDER_OPTIONS[provider].reasoningSummary;
+}
+
+export function getWorkspaceWebSearchMode(
+  options: WorkspaceProviderOptions | undefined,
+  fallback: WebSearchModeValue = DEFAULT_CODEX_WEB_SEARCH_MODE,
+): WebSearchModeValue {
+  return options?.["codex-cli"]?.webSearchMode ?? fallback;
+}
+
+export function getWorkspaceWebSearchBackend(
+  options: WorkspaceProviderOptions | undefined,
+  fallback: WebSearchBackendValue = DEFAULT_CODEX_WEB_SEARCH_BACKEND,
+): WebSearchBackendValue {
+  return getCodexWebSearchBackendFromProviderOptions(options, fallback);
+}
+
+export function getWorkspaceWebSearchContextSize(
+  options: WorkspaceProviderOptions | undefined,
+  fallback: WebSearchContextSizeValue = "medium",
+): WebSearchContextSizeValue {
+  return options?.["codex-cli"]?.webSearch?.contextSize ?? fallback;
+}
+
+export function getWorkspaceWebSearchAllowedDomains(
+  options: WorkspaceProviderOptions | undefined,
+): string[] {
+  return [...(options?.["codex-cli"]?.webSearch?.allowedDomains ?? [])];
+}
+
+export function getWorkspaceWebSearchLocation(
+  options: WorkspaceProviderOptions | undefined,
+): CodexWebSearchLocation {
+  return cloneLocation(options?.["codex-cli"]?.webSearch?.location) ?? {};
+}
+
+export function hasWorkspaceWebSearchLocation(options: WorkspaceProviderOptions | undefined): boolean {
+  return Object.keys(getWorkspaceWebSearchLocation(options)).length > 0;
+}
+
+export function listWorkspaceProviderOptionProviders(): readonly OpenAICompatibleProviderName[] {
+  return OPENAI_COMPATIBLE_PROVIDER_NAMES;
 }

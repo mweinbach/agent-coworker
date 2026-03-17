@@ -1,6 +1,53 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { JSDOM } from "jsdom";
 import { createElement } from "react";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
+
+type JsdomHarness = {
+  dom: JSDOM;
+  restore: () => void;
+};
+
+function setupJsdom(): JsdomHarness {
+  const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", {
+    url: "http://localhost",
+  });
+  const saved = {
+    window: globalThis.window,
+    document: globalThis.document,
+    navigator: globalThis.navigator,
+    HTMLElement: globalThis.HTMLElement,
+    Node: globalThis.Node,
+    getComputedStyle: globalThis.getComputedStyle,
+    actEnv: (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT,
+  };
+
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    navigator: dom.window.navigator,
+    HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node,
+    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+  });
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+  return {
+    dom,
+    restore: () => {
+      globalThis.window = saved.window;
+      globalThis.document = saved.document;
+      globalThis.navigator = saved.navigator;
+      globalThis.HTMLElement = saved.HTMLElement;
+      globalThis.Node = saved.Node;
+      globalThis.getComputedStyle = saved.getComputedStyle;
+      (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = saved.actEnv;
+      dom.window.close();
+    },
+  };
+}
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -70,6 +117,12 @@ mock.module("../src/lib/agentSocket", () => ({
 const { useAppStore } = await import("../src/app/store");
 const { EXA_SECTION_ID, ProvidersPage } = await import("../src/ui/settings/pages/ProvidersPage");
 
+const defaultProviderActions = {
+  requestProviderCatalog: useAppStore.getState().requestProviderCatalog,
+  requestProviderAuthMethods: useAppStore.getState().requestProviderAuthMethods,
+  refreshProviderStatus: useAppStore.getState().refreshProviderStatus,
+};
+
 describe("desktop providers page", () => {
   beforeEach(() => {
     (useAppStore as any).getInitialState = useAppStore.getState;
@@ -115,6 +168,7 @@ describe("desktop providers page", () => {
       } as any,
       providerLastAuthChallenge: null,
       providerLastAuthResult: null,
+      ...defaultProviderActions,
     });
   });
 
@@ -190,6 +244,41 @@ describe("desktop providers page", () => {
     expect(html).toContain("Sign in with ChatGPT (browser)");
     expect(html).not.toContain("device code");
     expect(html).not.toContain(">Continue<");
+  });
+
+  test("mount only triggers the consolidated provider refresh", async () => {
+    const requestProviderCatalog = mock(async () => {});
+    const requestProviderAuthMethods = mock(async () => {});
+    const refreshProviderStatus = mock(async () => {});
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          requestProviderCatalog,
+          requestProviderAuthMethods,
+          refreshProviderStatus,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(ProvidersPage));
+      });
+
+      expect(refreshProviderStatus).toHaveBeenCalledTimes(1);
+      expect(requestProviderCatalog).not.toHaveBeenCalled();
+      expect(requestProviderAuthMethods).not.toHaveBeenCalled();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
   });
 
   test("codex browser auth ignores stale challenge URLs", () => {

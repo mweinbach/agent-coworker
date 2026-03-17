@@ -18,4 +18,15 @@ describe("tool card formatting ask summaries", () => {
     const out = formatToolCard("ask", { question: "What do you want?" }, { answer: "Spreadsheet" }, "output-available");
     expect(out.subtitle).toContain("Answer: Spreadsheet");
   });
+
+  test("renders native web search cards with a generic web search title", () => {
+    const out = formatToolCard(
+      "nativeWebSearch",
+      { action: { type: "search", query: "latest OpenAI" } },
+      { action: { type: "search", query: "latest OpenAI" } },
+      "output-available"
+    );
+    expect(out.title).toBe("Web Search");
+    expect(out.subtitle).toContain("Search: latest OpenAI");
+  });
 });

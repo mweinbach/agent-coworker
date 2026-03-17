@@ -1,5 +1,17 @@
 import type { ServerEvent } from "../../../src/server/protocol";
 import type {
+  CodexCliProviderOptions,
+  CodexWebSearchBackend,
+  CodexWebSearchContextSize,
+  CodexWebSearchLocation,
+  CodexWebSearchMode,
+  OpenAiCompatibleProviderName,
+  OpenAiCompatibleProviderOptionsByProvider,
+  OpenAiReasoningEffort,
+  OpenAiReasoningSummary,
+  OpenAiTextVerbosity,
+} from "../../../src/shared/openaiCompatibleOptions";
+import type {
   ApprovalRiskCode,
   CommandInfo,
   HarnessContextPayload,
@@ -9,7 +21,13 @@ import type {
 } from "../../../src/types";
 
 export type FeedItem =
-  | { id: string; type: "message"; role: "user" | "assistant"; text: string }
+  | {
+      id: string;
+      type: "message";
+      role: "user" | "assistant";
+      text: string;
+      annotations?: Array<Record<string, unknown>>;
+    }
   | { id: string; type: "reasoning"; kind: "reasoning" | "summary"; text: string }
   | {
       id: string;
@@ -71,15 +89,15 @@ export type ContextUsageSnapshot = {
   totalTokens: number | null;
 };
 
-export type OpenAICompatibleProviderName = "openai" | "codex-cli";
-export type OpenAICompatibleReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
-export type OpenAICompatibleReasoningSummary = "auto" | "concise" | "detailed";
-export type OpenAICompatibleTextVerbosity = "low" | "medium" | "high";
-export type OpenAICompatibleProviderOptions = {
-  reasoningEffort?: OpenAICompatibleReasoningEffort;
-  reasoningSummary?: OpenAICompatibleReasoningSummary;
-  textVerbosity?: OpenAICompatibleTextVerbosity;
-};
+export type OpenAICompatibleProviderName = OpenAiCompatibleProviderName;
+export type OpenAICompatibleReasoningEffort = OpenAiReasoningEffort;
+export type OpenAICompatibleReasoningSummary = OpenAiReasoningSummary;
+export type OpenAICompatibleTextVerbosity = OpenAiTextVerbosity;
+export type CodexWebSearchBackendValue = CodexWebSearchBackend;
+export type CodexWebSearchModeValue = CodexWebSearchMode;
+export type CodexWebSearchContextSizeValue = CodexWebSearchContextSize;
+export type CodexWebSearchLocationValue = CodexWebSearchLocation;
+export type CodexProviderOptionsValue = CodexCliProviderOptions;
 export type SyncConfigPatch = {
   yolo?: boolean;
   observabilityEnabled?: boolean;
@@ -87,7 +105,7 @@ export type SyncConfigPatch = {
   preferredChildModel?: string;
   maxSteps?: number;
   toolOutputOverflowChars?: number | null;
-  providerOptions?: Partial<Record<OpenAICompatibleProviderName, OpenAICompatibleProviderOptions>>;
+  providerOptions?: OpenAiCompatibleProviderOptionsByProvider;
   userName?: string;
   userProfile?: {
     instructions?: string;

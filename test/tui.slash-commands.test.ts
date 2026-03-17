@@ -244,6 +244,92 @@ describe("local slash command registry", () => {
     });
   });
 
+  test("/web-search-mode updates codex native web search mode", async () => {
+    const setConfig = mock(() => true);
+    const commands = createLocalSlashCommands(makeDeps({
+      syncActions: {
+        reset: () => {},
+        cancel: () => {},
+        setConfig,
+        setProviderApiKey: () => {},
+        requestHarnessContext: () => {},
+        setHarnessContext: () => {},
+      },
+      getCurrentProvider: () => "codex-cli",
+    }));
+
+    const resolved = findLocalSlashCommand(commands, "web-search-mode");
+    expect(resolved).not.toBeNull();
+
+    await Promise.resolve(resolved?.execute("cached"));
+
+    expect(setConfig).toHaveBeenCalledWith({
+      providerOptions: {
+        "codex-cli": {
+          webSearchMode: "cached",
+        },
+      },
+    });
+  });
+
+  test("/web-search-backend updates codex web search backend", async () => {
+    const setConfig = mock(() => true);
+    const commands = createLocalSlashCommands(makeDeps({
+      syncActions: {
+        reset: () => {},
+        cancel: () => {},
+        setConfig,
+        setProviderApiKey: () => {},
+        requestHarnessContext: () => {},
+        setHarnessContext: () => {},
+      },
+      getCurrentProvider: () => "codex-cli",
+    }));
+
+    const resolved = findLocalSlashCommand(commands, "web-search-backend");
+    expect(resolved).not.toBeNull();
+
+    await Promise.resolve(resolved?.execute("exa"));
+
+    expect(setConfig).toHaveBeenCalledWith({
+      providerOptions: {
+        "codex-cli": {
+          webSearchBackend: "exa",
+        },
+      },
+    });
+  });
+
+  test("/web-search-context updates codex native web search context size", async () => {
+    const setConfig = mock(() => true);
+    const commands = createLocalSlashCommands(makeDeps({
+      syncActions: {
+        reset: () => {},
+        cancel: () => {},
+        setConfig,
+        setProviderApiKey: () => {},
+        requestHarnessContext: () => {},
+        setHarnessContext: () => {},
+      },
+      getCurrentProvider: () => "codex-cli",
+    }));
+
+    const resolved = findLocalSlashCommand(commands, "web-search-context");
+    expect(resolved).not.toBeNull();
+
+    await Promise.resolve(resolved?.execute("high"));
+
+    expect(setConfig).toHaveBeenCalledWith({
+      providerOptions: {
+        "codex-cli": {
+          webSearch: {
+            contextSize: "high",
+          },
+        },
+      },
+    });
+  });
+
   test("provider-setting commands refuse non-openai-compatible providers", async () => {
     const setConfig = mock(() => true);
     const commands = createLocalSlashCommands(makeDeps({
@@ -262,6 +348,28 @@ describe("local slash command registry", () => {
     expect(resolved).not.toBeNull();
 
     await Promise.resolve(resolved?.execute("medium"));
+
+    expect(setConfig).not.toHaveBeenCalled();
+  });
+
+  test("codex web-search commands refuse non-codex providers", async () => {
+    const setConfig = mock(() => true);
+    const commands = createLocalSlashCommands(makeDeps({
+      syncActions: {
+        reset: () => {},
+        cancel: () => {},
+        setConfig,
+        setProviderApiKey: () => {},
+        requestHarnessContext: () => {},
+        setHarnessContext: () => {},
+      },
+      getCurrentProvider: () => "openai",
+    }));
+
+    const resolved = findLocalSlashCommand(commands, "web-search-mode");
+    expect(resolved).not.toBeNull();
+
+    await Promise.resolve(resolved?.execute("live"));
 
     expect(setConfig).not.toHaveBeenCalled();
   });

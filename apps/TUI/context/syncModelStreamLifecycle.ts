@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { parseStructuredToolInput } from "../../../src/shared/structuredInput";
-import type { ModelStreamChunkEvent, ModelStreamUpdate } from "./modelStream";
-import { mapModelStreamChunk } from "./modelStream";
+import type { ModelStreamChunkEvent, ModelStreamRawEvent, ModelStreamUpdate } from "./modelStream";
+import { mapModelStreamChunk, mapModelStreamRawEvent } from "./modelStream";
 import type { ContextUsageSnapshot, FeedItem } from "./syncTypes";
 
 type SyncModelStreamLifecycleOptions = {
@@ -200,7 +200,10 @@ export function createSyncModelStreamLifecycle(options: SyncModelStreamLifecycle
   function handleChunkEvent(evt: ModelStreamChunkEvent) {
     const mapped = mapModelStreamChunk(evt);
     if (!mapped) return;
+    handleMappedUpdate(mapped);
+  }
 
+  function handleMappedUpdate(mapped: ModelStreamUpdate) {
     if (mapped.kind === "turn_start") {
       reset();
       options.clearPendingTools();
@@ -235,6 +238,16 @@ export function createSyncModelStreamLifecycle(options: SyncModelStreamLifecycle
       mapped.kind === "assistant_text_start" ||
       mapped.kind === "assistant_text_end"
     ) {
+      if (mapped.kind === "assistant_text_end" && mapped.annotations && lastStreamedAssistantTurnId) {
+        const itemId = streamedAssistantItemIds.get(lastStreamedAssistantTurnId);
+        if (itemId) {
+          options.updateFeedItem(itemId, (item) =>
+            item.type === "message" && item.role === "assistant"
+              ? { ...item, annotations: mapped.annotations }
+              : item
+          );
+        }
+      }
       // Keep these as state-only boundaries to avoid noisy feed output.
       return;
     }
@@ -412,6 +425,13 @@ export function createSyncModelStreamLifecycle(options: SyncModelStreamLifecycle
     appendSystemLineFromModelStream(mapped);
   }
 
+  function handleRawEvent(evt: ModelStreamRawEvent) {
+    const updates = mapModelStreamRawEvent(evt);
+    for (const update of updates) {
+      handleMappedUpdate(update);
+    }
+  }
+
   return {
     reset,
     handleSessionBusy,
@@ -419,6 +439,7 @@ export function createSyncModelStreamLifecycle(options: SyncModelStreamLifecycle
     shouldSuppressReasoningMessage,
     isTurnActive,
     handleChunkEvent,
+    handleRawEvent,
   };
 }
 

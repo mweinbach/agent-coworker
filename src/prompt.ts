@@ -9,6 +9,10 @@ import { parseChildModelRef } from "./models/childModelRouting";
 import { MemoryStore } from "./memoryStore";
 import { AGENT_ROLE_DEFINITIONS } from "./server/agents/roles";
 import type { AgentRole } from "./shared/agents";
+import {
+  getCodexWebSearchBackendFromProviderOptions,
+  isCodexWebSearchMode,
+} from "./shared/openaiCompatibleOptions";
 import { isUserFacingProviderEnabled } from "./providers/catalog";
 import type { ProviderName } from "./types";
 
@@ -102,6 +106,32 @@ function renderMemorySpecificPrompt(prompt: string, enabled: boolean): string {
   out = out.replace(/\n{3,}/g, "\n\n").trimEnd();
 
   return `${out}\n\n## Memory Disabled\n\nPersistent memory is disabled for this workspace. Do not read or write AGENT.md and do not call the memory tool.`;
+}
+
+function configuredCodexWebSearchMode(config: AgentConfig): "disabled" | "cached" | "live" | undefined {
+  const providerOptions = config.providerOptions;
+  if (!providerOptions || typeof providerOptions !== "object" || Array.isArray(providerOptions)) return undefined;
+  const codexOptions = providerOptions["codex-cli"];
+  if (!codexOptions || typeof codexOptions !== "object" || Array.isArray(codexOptions)) return undefined;
+  return isCodexWebSearchMode(codexOptions.webSearchMode) ? codexOptions.webSearchMode : undefined;
+}
+
+function renderCodexNativeWebSearchPrompt(prompt: string, config: AgentConfig): string {
+  if (config.provider !== "codex-cli") {
+    return prompt;
+  }
+
+  const backend = getCodexWebSearchBackendFromProviderOptions(config.providerOptions);
+  if (backend === "exa") {
+    return `${prompt}\n\n## Codex Web Search Backend\n\nThis Codex CLI session is configured to use the local Exa-backed webSearch tool instead of provider-native web search.\n\n- Use the local webSearch tool for current web lookup.\n- Use local webFetch when you need the full contents of a specific page or need to download a direct file.\n- Do not assume provider-native citations or provider-native web-search actions are available in this session.`;
+  }
+
+  const mode = configuredCodexWebSearchMode(config) ?? "live";
+  if (mode === "disabled") {
+    return `${prompt}\n\n## Codex Web Search Disabled\n\nThis Codex CLI session is configured for the native web-search backend, but web search is currently disabled.\n\n- Do not call local webSearch for ordinary lookup.\n- Do not expect provider-native web search to be available until the workspace setting changes.\n- Only use local webFetch when the task explicitly requires downloading or saving a direct file into the local workspace.`;
+  }
+
+  return `${prompt}\n\n## Codex Native Web Search\n\nThis Codex CLI session is configured to use provider-native web search for anything beyond your knowledge cutoff.\n\n- Use provider-native web search for general web lookup, opening specific pages, and finding within a page.\n- Prefer provider-native citations and sources when they are available. Do not add a manual \"Sources:\" section just to compensate for native citations.\n- Do not use local webFetch for ordinary HTML page reading in native-web-search sessions.\n- Only use local webFetch when the task explicitly requires downloading or saving a direct file into the local workspace and provider-native web search cannot satisfy that requirement.`;
 }
 
 const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
@@ -303,6 +333,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = renderTemplateVariables(prompt, vars);
   prompt = renderCapabilitySpecificPrompt(prompt, supportedModel);
   prompt = renderMemorySpecificPrompt(prompt, config.enableMemory ?? true);
+  prompt = renderCodexNativeWebSearchPrompt(prompt, config);
   prompt = renderSpawnAgentSpecificPrompt(prompt, config);
   prompt = normalizeLegacySpawnAgentGuidance(prompt);
 

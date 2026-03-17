@@ -9,6 +9,7 @@ type MarkdownProps = {
   maxChars?: number;
   normalizeDisplayCitations?: boolean;
   citationUrlsByIndex?: ReadonlyMap<number, string>;
+  citationAnnotations?: unknown;
 };
 
 export function Markdown(props: MarkdownProps) {
@@ -17,6 +18,8 @@ export function Markdown(props: MarkdownProps) {
       ? normalizeDisplayCitationMarkers(props.markdown, {
         citationUrlsByIndex: props.citationUrlsByIndex,
         citationMode: "markdown",
+        annotations: props.citationAnnotations,
+        fallbackToSourcesFooter: true,
       })
       : props.markdown;
     if (props.maxChars && text.length > props.maxChars) {

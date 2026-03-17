@@ -38,7 +38,7 @@ export function ToolPart(props: ToolPartProps) {
       <Match when={props.name === "grep"}>
         <GrepTool {...props} />
       </Match>
-      <Match when={props.name === "webFetch" || props.name === "webSearch"}>
+      <Match when={props.name === "webFetch" || props.name === "webSearch" || props.name === "nativeWebSearch"}>
         <WebTool {...props} />
       </Match>
       <Match when={props.name === "todoWrite"}>

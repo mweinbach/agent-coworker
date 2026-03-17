@@ -146,7 +146,14 @@ export type ToolApprovalMetadata = {
 };
 
 export type FeedItem =
-  | { id: string; kind: "message"; role: "user" | "assistant"; ts: string; text: string }
+  | {
+      id: string;
+      kind: "message";
+      role: "user" | "assistant";
+      ts: string;
+      text: string;
+      annotations?: Array<Record<string, unknown>>;
+    }
   | { id: string; kind: "reasoning"; mode: "reasoning" | "summary"; ts: string; text: string }
   | { id: string; kind: "tool"; ts: string; name: string; state: ToolFeedState; args?: unknown; result?: unknown; approval?: ToolApprovalMetadata }
   | { id: string; kind: "todos"; ts: string; todos: TodoItem[] }

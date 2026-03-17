@@ -58,6 +58,7 @@ export function mapPiEventToRawParts(
       return [{
         type: "text-end",
         id: streamId,
+        ...(Array.isArray(event.annotations) ? { annotations: event.annotations } : {}),
         ...(typeof event.phase === "string" ? { phase: event.phase } : {}),
       }];
     case "thinking_start":

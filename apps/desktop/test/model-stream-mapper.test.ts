@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { mapModelStreamChunk } from "../src/app/modelStream";
+import { mapModelStreamChunk, mapModelStreamRawEvent } from "../src/app/modelStream";
 
 describe("desktop model stream mapper", () => {
   const base = {
@@ -13,6 +13,20 @@ describe("desktop model stream mapper", () => {
 
   function chunk(partType: any, part: Record<string, unknown>, index = 0) {
     return { ...base, index, partType, part };
+  }
+
+  function raw(event: Record<string, unknown>, index = 0) {
+    return {
+      type: "model_stream_raw" as const,
+      sessionId: "s1",
+      turnId: "t1",
+      index,
+      provider: "codex-cli" as const,
+      model: "gpt-5.4",
+      format: "openai-responses-v1" as const,
+      normalizerVersion: 1,
+      event,
+    };
   }
 
   test("maps boundary and lifecycle parts", () => {
@@ -210,5 +224,66 @@ describe("desktop model stream mapper", () => {
       partType: "future_part_type",
       payload: { experimental: true },
     });
+  });
+
+  test("maps native web search raw provider events into synthetic tool activity", () => {
+    expect(mapModelStreamRawEvent(raw({
+      type: "response.output_item.added",
+      item: {
+        id: "ws_1",
+        type: "web_search_call",
+        action: {
+          type: "search",
+          query: "OpenAI responses web_search",
+        },
+      },
+    }))).toEqual([{
+      kind: "tool_input_start",
+      turnId: "t1",
+      key: "ws_1",
+      name: "nativeWebSearch",
+      args: {
+        type: "search",
+        query: "OpenAI responses web_search",
+      },
+    }]);
+
+    expect(mapModelStreamRawEvent(raw({
+      type: "response.output_item.done",
+      item: {
+        id: "ws_1",
+        type: "web_search_call",
+        status: "completed",
+        action: {
+          type: "open_page",
+          url: "https://example.com/page",
+          sources: [{ url: "https://example.com/page" }],
+        },
+      },
+    }, 1))).toEqual([{
+      kind: "tool_result",
+      turnId: "t1",
+      key: "ws_1",
+      name: "nativeWebSearch",
+      result: {
+        status: "completed",
+        action: {
+          type: "open_page",
+          url: "https://example.com/page",
+          sources: [{ url: "https://example.com/page" }],
+        },
+        sources: [{ url: "https://example.com/page" }],
+        raw: {
+          id: "ws_1",
+          type: "web_search_call",
+          status: "completed",
+          action: {
+            type: "open_page",
+            url: "https://example.com/page",
+            sources: [{ url: "https://example.com/page" }],
+          },
+        },
+      },
+    }]);
   });
 });

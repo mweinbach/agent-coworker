@@ -599,20 +599,207 @@ describe("openai responses runtime", () => {
     expect("previous_response_id" in request).toBe(false);
     expect("max_output_tokens" in request).toBe(false);
     expect(request.text).toEqual({ verbosity: "medium" });
+    expect(request.tool_choice).toBe("auto");
+    expect(request.parallel_tool_calls).toBe(true);
+    expect(request.include).toEqual(["web_search_call.action.sources"]);
+    expect(request.tools).toEqual([
+      {
+        type: "function",
+        name: "read",
+        description: "Read a file",
+        parameters: {
+          type: "object",
+          properties: {
+            filePath: { type: "string" },
+            offset: { type: "integer" },
+          },
+          required: ["filePath"],
+        },
+        strict: false,
+      },
+      {
+        type: "web_search",
+        external_web_access: true,
+      },
+    ]);
+  });
+
+  test("request builder omits both native and legacy web search tools when the native backend is disabled", () => {
+    const request = openAiNativeInternal.buildOpenAiNativeRequest({
+      provider: "codex-cli",
+      model: {
+        id: "gpt-5.2",
+        name: "gpt-5.2",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 32768,
+      },
+      systemPrompt: "You are helpful.",
+      piMessages: [{ role: "user", content: "hello" }],
+      tools: [{
+        name: "webSearch",
+        description: "Search the web",
+        parameters: { type: "object", properties: {}, required: [] },
+      }],
+      streamOptions: {
+        webSearchMode: "disabled",
+      },
+    });
+
+    expect(request.tools).toBeUndefined();
+    expect(request.include).toBeUndefined();
+  });
+
+  test("request builder keeps legacy webSearch when codex is explicitly configured for exa", () => {
+    const request = openAiNativeInternal.buildOpenAiNativeRequest({
+      provider: "codex-cli",
+      model: {
+        id: "gpt-5.2",
+        name: "gpt-5.2",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 32768,
+      },
+      systemPrompt: "You are helpful.",
+      piMessages: [{ role: "user", content: "hello" }],
+      tools: [{
+        name: "webSearch",
+        description: "Search the web",
+        parameters: { type: "object", properties: {}, required: [] },
+      }],
+      streamOptions: {
+        webSearchBackend: "exa",
+        webSearchMode: "live",
+      },
+    });
+
     expect(request.tools).toEqual([{
       type: "function",
-      name: "read",
-      description: "Read a file",
-      parameters: {
-        type: "object",
-        properties: {
-          filePath: { type: "string" },
-          offset: { type: "integer" },
-        },
-        required: ["filePath"],
-      },
+      name: "webSearch",
+      description: "Search the web",
+      parameters: { type: "object", properties: {}, required: [] },
       strict: false,
     }]);
+    expect(request.include).toBeUndefined();
+  });
+
+  test("request builder sends cached native web search with normalized filters and merged include fields", () => {
+    const request = openAiNativeInternal.buildOpenAiNativeRequest({
+      provider: "codex-cli",
+      model: {
+        id: "gpt-5.2",
+        name: "gpt-5.2",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 32768,
+      },
+      systemPrompt: "You are helpful.",
+      piMessages: [{ role: "user", content: "hello" }],
+      tools: [{
+        name: "webSearch",
+        description: "Search the web",
+        parameters: { type: "object", properties: {}, required: [] },
+      }],
+      streamOptions: {
+        reasoningEffort: "high",
+        webSearchMode: "cached",
+        webSearchContextSize: "high",
+        webSearchAllowedDomains: [
+          " https://OpenAI.com/docs ",
+          "openai.com",
+          "https://example.com/foo/",
+          "",
+        ],
+        webSearchLocation: {
+          country: "US",
+          city: "New York",
+          timezone: "America/New_York",
+        },
+      },
+    });
+
+    expect(request.include).toEqual([
+      "reasoning.encrypted_content",
+      "web_search_call.action.sources",
+    ]);
+    expect(request.tools).toEqual([{
+      type: "web_search",
+      external_web_access: false,
+      search_context_size: "high",
+      filters: {
+        allowed_domains: ["openai.com", "example.com"],
+      },
+      user_location: {
+        type: "approximate",
+        country: "US",
+        city: "New York",
+        timezone: "America/New_York",
+      },
+    }]);
+  });
+
+  test("request builder strips legacy local webSearch when native web search is enabled", () => {
+    const request = openAiNativeInternal.buildOpenAiNativeRequest({
+      provider: "codex-cli",
+      model: {
+        id: "gpt-5.2",
+        name: "gpt-5.2",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 32768,
+      },
+      systemPrompt: "You are helpful.",
+      piMessages: [{ role: "user", content: "hello" }],
+      tools: [
+        {
+          name: "webSearch",
+          description: "Search the web",
+          parameters: { type: "object", properties: {}, required: [] },
+        },
+        {
+          name: "read",
+          description: "Read a file",
+          parameters: { type: "object", properties: {}, required: [] },
+        },
+      ],
+      streamOptions: {
+        webSearchMode: "live",
+      },
+    });
+
+    expect(request.tools).toEqual([
+      {
+        type: "function",
+        name: "read",
+        description: "Read a file",
+        parameters: { type: "object", properties: {}, required: [] },
+        strict: false,
+      },
+      {
+        type: "web_search",
+        external_web_access: true,
+      },
+    ]);
   });
 
   test("request builder marks OpenAI tools as non-strict so optional parameters remain valid", () => {

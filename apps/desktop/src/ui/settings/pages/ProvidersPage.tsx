@@ -153,8 +153,6 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const authorizeProviderAuth = useAppStore((s) => s.authorizeProviderAuth);
   const logoutProviderAuth = useAppStore((s) => s.logoutProviderAuth);
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
-  const requestProviderCatalog = useAppStore((s) => s.requestProviderCatalog);
-  const requestProviderAuthMethods = useAppStore((s) => s.requestProviderAuthMethods);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
   const providerStatusByNameFromStore = useAppStore((s) => s.providerStatusByName);
   const providerStatusRefreshingFromStore = useAppStore((s) => s.providerStatusRefreshing);
@@ -224,9 +222,8 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
 
   useEffect(() => {
     if (!canConnectProvider) return;
-    void requestProviderCatalog();
-    void requestProviderAuthMethods();
-  }, [canConnectProvider, requestProviderAuthMethods, requestProviderCatalog]);
+    void refreshProviderStatus();
+  }, [canConnectProvider, refreshProviderStatus]);
 
   useEffect(() => {
     if (!providerLastAuthResult?.ok) return;
@@ -661,11 +658,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
             variant="link"
             className="h-auto px-0"
             type="button"
-            onClick={() => {
-              void requestProviderCatalog();
-              void requestProviderAuthMethods();
-              void refreshProviderStatus();
-            }}
+            onClick={() => void refreshProviderStatus()}
             disabled={providerStatusRefreshing}
           >
             {providerStatusRefreshing ? "Refreshing..." : "Refresh status"}

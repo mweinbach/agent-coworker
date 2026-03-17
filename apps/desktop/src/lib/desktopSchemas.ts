@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+import {
+  CODEX_WEB_SEARCH_BACKEND_VALUES,
+  CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
+  CODEX_WEB_SEARCH_MODE_VALUES,
+  OPENAI_REASONING_EFFORT_VALUES,
+  OPENAI_REASONING_SUMMARY_VALUES,
+  OPENAI_TEXT_VERBOSITY_VALUES,
+} from "../../../../src/shared/openaiCompatibleOptions";
 import type {
   ConfirmActionInput,
   ContextMenuItem,
@@ -27,7 +35,6 @@ import type {
   TrashPathInput,
 } from "./desktopApi";
 import type { PersistedState } from "../app/types";
-import { workspaceProviderOptionsSchema } from "../app/openaiCompatibleProviderOptions";
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/;
 const invalidPathSegmentPattern = /[/\\\0]/;
@@ -40,6 +47,12 @@ const optionalStringSchema = z.preprocess(
 );
 const safeIdSchema = nonEmptyStringSchema.regex(SAFE_ID, "contains invalid characters");
 const directionSchema = z.enum(["server", "client"]);
+const reasoningEffortSchema = z.enum(OPENAI_REASONING_EFFORT_VALUES);
+const reasoningSummarySchema = z.enum(OPENAI_REASONING_SUMMARY_VALUES);
+const textVerbositySchema = z.enum(OPENAI_TEXT_VERBOSITY_VALUES);
+const webSearchBackendSchema = z.enum(CODEX_WEB_SEARCH_BACKEND_VALUES);
+const webSearchModeSchema = z.enum(CODEX_WEB_SEARCH_MODE_VALUES);
+const webSearchContextSizeSchema = z.enum(CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES);
 
 const contextMenuItemSchema: z.ZodType<ContextMenuItem> = z.object({
   id: safeIdSchema,
@@ -55,6 +68,34 @@ const validatedSegmentSchema = nonEmptyStringSchema.refine(
   (value) => !invalidPathSegmentPattern.test(value) && value !== "." && value !== "..",
   "invalid path segment",
 );
+
+const providerOptionsSchema = z.object({
+  reasoningEffort: reasoningEffortSchema.optional(),
+  reasoningSummary: reasoningSummarySchema.optional(),
+  textVerbosity: textVerbositySchema.optional(),
+}).strict();
+
+const codexWebSearchLocationSchema = z.object({
+  country: z.string().trim().min(1).optional(),
+  region: z.string().trim().min(1).optional(),
+  city: z.string().trim().min(1).optional(),
+  timezone: z.string().trim().min(1).optional(),
+}).strict();
+
+const codexCliProviderOptionsSchema = providerOptionsSchema.extend({
+  webSearchBackend: webSearchBackendSchema.optional(),
+  webSearchMode: webSearchModeSchema.optional(),
+  webSearch: z.object({
+    contextSize: webSearchContextSizeSchema.optional(),
+    allowedDomains: z.array(z.string().trim().min(1)).optional(),
+    location: codexWebSearchLocationSchema.optional(),
+  }).strict().optional(),
+}).strict();
+
+const workspaceProviderOptionsSchema = z.object({
+  openai: providerOptionsSchema.optional(),
+  "codex-cli": codexCliProviderOptionsSchema.optional(),
+}).strict();
 
 export const startWorkspaceServerInputSchema: z.ZodType<StartWorkspaceServerInput> = z.object({
   workspaceId: safeIdSchema,

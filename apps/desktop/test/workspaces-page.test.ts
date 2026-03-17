@@ -152,12 +152,22 @@ describe("desktop workspaces page", () => {
               reasoningEffort: "medium",
               reasoningSummary: "concise",
               textVerbosity: "low",
+              webSearchBackend: "native",
+              webSearchMode: "live",
+              webSearch: {
+                contextSize: "high",
+                allowedDomains: ["openai.com"],
+                location: {
+                  country: "US",
+                  timezone: "America/New_York",
+                },
+              },
             },
           },
         },
         providerStatusByName: {
           openai: { verified: true },
-          "codex-cli": { authorized: true },
+          "codex-cli": { authorized: true, mode: "oauth" },
         },
         updateWorkspaceDefaults: async () => {},
       }),
@@ -169,6 +179,16 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Verbosity");
     expect(html).toContain("Reasoning effort");
     expect(html).toContain("Reasoning summary");
+    expect(html).toContain("Web search");
+    expect(html).toContain("Search backend");
+    expect(html).toContain("Web search mode");
+    expect(html).toContain("Context size");
+    expect(html).toContain("Allowed domains");
+    expect(html).toContain("Country");
+    expect(html).toContain("Timezone");
+    expect(html).toContain("Choose whether Codex uses the built-in native search tool or the local Exa tool. Native is the default.");
+    expect(html).toContain("Native uses Responses `web_search`. Exa uses the local `webSearch` tool and requires Exa access.");
+    expect(html).toContain("Cached uses indexed results only. Live allows live internet access. Domains should omit protocol.");
     expect(html).toContain("Applies when this workspace runs on OpenAI API.");
   });
 

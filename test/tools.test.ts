@@ -3310,6 +3310,42 @@ describe("createTools", () => {
     expect(Object.keys(tools).length).toBe(15);
   });
 
+  test("hides legacy webSearch for codex-cli by default", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "codex-cli",
+          model: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
+        }),
+      }),
+    );
+
+    expect(tools).not.toHaveProperty("webSearch");
+    expect(tools).toHaveProperty("webFetch");
+  });
+
+  test("keeps legacy webSearch for codex-cli when exa is selected", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "codex-cli",
+          model: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
+          providerOptions: {
+            "codex-cli": {
+              webSearchBackend: "exa",
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(tools).toHaveProperty("webSearch");
+  });
+
   test("omits memory tool when enableMemory is false", async () => {
     const dir = await tmpDir();
     const tools = createTools(makeCtx(dir, { config: makeConfig(dir, { enableMemory: false }) }));

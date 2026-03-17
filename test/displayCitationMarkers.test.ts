@@ -95,6 +95,66 @@ describe("display citation markers", () => {
     ]));
   });
 
+  test("prefers native assistant annotations when present", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "nativeWebSearch",
+        result: {
+          sources: [{ url: "https://stale.example.com" }],
+        },
+      },
+      {
+        id: "assistant-1",
+        kind: "message" as const,
+        role: "assistant" as const,
+        annotations: [
+          {
+            type: "url_citation",
+            start_index: 0,
+            end_index: 6,
+            url: "https://example.com/fresh",
+          },
+        ],
+      },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", new Map([[1, "https://example.com/fresh"]])],
+    ]));
+  });
+
+  test("falls back to native web search sources when annotations are unavailable", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "nativeWebSearch",
+        result: {
+          action: {
+            type: "search",
+            query: "openai responses",
+            sources: [
+              { url: "https://example.com/one" },
+              { url: "https://example.com/two" },
+            ],
+          },
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", new Map([
+        [1, "https://example.com/one"],
+        [2, "https://example.com/two"],
+      ])],
+    ]));
+  });
+
   test("surfaces overflow file paths for later citation hydration", () => {
     const result = {
       type: "text",
@@ -108,5 +168,34 @@ describe("display citation markers", () => {
       { id: "tool-1", kind: "tool" as const, name: "webSearch", result },
       { id: "assistant-1", kind: "message", role: "assistant" as const },
     ])).toEqual(new Map([["assistant-1", "/tmp/search-results.txt"]]));
+  });
+
+  test("inserts inline citation markers from native annotations", () => {
+    expect(
+      normalizeDisplayCitationMarkers("Search result", {
+        citationMode: "markdown",
+        annotations: [
+          {
+            type: "url_citation",
+            start_index: 0,
+            end_index: 6,
+            url: "https://example.com/search",
+          },
+        ],
+      }),
+    ).toBe("Search [1](https://example.com/search) result");
+  });
+
+  test("appends a compact sources footer when native citations only exist out of band", () => {
+    expect(
+      normalizeDisplayCitationMarkers("Answer", {
+        citationMode: "markdown",
+        fallbackToSourcesFooter: true,
+        citationUrlsByIndex: new Map([
+          [1, "https://example.com/one"],
+          [2, "https://example.com/two"],
+        ]),
+      }),
+    ).toBe("Answer\n\nSources: [1](https://example.com/one), [2](https://example.com/two)");
   });
 });

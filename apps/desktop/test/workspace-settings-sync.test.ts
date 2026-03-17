@@ -590,6 +590,8 @@ describe("workspace settings sync", () => {
                 "codex-cli": {
                   reasoningEffort: "low",
                   reasoningSummary: "auto",
+                  webSearchBackend: "exa",
+                  webSearchMode: "disabled",
                 },
               },
             }
@@ -619,6 +621,16 @@ describe("workspace settings sync", () => {
           "codex-cli": {
             reasoningEffort: "xhigh",
             reasoningSummary: "auto",
+            webSearchBackend: "native",
+            webSearchMode: "live",
+            webSearch: {
+              contextSize: "medium",
+              allowedDomains: ["openai.com"],
+              location: {
+                country: "US",
+                timezone: "America/New_York",
+              },
+            },
           },
         },
       },
@@ -634,6 +646,16 @@ describe("workspace settings sync", () => {
       "codex-cli": {
         reasoningEffort: "xhigh",
         reasoningSummary: "auto",
+        webSearchBackend: "native",
+        webSearchMode: "live",
+        webSearch: {
+          contextSize: "medium",
+          allowedDomains: ["openai.com"],
+          location: {
+            country: "US",
+            timezone: "America/New_York",
+          },
+        },
       },
     });
     expect((runtime?.controlSessionConfig as any)?.providerOptions).toEqual({
@@ -644,6 +666,16 @@ describe("workspace settings sync", () => {
       "codex-cli": {
         reasoningEffort: "xhigh",
         reasoningSummary: "auto",
+        webSearchBackend: "native",
+        webSearchMode: "live",
+        webSearch: {
+          contextSize: "medium",
+          allowedDomains: ["openai.com"],
+          location: {
+            country: "US",
+            timezone: "America/New_York",
+          },
+        },
       },
     });
   });

@@ -40,6 +40,9 @@ function getRecordValue(record: Record<string, unknown>, keys: string[]): unknow
 }
 
 function humanizeToolName(name: string): string {
+  if (name === "nativeWebSearch") {
+    return "Web Search";
+  }
   const compact = name.replace(/^tool[:._-]?/i, "");
   const withSpaces = compact.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ");
   const trimmed = withSpaces.trim();
@@ -47,10 +50,44 @@ function humanizeToolName(name: string): string {
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
+function nativeWebSearchAction(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  if (isRecord(value.action)) return value.action;
+  return null;
+}
+
+function nativeWebSearchActionSummary(action: Record<string, unknown>): string {
+  const actionType = toText(getRecordValue(action, ["type"])).trim().toLowerCase();
+  if (actionType === "search") {
+    const query = getRecordValue(action, ["query", "q"]);
+    return query ? `Search: ${truncate(toText(query), 90)}` : "Search completed";
+  }
+  if (actionType === "open_page") {
+    const url = getRecordValue(action, ["url"]);
+    return url ? `Opened: ${truncate(toText(url), 90)}` : "Opened page";
+  }
+  if (actionType === "find_in_page") {
+    const pattern = getRecordValue(action, ["pattern", "query"]);
+    const url = getRecordValue(action, ["url"]);
+    if (pattern && url) {
+      return `${truncate(`'${toText(pattern)}'`, 36)} in ${truncate(toText(url), 60)}`;
+    }
+    if (pattern) {
+      return `Find: ${truncate(toText(pattern), 90)}`;
+    }
+    return "Find in page completed";
+  }
+  return "Searching the web";
+}
+
 function summarizeArgs(name: string, args: unknown): string {
   if (!isRecord(args)) return "";
 
   const base = name.toLowerCase();
+  if (base === "nativewebsearch") {
+    const action = nativeWebSearchAction(args);
+    return action ? nativeWebSearchActionSummary(action) : "Searching the web";
+  }
   if (base === "websearch") {
     const query = getRecordValue(args, ["query", "q"]);
     return query ? `Searching for: ${truncate(toText(query), 90)}` : "";
@@ -117,6 +154,27 @@ function summarizeAskResult(result: unknown): string | null {
 }
 
 function summarizeResult(name: string, state: ToolFeedState, result: unknown): string {
+  if (name.toLowerCase() === "nativewebsearch") {
+    if (state === "input-streaming" || state === "input-available") {
+      return "Searching the web";
+    }
+    if (state === "approval-requested") {
+      return "Waiting for approval";
+    }
+    if (state === "output-error" || state === "output-denied") {
+      if (isRecord(result)) {
+        const error = getRecordValue(result, ["error", "message", "reason"]);
+        if (error) {
+          return truncate(`Error: ${toText(error)}`, 90);
+        }
+      }
+      return state === "output-denied" ? "Denied" : "Web search failed";
+    }
+
+    const action = nativeWebSearchAction(result);
+    return action ? nativeWebSearchActionSummary(action) : "Completed";
+  }
+
   if (state === "input-streaming") return "Capturing input…";
   if (state === "input-available") return "Running…";
   if (state === "approval-requested") return "Waiting for approval";
@@ -172,6 +230,16 @@ function buildDetailsRows(args: unknown, result: unknown, state: ToolFeedState):
   }];
 
   if (isRecord(args)) {
+    if (isRecord(args.action)) {
+      const action = args.action;
+      const actionType = getRecordValue(action, ["type"]);
+      const query = getRecordValue(action, ["query", "q", "pattern"]);
+      const url = getRecordValue(action, ["url"]);
+      if (actionType) rows.push({ label: "Action", value: toText(actionType) });
+      if (query) rows.push({ label: "Query", value: truncate(toText(query), 140) });
+      if (url) rows.push({ label: "URL", value: truncate(toText(url), 140) });
+    }
+
     const command = getRecordValue(args, ["command", "cmd"]);
     const query = getRecordValue(args, ["query", "q"]);
     const filePath = getRecordValue(args, ["filePath", "path"]);
@@ -188,6 +256,18 @@ function buildDetailsRows(args: unknown, result: unknown, state: ToolFeedState):
   }
 
   if (isRecord(result)) {
+    const action = nativeWebSearchAction(result);
+    if (action) {
+      const actionType = getRecordValue(action, ["type"]);
+      const query = getRecordValue(action, ["query", "q", "pattern"]);
+      const url = getRecordValue(action, ["url"]);
+      const sources = Array.isArray(result.sources) ? result.sources : Array.isArray(action.sources) ? action.sources : [];
+      if (actionType) rows.push({ label: "Action", value: toText(actionType) });
+      if (query) rows.push({ label: "Query", value: truncate(toText(query), 140) });
+      if (url) rows.push({ label: "URL", value: truncate(toText(url), 140) });
+      if (sources.length > 0) rows.push({ label: "Sources", value: toText(sources.length) });
+    }
+
     const exitCode = getRecordValue(result, ["exitCode"]);
     const resultCount = getRecordValue(result, ["count"]);
     const provider = getRecordValue(result, ["provider"]);

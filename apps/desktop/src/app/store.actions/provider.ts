@@ -47,6 +47,23 @@ import {
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
 export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "copyProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus"> {
+  const resolveProviderWorkspaceId = (): string | null =>
+    get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+
+  const ensureProviderControlReady = async (): Promise<string | null> => {
+    const workspaceId = resolveProviderWorkspaceId();
+    if (!workspaceId) return null;
+
+    await ensureServerRunning(get, set, workspaceId);
+    const socket = ensureControlSocket(get, set, workspaceId);
+    const sessionId = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
+    if (!socket || !sessionId) {
+      return null;
+    }
+
+    return workspaceId;
+  };
+
   return {
     connectProvider: async (provider, apiKey) => {
       const methods = providerAuthMethodsFor(get(), provider);
@@ -330,12 +347,9 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
   
 
     requestProviderCatalog: async () => {
-      const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+      const workspaceId = await ensureProviderControlReady();
       if (!workspaceId) return;
-  
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-  
+
       const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "provider_catalog_get", sessionId }));
       if (!ok) {
         set((s) => ({
@@ -352,12 +366,9 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
   
 
     requestProviderAuthMethods: async () => {
-      const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+      const workspaceId = await ensureProviderControlReady();
       if (!workspaceId) return;
-  
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-  
+
       const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "provider_auth_methods_get", sessionId }));
       if (!ok) {
         set((s) => ({
@@ -374,11 +385,8 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
   
 
     refreshProviderStatus: async () => {
-      const workspaceId = get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
+      const workspaceId = await ensureProviderControlReady();
       if (!workspaceId) return;
-  
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
 
       set({ providerStatusRefreshing: true });
       const sid = get().workspaceRuntimeById[workspaceId]?.controlSessionId;

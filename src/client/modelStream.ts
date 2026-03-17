@@ -7,6 +7,7 @@ const finiteNumberSchema = z.number().finite();
 const partRecordSchema = z.record(z.string(), z.unknown());
 
 export type ModelStreamChunkEvent = Extract<ServerEvent, { type: "model_stream_chunk" }>;
+export type ModelStreamRawEvent = Extract<ServerEvent, { type: "model_stream_raw" }>;
 
 export type ModelStreamUpdate =
   | { kind: "turn_start"; turnId: string }
@@ -32,7 +33,13 @@ export type ModelStreamUpdate =
     }
   | { kind: "assistant_text_start"; turnId: string; streamId: string; phase?: string }
   | { kind: "assistant_delta"; turnId: string; streamId: string; text: string; phase?: string }
-  | { kind: "assistant_text_end"; turnId: string; streamId: string; phase?: string }
+  | {
+      kind: "assistant_text_end";
+      turnId: string;
+      streamId: string;
+      phase?: string;
+      annotations?: Array<Record<string, unknown>>;
+    }
   | { kind: "reasoning_start"; turnId: string; streamId: string; mode: "reasoning" | "summary" }
   | { kind: "reasoning_delta"; turnId: string; streamId: string; mode: "reasoning" | "summary"; text: string }
   | { kind: "reasoning_end"; turnId: string; streamId: string; mode: "reasoning" | "summary" }
@@ -91,6 +98,15 @@ function asFiniteNumber(value: unknown): number | undefined {
 function asPartRecord(value: unknown): Record<string, unknown> {
   const parsed = partRecordSchema.safeParse(value);
   return parsed.success ? parsed.data : {};
+}
+
+function asRecordArray(value: unknown): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const next = value.filter(
+    (entry): entry is Record<string, unknown> =>
+      typeof entry === "object" && entry !== null && !Array.isArray(entry),
+  );
+  return next.length > 0 ? next : undefined;
 }
 
 function asReasoningMode(value: unknown): "reasoning" | "summary" {
@@ -339,6 +355,7 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         kind: "assistant_text_end",
         turnId: evt.turnId,
         streamId: asString(part.id) ?? `text:${evt.index}`,
+        ...(asRecordArray(part.annotations) ? { annotations: asRecordArray(part.annotations) } : {}),
         ...(assistantPhase(part.phase) ? { phase: assistantPhase(part.phase) } : {}),
       };
     case "reasoning_start":
@@ -496,4 +513,58 @@ export function mapModelStreamChunk(evt: ModelStreamChunkEvent): ModelStreamUpda
         payload: part,
       };
   }
+}
+
+function webSearchCallAction(item: Record<string, unknown>): Record<string, unknown> | undefined {
+  const action = asPartRecord(item.action);
+  return Object.keys(action).length > 0 ? action : undefined;
+}
+
+function webSearchCallSources(item: Record<string, unknown>): unknown[] | undefined {
+  const action = webSearchCallAction(item);
+  if (!action || !Array.isArray(action.sources)) return undefined;
+  return action.sources;
+}
+
+function mapNativeWebSearchRawEvent(evt: ModelStreamRawEvent): ModelStreamUpdate[] {
+  if (evt.format !== "openai-responses-v1") return [];
+
+  const event = asPartRecord(evt.event);
+  const eventType = asString(event.type);
+  if (!eventType) return [];
+
+  const item = asPartRecord(event.item);
+  if (item.type !== "web_search_call") return [];
+
+  const key = rawProviderKey(item, `native-web-search:${evt.turnId}:${evt.index}`);
+  if (eventType === "response.output_item.added") {
+    return [{
+      kind: "tool_input_start",
+      turnId: evt.turnId,
+      key,
+      name: "nativeWebSearch",
+      args: webSearchCallAction(item),
+    }];
+  }
+
+  if (eventType === "response.output_item.done") {
+    return [{
+      kind: "tool_result",
+      turnId: evt.turnId,
+      key,
+      name: "nativeWebSearch",
+      result: {
+        status: item.status ?? "completed",
+        action: webSearchCallAction(item),
+        sources: webSearchCallSources(item),
+        raw: item,
+      },
+    }];
+  }
+
+  return [];
+}
+
+export function mapModelStreamRawEvent(evt: ModelStreamRawEvent): ModelStreamUpdate[] {
+  return mapNativeWebSearchRawEvent(evt);
 }

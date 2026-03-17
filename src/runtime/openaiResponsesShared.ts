@@ -2,6 +2,7 @@ import type { PiModel } from "./piRuntimeOptions";
 import {
   createResponsesStreamProjector,
   projectResponsesStreamEvent,
+  type ResponsesTextAnnotation,
 } from "./openaiResponsesProjector";
 
 type AssistantToolCallBlock = {
@@ -14,7 +15,7 @@ type AssistantToolCallBlock = {
 
 type AssistantContentBlock =
   | { type: "thinking"; thinking?: string; thinkingSignature?: string }
-  | { type: "text"; text: string; textSignature?: string }
+  | { type: "text"; text: string; textSignature?: string; annotations?: ResponsesTextAnnotation[] }
   | AssistantToolCallBlock;
 
 type AssistantMessageLike = {
@@ -247,7 +248,11 @@ export function convertResponsesMessages(
           output.push({
             type: "message",
             role: "assistant",
-            content: [{ type: "output_text", text: sanitizeSurrogates(block.text), annotations: [] }],
+            content: [{
+              type: "output_text",
+              text: sanitizeSurrogates(block.text),
+              annotations: Array.isArray(block.annotations) ? block.annotations : [],
+            }],
             status: "completed",
             id: msgId,
           });

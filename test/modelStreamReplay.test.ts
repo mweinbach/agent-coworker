@@ -175,4 +175,53 @@ describe("modelStreamReplay", () => {
       part: { id: "finish-1" },
     })).toBe(false);
   });
+
+  test("replays native web search raw events without marking the turn as raw-backed", () => {
+    const runtime = createModelStreamReplayRuntime();
+    const turnId = "turn-native-web";
+
+    const updates = replayModelStreamRawEvent(runtime, {
+      type: "model_stream_raw",
+      sessionId: "session-3",
+      turnId,
+      index: 0,
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      format: "openai-responses-v1",
+      normalizerVersion: 1,
+      event: {
+        type: "response.output_item.added",
+        item: {
+          id: "ws_1",
+          type: "web_search_call",
+          action: {
+            type: "search",
+            query: "native web search",
+          },
+        },
+      },
+    });
+
+    expect(updates).toEqual([{
+      kind: "tool_input_start",
+      turnId,
+      key: "ws_1",
+      name: "nativeWebSearch",
+      args: {
+        type: "search",
+        query: "native web search",
+      },
+    }]);
+    expect(runtime.rawBackedTurns.has(turnId)).toBe(false);
+    expect(shouldIgnoreNormalizedChunkForRawBackedTurn(runtime, {
+      type: "model_stream_chunk",
+      sessionId: "session-3",
+      turnId,
+      index: 1,
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      partType: "tool_result",
+      part: { toolCallId: "tool-1", toolName: "read", output: { ok: true } },
+    })).toBe(false);
+  });
 });

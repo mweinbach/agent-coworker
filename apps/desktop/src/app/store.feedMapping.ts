@@ -324,6 +324,10 @@ function rememberLatestToolKey(stream: ThreadModelStreamRuntime, turnId: string,
   stream.latestToolKeyByTurnAndName.set(toolTurnNameKey(turnId, name), fullKey);
 }
 
+function shouldReuseLatestToolItemByName(name: string): boolean {
+  return name !== "nativeWebSearch";
+}
+
 function resolveToolItem(
   stream: ThreadModelStreamRuntime,
   turnId: string,
@@ -335,6 +339,10 @@ function resolveToolItem(
   if (directItemId) {
     rememberLatestToolKey(stream, turnId, name, fullKey);
     return { fullKey, itemId: directItemId };
+  }
+
+  if (!shouldReuseLatestToolItemByName(name)) {
+    return { fullKey };
   }
 
   const latestKey = stream.latestToolKeyByTurnAndName.get(toolTurnNameKey(turnId, name));
@@ -505,10 +513,22 @@ function applyModelStreamUpdate(
     update.kind === "turn_finish" ||
     update.kind === "step_start" ||
     update.kind === "step_finish" ||
-    update.kind === "assistant_text_start" ||
-    update.kind === "assistant_text_end"
+    update.kind === "assistant_text_start"
   ) {
     // Keep these as state-only boundaries to avoid noisy transcript/feed reconstruction.
+    return;
+  }
+
+  if (update.kind === "assistant_text_end") {
+    const assistantKey = `${update.turnId}:${update.streamId}`;
+    const itemId = stream.assistantItemIdByStream.get(assistantKey);
+    if (itemId && update.annotations) {
+      ops.updateFeedItem(itemId, (item) =>
+        item.kind === "message" && item.role === "assistant"
+          ? { ...item, annotations: update.annotations }
+          : item
+      );
+    }
     return;
   }
 

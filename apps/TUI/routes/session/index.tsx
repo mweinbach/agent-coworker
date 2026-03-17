@@ -152,6 +152,7 @@ function FeedItemRenderer(props: { item: FeedItem; citationUrlsByIndex?: Readonl
       <Match when={props.item.type === "message" && (props.item as any).role === "assistant"}>
         <AssistantMessage
           text={(props.item as any).text}
+          citationAnnotations={(props.item as any).annotations}
           citationUrlsByIndex={props.citationUrlsByIndex}
         />
       </Match>

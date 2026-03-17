@@ -1,6 +1,9 @@
 import type { AutocompleteItem } from "./autocomplete";
 import { showToast } from "../../ui/toast";
 import {
+  CODEX_WEB_SEARCH_BACKEND_VALUES,
+  CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
+  CODEX_WEB_SEARCH_MODE_VALUES,
   OPENAI_REASONING_EFFORT_VALUES,
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
@@ -38,6 +41,9 @@ const OPENAI_COMPATIBLE_PROVIDERS = new Set(["openai", "codex-cli"]);
 const TEXT_VERBOSITY_SET = new Set<string>(OPENAI_TEXT_VERBOSITY_VALUES);
 const REASONING_EFFORT_SET = new Set<string>(OPENAI_REASONING_EFFORT_VALUES);
 const REASONING_SUMMARY_SET = new Set<string>(OPENAI_REASONING_SUMMARY_VALUES);
+const WEB_SEARCH_BACKEND_SET = new Set<string>(CODEX_WEB_SEARCH_BACKEND_VALUES);
+const WEB_SEARCH_MODE_SET = new Set<string>(CODEX_WEB_SEARCH_MODE_VALUES);
+const WEB_SEARCH_CONTEXT_SIZE_SET = new Set<string>(CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES);
 
 export type LocalSlashCommand = {
   name: string;
@@ -78,6 +84,10 @@ function buildDefaultHarnessContext(objectiveOverride: string) {
 function activeOpenAICompatibleProvider(deps: LocalSlashDependencies): "openai" | "codex-cli" | null {
   const provider = deps.getCurrentProvider().trim();
   return OPENAI_COMPATIBLE_PROVIDERS.has(provider) ? (provider as "openai" | "codex-cli") : null;
+}
+
+function activeCodexProvider(deps: LocalSlashDependencies): "codex-cli" | null {
+  return deps.getCurrentProvider().trim() === "codex-cli" ? "codex-cli" : null;
 }
 
 function setActiveProviderOption(
@@ -134,6 +144,98 @@ function setActiveProviderOption(
     `${provider} ${field === "textVerbosity" ? "verbosity" : field === "reasoningEffort" ? "reasoning effort" : "reasoning summary"} updated`,
     "success"
   );
+}
+
+function setCodexWebSearchMode(deps: LocalSlashDependencies, rawValue: string) {
+  if (!activeCodexProvider(deps)) {
+    showToast("Switch to Codex CLI first", "error");
+    return;
+  }
+
+  const value = rawValue.trim().toLowerCase();
+  if (!value) {
+    showToast("Usage: /web-search-mode <disabled|cached|live>", "warning");
+    return;
+  }
+  if (!WEB_SEARCH_MODE_SET.has(value)) {
+    showToast("Web search mode must be disabled, cached, or live", "error");
+    return;
+  }
+
+  const dispatched = deps.syncActions.setConfig({
+    providerOptions: {
+      "codex-cli": {
+        webSearchMode: value as "disabled" | "cached" | "live",
+      },
+    },
+  });
+  if (!dispatched) {
+    showToast("Not connected — reconnect and try again", "error");
+    return;
+  }
+  showToast("Codex web search mode updated", "success");
+}
+
+function setCodexWebSearchBackend(deps: LocalSlashDependencies, rawValue: string) {
+  if (!activeCodexProvider(deps)) {
+    showToast("Switch to Codex CLI first", "error");
+    return;
+  }
+
+  const value = rawValue.trim().toLowerCase();
+  if (!value) {
+    showToast("Usage: /web-search-backend <native|exa>", "warning");
+    return;
+  }
+  if (!WEB_SEARCH_BACKEND_SET.has(value)) {
+    showToast("Web search backend must be native or exa", "error");
+    return;
+  }
+
+  const dispatched = deps.syncActions.setConfig({
+    providerOptions: {
+      "codex-cli": {
+        webSearchBackend: value as "native" | "exa",
+      },
+    },
+  });
+  if (!dispatched) {
+    showToast("Not connected — reconnect and try again", "error");
+    return;
+  }
+  showToast("Codex web search backend updated", "success");
+}
+
+function setCodexWebSearchContext(deps: LocalSlashDependencies, rawValue: string) {
+  if (!activeCodexProvider(deps)) {
+    showToast("Switch to Codex CLI first", "error");
+    return;
+  }
+
+  const value = rawValue.trim().toLowerCase();
+  if (!value) {
+    showToast("Usage: /web-search-context <low|medium|high>", "warning");
+    return;
+  }
+  if (!WEB_SEARCH_CONTEXT_SIZE_SET.has(value)) {
+    showToast("Web search context must be low, medium, or high", "error");
+    return;
+  }
+
+  const dispatched = deps.syncActions.setConfig({
+    providerOptions: {
+      "codex-cli": {
+        webSearch: {
+          contextSize: value as "low" | "medium" | "high",
+        },
+      },
+    },
+  });
+  if (!dispatched) {
+    showToast("Not connected — reconnect and try again", "error");
+    return;
+  }
+  showToast("Codex web search context updated", "success");
 }
 
 function parseWithKnownCommandNames(
@@ -358,6 +460,33 @@ export function createLocalSlashCommands(deps: LocalSlashDependencies): LocalSla
       icon: "S",
       execute: (argumentsText) => {
         setActiveProviderOption(deps, "reasoningSummary", argumentsText);
+      },
+    },
+    {
+      name: "web-search-backend",
+      aliases: [],
+      description: "Choose the Codex web search backend",
+      icon: "b",
+      execute: (argumentsText) => {
+        setCodexWebSearchBackend(deps, argumentsText);
+      },
+    },
+    {
+      name: "web-search-mode",
+      aliases: [],
+      description: "Set Codex native web search mode",
+      icon: "w",
+      execute: (argumentsText) => {
+        setCodexWebSearchMode(deps, argumentsText);
+      },
+    },
+    {
+      name: "web-search-context",
+      aliases: [],
+      description: "Set Codex native web search context size",
+      icon: "W",
+      execute: (argumentsText) => {
+        setCodexWebSearchContext(deps, argumentsText);
       },
     },
     {

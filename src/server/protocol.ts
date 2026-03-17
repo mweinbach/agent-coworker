@@ -474,7 +474,7 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.19";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.21";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",

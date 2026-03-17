@@ -248,8 +248,6 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   const setProviderApiKey = useAppStore((s) => s.setProviderApiKey);
   const authorizeProviderAuth = useAppStore((s) => s.authorizeProviderAuth);
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
-  const requestProviderCatalog = useAppStore((s) => s.requestProviderCatalog);
-  const requestProviderAuthMethods = useAppStore((s) => s.requestProviderAuthMethods);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
 
   const [expandedProvider, setExpandedProvider] = useState<ProviderName | null>(null);
@@ -283,10 +281,8 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
 
   // Initial fetch
   useEffect(() => {
-    void requestProviderCatalog();
-    void requestProviderAuthMethods();
     void refreshProviderStatus();
-  }, [requestProviderCatalog, requestProviderAuthMethods, refreshProviderStatus]);
+  }, [refreshProviderStatus]);
 
   // Poll provider status while this step is visible (useful for OAuth flows in browser).
   // Stop once a model provider is connected.

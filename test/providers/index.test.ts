@@ -72,6 +72,16 @@ describe("src/providers/index.ts", () => {
       expect(headers.authorization).toBe("Bearer nvidia-key");
     });
 
+
+    test("creates OpenAI-API Proxy model with saved key", async () => {
+      const config = makeConfig({ provider: "openai-proxy", model: "anthropic.claude-sonnet-4-5", preferredChildModel: "anthropic.claude-sonnet-4-5" });
+      const model = getModelForProvider(config, "anthropic.claude-sonnet-4-5", "proxy-key") as any;
+      expect(model.provider).toBe("openai-proxy.completions");
+      const headers = await model.config.headers();
+      expect(headers.authorization).toBe("Bearer proxy-key");
+      expect(headers.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS).toBe("1");
+    });
+
     test("creates OpenCode Go model with saved key", async () => {
       const config = makeConfig({ provider: "opencode-go", model: "glm-5", preferredChildModel: "glm-5" });
       const model = getModelForProvider(config, "glm-5", "opencode-key") as any;
@@ -126,6 +136,7 @@ describe("src/providers/index.ts", () => {
       expect(defaultModelForProvider("nvidia")).toBe(PROVIDERS.nvidia.defaultModel);
       expect(defaultModelForProvider("opencode-go")).toBe(PROVIDERS["opencode-go"].defaultModel);
       expect(defaultModelForProvider("opencode-zen")).toBe(PROVIDERS["opencode-zen"].defaultModel);
+      expect(defaultModelForProvider("openai-proxy")).toBe(PROVIDERS["openai-proxy"].defaultModel);
       expect(defaultModelForProvider("codex-cli")).toBe(PROVIDERS["codex-cli"].defaultModel);
     });
   });

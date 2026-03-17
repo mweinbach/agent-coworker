@@ -11,6 +11,10 @@ import {
   readCodexAuthMaterial,
   refreshCodexAuthMaterialCoalesced,
 } from "./codex-auth";
+import {
+  OPENAI_PROXY_DISABLED_BETA_HEADER,
+  OPENAI_PROXY_DISABLED_BETA_HEADER_VALUE,
+} from "./openaiProxyShared";
 import { resolveAuthHomeDir } from "../utils/authHome";
 
 type HeaderMap = Record<string, string>;
@@ -100,6 +104,19 @@ export function createTogetherModelAdapter(modelId: string, savedKey?: string): 
   return createModelAdapter(modelId, "together.completions", async () => {
     const key = firstNonEmpty(savedKey, envKey("TOGETHER_API_KEY"));
     const headers: HeaderMap = {};
+    if (key) {
+      headers.authorization = `Bearer ${key}`;
+    }
+    return headers;
+  });
+}
+
+export function createOpenAiProxyModelAdapter(modelId: string, savedKey?: string): ProviderModelAdapter {
+  return createModelAdapter(modelId, "openai-proxy.completions", async () => {
+    const key = firstNonEmpty(savedKey, envKey("OPENAI_PROXY_API_KEY"));
+    const headers: HeaderMap = {
+      [OPENAI_PROXY_DISABLED_BETA_HEADER]: OPENAI_PROXY_DISABLED_BETA_HEADER_VALUE,
+    };
     if (key) {
       headers.authorization = `Bearer ${key}`;
     }

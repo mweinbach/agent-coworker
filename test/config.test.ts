@@ -181,6 +181,22 @@ describe("loadConfig", () => {
     expect(cfg.runtime).toBe("openai-responses");
   });
 
+
+  test("openai-proxy allows non-registry model ids and stays on PI runtime", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      provider: "openai-proxy",
+      model: "anthropic.claude-sonnet-4-5",
+      runtime: "openai-responses",
+    });
+
+    const cfg = await loadConfig({ cwd, homedir: home, builtInDir: repoRoot(), env: {} });
+    expect(cfg.provider).toBe("openai-proxy");
+    expect(cfg.model).toBe("anthropic.claude-sonnet-4-5");
+    expect(cfg.runtime).toBe("pi");
+  });
+
   test("stale OpenAI Responses runtime config is normalized away for non-OpenAI providers", async () => {
     const { cwd, home } = await makeTmpDirs();
 

@@ -84,7 +84,9 @@ function mergeProviderOptionDefaults(
   modelId: string,
   providerOptions: Record<string, any> | undefined,
 ): Record<string, any> | undefined {
-  const defaults = assertSupportedModel(provider, modelId, "model").providerOptionsDefaults;
+  const defaults = provider === "openai-proxy"
+    ? {}
+    : assertSupportedModel(provider, modelId, "model").providerOptionsDefaults;
   const current = isPlainObject(providerOptions) ? deepMerge({}, providerOptions) as Record<string, any> : undefined;
   const currentProviderOptions =
     current && isPlainObject(current[provider]) ? current[provider] as Record<string, unknown> : undefined;
@@ -105,6 +107,14 @@ function mergeProviderOptionDefaults(
 }
 
 function resolveSupportedConfiguredModel(provider: ProviderName, modelId: string, source: string) {
+  if (provider === "openai-proxy") {
+    const trimmed = modelId.trim();
+    if (trimmed) {
+      const known = getSupportedModel(provider, trimmed);
+      return known ?? { ...defaultSupportedModel(provider), id: trimmed, displayName: trimmed };
+    }
+    return defaultSupportedModel(provider);
+  }
   const supported = getSupportedModel(provider, modelId);
   if (supported) return supported;
   const fallback = defaultSupportedModel(provider);
@@ -552,7 +562,9 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
 export function getModel(config: AgentConfig, id?: string) {
   const modelId = id || config.model;
-  assertSupportedModel(config.provider, modelId, id ? "model override" : "model");
+  if (config.provider !== "openai-proxy") {
+    assertSupportedModel(config.provider, modelId, id ? "model override" : "model");
+  }
   const savedKey = getSavedProviderApiKey(config, config.provider);
   return getModelForProvider(config, modelId, savedKey);
 }

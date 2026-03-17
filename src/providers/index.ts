@@ -10,6 +10,7 @@ import { nvidiaProvider } from "./nvidia";
 import { opencodeGoProvider } from "./opencode-go";
 import { opencodeZenProvider } from "./opencode-zen";
 import { openaiProvider } from "./openai";
+import { openaiProxyProvider } from "./openai-proxy";
 import { togetherProvider } from "./together";
 export { DEFAULT_PROVIDER_OPTIONS } from "./providerOptions";
 export {
@@ -52,6 +53,7 @@ const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   nvidia: nvidiaProvider,
   "opencode-go": opencodeGoProvider,
   "opencode-zen": opencodeZenProvider,
+  "openai-proxy": openaiProxyProvider,
   "codex-cli": codexCliProvider,
   google: googleProvider,
   openai: openaiProvider,
@@ -64,14 +66,17 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   nvidia: { ...PROVIDER_RUNTIMES.nvidia, ...PROVIDER_MODEL_CATALOG.nvidia },
   "opencode-go": { ...PROVIDER_RUNTIMES["opencode-go"], ...PROVIDER_MODEL_CATALOG["opencode-go"] },
   "opencode-zen": { ...PROVIDER_RUNTIMES["opencode-zen"], ...PROVIDER_MODEL_CATALOG["opencode-zen"] },
+  "openai-proxy": { ...PROVIDER_RUNTIMES["openai-proxy"], ...PROVIDER_MODEL_CATALOG["openai-proxy"] },
   "codex-cli": { ...PROVIDER_RUNTIMES["codex-cli"], ...PROVIDER_MODEL_CATALOG["codex-cli"] },
   google: { ...PROVIDER_RUNTIMES.google, ...PROVIDER_MODEL_CATALOG.google },
   openai: { ...PROVIDER_RUNTIMES.openai, ...PROVIDER_MODEL_CATALOG.openai },
 };
 
 export function getModelForProvider(config: AgentConfig, modelId: string, savedKey?: string) {
-  const supported = assertSupportedModel(config.provider, modelId);
-  return PROVIDERS[config.provider].createModel({ config, modelId: supported.id, savedKey });
+  const resolvedModelId = config.provider === "openai-proxy"
+    ? modelId.trim()
+    : assertSupportedModel(config.provider, modelId).id;
+  return PROVIDERS[config.provider].createModel({ config, modelId: resolvedModelId, savedKey });
 }
 
 export function getProviderKeyCandidates(provider: ProviderName): readonly ProviderName[] {

@@ -9,6 +9,7 @@ import {
   createGoogleModelAdapter,
   createNvidiaModelAdapter,
   createOpenAiModelAdapter,
+  createOpenAiProxyModelAdapter,
   createTogetherModelAdapter,
 } from "../../src/providers/modelAdapter";
 import { makeConfig, makeTmpDirs, withEnv, writeJson } from "./helpers";
@@ -94,6 +95,16 @@ describe("provider model adapters", () => {
     });
   });
 
+
+  test("OpenAI-API Proxy adapter injects required beta-disable header and bearer token", async () => {
+    await withEnv("OPENAI_PROXY_API_KEY", "proxy-env", async () => {
+      const adapter = createOpenAiProxyModelAdapter("anthropic.claude-sonnet-4-5");
+      const headers = await adapter.config.headers();
+      expect(headers.authorization).toBe("Bearer proxy-env");
+      expect(headers.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS).toBe("1");
+    });
+  });
+
   test("NVIDIA adapter wires Bearer authorization header", async () => {
     await withEnv("NVIDIA_API_KEY", "nvkey", async () => {
       const adapter = createNvidiaModelAdapter("nvidia/nemotron-3-super-120b-a12b");
@@ -110,12 +121,14 @@ describe("provider model adapters", () => {
             await withEnv("BASETEN_API_KEY", undefined, async () => {
               await withEnv("TOGETHER_API_KEY", undefined, async () => {
                 await withEnv("NVIDIA_API_KEY", undefined, async () => {
+                  await withEnv("OPENAI_PROXY_API_KEY", undefined, async () => {
                   const openAiHeaders = await createOpenAiModelAdapter("gpt-5.2").config.headers();
                   const googleHeaders = await createGoogleModelAdapter("gemini-3.1").config.headers();
                   const anthropicHeaders = await createAnthropicModelAdapter("claude-opus-4-6").config.headers();
                   const basetenHeaders = await createBasetenModelAdapter("moonshotai/Kimi-K2.5").config.headers();
                   const togetherHeaders = await createTogetherModelAdapter("moonshotai/Kimi-K2.5").config.headers();
                   const nvidiaHeaders = await createNvidiaModelAdapter("nvidia/nemotron-3-super-120b-a12b").config.headers();
+                  const openAiProxyHeaders = await createOpenAiProxyModelAdapter("anthropic.claude-sonnet-4-5").config.headers();
 
                   expect(openAiHeaders).toEqual({});
                   expect(googleHeaders).toEqual({});
@@ -123,6 +136,8 @@ describe("provider model adapters", () => {
                   expect(basetenHeaders).toEqual({});
                   expect(togetherHeaders).toEqual({});
                   expect(nvidiaHeaders).toEqual({});
+                  expect(openAiProxyHeaders).toEqual({ CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" });
+                });
                 });
               });
             });

@@ -45,7 +45,7 @@ Key modules:
 | `src/agent.ts` | Core agent loop. `createRunTurn()` factory returns `runTurn()` which calls the Vercel AI SDK `generateText()`. |
 | `src/server/` | WebSocket server, session management, protocol types, model streaming. |
 | `src/tools/` | Tool factories. Each tool is a file exporting a `create*Tool(ctx)` function. |
-| `src/providers/` | Provider registry (`google`, `openai`, `anthropic`, `codex-cli`). Each exports `defaultModel`, `keyCandidates`, `createModel()`. |
+| `src/providers/` | Provider registry (`google`, `openai`, `anthropic`, `openai-proxy`, `codex-cli`). Each exports `defaultModel`, `keyCandidates`, `createModel()`. |
 | `src/config.ts` | Config loading with three-tier merge and env var overrides. |
 | `src/mcp/` | MCP server config registry, OAuth provider, auth store. |
 | `src/skills/` | Skill discovery and trigger extraction. |
@@ -98,7 +98,7 @@ Configuration uses a **three-tier hierarchy** (each layer overrides the previous
 
 | Variable | Purpose |
 |---|---|
-| `AGENT_PROVIDER` | Provider name (`google`, `openai`, `anthropic`, `codex-cli`) |
+| `AGENT_PROVIDER` | Provider name (`google`, `openai`, `anthropic`, `openai-proxy`, `codex-cli`) |
 | `AGENT_MODEL` | Model ID override |
 | `AGENT_WORKING_DIR` | Working directory for the agent |
 | `AGENT_OUTPUT_DIR` | Output directory for generated files |
@@ -237,3 +237,13 @@ Key testing patterns:
 - [`docs/session-storage-architecture.md`](docs/session-storage-architecture.md) -- Session persistence design
 - [`CLAUDE.md`](CLAUDE.md) -- Repository assistant notes and architecture context
 - [`apps/TUI/docs/opentui.md`](apps/TUI/docs/opentui.md) -- OpenTUI framework documentation
+
+
+### OpenAI-API Proxy provider
+
+`openai-proxy` is an OpenAI-compatible gateway provider intended for internal proxies (for example LiteLLM -> Bedrock Claude). Configure:
+
+- `OPENAI_PROXY_BASE_URL` (required): Base URL for the gateway (Cowork calls `GET /models` on this base URL for dynamic catalog discovery).
+- `OPENAI_PROXY_API_KEY` (optional env fallback): Used when no saved provider API key exists.
+
+All outbound requests from this provider include `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: 1`.

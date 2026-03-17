@@ -73,7 +73,9 @@ export class ProviderAuthManager {
     const currentConfig = this.opts.getConfig();
     const nextProvider = providerRaw ?? currentConfig.provider;
     try {
-      assertSupportedModel(nextProvider, modelId, "model");
+      if (nextProvider !== "openai-proxy") {
+        assertSupportedModel(nextProvider, modelId, "model");
+      }
     } catch (error) {
       this.opts.emitError("validation_failed", "provider", error instanceof Error ? error.message : String(error));
       return;

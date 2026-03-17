@@ -5,8 +5,8 @@ import { isProviderName, PROVIDER_NAMES, resolveProviderName } from "../src/type
 // PROVIDER_NAMES
 // ---------------------------------------------------------------------------
 describe("PROVIDER_NAMES", () => {
-  test("contains exactly 9 providers", () => {
-    expect(PROVIDER_NAMES).toHaveLength(9);
+  test("contains exactly 10 providers", () => {
+    expect(PROVIDER_NAMES).toHaveLength(10);
   });
 
   test("contains expected provider names", () => {
@@ -18,6 +18,7 @@ describe("PROVIDER_NAMES", () => {
     expect(PROVIDER_NAMES).toContain("nvidia");
     expect(PROVIDER_NAMES).toContain("opencode-go");
     expect(PROVIDER_NAMES).toContain("opencode-zen");
+    expect(PROVIDER_NAMES).toContain("openai-proxy");
     expect(PROVIDER_NAMES).toContain("codex-cli");
   });
 });
@@ -32,6 +33,7 @@ describe("resolveProviderName", () => {
     expect(resolveProviderName("nvidia")).toBe("nvidia");
     expect(resolveProviderName("opencode-go")).toBe("opencode-go");
     expect(resolveProviderName("opencode-zen")).toBe("opencode-zen");
+    expect(resolveProviderName("openai-proxy")).toBe("openai-proxy");
     expect(resolveProviderName("codex-cli")).toBe("codex-cli");
   });
 
@@ -69,6 +71,10 @@ describe("isProviderName", () => {
 
     test("nvidia", () => {
       expect(isProviderName("nvidia")).toBe(true);
+    });
+
+    test("openai-proxy", () => {
+      expect(isProviderName("openai-proxy")).toBe(true);
     });
 
     test("codex-cli", () => {

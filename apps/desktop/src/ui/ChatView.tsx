@@ -362,6 +362,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   nvidia: "NVIDIA",
   "opencode-go": "OpenCode Go",
   "opencode-zen": "OpenCode Zen",
+  "openai-proxy": "OpenAI-API Proxy",
   "codex-cli": "Codex CLI",
 };
 

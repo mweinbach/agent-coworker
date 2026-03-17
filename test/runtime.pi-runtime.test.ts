@@ -210,6 +210,40 @@ describe("pi runtime regressions", () => {
     expect(resolved.model.maxTokens).toBe(128000);
   });
 
+
+  test("openai-proxy resolves through PI runtime with configured base URL and forced header", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-proxy-"));
+    await withEnv("OPENAI_PROXY_BASE_URL", "https://proxy.example/v1", async () => {
+      const config = makeConfig(homeDir, {
+        provider: "openai-proxy",
+        model: "anthropic.claude-sonnet-4-5",
+        preferredChildModel: "anthropic.claude-sonnet-4-5",
+      });
+
+      const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+      expect(resolved.model.api).toBe("openai-completions");
+      expect(resolved.model.baseUrl).toBe("https://proxy.example/v1");
+      expect(resolved.model.id).toBe("anthropic.claude-sonnet-4-5");
+      expect(resolved.headers).toEqual({ CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" });
+    });
+  });
+
+  test("openai-proxy PI runtime uses OPENAI_PROXY_API_KEY fallback", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-proxy-key-"));
+    await withEnv("OPENAI_PROXY_BASE_URL", "https://proxy.example/v1", async () => {
+      await withEnv("OPENAI_PROXY_API_KEY", "proxy-env-key", async () => {
+        const config = makeConfig(homeDir, {
+          provider: "openai-proxy",
+          model: "anthropic.claude-haiku-3-5",
+          preferredChildModel: "anthropic.claude-haiku-3-5",
+        });
+
+        const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+        expect(resolved.apiKey).toBe("proxy-env-key");
+      });
+    });
+  });
+
   test("openai responses model resolution keeps supported token limits for gpt-5.4", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-openai-gpt54-"));
     const config = makeConfig(homeDir, {

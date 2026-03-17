@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { AgentConfig } from "./types";
 import { discoverSkills } from "./skills";
-import { assertSupportedModel, type SupportedModel } from "./models/registry";
+import { assertSupportedModel, defaultSupportedModel, type SupportedModel } from "./models/registry";
 import { getChildAgentModelInfo, listChildAgentModelsWithInfo } from "./models/childAgentModelInfo";
 import { parseChildModelRef } from "./models/childModelRouting";
 import { MemoryStore } from "./memoryStore";
@@ -12,8 +12,14 @@ import type { AgentRole } from "./shared/agents";
 import { isUserFacingProviderEnabled } from "./providers/catalog";
 import type { ProviderName } from "./types";
 
+function resolvePromptModel(config: AgentConfig, modelId: string, source: string): SupportedModel {
+  if (config.provider !== "openai-proxy") return assertSupportedModel(config.provider, modelId, source);
+  const trimmed = modelId.trim();
+  return { ...defaultSupportedModel("openai-proxy"), id: trimmed || defaultSupportedModel("openai-proxy").id, displayName: trimmed || "OpenAI-API Proxy" };
+}
+
 async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
-  const supportedModel = assertSupportedModel(config.provider, config.model, "model");
+  const supportedModel = resolvePromptModel(config, config.model, "model");
   const modelSystemPath = path.join(config.builtInDir, "prompts", supportedModel.promptTemplate);
   try {
     await fs.access(modelSystemPath);
@@ -113,12 +119,13 @@ const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
   nvidia: "NVIDIA",
   "opencode-go": "OpenCode Go",
   "opencode-zen": "OpenCode Zen",
+  "openai-proxy": "OpenAI-API Proxy",
   "codex-cli": "Codex CLI",
 };
 
 function buildSpawnAgentPromptBody(config: AgentConfig): string {
   const providerLabel = PROVIDER_DISPLAY_NAMES[config.provider] ?? config.provider;
-  const currentModel = assertSupportedModel(config.provider, config.model, "model");
+  const currentModel = resolvePromptModel(config, config.model, "model");
 
   const roleLines = Object.values(AGENT_ROLE_DEFINITIONS)
     .map((role) => `- **${role.id}**: ${role.description}`)
@@ -128,7 +135,9 @@ function buildSpawnAgentPromptBody(config: AgentConfig): string {
     .map((ref) => {
       try {
         const parsed = parseChildModelRef(ref, config.provider, "child target");
-        const supported = assertSupportedModel(parsed.provider, parsed.modelId, "child target");
+        const supported = parsed.provider === "openai-proxy"
+          ? { ...defaultSupportedModel("openai-proxy"), id: parsed.modelId, displayName: parsed.modelId }
+          : assertSupportedModel(parsed.provider, parsed.modelId, "child target");
         const bestFor = getChildAgentModelInfo(parsed.provider, parsed.modelId)?.bestFor ?? "general-purpose work on this provider";
         const displayProvider = PROVIDER_DISPLAY_NAMES[parsed.provider] ?? parsed.provider;
         return `- **${displayProvider} / ${supported.displayName}** (\`${parsed.ref}\`): ${bestFor}.`;
@@ -254,7 +263,7 @@ export interface SystemPromptResult {
  * Use this when you need the skill metadata (e.g. for dynamic tool descriptions).
  */
 export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<SystemPromptResult> {
-  const supportedModel = assertSupportedModel(config.provider, config.model, "model");
+  const supportedModel = resolvePromptModel(config, config.model, "model");
   const systemPath = await resolveSystemTemplatePath(config);
   let prompt = await fs.readFile(systemPath, "utf-8");
 

@@ -306,4 +306,72 @@ describe("providers/connectionCatalog", () => {
 
     expect(payload.connected.filter((provider) => provider === "codex-cli")).toEqual(["codex-cli"]);
   });
+
+  test("openai-proxy catalog is populated from /models discovery", async () => {
+    const prev = process.env.OPENAI_PROXY_BASE_URL;
+    process.env.OPENAI_PROXY_BASE_URL = "https://proxy.example/v1";
+    try {
+    const payload = await getProviderCatalog({
+      readStore: async () => ({
+        version: 1,
+        updatedAt: "2026-02-17T00:00:00.000Z",
+        services: {
+          "openai-proxy": {
+            service: "openai-proxy",
+            mode: "api_key",
+            apiKey: "proxy-key",
+            updatedAt: "2026-02-17T00:00:00.000Z",
+          },
+        },
+      }),
+      fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: "anthropic.claude-sonnet-4-5" }, { id: "gpt-4o" }] })),
+    });
+
+    const entry = payload.all.find((item) => item.id === "openai-proxy");
+    expect(entry?.models).toEqual([{
+      id: "anthropic.claude-sonnet-4-5",
+      displayName: "anthropic.claude-sonnet-4-5",
+      knowledgeCutoff: "Unknown",
+      supportsImageInput: false,
+    }]);
+    expect(entry?.defaultModel).toBe("anthropic.claude-sonnet-4-5");
+    } finally {
+      if (prev === undefined) delete process.env.OPENAI_PROXY_BASE_URL;
+      else process.env.OPENAI_PROXY_BASE_URL = prev;
+    }
+  });
+
+  test("openai-proxy catalog keeps current manual model when not in discovery", async () => {
+    const prev = process.env.OPENAI_PROXY_BASE_URL;
+    process.env.OPENAI_PROXY_BASE_URL = "https://proxy.example/v1";
+    try {
+    const payload = await getProviderCatalog({
+      readStore: async () => ({ version: 1, updatedAt: "2026-02-17T00:00:00.000Z", services: {} }),
+      fetchImpl: async () => new Response(JSON.stringify({ data: [] })),
+      currentSelection: { provider: "openai-proxy", model: "anthropic.claude-opus-4-1" },
+    });
+    const entry = payload.all.find((item) => item.id === "openai-proxy");
+    expect(entry?.models.some((model) => model.id === "anthropic.claude-opus-4-1")).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.OPENAI_PROXY_BASE_URL;
+      else process.env.OPENAI_PROXY_BASE_URL = prev;
+    }
+  });
+
+  test("openai-proxy catalog gracefully falls back when discovery request fails", async () => {
+    const prev = process.env.OPENAI_PROXY_BASE_URL;
+    process.env.OPENAI_PROXY_BASE_URL = "https://proxy.example/v1";
+    try {
+    const payload = await getProviderCatalog({
+      readStore: async () => ({ version: 1, updatedAt: "2026-02-17T00:00:00.000Z", services: {} }),
+      fetchImpl: async () => new Response("boom", { status: 500 }),
+    });
+    const entry = payload.all.find((item) => item.id === "openai-proxy");
+    expect(entry?.models.length).toBeGreaterThan(0);
+    } finally {
+      if (prev === undefined) delete process.env.OPENAI_PROXY_BASE_URL;
+      else process.env.OPENAI_PROXY_BASE_URL = prev;
+    }
+  });
+
 });

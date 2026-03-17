@@ -6,6 +6,15 @@ import {
   type ProviderName,
 } from "../types";
 
+function resolveModelIdForProvider(provider: ProviderName, modelId: string, source: string): string {
+  if (provider === "openai-proxy") {
+    const trimmed = modelId.trim();
+    if (!trimmed) throw new Error(`${source} is required`);
+    return trimmed;
+  }
+  return assertSupportedModel(provider, modelId, source).id;
+}
+
 export type ParsedChildModelRef = {
   provider: ProviderName;
   modelId: string;
@@ -28,7 +37,7 @@ export function parseChildModelRef(raw: string, defaultProvider?: ProviderName, 
     if (!defaultProvider) {
       throw new Error(`Unsupported ${source} "${trimmed}". Expected provider:modelId.`);
     }
-    const modelId = assertSupportedModel(defaultProvider, trimmed, source).id;
+    const modelId = resolveModelIdForProvider(defaultProvider, trimmed, source);
     return {
       provider: defaultProvider,
       modelId,
@@ -43,7 +52,7 @@ export function parseChildModelRef(raw: string, defaultProvider?: ProviderName, 
     throw new Error(`Unsupported ${source} "${trimmed}". Expected provider:modelId.`);
   }
 
-  const modelId = assertSupportedModel(providerRaw, modelRaw, source).id;
+  const modelId = resolveModelIdForProvider(providerRaw, modelRaw, source);
   return {
     provider: providerRaw,
     modelId,
@@ -100,7 +109,7 @@ export function normalizeChildRoutingConfig(opts: {
   const mode = isChildModelRoutingMode(opts.childModelRoutingMode)
     ? opts.childModelRoutingMode
     : "same-provider";
-  const fallbackRef = childModelRef(opts.provider, assertSupportedModel(opts.provider, opts.model, "model").id);
+  const fallbackRef = childModelRef(opts.provider, resolveModelIdForProvider(opts.provider, opts.model, "model"));
   const allowedChildModelRefs = normalizeAllowedChildModelRefs(
     opts.allowedChildModelRefs ?? undefined,
     opts.provider,

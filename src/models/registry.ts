@@ -34,6 +34,7 @@ import opencodeZenMimoV2FlashFree from "../../config/models/opencode-zen/mimo-v2
 import opencodeZenMiniMaxM25Free from "../../config/models/opencode-zen/minimax-m2.5-free.json";
 import opencodeZenMiniMaxM25 from "../../config/models/opencode-zen/minimax-m2.5.json";
 import opencodeZenNemotron3SuperFree from "../../config/models/opencode-zen/nemotron-3-super-free.json";
+import openaiProxyDefaultClaude from "../../config/models/openai-proxy/default-claude.json";
 import togetherMoonshotAiKimiK25 from "../../config/models/together/moonshotai-kimi-k2.5.json";
 import togetherQwenQwen35397bA17b from "../../config/models/together/qwen-qwen3.5-397b-a17b.json";
 import togetherZaiOrgGlm5 from "../../config/models/together/zai-org-glm-5.json";
@@ -48,6 +49,7 @@ const providerNameSchema = z.enum([
   "nvidia",
   "opencode-go",
   "opencode-zen",
+  "openai-proxy",
   "codex-cli",
 ]);
 
@@ -100,6 +102,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   opencodeZenMiniMaxM25Free,
   opencodeZenMiniMaxM25,
   opencodeZenNemotron3SuperFree,
+  openaiProxyDefaultClaude,
   togetherMoonshotAiKimiK25,
   togetherQwenQwen35397bA17b,
   togetherZaiOrgGlm5,
@@ -117,6 +120,7 @@ function buildRegistry(entries: SupportedModel[]) {
     nvidia: [],
     "opencode-go": [],
     "opencode-zen": [],
+    "openai-proxy": [],
     "codex-cli": [],
   };
   const byKey = new Map<string, SupportedModel>();

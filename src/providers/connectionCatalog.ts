@@ -3,6 +3,12 @@ import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { defaultSupportedModel, listSupportedModels, type SupportedModel } from "../models/registry";
 import { readCodexAuthMaterial } from "./codex-auth";
 import { getOpenCodeDisplayName } from "./opencodeShared";
+import {
+  discoverOpenAiProxyModels,
+  resolveOpenAiProxyApiKey,
+  resolveOpenAiProxyBaseUrl,
+  type OpenAiCompatibleModelEntry,
+} from "./openaiProxyShared";
 import { resolveAuthHomeDir } from "../utils/authHome";
 
 export type ProviderCatalogModelEntry = Pick<
@@ -32,8 +38,18 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   nvidia: "NVIDIA",
   "opencode-go": getOpenCodeDisplayName("opencode-go"),
   "opencode-zen": getOpenCodeDisplayName("opencode-zen"),
+  "openai-proxy": "OpenAI-API Proxy",
   "codex-cli": "Codex CLI",
 };
+
+function mapDiscoveredModel(entry: OpenAiCompatibleModelEntry): ProviderCatalogModelEntry {
+  return {
+    id: entry.id,
+    displayName: entry.displayName,
+    knowledgeCutoff: entry.knowledgeCutoff,
+    supportsImageInput: entry.supportsImageInput,
+  };
+}
 
 export function listProviderCatalogEntries(): ProviderCatalogEntry[] {
   return PROVIDER_NAMES.map((provider) => ({
@@ -54,12 +70,41 @@ export async function getProviderCatalog(opts: {
   paths?: AiCoworkerPaths;
   readStore?: typeof readConnectionStore;
   readCodexAuthMaterialImpl?: typeof readCodexAuthMaterial;
+  fetchImpl?: typeof fetch;
+  currentSelection?: { provider: ProviderName; model: string };
 } = {}): Promise<ProviderCatalogPayload> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const readStore = opts.readStore ?? readConnectionStore;
   const readCodexAuthMaterialImpl = opts.readCodexAuthMaterialImpl ?? readCodexAuthMaterial;
   const store = await readStore(paths);
   const all = listProviderCatalogEntries();
+
+  const proxyBaseUrl = resolveOpenAiProxyBaseUrl();
+  const proxyApiKey = resolveOpenAiProxyApiKey({
+    savedKey: store.services["openai-proxy"]?.mode === "api_key" ? store.services["openai-proxy"]?.apiKey : undefined,
+  });
+  const proxyDiscovered = proxyBaseUrl
+    ? await discoverOpenAiProxyModels({ baseUrl: proxyBaseUrl, apiKey: proxyApiKey, fetchImpl: opts.fetchImpl }).catch(() => [])
+    : [];
+  const proxyCatalog = all.find((entry) => entry.id === "openai-proxy");
+  if (proxyCatalog && proxyDiscovered.length > 0) {
+    proxyCatalog.models = proxyDiscovered.map(mapDiscoveredModel);
+    proxyCatalog.defaultModel = proxyDiscovered[0]?.id ?? proxyCatalog.defaultModel;
+  }
+
+  const currentProxyModel = opts.currentSelection?.provider === "openai-proxy" ? opts.currentSelection.model.trim() : "";
+  if (proxyCatalog && currentProxyModel && !proxyCatalog.models.some((model) => model.id === currentProxyModel)) {
+    proxyCatalog.models = [
+      ...proxyCatalog.models,
+      {
+        id: currentProxyModel,
+        displayName: currentProxyModel,
+        knowledgeCutoff: "Unknown",
+        supportsImageInput: false,
+      },
+    ];
+  }
+
   const defaults: Record<string, string> = {};
   for (const entry of all) defaults[entry.id] = entry.defaultModel;
   const hasCodexOauth = Boolean((await readCodexAuthMaterialImpl(paths))?.accessToken);

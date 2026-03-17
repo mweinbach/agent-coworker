@@ -12,6 +12,7 @@ const DISPLAY_NAMES: Partial<Record<ProviderName, string>> = {
   nvidia: "NVIDIA",
   "opencode-go": "OpenCode Go",
   "opencode-zen": "OpenCode Zen",
+  "openai-proxy": "OpenAI-API Proxy",
   "codex-cli": "Codex CLI",
 };
 

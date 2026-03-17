@@ -38,6 +38,10 @@ export const PROVIDER_MODEL_CATALOG = {
     defaultModel: defaultModelIdForProvider("opencode-zen"),
     availableModels: listSupportedModelIds("opencode-zen"),
   },
+  "openai-proxy": {
+    defaultModel: defaultModelIdForProvider("openai-proxy"),
+    availableModels: listSupportedModelIds("openai-proxy"),
+  },
   "codex-cli": {
     defaultModel: defaultModelIdForProvider("codex-cli"),
     availableModels: listSupportedModelIds("codex-cli"),
@@ -71,6 +75,7 @@ export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   nvidia: PROVIDER_MODEL_CATALOG.nvidia.availableModels,
   "opencode-go": PROVIDER_MODEL_CATALOG["opencode-go"].availableModels,
   "opencode-zen": PROVIDER_MODEL_CATALOG["opencode-zen"].availableModels,
+  "openai-proxy": PROVIDER_MODEL_CATALOG["openai-proxy"].availableModels,
   "codex-cli": PROVIDER_MODEL_CATALOG["codex-cli"].availableModels,
   google: PROVIDER_MODEL_CATALOG.google.availableModels,
   openai: PROVIDER_MODEL_CATALOG.openai.availableModels,

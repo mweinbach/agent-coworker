@@ -28,6 +28,12 @@ import {
   type OpenCodeProviderName,
 } from "../providers/opencodeShared";
 import { getTogetherModelSpec, resolveTogetherApiKey } from "../providers/togetherShared";
+import {
+  OPENAI_PROXY_DISABLED_BETA_HEADER,
+  OPENAI_PROXY_DISABLED_BETA_HEADER_VALUE,
+  resolveOpenAiProxyApiKey,
+  resolveOpenAiProxyBaseUrl,
+} from "../providers/openaiProxyShared";
 import type { ModelMessage, ProviderName } from "../types";
 import { assertSupportedModel } from "../models/registry";
 import type { TelemetrySettings } from "../observability/runtime";
@@ -190,6 +196,15 @@ function stripPlaceholderCostFromAssistantRecord(
 }
 
 function applySupportedModelMetadata(model: PiModel, provider: ProviderName, modelId: string): PiModel {
+  if (provider === "openai-proxy") {
+    const trimmed = modelId.trim();
+    return {
+      ...model,
+      id: trimmed,
+      name: trimmed,
+      input: ["text"],
+    };
+  }
   const supported = assertSupportedModel(provider, modelId, "model");
   const input: Array<"text" | "image"> = supported.supportsImageInput ? ["text", "image"] : ["text"];
   return {
@@ -277,6 +292,29 @@ function getTogetherPiModel(modelId: string): PiModel | null {
     },
     contextWindow: modelSpec.contextWindow,
     maxTokens: modelSpec.maxTokens,
+  };
+}
+
+function getOpenAiProxyPiModel(modelId: string): PiModel | null {
+  const baseUrl = resolveOpenAiProxyBaseUrl();
+  if (!baseUrl) return null;
+
+  return {
+    id: modelId,
+    name: modelId,
+    api: "openai-completions",
+    provider: "openai-proxy",
+    baseUrl,
+    reasoning: true,
+    input: ["text"],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 200000,
+    maxTokens: 64000,
   };
 }
 
@@ -487,6 +525,20 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
       apiKey: resolveTogetherApiKey({
         savedKey: getSavedProviderApiKey(params.config, "together"),
       }),
+    };
+  }
+
+  if (provider === "openai-proxy") {
+    const model = getOpenAiProxyPiModel(modelId);
+    if (!model) throw new Error("OPENAI_PROXY_BASE_URL is required for provider openai-proxy.");
+    return {
+      model: applySupportedModelMetadata(model, provider, modelId),
+      apiKey: resolveOpenAiProxyApiKey({
+        savedKey: getSavedProviderApiKey(params.config, "openai-proxy"),
+      }),
+      headers: {
+        [OPENAI_PROXY_DISABLED_BETA_HEADER]: OPENAI_PROXY_DISABLED_BETA_HEADER_VALUE,
+      },
     };
   }
 

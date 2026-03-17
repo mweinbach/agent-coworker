@@ -12,6 +12,7 @@ const TITLE_MODEL_BY_PROVIDER = {
   together: "moonshotai/Kimi-K2.5",
   "opencode-go": "glm-5",
   "opencode-zen": "glm-5",
+  "openai-proxy": "anthropic.claude-3-5-sonnet",
 } as const satisfies Record<AgentConfig["provider"], string>;
 
 const TITLE_MAX_TOKENS = 150;

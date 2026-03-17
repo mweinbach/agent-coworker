@@ -9,6 +9,7 @@ export const PROVIDER_NAMES = [
   "nvidia",
   "opencode-go",
   "opencode-zen",
+  "openai-proxy",
   "codex-cli",
 ] as const;
 

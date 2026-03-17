@@ -25,6 +25,7 @@ describe("providers/authRegistry", () => {
     expect(methods.nvidia?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods["opencode-go"]?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods["opencode-zen"]?.some((m) => m.id === "api_key")).toBe(true);
+    expect(methods["openai-proxy"]?.some((m) => m.id === "api_key")).toBe(true);
     expect(methods["codex-cli"]?.some((m) => m.id === "oauth_cli")).toBe(true);
     expect(methods["codex-cli"]?.some((m) => m.id === "oauth_device")).toBe(false);
   });

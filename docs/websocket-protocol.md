@@ -235,7 +235,7 @@ Types referenced across multiple messages.
 ### ProviderName
 
 ```
-"google" | "openai" | "anthropic" | "opencode-go" | "opencode-zen" | "codex-cli"
+"google" | "openai" | "anthropic" | "opencode-go" | "opencode-zen" | "openai-proxy" | "codex-cli"
 ```
 
 ### PublicConfig
@@ -2261,6 +2261,9 @@ Result for MCP auth operations (`mcp_server_auth_callback` / `mcp_server_auth_se
 
 ### provider_catalog
 
+> OpenAI-API Proxy (`openai-proxy`) is dynamic: the server resolves models from `GET <OPENAI_PROXY_BASE_URL>/models` when available, preferring Claude/Anthropic-compatible model ids. If discovery fails or a manual session model is not returned by `/models`, the current model is still preserved in catalog output with conservative fallback metadata (`knowledgeCutoff: "Unknown"`, `supportsImageInput: false`). Outbound proxy requests always include `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: 1`.
+
+
 Provider catalog metadata. Sent on connection and after model changes.
 
 ```json
@@ -2299,6 +2302,7 @@ Auth method registry for all providers.
     "openai": [{ "id": "api_key", "type": "api", "label": "API key" }],
     "opencode-go": [{ "id": "api_key", "type": "api", "label": "API key" }],
     "opencode-zen": [{ "id": "api_key", "type": "api", "label": "API key" }],
+    "openai-proxy": [{ "id": "api_key", "type": "api", "label": "API key" }],
     "codex-cli": [
       { "id": "oauth_cli", "type": "oauth", "label": "Sign in with ChatGPT (browser)", "oauthMode": "auto" },
       { "id": "api_key", "type": "api", "label": "API key" }

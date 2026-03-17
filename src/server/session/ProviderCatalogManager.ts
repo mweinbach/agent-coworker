@@ -29,10 +29,11 @@ export class ProviderCatalogManager {
 
   async emitProviderCatalog() {
     try {
+      const cfg = this.opts.getConfig();
       const payload = await this.opts.getProviderCatalog({
         paths: this.opts.getGlobalAuthPaths(),
+        currentSelection: { provider: cfg.provider as any, model: cfg.model },
       });
-      const cfg = this.opts.getConfig();
       const defaults = { ...payload.default, [cfg.provider]: cfg.model };
       this.opts.emit({
         type: "provider_catalog",

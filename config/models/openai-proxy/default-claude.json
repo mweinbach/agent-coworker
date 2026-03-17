@@ -1,0 +1,10 @@
+{
+  "id": "anthropic.claude-3-5-sonnet",
+  "provider": "openai-proxy",
+  "displayName": "Claude (Proxy)",
+  "knowledgeCutoff": "Unknown",
+  "supportsImageInput": false,
+  "promptTemplate": "system.md",
+  "providerOptionsDefaults": {},
+  "isDefault": true
+}

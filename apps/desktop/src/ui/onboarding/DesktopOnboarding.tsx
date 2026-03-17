@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 import { useAppStore } from "../../app/store";
@@ -22,6 +22,10 @@ import {
 import type { ProviderName, ServerEvent } from "../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../lib/wsProtocol";
 import { cn } from "../../lib/utils";
+import coworkIconSvg from "../../../build/icon.icon/Assets/svgviewer-output.svg";
+
+const PROVIDER_STATUS_POLL_MS = 4000;
+const WORKSPACE_SERVER_TIMEOUT_MS = 30_000;
 
 type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
 
@@ -89,12 +93,19 @@ function StepIndicator({ current }: { current: OnboardingStep }) {
 function WelcomeStep({ onContinue, onDismiss }: { onContinue: () => void; onDismiss: () => void }) {
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <h2 className="text-2xl font-semibold tracking-tight">Welcome to Cowork</h2>
-        <p className="text-sm text-muted-foreground leading-relaxed">
-          Cowork is a local-first AI assistant that runs on your machine. Here's what we'll set up:
-        </p>
+      <div className="flex items-center gap-4">
+        <img src={coworkIconSvg} alt="" aria-hidden="true" className="h-12 w-12 shrink-0" draggable={false} />
+        <div className="space-y-1">
+          <h2 className="text-2xl font-semibold tracking-tight">Welcome to Cowork</h2>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            A local-first AI assistant that runs on your machine.
+          </p>
+        </div>
       </div>
+
+      <p className="text-sm text-muted-foreground leading-relaxed">
+        Here's what we'll set up:
+      </p>
 
       <div className="space-y-3">
         {[
@@ -132,6 +143,7 @@ function WelcomeStep({ onContinue, onDismiss }: { onContinue: () => void; onDism
 
 function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack: () => void }) {
   const addWorkspace = useAppStore((s) => s.addWorkspace);
+  const selectWorkspace = useAppStore((s) => s.selectWorkspace);
   const workspaces = useAppStore((s) => s.workspaces);
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const workspaceRuntimeById = useAppStore((s) => s.workspaceRuntimeById);
@@ -143,16 +155,64 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
   const runtime = workspace ? workspaceRuntimeById[workspace.id] : null;
   const serverReady = Boolean(runtime?.serverUrl && !runtime?.error);
   const starting = runtime?.starting === true;
+  const serverError = runtime?.error ?? null;
   const hasWorkspace = workspace !== null;
+  const hasMultipleWorkspaces = workspaces.length > 1;
+
+  // Track how long the server has been starting for timeout display
+  const [startingSince, setStartingSince] = useState<number | null>(null);
+  const [timedOut, setTimedOut] = useState(false);
+
+  useEffect(() => {
+    if (starting && !startingSince) {
+      setStartingSince(Date.now());
+      setTimedOut(false);
+    } else if (!starting) {
+      setStartingSince(null);
+      setTimedOut(false);
+    }
+  }, [starting, startingSince]);
+
+  useEffect(() => {
+    if (!startingSince) return;
+    const timer = setTimeout(() => setTimedOut(true), WORKSPACE_SERVER_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [startingSince]);
 
   return (
     <div className="space-y-6">
       <div className="space-y-2">
-        <h2 className="text-2xl font-semibold tracking-tight">Add a workspace</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">
+          {hasMultipleWorkspaces ? "Choose a workspace" : "Add a workspace"}
+        </h2>
         <p className="text-sm text-muted-foreground leading-relaxed">
-          Choose a folder on your machine. This is where Cowork will read and write files.
+          {hasMultipleWorkspaces
+            ? "Select an existing workspace or add a new one."
+            : "Choose a folder on your machine. This is where Cowork will read and write files."}
         </p>
       </div>
+
+      {/* Workspace picker for rerun with multiple workspaces */}
+      {hasMultipleWorkspaces ? (
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Active workspace</div>
+          <Select
+            value={selectedWorkspaceId ?? ""}
+            onValueChange={(value) => void selectWorkspace(value)}
+          >
+            <SelectTrigger aria-label="Select workspace">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {workspaces.map((ws) => (
+                <SelectItem key={ws.id} value={ws.id}>
+                  {ws.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
 
       {hasWorkspace ? (
         <Card className="border-border/80 bg-card/85">
@@ -163,8 +223,10 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
                 <div className="text-xs text-muted-foreground truncate">{workspace.path}</div>
               </div>
               <div className="shrink-0">
-                {starting ? (
-                  <Badge variant="secondary">Starting...</Badge>
+                {serverError ? (
+                  <Badge variant="destructive">Error</Badge>
+                ) : starting ? (
+                  <Badge variant="secondary">{timedOut ? "Slow start..." : "Starting..."}</Badge>
                 ) : serverReady ? (
                   <Badge>Ready</Badge>
                 ) : (
@@ -172,13 +234,21 @@ function WorkspaceStep({ onContinue, onBack }: { onContinue: () => void; onBack:
                 )}
               </div>
             </div>
+            {serverError ? (
+              <div className="mt-2 text-xs text-destructive">{serverError}</div>
+            ) : null}
+            {timedOut && starting ? (
+              <div className="mt-2 text-xs text-muted-foreground">
+                The workspace server is taking longer than expected. You can continue waiting or try choosing a different folder.
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}
 
       <div className="flex gap-3">
         <Button variant={hasWorkspace ? "outline" : "default"} onClick={() => void addWorkspace()}>
-          {hasWorkspace ? "Change folder" : "Choose folder"}
+          {hasWorkspace ? "Add different folder" : "Choose folder"}
         </Button>
       </div>
 
@@ -233,11 +303,20 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
     });
   }, [providerCatalog, providerStatusByName, modelChoices]);
 
+  // Initial fetch
   useEffect(() => {
     void requestProviderCatalog();
     void requestProviderAuthMethods();
     void refreshProviderStatus();
   }, [requestProviderCatalog, requestProviderAuthMethods, refreshProviderStatus]);
+
+  // Poll provider status while this step is visible (useful for OAuth flows in browser)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void refreshProviderStatus();
+    }, PROVIDER_STATUS_POLL_MS);
+    return () => clearInterval(interval);
+  }, [refreshProviderStatus]);
 
   const hasConnectedModelProvider = providerConnected.some((p) => {
     const models = modelChoices[p];
@@ -616,6 +695,92 @@ function FirstThreadStep({ onComplete }: { onComplete: (firstMessage?: string) =
 
 // ── Main Overlay ──
 
+// ── Focus trap hook ──
+
+function useFocusTrap(containerRef: React.RefObject<HTMLElement | null>, active: boolean) {
+  useEffect(() => {
+    if (!active) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Tab") return;
+      const focusable = container!.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+
+      if (event.shiftKey) {
+        if (document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    }
+
+    container.addEventListener("keydown", handleKeyDown);
+
+    // Auto-focus the first focusable element
+    const first = container.querySelector<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    if (first) {
+      // Delay to let framer-motion animation settle
+      requestAnimationFrame(() => first.focus());
+    }
+
+    return () => container.removeEventListener("keydown", handleKeyDown);
+  }, [containerRef, active]);
+}
+
+// ── Height-measuring wrapper for smooth step transitions ──
+
+function AnimatedStepContainer({ children, step }: { children: React.ReactNode; step: OnboardingStep }) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [measuredHeight, setMeasuredHeight] = useState<number | "auto">("auto");
+
+  useEffect(() => {
+    if (!contentRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setMeasuredHeight(entry.contentRect.height);
+      }
+    });
+    observer.observe(contentRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <motion.div
+      animate={{ height: measuredHeight }}
+      transition={{ type: "spring", stiffness: 400, damping: 35 }}
+      style={{ overflow: "hidden" }}
+    >
+      <div ref={contentRef}>
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={step}
+            initial={{ opacity: 0, x: 16 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -16 }}
+            transition={{ duration: 0.15 }}
+          >
+            {children}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+    </motion.div>
+  );
+}
+
 export function DesktopOnboarding() {
   const visible = useAppStore((s) => s.onboardingVisible);
   const step = useAppStore((s) => s.onboardingStep);
@@ -623,6 +788,9 @@ export function DesktopOnboarding() {
   const dismiss = useAppStore((s) => s.dismissOnboarding);
   const complete = useAppStore((s) => s.completeOnboarding);
   const newThread = useAppStore((s) => s.newThread);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useFocusTrap(cardRef, visible);
 
   const goTo = useCallback(
     (next: OnboardingStep) => setStep(next),
@@ -644,7 +812,7 @@ export function DesktopOnboarding() {
   if (!visible) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Onboarding">
       {/* Backdrop */}
       <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" />
 
@@ -653,6 +821,7 @@ export function DesktopOnboarding() {
 
       {/* Card */}
       <motion.div
+        ref={cardRef}
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2 }}
@@ -665,29 +834,21 @@ export function DesktopOnboarding() {
           </span>
         </div>
 
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={step}
-            initial={{ opacity: 0, x: 16 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -16 }}
-            transition={{ duration: 0.15 }}
-          >
-            {step === "welcome" && (
-              <WelcomeStep onContinue={() => goTo("workspace")} onDismiss={dismiss} />
-            )}
-            {step === "workspace" && (
-              <WorkspaceStep onContinue={() => goTo("provider")} onBack={() => goTo("welcome")} />
-            )}
-            {step === "provider" && (
-              <ProviderStep onContinue={() => goTo("defaults")} onBack={() => goTo("workspace")} />
-            )}
-            {step === "defaults" && (
-              <DefaultsStep onContinue={() => goTo("firstThread")} onBack={() => goTo("provider")} />
-            )}
-            {step === "firstThread" && <FirstThreadStep onComplete={handleComplete} />}
-          </motion.div>
-        </AnimatePresence>
+        <AnimatedStepContainer step={step}>
+          {step === "welcome" && (
+            <WelcomeStep onContinue={() => goTo("workspace")} onDismiss={dismiss} />
+          )}
+          {step === "workspace" && (
+            <WorkspaceStep onContinue={() => goTo("provider")} onBack={() => goTo("welcome")} />
+          )}
+          {step === "provider" && (
+            <ProviderStep onContinue={() => goTo("defaults")} onBack={() => goTo("workspace")} />
+          )}
+          {step === "defaults" && (
+            <DefaultsStep onContinue={() => goTo("firstThread")} onBack={() => goTo("provider")} />
+          )}
+          {step === "firstThread" && <FirstThreadStep onComplete={handleComplete} />}
+        </AnimatedStepContainer>
       </motion.div>
     </div>
   );

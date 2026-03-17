@@ -350,6 +350,74 @@ describe("onboarding persistence schema", () => {
   });
 });
 
+// ── Escape dismiss ──
+
+describe("escape key dismisses onboarding", () => {
+  test("dismissOnboarding is callable when onboardingVisible is true", () => {
+    useAppStore.setState({
+      onboardingVisible: true,
+      onboardingStep: "provider",
+      onboardingState: { status: "pending", completedAt: null, dismissedAt: null },
+    });
+
+    const state = useAppStore.getState();
+    expect(state.onboardingVisible).toBe(true);
+
+    // The actual Escape keydown handler lives in App.tsx and checks
+    // state.onboardingVisible before dispatching dismissOnboarding.
+    // We verify the state flag and action are consistent here.
+    state.dismissOnboarding();
+    const after = useAppStore.getState();
+    expect(after.onboardingVisible).toBe(false);
+    expect(after.onboardingState.status).toBe("dismissed");
+  });
+});
+
+// ── Rerun from completed state doesn't wipe data ──
+
+describe("rerun preserves existing state", () => {
+  test("startOnboarding does not clear workspaces or threads", () => {
+    useAppStore.setState({
+      onboardingVisible: false,
+      onboardingState: { status: "completed", completedAt: "2026-03-10T00:00:00Z", dismissedAt: null },
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Existing",
+          path: "/tmp/existing",
+          createdAt: "2026-03-10T00:00:00Z",
+          lastOpenedAt: "2026-03-10T00:00:00Z",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.2",
+          defaultPreferredChildModel: "gpt-5.2",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ] as any,
+      threads: [
+        {
+          id: "t-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-10T00:00:00Z",
+          lastMessageAt: "2026-03-10T00:00:00Z",
+          status: "active",
+          sessionId: null,
+          lastEventSeq: 0,
+        },
+      ] as any,
+    });
+
+    useAppStore.getState().startOnboarding();
+
+    const after = useAppStore.getState();
+    expect(after.onboardingVisible).toBe(true);
+    expect(after.workspaces).toHaveLength(1);
+    expect(after.threads).toHaveLength(1);
+  });
+});
+
 // ── Protocol guard ──
 
 describe("websocket protocol files unchanged", () => {

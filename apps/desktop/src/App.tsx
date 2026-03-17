@@ -87,6 +87,10 @@ export default function App() {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         const state = useAppStore.getState();
+        if (state.onboardingVisible) {
+          state.dismissOnboarding();
+          return;
+        }
         if (state.promptModal) {
           // For ask modals, send a response so the server-side deferred promise
           // resolves instead of hanging forever.

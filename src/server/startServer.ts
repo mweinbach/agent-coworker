@@ -17,6 +17,7 @@ import {
 import { ensureDefaultGlobalSkillsReady } from "../skills/defaultGlobalSkills";
 import { writeTextFileAtomic } from "../utils/atomicFile";
 import { getProviderCatalog } from "../providers/connectionCatalog";
+import { resolveAuthHomeDir } from "../utils/authHome";
 
 import { AgentControl } from "./agents/AgentControl";
 import { AgentSession } from "./session/AgentSession";
@@ -494,7 +495,9 @@ export async function startAgentServer(
   agentControl = new AgentControl({
     sessionBindings,
     sessionDb,
-    getConnectedProviders: async () => (await getProviderCatalog({ paths: getAiCoworkerPathsImpl({ homedir: opts.homedir }) })).connected as AgentConfig["provider"][],
+    getConnectedProviders: async () => (
+      await getProviderCatalog({ homedir: resolveAuthHomeDir() })
+    ).connected as AgentConfig["provider"][],
     buildSession,
     loadAgentPrompt,
     disposeBinding,

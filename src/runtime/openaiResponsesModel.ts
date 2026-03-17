@@ -1,4 +1,4 @@
-import { getSavedProviderApiKey } from "../config";
+import { getSavedProviderApiKey, getSavedProviderApiKeyForHome } from "../config";
 import { getAiCoworkerPaths } from "../connect";
 import { assertSupportedModel } from "../models/registry";
 import {
@@ -8,7 +8,7 @@ import {
   refreshCodexAuthMaterialCoalesced,
 } from "../providers/codex-auth";
 import type { AgentConfig } from "../types";
-import { resolveCoworkHomedir } from "../utils/coworkHome";
+import { resolveAuthHomeDir } from "../utils/authHome";
 
 import { pickKnownPiModel, type PiModel } from "./piRuntimeOptions";
 import type { RuntimeRunTurnParams } from "./types";
@@ -54,15 +54,14 @@ type ResolvedCodexAuth = {
   accountId?: string;
 };
 
-function runtimeHomeFromConfig(config: AgentConfig): string | undefined {
-  return resolveCoworkHomedir(config.userAgentDir);
-}
-
 async function resolveCodexAccessToken(
   config: AgentConfig,
   log?: (line: string) => void,
 ): Promise<ResolvedCodexAuth> {
-  const paths = getAiCoworkerPaths({ homedir: runtimeHomeFromConfig(config) });
+  void config;
+  // Codex auth is stored in the user-global Cowork home, not under a workspace
+  // `.agent` root.
+  const paths = getAiCoworkerPaths({ homedir: resolveAuthHomeDir(config) });
   let material = await readCodexAuthMaterial(paths);
   if (!material?.accessToken) {
     throw new Error("Codex auth is missing. Run /connect codex-cli to authenticate.");
@@ -164,7 +163,7 @@ export async function resolveOpenAiResponsesModel(
     throw new Error(`Unsupported provider for OpenAI Responses runtime: ${provider}`);
   }
 
-  const savedKey = getSavedProviderApiKey(params.config, "codex-cli");
+  const savedKey = getSavedProviderApiKeyForHome(resolveAuthHomeDir(params.config), "codex-cli");
   if (savedKey) {
     return {
       model: buildSupportedCodexResponsesModel({

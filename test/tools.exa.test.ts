@@ -24,6 +24,23 @@ async function makeCoworkHome() {
   return { tmp, userAgentDir, authDir };
 }
 
+async function withEnv<T>(
+  key: string,
+  value: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = process.env[key];
+  if (typeof value === "string") process.env[key] = value;
+  else delete process.env[key];
+
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
+}
+
 describe("tools/exa", () => {
   test("resolveExaApiKey prefers stored key over EXA_API_KEY", async () => {
     const { tmp, userAgentDir, authDir } = await makeCoworkHome();
@@ -41,7 +58,7 @@ describe("tools/exa", () => {
     const prev = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "env-key";
     try {
-      const result = await resolveExaApiKey(makeCtx(userAgentDir));
+      const result = await withEnv("HOME", tmp, async () => await resolveExaApiKey(makeCtx(userAgentDir)));
       expect(result).toBe("saved-key");
     } finally {
       if (prev === undefined) {
@@ -59,7 +76,7 @@ describe("tools/exa", () => {
     const prev = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "env-key";
     try {
-      const result = await resolveExaApiKey(makeCtx(userAgentDir));
+      const result = await withEnv("HOME", tmp, async () => await resolveExaApiKey(makeCtx(userAgentDir)));
       expect(result).toBe("env-key");
     } finally {
       if (prev === undefined) {
@@ -88,7 +105,7 @@ describe("tools/exa", () => {
 
     delete process.env.EXA_API_KEY;
     try {
-      const result = await resolveExaApiKey(makeCtx(userAgentDir));
+      const result = await withEnv("HOME", tmp, async () => await resolveExaApiKey(makeCtx(userAgentDir)));
       expect(result).toBe("saved-key");
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });

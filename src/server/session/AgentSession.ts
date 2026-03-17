@@ -364,7 +364,7 @@ export class AgentSession {
     this.providerCatalogManager = new ProviderCatalogManager({
       sessionId: this.id,
       getConfig: () => this.state.config,
-      getCoworkPaths: () => this.getCoworkPaths(),
+      getGlobalAuthPaths: () => this.getGlobalAuthPaths(),
       getProviderCatalog: this.deps.getProviderCatalogImpl,
       getProviderStatuses: this.deps.getProviderStatusesImpl,
       emit: (evt) => this.context.emit(evt),
@@ -397,7 +397,7 @@ export class AgentSession {
       emitConfigUpdated: () => this.metadataManager.emitConfigUpdated(),
       emitProviderCatalog: async () => await this.providerCatalogManager.emitProviderCatalog(),
       refreshProviderStatus: async () => await this.providerCatalogManager.refreshProviderStatus(),
-      getCoworkPaths: () => this.getCoworkPaths(),
+      getGlobalAuthPaths: () => this.getGlobalAuthPaths(),
       runProviderConnect: async (providerOpts) => await this.runProviderConnect(providerOpts),
     });
     this.turnExecutionManager = new TurnExecutionManager(this.context, {
@@ -1070,6 +1070,10 @@ export class AgentSession {
 
   private getCoworkPaths() {
     return this.runtimeSupport.getCoworkPaths();
+  }
+
+  private getGlobalAuthPaths() {
+    return this.runtimeSupport.getGlobalAuthPaths();
   }
 
   private async runProviderConnect(opts: Parameters<typeof connectModelProvider>[0]): Promise<ConnectProviderResult> {

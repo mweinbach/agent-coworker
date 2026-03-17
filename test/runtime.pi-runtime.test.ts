@@ -38,7 +38,7 @@ function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): Agen
     userAgentDir: path.join(homeDir, ".agent"),
     builtInDir: homeDir,
     builtInConfigDir: path.join(homeDir, "config"),
-    skillsDirs: [],
+    skillsDirs: [path.join(homeDir, ".cowork", "skills")],
     memoryDirs: [],
     configDirs: [],
     ...overrides,
@@ -100,6 +100,8 @@ describe("pi runtime regressions", () => {
   test("codex runtime model resolution preserves ChatGPT-Account-ID headers", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-codex-"));
     const paths = getAiCoworkerPaths({ homedir: homeDir });
+    const workspaceDir = path.join(homeDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
 
     await writeCodexAuthMaterial(paths, {
       accessToken: "tok_live",
@@ -114,6 +116,7 @@ describe("pi runtime regressions", () => {
       provider: "codex-cli",
       model: pickCodexModelId(),
       preferredChildModel: pickCodexModelId(),
+      userAgentDir: path.join(workspaceDir, ".agent"),
     });
 
     const resolved = await resolveOpenAiResponsesModel(makeParams(config));
@@ -128,6 +131,8 @@ describe("pi runtime regressions", () => {
 
   test("codex runtime model resolution imports legacy ~/.codex auth into Cowork auth", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-codex-legacy-"));
+    const workspaceDir = path.join(homeDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
     const legacyPath = path.join(homeDir, ".codex", "auth.json");
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
     await fs.writeFile(
@@ -149,6 +154,7 @@ describe("pi runtime regressions", () => {
       provider: "codex-cli",
       model: pickCodexModelId(),
       preferredChildModel: pickCodexModelId(),
+      userAgentDir: path.join(workspaceDir, ".agent"),
     });
 
     const resolved = await resolveOpenAiResponsesModel(makeParams(config));
@@ -168,6 +174,8 @@ describe("pi runtime regressions", () => {
   test("codex runtime model resolution keeps supported OpenAI token limits when using a saved API key", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-codex-saved-key-"));
     const paths = getAiCoworkerPaths({ homedir: homeDir });
+    const workspaceDir = path.join(homeDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
     await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
     await fs.writeFile(
       paths.connectionsFile,
@@ -190,6 +198,7 @@ describe("pi runtime regressions", () => {
       provider: "codex-cli",
       model: "gpt-5.4",
       preferredChildModel: "gpt-5.4",
+      userAgentDir: path.join(workspaceDir, ".agent"),
     });
 
     const resolved = await resolveOpenAiResponsesModel(makeParams(config));
@@ -455,34 +464,26 @@ describe("pi runtime regressions", () => {
       preferredChildModel: "glm-5",
     });
 
-    const previous = process.env.OPENCODE_ZEN_API_KEY;
-    process.env.OPENCODE_ZEN_API_KEY = "env-opencode-zen-key";
-    try {
-      const resolved = await piRuntimeInternal.resolvePiModel(makeParams(config));
+    const resolved = await withEnv("OPENCODE_ZEN_API_KEY", "env-opencode-zen-key", async () => (
+      await piRuntimeInternal.resolvePiModel(makeParams(config))
+    ));
 
-      expect(resolved.apiKey).toBe("env-opencode-zen-key");
-      expect(resolved.model).toMatchObject({
-        id: "glm-5",
-        api: "openai-completions",
-        provider: "opencode",
-        baseUrl: "https://opencode.ai/zen/v1",
-        reasoning: true,
-        contextWindow: 204800,
-        maxTokens: 131072,
-        cost: {
-          input: 1,
-          output: 3.2,
-          cacheRead: 0.2,
-          cacheWrite: 0,
-        },
-      });
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCODE_ZEN_API_KEY;
-      } else {
-        process.env.OPENCODE_ZEN_API_KEY = previous;
-      }
-    }
+    expect(resolved.apiKey).toBe("env-opencode-zen-key");
+    expect(resolved.model).toMatchObject({
+      id: "glm-5",
+      api: "openai-completions",
+      provider: "opencode",
+      baseUrl: "https://opencode.ai/zen/v1",
+      reasoning: true,
+      contextWindow: 204800,
+      maxTokens: 131072,
+      cost: {
+        input: 1,
+        output: 3.2,
+        cacheRead: 0.2,
+        cacheWrite: 0,
+      },
+    });
   });
 
   test("opencode-zen runtime model resolution returns explicit MiniMax M2.5 PI metadata", async () => {

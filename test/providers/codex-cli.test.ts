@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
 import { defaultModelForProvider, getModel, loadConfig } from "../../src/config";
-import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot, writeJson } from "./helpers";
+import { DEFAULT_PROVIDER_OPTIONS, makeConfig, makeTmpDirs, repoRoot, withEnv, writeJson } from "./helpers";
 
 const DEFAULT_CODEX_MODEL = "gpt-5.4";
 
@@ -36,18 +36,20 @@ describe(`Codex provider (${DEFAULT_CODEX_MODEL})`, () => {
       },
     });
 
-    const cfg = makeConfig({
-      provider: "codex-cli",
-      model: DEFAULT_CODEX_MODEL,
-      userAgentDir: path.join(home, ".agent"),
-    });
-    const viaGetModel = getModel(cfg, DEFAULT_CODEX_MODEL) as any;
-    const headers = await viaGetModel.config.headers();
+    await withEnv("HOME", home, async () => {
+      const cfg = makeConfig({
+        provider: "codex-cli",
+        model: DEFAULT_CODEX_MODEL,
+        userAgentDir: path.join(home, ".agent"),
+      });
+      const viaGetModel = getModel(cfg, DEFAULT_CODEX_MODEL) as any;
+      const headers = await viaGetModel.config.headers();
 
-    expect(viaGetModel.modelId).toBe(DEFAULT_CODEX_MODEL);
-    expect(viaGetModel.provider).toBe("codex-cli.responses");
-    expect(viaGetModel.specificationVersion).toBe("v3");
-    expect(headers).toEqual({ authorization: "Bearer test_codex_key" });
+      expect(viaGetModel.modelId).toBe(DEFAULT_CODEX_MODEL);
+      expect(viaGetModel.provider).toBe("codex-cli.responses");
+      expect(viaGetModel.specificationVersion).toBe("v3");
+      expect(headers).toEqual({ authorization: "Bearer test_codex_key" });
+    });
   });
 
   test("codex provider options are configured", () => {

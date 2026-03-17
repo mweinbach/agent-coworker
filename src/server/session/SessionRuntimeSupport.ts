@@ -1,6 +1,7 @@
 import { loadMCPConfigRegistry, type MCPRegistryServer } from "../../mcp/configRegistry";
 import { emitObservabilityEvent } from "../../observability/otel";
 import type { ServerErrorCode, ServerErrorSource } from "../../types";
+import { resolveAuthHomeDir } from "../../utils/authHome";
 import { resolveCoworkHomedir } from "../../utils/coworkHome";
 import type { ServerEvent } from "../protocol";
 import type { SessionDependencies, SessionRuntimeState } from "./SessionContext";
@@ -76,8 +77,14 @@ export class SessionRuntimeSupport {
     return this.opts.deps.getAiCoworkerPathsImpl({ homedir: this.getUserHomeDir() });
   }
 
+  getGlobalAuthPaths() {
+    return this.opts.deps.getAiCoworkerPathsImpl({ homedir: resolveAuthHomeDir(this.opts.state.config) });
+  }
+
   async runProviderConnect(opts: Parameters<SessionDependencies["connectProviderImpl"]>[0]) {
-    const paths = opts.paths ?? this.getCoworkPaths();
+    // Provider auth is user-global; never redirect it into a workspace-local
+    // `.cowork` tree.
+    const paths = opts.paths ?? this.getGlobalAuthPaths();
     return await this.opts.deps.connectProviderImpl({
       ...opts,
       cwd: opts.cwd ?? this.opts.state.config.workingDirectory,

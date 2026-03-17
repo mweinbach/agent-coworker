@@ -72,6 +72,7 @@ const { AgentSession } = await import("../src/server/session/AgentSession");
 // ---------------------------------------------------------------------------
 
 function makeConfig(dir: string): AgentConfig {
+  const userAgentDir = path.join(dir, ".agent-user");
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
@@ -82,10 +83,10 @@ function makeConfig(dir: string): AgentConfig {
     userName: "",
     knowledgeCutoff: "unknown",
     projectAgentDir: path.join(dir, ".agent"),
-    userAgentDir: path.join(dir, ".agent-user"),
+    userAgentDir,
     builtInDir: dir,
     builtInConfigDir: path.join(dir, "config"),
-    skillsDirs: [],
+    skillsDirs: [path.join(path.dirname(userAgentDir), ".cowork", "skills")],
     memoryDirs: [],
     configDirs: [],
     enableMcp: true,

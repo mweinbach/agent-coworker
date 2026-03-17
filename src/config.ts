@@ -16,7 +16,7 @@ import {
   resolveRuntimeName as resolveRuntimeNameFromValue,
 } from "./types";
 import type { AgentConfig, CommandTemplateConfig, ProviderName, RuntimeName } from "./types";
-import { resolveCoworkHomedir } from "./utils/coworkHome";
+import { resolveAuthHomeDir } from "./utils/authHome";
 import { assertSupportedModel, defaultSupportedModel, getSupportedModel } from "./models/registry";
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
 
@@ -255,12 +255,7 @@ function normalizeNullableNonNegativeInt(v: unknown): number | null | undefined 
   return normalizeNonNegativeInt(v);
 }
 
-function resolveUserHomeFromConfig(config: AgentConfig): string {
-  return resolveCoworkHomedir(config.userAgentDir);
-}
-
-export function getSavedProviderApiKey(config: AgentConfig, provider: ProviderName): string | undefined {
-  const home = resolveUserHomeFromConfig(config);
+export function getSavedProviderApiKeyForHome(home: string, provider: ProviderName): string | undefined {
   const paths = getAiCoworkerPaths({ homedir: home });
   const keyCandidates = getProviderKeyCandidates(provider);
 
@@ -282,6 +277,10 @@ export function getSavedProviderApiKey(config: AgentConfig, provider: ProviderNa
   }
 
   return undefined;
+}
+
+export function getSavedProviderApiKey(config: AgentConfig, provider: ProviderName): string | undefined {
+  return getSavedProviderApiKeyForHome(resolveAuthHomeDir(config), provider);
 }
 
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<AgentConfig> {

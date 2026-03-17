@@ -30,7 +30,7 @@ function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): Agen
     userAgentDir: path.join(homeDir, ".agent"),
     builtInDir: homeDir,
     builtInConfigDir: path.join(homeDir, "config"),
-    skillsDirs: [],
+    skillsDirs: [path.join(homeDir, ".cowork", "skills")],
     memoryDirs: [],
     configDirs: [],
     ...overrides,

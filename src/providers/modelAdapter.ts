@@ -11,7 +11,7 @@ import {
   readCodexAuthMaterial,
   refreshCodexAuthMaterialCoalesced,
 } from "./codex-auth";
-import { resolveCoworkHomedir } from "../utils/coworkHome";
+import { resolveAuthHomeDir } from "../utils/authHome";
 
 type HeaderMap = Record<string, string>;
 type HeaderResolver = () => Promise<HeaderMap>;
@@ -146,7 +146,10 @@ export function createOpenCodeZenModelAdapter(modelId: string, savedKey?: string
 }
 
 async function resolveCodexAuthHeaders(config: AgentConfig): Promise<HeaderMap> {
-  const paths = getAiCoworkerPaths({ homedir: resolveCoworkHomedir(config.userAgentDir) });
+  void config;
+  // Model adapter auth must read the user-global Cowork auth store so a
+  // workspace-local `.agent` directory cannot hide an existing login.
+  const paths = getAiCoworkerPaths({ homedir: resolveAuthHomeDir(config) });
 
   let material = await readCodexAuthMaterial(paths);
   if (!material?.accessToken) return {};

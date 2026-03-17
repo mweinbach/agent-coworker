@@ -5,6 +5,10 @@ import path from "node:path";
 import { getModel } from "../../src/config";
 import { makeConfig, makeTmpDirs, withEnv, writeJson } from "./helpers";
 
+async function withAuthHome<T>(home: string, run: () => Promise<T> | T): Promise<T> {
+  return await withEnv("HOME", home, async () => await run());
+}
+
 // ---------------------------------------------------------------------------
 // Saved API keys in ~/.cowork/auth should override .env keys
 // ---------------------------------------------------------------------------
@@ -27,16 +31,18 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("OPENAI_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "openai",
-        model: "gpt-5.2",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("OPENAI_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "openai",
+          model: "gpt-5.2",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+      });
     });
   });
 
@@ -58,16 +64,18 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("GOOGLE_GENERATIVE_AI_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "google",
-        model: "gemini-3-flash-preview",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("GOOGLE_GENERATIVE_AI_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers["x-goog-api-key"]).toBe(savedKey);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers["x-goog-api-key"]).toBe(savedKey);
+      });
     });
   });
 
@@ -89,16 +97,18 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("ANTHROPIC_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "anthropic",
-        model: "claude-opus-4-6",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("ANTHROPIC_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers["x-api-key"]).toBe(savedKey);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers["x-api-key"]).toBe(savedKey);
+      });
     });
   });
 
@@ -120,17 +130,19 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("BASETEN_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "baseten",
-        model: "moonshotai/Kimi-K2.5",
-        preferredChildModel: "moonshotai/Kimi-K2.5",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("BASETEN_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "baseten",
+          model: "moonshotai/Kimi-K2.5",
+          preferredChildModel: "moonshotai/Kimi-K2.5",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBe(`Api-Key ${savedKey}`);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Api-Key ${savedKey}`);
+      });
     });
   });
 
@@ -152,17 +164,19 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("TOGETHER_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "together",
-        model: "moonshotai/Kimi-K2.5",
-        preferredChildModel: "moonshotai/Kimi-K2.5",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("TOGETHER_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "together",
+          model: "moonshotai/Kimi-K2.5",
+          preferredChildModel: "moonshotai/Kimi-K2.5",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+      });
     });
   });
 
@@ -184,17 +198,19 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("NVIDIA_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "nvidia",
-        model: "nvidia/nemotron-3-super-120b-a12b",
-        preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("NVIDIA_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "nvidia",
+          model: "nvidia/nemotron-3-super-120b-a12b",
+          preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+      });
     });
   });
 
@@ -216,17 +232,19 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("OPENCODE_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "opencode-go",
-        model: "glm-5",
-        preferredChildModel: "glm-5",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("OPENCODE_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "opencode-go",
+          model: "glm-5",
+          preferredChildModel: "glm-5",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+      });
     });
   });
 
@@ -248,17 +266,19 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("OPENCODE_ZEN_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "opencode-zen",
-        model: "glm-5",
-        preferredChildModel: "glm-5",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("OPENCODE_ZEN_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "opencode-zen",
+          model: "glm-5",
+          preferredChildModel: "glm-5",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Bearer ${savedKey}`);
+      });
     });
   });
 
@@ -279,16 +299,18 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    const cfg = makeConfig({
-      provider: "codex-cli",
-      model: "gpt-5.2-codex",
-      userAgentDir: path.join(home, ".agent"),
-    });
+    await withEnv("HOME", home, async () => {
+      const cfg = makeConfig({
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        userAgentDir: path.join(home, ".agent"),
+      });
 
-    const model = getModel(cfg) as any;
-    const headers = await model.config.headers();
-    expect(headers.authorization).toBeUndefined();
-    expect(model.provider).toBe("codex-cli.responses");
+      const model = getModel(cfg) as any;
+      const headers = await model.config.headers();
+      expect(headers.authorization).toBeUndefined();
+      expect(model.provider).toBe("codex-cli.responses");
+    });
   });
 
   test("codex-cli model headers import legacy ~/.codex auth into Cowork auth when Cowork auth is missing", async () => {
@@ -302,21 +324,23 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    const cfg = makeConfig({
-      provider: "codex-cli",
-      model: "gpt-5-codex",
-      userAgentDir: path.join(home, ".agent"),
+    await withEnv("HOME", home, async () => {
+      const cfg = makeConfig({
+        provider: "codex-cli",
+        model: "gpt-5-codex",
+        userAgentDir: path.join(home, ".agent"),
+      });
+
+      const model = getModel(cfg) as any;
+      const headers = await model.config.headers();
+      expect(headers.authorization).toBe("Bearer legacy-access-token");
+
+      const persisted = JSON.parse(
+        await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")
+      ) as any;
+      expect(persisted?.tokens?.access_token).toBe("legacy-access-token");
+      expect(persisted?.tokens?.refresh_token).toBe("legacy-refresh-token");
     });
-
-    const model = getModel(cfg) as any;
-    const headers = await model.config.headers();
-    expect(headers.authorization).toBe("Bearer legacy-access-token");
-
-    const persisted = JSON.parse(
-      await fs.readFile(path.join(home, ".cowork", "auth", "codex-cli", "auth.json"), "utf-8")
-    ) as any;
-    expect(persisted?.tokens?.access_token).toBe("legacy-access-token");
-    expect(persisted?.tokens?.refresh_token).toBe("legacy-refresh-token");
   });
 
   test("falls back to env key when saved entry has no api key", async () => {
@@ -335,16 +359,18 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("OPENAI_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "openai",
-        model: "gpt-5.2",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("OPENAI_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "openai",
+          model: "gpt-5.2",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBe(`Bearer ${envKey}`);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Bearer ${envKey}`);
+      });
     });
   });
 
@@ -364,17 +390,19 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("OPENCODE_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "opencode-go",
-        model: "glm-5",
-        preferredChildModel: "glm-5",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("OPENCODE_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "opencode-go",
+          model: "glm-5",
+          preferredChildModel: "glm-5",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBe(`Bearer ${envKey}`);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Bearer ${envKey}`);
+      });
     });
   });
 
@@ -394,17 +422,19 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("BASETEN_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "baseten",
-        model: "moonshotai/Kimi-K2.5",
-        preferredChildModel: "moonshotai/Kimi-K2.5",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("BASETEN_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "baseten",
+          model: "moonshotai/Kimi-K2.5",
+          preferredChildModel: "moonshotai/Kimi-K2.5",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBe(`Api-Key ${envKey}`);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Api-Key ${envKey}`);
+      });
     });
   });
 
@@ -424,17 +454,19 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("TOGETHER_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "together",
-        model: "moonshotai/Kimi-K2.5",
-        preferredChildModel: "moonshotai/Kimi-K2.5",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("TOGETHER_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "together",
+          model: "moonshotai/Kimi-K2.5",
+          preferredChildModel: "moonshotai/Kimi-K2.5",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBe(`Bearer ${envKey}`);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Bearer ${envKey}`);
+      });
     });
   });
 
@@ -454,17 +486,19 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("NVIDIA_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "nvidia",
-        model: "nvidia/nemotron-3-super-120b-a12b",
-        preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("NVIDIA_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "nvidia",
+          model: "nvidia/nemotron-3-super-120b-a12b",
+          preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBe(`Bearer ${envKey}`);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Bearer ${envKey}`);
+      });
     });
   });
 
@@ -484,17 +518,19 @@ describe("Saved API key precedence (~/.cowork/auth)", () => {
       },
     });
 
-    await withEnv("OPENCODE_ZEN_API_KEY", envKey, async () => {
-      const cfg = makeConfig({
-        provider: "opencode-zen",
-        model: "glm-5",
-        preferredChildModel: "glm-5",
-        userAgentDir: path.join(home, ".agent"),
-      });
+    await withAuthHome(home, async () => {
+      await withEnv("OPENCODE_ZEN_API_KEY", envKey, async () => {
+        const cfg = makeConfig({
+          provider: "opencode-zen",
+          model: "glm-5",
+          preferredChildModel: "glm-5",
+          userAgentDir: path.join(home, ".agent"),
+        });
 
-      const model = getModel(cfg) as any;
-      const headers = await model.config.headers();
-      expect(headers.authorization).toBe(`Bearer ${envKey}`);
+        const model = getModel(cfg) as any;
+        const headers = await model.config.headers();
+        expect(headers.authorization).toBe(`Bearer ${envKey}`);
+      });
     });
   });
 });

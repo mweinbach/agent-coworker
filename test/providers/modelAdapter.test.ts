@@ -142,17 +142,21 @@ describe("provider model adapters", () => {
   test("Codex adapter falls back to Cowork auth and propagates ChatGPT-Account-ID", async () => {
     const { home, tmp } = await makeTmpDirs();
     try {
-      await writeCodexAuth(home);
-      const config = makeConfig({
-        provider: "codex-cli",
-        userAgentDir: path.join(home, ".agent"),
+      await withEnv("HOME", home, async () => {
+        await writeCodexAuth(home);
+        const workspaceDir = path.join(tmp, "workspace");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        const config = makeConfig({
+          provider: "codex-cli",
+          userAgentDir: path.join(workspaceDir, ".agent"),
+        });
+
+        const adapter = createCodexCliModelAdapter(config, "gpt-5.2");
+        const headers = await adapter.config.headers();
+
+        expect(headers.authorization).toBe("Bearer codex-token");
+        expect(headers["ChatGPT-Account-ID"]).toBe("acct-123");
       });
-
-      const adapter = createCodexCliModelAdapter(config, "gpt-5.2");
-      const headers = await adapter.config.headers();
-
-      expect(headers.authorization).toBe("Bearer codex-token");
-      expect(headers["ChatGPT-Account-ID"]).toBe("acct-123");
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }

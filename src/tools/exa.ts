@@ -1,10 +1,9 @@
-import path from "node:path";
-
 import { z } from "zod";
 
 import { getAiCoworkerPaths } from "../store/connections";
 import { readToolApiKey } from "./api-keys";
 import type { ToolContext } from "./context";
+import { resolveAuthHomeDir } from "../utils/authHome";
 
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const stringSchema = z.string();
@@ -23,12 +22,6 @@ const exaContentsResponseSchema = z.object({
 }).passthrough();
 
 export const EXA_MISSING_KEY_MESSAGE = "set EXA_API_KEY or save Exa API key in provider settings";
-
-function resolveHomeDirFromToolContext(ctx: ToolContext): string | undefined {
-  const parsed = nonEmptyTrimmedStringSchema.safeParse(ctx.config.userAgentDir);
-  if (!parsed.success) return undefined;
-  return path.dirname(parsed.data);
-}
 
 function firstNonEmptyString(...values: unknown[]): string | undefined {
   for (const value of values) {
@@ -80,8 +73,7 @@ function getExaStringList(value: unknown): string[] {
 
 export async function resolveExaApiKey(ctx: ToolContext): Promise<string | undefined> {
   try {
-    const homedir = resolveHomeDirFromToolContext(ctx);
-    const paths = getAiCoworkerPaths(homedir ? { homedir } : {});
+    const paths = getAiCoworkerPaths({ homedir: resolveAuthHomeDir(ctx.config) });
     const saved = await readToolApiKey({ name: "exa", paths });
     if (saved?.trim()) return saved.trim();
   } catch {

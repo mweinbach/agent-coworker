@@ -49,7 +49,7 @@ export class ProviderAuthManager {
       emitConfigUpdated: () => void;
       emitProviderCatalog: () => Promise<void>;
       refreshProviderStatus: () => Promise<void>;
-      getCoworkPaths: () => ReturnType<typeof getAiCoworkerPaths>;
+      getGlobalAuthPaths: () => ReturnType<typeof getAiCoworkerPaths>;
       runProviderConnect: ConnectProviderHandler;
     }
   ) {}
@@ -210,7 +210,7 @@ export class ProviderAuthManager {
         methodId,
         code,
         cwd: config.workingDirectory,
-        paths: this.opts.getCoworkPaths(),
+        paths: this.opts.getGlobalAuthPaths(),
         connect: async (opts) => await this.opts.runProviderConnect(opts),
         oauthStdioMode: "pipe",
         onOauthLine: (line) => this.opts.log(`[connect ${providerRaw}] ${line}`),
@@ -275,7 +275,7 @@ export class ProviderAuthManager {
     try {
       const result = await logoutProviderAuthMethod({
         provider: providerRaw,
-        paths: this.opts.getCoworkPaths(),
+        paths: this.opts.getGlobalAuthPaths(),
       });
 
       this.opts.emit({
@@ -347,7 +347,7 @@ export class ProviderAuthManager {
         methodId,
         apiKey: apiKeyRaw,
         cwd: config.workingDirectory,
-        paths: this.opts.getCoworkPaths(),
+        paths: this.opts.getGlobalAuthPaths(),
         connect: async (opts) => await this.opts.runProviderConnect(opts),
       });
 
@@ -440,7 +440,7 @@ export class ProviderAuthManager {
         sourceProvider: sourceProviderRaw,
         methodId,
         cwd: config.workingDirectory,
-        paths: this.opts.getCoworkPaths(),
+        paths: this.opts.getGlobalAuthPaths(),
         connect: async (opts) => await this.opts.runProviderConnect(opts),
       });
 

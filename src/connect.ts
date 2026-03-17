@@ -26,6 +26,7 @@ import {
 } from "./store/connections";
 import { maskApiKey, readToolApiKey, writeToolApiKey } from "./tools/api-keys";
 import { openExternalUrl, type UrlOpener } from "./utils/browser";
+import { resolveAuthHomeDir } from "./utils/authHome";
 
 export {
   getAiCoworkerPaths,
@@ -141,7 +142,7 @@ export async function connectProvider(opts: {
 }): Promise<ConnectProviderResult> {
   const provider = opts.provider;
   const apiKey = (opts.apiKey ?? "").trim();
-  const paths = opts.paths ?? getAiCoworkerPaths();
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
 
   const store = await readConnectionStore(paths);
   const now = new Date().toISOString();
@@ -265,7 +266,7 @@ export async function disconnectProvider(opts: {
   provider: ConnectService;
   paths?: AiCoworkerPaths;
 }): Promise<DisconnectProviderResult> {
-  const paths = opts.paths ?? getAiCoworkerPaths();
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
   const store = await readConnectionStore(paths);
   const now = new Date().toISOString();
 

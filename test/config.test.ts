@@ -26,6 +26,23 @@ async function makeTmpDirs() {
   return { tmp, cwd, home };
 }
 
+async function withEnv<T>(
+  key: string,
+  value: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = process.env[key];
+  if (typeof value === "string") process.env[key] = value;
+  else delete process.env[key];
+
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // loadConfig
 // ---------------------------------------------------------------------------
@@ -648,9 +665,11 @@ describe("loadConfig", () => {
       env: { AGENT_PROVIDER: "openai" },
     });
 
-    const model = getModel(cfg) as any;
-    const headers = await model.config.headers();
-    expect(headers.authorization).toBe("Bearer canonical-service-key");
+    await withEnv("HOME", home, async () => {
+      const model = getModel(cfg) as any;
+      const headers = await model.config.headers();
+      expect(headers.authorization).toBe("Bearer canonical-service-key");
+    });
   });
 
   test("throws when canonical connection store uses legacy apiKeys shape", async () => {
@@ -681,7 +700,9 @@ describe("loadConfig", () => {
       },
     });
 
-    expect(() => getModel(cfg)).toThrow("Invalid connection store schema");
+    await withEnv("HOME", home, async () => {
+      expect(() => getModel(cfg)).toThrow("Invalid connection store schema");
+    });
   });
 
   test("loads command template config from merged config", async () => {

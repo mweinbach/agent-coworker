@@ -27,7 +27,30 @@ import { getAiCoworkerPaths, writeConnectionStore } from "../src/connect";
 // Helpers
 // ---------------------------------------------------------------------------
 
+async function withEnv<T>(
+  key: string,
+  value: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = process.env[key];
+  if (typeof value === "string") process.env[key] = value;
+  else delete process.env[key];
+
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
+}
+
+async function withAuthHome<T>(homeDir: string, run: () => Promise<T>): Promise<T> {
+  return await withEnv("HOME", homeDir, async () => await run());
+}
+
 function makeConfig(dir: string, overrides: Partial<AgentConfig> = {}): AgentConfig {
+  const userAgentDir = overrides.userAgentDir ?? path.join(dir, ".agent-user");
+  const authHomeDir = path.dirname(userAgentDir);
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
@@ -38,10 +61,10 @@ function makeConfig(dir: string, overrides: Partial<AgentConfig> = {}): AgentCon
     userName: "",
     knowledgeCutoff: "unknown",
     projectAgentDir: path.join(dir, ".agent"),
-    userAgentDir: path.join(dir, ".agent-user"),
+    userAgentDir,
     builtInDir: dir,
     builtInConfigDir: path.join(dir, "config"),
-    skillsDirs: [],
+    skillsDirs: overrides.skillsDirs ?? [path.join(authHomeDir, ".cowork", "skills")],
     memoryDirs: [],
     configDirs: [],
     ...overrides,
@@ -1152,17 +1175,19 @@ describe("webSearch tool", () => {
     delete process.env.EXA_API_KEY;
 
     try {
-      const t: any = createWebSearchTool(
-        makeCtx(dir, {
-          config: makeConfig(dir, {
-            provider: "google",
-            model: "gemini-3-pro-preview",
-            preferredChildModel: "gemini-3-pro-preview",
-          }),
-        })
-      );
-      const out: string = await t.execute({ query: "test", maxResults: 1 });
-      expect(out).toContain("set EXA_API_KEY");
+      await withAuthHome(dir, async () => {
+        const t: any = createWebSearchTool(
+          makeCtx(dir, {
+            config: makeConfig(dir, {
+              provider: "google",
+              model: "gemini-3-pro-preview",
+              preferredChildModel: "gemini-3-pro-preview",
+            }),
+          })
+        );
+        const out: string = await t.execute({ query: "test", maxResults: 1 });
+        expect(out).toContain("set EXA_API_KEY");
+      });
     } finally {
       if (oldExa) process.env.EXA_API_KEY = oldExa;
       else delete process.env.EXA_API_KEY;
@@ -1175,9 +1200,11 @@ describe("webSearch tool", () => {
     delete process.env.EXA_API_KEY;
 
     try {
-      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
-      const out: string = await t.execute({ query: "test", maxResults: 1 });
-      expect(out).toContain("webSearch disabled");
+      await withAuthHome(dir, async () => {
+        const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
+        const out: string = await t.execute({ query: "test", maxResults: 1 });
+        expect(out).toContain("webSearch disabled");
+      });
     } finally {
       if (oldExa) process.env.EXA_API_KEY = oldExa;
       else delete process.env.EXA_API_KEY;
@@ -1197,11 +1224,13 @@ describe("webSearch tool", () => {
     }) as any;
 
     try {
-      const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
-      const out: string = await t.execute({ q: "HTTP 418 RFC 2324", maxResults: 1 });
-      expect(out).toContain("webSearch disabled");
-      expect(out).toContain("EXA_API_KEY");
-      expect((globalThis.fetch as any).mock.calls).toHaveLength(0);
+      await withAuthHome(dir, async () => {
+        const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
+        const out: string = await t.execute({ q: "HTTP 418 RFC 2324", maxResults: 1 });
+        expect(out).toContain("webSearch disabled");
+        expect(out).toContain("EXA_API_KEY");
+        expect((globalThis.fetch as any).mock.calls).toHaveLength(0);
+      });
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;
@@ -1478,11 +1507,13 @@ describe("webFetch tool", () => {
     }) as any;
 
     try {
-      const t: any = createWebFetchTool(makeCtx(dir));
-      const out: string = await t.execute({ url: "https://example.com/fallback", maxLength: 50000 });
-      expect(out).toContain("Offline page");
-      expect(out).toContain("Rendered locally.");
-      expect(exaCalls).toBe(0);
+      await withAuthHome(dir, async () => {
+        const t: any = createWebFetchTool(makeCtx(dir));
+        const out: string = await t.execute({ url: "https://example.com/fallback", maxLength: 50000 });
+        expect(out).toContain("Offline page");
+        expect(out).toContain("Rendered locally.");
+        expect(exaCalls).toBe(0);
+      });
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;

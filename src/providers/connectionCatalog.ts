@@ -3,6 +3,7 @@ import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { defaultSupportedModel, listSupportedModels, type SupportedModel } from "../models/registry";
 import { readCodexAuthMaterial } from "./codex-auth";
 import { getOpenCodeDisplayName } from "./opencodeShared";
+import { resolveAuthHomeDir } from "../utils/authHome";
 
 export type ProviderCatalogModelEntry = Pick<
   SupportedModel,
@@ -54,7 +55,7 @@ export async function getProviderCatalog(opts: {
   readStore?: typeof readConnectionStore;
   readCodexAuthMaterialImpl?: typeof readCodexAuthMaterial;
 } = {}): Promise<ProviderCatalogPayload> {
-  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir });
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const readStore = opts.readStore ?? readConnectionStore;
   const readCodexAuthMaterialImpl = opts.readCodexAuthMaterialImpl ?? readCodexAuthMaterial;
   const store = await readStore(paths);

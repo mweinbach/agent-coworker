@@ -215,7 +215,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       }));
       await persistNow(get);
   
-      ensureThreadSocket(get, set, threadId, url, opts?.firstMessage);
+      ensureThreadSocket(get, set, threadId, url, opts?.firstMessage, false);
     },
   
 
@@ -292,7 +292,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       if (firstMessage && firstMessage.trim()) {
         queuePendingThreadMessage(threadId, firstMessage);
       }
-      ensureThreadSocket(get, set, threadId, url);
+      ensureThreadSocket(get, set, threadId, url, firstMessage, Boolean(firstMessage?.trim()));
     },
   
 

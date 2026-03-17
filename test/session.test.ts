@@ -2592,6 +2592,7 @@ describe("AgentSession", () => {
     test("continues the same outer turn for a late steer and emits one aggregated turn_usage", async () => {
       const { session, events } = makeSession();
       const seenTurnIds: string[] = [];
+      const secondPassMessages: any[][] = [];
       let runCount = 0;
 
       mockRunTurn.mockImplementation(async (params: any) => {
@@ -2607,17 +2608,21 @@ describe("AgentSession", () => {
             reasoningText: undefined,
             responseMessages: [{ role: "assistant", content: "first pass" }],
             usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+            providerState: {
+              provider: "openai",
+              model: "gpt-5.2",
+              responseId: "resp_1",
+              updatedAt: new Date().toISOString(),
+            },
           };
         }
 
+        secondPassMessages.push([...params.messages]);
         const prepareResult = await params.prepareStep?.({
           stepNumber: 1,
-          messages: [{ role: "assistant", content: "first pass" }],
+          messages: params.messages,
         });
-        expect(prepareResult?.messages?.at(-1)).toEqual({
-          role: "user",
-          content: "follow up in the same turn",
-        });
+        expect(prepareResult).toBeUndefined();
 
         return {
           text: "second pass",
@@ -2631,6 +2636,11 @@ describe("AgentSession", () => {
 
       expect(runCount).toBe(2);
       expect(new Set(seenTurnIds).size).toBe(1);
+      expect(secondPassMessages).toHaveLength(1);
+      expect(secondPassMessages[0]?.at(-1)).toEqual({
+        role: "user",
+        content: "follow up in the same turn",
+      });
       expect(events.filter((e) => e.type === "session_busy" && (e as any).busy === true)).toHaveLength(1);
 
       const usageEvents = events.filter((e) => e.type === "turn_usage") as Array<Extract<ServerEvent, { type: "turn_usage" }>>;

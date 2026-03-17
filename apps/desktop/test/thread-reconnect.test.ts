@@ -455,8 +455,88 @@ describe("thread reconnect", () => {
     expect(sentUserMessages.length).toBe(1);
     expect(sentUserMessages[0].text).toBe("hello");
 
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-1",
+      cause: "user_message",
+    });
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: false,
+      turnId: "turn-1",
+      outcome: "completed",
+    });
+
+    expect(threadSocket.sent.filter((m) => m && m.type === "user_message")).toHaveLength(1);
+
     const state = useAppStore.getState();
     expect(state.threads.find((t) => t.id === threadId)?.status).toBe("active");
+  });
+
+  test("busy resume keeps reconnect firstMessage queued exactly once", async () => {
+    await useAppStore.getState().selectThread(threadId);
+
+    const initialSocket = socketByClient("desktop");
+    emitServerHello(initialSocket, "thread-session");
+    initialSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-1",
+      cause: "user_message",
+    });
+    initialSocket.close();
+
+    await useAppStore.getState().sendMessage("hello");
+
+    const resumedSocket = socketByClient("desktop");
+    resumedSocket.emit({
+      type: "server_hello",
+      sessionId: "thread-session",
+      protocolVersion: "2.0",
+      isResume: true,
+      busy: true,
+      turnId: "turn-1",
+      config: {
+        provider: "openai",
+        model: "gpt-5.2",
+        workingDirectory: "/tmp/workspace",
+        outputDirectory: "/tmp/workspace/output",
+      },
+    });
+
+    expect(resumedSocket.sent.filter((m) => m && m.type === "user_message")).toHaveLength(0);
+    expect(RUNTIME.pendingThreadMessages.get(threadId)).toEqual(["hello"]);
+
+    resumedSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: false,
+      turnId: "turn-1",
+      outcome: "completed",
+    });
+    expect(resumedSocket.sent.filter((m) => m && m.type === "user_message")).toHaveLength(1);
+    expect(resumedSocket.sent.filter((m) => m && m.type === "user_message")[0]?.text).toBe("hello");
+
+    resumedSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-2",
+      cause: "user_message",
+    });
+    resumedSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: false,
+      turnId: "turn-2",
+      outcome: "completed",
+    });
+
+    expect(resumedSocket.sent.filter((m) => m && m.type === "user_message")).toHaveLength(1);
   });
 
   test("reconnect keeps pending steers until the committed user_message arrives", async () => {

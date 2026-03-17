@@ -280,9 +280,9 @@ export class TurnExecutionManager {
     });
   }
 
-  private drainPendingSteers(stepMessages: ModelMessage[]): { messages: ModelMessage[] } | undefined {
+  private commitPendingSteers(): ModelMessage[] {
     const drained = this.context.state.pendingSteers.splice(0);
-    if (drained.length === 0) return undefined;
+    if (drained.length === 0) return [];
 
     const steerMessages = drained.map<ModelMessage>((steer) => ({
       role: "user",
@@ -298,6 +298,12 @@ export class TurnExecutionManager {
       });
     }
     this.context.queuePersistSessionSnapshot("session.steer_committed");
+    return steerMessages;
+  }
+
+  private drainPendingSteers(stepMessages: ModelMessage[]): { messages: ModelMessage[] } | undefined {
+    const steerMessages = this.commitPendingSteers();
+    if (steerMessages.length === 0) return undefined;
     return {
       messages: [...stepMessages, ...steerMessages],
     };
@@ -560,8 +566,9 @@ export class TurnExecutionManager {
         aggregatedUsage = mergeTurnUsage(aggregatedUsage, res.usage);
 
         await new Promise((resolve) => setTimeout(resolve, 0));
+        const lateSteersCommitted = this.commitPendingSteers().length > 0;
         continueSameTurn =
-          this.context.state.pendingSteers.length > 0 &&
+          lateSteersCommitted &&
           !this.context.state.abortController?.signal.aborted;
       }
 

@@ -254,8 +254,15 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
 
   function flushOneQueuedThreadMessage(get: StoreGet, set: StoreSet, threadId: string) {
     const next = shiftPendingThreadMessage(threadId);
-    if (!next) return;
-    sendUserMessageToThread(get, set, threadId, next);
+    if (!next) return false;
+    const ok = sendUserMessageToThread(get, set, threadId, next);
+    if (!ok) {
+      RUNTIME.pendingThreadMessages.set(threadId, [
+        next,
+        ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
+      ]);
+    }
+    return ok;
   }
 
   function applyModelStreamUpdateToThreadFeed(
@@ -289,6 +296,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     threadId: string,
     evt: ServerEvent,
     pendingFirstMessage?: string,
+    pendingFirstMessageQueued = false,
   ) {
     if (evt.type !== "server_hello") {
       const activeSessionId = get().threadRuntimeById[threadId]?.sessionId;
@@ -367,12 +375,16 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       let sentPendingFirstMessage = false;
       if (pendingFirstMessage && pendingFirstMessage.trim()) {
         if (resumedBusy) {
-          RUNTIME.pendingThreadMessages.set(threadId, [
-            pendingFirstMessage.trim(),
-            ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
-          ]);
+          if (!pendingFirstMessageQueued) {
+            RUNTIME.pendingThreadMessages.set(threadId, [
+              pendingFirstMessage.trim(),
+              ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
+            ]);
+          }
         } else {
-          sentPendingFirstMessage = sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
+          sentPendingFirstMessage = pendingFirstMessageQueued
+            ? flushOneQueuedThreadMessage(get, set, threadId)
+            : sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
         }
       }
 
@@ -812,6 +824,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     threadId: string,
     url: string,
     pendingFirstMessage?: string,
+    pendingFirstMessageQueued = false,
   ) {
     if (RUNTIME.threadSockets.has(threadId)) return;
 
@@ -825,7 +838,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       client: "desktop",
       version: "0.1.22",
       autoReconnect: true,
-      onEvent: (evt) => handleThreadEvent(get, set, threadId, evt, pendingFirstMessage),
+      onEvent: (evt) => handleThreadEvent(get, set, threadId, evt, pendingFirstMessage, pendingFirstMessageQueued),
       onClose: () => {
         RUNTIME.threadSockets.delete(threadId);
         RUNTIME.modelStreamByThread.delete(threadId);

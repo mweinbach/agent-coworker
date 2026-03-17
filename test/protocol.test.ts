@@ -134,6 +134,65 @@ describe("safeParseClientMessage", () => {
     });
   });
 
+  describe("steer_message", () => {
+    test("minimal steer_message", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "steer_message",
+          sessionId: "s1",
+          expectedTurnId: "turn-1",
+          text: "tighten the answer",
+        }),
+      );
+      expect(msg.type).toBe("steer_message");
+      if (msg.type === "steer_message") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.expectedTurnId).toBe("turn-1");
+        expect(msg.text).toBe("tighten the answer");
+      }
+    });
+
+    test("steer_message with clientMessageId", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "steer_message",
+          sessionId: "s1",
+          expectedTurnId: "turn-1",
+          text: "use bullets",
+          clientMessageId: "cm-1",
+        }),
+      );
+      if (msg.type === "steer_message") {
+        expect(msg.clientMessageId).toBe("cm-1");
+      }
+    });
+
+    test("steer_message rejects missing or invalid expectedTurnId", () => {
+      expect(expectErr(JSON.stringify({
+        type: "steer_message",
+        sessionId: "s1",
+        text: "continue",
+      }))).toBe("steer_message missing/invalid expectedTurnId");
+
+      expect(expectErr(JSON.stringify({
+        type: "steer_message",
+        sessionId: "s1",
+        expectedTurnId: "   ",
+        text: "continue",
+      }))).toBe("steer_message missing/invalid expectedTurnId");
+    });
+
+    test("steer_message rejects blank text", () => {
+      const err = expectErr(JSON.stringify({
+        type: "steer_message",
+        sessionId: "s1",
+        expectedTurnId: "turn-1",
+        text: "   ",
+      }));
+      expect(err).toBe("steer_message missing/invalid text");
+    });
+  });
+
   describe("ask_response", () => {
     test("valid ask_response", () => {
       const msg = expectOk(
@@ -1864,6 +1923,7 @@ describe("safeParseClientMessage", () => {
     test("new command message/event types are exported", () => {
       expect(CLIENT_MESSAGE_TYPES.includes("list_commands")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("execute_command")).toBe(true);
+      expect(CLIENT_MESSAGE_TYPES.includes("steer_message")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("provider_catalog_get")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_methods_get")).toBe(true);
       expect(CLIENT_MESSAGE_TYPES.includes("provider_auth_authorize")).toBe(true);
@@ -1891,6 +1951,7 @@ describe("safeParseClientMessage", () => {
       expect(SERVER_EVENT_TYPES.includes("provider_auth_challenge")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("provider_auth_result")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("mcp_servers")).toBe(true);
+      expect(SERVER_EVENT_TYPES.includes("steer_accepted")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("mcp_server_validation")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("mcp_server_auth_challenge")).toBe(true);
       expect(SERVER_EVENT_TYPES.includes("mcp_server_auth_result")).toBe(true);
@@ -1922,6 +1983,43 @@ describe("safeParseClientMessage", () => {
       if (evt.type === "server_hello") {
         expect(evt.protocolVersion).toBe("4.0");
         expect(evt.capabilities?.modelStreamChunk).toBe("v1");
+      }
+    });
+
+    test("server_hello supports resumed active turn ids", () => {
+      const evt = safeParseServerEvent({
+        type: "server_hello",
+        sessionId: "s1",
+        protocolVersion: "7.19",
+        busy: true,
+        turnId: "turn-1",
+        config: {
+          provider: "openai",
+          model: "gpt-5.2",
+          workingDirectory: "/tmp",
+        },
+      });
+
+      expect(evt?.type).toBe("server_hello");
+      if (evt?.type === "server_hello") {
+        expect(evt.turnId).toBe("turn-1");
+      }
+    });
+
+    test("safeParseServerEvent accepts steer_accepted", () => {
+      const evt = safeParseServerEvent({
+        type: "steer_accepted",
+        sessionId: "s1",
+        turnId: "turn-1",
+        text: "tighten scope",
+        clientMessageId: "cm-steer",
+      });
+
+      expect(evt).not.toBeNull();
+      expect(evt?.type).toBe("steer_accepted");
+      if (evt?.type === "steer_accepted") {
+        expect(evt.turnId).toBe("turn-1");
+        expect(evt.clientMessageId).toBe("cm-steer");
       }
     });
 

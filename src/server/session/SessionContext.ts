@@ -86,6 +86,12 @@ export type SeededSessionContext = {
   harnessContext: HarnessContextState | null;
 };
 
+export type PendingSteer = {
+  text: string;
+  clientMessageId?: string;
+  acceptedAt: string;
+};
+
 export type SessionRuntimeState = {
   config: AgentConfig;
   system: string;
@@ -98,6 +104,7 @@ export type SessionRuntimeState = {
   connecting: boolean;
   abortController: AbortController | null;
   currentTurnId: string | null;
+  pendingSteers: PendingSteer[];
   currentTurnOutcome: "completed" | "cancelled" | "error";
   maxSteps: number;
   todos: TodoItem[];

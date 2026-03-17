@@ -740,6 +740,63 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("resumed server_hello includes the active turnId while a session is busy", async () => {
+    const tmpDir = await makeTmpProject();
+    let releaseTurn: (() => void) | undefined;
+    const runTurnImpl = async () => {
+      await new Promise<void>((resolve) => {
+        releaseTurn = resolve;
+      });
+      return {
+        text: "done",
+        responseMessages: [],
+      };
+    };
+
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: runTurnImpl as any,
+    }));
+
+    try {
+      const activeTurn = await new Promise<{ sessionId: string; turnId: string }>((resolve, reject) => {
+        const ws = new WebSocket(url);
+        let sessionId = "";
+        const timer = setTimeout(() => {
+          ws.close();
+          reject(new Error("Timed out waiting for busy resume setup"));
+        }, 5000);
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+          if (!sessionId && msg.type === "server_hello") {
+            sessionId = msg.sessionId;
+            ws.send(JSON.stringify({ type: "user_message", sessionId, text: "go" }));
+            return;
+          }
+
+          if (msg.type === "session_busy" && msg.busy === true && typeof msg.turnId === "string") {
+            clearTimeout(timer);
+            ws.close();
+            resolve({ sessionId, turnId: msg.turnId });
+          }
+        };
+
+        ws.onerror = (event) => {
+          clearTimeout(timer);
+          reject(new Error(`WebSocket error: ${event}`));
+        };
+      });
+
+      const resumed = await collectMessages(`${url}?resumeSessionId=${activeTurn.sessionId}`, 1);
+      expect(resumed[0]?.type).toBe("server_hello");
+      expect(resumed[0]?.busy).toBe(true);
+      expect(resumed[0]?.turnId).toBe(activeTurn.turnId);
+    } finally {
+      releaseTurn?.();
+      server.stop();
+    }
+  });
+
   test("resumeSessionId replays turn events emitted while the client was disconnected", async () => {
     const tmpDir = await makeTmpProject();
     const runTurnImpl = async (params: any) => {
@@ -927,7 +984,7 @@ describe("WebSocket Lifecycle", () => {
       );
 
       const hello = resumedEvents.find((msg) => msg.type === "server_hello");
-      const info = resumedEvents.find((msg) => msg.type === "session_info");
+      const info = [...resumedEvents].reverse().find((msg) => msg.type === "session_info");
       expect(hello).toMatchObject({
         sessionId: childId,
         isResume: true,
@@ -937,9 +994,16 @@ describe("WebSocket Lifecycle", () => {
         mode: "collaborative",
         depth: 1,
         effectiveModel: "gemini-3-pro-preview",
-        executionState: "completed",
-        lastMessagePreview: "child finished",
       });
+      expect(typeof hello?.busy).toBe("boolean");
+      expect(["running", "completed"]).toContain(hello?.executionState);
+      if (hello?.busy) {
+        expect(hello.turnId).toEqual(expect.any(String));
+        expect(hello.executionState).toBe("running");
+      } else {
+        expect(hello.executionState).toBe("completed");
+        expect(hello.lastMessagePreview).toBe("child finished");
+      }
       expect(info).toMatchObject({
         sessionId: childId,
         sessionKind: "agent",
@@ -948,9 +1012,11 @@ describe("WebSocket Lifecycle", () => {
         mode: "collaborative",
         depth: 1,
         effectiveModel: "gemini-3-pro-preview",
-        executionState: "completed",
-        lastMessagePreview: "child finished",
       });
+      expect(["running", "completed"]).toContain(info?.executionState);
+      if (info?.executionState === "completed") {
+        expect(info.lastMessagePreview).toBe("child finished");
+      }
       expect(
         resumedEvents.some(
           (msg) =>

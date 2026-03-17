@@ -10,6 +10,7 @@ import type {
   PromptModalState,
   SettingsPageId,
   ThreadRecord,
+  ThreadBusyPolicy,
   ThreadRuntime,
   ThreadTitleSource,
   ViewId,
@@ -32,10 +33,16 @@ import {
   clearWorkspaceStartState,
   defaultThreadRuntime,
   defaultWorkspaceRuntime,
+  clearPendingThreadSteer,
+  clearPendingThreadSteers,
   ensureThreadRuntime,
   ensureWorkspaceRuntime,
+  hasPendingThreadSteer,
   getWorkspaceStartGeneration,
+  markPendingThreadSteerAccepted,
   queuePendingThreadMessage,
+  rememberPendingThreadSteer,
+  shiftPendingThreadMessage,
 } from "./store.helpers/runtimeState";
 import { createThreadEventReducer } from "./store.helpers/threadEventReducer";
 import { createTranscriptBuffer } from "./store.helpers/transcriptBuffer";
@@ -189,7 +196,7 @@ export type AppStoreState = {
   reconnectThread: (threadId: string, firstMessage?: string) => Promise<void>;
   renameThread: (threadId: string, newTitle: string) => void;
 
-  sendMessage: (text: string) => Promise<void>;
+  sendMessage: (text: string, busyPolicy?: ThreadBusyPolicy) => Promise<void>;
   cancelThread: (threadId: string) => void;
   clearThreadUsageHardCap: (threadId: string) => void;
   setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;
@@ -408,9 +415,13 @@ export {
   providerAuthMethodsFor,
   defaultWorkspaceRuntime,
   defaultThreadRuntime,
+  clearPendingThreadSteer,
+  clearPendingThreadSteers,
   ensureWorkspaceRuntime,
   ensureThreadRuntime,
+  hasPendingThreadSteer,
   mapTranscriptToFeed,
+  markPendingThreadSteerAccepted,
   persist,
   persistNow,
   ensureServerRunning,
@@ -422,4 +433,6 @@ export {
   pushNotification,
   sendUserMessageToThread,
   queuePendingThreadMessage,
+  rememberPendingThreadSteer,
+  shiftPendingThreadMessage,
 };

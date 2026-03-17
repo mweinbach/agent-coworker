@@ -88,6 +88,44 @@ describe("decodeClientMessage", () => {
     }
   });
 
+  test("decodes valid steer_message payloads", () => {
+    const raw = new Uint8Array(
+      Buffer.from(JSON.stringify({
+        type: "steer_message",
+        sessionId: "s-1",
+        expectedTurnId: "turn-1",
+        text: "continue in the same turn",
+      }), "utf-8"),
+    );
+
+    const decoded = decodeClientMessage(raw, "s-1");
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) {
+      expect(decoded.message.type).toBe("steer_message");
+      if (decoded.message.type === "steer_message") {
+        expect(decoded.message.expectedTurnId).toBe("turn-1");
+      }
+    }
+  });
+
+  test("maps invalid steer_message payloads to validation_failed", () => {
+    const raw = new Uint8Array(
+      Buffer.from(JSON.stringify({
+        type: "steer_message",
+        sessionId: "s-1",
+        expectedTurnId: "   ",
+        text: "continue",
+      }), "utf-8"),
+    );
+
+    const decoded = decodeClientMessage(raw, "s-1");
+    expect(decoded.ok).toBe(false);
+    if (!decoded.ok) {
+      expect(decoded.event.code).toBe("validation_failed");
+      expect(decoded.event.message).toBe("steer_message missing/invalid expectedTurnId");
+    }
+  });
+
   test("maps unsupported raw websocket payload types to invalid_json", () => {
     const decoded = decodeClientMessage({ bad: "payload" }, "s-1");
 

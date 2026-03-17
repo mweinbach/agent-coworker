@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.18`
+- Current protocol version: `7.19`
 
 ## Table of Contents
 
@@ -26,7 +26,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - [SessionUsageSnapshot](#sessionusagesnapshot) | [BudgetStatus](#budgetstatus)
 - [Client -> Server Messages](#client---server-messages)
   - Handshake: [client_hello](#client_hello)
-  - Conversation: [user_message](#user_message) | [ask_response](#ask_response) | [approval_response](#approval_response) | [cancel](#cancel) | [reset](#reset)
+  - Conversation: [user_message](#user_message) | [steer_message](#steer_message) | [ask_response](#ask_response) | [approval_response](#approval_response) | [cancel](#cancel) | [reset](#reset)
   - Model & Provider: [set_model](#set_model) | [refresh_provider_status](#refresh_provider_status) | [provider_catalog_get](#provider_catalog_get) | [provider_auth_methods_get](#provider_auth_methods_get) | [provider_auth_authorize](#provider_auth_authorize) | [provider_auth_logout](#provider_auth_logout) | [provider_auth_callback](#provider_auth_callback) | [provider_auth_set_api_key](#provider_auth_set_api_key) | [provider_auth_copy_api_key](#provider_auth_copy_api_key)
   - Tools & Commands: [list_tools](#list_tools) | [list_commands](#list_commands) | [execute_command](#execute_command)
   - Skills: [list_skills](#list_skills) | [read_skill](#read_skill) | [disable_skill](#disable_skill) | [enable_skill](#enable_skill) | [delete_skill](#delete_skill)
@@ -37,7 +37,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Keepalive: [ping](#ping)
 - [Server -> Client Events](#server---client-events)
   - Handshake & Lifecycle: [server_hello](#server_hello) | [session_settings](#session_settings) | [session_info](#session_info) | [session_busy](#session_busy) | [session_config](#session_config)
-  - Conversation: [user_message](#user_message-1) | [model_stream_chunk](#model_stream_chunk) | [model_stream_raw](#model_stream_raw) | [assistant_message](#assistant_message) | [reasoning](#reasoning) | [log](#log) | [todos](#todos) | [reset_done](#reset_done)
+  - Conversation: [steer_accepted](#steer_accepted) | [user_message](#user_message-1) | [model_stream_chunk](#model_stream_chunk) | [model_stream_raw](#model_stream_raw) | [assistant_message](#assistant_message) | [reasoning](#reasoning) | [log](#log) | [todos](#todos) | [reset_done](#reset_done)
   - Prompts: [ask](#ask) | [approval](#approval)
   - Provider: [provider_catalog](#provider_catalog) | [provider_auth_methods](#provider_auth_methods) | [provider_auth_challenge](#provider_auth_challenge) | [provider_auth_result](#provider_auth_result) | [provider_status](#provider_status) | [config_updated](#config_updated)
   - Tools & Skills: [tools](#tools) | [commands](#commands) | [skills_list](#skills_list) | [skill_content](#skill_content)
@@ -48,6 +48,12 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.19`:
+
+- New client message: `steer_message`, which targets the active turn by `expectedTurnId` and buffers steering until the next safe model-step boundary.
+- New server event: `steer_accepted`, emitted when a steer is accepted for the current active turn.
+- Resumed `server_hello` now includes `turnId` when the session is still busy so reconnecting clients can steer safely without waiting for a fresh `session_busy`.
 
 Changes in `7.18`:
 
@@ -202,7 +208,7 @@ When a WebSocket connection opens, the server sends these events in order:
 9. `mcp_servers` — layered MCP snapshot (async)
 10. `session_backup_state` — backup/checkpoint state (async)
 
-If connecting with `?resumeSessionId=<id>`, the server resumes the existing session instead of creating a new one (warm in-memory attach or cold rehydrate from persisted storage). `session_close` disposes active runtime bindings but retains persisted history for later resume/view. On resume, `server_hello` includes additional fields (`isResume`, `busy`, `messageCount`, `hasPendingAsk`, `hasPendingApproval`) and may include `resumedFromStorage: true` for cold rehydrate.
+If connecting with `?resumeSessionId=<id>`, the server resumes the existing session instead of creating a new one (warm in-memory attach or cold rehydrate from persisted storage). `session_close` disposes active runtime bindings but retains persisted history for later resume/view. On resume, `server_hello` includes additional fields (`isResume`, `busy`, `turnId`, `messageCount`, `hasPendingAsk`, `hasPendingApproval`) and may include `resumedFromStorage: true` for cold rehydrate.
 
 Child sessions created through `agent_spawn` are normal persisted sessions. They can be resumed directly with `?resumeSessionId=<childSessionId>`, and the server identifies them with `sessionKind: "agent"` plus `parentSessionId`, `role`, `mode`, and `depth`.
 
@@ -811,6 +817,28 @@ Send a user prompt to the session.
 6. `session_busy` (`busy: false`)
 
 **Error:** Returns `error` with code `busy` if a turn is already running.
+
+---
+
+### steer_message
+
+Buffer a steer for the currently running turn. The steer is accepted only if `expectedTurnId` matches the active turn, and it is committed to history only when applied at the next safe model-step boundary.
+
+```json
+{ "type": "steer_message", "sessionId": "...", "expectedTurnId": "turn-abc", "text": "Use a shorter answer", "clientMessageId": "steer-1" }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | `"steer_message"` | Yes | — |
+| `sessionId` | `string` | Yes | Non-empty session ID |
+| `expectedTurnId` | `string` | Yes | Non-empty active turn ID expected by the client |
+| `text` | `string` | Yes | Non-empty steer text |
+| `clientMessageId` | `string` | No | Client-side correlation ID echoed in `steer_accepted` and later `user_message` if the steer is committed |
+
+**Response:** `steer_accepted` if the active turn still matches. No new `session_busy` (`busy: true`) event is emitted.
+
+**Error:** Returns `error` with code `validation_failed` if there is no active turn, the active turn no longer matches `expectedTurnId`, or `text` is blank.
 
 ---
 
@@ -2002,7 +2030,8 @@ Initial handshake event sent immediately on WebSocket connection.
   "executionState": "running",
   "isResume": true,
   "resumedFromStorage": true,
-  "busy": false,
+  "busy": true,
+  "turnId": "turn-abc",
   "messageCount": 12,
   "hasPendingAsk": false,
   "hasPendingApproval": false
@@ -2026,6 +2055,7 @@ Initial handshake event sent immediately on WebSocket connection.
 | `isResume` | `boolean?` | Present and `true` only when resuming a disconnected session |
 | `resumedFromStorage` | `boolean?` | Present and `true` on cold resume (rehydrated from persisted store) |
 | `busy` | `boolean?` | Whether the session is mid-turn (only on resume) |
+| `turnId` | `string?` | Active turn identifier when resuming into a busy session |
 | `messageCount` | `number?` | Number of messages in history (only on resume) |
 | `hasPendingAsk` | `boolean?` | Whether there's a pending `ask` prompt (only on resume) |
 | `hasPendingApproval` | `boolean?` | Whether there's a pending `approval` prompt (only on resume) |
@@ -2394,6 +2424,24 @@ Busy/idle state transitions for an agent turn with context.
 | `turnId` | `string?` | Unique turn identifier (present on both busy=true and busy=false) |
 | `cause` | `"user_message" \| "command"?` | What triggered the turn (present on busy=true) |
 | `outcome` | `"completed" \| "cancelled" \| "error"?` | How the turn ended (present on busy=false) |
+
+---
+
+### steer_accepted
+
+Acknowledges that a `steer_message` was accepted for the active turn. The steer is not yet part of persistent history when this event is emitted; it is only committed if and when the runtime drains it at a safe step boundary.
+
+```json
+{ "type": "steer_accepted", "sessionId": "...", "turnId": "turn-abc", "text": "Use a shorter answer", "clientMessageId": "steer-1" }
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"steer_accepted"` | — |
+| `sessionId` | `string` | Session identifier |
+| `turnId` | `string` | Active turn identifier |
+| `text` | `string` | Accepted steer text |
+| `clientMessageId` | `string?` | Echoed from the original `steer_message` if provided |
 
 ---
 

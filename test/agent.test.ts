@@ -265,6 +265,57 @@ describe("runTurn", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("disabling thoughts for this step"));
   });
 
+  test("composes session prepareStep before google prepareStep and shallow-merges overrides", async () => {
+    const log = mock(() => {});
+    const providerOptions = {
+      google: {
+        thinkingConfig: {
+          includeThoughts: true,
+          thinkingLevel: "high",
+        },
+      },
+    };
+    const sessionPrepareStep = mock(async ({ messages }: { messages: any[] }) => ({
+      messages: [...messages, { role: "user", content: "steer" }],
+      providerOptions: {
+        session: { source: "steer" },
+      },
+      streamOptions: {
+        injected: true,
+      },
+    }));
+
+    await runTurn(makeParams({
+      config: makeConfig({ providerOptions }),
+      prepareStep: sessionPrepareStep,
+      log,
+    }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    const replayMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } }],
+      },
+    ] as any[];
+
+    const prepareResult = await callArg.prepareStep({ stepNumber: 1, messages: replayMessages });
+    expect(sessionPrepareStep).toHaveBeenCalledWith({
+      stepNumber: 1,
+      messages: replayMessages,
+    });
+    expect(prepareResult.messages.at(-1)).toEqual({ role: "user", content: "steer" });
+    expect(prepareResult.providerOptions).toMatchObject({
+      session: { source: "steer" },
+      google: {
+        thinkingConfig: {
+          includeThoughts: false,
+        },
+      },
+    });
+    expect(prepareResult.streamOptions).toEqual({ injected: true });
+  });
+
   test("keeps provider options unchanged for non-google providers", async () => {
     const providerOptions = { openai: { reasoningEffort: "high" } };
     const msgs = [

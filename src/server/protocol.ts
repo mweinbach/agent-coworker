@@ -84,6 +84,13 @@ export type SessionConfigState = {
 export type ClientMessage =
   | { type: "client_hello"; client: "tui" | "cli" | string; version?: string }
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
+  | {
+    type: "steer_message";
+    sessionId: string;
+    expectedTurnId: string;
+    text: string;
+    clientMessageId?: string;
+  }
   | { type: "ask_response"; sessionId: string; requestId: string; answer: string }
   | { type: "approval_response"; sessionId: string; requestId: string; approved: boolean }
   | { type: "set_model"; sessionId: string; model: string; provider?: AgentConfig["provider"] }
@@ -198,6 +205,7 @@ export type ServerEvent =
     isResume?: boolean;
     resumedFromStorage?: boolean;
     busy?: boolean;
+    turnId?: string;
     messageCount?: number;
     hasPendingAsk?: boolean;
     hasPendingApproval?: boolean;
@@ -321,6 +329,13 @@ export type ServerEvent =
     turnId?: string;
     cause?: "user_message" | "command";
     outcome?: "completed" | "cancelled" | "error";
+  }
+  | {
+    type: "steer_accepted";
+    sessionId: string;
+    turnId: string;
+    text: string;
+    clientMessageId?: string;
   }
   | { type: "user_message"; sessionId: string; text: string; clientMessageId?: string }
   | {
@@ -459,11 +474,12 @@ export type ServerEvent =
   | { type: "error"; sessionId: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { type: "pong"; sessionId: string };
 
-export const WEBSOCKET_PROTOCOL_VERSION = "7.18";
+export const WEBSOCKET_PROTOCOL_VERSION = "7.19";
 
 export const CLIENT_MESSAGE_TYPES = [
   "client_hello",
   "user_message",
+  "steer_message",
   "ask_response",
   "approval_response",
   "set_model",
@@ -541,6 +557,7 @@ export const SERVER_EVENT_TYPES = [
   "provider_auth_result",
   "provider_status",
   "session_busy",
+  "steer_accepted",
   "user_message",
   "model_stream_chunk",
   "model_stream_raw",

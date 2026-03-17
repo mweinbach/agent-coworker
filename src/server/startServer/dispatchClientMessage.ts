@@ -40,6 +40,8 @@ export function dispatchClientMessage({
       return;
     case "user_message":
       return void session.sendUserMessage(message.text, message.clientMessageId);
+    case "steer_message":
+      return void session.sendSteerMessage(message.text, message.expectedTurnId, message.clientMessageId);
     case "ask_response":
       return session.handleAskResponse(message.requestId, message.answer);
     case "approval_response":

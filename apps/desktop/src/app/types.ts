@@ -73,6 +73,7 @@ export type WorkspaceDefaultsPatch = Partial<Omit<WorkspaceRecord, "userProfile"
 };
 
 export type ThreadStatus = "active" | "disconnected";
+export type ThreadBusyPolicy = "reject" | "steer" | "queue";
 
 export type ThreadTitleSource = "default" | "model" | "heuristic" | "manual";
 
@@ -230,6 +231,7 @@ export type ThreadRuntime = {
   enableMcp: boolean | null;
   busy: boolean;
   busySince: string | null;
+  activeTurnId: string | null;
   feed: FeedItem[];
   transcriptOnly: boolean;
 };

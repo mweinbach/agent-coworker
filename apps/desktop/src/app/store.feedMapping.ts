@@ -852,6 +852,8 @@ const transcriptFeedPayloadSchema = z.discriminatedUnion("type", [
 ]);
 
 const transcriptFeedSuppressedTypes = new Set([
+  "steer_message",
+  "steer_accepted",
   "agent_spawned",
   "agent_list",
   "agent_status",

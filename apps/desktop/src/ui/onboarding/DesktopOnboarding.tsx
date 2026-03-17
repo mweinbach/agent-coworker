@@ -783,17 +783,23 @@ export function DesktopOnboarding() {
 
   const handleComplete = useCallback(
     async (firstMessage?: string) => {
+      const threadsBefore = useAppStore.getState().threads.length;
       try {
         if (firstMessage) {
           await newThread({ firstMessage, titleHint: firstMessage.slice(0, 40) });
         } else {
           await newThread();
         }
-        complete();
       } catch {
-        // Thread creation failed — leave onboarding open so the user
-        // can retry or dismiss manually instead of being silently
-        // marked as completed with no usable chat session.
+        // Thread creation threw — leave onboarding open.
+        return;
+      }
+      // newThread silently returns early on some failure paths (e.g.
+      // no workspace server URL) instead of throwing.  Only mark
+      // onboarding complete when a thread was actually created.
+      const threadsAfter = useAppStore.getState().threads.length;
+      if (threadsAfter > threadsBefore) {
+        complete();
       }
     },
     [complete, newThread],

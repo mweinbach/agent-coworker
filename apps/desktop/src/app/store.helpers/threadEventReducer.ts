@@ -167,6 +167,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
 
       if (busyPolicy === "steer") {
         if (!rt.activeTurnId) return false;
+        if (rt.pendingSteer?.status === "sending" && rt.pendingSteer.text.trim() === trimmed) {
+          return false;
+        }
 
         const clientMessageId = deps.makeId();
         rememberPendingThreadSteer(threadId, {
@@ -934,13 +937,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               ...s.threadRuntimeById,
               [threadId]: {
                 ...rt,
-              connected: false,
-              busy: false,
-              busySince: null,
-              activeTurnId: null,
-              pendingSteer: null,
+                connected: false,
+                busy: false,
+                busySince: null,
+                activeTurnId: null,
+                pendingSteer: rt.pendingSteer,
+              },
             },
-          },
             threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "disconnected" } : t)),
           };
         });

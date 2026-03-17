@@ -408,6 +408,33 @@ describe("desktop protocol v2 mapping", () => {
     expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toBeNull();
   });
 
+  test("busy steer ignores duplicate submits while the same draft is still pending", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId!;
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-1",
+      cause: "user_message",
+    });
+
+    useAppStore.setState({ composerText: "tighten the answer" });
+    await useAppStore.getState().sendMessage("tighten the answer", "steer");
+    await useAppStore.getState().sendMessage("tighten the answer", "steer");
+
+    const steerMessages = threadSocket.sent.filter((msg) => msg?.type === "steer_message");
+    expect(steerMessages).toHaveLength(1);
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toEqual({
+      clientMessageId: steerMessages[0]!.clientMessageId,
+      text: "tighten the answer",
+      status: "sending",
+    });
+  });
+
   test("requestWorkspaceMemories replaces a stale control socket when the workspace server URL changes", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const originalSocket = socketByClient("desktop-control");

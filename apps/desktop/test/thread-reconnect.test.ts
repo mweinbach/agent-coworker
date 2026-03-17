@@ -557,11 +557,21 @@ describe("thread reconnect", () => {
     const steerMessage = initialSocket.sent.find((msg) => msg?.type === "steer_message");
     expect(steerMessage?.clientMessageId).toBeTruthy();
     expect(RUNTIME.pendingThreadSteers.get(threadId)?.has(steerMessage.clientMessageId)).toBe(true);
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toEqual({
+      clientMessageId: steerMessage!.clientMessageId,
+      text: "tighten the answer",
+      status: "sending",
+    });
 
     initialSocket.close();
 
     expect(useAppStore.getState().threads.find((t) => t.id === threadId)?.status).toBe("disconnected");
     expect(RUNTIME.pendingThreadSteers.get(threadId)?.has(steerMessage.clientMessageId)).toBe(true);
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toEqual({
+      clientMessageId: steerMessage!.clientMessageId,
+      text: "tighten the answer",
+      status: "sending",
+    });
 
     await useAppStore.getState().reconnectThread(threadId);
 
@@ -582,6 +592,25 @@ describe("thread reconnect", () => {
     });
 
     expect(RUNTIME.pendingThreadSteers.get(threadId)?.has(steerMessage.clientMessageId)).toBe(true);
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toEqual({
+      clientMessageId: steerMessage!.clientMessageId,
+      text: "tighten the answer",
+      status: "sending",
+    });
+
+    resumedSocket.emit({
+      type: "steer_accepted",
+      sessionId: "thread-session",
+      turnId: "turn-1",
+      text: "tighten the answer",
+      clientMessageId: steerMessage.clientMessageId,
+    });
+
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toEqual({
+      clientMessageId: steerMessage!.clientMessageId,
+      text: "tighten the answer",
+      status: "accepted",
+    });
 
     resumedSocket.emit({
       type: "user_message",

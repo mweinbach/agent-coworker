@@ -611,6 +611,13 @@ export class TurnExecutionManager {
         }
 
         await new Promise((resolve) => setTimeout(resolve, 0));
+        if (this.context.state.abortController?.signal.aborted) {
+          this.context.state.pendingSteers.splice(0);
+          continueSameTurn = false;
+          this.context.state.acceptingSteers = false;
+          continue;
+        }
+
         const lateSteersCommitted = this.commitPendingSteers().length > 0;
         continueSameTurn =
           lateSteersCommitted &&

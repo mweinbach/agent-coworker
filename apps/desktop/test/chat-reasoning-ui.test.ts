@@ -237,7 +237,7 @@ describe("desktop reasoning UI helpers", () => {
       },
       sessionId: "session-1",
       threadStatus: "active",
-    })).toEqual({ status: "ready", disabled: false, mode: "steer-pending" });
+    })).toEqual({ status: "ready", disabled: true, mode: "steer-pending" });
 
     expect(getComposerSubmitState({
       busy: false,

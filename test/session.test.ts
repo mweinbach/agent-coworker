@@ -2688,6 +2688,42 @@ describe("AgentSession", () => {
       expect(compact.turns[0]?.turnId).toBe(seenTurnIds[0]);
     });
 
+    test("does not commit a late steer after the turn is cancelled", async () => {
+      const { session, events } = makeSession();
+      let runCount = 0;
+
+      mockRunTurn.mockImplementation(async () => {
+        runCount += 1;
+        if (runCount === 1) {
+          queueMicrotask(() => {
+            void session.sendSteerMessage("follow up in the same turn", session.activeTurnId!, "steer-cancelled");
+            queueMicrotask(() => {
+              session.cancel();
+            });
+          });
+          return {
+            text: "first pass",
+            reasoningText: undefined,
+            responseMessages: [{ role: "assistant", content: "first pass" }],
+          };
+        }
+
+        throw new Error("late steer continuation should not run after cancellation");
+      });
+
+      await session.sendUserMessage("go");
+
+      expect(runCount).toBe(1);
+      expect(
+        (session as any).state.allMessages.some((message: any) => message.content === "follow up in the same turn"),
+      ).toBe(false);
+      expect(
+        events.some((e) =>
+          e.type === "user_message"
+          && (e as any).clientMessageId === "steer-cancelled"),
+      ).toBe(false);
+    });
+
     test("rejects steer_message once the active turn stops accepting steering", async () => {
       const { session, events } = makeSession();
 

@@ -183,6 +183,7 @@ export function getComposerSubmitState(opts: {
     disabled:
       opts.hasPromptModal
       || !hasComposerText
+      || steerPending
       || (opts.busy && (!opts.sessionId || opts.threadStatus !== "active")),
   };
 }

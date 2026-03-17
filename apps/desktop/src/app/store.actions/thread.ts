@@ -325,6 +325,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
   
       const ok = sendUserMessageToThread(get, set, activeThreadId, trimmed, busyPolicy);
       if (!ok) return;
+      if (busyPolicy === "steer" && rt?.busy) return;
 
       set({ composerText: "" });
     },

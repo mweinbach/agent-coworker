@@ -340,12 +340,14 @@ describe("desktop protocol v2 mapping", () => {
       cause: "user_message",
     });
 
+    useAppStore.setState({ composerText: "tighten the answer" });
     await useAppStore.getState().sendMessage("tighten the answer", "steer");
 
     const steerMessage = threadSocket.sent.find((msg) => msg?.type === "steer_message");
     expect(steerMessage).toBeDefined();
     expect(steerMessage?.expectedTurnId).toBe("turn-1");
     expect(steerMessage?.clientMessageId).toBeTruthy();
+    expect(useAppStore.getState().composerText).toBe("tighten the answer");
     expect(RUNTIME.pendingThreadMessages.get(threadId)?.length ?? 0).toBe(0);
     expect(RUNTIME.pendingThreadSteers.get(threadId)?.get(steerMessage.clientMessageId)?.accepted).toBe(false);
 
@@ -357,6 +359,7 @@ describe("desktop protocol v2 mapping", () => {
       clientMessageId: steerMessage.clientMessageId,
     });
     expect(RUNTIME.pendingThreadSteers.get(threadId)?.get(steerMessage.clientMessageId)?.accepted).toBe(true);
+    expect(useAppStore.getState().composerText).toBe("");
 
     threadSocket.emit({
       type: "user_message",
@@ -365,6 +368,35 @@ describe("desktop protocol v2 mapping", () => {
       clientMessageId: steerMessage.clientMessageId,
     });
     expect(RUNTIME.pendingThreadSteers.get(threadId)?.has(steerMessage.clientMessageId) ?? false).toBe(false);
+  });
+
+  test("busy steer keeps the composer text when the server rejects the steer", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-1",
+      cause: "user_message",
+    });
+
+    useAppStore.setState({ composerText: "tighten the answer" });
+    await useAppStore.getState().sendMessage("tighten the answer", "steer");
+
+    expect(useAppStore.getState().composerText).toBe("tighten the answer");
+
+    threadSocket.emit({
+      type: "error",
+      sessionId: "thread-session",
+      message: "Active turn mismatch.",
+      code: "validation_failed",
+      source: "session",
+    });
+
+    expect(useAppStore.getState().composerText).toBe("tighten the answer");
   });
 
   test("requestWorkspaceMemories replaces a stale control socket when the workspace server URL changes", async () => {

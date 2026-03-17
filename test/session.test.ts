@@ -2589,6 +2589,35 @@ describe("AgentSession", () => {
       expect(stepMessages[1]?.at(-1)).toEqual({ role: "user", content: "mention tests" });
     });
 
+    test("late steer continuations only receive the remaining maxSteps budget", async () => {
+      const { session } = makeSession();
+      (session as any).state.maxSteps = 2;
+      const seenMaxSteps: number[] = [];
+      let runCount = 0;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        runCount += 1;
+        seenMaxSteps.push(params.maxSteps);
+        await params.onModelStreamPart?.({ type: "start-step", stepNumber: 1 });
+
+        if (runCount === 1) {
+          queueMicrotask(() => {
+            void session.sendSteerMessage("follow up once", session.activeTurnId!, "steer-remaining-steps");
+          });
+        }
+
+        return {
+          text: runCount === 1 ? "first pass" : "second pass",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: runCount === 1 ? "first pass" : "second pass" }],
+        };
+      });
+
+      await session.sendUserMessage("go");
+
+      expect(seenMaxSteps).toEqual([2, 1]);
+    });
+
     test("continues the same outer turn for a late steer and emits one aggregated turn_usage", async () => {
       const { session, events } = makeSession();
       const seenTurnIds: string[] = [];
@@ -2657,6 +2686,34 @@ describe("AgentSession", () => {
       expect(compact.totalTurns).toBe(1);
       expect(compact.turns).toHaveLength(1);
       expect(compact.turns[0]?.turnId).toBe(seenTurnIds[0]);
+    });
+
+    test("rejects steer_message once the active turn stops accepting steering", async () => {
+      const { session, events } = makeSession();
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          }),
+      );
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const activeTurnId = session.activeTurnId;
+      expect(activeTurnId).toBeTruthy();
+      (session as any).state.acceptingSteers = false;
+
+      await session.sendSteerMessage("too late", activeTurnId!, "steer-closed");
+
+      const errorEvt = events.findLast((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt?.message).toBe("Active turn no longer accepts steering.");
+      expect(events.some((e) => e.type === "steer_accepted" && (e as any).clientMessageId === "steer-closed")).toBe(false);
+
+      resolveRunTurn();
+      await turnPromise;
     });
 
     test("updates child session_info executionState across a successful turn", async () => {

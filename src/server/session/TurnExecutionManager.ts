@@ -223,6 +223,10 @@ function mergeTurnUsage(
   };
 }
 
+function isStartStepPart(part: unknown): boolean {
+  return typeof part === "object" && part !== null && (part as { type?: unknown }).type === "start-step";
+}
+
 export class TurnExecutionManager {
   constructor(
     private readonly context: SessionContext,
@@ -258,6 +262,11 @@ export class TurnExecutionManager {
 
     if (expectedTurnId !== currentTurnId) {
       this.context.emitError("validation_failed", "session", "Active turn mismatch.");
+      return;
+    }
+
+    if (!this.context.state.acceptingSteers) {
+      this.context.emitError("validation_failed", "session", "Active turn no longer accepts steering.");
       return;
     }
 
@@ -309,6 +318,12 @@ export class TurnExecutionManager {
     };
   }
 
+  private rejectPendingSteers(message: string) {
+    if (this.context.state.pendingSteers.length === 0) return;
+    this.context.state.pendingSteers.splice(0);
+    this.context.emitError("validation_failed", "session", message);
+  }
+
   async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
     if (this.context.state.running) {
       this.context.emitError("busy", "session", "Agent is busy");
@@ -331,6 +346,7 @@ export class TurnExecutionManager {
 
     this.context.state.running = true;
     this.context.state.abortController = new AbortController();
+    this.context.state.acceptingSteers = true;
     const turnStartedAt = Date.now();
     const turnId = makeId();
     this.context.state.currentTurnId = turnId;
@@ -340,10 +356,14 @@ export class TurnExecutionManager {
     let lastStreamError: unknown = null;
     let lastMessagePreview: string | undefined;
     let aggregatedUsage: TurnUsage | undefined;
+    let startedStepCount = 0;
     let streamPartIndex = 0;
     let rawStreamEventIndex = 0;
     const includeRawChunks = this.context.state.config.includeRawChunks ?? true;
-    const invokeRunTurn = async (providerStateOverride = this.context.state.providerState) =>
+    const invokeRunTurn = async (
+      maxSteps: number,
+      providerStateOverride = this.context.state.providerState,
+    ) =>
       await this.context.deps.runTurnImpl({
         config: this.context.state.config,
         system: this.context.state.system,
@@ -413,7 +433,7 @@ export class TurnExecutionManager {
         approveCommand: (cmd) => this.approveCommand(cmd),
         updateTodos: (todos) => this.updateTodos(todos),
         discoveredSkills: this.context.state.discoveredSkills,
-        maxSteps: this.context.state.maxSteps,
+        maxSteps,
         enableMcp: this.context.state.config.enableMcp,
         spawnDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
         agentRole: this.context.state.sessionInfo.role,
@@ -478,6 +498,11 @@ export class TurnExecutionManager {
           });
         },
         onModelStreamPart: async (rawPart) => {
+          if (isStartStepPart(rawPart)) {
+            startedStepCount += 1;
+            this.context.state.acceptingSteers = startedStepCount < this.context.state.maxSteps;
+          }
+
           const partIndex = streamPartIndex++;
           const normalized = normalizeModelStreamPart(rawPart, {
             provider: this.context.state.config.provider,
@@ -515,9 +540,17 @@ export class TurnExecutionManager {
       this.context.queuePersistSessionSnapshot("session.user_message");
       let continueSameTurn = true;
       while (continueSameTurn) {
+        const remainingSteps = this.context.state.maxSteps - startedStepCount;
+        if (remainingSteps <= 0) {
+          this.context.state.acceptingSteers = false;
+          this.rejectPendingSteers("Active turn reached its max step budget and can no longer accept steering.");
+          break;
+        }
+
+        const startedStepsBeforePass = startedStepCount;
         let res;
         try {
-          res = await invokeRunTurn();
+          res = await invokeRunTurn(remainingSteps);
         } catch (error) {
           const shouldRetryContinuation =
             supportsOpenAiContinuation(this.context.state.config.provider) &&
@@ -531,7 +564,12 @@ export class TurnExecutionManager {
           this.log("[warn] stored OpenAI continuation handle was rejected; retrying from local transcript");
           this.context.state.providerState = null;
           this.context.queuePersistSessionSnapshot("session.provider_state_invalidated");
-          res = await invokeRunTurn(null);
+          res = await invokeRunTurn(remainingSteps, null);
+        }
+
+        if (startedStepCount === startedStepsBeforePass) {
+          startedStepCount += 1;
+          this.context.state.acceptingSteers = startedStepCount < this.context.state.maxSteps;
         }
 
         if (supportsOpenAiContinuation(this.context.state.config.provider)) {
@@ -565,11 +603,21 @@ export class TurnExecutionManager {
 
         aggregatedUsage = mergeTurnUsage(aggregatedUsage, res.usage);
 
+        if (startedStepCount >= this.context.state.maxSteps) {
+          this.context.state.acceptingSteers = false;
+          this.rejectPendingSteers("Active turn reached its max step budget and can no longer accept steering.");
+          continueSameTurn = false;
+          continue;
+        }
+
         await new Promise((resolve) => setTimeout(resolve, 0));
         const lateSteersCommitted = this.commitPendingSteers().length > 0;
         continueSameTurn =
           lateSteersCommitted &&
           !this.context.state.abortController?.signal.aborted;
+        this.context.state.acceptingSteers =
+          continueSameTurn &&
+          startedStepCount < this.context.state.maxSteps;
       }
 
       if (aggregatedUsage) {
@@ -637,6 +685,7 @@ export class TurnExecutionManager {
         );
       }
     } finally {
+      this.context.state.acceptingSteers = false;
       this.context.state.pendingSteers.splice(0);
       this.deps.metadataManager.updateSessionInfo({
         executionState: this.settledExecutionState(),

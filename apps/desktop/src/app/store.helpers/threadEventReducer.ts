@@ -449,6 +449,11 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       if (typeof evt.clientMessageId === "string") {
         markPendingThreadSteerAccepted(threadId, evt.clientMessageId);
       }
+      const activeThreadId = get().selectedThreadId;
+      const composerText = get().composerText.trim();
+      if (activeThreadId === threadId && composerText.length > 0 && composerText === evt.text.trim()) {
+        set({ composerText: "" });
+      }
       return;
     }
 

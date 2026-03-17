@@ -241,6 +241,7 @@ export class AgentSession {
       connecting: false,
       abortController: null,
       currentTurnId: null,
+      acceptingSteers: false,
       pendingSteers: [],
       currentTurnOutcome: initialCurrentTurnOutcome(hydrated),
       maxSteps: 100,

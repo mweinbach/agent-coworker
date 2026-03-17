@@ -104,6 +104,7 @@ export type SessionRuntimeState = {
   connecting: boolean;
   abortController: AbortController | null;
   currentTurnId: string | null;
+  acceptingSteers: boolean;
   pendingSteers: PendingSteer[];
   currentTurnOutcome: "completed" | "cancelled" | "error";
   maxSteps: number;

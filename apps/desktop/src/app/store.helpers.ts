@@ -5,6 +5,8 @@ import { PROVIDER_NAMES } from "../lib/wsProtocol";
 
 import type {
   Notification,
+  OnboardingStep,
+  PersistedOnboardingState,
   PromptModalState,
   SettingsPageId,
   ThreadRecord,
@@ -159,6 +161,10 @@ export type AppStoreState = {
   showHiddenFiles: boolean;
   updateState: UpdaterState;
 
+  onboardingVisible: boolean;
+  onboardingStep: OnboardingStep;
+  onboardingState: PersistedOnboardingState;
+
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   contextSidebarCollapsed: boolean;
@@ -248,6 +254,11 @@ export type AppStoreState = {
   answerAsk: (threadId: string, requestId: string, answer: string) => void;
   answerApproval: (threadId: string, requestId: string, approved: boolean) => void;
   dismissPrompt: () => void;
+
+  startOnboarding: () => void;
+  dismissOnboarding: () => void;
+  completeOnboarding: () => void;
+  setOnboardingStep: (step: OnboardingStep) => void;
 
   toggleSidebar: () => void;
   toggleContextSidebar: () => void;

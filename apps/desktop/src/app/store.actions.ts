@@ -10,6 +10,7 @@ import { createSkillActions } from "./store.actions/skills";
 import { createThreadActions } from "./store.actions/thread";
 import { createWorkspaceActions } from "./store.actions/workspace";
 import { createWorkspaceDefaultsActions } from "./store.actions/workspaceDefaults";
+import { createOnboardingActions } from "./store.actions/onboarding";
 
 export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions {
   return {
@@ -23,5 +24,6 @@ export function createAppActions(set: StoreSet, get: StoreGet): AppStoreActions 
     ...createWorkspaceMemoryActions(set, get),
     ...createProviderActions(set, get),
     ...createExplorerActions(set, get),
+    ...createOnboardingActions(set, get),
   };
 }

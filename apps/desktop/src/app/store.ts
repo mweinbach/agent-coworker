@@ -42,6 +42,10 @@ const initialState: AppStoreDataState = {
   showHiddenFiles: false,
   updateState: createDefaultUpdaterState(),
 
+  onboardingVisible: false,
+  onboardingStep: "welcome" as const,
+  onboardingState: { status: "pending" as const, completedAt: null, dismissedAt: null },
+
   sidebarCollapsed: false,
   contextSidebarCollapsed: false,
   contextSidebarWidth: 300,

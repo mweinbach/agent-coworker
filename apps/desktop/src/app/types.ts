@@ -95,6 +95,16 @@ export type PersistedProviderState = {
   statusLastUpdatedAt?: string | null;
 };
 
+export type OnboardingStatus = "pending" | "dismissed" | "completed";
+
+export type PersistedOnboardingState = {
+  status: OnboardingStatus;
+  completedAt: string | null;
+  dismissedAt: string | null;
+};
+
+export type OnboardingStep = "welcome" | "workspace" | "provider" | "defaults" | "firstThread";
+
 export type PersistedState = {
   version: number;
   workspaces: WorkspaceRecord[];
@@ -102,6 +112,7 @@ export type PersistedState = {
   developerMode?: boolean;
   showHiddenFiles?: boolean;
   providerState?: PersistedProviderState;
+  onboarding?: PersistedOnboardingState;
 };
 
 export type TranscriptDirection = "server" | "client";

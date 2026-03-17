@@ -20,6 +20,7 @@ import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
 import { ContextSidebarResizer } from "./ui/layout/ContextSidebarResizer";
+import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
 
 const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed: boolean }) {
   const sidebarWidth = useAppStore((s) => s.sidebarWidth);
@@ -210,6 +211,7 @@ export default function App() {
           <SettingsContent init={init} ready={ready} startupError={startupError} />
         </div>
         <PromptModal />
+        <DesktopOnboarding />
       </div>
     );
   }
@@ -240,6 +242,7 @@ export default function App() {
       </div>
 
       <PromptModal />
+      <DesktopOnboarding />
     </div>
   );
 }

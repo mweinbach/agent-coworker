@@ -5,6 +5,7 @@ import { z } from "zod";
 import { app } from "electron";
 
 import type {
+  PersistedOnboardingState,
   PersistedState,
   ThreadRecord,
   TranscriptEvent,
@@ -49,6 +50,24 @@ function defaultState(): PersistedState {
     developerMode: false,
     showHiddenFiles: false,
   };
+}
+
+function sanitizeOnboarding(value: unknown): PersistedOnboardingState | undefined {
+  if (!isRecord(value)) return undefined;
+  const status = value.status;
+  const normalizedStatus =
+    status === "pending" || status === "dismissed" || status === "completed"
+      ? status
+      : "pending";
+  const completedAt =
+    typeof value.completedAt === "string" && value.completedAt.trim()
+      ? value.completedAt.trim()
+      : null;
+  const dismissedAt =
+    typeof value.dismissedAt === "string" && value.dismissedAt.trim()
+      ? value.dismissedAt.trim()
+      : null;
+  return { status: normalizedStatus, completedAt, dismissedAt };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -266,6 +285,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     typeof value.version === "number" && Number.isFinite(value.version)
       ? Math.max(0, Math.floor(value.version))
       : 0;
+  const onboarding = sanitizeOnboarding(value.onboarding);
   return {
     version: parsedVersion >= 2 ? parsedVersion : 2,
     workspaces,
@@ -273,6 +293,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     developerMode: typeof value.developerMode === "boolean" ? value.developerMode : false,
     showHiddenFiles: typeof value.showHiddenFiles === "boolean" ? value.showHiddenFiles : false,
     ...(providerState ? { providerState } : {}),
+    ...(onboarding ? { onboarding } : {}),
   };
 }
 

@@ -185,7 +185,7 @@ jobs:
         shell: pwsh
         run: |
           $version = (Get-Content apps/desktop/package.json -Raw | ConvertFrom-Json).version
-          $installer = Get-ChildItem "apps/desktop/release/*-$version-win-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $installer = Get-ChildItem "apps/desktop/release/*Setup $version.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
           if (-not $installer) {
             throw "No packaged .exe installer found for version $version under apps/desktop/release"
@@ -207,7 +207,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
           Remove-Item "$stagingDir/*" -Force -ErrorAction SilentlyContinue
 
-          $installer = Get-ChildItem "apps/desktop/release/*-$version-win-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $installer = Get-ChildItem "apps/desktop/release/*Setup $version.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
           if (-not $installer) {
             throw "No packaged .exe installer found for version $version under apps/desktop/release"

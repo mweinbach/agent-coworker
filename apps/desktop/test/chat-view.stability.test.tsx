@@ -178,6 +178,7 @@ describe("desktop chat view stability", () => {
           busy: false,
           busySince: null,
           feed: [],
+          pendingSteer: null,
           transcriptOnly: false,
         },
       },
@@ -265,6 +266,7 @@ describe("desktop chat view stability", () => {
           busy: true,
           busySince: "2026-03-12T00:00:05.000Z",
           feed: [],
+          pendingSteer: null,
           transcriptOnly: false,
           activeTurnId: "turn-1",
         },
@@ -292,7 +294,27 @@ describe("desktop chat view stability", () => {
       });
 
       expect(container.querySelector('[aria-label="Stop generating response"]')).toBeNull();
-      expect(container.querySelector('[aria-label="Send message"]')).not.toBeNull();
+      expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
+      expect(container.textContent).toContain("Steer ready. Press Enter to inject it into the current run.");
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            "thread-1": {
+              ...state.threadRuntimeById["thread-1"]!,
+              pendingSteer: {
+                clientMessageId: "cmid-1",
+                text: "tighten scope",
+                status: "sending",
+              },
+            },
+          },
+        }));
+      });
+
+      expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
+      expect(container.textContent).toContain("Steer sent. Waiting for the running turn to accept it.");
 
       await act(async () => {
         root.unmount();

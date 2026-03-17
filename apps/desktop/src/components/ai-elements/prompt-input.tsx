@@ -1,7 +1,7 @@
 import type { ComponentProps } from "react";
 
 import { forwardRef } from "react";
-import { ArrowUpIcon, SquareIcon } from "lucide-react";
+import { ArrowUpIcon, LoaderCircleIcon, SquareIcon } from "lucide-react";
 
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
@@ -9,6 +9,7 @@ import { designTokens } from "../../lib/designTokens";
 import { cn } from "../../lib/utils";
 
 export type PromptInputStatus = "ready" | "submitted" | "streaming" | "error";
+export type PromptInputMode = "send" | "steer-ready" | "steer-pending";
 
 type PromptInputRootProps = ComponentProps<"div">;
 
@@ -78,11 +79,12 @@ export const PromptInputTextarea = forwardRef<HTMLTextAreaElement, ComponentProp
 });
 
 type PromptInputSubmitProps = Omit<ComponentProps<typeof Button>, "children" | "type"> & {
+  mode?: PromptInputMode;
   onStop?: () => void;
   status: PromptInputStatus;
 };
 
-export function PromptInputSubmit({ className, disabled, onStop, status, ...props }: PromptInputSubmitProps) {
+export function PromptInputSubmit({ className, disabled, mode = "send", onStop, status, ...props }: PromptInputSubmitProps) {
   if (status === "submitted" || status === "streaming") {
     return (
       <Button
@@ -103,19 +105,27 @@ export function PromptInputSubmit({ className, disabled, onStop, status, ...prop
     );
   }
 
+  const steerReady = mode === "steer-ready";
+  const steerPending = mode === "steer-pending";
+
   return (
     <Button
       type="submit"
       size="icon"
       className={cn(
-        "rounded-full border border-primary/15 bg-primary brightness-[0.72] text-primary-foreground shadow-none hover:brightness-[0.78] disabled:brightness-100 disabled:border-border/50 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
+        steerReady || steerPending
+          ? "rounded-full border border-amber-500/40 bg-amber-500 text-slate-950 shadow-none hover:bg-amber-400"
+          : "rounded-full border border-primary/15 bg-primary brightness-[0.72] text-primary-foreground shadow-none hover:brightness-[0.78]",
+        steerPending && "animate-pulse",
+        "disabled:brightness-100 disabled:border-border/50 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
         className,
       )}
       disabled={disabled}
-      aria-label="Send message"
+      aria-label={steerReady || steerPending ? "Steer current response" : "Send message"}
+      title={steerPending ? "Steer sent, waiting for acceptance" : steerReady ? "Steer the current response" : "Send message"}
       {...props}
     >
-      <ArrowUpIcon data-icon="send" />
+      {steerPending ? <LoaderCircleIcon data-icon="send" className="animate-spin" /> : <ArrowUpIcon data-icon="send" />}
     </Button>
   );
 }

@@ -116,3 +116,4 @@
 - When the user explicitly asks for subagent verification first, spawn the requested subagents before editing, use their issue-by-issue findings to drive the fix plan, and then confirm the same conclusions locally before patching.
 - When the desktop app is meant to feel native, do not ship renderer-wide ::-webkit-scrollbar skins; let Electron fall back to OS scrollbars and focus styling only on layout/containers.
 - For desktop steering UX in this repo, do not stop at store/runtime support; the chat composer itself must stay editable during busy turns, route non-empty busy submits through `busyPolicy: "steer"`, and only show the stop control when the composer is empty.
+- When desktop steering is user-visible, distinguish `steer ready` from `steer pending` in the composer itself; a generic send icon is not enough once the draft is targeting the active run.

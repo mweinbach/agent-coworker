@@ -175,6 +175,23 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           expectedTurnId: rt.activeTurnId,
           accepted: false,
         });
+        set((s) => {
+          const nextRt = s.threadRuntimeById[threadId];
+          if (!nextRt) return {};
+          return {
+            threadRuntimeById: {
+              ...s.threadRuntimeById,
+              [threadId]: {
+                ...nextRt,
+                pendingSteer: {
+                  clientMessageId,
+                  text: trimmed,
+                  status: "sending",
+                },
+              },
+            },
+          };
+        });
 
         deps.appendThreadTranscript(threadId, "client", {
           type: "steer_message",
@@ -194,6 +211,19 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
 
         if (!ok) {
           clearPendingThreadSteer(threadId, clientMessageId);
+          set((s) => {
+            const nextRt = s.threadRuntimeById[threadId];
+            if (!nextRt || nextRt.pendingSteer?.clientMessageId !== clientMessageId) return {};
+            return {
+              threadRuntimeById: {
+                ...s.threadRuntimeById,
+                [threadId]: {
+                  ...nextRt,
+                  pendingSteer: null,
+                },
+              },
+            };
+          });
           pushFeedItem(set, threadId, {
             id: deps.makeId(),
             kind: "error",
@@ -347,6 +377,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               busy: resumedBusy,
               busySince: resumedBusy ? rt.busySince ?? deps.nowIso() : null,
               activeTurnId: resumedBusy ? (evt.turnId ?? null) : null,
+              pendingSteer: resumedBusy ? rt.pendingSteer : null,
               transcriptOnly: false,
             },
           },
@@ -431,6 +462,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               busy: evt.busy,
               busySince: evt.busy ? rt.busySince ?? deps.nowIso() : null,
               activeTurnId: evt.busy ? (evt.turnId ?? rt.activeTurnId) : null,
+              pendingSteer: evt.busy ? rt.pendingSteer : null,
             },
           },
         };
@@ -448,6 +480,23 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     if (evt.type === "steer_accepted") {
       if (typeof evt.clientMessageId === "string") {
         markPendingThreadSteerAccepted(threadId, evt.clientMessageId);
+        set((s) => {
+          const rt = s.threadRuntimeById[threadId];
+          const pendingSteer = rt?.pendingSteer;
+          if (!rt || !pendingSteer || pendingSteer.clientMessageId !== evt.clientMessageId) return {};
+          return {
+            threadRuntimeById: {
+              ...s.threadRuntimeById,
+              [threadId]: {
+                ...rt,
+                pendingSteer: {
+                  ...pendingSteer,
+                  status: "accepted",
+                },
+              },
+            },
+          };
+        });
       }
       const activeThreadId = get().selectedThreadId;
       const composerText = get().composerText.trim();
@@ -659,6 +708,19 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       const cmid = typeof evt.clientMessageId === "string" ? evt.clientMessageId : null;
       if (cmid && hasPendingThreadSteer(threadId, cmid)) {
         clearPendingThreadSteer(threadId, cmid);
+        set((s) => {
+          const rt = s.threadRuntimeById[threadId];
+          if (!rt || rt.pendingSteer?.clientMessageId !== cmid) return {};
+          return {
+            threadRuntimeById: {
+              ...s.threadRuntimeById,
+              [threadId]: {
+                ...rt,
+                pendingSteer: null,
+              },
+            },
+          };
+        });
       }
       if (cmid) {
         const seen = RUNTIME.optimisticUserMessageIds.get(threadId);
@@ -812,6 +874,22 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           detail: `${evt.source}/${evt.code}: ${evt.message}`,
         }),
       }));
+      if (evt.code === "validation_failed") {
+        set((s) => {
+          const rt = s.threadRuntimeById[threadId];
+          if (!rt?.pendingSteer) return {};
+          return {
+            threadRuntimeById: {
+              ...s.threadRuntimeById,
+              [threadId]: {
+                ...rt,
+                pendingSteer: null,
+              },
+            },
+          };
+        });
+        clearPendingThreadSteers(threadId);
+      }
       return;
     }
 
@@ -856,12 +934,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               ...s.threadRuntimeById,
               [threadId]: {
                 ...rt,
-                connected: false,
-                busy: false,
-                busySince: null,
-                activeTurnId: null,
-              },
+              connected: false,
+              busy: false,
+              busySince: null,
+              activeTurnId: null,
+              pendingSteer: null,
             },
+          },
             threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "disconnected" } : t)),
           };
         });

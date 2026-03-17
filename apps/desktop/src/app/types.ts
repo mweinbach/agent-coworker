@@ -89,6 +89,12 @@ export type ThreadRecord = {
   lastEventSeq: number;
 };
 
+export type ThreadPendingSteer = {
+  clientMessageId: string;
+  text: string;
+  status: "sending" | "accepted";
+};
+
 export type PersistedProviderStatus = Extract<ServerEvent, { type: "provider_status" }>["providers"][number];
 
 export type PersistedProviderState = {
@@ -232,6 +238,7 @@ export type ThreadRuntime = {
   busy: boolean;
   busySince: string | null;
   activeTurnId: string | null;
+  pendingSteer?: ThreadPendingSteer | null;
   feed: FeedItem[];
   transcriptOnly: boolean;
 };

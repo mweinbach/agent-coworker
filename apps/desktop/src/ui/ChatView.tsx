@@ -5,7 +5,7 @@ import { AlertTriangleIcon, MessageSquareIcon, RotateCcwIcon } from "lucide-reac
 import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 
 import { useAppStore } from "../app/store";
-import type { FeedItem, ThreadStatus } from "../app/types";
+import type { FeedItem, ThreadPendingSteer, ThreadStatus } from "../app/types";
 import {
   Conversation,
   ConversationContent,
@@ -158,25 +158,46 @@ export function getComposerSubmitState(opts: {
   busy: boolean;
   hasPromptModal: boolean;
   composerText: string;
+  pendingSteer: ThreadPendingSteer | null;
   sessionId: string | null;
   threadStatus: ThreadStatus;
-}): { status: "ready" | "streaming"; disabled: boolean } {
-  const hasComposerText = opts.composerText.trim().length > 0;
+}): { status: "ready" | "streaming"; disabled: boolean; mode: "send" | "steer-ready" | "steer-pending" } {
+  const composerText = opts.composerText.trim();
+  const hasComposerText = composerText.length > 0;
+  const steerPending = opts.busy
+    && hasComposerText
+    && opts.pendingSteer?.status === "sending"
+    && opts.pendingSteer.text.trim() === composerText;
 
   if (opts.busy && !hasComposerText) {
     return {
       status: "streaming",
       disabled: opts.hasPromptModal || !opts.sessionId || opts.threadStatus !== "active",
+      mode: "send",
     };
   }
 
   return {
     status: "ready",
+    mode: opts.busy ? (steerPending ? "steer-pending" : "steer-ready") : "send",
     disabled:
       opts.hasPromptModal
       || !hasComposerText
       || (opts.busy && (!opts.sessionId || opts.threadStatus !== "active")),
   };
+}
+
+export function composerBusyHint(submitState: ReturnType<typeof getComposerSubmitState>): string {
+  if (submitState.status === "streaming") {
+    return "Type to steer, or use stop to cancel.";
+  }
+  if (submitState.mode === "steer-pending") {
+    return "Steer sent. Waiting for the running turn to accept it.";
+  }
+  if (submitState.mode === "steer-ready") {
+    return "Steer ready. Press Enter to inject it into the current run.";
+  }
+  return "Press Enter to send, Shift+Enter for newline.";
 }
 
 export function resolveComposerBusyPolicy(busy: boolean): "reject" | "steer" {
@@ -585,6 +606,7 @@ export function ChatView() {
     busy,
     hasPromptModal,
     composerText,
+    pendingSteer: rt?.pendingSteer ?? null,
     sessionId: rt?.sessionId ?? null,
     threadStatus: thread.status,
   });
@@ -693,13 +715,10 @@ export function ChatView() {
                 </PromptInputTools>
                 <div className={cn("flex shrink-0 items-center gap-2", busy ? "opacity-100" : "opacity-70")}>
                   <span className="hidden max-w-[18rem] text-right text-xs leading-tight text-muted-foreground sm:block">
-                    {busy
-                      ? (composerText.trim()
-                        ? "Press Enter to steer, or clear the draft to stop."
-                        : "Type to steer, or use stop to cancel.")
-                      : "Press Enter to send, Shift+Enter for newline."}
+                    {composerBusyHint(composerSubmitState)}
                   </span>
                   <PromptInputSubmit
+                    mode={composerSubmitState.mode}
                     status={composerSubmitState.status}
                     disabled={composerSubmitState.disabled}
                     onStop={selectedThreadId ? () => cancelThread(selectedThreadId) : undefined}

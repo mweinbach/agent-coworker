@@ -348,6 +348,11 @@ describe("desktop protocol v2 mapping", () => {
     expect(steerMessage?.expectedTurnId).toBe("turn-1");
     expect(steerMessage?.clientMessageId).toBeTruthy();
     expect(useAppStore.getState().composerText).toBe("tighten the answer");
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toEqual({
+      clientMessageId: steerMessage!.clientMessageId,
+      text: "tighten the answer",
+      status: "sending",
+    });
     expect(RUNTIME.pendingThreadMessages.get(threadId)?.length ?? 0).toBe(0);
     expect(RUNTIME.pendingThreadSteers.get(threadId)?.get(steerMessage.clientMessageId)?.accepted).toBe(false);
 
@@ -360,6 +365,7 @@ describe("desktop protocol v2 mapping", () => {
     });
     expect(RUNTIME.pendingThreadSteers.get(threadId)?.get(steerMessage.clientMessageId)?.accepted).toBe(true);
     expect(useAppStore.getState().composerText).toBe("");
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer?.status).toBe("accepted");
 
     threadSocket.emit({
       type: "user_message",
@@ -368,10 +374,12 @@ describe("desktop protocol v2 mapping", () => {
       clientMessageId: steerMessage.clientMessageId,
     });
     expect(RUNTIME.pendingThreadSteers.get(threadId)?.has(steerMessage.clientMessageId) ?? false).toBe(false);
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toBeNull();
   });
 
   test("busy steer keeps the composer text when the server rejects the steer", async () => {
     await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId!;
     const threadSocket = socketByClient("desktop");
     emitServerHello(threadSocket, "thread-session");
 
@@ -397,6 +405,7 @@ describe("desktop protocol v2 mapping", () => {
     });
 
     expect(useAppStore.getState().composerText).toBe("tighten the answer");
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toBeNull();
   });
 
   test("requestWorkspaceMemories replaces a stale control socket when the workspace server URL changes", async () => {

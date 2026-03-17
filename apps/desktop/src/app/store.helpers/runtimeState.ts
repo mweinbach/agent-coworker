@@ -172,6 +172,7 @@ export function defaultThreadRuntime(): ThreadRuntime {
     busy: false,
     busySince: null,
     activeTurnId: null,
+    pendingSteer: null,
     feed: [],
     transcriptOnly: false,
   };

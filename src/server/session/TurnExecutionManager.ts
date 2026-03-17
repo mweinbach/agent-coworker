@@ -356,10 +356,34 @@ export class TurnExecutionManager {
     let lastStreamError: unknown = null;
     let lastMessagePreview: string | undefined;
     let aggregatedUsage: TurnUsage | undefined;
+    let persistedAggregatedUsage = false;
     let startedStepCount = 0;
     let streamPartIndex = 0;
     let rawStreamEventIndex = 0;
     const includeRawChunks = this.context.state.config.includeRawChunks ?? true;
+    const persistAggregatedUsage = () => {
+      if (persistedAggregatedUsage || !aggregatedUsage) {
+        return;
+      }
+
+      persistedAggregatedUsage = true;
+      this.context.emit({ type: "turn_usage", sessionId: this.context.id, turnId, usage: aggregatedUsage });
+
+      const tracker = this.context.state.costTracker;
+      if (tracker) {
+        tracker.recordTurn({
+          turnId,
+          provider: this.context.state.config.provider,
+          model: this.context.state.config.model,
+          usage: aggregatedUsage,
+        });
+        this.context.emit({
+          type: "session_usage",
+          sessionId: this.context.id,
+          usage: tracker.getCompactSnapshot(),
+        });
+      }
+    };
     const invokeRunTurn = async (
       maxSteps: number,
       providerStateOverride = this.context.state.providerState,
@@ -627,24 +651,7 @@ export class TurnExecutionManager {
           startedStepCount < this.context.state.maxSteps;
       }
 
-      if (aggregatedUsage) {
-        this.context.emit({ type: "turn_usage", sessionId: this.context.id, turnId, usage: aggregatedUsage });
-
-        const tracker = this.context.state.costTracker;
-        if (tracker) {
-          tracker.recordTurn({
-            turnId,
-            provider: this.context.state.config.provider,
-            model: this.context.state.config.model,
-            usage: aggregatedUsage,
-          });
-          this.context.emit({
-            type: "session_usage",
-            sessionId: this.context.id,
-            usage: tracker.getCompactSnapshot(),
-          });
-        }
-      }
+      persistAggregatedUsage();
 
       this.context.emitTelemetry(
         "agent.turn.completed",
@@ -692,6 +699,7 @@ export class TurnExecutionManager {
         );
       }
     } finally {
+      persistAggregatedUsage();
       this.context.state.acceptingSteers = false;
       this.context.state.pendingSteers.splice(0);
       this.deps.metadataManager.updateSessionInfo({

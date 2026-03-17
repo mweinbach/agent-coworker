@@ -2724,6 +2724,71 @@ describe("AgentSession", () => {
       ).toBe(false);
     });
 
+    test("persists aggregated usage when a late steer continuation errors after an earlier pass consumed tokens", async () => {
+      const { session, events } = makeSession();
+      let runCount = 0;
+
+      mockRunTurn.mockImplementation(async () => {
+        runCount += 1;
+
+        if (runCount === 1) {
+          queueMicrotask(() => {
+            void session.sendSteerMessage("follow up and fail", session.activeTurnId!, "steer-error");
+          });
+          return {
+            text: "first pass",
+            reasoningText: undefined,
+            responseMessages: [{ role: "assistant", content: "first pass" }],
+            usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          };
+        }
+
+        throw new Error("follow-up provider failed");
+      });
+
+      await session.sendUserMessage("go");
+
+      expect(runCount).toBe(2);
+
+      const busyTrue = events.find(
+        (e) => e.type === "session_busy" && (e as any).busy === true
+      ) as Extract<ServerEvent, { type: "session_busy" }> | undefined;
+      expect(busyTrue?.turnId).toBeTruthy();
+
+      const usageEvents = events.filter((e) => e.type === "turn_usage") as Array<Extract<ServerEvent, { type: "turn_usage" }>>;
+      expect(usageEvents).toHaveLength(1);
+      expect(usageEvents[0]?.turnId).toBe(busyTrue?.turnId);
+      expect(usageEvents[0]?.usage).toMatchObject({
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+      });
+
+      const tracker = (session as any).state.costTracker as SessionCostTracker;
+      const compact = tracker.getCompactSnapshot();
+      expect(compact.totalTurns).toBe(1);
+      expect(compact.turns).toHaveLength(1);
+      expect(compact.turns[0]?.turnId).toBe(busyTrue?.turnId);
+      expect(compact.turns[0]?.usage).toMatchObject({
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+      });
+
+      const sessionUsageEvents = events.filter((e) => e.type === "session_usage") as Array<Extract<ServerEvent, { type: "session_usage" }>>;
+      expect(sessionUsageEvents).toHaveLength(1);
+      expect(sessionUsageEvents[0]?.usage?.totalTurns).toBe(1);
+      expect(sessionUsageEvents[0]?.usage?.turns[0]?.turnId).toBe(busyTrue?.turnId);
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt?.message).toContain("follow-up provider failed");
+
+      const busyFalse = events.find(
+        (e) => e.type === "session_busy" && !(e as any).busy
+      ) as Extract<ServerEvent, { type: "session_busy" }> | undefined;
+      expect(busyFalse?.outcome).toBe("error");
+    });
+
     test("rejects steer_message once the active turn stops accepting steering", async () => {
       const { session, events } = makeSession();
 

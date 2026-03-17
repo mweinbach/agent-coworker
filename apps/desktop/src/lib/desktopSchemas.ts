@@ -154,6 +154,15 @@ const persistedThreadSchema = z.object({
   ),
 }).passthrough();
 
+const persistedOnboardingSchema = z.object({
+  status: z.preprocess(
+    (value) => (value === "pending" || value === "dismissed" || value === "completed" ? value : "pending"),
+    z.enum(["pending", "dismissed", "completed"]),
+  ),
+  completedAt: z.preprocess((value) => (typeof value === "string" && value.trim() ? value : null), z.string().nullable()),
+  dismissedAt: z.preprocess((value) => (typeof value === "string" && value.trim() ? value : null), z.string().nullable()),
+}).optional();
+
 export const persistedStateInputSchema: z.ZodType<PersistedState> = z.object({
   workspaces: z.array(persistedWorkspaceSchema),
   threads: z.array(persistedThreadSchema),
@@ -163,6 +172,7 @@ export const persistedStateInputSchema: z.ZodType<PersistedState> = z.object({
     (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 2),
     z.number().int().nonnegative(),
   ),
+  onboarding: persistedOnboardingSchema,
 }).passthrough() as z.ZodType<PersistedState>;
 
 export const confirmActionInputSchema: z.ZodType<ConfirmActionInput> = z.object({

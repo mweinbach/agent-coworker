@@ -29,6 +29,7 @@ function parseOverflowThresholdDraft(value: string): number | null {
 export function DeveloperPage() {
   const developerMode = useAppStore((s) => s.developerMode);
   const setDeveloperMode = useAppStore((s) => s.setDeveloperMode);
+  const startOnboarding = useAppStore((s) => s.startOnboarding);
 
   const showHiddenFiles = useAppStore((s) => s.showHiddenFiles);
   const setShowHiddenFiles = useAppStore((s) => s.setShowHiddenFiles);
@@ -130,6 +131,23 @@ export function DeveloperPage() {
               onCheckedChange={(checked) => setDeveloperMode(toBoolean(checked))}
             />
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/80 bg-card/85">
+        <CardHeader>
+          <CardTitle>Onboarding</CardTitle>
+          <CardDescription>Re-run the first-time setup walkthrough.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            type="button"
+            variant="outline"
+            aria-label="Run onboarding again"
+            onClick={() => startOnboarding()}
+          >
+            Run onboarding again
+          </Button>
         </CardContent>
       </Card>
 

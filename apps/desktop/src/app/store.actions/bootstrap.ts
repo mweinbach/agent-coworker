@@ -52,10 +52,16 @@ import { deriveConnectedProviders, normalizePersistedProviderState } from "../pe
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import {
   normalizeWorkspaceUserProfile,
+  type PersistedOnboardingState,
   type PersistedProviderState,
   type ThreadRecord,
   type WorkspaceRecord,
 } from "../types";
+import {
+  DEFAULT_ONBOARDING_STATE,
+  shouldAutoOpenOnboarding,
+  shouldBackfillOnboardingCompleted,
+} from "./onboarding";
 
 const optionalStringWithContentSchema = z.preprocess(
   (value) => (typeof value === "string" && value.trim() ? value : undefined),
@@ -179,6 +185,7 @@ const persistedStateSchema = z.object({
   showHiddenFiles: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough().transform((state) => {
   const providerState = normalizePersistedProviderState((state as { providerState?: unknown }).providerState);
+  const onboarding = (state as { onboarding?: PersistedOnboardingState }).onboarding;
   const workspaceByRecency = [...state.workspaces].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
   const selectedWorkspaceId = workspaceByRecency[0]?.id ?? null;
   const workspaceThreads = selectedWorkspaceId
@@ -198,6 +205,7 @@ const persistedStateSchema = z.object({
     developerMode: state.developerMode,
     showHiddenFiles: state.showHiddenFiles,
     providerState,
+    onboarding,
   };
 });
 
@@ -213,6 +221,22 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
         } catch (error) {
           console.warn("Desktop updater state load failed:", error);
         }
+        const connectedProviders = deriveConnectedProviders(state.providerState as PersistedProviderState | undefined);
+        const onboardingOpts = {
+          onboarding: state.onboarding,
+          workspaceCount: state.workspaces.length,
+          threadCount: state.threads.length,
+          hasConnectedProvider: connectedProviders.length > 0,
+        };
+
+        // Backfill: if existing user but onboarding metadata was never set, mark completed.
+        let resolvedOnboarding = state.onboarding ?? DEFAULT_ONBOARDING_STATE;
+        if (shouldBackfillOnboardingCompleted(onboardingOpts)) {
+          resolvedOnboarding = { status: "completed", completedAt: nowIso(), dismissedAt: null };
+        }
+
+        const autoOpen = shouldAutoOpenOnboarding(onboardingOpts);
+
         set({
           workspaces: state.workspaces,
           threads: state.threads,
@@ -220,13 +244,21 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           selectedThreadId: state.selectedThreadId,
           providerStatusByName: state.providerState?.statusByName ?? {},
           providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
-          providerConnected: deriveConnectedProviders(state.providerState as PersistedProviderState | undefined),
+          providerConnected: connectedProviders,
           developerMode: state.developerMode,
           showHiddenFiles: state.showHiddenFiles,
           updateState,
           ready: true,
           startupError: null,
+          onboardingState: resolvedOnboarding,
+          onboardingVisible: autoOpen,
+          onboardingStep: "welcome",
         });
+
+        // Persist backfilled onboarding status if we changed it.
+        if (resolvedOnboarding.status !== (state.onboarding?.status ?? "pending")) {
+          void persistNow(get);
+        }
 
         if (state.selectedThreadId) {
           await get().selectThread(state.selectedThreadId);
@@ -252,6 +284,8 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           providerLastAuthResult: null,
           ready: true,
           startupError: detail,
+          onboardingVisible: false,
+          onboardingStep: "welcome" as const,
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),

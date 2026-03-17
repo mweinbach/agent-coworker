@@ -348,6 +348,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         };
       });
       deps.persist(get);
+      if (!resumedBusy) {
+        clearPendingThreadSteers(threadId);
+      }
 
       void get().applyWorkspaceDefaultsToThread(threadId, "auto");
       RUNTIME.threadSockets.get(threadId)?.send({
@@ -844,7 +847,6 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "disconnected" } : t)),
           };
         });
-        clearPendingThreadSteers(threadId);
         void deps.persist(get);
       },
     });

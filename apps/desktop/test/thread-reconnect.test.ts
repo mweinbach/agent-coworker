@@ -136,6 +136,7 @@ describe("thread reconnect", () => {
     RUNTIME.threadSockets.clear();
     RUNTIME.optimisticUserMessageIds.clear();
     RUNTIME.pendingThreadMessages.clear();
+    RUNTIME.pendingThreadSteers.clear();
     RUNTIME.pendingWorkspaceDefaultApplyThreadIds.clear();
     RUNTIME.workspaceStartPromises.clear();
     RUNTIME.workspaceStartGenerations.clear();
@@ -456,6 +457,60 @@ describe("thread reconnect", () => {
 
     const state = useAppStore.getState();
     expect(state.threads.find((t) => t.id === threadId)?.status).toBe("active");
+  });
+
+  test("reconnect keeps pending steers until the committed user_message arrives", async () => {
+    await useAppStore.getState().selectThread(threadId);
+
+    const initialSocket = socketByClient("desktop");
+    emitServerHello(initialSocket, "thread-session");
+    initialSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-1",
+      cause: "user_message",
+    });
+
+    await useAppStore.getState().sendMessage("tighten the answer", "steer");
+
+    const steerMessage = initialSocket.sent.find((msg) => msg?.type === "steer_message");
+    expect(steerMessage?.clientMessageId).toBeTruthy();
+    expect(RUNTIME.pendingThreadSteers.get(threadId)?.has(steerMessage.clientMessageId)).toBe(true);
+
+    initialSocket.close();
+
+    expect(useAppStore.getState().threads.find((t) => t.id === threadId)?.status).toBe("disconnected");
+    expect(RUNTIME.pendingThreadSteers.get(threadId)?.has(steerMessage.clientMessageId)).toBe(true);
+
+    await useAppStore.getState().reconnectThread(threadId);
+
+    const resumedSocket = socketByClient("desktop");
+    resumedSocket.emit({
+      type: "server_hello",
+      sessionId: "thread-session",
+      protocolVersion: "2.0",
+      isResume: true,
+      busy: true,
+      turnId: "turn-1",
+      config: {
+        provider: "openai",
+        model: "gpt-5.2",
+        workingDirectory: "/tmp/workspace",
+        outputDirectory: "/tmp/workspace/output",
+      },
+    });
+
+    expect(RUNTIME.pendingThreadSteers.get(threadId)?.has(steerMessage.clientMessageId)).toBe(true);
+
+    resumedSocket.emit({
+      type: "user_message",
+      sessionId: "thread-session",
+      text: "tighten the answer",
+      clientMessageId: steerMessage.clientMessageId,
+    });
+
+    expect(RUNTIME.pendingThreadSteers.get(threadId)?.has(steerMessage.clientMessageId) ?? false).toBe(false);
   });
 
   test("selectThread transcript hydration maps legacy reasoning aliases", async () => {

@@ -252,11 +252,11 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           startupError: null,
           onboardingState: resolvedOnboarding,
           onboardingVisible: autoOpen,
-          onboardingStep: autoOpen ? "welcome" : "welcome",
+          onboardingStep: "welcome",
         });
 
         // Persist backfilled onboarding status if we changed it.
-        if (resolvedOnboarding !== (state.onboarding ?? DEFAULT_ONBOARDING_STATE) && resolvedOnboarding.status === "completed") {
+        if (resolvedOnboarding.status !== (state.onboarding?.status ?? "pending")) {
           void persistNow(get);
         }
 
@@ -284,9 +284,8 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           providerLastAuthResult: null,
           ready: true,
           startupError: detail,
-          onboardingVisible: true,
+          onboardingVisible: false,
           onboardingStep: "welcome" as const,
-          onboardingState: DEFAULT_ONBOARDING_STATE,
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),

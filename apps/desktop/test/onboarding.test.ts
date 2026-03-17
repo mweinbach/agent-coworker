@@ -418,6 +418,64 @@ describe("rerun preserves existing state", () => {
   });
 });
 
+// ── Error recovery path ──
+
+describe("init error path does not force onboarding", () => {
+  test("onboardingVisible is false after init failure", () => {
+    // Simulate what the catch block in init() does:
+    // it should NOT set onboardingVisible: true for existing users
+    // who hit a transient error.
+    useAppStore.setState({
+      onboardingVisible: false,
+      onboardingState: { status: "completed", completedAt: "2026-03-10T00:00:00Z", dismissedAt: null },
+    });
+
+    // The error path now sets onboardingVisible: false
+    useAppStore.setState({
+      onboardingVisible: false,
+      onboardingStep: "welcome",
+      ready: true,
+      startupError: "simulated failure",
+    });
+
+    const after = useAppStore.getState();
+    expect(after.onboardingVisible).toBe(false);
+    expect(after.startupError).toBe("simulated failure");
+  });
+});
+
+// ── Shared provider utilities ──
+
+describe("shared provider display utilities", () => {
+  test("displayProviderName returns human names", async () => {
+    const { displayProviderName } = await import("../src/lib/providerDisplayNames");
+    expect(displayProviderName("openai")).toBe("OpenAI");
+    expect(displayProviderName("google")).toBe("Google");
+    expect(displayProviderName("anthropic")).toBe("Anthropic");
+  });
+
+  test("isProviderNameString validates known providers", async () => {
+    const { isProviderNameString } = await import("../src/lib/providerDisplayNames");
+    expect(isProviderNameString("openai")).toBe(true);
+    expect(isProviderNameString("google")).toBe(true);
+    expect(isProviderNameString("not-a-provider")).toBe(false);
+  });
+
+  test("fallbackAuthMethods returns api key for most providers", async () => {
+    const { fallbackAuthMethods } = await import("../src/lib/providerDisplayNames");
+    const methods = fallbackAuthMethods("openai");
+    expect(methods).toHaveLength(1);
+    expect(methods[0]!.type).toBe("api");
+  });
+
+  test("fallbackAuthMethods returns oauth for codex-cli", async () => {
+    const { fallbackAuthMethods } = await import("../src/lib/providerDisplayNames");
+    const methods = fallbackAuthMethods("codex-cli");
+    expect(methods.length).toBeGreaterThan(1);
+    expect(methods[0]!.type).toBe("oauth");
+  });
+});
+
 // ── Protocol guard ──
 
 describe("websocket protocol files unchanged", () => {

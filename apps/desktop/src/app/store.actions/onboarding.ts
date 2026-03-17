@@ -1,4 +1,4 @@
-import type { OnboardingStep, PersistedOnboardingState, PersistedState } from "../types";
+import type { OnboardingStep, PersistedOnboardingState } from "../types";
 import type { AppStoreActions, StoreGet, StoreSet } from "../store.helpers";
 import { nowIso, persistNow } from "../store.helpers";
 

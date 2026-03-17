@@ -45,21 +45,7 @@ import {
 import type { ProviderName } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { cn } from "../../../lib/utils";
-
-function displayProviderName(provider: ProviderName): string {
-  const names: Partial<Record<ProviderName, string>> = {
-    google: "Google",
-    openai: "OpenAI",
-    anthropic: "Anthropic",
-    baseten: "Baseten",
-    together: "Together AI",
-    nvidia: "NVIDIA",
-    "opencode-go": "OpenCode Go",
-    "opencode-zen": "OpenCode Zen",
-    "codex-cli": "Codex CLI",
-  };
-  return names[provider] ?? provider;
-}
+import { displayProviderName } from "../../../lib/providerDisplayNames";
 
 function toBoolean(checked: boolean | "indeterminate"): boolean {
   return checked === true;

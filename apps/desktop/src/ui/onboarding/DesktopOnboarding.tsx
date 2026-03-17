@@ -18,10 +18,16 @@ import {
   availableProvidersFromCatalog,
   modelChoicesFromCatalog,
   modelOptionsFromCatalog,
+  UI_DISABLED_PROVIDERS,
 } from "../../lib/modelChoices";
 import type { ProviderName, ServerEvent } from "../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../lib/wsProtocol";
 import { cn } from "../../lib/utils";
+import {
+  displayProviderName,
+  fallbackAuthMethods,
+  isProviderNameString,
+} from "../../lib/providerDisplayNames";
 import coworkIconSvg from "../../../build/icon.icon/Assets/svgviewer-output.svg";
 
 const PROVIDER_STATUS_POLL_MS = 4000;
@@ -33,40 +39,6 @@ const STEP_ORDER: OnboardingStep[] = ["welcome", "workspace", "provider", "defau
 
 function stepIndex(step: OnboardingStep): number {
   return STEP_ORDER.indexOf(step);
-}
-
-function displayProviderName(provider: ProviderName): string {
-  const names: Partial<Record<ProviderName, string>> = {
-    google: "Google",
-    openai: "OpenAI",
-    anthropic: "Anthropic",
-    baseten: "Baseten",
-    together: "Together AI",
-    nvidia: "NVIDIA",
-    "opencode-go": "OpenCode Go",
-    "opencode-zen": "OpenCode Zen",
-    "codex-cli": "Codex CLI",
-  };
-  return names[provider] ?? provider;
-}
-
-function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
-  if (provider === "google") {
-    return [
-      { id: "api_key", type: "api", label: "API key" },
-    ];
-  }
-  if (provider === "codex-cli") {
-    return [
-      { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
-      { id: "api_key", type: "api", label: "API key" },
-    ];
-  }
-  return [{ id: "api_key", type: "api", label: "API key" }];
-}
-
-function isProviderName(value: string): value is ProviderName {
-  return (PROVIDER_NAMES as readonly string[]).includes(value);
 }
 
 // ── Step indicators ──
@@ -289,9 +261,10 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   const modelProviders = useMemo(() => {
     const fromCatalog = providerCatalog
       .map((entry) => entry.id)
-      .filter((p): p is ProviderName => isProviderName(p));
+      .filter((p): p is ProviderName => isProviderNameString(p));
     const source = fromCatalog.length > 0 ? fromCatalog : [...PROVIDER_NAMES];
-    return source.filter((p) => {
+    const filtered = source.filter((p) => !UI_DISABLED_PROVIDERS.has(p));
+    return filtered.filter((p) => {
       const models = modelChoices[p];
       return models && models.length > 0;
     }).sort((a, b) => {
@@ -303,6 +276,11 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
     });
   }, [providerCatalog, providerStatusByName, modelChoices]);
 
+  const hasConnectedModelProvider = providerConnected.some((p) => {
+    const models = modelChoices[p];
+    return models && models.length > 0;
+  });
+
   // Initial fetch
   useEffect(() => {
     void requestProviderCatalog();
@@ -310,18 +288,15 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
     void refreshProviderStatus();
   }, [requestProviderCatalog, requestProviderAuthMethods, refreshProviderStatus]);
 
-  // Poll provider status while this step is visible (useful for OAuth flows in browser)
+  // Poll provider status while this step is visible (useful for OAuth flows in browser).
+  // Stop once a model provider is connected.
   useEffect(() => {
+    if (hasConnectedModelProvider) return;
     const interval = setInterval(() => {
       void refreshProviderStatus();
     }, PROVIDER_STATUS_POLL_MS);
     return () => clearInterval(interval);
-  }, [refreshProviderStatus]);
-
-  const hasConnectedModelProvider = providerConnected.some((p) => {
-    const models = modelChoices[p];
-    return models && models.length > 0;
-  });
+  }, [refreshProviderStatus, hasConnectedModelProvider]);
 
   const authMethodsFor = (provider: ProviderName): ProviderAuthMethod[] => {
     const fromStore = providerAuthMethodsByProvider[provider];
@@ -565,7 +540,7 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
           <Select
             value={effectiveProvider}
             onValueChange={(value) => {
-              if (!isProviderName(value)) return;
+              if (!isProviderNameString(value)) return;
               const newModel = (modelChoices[value] ?? [])[0] ?? "";
               void updateWorkspaceDefaults(workspace.id, {
                 defaultProvider: value,

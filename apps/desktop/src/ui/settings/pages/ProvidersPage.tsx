@@ -10,6 +10,10 @@ import { modelChoicesFromCatalog, UI_DISABLED_PROVIDERS } from "../../../lib/mod
 import type { ProviderName, ServerEvent } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { cn } from "../../../lib/utils";
+import {
+  displayProviderName,
+  isProviderNameString,
+} from "../../../lib/providerDisplayNames";
 
 type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
 
@@ -79,25 +83,6 @@ function formatCreditsSummary(credits: any): string {
   if (credits.unlimited === true) return "Unlimited credits";
   if (typeof credits.balance === "string" && credits.balance.trim()) return `Credits balance: ${credits.balance.trim()}`;
   return credits.hasCredits === true ? "Credits available" : "No credits available";
-}
-
-function isProviderName(value: string): value is ProviderName {
-  return (PROVIDER_NAMES as readonly string[]).includes(value);
-}
-
-function displayProviderName(provider: ProviderName): string {
-  const names: Partial<Record<ProviderName, string>> = {
-    google: "Google",
-    openai: "OpenAI",
-    anthropic: "Anthropic",
-    baseten: "Baseten",
-    together: "Together AI",
-    nvidia: "NVIDIA",
-    "opencode-go": "OpenCode Go",
-    "opencode-zen": "OpenCode Zen",
-    "codex-cli": "Codex CLI",
-  };
-  return names[provider] ?? provider;
 }
 
 function siblingOpenCodeProvider(provider: ProviderName): ProviderName | null {
@@ -196,7 +181,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const { modelProviders, toolProviders } = useMemo(() => {
     const fromCatalog = providerCatalog
       .map((entry) => entry.id)
-      .filter((provider): provider is ProviderName => isProviderName(provider));
+      .filter((provider): provider is ProviderName => isProviderNameString(provider));
     const source = fromCatalog.length > 0 ? fromCatalog : [...PROVIDER_NAMES];
     const filtered = source.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider));
 
@@ -225,7 +210,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const catalogNameByProvider = useMemo(() => {
     const map = new Map<ProviderName, string>();
     for (const entry of providerCatalog) {
-      if (!isProviderName(entry.id)) continue;
+      if (!isProviderNameString(entry.id)) continue;
       map.set(entry.id, entry.name);
     }
     return map;

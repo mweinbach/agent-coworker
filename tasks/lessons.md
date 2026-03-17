@@ -1,5 +1,6 @@
 # Lessons
 
+- When the user explicitly asks for PR triage via subagents, spawn the requested reviewers before local implementation so the final fix plan is grounded in the current branch state instead of only your own read.
 - For provider auth and saved-key lookups in this repo, treat `~/.cowork` as the only auth home; never derive auth storage from a workspace `.agent` path, and pin `HOME` in tests that fabricate auth state so they cannot accidentally read real machine credentials.
 - For desktop admin pages that auto-fetch data, do not assume store-level success/error handling is enough; add a UI-level fallback so an orphaned request cannot leave the page stuck on a perpetual loading message when the correct end state is simply empty.
 - For desktop request spinners in this repo, clear the loading flag on both success events and structured control-session errors; server-side failures like `memory_list` SQLite errors may never emit the success payload that normally resets UI state.
@@ -9,6 +10,7 @@
 - For automated PR review bots in this repo, optimize for unresolved findings only: cancel in-flight review runs when a PR closes, skip drafts, disable public session-share noise, and never post long “everything looks good now” summaries.
 - When finishing PR review work in this repo, do not stop at local code/test changes; reply on each completed GitHub review thread and resolve it in the PR in the same pass.
 - Before telling the user a review comment is already fixed, re-check the exact current branch code path the comment points at; unresolved PR findings can stay live even when nearby related work landed earlier in the branch.
+- When the user explicitly asks for model-specific subagent review, verify that the requested runner/model combination actually works in the current environment before relying on it; if the wrapper injects unsupported params or the model alias is unavailable, say so briefly and continue with direct code verification or another approved path.
 - For child-agent persistence, do not snapshot `executionState` from seeded `sessionInfo` alone; derive it from live runtime state (`running`, turn outcome, closed status) or restarted agents can come back as stale `pending_init`.
 - When rehydrating persisted child sessions, carry terminal failure state back into runtime fields like `currentTurnOutcome`; otherwise `agent_wait` and other republish paths can silently flip failed children to `completed` after restart.
 - Before doing multi-commit feature work in this repo, confirm the active branch is based on current `main`; if it is not, rebase or restart from current `main` before building the stack.
@@ -111,5 +113,5 @@
 - When adding a provider without local pricing metadata, never assume `model.cost` exists in runtime projection paths; cost calculation must be optional so unsupported pricing data does not crash the agent.
 - When a tool requires session-only runtime control, hide it from non-session tool registries and update any raw-loop prompt fixtures in the same pass; otherwise scripted coverage drifts from the live `spawnAgent` contract.
 - When the user broadens PR follow-up scope from specific review threads to "every comment that needs work," sweep both unresolved review threads and newer top-level review/comment bodies on the latest commit before declaring PR feedback handled.
-
+- When the user explicitly asks for subagent verification first, spawn the requested subagents before editing, use their issue-by-issue findings to drive the fix plan, and then confirm the same conclusions locally before patching.
 - When the desktop app is meant to feel native, do not ship renderer-wide ::-webkit-scrollbar skins; let Electron fall back to OS scrollbars and focus styling only on layout/containers.

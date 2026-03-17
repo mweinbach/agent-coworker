@@ -16,6 +16,20 @@ export class SessionSnapshotBuilder {
     }
   ) {}
 
+  private resolvePersistedLastMessagePreview(): string | null {
+    const preview = this.opts.state.sessionInfo.lastMessagePreview?.trim();
+    if (preview) return preview;
+
+    for (let i = this.opts.state.allMessages.length - 1; i >= 0; i -= 1) {
+      const message = this.opts.state.allMessages[i];
+      if (!message || message.role !== "assistant") continue;
+      const text = extractAssistantPreviewText(message.content);
+      if (text) return text;
+    }
+
+    return null;
+  }
+
   private resolvePersistedExecutionState(): AgentExecutionState | null {
     if ((this.opts.state.sessionInfo.sessionKind ?? "root") !== "agent") {
       return this.opts.state.sessionInfo.executionState ?? null;
@@ -28,6 +42,7 @@ export class SessionSnapshotBuilder {
 
   buildPersistedSnapshotAt(updatedAt: string): PersistedSessionSnapshot {
     const executionState = this.resolvePersistedExecutionState();
+    const lastMessagePreview = this.resolvePersistedLastMessagePreview();
     return {
       version: 7,
       sessionId: this.opts.sessionId,
@@ -50,7 +65,7 @@ export class SessionSnapshotBuilder {
         requestedReasoningEffort: this.opts.state.sessionInfo.requestedReasoningEffort ?? null,
         effectiveReasoningEffort: this.opts.state.sessionInfo.effectiveReasoningEffort ?? null,
         executionState,
-        lastMessagePreview: this.opts.state.sessionInfo.lastMessagePreview ?? null,
+        lastMessagePreview,
       },
       config: {
         provider: this.opts.state.config.provider,
@@ -77,6 +92,7 @@ export class SessionSnapshotBuilder {
 
   buildCanonicalSnapshot(updatedAt: string): PersistedSessionMutation["snapshot"] {
     const executionState = this.resolvePersistedExecutionState();
+    const lastMessagePreview = this.resolvePersistedLastMessagePreview();
     return {
       sessionKind: this.opts.state.sessionInfo.sessionKind ?? "root",
       parentSessionId: this.opts.state.sessionInfo.parentSessionId ?? null,
@@ -89,7 +105,7 @@ export class SessionSnapshotBuilder {
       requestedReasoningEffort: this.opts.state.sessionInfo.requestedReasoningEffort ?? null,
       effectiveReasoningEffort: this.opts.state.sessionInfo.effectiveReasoningEffort ?? null,
       executionState,
-      lastMessagePreview: this.opts.state.sessionInfo.lastMessagePreview ?? null,
+      lastMessagePreview,
       title: this.opts.state.sessionInfo.title,
       titleSource: this.opts.state.sessionInfo.titleSource,
       titleModel: this.opts.state.sessionInfo.titleModel,
@@ -116,4 +132,28 @@ export class SessionSnapshotBuilder {
       costTracker: this.opts.state.costTracker?.getSnapshot() ?? null,
     };
   }
+}
+
+function extractAssistantPreviewText(content: unknown, maxChars = 800): string | null {
+  const trimmed = extractAssistantMessageText(content).trim();
+  if (!trimmed) return null;
+  if (trimmed.length <= maxChars) return trimmed;
+  return `${trimmed.slice(0, maxChars - 1)}…`;
+}
+
+function extractAssistantMessageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+
+  const chunks: string[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    const maybePart = part as { text?: unknown; phase?: unknown };
+    if (maybePart.phase === "commentary") continue;
+    if (typeof maybePart.text === "string" && maybePart.text.length > 0) {
+      chunks.push(maybePart.text);
+    }
+  }
+
+  return chunks.join("");
 }

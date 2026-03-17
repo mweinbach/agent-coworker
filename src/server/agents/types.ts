@@ -47,12 +47,13 @@ export type AgentControlSummaryOverrides = {
   requestedReasoningEffort?: AgentReasoningEffort;
   effectiveReasoningEffort?: AgentReasoningEffort;
   executionState?: PersistentAgentSummary["executionState"];
+  busy?: boolean;
 };
 
 export type AgentControlDeps = {
   sessionBindings: Map<string, SessionBinding>;
   sessionDb: SessionDb | null;
-  getConnectedProviders: () => Promise<ProviderName[]>;
+  getConnectedProviders: (parentConfig: AgentConfig) => Promise<ProviderName[]>;
   buildSession: (
     binding: SessionBinding,
     persistedSessionId?: string,

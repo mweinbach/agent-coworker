@@ -216,6 +216,48 @@ describe("AgentControl.spawn", () => {
     );
   });
 
+  test("returns the post-dispatch running summary from spawn", async () => {
+    const parentConfig = makeConfig();
+    const childSession = makeChildSession(parentConfig);
+    childSession.sendUserMessage = mock(() => new Promise<void>(() => {}));
+    const buildSession = mock((binding: SessionBinding) => {
+      binding.session = childSession;
+      return { session: childSession, isResume: false, resumedFromStorage: false };
+    });
+    const emitParentAgentStatus = mock(() => {});
+    const control = new AgentControl({
+      sessionBindings: new Map([
+        ["root-1", { session: { buildForkContextSeed: () => ({ messages: [], todos: [], harnessContext: null }) }, socket: null }],
+      ]) as Map<string, SessionBinding>,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: buildSession as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus,
+      emitParentLog: () => {},
+    });
+
+    const summary = await control.spawn({
+      parentSessionId: "root-1",
+      parentConfig,
+      role: "worker",
+      message: "Handle the fix",
+    });
+
+    expect(summary.executionState).toBe("running");
+    expect(summary.busy).toBe(true);
+    expect(childSession.isBusy).toBe(false);
+    expect(emitParentAgentStatus).toHaveBeenLastCalledWith(
+      "root-1",
+      expect.objectContaining({
+        agentId: "child-1",
+        executionState: "running",
+        busy: true,
+      }),
+    );
+  });
+
   test("routes an allowlisted cross-provider child target when the provider is connected", async () => {
     const parentConfig = makeConfig({
       provider: "codex-cli",
@@ -323,6 +365,7 @@ describe("AgentControl.spawn", () => {
       expect.stringContaining("falling back to codex-cli:gpt-5.4"),
     );
   });
+
 });
 
 describe("AgentControl persisted child control", () => {

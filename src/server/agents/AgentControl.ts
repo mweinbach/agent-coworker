@@ -82,7 +82,7 @@ export class AgentControl {
       updatedAt: info.updatedAt,
       lifecycleState: session.persistenceStatus === "closed" ? "closed" : "active",
       executionState,
-      busy: session.isBusy,
+      busy: overrides.busy ?? session.isBusy,
       ...(info.lastMessagePreview ?? session.getLatestAssistantText()
         ? { lastMessagePreview: info.lastMessagePreview ?? session.getLatestAssistantText()! }
         : {}),
@@ -97,7 +97,12 @@ export class AgentControl {
     return summary;
   }
 
-  private trackRun(parentSessionId: string, session: AgentSession, message: string, displayState: AgentExecutionState): void {
+  private trackRun(
+    parentSessionId: string,
+    session: AgentSession,
+    message: string,
+    displayState: AgentExecutionState,
+  ): PersistentAgentSummary {
     const run = session.sendUserMessage(message)
       .catch(() => {
         // Child session surfaces its own error event/history; parent notification is published below.
@@ -107,7 +112,10 @@ export class AgentControl {
         this.publish(parentSessionId, session);
       });
     this.inFlightByAgentId.set(session.id, run);
-    this.publish(parentSessionId, session, { executionState: displayState });
+    return this.publish(parentSessionId, session, {
+      executionState: displayState,
+      busy: displayState === "running" ? true : undefined,
+    });
   }
 
   async spawn(opts: AgentSpawnOptions): Promise<PersistentAgentSummary> {
@@ -124,7 +132,7 @@ export class AgentControl {
       role: roleDefinition,
       ...(opts.model ? { model: opts.model } : {}),
       ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
-      connectedProviders: await this.deps.getConnectedProviders(),
+      connectedProviders: await this.deps.getConnectedProviders(opts.parentConfig),
     });
     if (routed.fallbackLine) {
       this.deps.emitParentLog(opts.parentSessionId, routed.fallbackLine);
@@ -151,7 +159,7 @@ export class AgentControl {
     binding.session = built.session;
     built.session.beginDisconnectedReplayBuffer();
     this.deps.sessionBindings.set(built.session.id, binding);
-    const summary = this.publish(opts.parentSessionId, built.session, {
+    this.publish(opts.parentSessionId, built.session, {
       mode: roleDefinition.defaultMode,
       depth,
       requestedModel: routed.requestedModel,
@@ -159,8 +167,7 @@ export class AgentControl {
       effectiveReasoningEffort: routed.effectiveReasoningEffort,
       executionState: "pending_init",
     });
-    this.trackRun(opts.parentSessionId, built.session, opts.message, "running");
-    return summary;
+    return this.trackRun(opts.parentSessionId, built.session, opts.message, "running");
   }
 
   async list(parentSessionId: string): Promise<PersistentAgentSummary[]> {

@@ -492,12 +492,14 @@ export async function startAgentServer(
     return { session, isResume: false, resumedFromStorage: false };
   };
 
+  const getConnectedProviders = async (parentConfig: AgentConfig): Promise<AgentConfig["provider"][]> => (
+    await getProviderCatalog({ homedir: resolveAuthHomeDir(parentConfig, opts.homedir) })
+  ).connected as AgentConfig["provider"][];
+
   agentControl = new AgentControl({
     sessionBindings,
     sessionDb,
-    getConnectedProviders: async () => (
-      await getProviderCatalog({ homedir: resolveAuthHomeDir() })
-    ).connected as AgentConfig["provider"][],
+    getConnectedProviders,
     buildSession,
     loadAgentPrompt,
     disposeBinding,

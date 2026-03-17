@@ -167,4 +167,68 @@ describe("SessionSnapshotBuilder child execution state", () => {
     expect(persisted.version).toBe(7);
     expect(persisted.config.providerOptions).toEqual(providerOptions);
   });
+
+  test("derives child lastMessagePreview from the latest assistant transcript when metadata is stale", () => {
+    const base = makeAgentState();
+    const state = makeAgentState({
+      allMessages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "output_text", phase: "final", text: "Latest child result" },
+          ],
+        } as any,
+      ],
+      sessionInfo: {
+        ...base.sessionInfo,
+        lastMessagePreview: undefined,
+      },
+    });
+    const builder = new SessionSnapshotBuilder({
+      sessionId: "child-1",
+      state,
+      harnessContextStore: new HarnessContextStore(),
+      getEnableMcp: () => true,
+      hasPendingAsk: () => false,
+      hasPendingApproval: () => false,
+    });
+
+    const persisted = builder.buildPersistedSnapshotAt("2026-03-16T18:01:00.000Z");
+    const canonical = builder.buildCanonicalSnapshot("2026-03-16T18:01:00.000Z");
+
+    expect(persisted.session.lastMessagePreview).toBe("Latest child result");
+    expect(canonical.lastMessagePreview).toBe("Latest child result");
+  });
+
+  test("preserves a newer sessionInfo preview over older assistant transcript text", () => {
+    const base = makeAgentState();
+    const state = makeAgentState({
+      allMessages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "output_text", phase: "final", text: "Older child result" },
+          ],
+        } as any,
+      ],
+      sessionInfo: {
+        ...base.sessionInfo,
+        lastMessagePreview: "Latest child error",
+      },
+    });
+    const builder = new SessionSnapshotBuilder({
+      sessionId: "child-1",
+      state,
+      harnessContextStore: new HarnessContextStore(),
+      getEnableMcp: () => true,
+      hasPendingAsk: () => false,
+      hasPendingApproval: () => false,
+    });
+
+    const persisted = builder.buildPersistedSnapshotAt("2026-03-16T18:01:00.000Z");
+    const canonical = builder.buildCanonicalSnapshot("2026-03-16T18:01:00.000Z");
+
+    expect(persisted.session.lastMessagePreview).toBe("Latest child error");
+    expect(canonical.lastMessagePreview).toBe("Latest child error");
+  });
 });

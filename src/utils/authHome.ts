@@ -12,11 +12,13 @@ function homeFromSkillsDir(skillsDir: string): string | undefined {
   return path.dirname(coworkDir);
 }
 
-export function resolveAuthHomeDir(config?: Pick<AgentConfig, "skillsDirs">): string {
+export function resolveAuthHomeDir(config?: Pick<AgentConfig, "skillsDirs">, fallbackHomedir?: string): string {
   for (const skillsDir of config?.skillsDirs ?? []) {
     const derived = homeFromSkillsDir(skillsDir);
     if (derived) return derived;
   }
+  const fromFallback = fallbackHomedir?.trim();
+  if (fromFallback) return fromFallback;
   const fromEnv = process.env.HOME?.trim();
   return fromEnv || os.homedir();
 }

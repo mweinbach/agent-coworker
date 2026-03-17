@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startAgentServer, type StartAgentServerOptions } from "../src/server/startServer";
+import { getAiCoworkerPaths } from "../src/connect";
 import {
   ASK_SKIP_TOKEN,
   CLIENT_MESSAGE_TYPES,
@@ -964,6 +965,124 @@ describe("WebSocket Lifecycle", () => {
       );
     } finally {
       server.stop();
+    }
+  });
+
+  test("agent_spawned reports a running child before the child turn settles", async () => {
+    const tmpDir = await makeTmpProject();
+    let releaseRun: (() => void) | null = null;
+    const runGate = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => {
+        await runGate;
+        return {
+          text: "child finished",
+          responseMessages: [],
+        };
+      }) as any,
+    }));
+
+    try {
+      const spawned = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({ type: "agent_spawn", sessionId, role: "worker", message: "child task" }),
+        (msg) => msg.type === "agent_spawned",
+        5000,
+      );
+
+      expect(spawned.agent.executionState).toBe("running");
+      expect(spawned.agent.busy).toBe(true);
+    } finally {
+      releaseRun?.();
+      server.stop();
+    }
+  });
+
+  test("agent_spawn routes cross-provider children using the configured server home auth store", async () => {
+    const tmpDir = await makeTmpProject();
+    const authHomeDir = path.join(tmpDir, "server-home");
+    const processHomeDir = path.join(tmpDir, "process-home");
+    await fs.mkdir(authHomeDir, { recursive: true });
+    await fs.mkdir(processHomeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, ".agent", "config.json"),
+      `${JSON.stringify({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        preferredChildModel: "gpt-5.4",
+        childModelRoutingMode: "cross-provider-allowlist",
+        preferredChildModelRef: "codex-cli:gpt-5.4",
+        allowedChildModelRefs: ["opencode-zen:glm-5"],
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+    const authPaths = getAiCoworkerPaths({ homedir: authHomeDir });
+    await fs.mkdir(path.dirname(authPaths.connectionsFile), { recursive: true });
+    const updatedAt = new Date().toISOString();
+    await fs.writeFile(
+      authPaths.connectionsFile,
+      `${JSON.stringify({
+        version: 1,
+        updatedAt,
+        services: {
+          "opencode-zen": {
+            service: "opencode-zen",
+            mode: "api_key",
+            apiKey: "test-opencode-key",
+            updatedAt,
+          },
+        },
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    const originalHome = process.env.HOME;
+    process.env.HOME = processHomeDir;
+    const { server, url } = await startAgentServer({
+      cwd: tmpDir,
+      hostname: "127.0.0.1",
+      port: 0,
+      homedir: authHomeDir,
+      env: {
+        AGENT_WORKING_DIR: tmpDir,
+        AGENT_PROVIDER: "codex-cli",
+        AGENT_MODEL: "gpt-5.4",
+        COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+      },
+      runTurnImpl: (async () => ({
+        text: "child finished",
+        responseMessages: [],
+      })) as any,
+    });
+
+    try {
+      const event = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({
+          type: "agent_spawn",
+          sessionId,
+          role: "worker",
+          model: "opencode-zen:glm-5",
+          message: "Investigate with glm-5",
+        }),
+        (msg) => msg.type === "agent_spawned",
+        5000,
+      );
+
+      expect(event.agent).toMatchObject({
+        role: "worker",
+        provider: "opencode-zen",
+        effectiveModel: "glm-5",
+      });
+    } finally {
+      server.stop();
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
     }
   });
 

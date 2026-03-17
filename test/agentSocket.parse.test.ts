@@ -23,18 +23,22 @@ describe("agent socket parser", () => {
       type: "server_hello",
       sessionId: "s-1",
       config: { provider: "google", model: "gemini", workingDirectory: "/" },
-      sessionKind: "subagent",
+      sessionKind: "agent",
       parentSessionId: "root-1",
-      agentType: "general",
+      role: "worker",
+      mode: "collaborative",
+      depth: 1,
+      effectiveModel: "gemini",
+      executionState: "running",
     });
 
     const parsed = safeParseServerEvent(raw);
     expect(parsed?.type).toBe("server_hello");
     expect(parsed?.sessionId).toBe("s-1");
     if (parsed?.type !== "server_hello") return;
-    expect(parsed.sessionKind).toBe("subagent");
+    expect(parsed.sessionKind).toBe("agent");
     expect(parsed.parentSessionId).toBe("root-1");
-    expect(parsed.agentType).toBe("general");
+    expect(parsed.role).toBe("worker");
   });
 
   test("safeParseServerEvent accepts representative protocol events", () => {
@@ -88,7 +92,10 @@ describe("agent socket parser", () => {
           defaultBackupsEnabled: true,
           toolOutputOverflowChars: 25000,
           defaultToolOutputOverflowChars: 25000,
-          subAgentModel: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
+          childModelRoutingMode: "same-provider",
+          preferredChildModelRef: "openai:gpt-5.2",
+          allowedChildModelRefs: [],
           maxSteps: 100,
           userName: "Alex",
           userProfile: {
@@ -125,18 +132,21 @@ describe("agent socket parser", () => {
         message: "warning",
       },
       {
-        type: "subagent_created",
+        type: "agent_spawned",
         sessionId: "s-1",
-        subagent: {
-          sessionId: "child-1",
+        agent: {
+          agentId: "child-1",
           parentSessionId: "s-1",
-          agentType: "general",
+          role: "worker",
+          mode: "collaborative",
+          depth: 1,
+          effectiveModel: "gpt-5.2",
           title: "Child Session",
           provider: "openai",
-          model: "gpt-5.2",
           createdAt: "2026-03-08T00:00:00.000Z",
           updatedAt: "2026-03-08T00:00:01.000Z",
-          status: "active",
+          lifecycleState: "active",
+          executionState: "running",
           busy: true,
         },
       },

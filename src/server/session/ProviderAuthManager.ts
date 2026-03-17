@@ -14,6 +14,7 @@ import { defaultRuntimeNameForProvider, isProviderName } from "../../types";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import type { ServerEvent } from "../protocol";
 import { assertSupportedModel } from "../../models/registry";
+import { normalizeChildRoutingConfig } from "../../models/childModelRouting";
 
 export class ProviderAuthManager {
   constructor(
@@ -38,14 +39,17 @@ export class ProviderAuthManager {
       persistModelSelection?: (selection: {
         provider: AgentConfig["provider"];
         model: string;
-        subAgentModel: string;
+        preferredChildModel: string;
+        childModelRoutingMode?: AgentConfig["childModelRoutingMode"];
+        preferredChildModelRef?: string;
+        allowedChildModelRefs?: string[];
       }) => Promise<void> | void;
       updateSessionInfo: (patch: Partial<{ provider: AgentConfig["provider"]; model: string }>) => void;
       queuePersistSessionSnapshot: (reason: string) => void;
       emitConfigUpdated: () => void;
       emitProviderCatalog: () => Promise<void>;
       refreshProviderStatus: () => Promise<void>;
-      getCoworkPaths: () => ReturnType<typeof getAiCoworkerPaths>;
+      getGlobalAuthPaths: () => ReturnType<typeof getAiCoworkerPaths>;
       runProviderConnect: ConnectProviderHandler;
     }
   ) {}
@@ -74,9 +78,17 @@ export class ProviderAuthManager {
       this.opts.emitError("validation_failed", "provider", error instanceof Error ? error.message : String(error));
       return;
     }
-    const nextSubAgentModel = currentConfig.provider !== nextProvider || currentConfig.subAgentModel === currentConfig.model
-      ? modelId
-      : currentConfig.subAgentModel;
+    const normalizedChildRouting = normalizeChildRoutingConfig({
+      provider: nextProvider,
+      model: modelId,
+      childModelRoutingMode: currentConfig.childModelRoutingMode,
+      preferredChildModelRef:
+        currentConfig.provider !== nextProvider || currentConfig.preferredChildModel === currentConfig.model
+          ? `${nextProvider}:${modelId}`
+          : currentConfig.preferredChildModelRef ?? currentConfig.preferredChildModel,
+      allowedChildModelRefs: currentConfig.allowedChildModelRefs,
+      source: "model selection",
+    });
     const nextRuntime = currentConfig.provider === nextProvider
       ? currentConfig.runtime
       : defaultRuntimeNameForProvider(nextProvider);
@@ -88,7 +100,10 @@ export class ProviderAuthManager {
       provider: nextProvider,
       ...(nextRuntime !== undefined ? { runtime: nextRuntime } : {}),
       model: modelId,
-      subAgentModel: nextSubAgentModel,
+      preferredChildModel: normalizedChildRouting.preferredChildModel,
+      childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
+      preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
+      allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
     });
     if (shouldClearProviderState) {
       this.opts.clearProviderState();
@@ -100,7 +115,10 @@ export class ProviderAuthManager {
         await this.opts.persistModelSelection({
           provider: nextProvider,
           model: modelId,
-          subAgentModel: nextSubAgentModel,
+          preferredChildModel: normalizedChildRouting.preferredChildModel,
+          childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
+          preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
+          allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
         });
       } catch (err) {
         persistError = err;
@@ -192,7 +210,7 @@ export class ProviderAuthManager {
         methodId,
         code,
         cwd: config.workingDirectory,
-        paths: this.opts.getCoworkPaths(),
+        paths: this.opts.getGlobalAuthPaths(),
         connect: async (opts) => await this.opts.runProviderConnect(opts),
         oauthStdioMode: "pipe",
         onOauthLine: (line) => this.opts.log(`[connect ${providerRaw}] ${line}`),
@@ -257,7 +275,7 @@ export class ProviderAuthManager {
     try {
       const result = await logoutProviderAuthMethod({
         provider: providerRaw,
-        paths: this.opts.getCoworkPaths(),
+        paths: this.opts.getGlobalAuthPaths(),
       });
 
       this.opts.emit({
@@ -329,7 +347,7 @@ export class ProviderAuthManager {
         methodId,
         apiKey: apiKeyRaw,
         cwd: config.workingDirectory,
-        paths: this.opts.getCoworkPaths(),
+        paths: this.opts.getGlobalAuthPaths(),
         connect: async (opts) => await this.opts.runProviderConnect(opts),
       });
 
@@ -422,7 +440,7 @@ export class ProviderAuthManager {
         sourceProvider: sourceProviderRaw,
         methodId,
         cwd: config.workingDirectory,
-        paths: this.opts.getCoworkPaths(),
+        paths: this.opts.getGlobalAuthPaths(),
         connect: async (opts) => await this.opts.runProviderConnect(opts),
       });
 

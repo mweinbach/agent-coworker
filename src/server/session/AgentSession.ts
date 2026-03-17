@@ -43,6 +43,7 @@ import type {
   HydratedSessionState,
   PersistedModelSelection,
   PersistedProjectConfigPatch,
+  SeededSessionContext,
   SessionBackupFactory,
   SessionContext,
   SessionDependencies,
@@ -55,7 +56,7 @@ import { SessionRuntimeSupport } from "./SessionRuntimeSupport";
 import { SessionSnapshotBuilder } from "./SessionSnapshotBuilder";
 import { SkillManager } from "./SkillManager";
 import { TurnExecutionManager } from "./TurnExecutionManager";
-import type { SubagentAgentType } from "../../shared/persistentSubagents";
+import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 
 function makeId(): string {
   return crypto.randomUUID();
@@ -76,6 +77,54 @@ function contentText(value: unknown): string {
     .filter(Boolean)
     .join("\n")
     .trim();
+}
+
+function normalizeHydratedExecutionState(
+  sessionKind: SessionInfoState["sessionKind"] | undefined,
+  executionState: SessionInfoState["executionState"],
+  status: HydratedSessionState["status"] | undefined,
+): SessionInfoState["executionState"] {
+  if ((sessionKind ?? "root") !== "agent") {
+    return executionState;
+  }
+  if (status === "closed") {
+    return "closed";
+  }
+  if (!executionState || executionState === "completed" || executionState === "errored" || executionState === "closed") {
+    return executionState;
+  }
+  return "completed";
+}
+
+function normalizeHydratedSessionInfo(hydrated?: HydratedSessionState): SessionInfoState | undefined {
+  if (!hydrated) {
+    return undefined;
+  }
+  const executionState = normalizeHydratedExecutionState(
+    hydrated.sessionInfo.sessionKind,
+    hydrated.sessionInfo.executionState,
+    hydrated.status,
+  );
+  if (executionState === hydrated.sessionInfo.executionState) {
+    return hydrated.sessionInfo;
+  }
+  return {
+    ...hydrated.sessionInfo,
+    executionState,
+  };
+}
+
+function initialCurrentTurnOutcome(hydrated?: HydratedSessionState): SessionRuntimeState["currentTurnOutcome"] {
+  if (
+    normalizeHydratedExecutionState(
+      hydrated?.sessionInfo.sessionKind,
+      hydrated?.sessionInfo.executionState,
+      hydrated?.status,
+    ) === "errored"
+  ) {
+    return "error";
+  }
+  return "completed";
 }
 
 const MAX_DISCONNECTED_REPLAY_EVENTS = 256;
@@ -154,11 +203,12 @@ export class AgentSession {
     generateSessionTitleImpl?: typeof generateSessionTitle;
     sessionDb?: SessionDb | null;
     writePersistedSessionSnapshotImpl?: typeof writePersistedSessionSnapshot;
-    createSubagentSessionImpl?: SessionDependencies["createSubagentSessionImpl"];
-    listSubagentSessionsImpl?: SessionDependencies["listSubagentSessionsImpl"];
-    sendSubagentInputImpl?: SessionDependencies["sendSubagentInputImpl"];
-    waitForSubagentImpl?: SessionDependencies["waitForSubagentImpl"];
-    closeSubagentImpl?: SessionDependencies["closeSubagentImpl"];
+    createAgentSessionImpl?: SessionDependencies["createAgentSessionImpl"];
+    listAgentSessionsImpl?: SessionDependencies["listAgentSessionsImpl"];
+    sendAgentInputImpl?: SessionDependencies["sendAgentInputImpl"];
+    waitForAgentImpl?: SessionDependencies["waitForAgentImpl"];
+    resumeAgentImpl?: SessionDependencies["resumeAgentImpl"];
+    closeAgentImpl?: SessionDependencies["closeAgentImpl"];
     deleteSessionImpl?: SessionDependencies["deleteSessionImpl"];
     listWorkspaceBackupsImpl?: SessionDependencies["listWorkspaceBackupsImpl"];
     createWorkspaceBackupCheckpointImpl?: SessionDependencies["createWorkspaceBackupCheckpointImpl"];
@@ -167,9 +217,15 @@ export class AgentSession {
     deleteWorkspaceBackupEntryImpl?: SessionDependencies["deleteWorkspaceBackupEntryImpl"];
     getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
     hydratedState?: HydratedSessionState;
+    seedContext?: SeededSessionContext;
     skipInitialPersist?: boolean;
   }) {
     const hydrated = opts.hydratedState;
+    const hydratedSessionInfo = normalizeHydratedSessionInfo(hydrated);
+    const seededMessages = hydrated?.messages ?? (opts.seedContext ? structuredClone(opts.seedContext.messages) : []);
+    const seededTodos = hydrated?.todos ?? (opts.seedContext ? structuredClone(opts.seedContext.todos) : []);
+    const seededHarnessContext = hydrated?.harnessContext
+      ?? (opts.seedContext?.harnessContext ? structuredClone(opts.seedContext.harnessContext) : null);
     this.id = hydrated?.sessionId ?? makeId();
 
     const now = new Date().toISOString();
@@ -179,16 +235,16 @@ export class AgentSession {
       discoveredSkills: opts.discoveredSkills ?? [],
       yolo: opts.yolo === true,
       messages: [],
-      allMessages: [...(hydrated?.messages ?? [])],
+      allMessages: [...seededMessages],
       providerState: hydrated?.providerState ?? null,
       running: false,
       connecting: false,
       abortController: null,
       currentTurnId: null,
-      currentTurnOutcome: "completed",
+      currentTurnOutcome: initialCurrentTurnOutcome(hydrated),
       maxSteps: 100,
-      todos: hydrated?.todos ?? [],
-      sessionInfo: hydrated?.sessionInfo ?? {
+      todos: seededTodos,
+      sessionInfo: hydratedSessionInfo ?? {
         title: DEFAULT_SESSION_TITLE,
         titleSource: "default",
         titleModel: null,
@@ -198,7 +254,20 @@ export class AgentSession {
         model: opts.config.model,
         sessionKind: opts.sessionInfoPatch?.sessionKind ?? "root",
         ...(opts.sessionInfoPatch?.parentSessionId ? { parentSessionId: opts.sessionInfoPatch.parentSessionId } : {}),
-        ...(opts.sessionInfoPatch?.agentType ? { agentType: opts.sessionInfoPatch.agentType } : {}),
+        ...(opts.sessionInfoPatch?.role ? { role: opts.sessionInfoPatch.role } : {}),
+        ...(opts.sessionInfoPatch?.mode ? { mode: opts.sessionInfoPatch.mode } : {}),
+        ...(typeof opts.sessionInfoPatch?.depth === "number" ? { depth: opts.sessionInfoPatch.depth } : {}),
+        ...(opts.sessionInfoPatch?.nickname ? { nickname: opts.sessionInfoPatch.nickname } : {}),
+        ...(opts.sessionInfoPatch?.requestedModel ? { requestedModel: opts.sessionInfoPatch.requestedModel } : {}),
+        ...(opts.sessionInfoPatch?.effectiveModel ? { effectiveModel: opts.sessionInfoPatch.effectiveModel } : {}),
+        ...(opts.sessionInfoPatch?.requestedReasoningEffort
+          ? { requestedReasoningEffort: opts.sessionInfoPatch.requestedReasoningEffort }
+          : {}),
+        ...(opts.sessionInfoPatch?.effectiveReasoningEffort
+          ? { effectiveReasoningEffort: opts.sessionInfoPatch.effectiveReasoningEffort }
+          : {}),
+        ...(opts.sessionInfoPatch?.executionState ? { executionState: opts.sessionInfoPatch.executionState } : {}),
+        ...(opts.sessionInfoPatch?.lastMessagePreview ? { lastMessagePreview: opts.sessionInfoPatch.lastMessagePreview } : {}),
       },
       persistenceStatus: hydrated?.status ?? "active",
       hasGeneratedTitle: hydrated?.hasGeneratedTitle ?? false,
@@ -236,11 +305,12 @@ export class AgentSession {
       generateSessionTitleImpl: opts.generateSessionTitleImpl ?? generateSessionTitle,
       sessionDb: opts.sessionDb ?? null,
       writePersistedSessionSnapshotImpl: opts.writePersistedSessionSnapshotImpl ?? writePersistedSessionSnapshot,
-      createSubagentSessionImpl: opts.createSubagentSessionImpl,
-      listSubagentSessionsImpl: opts.listSubagentSessionsImpl,
-      sendSubagentInputImpl: opts.sendSubagentInputImpl,
-      waitForSubagentImpl: opts.waitForSubagentImpl,
-      closeSubagentImpl: opts.closeSubagentImpl,
+      createAgentSessionImpl: opts.createAgentSessionImpl,
+      listAgentSessionsImpl: opts.listAgentSessionsImpl,
+      sendAgentInputImpl: opts.sendAgentInputImpl,
+      waitForAgentImpl: opts.waitForAgentImpl,
+      resumeAgentImpl: opts.resumeAgentImpl,
+      closeAgentImpl: opts.closeAgentImpl,
       deleteSessionImpl: opts.deleteSessionImpl,
       listWorkspaceBackupsImpl: opts.listWorkspaceBackupsImpl,
       createWorkspaceBackupCheckpointImpl: opts.createWorkspaceBackupCheckpointImpl,
@@ -250,8 +320,8 @@ export class AgentSession {
       getWorkspaceBackupDeltaImpl: opts.getWorkspaceBackupDeltaImpl,
     };
 
-    if (hydrated?.harnessContext) {
-      this.deps.harnessContextStore.set(this.id, hydrated.harnessContext);
+    if (seededHarnessContext) {
+      this.deps.harnessContextStore.set(this.id, seededHarnessContext);
     }
 
     const emit = (evt: ServerEvent) => {
@@ -336,7 +406,7 @@ export class AgentSession {
     this.providerCatalogManager = new ProviderCatalogManager({
       sessionId: this.id,
       getConfig: () => this.state.config,
-      getCoworkPaths: () => this.getCoworkPaths(),
+      getGlobalAuthPaths: () => this.getGlobalAuthPaths(),
       getProviderCatalog: this.deps.getProviderCatalogImpl,
       getProviderStatuses: this.deps.getProviderStatusesImpl,
       emit: (evt) => this.context.emit(evt),
@@ -369,7 +439,7 @@ export class AgentSession {
       emitConfigUpdated: () => this.metadataManager.emitConfigUpdated(),
       emitProviderCatalog: async () => await this.providerCatalogManager.emitProviderCatalog(),
       refreshProviderStatus: async () => await this.providerCatalogManager.refreshProviderStatus(),
-      getCoworkPaths: () => this.getCoworkPaths(),
+      getGlobalAuthPaths: () => this.getGlobalAuthPaths(),
       runProviderConnect: async (providerOpts) => await this.runProviderConnect(providerOpts),
     });
     this.turnExecutionManager = new TurnExecutionManager(this.context, {
@@ -412,11 +482,12 @@ export class AgentSession {
     generateSessionTitleImpl?: typeof generateSessionTitle;
     sessionDb?: SessionDb | null;
     writePersistedSessionSnapshotImpl?: typeof writePersistedSessionSnapshot;
-    createSubagentSessionImpl?: SessionDependencies["createSubagentSessionImpl"];
-    listSubagentSessionsImpl?: SessionDependencies["listSubagentSessionsImpl"];
-    sendSubagentInputImpl?: SessionDependencies["sendSubagentInputImpl"];
-    waitForSubagentImpl?: SessionDependencies["waitForSubagentImpl"];
-    closeSubagentImpl?: SessionDependencies["closeSubagentImpl"];
+    createAgentSessionImpl?: SessionDependencies["createAgentSessionImpl"];
+    listAgentSessionsImpl?: SessionDependencies["listAgentSessionsImpl"];
+    sendAgentInputImpl?: SessionDependencies["sendAgentInputImpl"];
+    waitForAgentImpl?: SessionDependencies["waitForAgentImpl"];
+    resumeAgentImpl?: SessionDependencies["resumeAgentImpl"];
+    closeAgentImpl?: SessionDependencies["closeAgentImpl"];
     deleteSessionImpl?: SessionDependencies["deleteSessionImpl"];
     listWorkspaceBackupsImpl?: SessionDependencies["listWorkspaceBackupsImpl"];
     createWorkspaceBackupCheckpointImpl?: SessionDependencies["createWorkspaceBackupCheckpointImpl"];
@@ -438,6 +509,7 @@ export class AgentSession {
       enableMcp: persisted.enableMcp,
       outputDirectory: persisted.outputDirectory,
       uploadsDirectory: persisted.uploadsDirectory,
+      ...(persisted.providerOptions !== undefined ? { providerOptions: structuredClone(persisted.providerOptions) } : {}),
     };
 
     const sessionInfo = {
@@ -450,7 +522,16 @@ export class AgentSession {
       model: resumedModel.id,
       sessionKind: persisted.sessionKind,
       ...(persisted.parentSessionId ? { parentSessionId: persisted.parentSessionId } : {}),
-      ...(persisted.agentType ? { agentType: persisted.agentType } : {}),
+      ...(persisted.role ? { role: persisted.role } : {}),
+      ...(persisted.mode ? { mode: persisted.mode } : {}),
+      ...(typeof persisted.depth === "number" ? { depth: persisted.depth } : {}),
+      ...(persisted.nickname ? { nickname: persisted.nickname } : {}),
+      ...(persisted.requestedModel ? { requestedModel: persisted.requestedModel } : {}),
+      ...(persisted.effectiveModel ? { effectiveModel: persisted.effectiveModel } : {}),
+      ...(persisted.requestedReasoningEffort ? { requestedReasoningEffort: persisted.requestedReasoningEffort } : {}),
+      ...(persisted.effectiveReasoningEffort ? { effectiveReasoningEffort: persisted.effectiveReasoningEffort } : {}),
+      ...(persisted.executionState ? { executionState: persisted.executionState } : {}),
+      ...(persisted.lastMessagePreview ? { lastMessagePreview: persisted.lastMessagePreview } : {}),
     };
 
     const session = new AgentSession({
@@ -471,11 +552,12 @@ export class AgentSession {
       generateSessionTitleImpl: opts.generateSessionTitleImpl,
       sessionDb: opts.sessionDb,
       writePersistedSessionSnapshotImpl: opts.writePersistedSessionSnapshotImpl,
-      createSubagentSessionImpl: opts.createSubagentSessionImpl,
-      listSubagentSessionsImpl: opts.listSubagentSessionsImpl,
-      sendSubagentInputImpl: opts.sendSubagentInputImpl,
-      waitForSubagentImpl: opts.waitForSubagentImpl,
-      closeSubagentImpl: opts.closeSubagentImpl,
+      createAgentSessionImpl: opts.createAgentSessionImpl,
+      listAgentSessionsImpl: opts.listAgentSessionsImpl,
+      sendAgentInputImpl: opts.sendAgentInputImpl,
+      waitForAgentImpl: opts.waitForAgentImpl,
+      resumeAgentImpl: opts.resumeAgentImpl,
+      closeAgentImpl: opts.closeAgentImpl,
       deleteSessionImpl: opts.deleteSessionImpl,
       listWorkspaceBackupsImpl: opts.listWorkspaceBackupsImpl,
       createWorkspaceBackupCheckpointImpl: opts.createWorkspaceBackupCheckpointImpl,
@@ -537,8 +619,8 @@ export class AgentSession {
     return this.state.sessionInfo.parentSessionId ?? null;
   }
 
-  get agentType() {
-    return this.state.sessionInfo.agentType ?? null;
+  get role() {
+    return this.state.sessionInfo.role ?? null;
   }
 
   get hasPendingAsk(): boolean {
@@ -581,8 +663,13 @@ export class AgentSession {
     return this.metadataManager.getSessionInfoEvent();
   }
 
-  isSubagentOf(parentSessionId: string): boolean {
-    return this.sessionKind === "subagent" && this.parentSessionId === parentSessionId;
+  isAgentOf(parentSessionId: string): boolean {
+    return this.sessionKind === "agent" && this.parentSessionId === parentSessionId;
+  }
+
+  getSessionDepth(): number {
+    const depth = this.state.sessionInfo.depth;
+    return typeof depth === "number" ? depth : 0;
   }
 
   getLatestAssistantText(): string | undefined {
@@ -816,6 +903,14 @@ export class AgentSession {
   reopenForHistory() {
     if (this.state.persistenceStatus === "active") return;
     this.state.persistenceStatus = "active";
+    if (
+      (this.state.sessionInfo.sessionKind ?? "root") === "agent"
+      && this.state.sessionInfo.executionState === "closed"
+    ) {
+      this.metadataManager.updateSessionInfo({
+        executionState: this.currentTurnOutcome === "error" ? "errored" : "completed",
+      });
+    }
     this.queuePersistSessionSnapshot("session.reopened");
   }
 
@@ -830,6 +925,14 @@ export class AgentSession {
     this.adminManager.getMessages(offset, limit);
   }
 
+  buildForkContextSeed(): SeededSessionContext {
+    return {
+      messages: structuredClone(this.state.allMessages),
+      todos: structuredClone(this.state.todos),
+      harnessContext: this.deps.harnessContextStore.get(this.id),
+    };
+  }
+
   setSessionTitle(title: string) {
     this.metadataManager.setSessionTitle(title);
   }
@@ -838,12 +941,34 @@ export class AgentSession {
     await this.adminManager.listSessions();
   }
 
-  async listSubagentSessions() {
-    await this.adminManager.listSubagentSessions();
+  async listAgentSessions() {
+    await this.adminManager.listAgentSessions();
   }
 
-  async createSubagentSession(agentType: SubagentAgentType, task: string) {
-    await this.adminManager.createSubagentSession(agentType, task);
+  async createAgentSession(opts: {
+    message: string;
+    role?: AgentRole;
+    model?: string;
+    reasoningEffort?: AgentReasoningEffort;
+    forkContext?: boolean;
+  }) {
+    await this.adminManager.createAgentSession(opts);
+  }
+
+  async sendAgentInput(agentId: string, message: string, interrupt?: boolean) {
+    await this.adminManager.sendAgentInput(agentId, message, interrupt);
+  }
+
+  async waitForAgents(agentIds: string[], timeoutMs?: number) {
+    await this.adminManager.waitForAgents(agentIds, timeoutMs);
+  }
+
+  async resumeAgent(agentId: string) {
+    await this.adminManager.resumeAgent(agentId);
+  }
+
+  async closeAgent(agentId: string) {
+    await this.adminManager.closeAgent(agentId);
   }
 
   async deleteSession(targetSessionId: string) {
@@ -987,6 +1112,10 @@ export class AgentSession {
 
   private getCoworkPaths() {
     return this.runtimeSupport.getCoworkPaths();
+  }
+
+  private getGlobalAuthPaths() {
+    return this.runtimeSupport.getGlobalAuthPaths();
   }
 
   private async runProviderConnect(opts: Parameters<typeof connectModelProvider>[0]): Promise<ConnectProviderResult> {

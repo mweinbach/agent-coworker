@@ -1,5 +1,7 @@
 # Lessons
 
+- When the user explicitly asks for PR triage via subagents, spawn the requested reviewers before local implementation so the final fix plan is grounded in the current branch state instead of only your own read.
+- For provider auth and saved-key lookups in this repo, treat `~/.cowork` as the only auth home; never derive auth storage from a workspace `.agent` path, and pin `HOME` in tests that fabricate auth state so they cannot accidentally read real machine credentials.
 - For desktop admin pages that auto-fetch data, do not assume store-level success/error handling is enough; add a UI-level fallback so an orphaned request cannot leave the page stuck on a perpetual loading message when the correct end state is simply empty.
 - For desktop request spinners in this repo, clear the loading flag on both success events and structured control-session errors; server-side failures like `memory_list` SQLite errors may never emit the success payload that normally resets UI state.
 - When the user explicitly changes a CI request from “narrow the trigger” to “delete the workflow,” stop refining the trigger and remove the job/workflow exactly as requested.
@@ -7,12 +9,18 @@
 - For expensive environment-backed CI in this repo, never leave the heavy job gated only on `event_name != 'pull_request'`; explicitly scope it to the intended branch or manual dispatch so ordinary `main` pushes do not burn the testing environment.
 - For automated PR review bots in this repo, optimize for unresolved findings only: cancel in-flight review runs when a PR closes, skip drafts, disable public session-share noise, and never post long “everything looks good now” summaries.
 - When finishing PR review work in this repo, do not stop at local code/test changes; reply on each completed GitHub review thread and resolve it in the PR in the same pass.
+- Before telling the user a review comment is already fixed, re-check the exact current branch code path the comment points at; unresolved PR findings can stay live even when nearby related work landed earlier in the branch.
+- When the user explicitly asks for model-specific subagent review, verify that the requested runner/model combination actually works in the current environment before relying on it; if the wrapper injects unsupported params or the model alias is unavailable, say so briefly and continue with direct code verification or another approved path.
+- For child-agent persistence, do not snapshot `executionState` from seeded `sessionInfo` alone; derive it from live runtime state (`running`, turn outcome, closed status) or restarted agents can come back as stale `pending_init`.
+- When rehydrating persisted child sessions, carry terminal failure state back into runtime fields like `currentTurnOutcome`; otherwise `agent_wait` and other republish paths can silently flip failed children to `completed` after restart.
 - Before doing multi-commit feature work in this repo, confirm the active branch is based on current `main`; if it is not, rebase or restart from current `main` before building the stack.
 - For settings that can be explicitly set, explicitly disabled, or inherited, never overload `undefined` for both “no-op” and “inherit”; add a dedicated clear/inherit path end-to-end so reset-to-default actions delete persisted overrides instead of pinning the current built-in value.
 - When the user narrows a protocol or compatibility requirement, apply that exact direction to the fix; do not keep broader backward-compat or provider-scope assumptions alive in the implementation.
 - When a user turns a review finding into an explicit product direction, implement the requested contract rather than the literal review recommendation; update the affected tests and tool descriptions to match that new source of truth.
 - When the user clarifies a provider contract, follow the repo’s intended behavior instead of extrapolating from public pricing/model docs; for OpenCode specifically, Go can intentionally have no local pricing data even if Zen does.
+- When adding or reviewing child-agent model routing, audit the full contract in one pass: model-ref parsing, session/workspace persistence, runtime routing, prompt/tool guidance, desktop defaults sync, and allowlist/disconnected-provider fallback behavior all have to agree or cross-provider spawning silently collapses back to same-provider behavior.
 - When adding a new desktop workspace setting, audit the full renderer-to-Electron persistence round trip in the same pass; updating store state and schemas without `PersistenceService.sanitizeWorkspaces()` will silently drop the field on save/load.
+- When adding multiple desktop workspace defaults in one feature, verify `sanitizeWorkspaces()` preserves every new field, not just the headline one; partial sanitizer updates can quietly reset cross-provider child-routing defaults on restart.
 - When moving `webFetch` page extraction to Exa contents, keep high-value extras like page links and image links in the returned payload; stripping them leaves the model without navigation context for follow-up fetches.
 - When the user corrects provider pricing/catalog scope, treat that repo contract as authoritative: do not add local pricing entries or “missing model” follow-ups for a provider family unless the product path in this repo is explicitly meant to surface them.
 - When a user explicitly wants a release pushed for CI/tag-driven packaging, stop local artifact builds after core validation and push the release/tag instead of spending time on local packaging smoke tests.
@@ -35,6 +43,7 @@
 - For live desktop UI testing in this repo, default to the Playwright/CDP workflow first; relaunch Electron with `COWORK_ELECTRON_REMOTE_DEBUG=1` instead of relying only on lighter wrappers.
 - For desktop UI bugs in the shadcn/ai-elements surface, fix the component composition and spacing locally before adding new state/layout plumbing.
 - For dense desktop agent timelines, collapse reasoning and tool traces into a shared secondary disclosure before trying to restyle dozens of inline cards.
+- For stacked desktop sidebar panels, never leave the upper cards on pure auto height when a lower panel needs to stay usable; cap the upper sections and put overflow on their internal content so the bottom explorer keeps a meaningful minimum height.
 - For grouped desktop tool traces, do not nest the full `ToolCard` disclosure stack inside the `Thinking` disclosure; use a flat, readable step list and visually verify the expanded state, not just the collapsed summary.
 - For grouped desktop reasoning summaries, do not stack a preview disclosure on top of the full rendered note; render the summary once in the trace and avoid duplicate preview/body text.
 - For grouped desktop trace cleanup, merge adjacent tool rows by lifecycle compatibility and result shape, not just by matching tool name, and verify the header layout inside the real three-column shell because viewport breakpoints alone can hide narrow-panel collisions.
@@ -102,3 +111,7 @@
 - For optional prompt metadata fields, do not leave placeholder labels like "(if provided)" in templates; injection should conditionally remove whole lines when values are empty.
 - When users ask for prompt UX polish, prioritize cohesive narrative copy in injected sections (not just raw data dumps) and keep the section self-explanatory about tool usage and precedence.
 - When adding a provider without local pricing metadata, never assume `model.cost` exists in runtime projection paths; cost calculation must be optional so unsupported pricing data does not crash the agent.
+- When a tool requires session-only runtime control, hide it from non-session tool registries and update any raw-loop prompt fixtures in the same pass; otherwise scripted coverage drifts from the live `spawnAgent` contract.
+- When the user broadens PR follow-up scope from specific review threads to "every comment that needs work," sweep both unresolved review threads and newer top-level review/comment bodies on the latest commit before declaring PR feedback handled.
+- When the user explicitly asks for subagent verification first, spawn the requested subagents before editing, use their issue-by-issue findings to drive the fix plan, and then confirm the same conclusions locally before patching.
+- When the desktop app is meant to feel native, do not ship renderer-wide ::-webkit-scrollbar skins; let Electron fall back to OS scrollbars and focus styling only on layout/containers.

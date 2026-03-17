@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startAgentServer, type StartAgentServerOptions } from "../src/server/startServer";
+import { getAiCoworkerPaths } from "../src/connect";
 import {
   ASK_SKIP_TOKEN,
   CLIENT_MESSAGE_TYPES,
@@ -200,6 +201,43 @@ function sendAndWaitForEvent(
   });
 }
 
+function sendToExistingSessionAndWaitForEvent(
+  url: string,
+  resumeSessionId: string,
+  buildMsg: (sessionId: string) => object,
+  match: (message: any) => boolean,
+  timeoutMs = 5000,
+): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let sent = false;
+    const ws = new WebSocket(`${url}?resumeSessionId=${resumeSessionId}`);
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("Timed out waiting for matching event"));
+    }, timeoutMs);
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+      if (!sent && msg.type === "server_hello" && msg.sessionId === resumeSessionId) {
+        sent = true;
+        ws.send(JSON.stringify(buildMsg(resumeSessionId)));
+        return;
+      }
+      if (!match(msg)) return;
+
+      clearTimeout(timer);
+      ws.close();
+      resolve(msg);
+    };
+
+    ws.onerror = (e) => {
+      clearTimeout(timer);
+      ws.close();
+      reject(new Error(`WebSocket error: ${e}`));
+    };
+  });
+}
+
 function connectAndWaitForEvent(
   url: string,
   match: (message: any) => boolean,
@@ -229,32 +267,32 @@ function connectAndWaitForEvent(
   });
 }
 
-function createPersistentSubagent(
+function createPersistentAgent(
   url: string,
-  task = "subagent task",
-  agentType: "general" | "research" | "explore" = "general",
+  message = "child agent task",
+  role: "default" | "worker" | "research" | "explorer" = "worker",
   timeoutMs = 5000,
-): Promise<{ parentSessionId: string; subagent: any }> {
+): Promise<{ parentSessionId: string; agent: any }> {
   return new Promise((resolve, reject) => {
     let parentSessionId = "";
     const ws = new WebSocket(url);
     const timer = setTimeout(() => {
       ws.close();
-      reject(new Error("Timed out waiting for subagent_created"));
+      reject(new Error("Timed out waiting for agent_spawned"));
     }, timeoutMs);
 
     ws.onmessage = (e) => {
       const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
       if (!parentSessionId && msg.type === "server_hello") {
         parentSessionId = msg.sessionId;
-        ws.send(JSON.stringify({ type: "subagent_create", sessionId: parentSessionId, agentType, task }));
+        ws.send(JSON.stringify({ type: "agent_spawn", sessionId: parentSessionId, role, message }));
         return;
       }
 
-      if (msg.type !== "subagent_created" || msg.sessionId !== parentSessionId) return;
+      if (msg.type !== "agent_spawned" || msg.sessionId !== parentSessionId) return;
       clearTimeout(timer);
       ws.close();
-      resolve({ parentSessionId, subagent: msg.subagent });
+      resolve({ parentSessionId, agent: msg.agent });
     };
 
     ws.onerror = (e) => {
@@ -545,7 +583,7 @@ describe("WebSocket Lifecycle", () => {
       expect(typeof configEvt.config.defaultBackupsEnabled).toBe("boolean");
       expect(typeof configEvt.config.toolOutputOverflowChars).toBe("number");
       expect("defaultToolOutputOverflowChars" in configEvt.config).toBe(false);
-      expect(typeof configEvt.config.subAgentModel).toBe("string");
+      expect(typeof configEvt.config.preferredChildModel).toBe("string");
       expect(typeof configEvt.config.maxSteps).toBe("number");
     } finally {
       server.stop();
@@ -862,14 +900,14 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
-  test("subagent_create creates a durable child session with resumable replay and child metadata", async () => {
+  test("agent_spawn creates a durable child session with resumable replay and child metadata", async () => {
     const tmpDir = await makeTmpProject();
     const runTurnImpl = async (params: any) => {
       await params.onModelStreamPart?.({ type: "start" });
-      await params.onModelStreamPart?.({ type: "text-delta", id: "txt_child", text: "subagent stream" });
+      await params.onModelStreamPart?.({ type: "text-delta", id: "txt_child", text: "child stream" });
       await params.onModelStreamPart?.({ type: "finish", finishReason: "stop" });
       return {
-        text: "subagent finished",
+        text: "child finished",
         responseMessages: [],
       };
     };
@@ -878,13 +916,13 @@ describe("WebSocket Lifecycle", () => {
     }));
 
     try {
-      const created = await createPersistentSubagent(url, "subagent task", "general");
-      const childId = created.subagent.sessionId as string;
+      const created = await createPersistentAgent(url, "child task", "worker");
+      const childId = created.agent.agentId as string;
 
       const resumedEvents = await collectSessionEventsUntil(
         url,
         childId,
-        (msg) => msg.type === "assistant_message" && msg.text === "subagent finished",
+        (msg) => msg.type === "assistant_message" && msg.text === "child finished",
         5000,
       );
 
@@ -893,15 +931,25 @@ describe("WebSocket Lifecycle", () => {
       expect(hello).toMatchObject({
         sessionId: childId,
         isResume: true,
-        sessionKind: "subagent",
+        sessionKind: "agent",
         parentSessionId: created.parentSessionId,
-        agentType: "general",
+        role: "worker",
+        mode: "collaborative",
+        depth: 1,
+        effectiveModel: "gemini-3-pro-preview",
+        executionState: "completed",
+        lastMessagePreview: "child finished",
       });
       expect(info).toMatchObject({
         sessionId: childId,
-        sessionKind: "subagent",
+        sessionKind: "agent",
         parentSessionId: created.parentSessionId,
-        agentType: "general",
+        role: "worker",
+        mode: "collaborative",
+        depth: 1,
+        effectiveModel: "gemini-3-pro-preview",
+        executionState: "completed",
+        lastMessagePreview: "child finished",
       });
       expect(
         resumedEvents.some(
@@ -909,10 +957,10 @@ describe("WebSocket Lifecycle", () => {
             msg.type === "model_stream_chunk" &&
             msg.partType === "text_delta" &&
             typeof msg.part?.text === "string" &&
-            msg.part.text.includes("subagent stream"),
+            msg.part.text.includes("child stream"),
         ),
       ).toBe(true);
-      expect(resumedEvents.some((msg) => msg.type === "assistant_message" && msg.text === "subagent finished")).toBe(
+      expect(resumedEvents.some((msg) => msg.type === "assistant_message" && msg.text === "child finished")).toBe(
         true,
       );
     } finally {
@@ -920,7 +968,193 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
-  test("subagent_sessions_get lists child sessions and child sessions cannot call list_sessions", async () => {
+  test("agent_spawned reports a running child before the child turn settles", async () => {
+    const tmpDir = await makeTmpProject();
+    let releaseRun: (() => void) | null = null;
+    const runGate = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => {
+        await runGate;
+        return {
+          text: "child finished",
+          responseMessages: [],
+        };
+      }) as any,
+    }));
+
+    try {
+      const spawned = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({ type: "agent_spawn", sessionId, role: "worker", message: "child task" }),
+        (msg) => msg.type === "agent_spawned",
+        5000,
+      );
+
+      expect(spawned.agent.executionState).toBe("running");
+      expect(spawned.agent.busy).toBe(true);
+    } finally {
+      releaseRun?.();
+      server.stop();
+    }
+  });
+
+  test("agent_spawn routes cross-provider children using the configured server home auth store", async () => {
+    const tmpDir = await makeTmpProject();
+    const authHomeDir = path.join(tmpDir, "server-home");
+    const processHomeDir = path.join(tmpDir, "process-home");
+    await fs.mkdir(authHomeDir, { recursive: true });
+    await fs.mkdir(processHomeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, ".agent", "config.json"),
+      `${JSON.stringify({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        preferredChildModel: "gpt-5.4",
+        childModelRoutingMode: "cross-provider-allowlist",
+        preferredChildModelRef: "codex-cli:gpt-5.4",
+        allowedChildModelRefs: ["opencode-zen:glm-5"],
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+    const authPaths = getAiCoworkerPaths({ homedir: authHomeDir });
+    await fs.mkdir(path.dirname(authPaths.connectionsFile), { recursive: true });
+    const updatedAt = new Date().toISOString();
+    await fs.writeFile(
+      authPaths.connectionsFile,
+      `${JSON.stringify({
+        version: 1,
+        updatedAt,
+        services: {
+          "opencode-zen": {
+            service: "opencode-zen",
+            mode: "api_key",
+            apiKey: "test-opencode-key",
+            updatedAt,
+          },
+        },
+      }, null, 2)}\n`,
+      "utf-8",
+    );
+
+    const originalHome = process.env.HOME;
+    process.env.HOME = processHomeDir;
+    const { server, url } = await startAgentServer({
+      cwd: tmpDir,
+      hostname: "127.0.0.1",
+      port: 0,
+      homedir: authHomeDir,
+      env: {
+        AGENT_WORKING_DIR: tmpDir,
+        AGENT_PROVIDER: "codex-cli",
+        AGENT_MODEL: "gpt-5.4",
+        COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+      },
+      runTurnImpl: (async () => ({
+        text: "child finished",
+        responseMessages: [],
+      })) as any,
+    });
+
+    try {
+      const event = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({
+          type: "agent_spawn",
+          sessionId,
+          role: "worker",
+          model: "opencode-zen:glm-5",
+          message: "Investigate with glm-5",
+        }),
+        (msg) => msg.type === "agent_spawned",
+        5000,
+      );
+
+      expect(event.agent).toMatchObject({
+        role: "worker",
+        provider: "opencode-zen",
+        effectiveModel: "glm-5",
+      });
+    } finally {
+      server.stop();
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
+  test("agent_resume returns child status instead of reporting resume unavailable", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => ({
+        text: "child finished",
+        responseMessages: [],
+      })) as any,
+    }));
+
+    try {
+      const created = await createPersistentAgent(url, "child task", "worker");
+      const result = await sendToExistingSessionAndWaitForEvent(
+        url,
+        created.parentSessionId,
+        (sessionId) => ({ type: "agent_resume", sessionId, agentId: created.agent.agentId }),
+        (msg) => msg.type === "agent_status" && msg.agent?.agentId === created.agent.agentId,
+        5000,
+      );
+
+      expect(result).toMatchObject({
+        type: "agent_status",
+        sessionId: created.parentSessionId,
+        agent: {
+          agentId: created.agent.agentId,
+          parentSessionId: created.parentSessionId,
+          role: "worker",
+        },
+      });
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("agent_wait emits an explicit agent_wait_result event", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async () => ({
+        text: "child finished",
+        responseMessages: [],
+      })) as any,
+    }));
+
+    try {
+      const created = await createPersistentAgent(url, "child task", "worker");
+      const result = await sendToExistingSessionAndWaitForEvent(
+        url,
+        created.parentSessionId,
+        (sessionId) => ({ type: "agent_wait", sessionId, agentIds: [created.agent.agentId], timeoutMs: 1000 }),
+        (msg) => msg.type === "agent_wait_result" && msg.agentIds?.includes(created.agent.agentId),
+        5000,
+      );
+
+      expect(result).toMatchObject({
+        type: "agent_wait_result",
+        sessionId: created.parentSessionId,
+        agentIds: [created.agent.agentId],
+        timedOut: false,
+      });
+      expect(result.agents).toHaveLength(1);
+      expect(result.agents[0]).toMatchObject({
+        agentId: created.agent.agentId,
+        executionState: "completed",
+      });
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("agent_list_get lists child sessions and child sessions cannot call list_sessions", async () => {
     const tmpDir = await makeTmpProject();
     const runTurnImpl = async () => ({
       text: "done",
@@ -937,25 +1171,25 @@ describe("WebSocket Lifecycle", () => {
         let createdChildId = "";
         const timer = setTimeout(() => {
           ws.close();
-          reject(new Error("Timed out waiting for subagent_sessions"));
+          reject(new Error("Timed out waiting for agent_list"));
         }, 5000);
 
         ws.onmessage = (e) => {
           const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
           if (!rootId && msg.type === "server_hello") {
             rootId = msg.sessionId;
-            ws.send(JSON.stringify({ type: "subagent_create", sessionId: rootId, agentType: "research", task: "research this" }));
+            ws.send(JSON.stringify({ type: "agent_spawn", sessionId: rootId, role: "research", message: "research this" }));
             return;
           }
-          if (msg.type === "subagent_created") {
-            createdChildId = msg.subagent.sessionId;
-            ws.send(JSON.stringify({ type: "subagent_sessions_get", sessionId: rootId }));
+          if (msg.type === "agent_spawned") {
+            createdChildId = msg.agent.agentId;
+            ws.send(JSON.stringify({ type: "agent_list_get", sessionId: rootId }));
             return;
           }
-          if (msg.type !== "subagent_sessions") return;
+          if (msg.type !== "agent_list") return;
           clearTimeout(timer);
           ws.close();
-          resolve({ rootId, createdChildId, subagents: msg.subagents });
+          resolve({ rootId, createdChildId, agents: msg.agents });
         };
 
         ws.onerror = (e) => {
@@ -965,11 +1199,11 @@ describe("WebSocket Lifecycle", () => {
         };
       });
 
-      expect(listing.subagents).toHaveLength(1);
-      expect(listing.subagents[0]).toMatchObject({
-        sessionId: listing.createdChildId,
+      expect(listing.agents).toHaveLength(1);
+      expect(listing.agents[0]).toMatchObject({
+        agentId: listing.createdChildId,
         parentSessionId: listing.rootId,
-        agentType: "research",
+        role: "research",
       });
 
       const childError = await sendAndWaitForEvent(
@@ -984,14 +1218,14 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
-  test("research children use model while general children use subAgentModel", async () => {
+  test("child agents inherit the live parent model when no model override is requested", async () => {
     const tmpDir = await makeTmpProject();
     await fs.writeFile(
       path.join(tmpDir, ".agent", "config.json"),
       `${JSON.stringify({
         provider: "google",
         model: "gemini-3-pro-preview",
-        subAgentModel: "gemini-3-flash-preview",
+        preferredChildModel: "gemini-3-flash-preview",
       }, null, 2)}\n`,
       "utf-8",
     );
@@ -1004,17 +1238,17 @@ describe("WebSocket Lifecycle", () => {
     }));
 
     try {
-      const general = await createPersistentSubagent(url, "general task", "general");
-      const research = await createPersistentSubagent(url, "research task", "research");
+      const worker = await createPersistentAgent(url, "worker task", "worker");
+      const research = await createPersistentAgent(url, "research task", "research");
 
-      expect(general.subagent.model).toBe("gemini-3-flash-preview");
-      expect(research.subagent.model).toBe("gemini-3-pro-preview");
+      expect(worker.agent.effectiveModel).toBe("gemini-3-pro-preview");
+      expect(research.agent.effectiveModel).toBe("gemini-3-pro-preview");
     } finally {
       server.stop();
     }
   });
 
-  test("deleting a root session removes its persistent subagent resume target", async () => {
+  test("deleting a root session removes its persistent child-agent resume target", async () => {
     const tmpDir = await makeTmpProject();
     const runTurnImpl = async () => ({
       text: "done",
@@ -1025,7 +1259,7 @@ describe("WebSocket Lifecycle", () => {
     }));
 
     try {
-      const created = await createPersistentSubagent(url, "child task", "general");
+      const created = await createPersistentAgent(url, "child task", "worker");
 
       await sendAndWaitForEvent(
         url,
@@ -1033,9 +1267,9 @@ describe("WebSocket Lifecycle", () => {
         (msg) => msg.type === "session_deleted" && msg.targetSessionId === created.parentSessionId,
       );
 
-      const hello = (await collectMessages(`${url}?resumeSessionId=${created.subagent.sessionId}`, 1))[0];
+      const hello = (await collectMessages(`${url}?resumeSessionId=${created.agent.agentId}`, 1))[0];
       expect(hello.type).toBe("server_hello");
-      expect(hello.sessionId).not.toBe(created.subagent.sessionId);
+      expect(hello.sessionId).not.toBe(created.agent.agentId);
       expect(hello.sessionKind).toBe("root");
     } finally {
       server.stop();
@@ -1053,8 +1287,8 @@ describe("WebSocket Lifecycle", () => {
     }));
 
     try {
-      const created = await createPersistentSubagent(url, "child task", "general");
-      const childId = created.subagent.sessionId as string;
+      const created = await createPersistentAgent(url, "child task", "worker");
+      const childId = created.agent.agentId as string;
 
       const update = await sendAndWaitForEvent(
         `${url}?resumeSessionId=${childId}`,
@@ -2857,14 +3091,14 @@ describe("Protocol Doc Parity", () => {
     }
   });
 
-  test("set_config rejects unsupported subAgentModel values before persisting them", async () => {
+  test("set_config rejects unsupported preferredChildModel values before persisting them", async () => {
     const tmpDir = await makeTmpProject();
     await fs.writeFile(
       path.join(tmpDir, ".agent", "config.json"),
       `${JSON.stringify({
         provider: "openai",
         model: "gpt-5.2",
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
       }, null, 2)}\n`,
       "utf-8",
     );
@@ -2883,7 +3117,7 @@ describe("Protocol Doc Parity", () => {
           type: "set_config",
           sessionId,
           config: {
-            subAgentModel: "gemini-3-pro-preview",
+            preferredChildModel: "gemini-3-pro-preview",
           },
         }),
         (message) => message.type === "error",
@@ -2891,12 +3125,12 @@ describe("Protocol Doc Parity", () => {
 
       expect(errorEvent.code).toBe("validation_failed");
       expect(errorEvent.source).toBe("session");
-      expect(errorEvent.message).toContain('Unsupported sub-agent model "gemini-3-pro-preview" for provider openai');
+      expect(errorEvent.message).toContain('Unsupported session config preferred child target "gemini-3-pro-preview" for provider openai');
 
       const persistedConfig = JSON.parse(
         await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),
       ) as any;
-      expect(persistedConfig.subAgentModel).toBe("gpt-5.2");
+      expect(persistedConfig.preferredChildModel).toBe("gpt-5.2");
     } finally {
       server.stop();
     }

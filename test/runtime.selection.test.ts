@@ -9,7 +9,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     provider: "openai",
     model: "gpt-5.2",
-    subAgentModel: "gpt-5.2",
+    preferredChildModel: "gpt-5.2",
     workingDirectory: base,
     outputDirectory: path.join(base, "output"),
     uploadsDirectory: path.join(base, "uploads"),
@@ -43,7 +43,7 @@ describe("runtime selection", () => {
     const config = makeConfig({
       provider: "codex-cli",
       model: "gpt-5.4",
-      subAgentModel: "gpt-5.4",
+      preferredChildModel: "gpt-5.4",
     });
     expect(resolveRuntimeName(config)).toBe("openai-responses");
     expect(createRuntime(config).name).toBe("openai-responses");
@@ -53,7 +53,7 @@ describe("runtime selection", () => {
     const config = makeConfig({
       provider: "codex-cli",
       model: "gpt-5.4",
-      subAgentModel: "gpt-5.4",
+      preferredChildModel: "gpt-5.4",
       runtime: "pi",
     });
     expect(resolveRuntimeName(config)).toBe("openai-responses");
@@ -64,7 +64,7 @@ describe("runtime selection", () => {
     const config = makeConfig({
       provider: "opencode-go",
       model: "glm-5",
-      subAgentModel: "glm-5",
+      preferredChildModel: "glm-5",
     });
     expect(resolveRuntimeName(config)).toBe("pi");
     expect(createRuntime(config).name).toBe("pi");
@@ -74,7 +74,7 @@ describe("runtime selection", () => {
     const config = makeConfig({
       provider: "opencode-zen",
       model: "glm-5",
-      subAgentModel: "glm-5",
+      preferredChildModel: "glm-5",
     });
     expect(resolveRuntimeName(config)).toBe("pi");
     expect(createRuntime(config).name).toBe("pi");
@@ -84,7 +84,7 @@ describe("runtime selection", () => {
     const config = makeConfig({
       provider: "google",
       model: "gemini-3-flash-preview",
-      subAgentModel: "gemini-3-flash-preview",
+      preferredChildModel: "gemini-3-flash-preview",
       runtime: "openai-responses",
     });
 

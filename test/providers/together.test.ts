@@ -13,7 +13,7 @@ describe("Together AI provider", () => {
     const cfg = makeConfig({
       provider: "together",
       model: "moonshotai/Kimi-K2.5",
-      subAgentModel: "moonshotai/Kimi-K2.5",
+      preferredChildModel: "moonshotai/Kimi-K2.5",
     });
     const model = getModel(cfg);
 
@@ -43,7 +43,7 @@ describe("Together AI provider", () => {
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       provider: "together",
       model: "Qwen/Qwen3.5-397B-A17B",
-      subAgentModel: "Qwen/Qwen3.5-397B-A17B",
+      preferredChildModel: "Qwen/Qwen3.5-397B-A17B",
     });
 
     const cfg = await loadConfig({

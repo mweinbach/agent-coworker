@@ -37,7 +37,7 @@ describe("src/providers/index.ts", () => {
       const config = makeConfig({
         provider: "baseten",
         model: "moonshotai/Kimi-K2.5",
-        subAgentModel: "moonshotai/Kimi-K2.5",
+        preferredChildModel: "moonshotai/Kimi-K2.5",
       });
       const model = getModelForProvider(config, "moonshotai/Kimi-K2.5", "baseten-key") as any;
       const headers = await model.config.headers();
@@ -50,7 +50,7 @@ describe("src/providers/index.ts", () => {
       const config = makeConfig({
         provider: "together",
         model: "moonshotai/Kimi-K2.5",
-        subAgentModel: "moonshotai/Kimi-K2.5",
+        preferredChildModel: "moonshotai/Kimi-K2.5",
       });
       const model = getModelForProvider(config, "moonshotai/Kimi-K2.5", "together-key") as any;
       const headers = await model.config.headers();
@@ -63,7 +63,7 @@ describe("src/providers/index.ts", () => {
       const config = makeConfig({
         provider: "nvidia",
         model: "nvidia/nemotron-3-super-120b-a12b",
-        subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+        preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
       });
       const model = getModelForProvider(config, "nvidia/nemotron-3-super-120b-a12b", "nvidia-key") as any;
       const headers = await model.config.headers();
@@ -73,7 +73,7 @@ describe("src/providers/index.ts", () => {
     });
 
     test("creates OpenCode Go model with saved key", async () => {
-      const config = makeConfig({ provider: "opencode-go", model: "glm-5", subAgentModel: "glm-5" });
+      const config = makeConfig({ provider: "opencode-go", model: "glm-5", preferredChildModel: "glm-5" });
       const model = getModelForProvider(config, "glm-5", "opencode-key") as any;
       const headers = await model.config.headers();
       expect(model.modelId).toBe("glm-5");
@@ -82,7 +82,7 @@ describe("src/providers/index.ts", () => {
     });
 
     test("creates OpenCode Zen model with saved key", async () => {
-      const config = makeConfig({ provider: "opencode-zen", model: "glm-5", subAgentModel: "glm-5" });
+      const config = makeConfig({ provider: "opencode-zen", model: "glm-5", preferredChildModel: "glm-5" });
       const model = getModelForProvider(config, "glm-5", "opencode-zen-key") as any;
       const headers = await model.config.headers();
       expect(model.modelId).toBe("glm-5");
@@ -91,7 +91,7 @@ describe("src/providers/index.ts", () => {
     });
 
     test("creates Zen-only OpenCode model with saved key", async () => {
-      const config = makeConfig({ provider: "opencode-zen", model: "minimax-m2.5", subAgentModel: "glm-5" });
+      const config = makeConfig({ provider: "opencode-zen", model: "minimax-m2.5", preferredChildModel: "glm-5" });
       const model = getModelForProvider(config, "minimax-m2.5", "opencode-zen-key") as any;
       const headers = await model.config.headers();
       expect(model.modelId).toBe("minimax-m2.5");
@@ -100,7 +100,7 @@ describe("src/providers/index.ts", () => {
     });
 
     test("rejects Zen-only OpenCode models on opencode-go", () => {
-      const config = makeConfig({ provider: "opencode-go", model: "glm-5", subAgentModel: "glm-5" });
+      const config = makeConfig({ provider: "opencode-go", model: "glm-5", preferredChildModel: "glm-5" });
       expect(() => getModelForProvider(config, "minimax-m2.5")).toThrow(
         'Unsupported model "minimax-m2.5" for provider opencode-go.',
       );

@@ -5,11 +5,15 @@ import {
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
 } from "../shared/openaiCompatibleOptions";
+import { CHILD_MODEL_ROUTING_MODES } from "../types";
 import {
-  persistentSubagentSummarySchema,
+  agentExecutionStateSchema,
+  agentModeSchema,
+  agentReasoningEffortSchema,
+  persistentAgentSummarySchema,
   sessionKindSchema,
-  subagentAgentTypeSchema,
-} from "../shared/persistentSubagents";
+  agentRoleSchema,
+} from "../shared/agents";
 import { sessionUsageSnapshotSchema } from "../session/sessionUsageSchema";
 import type { ServerEvent } from "./protocol";
 
@@ -32,6 +36,7 @@ const editableOpenAiProviderOptionsByProviderSchema = z.object({
   openai: openAiCompatibleProviderOptionsSchema.optional(),
   "codex-cli": openAiCompatibleProviderOptionsSchema.optional(),
 }).passthrough();
+const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
 
 export type ServerEventParseErrorReason = "invalid_json" | "invalid_envelope" | "unknown_type" | "invalid_event";
 
@@ -120,7 +125,16 @@ const serverEventSchema = z.discriminatedUnion("type", [
     hasPendingApproval: z.boolean().optional(),
     sessionKind: sessionKindSchema.optional(),
     parentSessionId: z.string().optional(),
-    agentType: subagentAgentTypeSchema.optional(),
+    role: agentRoleSchema.optional(),
+    mode: agentModeSchema.optional(),
+    depth: z.number().int().min(0).optional(),
+    nickname: z.string().optional(),
+    requestedModel: z.string().optional(),
+    effectiveModel: z.string().optional(),
+    requestedReasoningEffort: agentReasoningEffortSchema.optional(),
+    effectiveReasoningEffort: agentReasoningEffortSchema.optional(),
+    executionState: agentExecutionStateSchema.optional(),
+    lastMessagePreview: z.string().optional(),
   }).passthrough(),
   z.object({
     type: z.literal("session_settings"),
@@ -141,7 +155,16 @@ const serverEventSchema = z.discriminatedUnion("type", [
     model: z.string(),
     sessionKind: sessionKindSchema.optional(),
     parentSessionId: z.string().optional(),
-    agentType: subagentAgentTypeSchema.optional(),
+    role: agentRoleSchema.optional(),
+    mode: agentModeSchema.optional(),
+    depth: z.number().int().min(0).optional(),
+    nickname: z.string().optional(),
+    requestedModel: z.string().optional(),
+    effectiveModel: z.string().optional(),
+    requestedReasoningEffort: agentReasoningEffortSchema.optional(),
+    effectiveReasoningEffort: agentReasoningEffortSchema.optional(),
+    executionState: agentExecutionStateSchema.optional(),
+    lastMessagePreview: z.string().optional(),
   }).passthrough(),
   z.object({
     type: z.literal("mcp_servers"),
@@ -372,14 +395,26 @@ const serverEventSchema = z.discriminatedUnion("type", [
     sessions: unknownArraySchema,
   }).passthrough(),
   z.object({
-    type: z.literal("subagent_created"),
+    type: z.literal("agent_spawned"),
     sessionId: nonEmptyTrimmedStringSchema,
-    subagent: persistentSubagentSummarySchema,
+    agent: persistentAgentSummarySchema,
   }).passthrough(),
   z.object({
-    type: z.literal("subagent_sessions"),
+    type: z.literal("agent_list"),
     sessionId: nonEmptyTrimmedStringSchema,
-    subagents: z.array(persistentSubagentSummarySchema),
+    agents: z.array(persistentAgentSummarySchema),
+  }).passthrough(),
+  z.object({
+    type: z.literal("agent_status"),
+    sessionId: nonEmptyTrimmedStringSchema,
+    agent: persistentAgentSummarySchema,
+  }).passthrough(),
+  z.object({
+    type: z.literal("agent_wait_result"),
+    sessionId: nonEmptyTrimmedStringSchema,
+    agentIds: z.array(nonEmptyTrimmedStringSchema),
+    timedOut: z.boolean(),
+    agents: z.array(persistentAgentSummarySchema),
   }).passthrough(),
   z.object({
     type: z.literal("session_deleted"),
@@ -394,7 +429,12 @@ const serverEventSchema = z.discriminatedUnion("type", [
       observabilityEnabled: z.boolean(),
       backupsEnabled: z.boolean(),
       defaultBackupsEnabled: z.boolean(),
-      subAgentModel: z.string(),
+      enableMemory: z.boolean().optional(),
+      memoryRequireApproval: z.boolean().optional(),
+      preferredChildModel: z.string(),
+      childModelRoutingMode: childModelRoutingModeSchema,
+      preferredChildModelRef: z.string(),
+      allowedChildModelRefs: z.array(z.string()),
       maxSteps: z.number(),
       toolOutputOverflowChars: z.number().int().nonnegative().nullable(),
       defaultToolOutputOverflowChars: z.number().int().nonnegative().nullable().optional(),
@@ -483,8 +523,10 @@ const KNOWN_SERVER_EVENT_TYPES = new Set<string>([
   "session_usage",
   "messages",
   "sessions",
-  "subagent_created",
-  "subagent_sessions",
+  "agent_spawned",
+  "agent_list",
+  "agent_status",
+  "agent_wait_result",
   "session_deleted",
   "session_config",
   "file_uploaded",

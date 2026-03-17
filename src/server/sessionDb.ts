@@ -2,7 +2,14 @@ import { Database } from "bun:sqlite";
 import path from "node:path";
 
 import type { AiCoworkerPaths } from "../connect";
-import type { PersistentSubagentSummary, SessionKind, SubagentAgentType } from "../shared/persistentSubagents";
+import type {
+  AgentExecutionState,
+  AgentMode,
+  AgentReasoningEffort,
+  AgentRole,
+  PersistentAgentSummary,
+  SessionKind,
+} from "../shared/agents";
 import type { OpenAiContinuationState } from "../shared/openaiContinuation";
 import type { SessionUsageSnapshot } from "../session/costTracker";
 import type { ModelStreamRawFormat } from "./modelStream";
@@ -25,7 +32,16 @@ export type PersistedSessionRecord = {
   sessionId: string;
   sessionKind: SessionKind;
   parentSessionId: string | null;
-  agentType: SubagentAgentType | null;
+  role: AgentRole | null;
+  mode?: AgentMode | null;
+  depth?: number | null;
+  nickname?: string | null;
+  requestedModel?: string | null;
+  effectiveModel?: string | null;
+  requestedReasoningEffort?: AgentReasoningEffort | null;
+  effectiveReasoningEffort?: AgentReasoningEffort | null;
+  executionState?: AgentExecutionState | null;
+  lastMessagePreview?: string | null;
   title: string;
   titleSource: SessionTitleSource;
   titleModel: string | null;
@@ -34,6 +50,7 @@ export type PersistedSessionRecord = {
   workingDirectory: string;
   outputDirectory?: string;
   uploadsDirectory?: string;
+  providerOptions?: AgentConfig["providerOptions"];
   enableMcp: boolean;
   backupsEnabledOverride: boolean | null;
   createdAt: string;
@@ -60,7 +77,16 @@ export type PersistedSessionMutation = {
   snapshot: {
     sessionKind: SessionKind;
     parentSessionId: string | null;
-    agentType: SubagentAgentType | null;
+    role: AgentRole | null;
+    mode?: AgentMode | null;
+    depth?: number | null;
+    nickname?: string | null;
+    requestedModel?: string | null;
+    effectiveModel?: string | null;
+    requestedReasoningEffort?: AgentReasoningEffort | null;
+    effectiveReasoningEffort?: AgentReasoningEffort | null;
+    executionState?: AgentExecutionState | null;
+    lastMessagePreview?: string | null;
     title: string;
     titleSource: SessionTitleSource;
     titleModel: string | null;
@@ -69,6 +95,7 @@ export type PersistedSessionMutation = {
     workingDirectory: string;
     outputDirectory?: string;
     uploadsDirectory?: string;
+    providerOptions?: AgentConfig["providerOptions"];
     enableMcp: boolean;
     backupsEnabledOverride: boolean | null;
     createdAt: string;
@@ -172,8 +199,8 @@ export class SessionDb {
     return this.repository.listSessions();
   }
 
-  listSubagentSessions(parentSessionId: string): PersistentSubagentSummary[] {
-    return this.repository.listSubagentSessions(parentSessionId);
+  listAgentSessions(parentSessionId: string): PersistentAgentSummary[] {
+    return this.repository.listAgentSessions(parentSessionId);
   }
 
   deleteSession(sessionId: string): void {

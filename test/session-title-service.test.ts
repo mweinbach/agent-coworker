@@ -7,7 +7,7 @@ function makeConfig(provider: AgentConfig["provider"] = "openai"): AgentConfig {
   return {
     provider,
     model: provider === "openai" ? "gpt-5.2" : "gemini-3-flash-preview",
-    subAgentModel: provider === "openai" ? "gpt-5.2" : "gemini-3-flash-preview",
+    preferredChildModel: provider === "openai" ? "gpt-5.2" : "gemini-3-flash-preview",
     workingDirectory: "/tmp/workspace",
     outputDirectory: "/tmp/workspace/output",
     uploadsDirectory: "/tmp/workspace/uploads",

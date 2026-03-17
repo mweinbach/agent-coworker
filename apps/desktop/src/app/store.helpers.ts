@@ -1,4 +1,3 @@
-import { UI_DISABLED_PROVIDERS } from "../lib/modelChoices";
 import { startWorkspaceServer } from "../lib/desktopCommands";
 import { createDefaultUpdaterState, type UpdaterState } from "../lib/desktopApi";
 import type { MCPServerConfig, ProviderName, ServerEvent, TodoItem } from "../lib/wsProtocol";
@@ -17,7 +16,12 @@ import type {
   WorkspaceRuntime,
   WorkspaceExplorerState,
 } from "./types";
-import { buildContextPreamble, extractUsageStateFromTranscript, mapTranscriptToFeed } from "./store.feedMapping";
+import {
+  buildContextPreamble,
+  extractAgentStateFromTranscript,
+  extractUsageStateFromTranscript,
+  mapTranscriptToFeed,
+} from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
 import { persist, persistNow } from "./store.helpers/persistence";
 import {
@@ -92,10 +96,6 @@ type ProviderAuthResultEvent = Extract<ServerEvent, { type: "provider_auth_resul
 
 function isProviderName(v: unknown): v is ProviderName {
   return typeof v === "string" && (PROVIDER_NAMES as readonly string[]).includes(v);
-}
-
-function normalizeProviderChoice(provider: ProviderName): ProviderName {
-  return UI_DISABLED_PROVIDERS.has(provider) ? "google" : provider;
 }
 
 function defaultProviderAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
@@ -391,9 +391,9 @@ export {
   truncateTitle,
   normalizeThreadTitleSource,
   buildContextPreamble,
+  extractAgentStateFromTranscript,
   extractUsageStateFromTranscript,
   isProviderName,
-  normalizeProviderChoice,
   providerAuthMethodsFor,
   defaultWorkspaceRuntime,
   defaultThreadRuntime,

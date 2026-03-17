@@ -19,6 +19,7 @@ import {
   trashPath,
 } from "../../lib/desktopCommands";
 import type { ProviderName } from "../../lib/wsProtocol";
+import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
 
 import {
   type AppStoreActions,
@@ -36,7 +37,6 @@ import {
   isProviderName,
   makeId,
   mapTranscriptToFeed,
-  normalizeProviderChoice,
   nowIso,
   persistNow,
   providerAuthMethodsFor,
@@ -94,7 +94,10 @@ const persistedWorkspaceSchema = z.object({
   lastOpenedAt: z.string(),
   defaultProvider: normalizedProviderSchema,
   defaultModel: optionalStringWithContentSchema,
-  defaultSubAgentModel: optionalStringWithContentSchema,
+  defaultPreferredChildModel: optionalStringWithContentSchema,
+  defaultChildModelRoutingMode: z.enum(["same-provider", "cross-provider-allowlist"]).optional(),
+  defaultPreferredChildModelRef: optionalStringWithContentSchema,
+  defaultAllowedChildModelRefs: z.array(z.string().trim().min(1)).optional(),
   defaultToolOutputOverflowChars: z.preprocess((value) => {
     if (value === undefined) return undefined;
     if (value === null) return null;
@@ -114,7 +117,17 @@ const persistedWorkspaceSchema = z.object({
   defaultBackupsEnabled: z.preprocess((value) => (typeof value === "boolean" ? value : true), z.boolean()),
   yolo: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough().transform((workspace): WorkspaceRecord => {
+  const legacySubAgentModel = (() => {
+    const asRecord = workspace as Record<string, unknown>;
+    const legacy = typeof asRecord.defaultSubAgentModel === "string" ? asRecord.defaultSubAgentModel.trim() : "";
+    return legacy.length > 0 ? legacy : undefined;
+  })();
   const model = workspace.defaultModel ?? defaultModelForProvider(workspace.defaultProvider);
+  const childModelRoutingMode = (workspace.defaultChildModelRoutingMode ?? "same-provider") as ChildModelRoutingMode;
+  const legacyPreferredValue = workspace.defaultPreferredChildModel ?? legacySubAgentModel ?? model;
+  const preferredChildModelRef =
+    workspace.defaultPreferredChildModelRef
+    ?? (legacyPreferredValue.includes(":") ? legacyPreferredValue : `${workspace.defaultProvider}:${legacyPreferredValue}`);
   return {
     id: workspace.id,
     name: workspace.name,
@@ -123,7 +136,10 @@ const persistedWorkspaceSchema = z.object({
     lastOpenedAt: workspace.lastOpenedAt,
     defaultProvider: workspace.defaultProvider,
     defaultModel: model,
-    defaultSubAgentModel: workspace.defaultSubAgentModel ?? model,
+    defaultPreferredChildModel: legacyPreferredValue,
+    defaultChildModelRoutingMode: childModelRoutingMode,
+    defaultPreferredChildModelRef: preferredChildModelRef,
+    defaultAllowedChildModelRefs: workspace.defaultAllowedChildModelRefs ?? [],
     defaultToolOutputOverflowChars: workspace.defaultToolOutputOverflowChars,
     providerOptions: normalizeWorkspaceProviderOptions(workspace.providerOptions),
     userName: workspace.userName,

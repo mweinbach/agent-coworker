@@ -45,6 +45,18 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     status: "connecting",
     sessionId: null,
     sessionTitle: null,
+    sessionKind: null,
+    parentSessionId: null,
+    role: null,
+    mode: null,
+    depth: 0,
+    nickname: null,
+    requestedModel: null,
+    effectiveModel: null,
+    requestedReasoningEffort: null,
+    effectiveReasoningEffort: null,
+    executionState: null,
+    lastMessagePreview: null,
     provider: "",
     model: "",
     cwd: "",
@@ -67,6 +79,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
     backup: null,
     contextUsage: null,
     sessionSummaries: [],
+    agents: [],
     userName: "",
     userProfile: {
       instructions: "",
@@ -124,6 +137,18 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
         syncState.status = "connected";
         syncState.sessionId = evt.sessionId;
         syncState.sessionTitle = helloState.isResume ? syncState.sessionTitle : null;
+        syncState.sessionKind = evt.sessionKind ?? "root";
+        syncState.parentSessionId = evt.parentSessionId ?? null;
+        syncState.role = evt.role ?? null;
+        syncState.mode = evt.mode ?? null;
+        syncState.depth = typeof evt.depth === "number" ? evt.depth : 0;
+        syncState.nickname = evt.nickname ?? null;
+        syncState.requestedModel = evt.requestedModel ?? null;
+        syncState.effectiveModel = evt.effectiveModel ?? null;
+        syncState.requestedReasoningEffort = evt.requestedReasoningEffort ?? null;
+        syncState.effectiveReasoningEffort = evt.effectiveReasoningEffort ?? null;
+        syncState.executionState = evt.executionState ?? null;
+        syncState.lastMessagePreview = evt.lastMessagePreview ?? null;
         syncState.provider = evt.config.provider;
         syncState.model = evt.config.model;
         syncState.cwd = evt.config.workingDirectory;
@@ -133,6 +158,10 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           syncState.feed = [...syncState.feed, { id: nextFeedId(), type: "system", line: `resumed: ${evt.sessionId}` }];
           if (helloState.clearPendingAsk) syncState.pendingAsk = null;
           if (helloState.clearPendingApproval) syncState.pendingApproval = null;
+          if ((evt.sessionKind ?? "root") === "agent") {
+            syncState.agents = [];
+            syncState.sessionSummaries = [];
+          }
         } else {
           syncState.enableMcp = true;
           syncState.tools = [];
@@ -153,6 +182,7 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
           syncState.backup = null;
           syncState.contextUsage = null;
           syncState.sessionSummaries = [];
+          syncState.agents = [];
           syncState.feed = [{ id: nextFeedId(), type: "system", line: `connected: ${evt.sessionId}` }];
           syncState.todos = [];
           syncState.pendingAsk = null;
@@ -168,7 +198,10 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       socketLifecycle.send({ type: "list_skills", sessionId: evt.sessionId });
       socketLifecycle.send({ type: "session_backup_get", sessionId: evt.sessionId });
       socketLifecycle.send({ type: "harness_context_get", sessionId: evt.sessionId });
-      socketLifecycle.send({ type: "list_sessions", sessionId: evt.sessionId });
+      if ((evt.sessionKind ?? "root") !== "agent") {
+        socketLifecycle.send({ type: "list_sessions", sessionId: evt.sessionId });
+        socketLifecycle.send({ type: "agent_list_get", sessionId: evt.sessionId });
+      }
       return;
     }
 
@@ -457,8 +490,54 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
 
     requestSessions() {
       const sessionId = state.sessionId;
-      if (!sessionId || !socketLifecycle.hasSocket()) return;
+      if (!sessionId || !socketLifecycle.hasSocket() || state.sessionKind === "agent") return;
       socketLifecycle.send({ type: "list_sessions", sessionId });
+    },
+
+    requestAgentList() {
+      const sessionId = state.sessionId;
+      if (!sessionId || !socketLifecycle.hasSocket() || state.sessionKind === "agent") return;
+      socketLifecycle.send({ type: "agent_list_get", sessionId });
+    },
+
+    waitForAgents(agentIds: string[], timeoutMs?: number) {
+      const sessionId = state.sessionId;
+      const normalizedAgentIds = agentIds.map((agentId) => agentId.trim()).filter(Boolean);
+      if (!sessionId || !socketLifecycle.hasSocket() || state.sessionKind === "agent" || normalizedAgentIds.length === 0) {
+        return false;
+      }
+      return socketLifecycle.send({
+        type: "agent_wait",
+        sessionId,
+        agentIds: normalizedAgentIds,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      });
+    },
+
+    resumeAgent(agentId: string) {
+      const sessionId = state.sessionId;
+      const normalizedAgentId = agentId.trim();
+      if (!sessionId || !socketLifecycle.hasSocket() || state.sessionKind === "agent" || !normalizedAgentId) {
+        return false;
+      }
+      return socketLifecycle.send({
+        type: "agent_resume",
+        sessionId,
+        agentId: normalizedAgentId,
+      });
+    },
+
+    closeAgent(agentId: string) {
+      const sessionId = state.sessionId;
+      const normalizedAgentId = agentId.trim();
+      if (!sessionId || !socketLifecycle.hasSocket() || state.sessionKind === "agent" || !normalizedAgentId) {
+        return false;
+      }
+      return socketLifecycle.send({
+        type: "agent_close",
+        sessionId,
+        agentId: normalizedAgentId,
+      });
     },
 
     resumeSession(targetSessionId: string) {

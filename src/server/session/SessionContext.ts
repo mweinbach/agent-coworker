@@ -8,9 +8,10 @@ import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { getProviderStatuses } from "../../providerStatus";
 import type { OpenAiContinuationState } from "../../shared/openaiContinuation";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../../shared/openaiCompatibleOptions";
-import type { PersistentSubagentSummary, SubagentAgentType } from "../../shared/persistentSubagents";
+import type { AgentReasoningEffort, PersistentAgentSummary, AgentRole } from "../../shared/agents";
 import type {
   AgentConfig,
+  ChildModelRoutingMode,
   HarnessContextState,
   ModelMessage,
   ServerErrorCode,
@@ -34,13 +35,28 @@ export type SessionBackupFactory = (opts: SessionBackupInitOptions) => Promise<S
 export type PersistedModelSelection = {
   provider: AgentConfig["provider"];
   model: string;
-  subAgentModel: string;
+  preferredChildModel: string;
+  childModelRoutingMode?: ChildModelRoutingMode;
+  preferredChildModelRef?: string;
+  allowedChildModelRefs?: string[];
 };
 
 export type PersistedProjectConfigPatch = Partial<
   Pick<
     AgentConfig,
-    "provider" | "model" | "subAgentModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
+    | "provider"
+    | "model"
+    | "preferredChildModel"
+    | "childModelRoutingMode"
+    | "preferredChildModelRef"
+    | "allowedChildModelRefs"
+    | "enableMcp"
+    | "enableMemory"
+    | "memoryRequireApproval"
+    | "observabilityEnabled"
+    | "backupsEnabled"
+    | "toolOutputOverflowChars"
+    | "userName"
   >
 > & {
   userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -61,6 +77,13 @@ export type HydratedSessionState = {
   harnessContext: HarnessContextState | null;
   backupsEnabledOverride: boolean | null;
   costTracker: SessionUsageSnapshot | null;
+  providerOptions?: AgentConfig["providerOptions"];
+};
+
+export type SeededSessionContext = {
+  messages: ModelMessage[];
+  todos: TodoItem[];
+  harnessContext: HarnessContextState | null;
 };
 
 export type SessionRuntimeState = {
@@ -104,32 +127,36 @@ export type SessionDependencies = {
   generateSessionTitleImpl: typeof generateSessionTitle;
   sessionDb: SessionDb | null;
   writePersistedSessionSnapshotImpl: typeof writePersistedSessionSnapshot;
-  createSubagentSessionImpl?: (opts: {
+  createAgentSessionImpl?: (opts: {
     parentSessionId: string;
     parentConfig: AgentConfig;
-    agentType: SubagentAgentType;
-    task: string;
-  }) => Promise<PersistentSubagentSummary>;
-  listSubagentSessionsImpl?: (parentSessionId: string) => Promise<PersistentSubagentSummary[]>;
-  sendSubagentInputImpl?: (opts: {
+    message: string;
+    role?: AgentRole;
+    model?: string;
+    reasoningEffort?: AgentReasoningEffort;
+    forkContext?: boolean;
+    parentDepth?: number;
+  }) => Promise<PersistentAgentSummary>;
+  listAgentSessionsImpl?: (parentSessionId: string) => Promise<PersistentAgentSummary[]>;
+  sendAgentInputImpl?: (opts: {
     parentSessionId: string;
     agentId: string;
-    task: string;
+    message: string;
+    interrupt?: boolean;
   }) => Promise<void>;
-  waitForSubagentImpl?: (opts: {
+  waitForAgentImpl?: (opts: {
     parentSessionId: string;
-    agentId: string;
+    agentIds: string[];
     timeoutMs?: number;
-  }) => Promise<{
-    sessionId: string;
-    status: "completed" | "running" | "error" | "closed";
-    busy: boolean;
-    text?: string;
-  }>;
-  closeSubagentImpl?: (opts: {
+  }) => Promise<{ timedOut: boolean; agents: PersistentAgentSummary[] }>;
+  resumeAgentImpl?: (opts: {
     parentSessionId: string;
     agentId: string;
-  }) => Promise<PersistentSubagentSummary>;
+  }) => Promise<PersistentAgentSummary>;
+  closeAgentImpl?: (opts: {
+    parentSessionId: string;
+    agentId: string;
+  }) => Promise<PersistentAgentSummary>;
   deleteSessionImpl?: (opts: {
     requesterSessionId: string;
     targetSessionId: string;
@@ -187,13 +214,7 @@ export type SessionContext = {
   getMcpServerByName: (nameRaw: string) => Promise<MCPRegistryServer | null>;
   queuePersistSessionSnapshot: (reason: string) => void;
   updateSessionInfo: (
-    patch: Partial<{
-      title: string;
-      titleSource: SessionTitleSource;
-      titleModel: string | null;
-      provider: AgentConfig["provider"];
-      model: string;
-    }>
+    patch: Partial<SessionInfoState>
   ) => void;
   emitConfigUpdated: () => void;
   syncSessionBackupAvailability: () => Promise<void>;

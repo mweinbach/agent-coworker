@@ -5,6 +5,7 @@ import {
   type AiCoworkerPaths,
   type ToolApiKeyName,
 } from "../store/connections";
+import { resolveAuthHomeDir } from "../utils/authHome";
 
 export async function readToolApiKey(opts: {
   name: ToolApiKeyName;
@@ -12,7 +13,7 @@ export async function readToolApiKey(opts: {
   homedir?: string;
   readStore?: typeof readConnectionStore;
 }): Promise<string | undefined> {
-  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir });
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const readStore = opts.readStore ?? readConnectionStore;
   const store = await readStore(paths);
   const value = store.toolApiKeys?.[opts.name];
@@ -27,7 +28,7 @@ export async function writeToolApiKey(opts: {
   readStore?: typeof readConnectionStore;
   writeStore?: typeof writeConnectionStore;
 }): Promise<{ storageFile: string; maskedApiKey: string; message: string }> {
-  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir });
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const readStore = opts.readStore ?? readConnectionStore;
   const writeStore = opts.writeStore ?? writeConnectionStore;
   const apiKey = opts.apiKey.trim();

@@ -9,6 +9,7 @@ export { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "../../../../src/shared/toolO
 export { PROVIDER_NAMES } from "../../../../src/types";
 export type {
   ApprovalRiskCode,
+  ChildModelRoutingMode,
   MCPServerConfig,
   ProviderName,
   ServerErrorCode,

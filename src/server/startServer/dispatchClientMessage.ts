@@ -149,10 +149,24 @@ export function dispatchClientMessage({
       return void session.upsertMemory(message.scope, message.id, message.content);
     case "memory_delete":
       return void session.deleteMemory(message.scope, message.id);
-    case "subagent_create":
-      return void session.createSubagentSession(message.agentType, message.task);
-    case "subagent_sessions_get":
-      return void session.listSubagentSessions();
+    case "agent_spawn":
+      return void session.createAgentSession({
+        message: message.message,
+        ...(message.role ? { role: message.role } : {}),
+        ...(message.model ? { model: message.model } : {}),
+        ...(message.reasoningEffort ? { reasoningEffort: message.reasoningEffort } : {}),
+        ...(message.forkContext !== undefined ? { forkContext: message.forkContext } : {}),
+      });
+    case "agent_list_get":
+      return void session.listAgentSessions();
+    case "agent_input_send":
+      return void session.sendAgentInput(message.agentId, message.message, message.interrupt);
+    case "agent_wait":
+      return void session.waitForAgents(message.agentIds, message.timeoutMs);
+    case "agent_resume":
+      return void session.resumeAgent(message.agentId);
+    case "agent_close":
+      return void session.closeAgent(message.agentId);
     case "set_config":
       return void session.setConfig(message.config);
     case "upload_file":

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getAiCoworkerPaths, maskApiKey, readConnectionStore, type AiCoworkerPaths, type ConnectionStore } from "./connect";
 import { CODEX_BACKEND_BASE_URL, decodeJwtPayload, isTokenExpiring, readCodexAuthMaterial, refreshCodexAuthMaterial } from "./providers/codex-auth";
 import { PROVIDER_NAMES, type ProviderName } from "./types";
+import { resolveAuthHomeDir } from "./utils/authHome";
 
 export type ProviderStatusMode = "missing" | "error" | "api_key" | "oauth" | "oauth_pending";
 
@@ -446,7 +447,7 @@ export async function getProviderStatuses(opts: {
   fetchImpl?: typeof fetch;
   now?: () => Date;
 } = {}): Promise<ProviderStatus[]> {
-  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir });
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const fetchImpl = opts.fetchImpl ?? fetch;
   const now = opts.now ?? (() => new Date());
 

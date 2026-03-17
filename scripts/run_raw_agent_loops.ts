@@ -7,7 +7,14 @@ import path from "node:path";
 import { loadConfig } from "../src/config";
 import { runTurnWithDeps } from "../src/agent";
 import { DEFAULT_PROVIDER_OPTIONS } from "../src/providers";
-import { loadSubAgentPrompt, loadSystemPromptWithSkills } from "../src/prompt";
+import { getProviderCatalog } from "../src/providers/connectionCatalog";
+import { getAiCoworkerPaths } from "../src/connect";
+import { loadSystemPromptWithSkills } from "../src/prompt";
+import { StatusBus } from "../src/server/agents/StatusBus";
+import { DelegateRunner } from "../src/server/agents/DelegateRunner";
+import { routeAgentConfig } from "../src/server/agents/modelRouter";
+import { getAgentRoleDefinition } from "../src/server/agents/roles";
+import type { AgentReasoningEffort, AgentRole, PersistentAgentSummary } from "../src/shared/agents";
 import { ensureDefaultGlobalSkillsReady } from "../src/skills/defaultGlobalSkills";
 import type { AgentConfig, ModelMessage, ProviderName, TodoItem } from "../src/types";
 import type { ToolContext } from "../src/tools";
@@ -19,6 +26,13 @@ import { createGlobTool } from "../src/tools/glob";
 import { createGrepTool } from "../src/tools/grep";
 import { createMemoryTool } from "../src/tools/memory";
 import { createNotebookEditTool } from "../src/tools/notebookEdit";
+import {
+  createCloseAgentTool,
+  createListAgentsTool,
+  createResumeAgentTool,
+  createSendAgentInputTool,
+  createWaitForAgentTool,
+} from "../src/tools/persistentAgents";
 import { createReadTool } from "../src/tools/read";
 import { createSkillTool } from "../src/tools/skill";
 import { createSpawnAgentTool } from "../src/tools/spawnAgent";
@@ -26,7 +40,6 @@ import { createTodoWriteTool } from "../src/tools/todoWrite";
 import { createWebFetchTool } from "../src/tools/webFetch";
 import { createWebSearchTool } from "../src/tools/webSearch";
 import { createWriteTool } from "../src/tools/write";
-import { classifyCommand } from "../src/utils/approval";
 import { emitObservabilityEvent } from "../src/observability/otel";
 import { getObservabilityHealth } from "../src/observability/runtime";
 
@@ -185,6 +198,26 @@ type RunSpec = {
   prompt: (ctx: PromptContext) => string;
 };
 
+type RawLoopAgentControlState = {
+  summary: PersistentAgentSummary;
+  role: AgentRole;
+  requestedModel?: string;
+  requestedReasoningEffort?: AgentReasoningEffort;
+  routedConfig: AgentConfig;
+  connectedProviders: readonly ProviderName[];
+  historyMessages: ModelMessage[];
+  abortController: AbortController | null;
+  runPromise: Promise<void> | null;
+  runToken: number;
+};
+
+type RawLoopAgentControlDeps = {
+  createDelegateRunner?: () => Pick<DelegateRunner, "run">;
+  makeId?: () => string;
+  now?: () => string;
+  getConnectedProviders?: () => Promise<readonly ProviderName[]>;
+};
+
 function isoSafeNow() {
   return new Date().toISOString();
 }
@@ -281,6 +314,194 @@ function withExecuteGuard(
   });
 }
 
+export function createRawLoopAgentControl(
+  opts: Pick<ToolContext, "config" | "log" | "askUser" | "approveCommand" | "availableSkills" | "spawnDepth" | "abortSignal">
+    & { parentMessages?: ModelMessage[] },
+  deps: RawLoopAgentControlDeps = {},
+): NonNullable<ToolContext["agentControl"]> {
+  const statusBus = new StatusBus();
+  const delegateRunner = deps.createDelegateRunner?.() ?? new DelegateRunner();
+  const makeId = deps.makeId ?? (() => crypto.randomUUID());
+  const now = deps.now ?? (() => isoSafeNow());
+  const getConnectedProviders = deps.getConnectedProviders ?? (async () => [opts.config.provider]);
+  const states = new Map<string, RawLoopAgentControlState>();
+
+  const publish = (
+    state: RawLoopAgentControlState,
+    patch: Partial<PersistentAgentSummary>,
+  ): PersistentAgentSummary => {
+    state.summary = {
+      ...state.summary,
+      ...patch,
+      updatedAt: now(),
+    };
+    statusBus.publish(state.summary);
+    return state.summary;
+  };
+
+  const getState = (agentId: string): RawLoopAgentControlState => {
+    const state = states.get(agentId);
+    if (!state) {
+      throw new Error(`Unknown child agent: ${agentId}`);
+    }
+    return state;
+  };
+
+  const startRun = (state: RawLoopAgentControlState, message: string): void => {
+    state.runToken += 1;
+    const runToken = state.runToken;
+    const controller = new AbortController();
+    const priorMessages = structuredClone(state.historyMessages);
+    state.historyMessages.push({ role: "user", content: message });
+    state.abortController = controller;
+    publish(state, {
+      lifecycleState: "active",
+      executionState: "running",
+      busy: true,
+    });
+
+    const run = delegateRunner.run({
+      config: state.routedConfig,
+      role: state.role,
+      message,
+      spawnDepth: opts.spawnDepth,
+      log: opts.log,
+      askUser: opts.askUser,
+      approveCommand: opts.approveCommand,
+      abortSignal: controller.signal,
+      discoveredSkills: opts.availableSkills,
+      ...(priorMessages.length > 0 ? { seedMessages: priorMessages } : {}),
+      ...(state.requestedModel ? { model: state.requestedModel } : {}),
+      ...(state.requestedReasoningEffort ? { reasoningEffort: state.requestedReasoningEffort } : {}),
+      ...(state.connectedProviders.length > 0 ? { connectedProviders: state.connectedProviders } : {}),
+    }).then((result) => {
+      if (state.runToken !== runToken || state.abortController !== controller || state.summary.lifecycleState === "closed") {
+        return;
+      }
+      state.historyMessages.push(...structuredClone(result.responseMessages));
+      const trimmed = result.text.trim();
+      publish(state, {
+        executionState: "completed",
+        busy: false,
+        ...(trimmed ? { lastMessagePreview: trimmed } : {}),
+      });
+    }).catch((err) => {
+      if (state.runToken !== runToken || state.abortController !== controller || state.summary.lifecycleState === "closed") {
+        return;
+      }
+      publish(state, {
+        executionState: controller.signal.aborted ? "closed" : "errored",
+        busy: false,
+        ...(controller.signal.aborted ? {} : { lastMessagePreview: String(err) }),
+      });
+    }).finally(() => {
+      if (state.runToken === runToken && state.abortController === controller) {
+        state.abortController = null;
+        state.runPromise = null;
+      }
+    });
+
+    state.runPromise = run;
+  };
+
+  const reopenClosed = (state: RawLoopAgentControlState): void => {
+    if (state.summary.lifecycleState !== "closed") return;
+    publish(state, {
+      lifecycleState: "active",
+      ...(state.summary.executionState === "closed" ? { executionState: "completed" } : {}),
+    });
+  };
+
+  return {
+    spawn: async ({ message, role, model, reasoningEffort, forkContext }) => {
+      const effectiveRole = role ?? "default";
+      const connectedProviders = await getConnectedProviders();
+      const routed = routeAgentConfig(opts.config, {
+        role: getAgentRoleDefinition(effectiveRole),
+        ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        connectedProviders,
+      });
+      if (routed.fallbackLine) {
+        opts.log(routed.fallbackLine);
+      }
+      const timestamp = now();
+      const state: RawLoopAgentControlState = {
+        routedConfig: routed.config,
+        summary: {
+          agentId: makeId(),
+          parentSessionId: "raw-loop",
+          role: effectiveRole,
+          mode: "delegate",
+          depth: (opts.spawnDepth ?? 0) + 1,
+          ...(routed.requestedModel ? { requestedModel: routed.requestedModel } : {}),
+          effectiveModel: routed.effectiveModel,
+          ...(routed.requestedReasoningEffort ? { requestedReasoningEffort: routed.requestedReasoningEffort } : {}),
+          ...(routed.effectiveReasoningEffort ? { effectiveReasoningEffort: routed.effectiveReasoningEffort } : {}),
+          provider: routed.config.provider,
+          title: `Raw ${effectiveRole} agent`,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          lifecycleState: "active",
+          executionState: "pending_init",
+          busy: false,
+        },
+        role: effectiveRole,
+        requestedModel: routed.requestedModel,
+        requestedReasoningEffort: routed.requestedReasoningEffort,
+        connectedProviders,
+        historyMessages:
+          forkContext && opts.parentMessages
+            ? structuredClone(opts.parentMessages)
+            : [],
+        abortController: null,
+        runPromise: null,
+        runToken: 0,
+      };
+      states.set(state.summary.agentId, state);
+      statusBus.publish(state.summary);
+      startRun(state, message);
+      return state.summary;
+    },
+    list: async () => [...states.values()].map((state) => state.summary).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    sendInput: async ({ agentId, message, interrupt }) => {
+      const state = getState(agentId);
+      reopenClosed(state);
+      if (state.summary.busy) {
+        if (!interrupt) {
+          throw new Error(`Child agent ${agentId} is busy`);
+        }
+        state.runToken += 1;
+        state.abortController?.abort();
+        await state.runPromise;
+      }
+      startRun(state, message);
+    },
+    wait: async ({ agentIds, timeoutMs }) => {
+      for (const agentId of agentIds) {
+        getState(agentId);
+      }
+      return await statusBus.wait(agentIds, timeoutMs);
+    },
+    resume: async ({ agentId }) => {
+      const state = getState(agentId);
+      reopenClosed(state);
+      return state.summary;
+    },
+    close: async ({ agentId }) => {
+      const state = getState(agentId);
+      state.runToken += 1;
+      state.abortController?.abort();
+      await state.runPromise;
+      return publish(state, {
+        lifecycleState: "closed",
+        executionState: "closed",
+        busy: false,
+      });
+    },
+  };
+}
+
 function createToolsWithTracing(
   ctx: ToolContext,
   steps: TracedStep[],
@@ -300,10 +521,16 @@ function createToolsWithTracing(
     webFetch: createWebFetchTool(ctx),
     ask: createAskTool(ctx),
     todoWrite: createTodoWriteTool(ctx),
-    spawnAgent: createSpawnAgentTool(ctx, {
-      loadSubAgentPrompt,
-      classifyCommandDetailed: classifyCommand as any,
-    }),
+    ...(ctx.agentControl
+      ? {
+          spawnAgent: createSpawnAgentTool(ctx),
+          listAgents: createListAgentsTool(ctx),
+          sendAgentInput: createSendAgentInputTool(ctx),
+          waitForAgent: createWaitForAgentTool(ctx),
+          resumeAgent: createResumeAgentTool(ctx),
+          closeAgent: createCloseAgentTool(ctx),
+        }
+      : {}),
     notebookEdit: createNotebookEditTool(ctx),
     skill: createSkillTool(ctx),
     memory: createMemoryTool(ctx),
@@ -830,7 +1057,7 @@ function buildGptSkillReliabilityRuns(): RunSpec[] {
   ];
 }
 
-function buildGoogleCustomtoolsToolCoverageRuns(): RunSpec[] {
+export function buildGoogleCustomtoolsToolCoverageRuns(): RunSpec[] {
   const model = "gemini-3.1-pro-preview-customtools";
 
   return [
@@ -913,24 +1140,25 @@ label: <selected label>
       model,
       maxSteps: 110,
       maxAttempts: 4,
-      requiredToolCalls: ["spawnAgent", "write", "grep", "edit", "read"],
+      requiredToolCalls: ["spawnAgent", "waitForAgent", "write", "grep", "edit", "read"],
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Exercise spawnAgent + grep + edit deterministically.
 
 Steps (must use tools):
-1) Use spawnAgent with agentType="general" and task: "Reply with exactly SUBAGENT_OK".
-2) Use write to create "gct04_source.txt" containing lines:
+1) Use spawnAgent with role="worker" and message: "Reply with exactly SUBAGENT_OK".
+2) Use waitForAgent with the returned agentId and timeoutMs=5000. Use the completed agent's lastMessagePreview as the sub-agent output.
+3) Use write to create "gct04_source.txt" containing lines:
 - alpha
 - beta
 - gamma
-3) Use grep with pattern "beta", path "gct04_source.txt", caseSensitive=false.
-4) Use write to create "gct04_report.md" with lines:
+4) Use grep with pattern "beta", path "gct04_source.txt", caseSensitive=false.
+5) Use write to create "gct04_report.md" with lines:
 - SUBAGENT_PLACEHOLDER
 - GREP_PLACEHOLDER
-5) Use edit to replace exact string "SUBAGENT_PLACEHOLDER" with spawnAgent result.
-6) Use edit to replace exact string "GREP_PLACEHOLDER" with a concise grep summary.
-7) Use read to read "gct04_report.md" (limit=220, offset=1).
+6) Use edit to replace exact string "SUBAGENT_PLACEHOLDER" with the completed agent's lastMessagePreview.
+7) Use edit to replace exact string "GREP_PLACEHOLDER" with a concise grep summary.
+8) Use read to read "gct04_report.md" (limit=220, offset=1).
 
 Final response must be raw JSON:
 { "report": "<absolute path>", "end": "<<END_RUN>>" }`,
@@ -938,105 +1166,8 @@ Final response must be raw JSON:
   ];
 }
 
-function buildCodexHarnessSmokeRuns(): RunSpec[] {
-  const model = "gpt-5.4";
-
+export function buildMixedRuns(): RunSpec[] {
   return [
-    {
-      id: "codex-smoke-01-core-tools",
-      provider: "codex-cli",
-      model,
-      maxSteps: 90,
-      maxAttempts: 3,
-      requiredToolCalls: ["todoWrite", "bash", "grep", "read", "write", "glob"],
-      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
-
-Task: Smoke-test the harness against the current repo using a focused local tool loop.
-
-Steps (must use tools):
-1) Use todoWrite to create 4 items and set exactly one item to in_progress.
-2) Use bash to run: pwd
-3) Use write to create "harness_source.txt" containing at least 3 lines, and one line must include the exact text "runTurnWithDeps".
-4) Use grep with pattern "runTurnWithDeps" in path "harness_source.txt".
-5) Use read to read "harness_source.txt" (limit=120, offset=1).
-6) Use write to create "codex_harness_smoke.md" with:
-- A title
-- A short paragraph explaining what the harness run validated
-- 3 bullets summarizing what you observed from the repo/tooling
-7) Use glob with pattern "codex_harness_smoke.md".
-8) Use read to read "codex_harness_smoke.md" (limit=220, offset=1).
-9) Use todoWrite to mark all items completed.
-
-Final response must be raw JSON:
-{ "report": "<absolute path>", "end": "<<END_RUN>>" }`,
-    },
-  ];
-}
-
-function computeRetryDelayMs(err: unknown, attempt: number): number {
-  const extracted = extractRetryDelayMs(err);
-  const backoffBaseMs = 12_000;
-  const backoffMs = Math.min(180_000, backoffBaseMs * Math.pow(2, Math.max(0, attempt - 1)));
-  const target = extracted ? Math.max(extracted, backoffMs) : backoffMs;
-  const jitterMs = Math.floor(Math.random() * 1500);
-  return target + jitterMs;
-}
-
-async function emitHarnessRunEvent(
-  config: AgentConfig,
-  name: string,
-  status: "ok" | "error",
-  at: string,
-  attrs: Record<string, string | number | boolean>,
-  durationMs?: number
-) {
-  await emitObservabilityEvent(config, {
-    name,
-    at,
-    status,
-    ...(durationMs !== undefined ? { durationMs } : {}),
-    attributes: attrs,
-  });
-}
-
-async function main() {
-  const cliArgs = parseArgs(process.argv.slice(2));
-  const repoDir = process.cwd();
-
-  const baseConfig = await loadConfig({
-    cwd: repoDir,
-    env: {
-      ...process.env,
-      AGENT_WORKING_DIR: repoDir,
-      COWORK_DISABLE_BUILTIN_SKILLS: process.env.COWORK_DISABLE_BUILTIN_SKILLS ?? "1",
-    },
-  });
-
-  const runRootPrefix =
-    cliArgs.scenario === "mixed"
-      ? "raw-agent-loop_mixed"
-      : cliArgs.scenario === "dcf-model-matrix"
-        ? "raw-agent-loop_dcf-model-matrix"
-        : cliArgs.scenario === "gpt-skill-reliability"
-          ? "raw-agent-loop_gpt-skill-reliability"
-          : cliArgs.scenario === "google-customtools-tool-coverage"
-            ? "raw-agent-loop_google-customtools-tool-coverage"
-            : "raw-agent-loop_codex-gpt-5.4-smoke";
-  const runRoot = path.join(baseConfig.outputDirectory || path.join(repoDir, "tmp"), `${runRootPrefix}_${safeStamp()}`);
-  await ensureDir(runRoot);
-
-  const googleApiKey = (
-    process.env.GEMINI_API_KEY ??
-    process.env.GOOGLE_GENERATIVE_AI_API_KEY ??
-    process.env.GOOGLE_API_KEY ??
-    ""
-  ).trim();
-  const openaiApiKey = (process.env.OPENAI_API_KEY ?? "").trim();
-  const anthropicApiKey = (process.env.ANTHROPIC_API_KEY ?? "").trim();
-
-  let anthropicModelIds: string[] = [];
-
-  const mixedRuns: RunSpec[] = [
     {
       id: "run-01",
       provider: "google",
@@ -1215,21 +1346,23 @@ dataset: <dataset>
       provider: "openai",
       model: "gpt-5-mini",
       maxSteps: 120,
+      requiredToolCalls: ["spawnAgent", "waitForAgent", "webFetch", "write", "edit", "glob", "read"],
       prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
 
 Task: Use a research sub-agent, then write and lightly edit a short report.
 
 Steps (must use tools):
-1) Use spawnAgent with agentType="research" and task:
-"Find the latest stable Bun release version (as of today) and one authoritative URL. Return JSON: {version, url}."
-2) Use webFetch on the returned URL (maxLength=6000).
-3) Use write to create "bun_release_report.md" with:
+1) Use spawnAgent with role="research" and message:
+"Find the latest stable Bun release version (as of today) and one authoritative URL. Return JSON only: {\\"version\\":\\"...\\",\\"url\\":\\"...\\"}."
+2) Use waitForAgent with the returned agentId and timeoutMs=10000. Extract version and URL from the completed agent's lastMessagePreview JSON.
+3) Use webFetch on the returned URL (maxLength=6000).
+4) Use write to create "bun_release_report.md" with:
 - version and URL
 - 3 bullet summary
 - A short 'Limitations' section
-4) Use edit to replace the exact string "LIMITATIONS_TODO" with a concrete limitation.
-5) Use glob with pattern "*.md".
-6) Use read to read back "bun_release_report.md" (limit=220, offset=1).
+5) Use edit to replace the exact string "LIMITATIONS_TODO" with a concrete limitation.
+6) Use glob with pattern "*.md".
+7) Use read to read back "bun_release_report.md" (limit=220, offset=1).
 
 Final response must be exactly two lines:
 report: <absolute path>
@@ -1305,6 +1438,107 @@ Steps (must use tools):
 Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
     },
   ];
+}
+
+function buildCodexHarnessSmokeRuns(): RunSpec[] {
+  const model = "gpt-5.4";
+
+  return [
+    {
+      id: "codex-smoke-01-core-tools",
+      provider: "codex-cli",
+      model,
+      maxSteps: 90,
+      maxAttempts: 3,
+      requiredToolCalls: ["todoWrite", "bash", "grep", "read", "write", "glob"],
+      prompt: ({ runDir }) => `You are running inside workingDirectory="${runDir}". Keep ALL created files inside this working directory.
+
+Task: Smoke-test the harness against the current repo using a focused local tool loop.
+
+Steps (must use tools):
+1) Use todoWrite to create 4 items and set exactly one item to in_progress.
+2) Use bash to run: pwd
+3) Use write to create "harness_source.txt" containing at least 3 lines, and one line must include the exact text "runTurnWithDeps".
+4) Use grep with pattern "runTurnWithDeps" in path "harness_source.txt".
+5) Use read to read "harness_source.txt" (limit=120, offset=1).
+6) Use write to create "codex_harness_smoke.md" with:
+- A title
+- A short paragraph explaining what the harness run validated
+- 3 bullets summarizing what you observed from the repo/tooling
+7) Use glob with pattern "codex_harness_smoke.md".
+8) Use read to read "codex_harness_smoke.md" (limit=220, offset=1).
+9) Use todoWrite to mark all items completed.
+
+Final response must be raw JSON:
+{ "report": "<absolute path>", "end": "<<END_RUN>>" }`,
+    },
+  ];
+}
+
+function computeRetryDelayMs(err: unknown, attempt: number): number {
+  const extracted = extractRetryDelayMs(err);
+  const backoffBaseMs = 12_000;
+  const backoffMs = Math.min(180_000, backoffBaseMs * Math.pow(2, Math.max(0, attempt - 1)));
+  const target = extracted ? Math.max(extracted, backoffMs) : backoffMs;
+  const jitterMs = Math.floor(Math.random() * 1500);
+  return target + jitterMs;
+}
+
+async function emitHarnessRunEvent(
+  config: AgentConfig,
+  name: string,
+  status: "ok" | "error",
+  at: string,
+  attrs: Record<string, string | number | boolean>,
+  durationMs?: number
+) {
+  await emitObservabilityEvent(config, {
+    name,
+    at,
+    status,
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    attributes: attrs,
+  });
+}
+
+async function main() {
+  const cliArgs = parseArgs(process.argv.slice(2));
+  const repoDir = process.cwd();
+
+  const baseConfig = await loadConfig({
+    cwd: repoDir,
+    env: {
+      ...process.env,
+      AGENT_WORKING_DIR: repoDir,
+      COWORK_DISABLE_BUILTIN_SKILLS: process.env.COWORK_DISABLE_BUILTIN_SKILLS ?? "1",
+    },
+  });
+
+  const runRootPrefix =
+    cliArgs.scenario === "mixed"
+      ? "raw-agent-loop_mixed"
+      : cliArgs.scenario === "dcf-model-matrix"
+        ? "raw-agent-loop_dcf-model-matrix"
+        : cliArgs.scenario === "gpt-skill-reliability"
+          ? "raw-agent-loop_gpt-skill-reliability"
+          : cliArgs.scenario === "google-customtools-tool-coverage"
+            ? "raw-agent-loop_google-customtools-tool-coverage"
+            : "raw-agent-loop_codex-gpt-5.4-smoke";
+  const runRoot = path.join(baseConfig.outputDirectory || path.join(repoDir, "tmp"), `${runRootPrefix}_${safeStamp()}`);
+  await ensureDir(runRoot);
+
+  const googleApiKey = (
+    process.env.GEMINI_API_KEY ??
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY ??
+    process.env.GOOGLE_API_KEY ??
+    ""
+  ).trim();
+  const openaiApiKey = (process.env.OPENAI_API_KEY ?? "").trim();
+  const anthropicApiKey = (process.env.ANTHROPIC_API_KEY ?? "").trim();
+
+  let anthropicModelIds: string[] = [];
+
+  const mixedRuns = buildMixedRuns();
 
   const scenarioRuns =
     cliArgs.scenario === "mixed"
@@ -1360,6 +1594,10 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
     }
   }
 
+  const connectedProviders = (await getProviderCatalog({
+    paths: getAiCoworkerPaths(),
+  })).connected;
+
   for (let i = 0; i < runs.length; i++) {
     const runIndex = i + 1;
     const run = runs[i]!;
@@ -1397,7 +1635,7 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
     config.enableMcp = false;
     config.provider = run.provider;
     config.model = resolved.resolvedModel;
-    config.subAgentModel = resolved.resolvedModel;
+    config.preferredChildModel = resolved.resolvedModel;
     config.harness = { reportOnly: cliArgs.reportOnly, strictMode: false };
 
     // Keep memory local to the run folder so artifacts can be captured per-run.
@@ -1506,6 +1744,16 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
             guardedToolNames: run.guardedToolsBeforeRequiredTool,
           }
         );
+      const agentControl = createRawLoopAgentControl({
+        config,
+        log,
+        askUser,
+        approveCommand,
+        availableSkills: discoveredSkills,
+        parentMessages: inputMessages,
+      }, {
+        getConnectedProviders: async () => connectedProviders,
+      });
 
       try {
         const res = await runTurnWithDeps(
@@ -1518,6 +1766,7 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
             approveCommand,
             updateTodos,
             discoveredSkills,
+            agentControl,
             maxSteps: run.maxSteps ?? 100,
             enableMcp: false,
             telemetryContext: {
@@ -1803,7 +2052,9 @@ Final response must be JSON with keys run_id, memo, and end="<<END_RUN>>".`,
   console.log(`[raw-loop] wrote traces to: ${runRoot}`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}

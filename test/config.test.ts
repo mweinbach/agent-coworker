@@ -26,6 +26,23 @@ async function makeTmpDirs() {
   return { tmp, cwd, home };
 }
 
+async function withEnv<T>(
+  key: string,
+  value: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = process.env[key];
+  if (typeof value === "string") process.env[key] = value;
+  else delete process.env[key];
+
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // loadConfig
 // ---------------------------------------------------------------------------
@@ -198,7 +215,7 @@ describe("loadConfig", () => {
 
     expect(cfg.provider).toBe("google");
     expect(cfg.model).toBe(defaultModelForProvider("google"));
-    expect(cfg.subAgentModel).toBe(defaultModelForProvider("google"));
+    expect(cfg.preferredChildModel).toBe(defaultModelForProvider("google"));
     expect(cfg.knowledgeCutoff).toBe("January 2025");
     expect(cfg.userName).toBe("");
     expect(cfg.observabilityEnabled).toBe(true);
@@ -327,7 +344,7 @@ describe("loadConfig", () => {
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       provider: "google",
       model: "gemini-legacy-preview",
-      subAgentModel: "gemini-legacy-research",
+      preferredChildModel: "gemini-legacy-research",
     });
 
     const cfg = await loadConfig({
@@ -339,7 +356,7 @@ describe("loadConfig", () => {
 
     expect(cfg.provider).toBe("google");
     expect(cfg.model).toBe(defaultModelForProvider("google"));
-    expect(cfg.subAgentModel).toBe(cfg.model);
+    expect(cfg.preferredChildModel).toBe(cfg.model);
   });
 
   test("AGENT_WORKING_DIR env var overrides cwd", async () => {
@@ -475,7 +492,7 @@ describe("loadConfig", () => {
     expect(cfg.workingDirectory).toBe(cwd);
   });
 
-  test("subAgentModel falls back to main model when not configured", async () => {
+  test("preferredChildModel falls back to main model when not configured", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     const customBuiltIn = path.join(os.tmpdir(), "builtin-nosub-" + Date.now());
@@ -491,18 +508,18 @@ describe("loadConfig", () => {
       env: {},
     });
 
-    expect(cfg.subAgentModel).toBe("gpt-5.2");
+    expect(cfg.preferredChildModel).toBe("gpt-5.2");
   });
 
-  test("subAgentModel from project config overrides user config", async () => {
+  test("preferredChildModel from project config overrides user config", async () => {
     const { cwd, home } = await makeTmpDirs();
 
     await writeJson(path.join(home, ".agent", "config.json"), {
-      subAgentModel: "gemini-3-flash-preview",
+      preferredChildModel: "gemini-3-flash-preview",
     });
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
-      subAgentModel: "gemini-3-pro-preview",
+      preferredChildModel: "gemini-3-pro-preview",
     });
 
     const cfg = await loadConfig({
@@ -512,7 +529,51 @@ describe("loadConfig", () => {
       env: {},
     });
 
-    expect(cfg.subAgentModel).toBe("gemini-3-pro-preview");
+    expect(cfg.preferredChildModel).toBe("gemini-3-pro-preview");
+  });
+
+  test("legacy subAgentModel config still seeds the preferred child model", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      provider: "openai",
+      model: "gpt-5.4",
+      subAgentModel: "gpt-5-mini",
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.preferredChildModel).toBe("gpt-5-mini");
+    expect(cfg.preferredChildModelRef).toBe("openai:gpt-5-mini");
+  });
+
+  test("preferredChildModelRef and allowlist normalize cross-provider child routing config", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await writeJson(path.join(cwd, ".agent", "config.json"), {
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      childModelRoutingMode: "cross-provider-allowlist",
+      preferredChildModelRef: "opencode-zen:glm-5",
+      allowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
+    });
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+
+    expect(cfg.childModelRoutingMode).toBe("cross-provider-allowlist");
+    expect(cfg.preferredChildModelRef).toBe("opencode-zen:glm-5");
+    expect(cfg.allowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
+    expect(cfg.preferredChildModel).toBe("gpt-5.4");
   });
 
   test("knowledgeCutoff config values are ignored in favor of the selected model registry entry", async () => {
@@ -604,9 +665,11 @@ describe("loadConfig", () => {
       env: { AGENT_PROVIDER: "openai" },
     });
 
-    const model = getModel(cfg) as any;
-    const headers = await model.config.headers();
-    expect(headers.authorization).toBe("Bearer canonical-service-key");
+    await withEnv("HOME", home, async () => {
+      const model = getModel(cfg) as any;
+      const headers = await model.config.headers();
+      expect(headers.authorization).toBe("Bearer canonical-service-key");
+    });
   });
 
   test("throws when canonical connection store uses legacy apiKeys shape", async () => {
@@ -637,7 +700,9 @@ describe("loadConfig", () => {
       },
     });
 
-    expect(() => getModel(cfg)).toThrow("Invalid connection store schema");
+    await withEnv("HOME", home, async () => {
+      expect(() => getModel(cfg)).toThrow("Invalid connection store schema");
+    });
   });
 
   test("loads command template config from merged config", async () => {
@@ -1121,7 +1186,7 @@ describe("getModel", () => {
     });
 
     expect(cfg.model).toBe(defaultModelForProvider("google"));
-    expect(cfg.subAgentModel).toBe(defaultModelForProvider("google"));
+    expect(cfg.preferredChildModel).toBe(defaultModelForProvider("google"));
   });
 });
 

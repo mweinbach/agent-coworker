@@ -15,7 +15,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
-    subAgentModel: "gemini-3-flash-preview",
+    preferredChildModel: "gemini-3-flash-preview",
     workingDirectory: base,
     outputDirectory: path.join(base, "output"),
     uploadsDirectory: path.join(base, "uploads"),

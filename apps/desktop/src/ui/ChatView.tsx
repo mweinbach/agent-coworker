@@ -37,7 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
-import { modelChoicesFromCatalog, UI_DISABLED_PROVIDERS } from "../lib/modelChoices";
+import { availableProvidersFromCatalog, modelChoicesFromCatalog } from "../lib/modelChoices";
 import { readFile } from "../lib/desktopCommands";
 import type { ProviderName } from "../lib/wsProtocol";
 import { cn } from "../lib/utils";
@@ -347,8 +347,12 @@ function ThreadModelSelector({
 }) {
   const setThreadModel = useAppStore((s) => s.setThreadModel);
   const providerCatalog = useAppStore((s) => s.providerCatalog);
+  const providerConnected = useAppStore((s) => s.providerConnected);
   const choices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
-  const providers = (Object.keys(choices) as ProviderName[]).filter(p => !UI_DISABLED_PROVIDERS.has(p));
+  const providers = useMemo(
+    () => availableProvidersFromCatalog(providerCatalog, providerConnected, provider),
+    [providerCatalog, providerConnected, provider],
+  );
   const value = `${provider}:${model}`;
 
   return (

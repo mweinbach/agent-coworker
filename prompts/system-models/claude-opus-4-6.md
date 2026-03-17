@@ -399,7 +399,7 @@ Just do it when:
 </when_not_to_plan>
 
 <how_to_plan>
-1. Explore: Use read, glob, grep, and spawnAgent (explore type) to understand the codebase.
+1. Explore: Use read, glob, grep, and spawnAgent with `role: "explorer"` to understand the codebase.
 2. Design: Write a plan — what files to change, what approach to take, what the tradeoffs are.
 3. Present: Use the ask tool to show the plan and get approval. Include the key decision points.
 4. Implement: On approval, execute the plan. On rejection, revise.

@@ -100,7 +100,7 @@ Built-in capabilities exposed to the agent:
 | `webFetch` | Fetch web content | No |
 | `ask` | Ask user questions | No |
 | `todoWrite` | Update progress list | No |
-| `spawnAgent` | Delegate to sub-agent | No |
+| `spawnAgent` | Delegate to a child agent | No |
 | `skill` | Load skill instructions | No |
 | `memory` | Read/write persistent memory | No |
 

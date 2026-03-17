@@ -8,7 +8,7 @@ function makeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
   return {
     provider: "openai",
     model: "gpt-5.2",
-    subAgentModel: "gpt-5.2",
+    preferredChildModel: "gpt-5.2",
     workingDirectory: "/tmp/work",
     outputDirectory: "/tmp/out",
     uploadsDirectory: "/tmp/uploads",

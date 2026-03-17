@@ -18,6 +18,7 @@ output/
 uploads/
 .ModelScratchpad/
 .agent/
+.agent-user
 .cowork/
 
 # Env / misc

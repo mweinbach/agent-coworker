@@ -35,6 +35,7 @@ async function main() {
   const cwd = process.cwd();
   const requiredFiles = [
     "docs/harness/index.md",
+    "docs/harness/config.md",
     "docs/harness/observability.md",
     "docs/harness/context.md",
     "docs/harness/slo.md",
@@ -50,13 +51,16 @@ async function main() {
 
   const agents = await readText(path.join(cwd, "AGENTS.md"));
   const harnessIndex = await readText(path.join(cwd, "docs/harness/index.md"));
+  const readme = await readText(path.join(cwd, "README.md"));
   const wsProtocol = await readText(path.join(cwd, "docs/websocket-protocol.md"));
 
   const checks: CheckResult[] = [
     assertContains(agents, "docs/harness/index.md", "AGENTS.md"),
+    assertContains(harnessIndex, "config.md", "docs/harness/index.md"),
     assertContains(harnessIndex, "observability.md", "docs/harness/index.md"),
     assertContains(harnessIndex, "context.md", "docs/harness/index.md"),
     assertContains(harnessIndex, "slo.md", "docs/harness/index.md"),
+    assertContains(readme, "docs/harness/config.md", "README.md"),
     assertContains(wsProtocol, "harness_context_get", "docs/websocket-protocol.md"),
     assertContains(wsProtocol, "observability_status", "docs/websocket-protocol.md"),
     assertContains(wsProtocol, protocolVersionNeedle(), "docs/websocket-protocol.md"),

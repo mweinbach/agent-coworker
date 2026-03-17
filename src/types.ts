@@ -15,6 +15,14 @@ export const PROVIDER_NAMES = [
 export type ProviderName = (typeof PROVIDER_NAMES)[number];
 const providerNameSchema = z.enum(PROVIDER_NAMES);
 
+export const CHILD_MODEL_ROUTING_MODES = [
+  "same-provider",
+  "cross-provider-allowlist",
+] as const;
+
+export type ChildModelRoutingMode = (typeof CHILD_MODEL_ROUTING_MODES)[number];
+const childModelRoutingModeSchema = z.enum(CHILD_MODEL_ROUTING_MODES);
+
 export type ModelMessage = {
   role: "system" | "user" | "assistant" | "tool" | (string & {});
   content: unknown;
@@ -27,6 +35,15 @@ export function isProviderName(v: unknown): v is ProviderName {
 
 export function resolveProviderName(v: unknown): ProviderName | null {
   const parsed = providerNameSchema.safeParse(v);
+  return parsed.success ? parsed.data : null;
+}
+
+export function isChildModelRoutingMode(v: unknown): v is ChildModelRoutingMode {
+  return childModelRoutingModeSchema.safeParse(v).success;
+}
+
+export function resolveChildModelRoutingMode(v: unknown): ChildModelRoutingMode | null {
+  const parsed = childModelRoutingModeSchema.safeParse(v);
   return parsed.success ? parsed.data : null;
 }
 
@@ -92,7 +109,10 @@ export interface AgentConfig {
   provider: ProviderName;
   runtime?: RuntimeName;
   model: string;
-  subAgentModel: string;
+  preferredChildModel: string;
+  childModelRoutingMode?: ChildModelRoutingMode;
+  preferredChildModelRef?: string;
+  allowedChildModelRefs?: string[];
   toolOutputOverflowChars?: number | null;
   /**
    * Effective non-project fallback for tool overflow spilling after built-in

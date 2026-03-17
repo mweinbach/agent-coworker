@@ -9,7 +9,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     provider: "openai",
     model: "gpt-5.2",
-    subAgentModel: "gpt-5.2",
+    preferredChildModel: "gpt-5.2",
     workingDirectory: "/tmp",
     outputDirectory: "/tmp/output",
     uploadsDirectory: "/tmp/uploads",
@@ -104,7 +104,7 @@ describe("pi runtime provider option mapping", () => {
     const params = makeParams(makeConfig({
       provider: "baseten",
       model: "moonshotai/Kimi-K2.5",
-      subAgentModel: "moonshotai/Kimi-K2.5",
+      preferredChildModel: "moonshotai/Kimi-K2.5",
       providerOptions: {
         baseten: {
           reasoningEffort: "high",
@@ -123,7 +123,7 @@ describe("pi runtime provider option mapping", () => {
     const params = makeParams(makeConfig({
       provider: "together",
       model: "moonshotai/Kimi-K2.5",
-      subAgentModel: "moonshotai/Kimi-K2.5",
+      preferredChildModel: "moonshotai/Kimi-K2.5",
       providerOptions: {
         together: {
           reasoningEffort: "high",
@@ -142,7 +142,7 @@ describe("pi runtime provider option mapping", () => {
     const params = makeParams(makeConfig({
       provider: "nvidia",
       model: "nvidia/nemotron-3-super-120b-a12b",
-      subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+      preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
       providerOptions: {
         nvidia: {
           reasoningEffort: "none",

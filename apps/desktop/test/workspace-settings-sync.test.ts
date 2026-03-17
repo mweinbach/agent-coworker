@@ -150,7 +150,7 @@ describe("workspace settings sync", () => {
           lastOpenedAt: "2026-02-19T00:00:00.000Z",
           defaultProvider: "openai",
           defaultModel: "gpt-5.2",
-          defaultSubAgentModel: "gpt-5.2",
+          defaultPreferredChildModel: "gpt-5.2",
           defaultToolOutputOverflowChars: 25000,
           defaultEnableMcp: true,
           defaultBackupsEnabled: true,
@@ -187,7 +187,7 @@ describe("workspace settings sync", () => {
     });
   });
 
-  test("init normalizes workspace defaultSubAgentModel fallback", async () => {
+  test("init normalizes workspace defaultPreferredChildModel fallback", async () => {
     mockedLoadedState = {
       version: 2,
       workspaces: [
@@ -213,7 +213,36 @@ describe("workspace settings sync", () => {
 
     const loaded = useAppStore.getState().workspaces[0];
     expect(loaded?.defaultModel).toBe("gpt-5.2");
-    expect(loaded?.defaultSubAgentModel).toBe("gpt-5.2");
+    expect(loaded?.defaultPreferredChildModel).toBe("gpt-5.2");
+  });
+
+  test("init migrates legacy defaultSubAgentModel into defaultPreferredChildModel", async () => {
+    mockedLoadedState = {
+      version: 2,
+      workspaces: [
+        {
+          id: "ws-migrate",
+          name: "Legacy migration",
+          path: "/tmp/workspace",
+          createdAt: "2026-02-19T00:00:00.000Z",
+          lastOpenedAt: "2026-02-19T00:00:00.000Z",
+          defaultProvider: "openai",
+          defaultSubAgentModel: "gpt-5.2-mini",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+    };
+
+    await useAppStore.getState().init();
+
+    const loaded = useAppStore.getState().workspaces[0];
+    expect(loaded?.defaultModel).toBe("gpt-5.4");
+    expect(loaded?.defaultPreferredChildModel).toBe("gpt-5.2-mini");
   });
 
   test("init preserves workspace user profile defaults during rehydration", async () => {
@@ -476,7 +505,10 @@ describe("workspace settings sync", () => {
         defaultBackupsEnabled: false,
         toolOutputOverflowChars: 12000,
         defaultToolOutputOverflowChars: 12000,
-        subAgentModel: "gpt-5-mini",
+        preferredChildModel: "gpt-5-mini",
+        childModelRoutingMode: "cross-provider-allowlist",
+        preferredChildModelRef: "opencode-zen:glm-5",
+        allowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -485,12 +517,18 @@ describe("workspace settings sync", () => {
 
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
-    expect(workspace?.defaultSubAgentModel).toBe("gpt-5-mini");
+    expect(workspace?.defaultPreferredChildModel).toBe("gpt-5-mini");
+    expect(workspace?.defaultChildModelRoutingMode).toBe("cross-provider-allowlist");
+    expect(workspace?.defaultPreferredChildModelRef).toBe("opencode-zen:glm-5");
+    expect(workspace?.defaultAllowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
     expect(workspace?.defaultBackupsEnabled).toBe(false);
     expect(workspace?.defaultToolOutputOverflowChars).toBe(12000);
     expect(workspace?.userName).toBe("Alex");
     expect(workspace?.userProfile).toEqual({ instructions: "", work: "", details: "" });
-    expect(runtime?.controlSessionConfig?.subAgentModel).toBe("gpt-5-mini");
+    expect(runtime?.controlSessionConfig?.preferredChildModel).toBe("gpt-5-mini");
+    expect(runtime?.controlSessionConfig?.childModelRoutingMode).toBe("cross-provider-allowlist");
+    expect(runtime?.controlSessionConfig?.preferredChildModelRef).toBe("opencode-zen:glm-5");
+    expect(runtime?.controlSessionConfig?.allowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
     expect(runtime?.controlSessionConfig?.backupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.defaultBackupsEnabled).toBe(false);
     expect(runtime?.controlSessionConfig?.toolOutputOverflowChars).toBe(12000);
@@ -512,7 +550,7 @@ describe("workspace settings sync", () => {
         backupsEnabled: false,
         defaultBackupsEnabled: true,
         toolOutputOverflowChars: 25000,
-        subAgentModel: "gpt-5-mini",
+        preferredChildModel: "gpt-5-mini",
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -535,6 +573,9 @@ describe("workspace settings sync", () => {
         workspace.id === workspaceId
           ? {
               ...workspace,
+              defaultChildModelRoutingMode: "cross-provider-allowlist",
+              defaultPreferredChildModelRef: "opencode-zen:glm-5",
+              defaultAllowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
               userName: "Alex",
               userProfile: {
                 instructions: "Keep answers terse.",
@@ -569,7 +610,7 @@ describe("workspace settings sync", () => {
         backupsEnabled: true,
         defaultBackupsEnabled: true,
         toolOutputOverflowChars: 25000,
-        subAgentModel: "gpt-5-mini",
+        preferredChildModel: "gpt-5-mini",
         providerOptions: {
           openai: {
             reasoningSummary: "concise",
@@ -645,7 +686,7 @@ describe("workspace settings sync", () => {
         backupsEnabled: true,
         defaultBackupsEnabled: true,
         toolOutputOverflowChars: 25000,
-        subAgentModel: "gpt-5-mini",
+        preferredChildModel: "gpt-5-mini",
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -665,6 +706,9 @@ describe("workspace settings sync", () => {
         workspace.id === workspaceId
           ? {
               ...workspace,
+              defaultChildModelRoutingMode: "cross-provider-allowlist",
+              defaultPreferredChildModelRef: "opencode-zen:glm-5",
+              defaultAllowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
               userName: "Alex",
               userProfile: {
                 instructions: "Keep answers terse.",
@@ -712,7 +756,10 @@ describe("workspace settings sync", () => {
     expect(threadSocket.sent[2]).toMatchObject({
       type: "set_config",
       config: {
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
+        childModelRoutingMode: "cross-provider-allowlist",
+        preferredChildModelRef: "opencode-zen:glm-5",
+        allowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
         userName: "Alex",
         userProfile: {
           instructions: "Keep answers terse.",
@@ -731,6 +778,74 @@ describe("workspace settings sync", () => {
           },
         },
       },
+    });
+  });
+
+  test("applyWorkspaceDefaultsToThread preserves an existing baseten workspace provider", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultProvider: "baseten",
+              defaultModel: "moonshotai/Kimi-K2.5",
+              defaultPreferredChildModel: "moonshotai/Kimi-K2.5",
+            }
+          : workspace,
+      ),
+    }));
+
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+    threadSocket.sent = [];
+
+    const threadId = useAppStore.getState().threads[0]?.id;
+    if (!threadId) throw new Error("expected thread");
+    await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
+
+    expect(threadSocket.sent.find((message) => message?.type === "set_model")).toMatchObject({
+      type: "set_model",
+      provider: "baseten",
+      model: "moonshotai/Kimi-K2.5",
+    });
+  });
+
+  test("updateWorkspaceDefaults syncs baseten control-session defaults without rewriting the provider", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultProvider: "baseten",
+              defaultModel: "moonshotai/Kimi-K2.5",
+              defaultPreferredChildModel: "moonshotai/Kimi-K2.5",
+            }
+          : workspace,
+      ),
+    }));
+
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+
+    controlSocket.sent = [];
+    threadSocket.sent = [];
+
+    await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      defaultModel: "moonshotai/Kimi-K2.5",
+    });
+
+    expect(controlSocket.sent.find((message) => message?.type === "set_model")).toMatchObject({
+      type: "set_model",
+      provider: "baseten",
+      model: "moonshotai/Kimi-K2.5",
     });
   });
 
@@ -761,7 +876,7 @@ describe("workspace settings sync", () => {
         backupsEnabled: false,
         defaultBackupsEnabled: false,
         toolOutputOverflowChars: 25000,
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -795,7 +910,7 @@ describe("workspace settings sync", () => {
         defaultBackupsEnabled: false,
         toolOutputOverflowChars: 12000,
         defaultToolOutputOverflowChars: 12000,
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -861,7 +976,7 @@ describe("workspace settings sync", () => {
       type: "set_config",
       config: {
         backupsEnabled: true,
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         userName: "Taylor",
         userProfile: {
           instructions: "Keep answers terse.",
@@ -880,7 +995,7 @@ describe("workspace settings sync", () => {
     expect(threadSocket.sent[2]).toMatchObject({
       type: "set_config",
       config: {
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         userName: "Taylor",
         userProfile: {
           instructions: "Keep answers terse.",
@@ -917,7 +1032,7 @@ describe("workspace settings sync", () => {
         defaultBackupsEnabled: true,
         toolOutputOverflowChars: 12000,
         defaultToolOutputOverflowChars: 12000,
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -936,7 +1051,7 @@ describe("workspace settings sync", () => {
         defaultBackupsEnabled: true,
         toolOutputOverflowChars: 12000,
         defaultToolOutputOverflowChars: 12000,
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         maxSteps: 75,
         userName: "Alex",
         userProfile: { instructions: "", work: "", details: "" },
@@ -957,7 +1072,7 @@ describe("workspace settings sync", () => {
       type: "set_config",
       config: {
         backupsEnabled: true,
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
         clearToolOutputOverflowChars: true,
       },
     });
@@ -1019,7 +1134,7 @@ describe("workspace settings sync", () => {
     await useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
       defaultProvider: "openai",
       defaultModel: "gpt-5.2",
-      defaultSubAgentModel: "gpt-5.2-mini",
+      defaultPreferredChildModel: "gpt-5.2-mini",
       defaultToolOutputOverflowChars: 12000,
       defaultEnableMcp: false,
       defaultBackupsEnabled: false,
@@ -1043,7 +1158,7 @@ describe("workspace settings sync", () => {
       type: "set_config",
       config: {
         backupsEnabled: false,
-        subAgentModel: "gpt-5.2-mini",
+        preferredChildModel: "gpt-5.2-mini",
         toolOutputOverflowChars: 12000,
         providerOptions: {
           openai: {
@@ -1077,7 +1192,7 @@ describe("workspace settings sync", () => {
     expect(idleThreadSocket.sent[2]).toMatchObject({
       type: "set_config",
       config: {
-        subAgentModel: "gpt-5.2-mini",
+        preferredChildModel: "gpt-5.2-mini",
         providerOptions: {
           openai: {
             reasoningEffort: "high",
@@ -1119,7 +1234,7 @@ describe("workspace settings sync", () => {
     expect(busyThreadSocket.sent[1]).toMatchObject({
       type: "set_config",
       config: {
-        subAgentModel: "gpt-5.2-mini",
+        preferredChildModel: "gpt-5.2-mini",
         providerOptions: {
           openai: {
             reasoningEffort: "high",

@@ -1,24 +1,17 @@
-import { describe, expect, test, mock, beforeEach } from "bun:test";
-
-import fs from "node:fs/promises";
-import os from "node:os";
+import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 
-import type { AgentConfig } from "../src/types";
-import type { ToolContext } from "../src/tools/context";
-
 import { createSpawnAgentTool } from "../src/tools/spawnAgent";
-import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
+import type { ToolContext } from "../src/tools/context";
+import type { PersistentAgentSummary } from "../src/shared/agents";
+import type { AgentConfig } from "../src/types";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeConfig(dir: string, overrides: Partial<AgentConfig> = {}): AgentConfig {
+function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
+  const dir = "/tmp/spawn-agent-tool";
   return {
-    provider: "google",
-    model: "model-main",
-    subAgentModel: "model-sub",
+    provider: "openai",
+    model: "gpt-5.4",
+    preferredChildModel: "gpt-5-mini",
     workingDirectory: dir,
     outputDirectory: path.join(dir, "output"),
     uploadsDirectory: path.join(dir, "uploads"),
@@ -26,8 +19,8 @@ function makeConfig(dir: string, overrides: Partial<AgentConfig> = {}): AgentCon
     knowledgeCutoff: "unknown",
     projectAgentDir: path.join(dir, ".agent"),
     userAgentDir: path.join(dir, ".agent-user"),
-    builtInDir: process.cwd(),
-    builtInConfigDir: path.join(process.cwd(), "config"),
+    builtInDir: dir,
+    builtInConfigDir: path.join(dir, "config"),
     skillsDirs: [],
     memoryDirs: [],
     configDirs: [],
@@ -35,9 +28,28 @@ function makeConfig(dir: string, overrides: Partial<AgentConfig> = {}): AgentCon
   };
 }
 
-function makeCtx(dir: string, overrides: Partial<ToolContext> = {}): ToolContext {
+function makeSummary(overrides: Partial<PersistentAgentSummary> = {}): PersistentAgentSummary {
   return {
-    config: makeConfig(dir),
+    agentId: "child-1",
+    parentSessionId: "root-1",
+    role: "worker",
+    mode: "collaborative",
+    depth: 1,
+    effectiveModel: "gpt-5-mini",
+    title: "Investigate",
+    provider: "openai",
+    createdAt: "2026-03-15T00:00:00.000Z",
+    updatedAt: "2026-03-15T00:00:00.000Z",
+    lifecycleState: "active",
+    executionState: "running",
+    busy: true,
+    ...overrides,
+  };
+}
+
+function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+  return {
+    config: makeConfig(),
     log: () => {},
     askUser: async () => "",
     approveCommand: async () => true,
@@ -45,250 +57,71 @@ function makeCtx(dir: string, overrides: Partial<ToolContext> = {}): ToolContext
   };
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 describe("spawnAgent tool", () => {
-  let lastGenerateTextArgs: any = null;
-
-  const mockStreamText = mock(async (args: any) => {
-    lastGenerateTextArgs = args;
-    return { text: "subagent result" };
-  });
-
-  const mockStepCountIs = mock((n: number) => `stepCountIs:${n}`);
-  const mockGetModel = mock((_config: AgentConfig, id?: string) => ({ modelId: id ?? "" }));
-  const mockLoadSubAgentPrompt = mock(async (_config: AgentConfig, agentType: string) => `SYSTEM:${agentType}`);
-  const mockClassifyCommandDetailed = mock((command: string) => {
-    if (command === "pwd") return { kind: "auto" as const };
-    return {
-      kind: "prompt" as const,
-      dangerous: false as const,
-      riskCode: "requires_manual_review" as const,
-    };
-  });
-
-  beforeEach(async () => {
-    await observabilityRuntimeInternal.resetForTests();
-
-    lastGenerateTextArgs = null;
-    mockStreamText.mockClear();
-    mockStepCountIs.mockClear();
-    mockGetModel.mockClear();
-    mockLoadSubAgentPrompt.mockClear();
-    mockClassifyCommandDetailed.mockClear();
-  });
-
-  test("general uses subAgentModel and general tool set", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-general-"));
-    const ctx = makeCtx(dir, {
-      config: makeConfig(dir, { providerOptions: { google: { thinkingConfig: { thinkingLevel: "high" } } } }),
+  test("forwards message and optional fields to agentControl.spawn", async () => {
+    const summary = makeSummary({
+      role: "research",
+      effectiveModel: "gpt-5.4",
+      requestedModel: "gpt-5.4",
+      requestedReasoningEffort: "high",
+      effectiveReasoningEffort: "high",
     });
-
-    const t: any = createSpawnAgentTool(ctx, {
-      streamText: mockStreamText as any,
-      stepCountIs: mockStepCountIs as any,
-      getModel: mockGetModel as any,
-      loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
-      classifyCommandDetailed: mockClassifyCommandDetailed as any,
-    });
-
-    const out = await t.execute({ task: "do the thing", agentType: "general" });
-
-    expect(out).toBe("subagent result");
-    expect(mockLoadSubAgentPrompt).toHaveBeenCalledWith(ctx.config, "general");
-    expect(mockGetModel).toHaveBeenCalledWith(ctx.config, "model-sub");
-    expect(mockStepCountIs).toHaveBeenCalledWith(50);
-
-    expect(lastGenerateTextArgs.system).toBe("SYSTEM:general");
-    expect(lastGenerateTextArgs.prompt).toBe("do the thing");
-    expect(lastGenerateTextArgs.stopWhen).toBe("stepCountIs:50");
-    expect(lastGenerateTextArgs.providerOptions).toEqual(ctx.config.providerOptions);
-    expect(lastGenerateTextArgs.timeout).toBeUndefined();
-
-    const toolNames = Object.keys(lastGenerateTextArgs.tools).sort();
-    expect(toolNames).toEqual(
-      ["edit", "glob", "grep", "memory", "notebookEdit", "read", "skill", "webFetch", "webSearch", "write"].sort()
-    );
-    expect(lastGenerateTextArgs.tools.webSearch.type).toBeUndefined();
-    expect(typeof lastGenerateTextArgs.tools.webSearch.execute).toBe("function");
-  });
-
-  test("adds google prepareStep to repair replay thought signatures in sub-agent loops", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-prepare-step-"));
-    const log = mock(() => {});
-    const ctx = makeCtx(dir, {
-      log,
-      config: makeConfig(dir, {
-        providerOptions: {
-          google: {
-            thinkingConfig: {
-              includeThoughts: true,
-              thinkingLevel: "high",
-            },
-          },
-        },
-      }),
-    });
-
-    const t: any = createSpawnAgentTool(ctx, {
-      streamText: mockStreamText as any,
-      stepCountIs: mockStepCountIs as any,
-      getModel: mockGetModel as any,
-      loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
-      classifyCommandDetailed: mockClassifyCommandDetailed as any,
-    });
-
-    await t.execute({ task: "loop-safe sub-agent", agentType: "general" });
-
-    expect(typeof lastGenerateTextArgs.prepareStep).toBe("function");
-    const replayMessages = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "reasoning",
-            text: "thinking",
-            providerOptions: { google: { thoughtSignature: "sig-sub" } },
-          },
-          { type: "tool-call", toolCallId: "call-1", toolName: "bash", input: { command: "ls" } },
-        ],
+    const spawn = mock(async () => summary);
+    const tool: any = createSpawnAgentTool(makeCtx({
+      agentControl: {
+        spawn,
+        list: async () => [],
+        sendInput: async () => {},
+        wait: async () => ({ timedOut: false, agents: [] }),
+        resume: async () => summary,
+        close: async () => summary,
       },
-    ] as any[];
+    }));
 
-    const repaired = await lastGenerateTextArgs.prepareStep({ stepNumber: 1, messages: replayMessages });
-    expect(repaired).toBeDefined();
-    expect(repaired.providerOptions).toBeUndefined();
-    expect(JSON.stringify(repaired.messages)).toContain("\"thoughtSignature\":\"sig-sub\"");
-
-    const unresolved = await lastGenerateTextArgs.prepareStep({
-      stepNumber: 1,
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "tool-call", toolCallId: "call-2", toolName: "bash", input: { command: "pwd" } }],
-        },
-      ],
+    const result = await tool.execute({
+      message: "Investigate this failure",
+      role: "research",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      forkContext: true,
     });
-    expect(unresolved).toBeDefined();
-    expect(unresolved.providerOptions.google.thinkingConfig.includeThoughts).toBe(false);
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("disabling thoughts for this step"));
+
+    expect(spawn).toHaveBeenCalledWith({
+      message: "Investigate this failure",
+      role: "research",
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+      forkContext: true,
+    });
+    expect(result).toEqual(summary);
   });
 
-  test("research uses main model and web-only tool set", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-research-"));
-    const ctx = makeCtx(dir);
+  test("defaults role to default", async () => {
+    const summary = makeSummary({ role: "default" });
+    const spawn = mock(async () => summary);
+    const tool: any = createSpawnAgentTool(makeCtx({
+      agentControl: {
+        spawn,
+        list: async () => [],
+        sendInput: async () => {},
+        wait: async () => ({ timedOut: false, agents: [] }),
+        resume: async () => summary,
+        close: async () => summary,
+      },
+    }));
 
-    const t: any = createSpawnAgentTool(ctx, {
-      streamText: mockStreamText as any,
-      stepCountIs: mockStepCountIs as any,
-      getModel: mockGetModel as any,
-      loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
-      classifyCommandDetailed: mockClassifyCommandDetailed as any,
+    await tool.execute({ message: "Check the code path" });
+
+    expect(spawn).toHaveBeenCalledWith({
+      message: "Check the code path",
+      role: "default",
     });
-
-    await t.execute({ task: "research it", agentType: "research" });
-
-    expect(mockLoadSubAgentPrompt).toHaveBeenCalledWith(ctx.config, "research");
-    expect(mockGetModel).toHaveBeenCalledWith(ctx.config, "model-main");
-
-    const toolNames = Object.keys(lastGenerateTextArgs.tools).sort();
-    expect(toolNames).toEqual(["read", "webFetch", "webSearch"].sort());
-    expect(lastGenerateTextArgs.tools.webSearch.type).toBeUndefined();
-    expect(typeof lastGenerateTextArgs.tools.webSearch.execute).toBe("function");
   });
 
-  test("explore includes bash tool and escalates non-auto approvals to parent context", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-explore-"));
-    const parentApprove = mock(async (command: string) => !command.includes("touch"));
-    const ctx = makeCtx(dir, { approveCommand: parentApprove });
-
-    const t: any = createSpawnAgentTool(ctx, {
-      streamText: mockStreamText as any,
-      stepCountIs: mockStepCountIs as any,
-      getModel: mockGetModel as any,
-      loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
-      classifyCommandDetailed: mockClassifyCommandDetailed as any,
-    });
-
-    await t.execute({ task: "explore it", agentType: "explore" });
-
-    const tools = lastGenerateTextArgs.tools as Record<string, any>;
-    expect(Object.keys(tools).sort()).toEqual(["bash", "glob", "grep", "read"].sort());
-
-    const ok = await tools.bash.execute({ command: "pwd" });
-    expect(ok.exitCode).toBe(0);
-
-    const rejected = await tools.bash.execute({ command: "touch /tmp/should-not-run" });
-    expect(rejected.exitCode).toBe(1);
-    expect(rejected.stderr).toContain("rejected");
-    expect(parentApprove).toHaveBeenCalledWith("touch /tmp/should-not-run");
-  });
-
-  test("forwards abortSignal to sub-agent streamText call", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-abort-"));
-    const controller = new AbortController();
-    const ctx = makeCtx(dir, { abortSignal: controller.signal });
-
-    const t: any = createSpawnAgentTool(ctx, {
-      streamText: mockStreamText as any,
-      stepCountIs: mockStepCountIs as any,
-      getModel: mockGetModel as any,
-      loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
-      classifyCommandDetailed: mockClassifyCommandDetailed as any,
-    });
-
-    await t.execute({ task: "check signal", agentType: "general" });
-    expect(lastGenerateTextArgs.abortSignal).toBe(controller.signal);
-  });
-
-  test("enables runtime telemetry with full I/O when observability is configured", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-telemetry-"));
-    const ctx = makeCtx(dir, {
-      config: makeConfig(dir, {
-        observabilityEnabled: true,
-        observability: {
-          provider: "langfuse",
-          baseUrl: "https://cloud.langfuse.com",
-          otelEndpoint: "https://cloud.langfuse.com/api/public/otel/v1/traces",
-          publicKey: "pk-lf-test",
-          secretKey: "sk-lf-test",
-        },
-      }),
-    });
-
-    const t: any = createSpawnAgentTool(ctx, {
-      streamText: mockStreamText as any,
-      stepCountIs: mockStepCountIs as any,
-      getModel: mockGetModel as any,
-      loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
-      classifyCommandDetailed: mockClassifyCommandDetailed as any,
-    });
-
-    await t.execute({ task: "telemetry check", agentType: "general" });
-
-    expect(lastGenerateTextArgs.experimental_telemetry).toBeDefined();
-    expect(lastGenerateTextArgs.experimental_telemetry.isEnabled).toBe(true);
-    expect(lastGenerateTextArgs.experimental_telemetry.recordInputs).toBe(true);
-    expect(lastGenerateTextArgs.experimental_telemetry.recordOutputs).toBe(true);
-    expect(lastGenerateTextArgs.experimental_telemetry.functionId).toBe("tool.spawnAgent");
-  });
-
-  test("rejects sub-agent recursion beyond configured depth", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "spawn-agent-depth-"));
-    const ctx = makeCtx(dir, { spawnDepth: 2 });
-
-    const t: any = createSpawnAgentTool(ctx, {
-      streamText: mockStreamText as any,
-      stepCountIs: mockStepCountIs as any,
-      getModel: mockGetModel as any,
-      loadSubAgentPrompt: mockLoadSubAgentPrompt as any,
-      classifyCommandDetailed: mockClassifyCommandDetailed as any,
-    });
-
-    await expect(t.execute({ task: "any task", agentType: "general" })).rejects.toThrow(
-      /recursion depth exceeded/i
+  test("rejects when no child-agent control is available", async () => {
+    const tool: any = createSpawnAgentTool(makeCtx());
+    await expect(tool.execute({ message: "Investigate" })).rejects.toThrow(
+      "Child agents are unavailable outside a session-backed turn.",
     );
   });
 });

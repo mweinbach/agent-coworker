@@ -27,7 +27,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const base: AgentConfig = {
     provider: "google",
     model: "gemini-3-pro-preview",
-    subAgentModel: "gemini-3-pro-preview",
+    preferredChildModel: "gemini-3-pro-preview",
     workingDirectory: "/test/working",
     userName: "TestUser",
     knowledgeCutoff: "End of May 2025",
@@ -150,10 +150,45 @@ describe("loadSystemPrompt", () => {
   });
 
   test("replaces {{modelName}} template variable", async () => {
-    const config = makeConfig({ provider: "openai", model: "gpt-5.4", subAgentModel: "gpt-5.4" });
+    const config = makeConfig({ provider: "openai", model: "gpt-5.4", preferredChildModel: "gpt-5.4" });
     const prompt = await loadSystemPrompt(config);
     expect(prompt).toContain("GPT-5.4");
     expect(prompt).not.toContain("{{modelName}}");
+  });
+
+  test("renders dynamic spawnAgent roles and current-provider model guidance", async () => {
+    const config = makeConfig({ provider: "openai", model: "gpt-5.4", preferredChildModel: "gpt-5.4" });
+    const prompt = await loadSystemPrompt(config);
+
+    expect(prompt).toContain("Available child-agent roles:");
+    expect(prompt).toContain("**default**");
+    expect(prompt).toContain("**explorer**");
+    expect(prompt).toContain("**research**");
+    expect(prompt).toContain("**worker**");
+    expect(prompt).toContain("**reviewer**");
+    expect(prompt).toContain("Available model overrides for the current provider (OpenAI):");
+    expect(prompt).toContain("**GPT-5.4** (`gpt-5.4`)");
+    expect(prompt).toContain("**GPT-5 Mini** (`gpt-5-mini`)");
+    expect(prompt).toContain("`preferredChildModelRef` is only a workspace/UI suggestion");
+    expect(prompt).toContain("spawnAgent with `role: \"explorer\"`");
+    expect(prompt).not.toContain("spawnAgent (explore type)");
+    expect(prompt).not.toContain("**explore**: Fast codebase exploration.");
+    expect(prompt).not.toContain("**general**: Full-capability agent for delegated tasks.");
+    expect(prompt).not.toContain("moonshotai/Kimi-K2.5");
+  });
+
+  test("does not list Baseten child models in the spawnAgent summary", async () => {
+    const config = makeConfig({
+      provider: "baseten",
+      model: "moonshotai/Kimi-K2.5",
+      preferredChildModel: "moonshotai/Kimi-K2.5",
+    });
+    const prompt = await loadSystemPrompt(config);
+
+    expect(prompt).toContain("Available model overrides for the current provider (Baseten):");
+    expect(prompt).toContain("No user-facing child model overrides are available for this provider.");
+    expect(prompt).not.toContain("Nemotron 120B A12B");
+    expect(prompt).not.toContain("moonshotai/Kimi-K2.5");
   });
 
   test("replaces {{userName}} template variable", async () => {
@@ -349,7 +384,7 @@ describe("loadSystemPrompt", () => {
     const config = makeConfig({
       provider: "opencode-go",
       model: "kimi-k2.5",
-      subAgentModel: "kimi-k2.5",
+      preferredChildModel: "kimi-k2.5",
       skillsDirs: ["/nonexistent/skills"],
     });
     const prompt = await loadSystemPrompt(config);
@@ -456,7 +491,7 @@ describe("loadSystemPrompt", () => {
     const config = makeConfig({
       provider: "opencode-go",
       model: "glm-5",
-      subAgentModel: "glm-5",
+      preferredChildModel: "glm-5",
       skillsDirs: ["/nonexistent/skills"],
     });
     const prompt = await loadSystemPrompt(config);
@@ -736,7 +771,7 @@ describe("loadSubAgentPrompt", () => {
     const prompt = await loadSubAgentPrompt(config, "explore");
     expect(typeof prompt).toBe("string");
     expect(prompt.length).toBeGreaterThan(0);
-    expect(prompt).toContain("codebase");
+    expect(prompt).toContain("Role: explorer");
   });
 
   test("loads research prompt and returns non-empty string", async () => {
@@ -759,21 +794,26 @@ describe("loadSubAgentPrompt", () => {
     const prompt = await loadSubAgentPrompt(config, "general");
     expect(typeof prompt).toBe("string");
     expect(prompt.length).toBeGreaterThan(0);
-    expect(prompt).toContain("general-purpose");
+    expect(prompt).toContain("Role: worker");
   });
 
   test("loads from builtInDir/prompts/sub-agents/ path", async () => {
     const { builtIn } = await makeTmpDirs();
 
+    const basePrompt = "Shared base prompt.";
     const promptContent = "Custom explore agent prompt for testing.";
     await writeFile(
-      path.join(builtIn, "prompts", "sub-agents", "explore.md"),
+      path.join(builtIn, "prompts", "sub-agents", "base.md"),
+      basePrompt
+    );
+    await writeFile(
+      path.join(builtIn, "prompts", "sub-agents", "explorer.md"),
       promptContent
     );
 
     const config = makeConfig({ builtInDir: builtIn });
     const prompt = await loadSubAgentPrompt(config, "explore");
-    expect(prompt).toBe(promptContent);
+    expect(prompt).toBe(`${basePrompt}\n\n${promptContent}\n`);
   });
 });
 

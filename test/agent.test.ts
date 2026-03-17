@@ -16,7 +16,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
-    subAgentModel: "gemini-3-flash-preview",
+    preferredChildModel: "gemini-3-flash-preview",
     workingDirectory: base,
     outputDirectory: path.join(base, "output"),
     uploadsDirectory: path.join(base, "uploads"),
@@ -701,6 +701,29 @@ describe("runTurn", () => {
     const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.tools).toHaveProperty("bash");
     expect(callArg.tools).toHaveProperty("mcp__s__doThing");
+  });
+
+  test("read-only child roles only receive read-only MCP tools", async () => {
+    mockCreateTools.mockReturnValue({
+      read: { type: "builtin-read" },
+      write: { type: "builtin-write" },
+    });
+    mockLoadMCPServers.mockResolvedValue([{ name: "s", transport: { type: "stdio", command: "x", args: [] } }]);
+    mockLoadMCPTools.mockResolvedValue({
+      tools: {
+        "mcp__s__search": { type: "mcp-read", annotations: { readOnlyHint: true } },
+        "mcp__s__mutate": { type: "mcp-write", annotations: { destructiveHint: true } },
+      },
+      errors: [],
+    });
+
+    await runTurn(makeParams({ enableMcp: true, agentRole: "research" }));
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.tools).toEqual({
+      read: { type: "builtin-read" },
+      "mcp__s__search": { type: "mcp-read", annotations: { readOnlyHint: true } },
+    });
   });
 
   test("MCP tool name collisions are remapped to a safe alias", async () => {

@@ -15,6 +15,7 @@ import type {
   SessionBackupPublicCheckpoint,
   SessionBackupPublicState,
 } from "../src/server/sessionBackup";
+import type { SessionInfoState } from "../src/server/session/SessionContext";
 import * as REAL_AGENT from "../src/agent";
 
 // ---------------------------------------------------------------------------
@@ -71,20 +72,21 @@ const { AgentSession } = await import("../src/server/session/AgentSession");
 // ---------------------------------------------------------------------------
 
 function makeConfig(dir: string): AgentConfig {
+  const userAgentDir = path.join(dir, ".agent-user");
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
-    subAgentModel: "gemini-3-flash-preview",
+    preferredChildModel: "gemini-3-flash-preview",
     workingDirectory: dir,
     outputDirectory: path.join(dir, "output"),
     uploadsDirectory: path.join(dir, "uploads"),
     userName: "",
     knowledgeCutoff: "unknown",
     projectAgentDir: path.join(dir, ".agent"),
-    userAgentDir: path.join(dir, ".agent-user"),
+    userAgentDir,
     builtInDir: dir,
     builtInConfigDir: path.join(dir, "config"),
-    skillsDirs: [],
+    skillsDirs: [path.join(path.dirname(userAgentDir), ".cowork", "skills")],
     memoryDirs: [],
     configDirs: [],
     enableMcp: true,
@@ -179,13 +181,13 @@ function makeSession(
     persistModelSelectionImpl: (selection: {
       provider: AgentConfig["provider"];
       model: string;
-      subAgentModel: string;
+      preferredChildModel: string;
     }) => Promise<void> | void;
     persistProjectConfigPatchImpl: (
       patch: Partial<
         Pick<
           AgentConfig,
-          "provider" | "model" | "subAgentModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
+          "provider" | "model" | "preferredChildModel" | "enableMcp" | "enableMemory" | "memoryRequireApproval" | "observabilityEnabled" | "backupsEnabled" | "toolOutputOverflowChars" | "userName"
         >
       > & {
         userProfile?: Partial<NonNullable<AgentConfig["userProfile"]>>;
@@ -202,12 +204,13 @@ function makeSession(
       model: string | null;
     }>;
     writePersistedSessionSnapshotImpl: (opts: any) => Promise<string>;
-    createSubagentSessionImpl: (opts: any) => Promise<any>;
-    listSubagentSessionsImpl: (parentSessionId: string) => Promise<any[]>;
-    sendSubagentInputImpl: (opts: any) => Promise<void>;
-    waitForSubagentImpl: (opts: any) => Promise<any>;
-    closeSubagentImpl: (opts: any) => Promise<any>;
+    createAgentSessionImpl: (opts: any) => Promise<any>;
+    listAgentSessionsImpl: (parentSessionId: string) => Promise<any[]>;
+    sendAgentInputImpl: (opts: any) => Promise<void>;
+    waitForAgentImpl: (opts: any) => Promise<any>;
+    closeAgentImpl: (opts: any) => Promise<any>;
     deleteSessionImpl: (opts: any) => Promise<void>;
+    sessionInfoPatch: Partial<SessionInfoState>;
   }>
 ) {
   const dir = "/tmp/test-session";
@@ -230,12 +233,13 @@ function makeSession(
     generateSessionTitleImpl: overrides?.generateSessionTitleImpl ?? mockGenerateSessionTitle,
     writePersistedSessionSnapshotImpl:
       overrides?.writePersistedSessionSnapshotImpl ?? mockWritePersistedSessionSnapshot,
-    createSubagentSessionImpl: overrides?.createSubagentSessionImpl,
-    listSubagentSessionsImpl: overrides?.listSubagentSessionsImpl,
-    sendSubagentInputImpl: overrides?.sendSubagentInputImpl,
-    waitForSubagentImpl: overrides?.waitForSubagentImpl,
-    closeSubagentImpl: overrides?.closeSubagentImpl,
+    createAgentSessionImpl: overrides?.createAgentSessionImpl,
+    listAgentSessionsImpl: overrides?.listAgentSessionsImpl,
+    sendAgentInputImpl: overrides?.sendAgentInputImpl,
+    waitForAgentImpl: overrides?.waitForAgentImpl,
+    closeAgentImpl: overrides?.closeAgentImpl,
     deleteSessionImpl: overrides?.deleteSessionImpl,
+    sessionInfoPatch: overrides?.sessionInfoPatch,
   });
   return { session, emit, events, sessionBackupFactory };
 }
@@ -366,7 +370,7 @@ describe("AgentSession", () => {
       await flushAsyncWork();
       expect(mockWritePersistedSessionSnapshot).toHaveBeenCalledTimes(1);
       const first = mockWritePersistedSessionSnapshot.mock.calls[0]?.[0] as any;
-      expect(first?.snapshot?.version).toBe(5);
+      expect(first?.snapshot?.version).toBe(7);
       expect(first?.snapshot?.context?.providerState).toBeNull();
       expect(first?.snapshot?.context?.costTracker).toMatchObject({
         totalTurns: 0,
@@ -427,10 +431,10 @@ describe("AgentSession", () => {
       expect(pub.providerOptions).toBeUndefined();
     });
 
-    test("does not include subAgentModel", () => {
+    test("does not include preferredChildModel", () => {
       const { session } = makeSession();
       const pub = session.getPublicConfig() as any;
-      expect(pub.subAgentModel).toBeUndefined();
+      expect(pub.preferredChildModel).toBeUndefined();
     });
 
     test("does not include userName", () => {
@@ -820,7 +824,7 @@ describe("AgentSession", () => {
       expect(evt.config.defaultBackupsEnabled).toBe(true);
       expect(evt.config.toolOutputOverflowChars).toBe(25000);
       expect("defaultToolOutputOverflowChars" in evt.config).toBe(false);
-      expect(evt.config.subAgentModel).toBe("gemini-3-flash-preview");
+      expect(evt.config.preferredChildModel).toBe("gemini-3-flash-preview");
       expect(evt.config.maxSteps).toBe(100);
     });
 
@@ -864,12 +868,12 @@ describe("AgentSession", () => {
       expect((evt.config.providerOptions as any)?.google).toBeUndefined();
     });
 
-    test("setConfig emits session_config and persists subAgentModel/observability/backupsEnabled/toolOutputOverflowChars", async () => {
+    test("setConfig emits session_config and persists preferredChildModel/observability/backupsEnabled/toolOutputOverflowChars", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
       await session.setConfig({
-        subAgentModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3-pro-preview",
         observabilityEnabled: true,
         backupsEnabled: false,
         toolOutputOverflowChars: null,
@@ -878,16 +882,22 @@ describe("AgentSession", () => {
 
       const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
       expect(cfgEvt).toBeDefined();
-      expect(cfgEvt.config.subAgentModel).toBe("gemini-3-pro-preview");
+      expect(cfgEvt.config.preferredChildModel).toBe("gemini-3-pro-preview");
       expect(cfgEvt.config.observabilityEnabled).toBe(true);
       expect(cfgEvt.config.backupsEnabled).toBe(false);
       expect(cfgEvt.config.defaultBackupsEnabled).toBe(false);
       expect(cfgEvt.config.toolOutputOverflowChars).toBeNull();
       expect(cfgEvt.config.defaultToolOutputOverflowChars).toBeNull();
       expect(cfgEvt.config.maxSteps).toBe(25);
+      expect(cfgEvt.config.childModelRoutingMode).toBe("same-provider");
+      expect(cfgEvt.config.preferredChildModelRef).toBe("google:gemini-3-pro-preview");
+      expect(cfgEvt.config.allowedChildModelRefs).toEqual([]);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
-        subAgentModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3-pro-preview",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "google:gemini-3-pro-preview",
+        allowedChildModelRefs: [],
         observabilityEnabled: true,
         backupsEnabled: false,
         toolOutputOverflowChars: null,
@@ -962,24 +972,24 @@ describe("AgentSession", () => {
       ]);
     });
 
-    test("setConfig rejects unsupported subAgentModel values before persistence", async () => {
+    test("setConfig rejects unsupported preferredChildModel values before persistence", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
       const { session, events } = makeSession({
         config: {
           ...makeConfig("/tmp/test-session"),
           provider: "openai",
           model: "gpt-5.2",
-          subAgentModel: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
         },
         persistProjectConfigPatchImpl,
       });
 
       await session.setConfig({
-        subAgentModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3-pro-preview",
       });
 
       expect(persistProjectConfigPatchImpl).not.toHaveBeenCalled();
-      expect(session.getSessionConfigEvent().config.subAgentModel).toBe("gpt-5.2");
+      expect(session.getSessionConfigEvent().config.preferredChildModel).toBe("gpt-5.2");
       expect(events.some((evt) => evt.type === "session_config")).toBe(false);
 
       const errEvt = events.find((evt): evt is Extract<ServerEvent, { type: "error" }> => evt.type === "error");
@@ -987,7 +997,7 @@ describe("AgentSession", () => {
       if (errEvt) {
         expect(errEvt.code).toBe("validation_failed");
         expect(errEvt.source).toBe("session");
-        expect(errEvt.message).toContain('Unsupported sub-agent model "gemini-3-pro-preview" for provider openai');
+        expect(errEvt.message).toContain('Unsupported session config preferred child target "gemini-3-pro-preview" for provider openai');
       }
     });
 
@@ -1036,13 +1046,13 @@ describe("AgentSession", () => {
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
       await session.setConfig({
-        subAgentModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3-pro-preview",
         observabilityEnabled: true,
         maxSteps: 25,
       });
 
       const cfg = session.getSessionConfigEvent().config;
-      expect(cfg.subAgentModel).toBe("gemini-3-flash-preview");
+      expect(cfg.preferredChildModel).toBe("gemini-3-flash-preview");
       expect(cfg.observabilityEnabled).toBe(false);
       expect(cfg.maxSteps).toBe(100);
 
@@ -1332,7 +1342,7 @@ describe("AgentSession", () => {
           provider: "openai",
           runtime: "openai-responses",
           model: "gpt-5.2",
-          subAgentModel: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
         },
       });
 
@@ -1378,7 +1388,10 @@ describe("AgentSession", () => {
       expect(persistModelSelectionImpl).toHaveBeenCalledWith({
         provider: "openai",
         model: "gpt-5.2",
-        subAgentModel: "gpt-5.2",
+        preferredChildModel: "gpt-5.2",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5.2",
+        allowedChildModelRefs: [],
       });
     });
 
@@ -2429,6 +2442,157 @@ describe("AgentSession", () => {
       expect(busyFalseIdxAfter).toBeGreaterThan(busyTrueIdx);
     });
 
+    test("updates child session_info executionState across a successful turn", async () => {
+      const { session, events } = makeSession({
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "root-1",
+          role: "worker",
+          mode: "delegate",
+          depth: 1,
+          executionState: "pending_init",
+        },
+      });
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          })
+      );
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(
+        events.some(
+          (event) => event.type === "session_info" && event.sessionId === session.id && event.executionState === "running"
+        )
+      ).toBe(true);
+
+      resolveRunTurn();
+      await sendPromise;
+
+      expect(session.getSessionInfoEvent().executionState).toBe("completed");
+      expect(
+        events.some(
+          (event) => event.type === "session_info" && event.sessionId === session.id && event.executionState === "completed"
+        )
+      ).toBe(true);
+    });
+
+    test("updates child session_info executionState to errored when a turn fails", async () => {
+      const { session, events } = makeSession({
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "root-1",
+          role: "worker",
+          mode: "delegate",
+          depth: 1,
+          executionState: "pending_init",
+        },
+      });
+
+      mockRunTurn.mockImplementation(async () => {
+        throw new Error("delegate failed");
+      });
+
+      await session.sendUserMessage("go");
+
+      expect(session.getSessionInfoEvent().executionState).toBe("errored");
+      expect(
+        events.some(
+          (event) => event.type === "session_info" && event.sessionId === session.id && event.executionState === "running"
+        )
+      ).toBe(true);
+      expect(
+        events.some(
+          (event) => event.type === "session_info" && event.sessionId === session.id && event.executionState === "errored"
+        )
+      ).toBe(true);
+    });
+
+    test("replaces a stale child preview with the latest error text on a failed rerun", async () => {
+      const { session } = makeSession({
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "root-1",
+          role: "worker",
+          mode: "delegate",
+          depth: 1,
+          executionState: "pending_init",
+        },
+      });
+
+      mockRunTurn
+        .mockImplementationOnce(async () => ({
+          text: "First child result",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: [{ type: "text", text: "First child result" }] }],
+        }))
+        .mockImplementationOnce(async () => {
+          throw new Error("delegate failed");
+        });
+
+      await session.sendUserMessage("first");
+      expect(session.getSessionInfoEvent().lastMessagePreview).toBe("First child result");
+
+      await session.sendUserMessage("second");
+      expect(session.getSessionInfoEvent().executionState).toBe("errored");
+      expect(session.getSessionInfoEvent().lastMessagePreview).toBe("delegate failed");
+    });
+
+    test("marks malformed repeated tool-call churn as a provider error", async () => {
+      const { session, events } = makeSession({
+        sessionInfoPatch: {
+          sessionKind: "agent",
+          parentSessionId: "root-1",
+          role: "worker",
+          mode: "delegate",
+          depth: 1,
+          executionState: "pending_init",
+        },
+      });
+
+      mockRunTurn.mockImplementationOnce(async () => ({
+        text: "I'm having trouble with the function call format. Let me try again.",
+        reasoningText: undefined,
+        responseMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "I'm having trouble with the function call format. Let me try again." }],
+          },
+          {
+            role: "tool",
+            content: [{ type: "tool-result", toolName: "tool", output: { value: "Tool tool not found" }, isError: true }],
+          },
+          {
+            role: "tool",
+            content: [{ type: "tool-result", toolName: "tool", output: { value: "Tool tool not found" }, isError: true }],
+          },
+          {
+            role: "tool",
+            content: [{ type: "tool-result", toolName: "read", output: { value: "Invalid input: expected string, received undefined" }, isError: true }],
+          },
+        ],
+      }));
+
+      await session.sendUserMessage("go");
+
+      expect(session.getSessionInfoEvent().executionState).toBe("errored");
+      expect(session.getSessionInfoEvent().lastMessagePreview).toContain("Model failed to produce valid tool calls");
+      expect(
+        events.some(
+          (event) => event.type === "error"
+            && event.sessionId === session.id
+            && event.code === "provider_error"
+            && event.message.includes("Model failed to produce valid tool calls")
+        )
+      ).toBe(true);
+      expect(events.some((event) => event.type === "assistant_message")).toBe(false);
+    });
+
     test("clears busy and allows follow-up even when auto-checkpoint never resolves", async () => {
       const sessionBackupFactory = mock(async (opts: SessionBackupInitOptions): Promise<SessionBackupHandle> => {
         const createdAt = new Date().toISOString();
@@ -2679,7 +2843,7 @@ describe("AgentSession", () => {
         }));
 
       const dir = "/tmp/test-session";
-      const config = { ...makeConfig(dir), provider: "openai" as const, model: "gpt-5.2", subAgentModel: "gpt-5.2" };
+      const config = { ...makeConfig(dir), provider: "openai" as const, model: "gpt-5.2", preferredChildModel: "gpt-5.2" };
       const { session } = makeSession({ config });
       (session as any).state.providerState = {
         provider: "openai",
@@ -4026,7 +4190,7 @@ describe("AgentSession", () => {
           ...makeConfig(dir),
           provider: "openai",
           model: "gpt-5.2",
-          subAgentModel: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
         },
       });
 
@@ -4068,7 +4232,7 @@ describe("AgentSession", () => {
           ...makeConfig(dir),
           provider: "openai",
           model: "gpt-5.2",
-          subAgentModel: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
         },
       });
 
@@ -4110,7 +4274,7 @@ describe("AgentSession", () => {
           ...makeConfig("/tmp/test-session-compact-usage"),
           provider: "openai",
           model: "gpt-5.2",
-          subAgentModel: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
         },
       });
 
@@ -4143,7 +4307,7 @@ describe("AgentSession", () => {
           ...makeConfig("/tmp/test-session-budget-alerts"),
           provider: "openai",
           model: "gpt-5.2",
-          subAgentModel: "gpt-5.2",
+          preferredChildModel: "gpt-5.2",
         },
       });
 
@@ -4237,7 +4401,7 @@ describe("AgentSession", () => {
           sessionId: "persisted-session",
           sessionKind: "root",
           parentSessionId: null,
-          agentType: null,
+          role: null,
           title: "Persisted",
           titleSource: "manual",
           titleModel: null,
@@ -4275,6 +4439,164 @@ describe("AgentSession", () => {
       expect(usageEvt?.usage?.turns.at(-1)?.turnId).toBe("turn-10");
     });
 
+    test("rehydrates persisted errored child sessions with an error runtime outcome", () => {
+      const { emit } = makeEmit();
+
+      const session = AgentSession.fromPersisted({
+        persisted: {
+          sessionId: "persisted-child-error",
+          sessionKind: "agent",
+          parentSessionId: "root-1",
+          role: "worker",
+          mode: "collaborative",
+          depth: 1,
+          nickname: null,
+          requestedModel: null,
+          effectiveModel: "gpt-5.2",
+          requestedReasoningEffort: null,
+          effectiveReasoningEffort: null,
+          executionState: "errored",
+          lastMessagePreview: "Task failed",
+          title: "Persisted child",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "openai",
+          model: "gpt-5.2",
+          workingDirectory: "/tmp/persisted",
+          outputDirectory: undefined,
+          uploadsDirectory: undefined,
+          enableMcp: true,
+          backupsEnabledOverride: null,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:01.000Z",
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          messageCount: 1,
+          lastEventSeq: 1,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }] as any,
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+        baseConfig: makeConfig("/tmp/persisted"),
+        emit,
+        sessionBackupFactory: makeSessionBackupFactory(),
+        getProviderStatusesImpl: async () => [],
+      });
+
+      expect(session.currentTurnOutcome).toBe("error");
+      expect(session.getSessionInfoEvent().executionState).toBe("errored");
+    });
+
+    test("rehydrates stale in-flight child execution states as completed when no turn is active", () => {
+      for (const executionState of ["running", "pending_init"] as const) {
+        const { emit } = makeEmit();
+
+        const session = AgentSession.fromPersisted({
+          persisted: {
+            sessionId: `persisted-child-${executionState}`,
+            sessionKind: "agent",
+            parentSessionId: "root-1",
+            role: "worker",
+            mode: "collaborative",
+            depth: 1,
+            nickname: null,
+            requestedModel: null,
+            effectiveModel: "gpt-5.2",
+            requestedReasoningEffort: null,
+            effectiveReasoningEffort: null,
+            executionState,
+            lastMessagePreview: "Task was in progress",
+            title: "Persisted child",
+            titleSource: "manual",
+            titleModel: null,
+            provider: "openai",
+            model: "gpt-5.2",
+            workingDirectory: "/tmp/persisted",
+            outputDirectory: undefined,
+            uploadsDirectory: undefined,
+            enableMcp: true,
+            backupsEnabledOverride: null,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            updatedAt: "2026-03-09T00:00:01.000Z",
+            status: "active",
+            hasPendingAsk: false,
+            hasPendingApproval: false,
+            messageCount: 1,
+            lastEventSeq: 1,
+            systemPrompt: "system",
+            messages: [{ role: "user", content: "hello" }] as any,
+            providerState: null,
+            todos: [],
+            harnessContext: null,
+            costTracker: null,
+          },
+          baseConfig: makeConfig("/tmp/persisted"),
+          emit,
+          sessionBackupFactory: makeSessionBackupFactory(),
+          getProviderStatusesImpl: async () => [],
+        });
+
+        expect(session.currentTurnOutcome).toBe("completed");
+        expect(session.getSessionInfoEvent().executionState).toBe("completed");
+      }
+    });
+
+    test("restores persisted providerOptions into resumed runtime config", async () => {
+      const { emit } = makeEmit();
+      const providerOptions = {
+        openai: {
+          reasoningEffort: "xhigh",
+          reasoningSummary: "detailed",
+        },
+      };
+
+      const session = AgentSession.fromPersisted({
+        persisted: {
+          sessionId: "persisted-provider-options",
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          title: "Persisted",
+          titleSource: "manual",
+          titleModel: null,
+          provider: "openai",
+          model: "gpt-5.2",
+          workingDirectory: "/tmp/persisted",
+          outputDirectory: undefined,
+          uploadsDirectory: undefined,
+          providerOptions,
+          enableMcp: true,
+          backupsEnabledOverride: null,
+          createdAt: "2026-03-09T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:01.000Z",
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          messageCount: 1,
+          lastEventSeq: 1,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }] as any,
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+        baseConfig: makeConfig("/tmp/persisted"),
+        emit,
+        sessionBackupFactory: makeSessionBackupFactory(),
+        getProviderStatusesImpl: async () => [],
+      });
+
+      await session.sendUserMessage("question");
+
+      const call = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(call.config.providerOptions).toEqual(providerOptions);
+    });
+
     test("migrates unsupported persisted models to provider default and persists the upgraded snapshot", async () => {
       const { emit, events } = makeEmit();
       const writePersistedSessionSnapshotImpl = mock(async () => "/tmp/mock-home/.cowork/sessions/persisted-upgraded.json");
@@ -4286,7 +4608,7 @@ describe("AgentSession", () => {
           sessionId: "persisted-legacy-model",
           sessionKind: "root",
           parentSessionId: null,
-          agentType: null,
+          role: null,
           title: "Legacy",
           titleSource: "manual",
           titleModel: null,
@@ -4567,14 +4889,14 @@ describe("AgentSession", () => {
       expect(assistantEvt.text).toBe("simple string content");
     });
 
-    test("passes persistentAgentControl to root session turns when child-session callbacks exist", async () => {
+    test("passes agentControl to root session turns when child-session callbacks exist", async () => {
       mockRunTurn.mockImplementation(async (params: any) => {
-        expect(params.persistentAgentControl).toBeDefined();
-        expect(typeof params.persistentAgentControl.spawn).toBe("function");
-        expect(typeof params.persistentAgentControl.list).toBe("function");
-        expect(typeof params.persistentAgentControl.sendInput).toBe("function");
-        expect(typeof params.persistentAgentControl.wait).toBe("function");
-        expect(typeof params.persistentAgentControl.close).toBe("function");
+        expect(params.agentControl).toBeDefined();
+        expect(typeof params.agentControl.spawn).toBe("function");
+        expect(typeof params.agentControl.list).toBe("function");
+        expect(typeof params.agentControl.sendInput).toBe("function");
+        expect(typeof params.agentControl.wait).toBe("function");
+        expect(typeof params.agentControl.close).toBe("function");
         return {
           text: "ok",
           reasoningText: undefined,
@@ -4582,10 +4904,10 @@ describe("AgentSession", () => {
         };
       });
 
-      const createSubagentSessionImpl = mock(async () => ({
+      const createAgentSessionImpl = mock(async () => ({
         sessionId: "sub-1",
         parentSessionId: "parent-1",
-        agentType: "general" as const,
+        role: "worker" as const,
         title: "Child",
         provider: "google" as const,
         model: "gemini-3-flash-preview",
@@ -4596,14 +4918,14 @@ describe("AgentSession", () => {
       }));
 
       const { session } = makeSession({
-        createSubagentSessionImpl,
-        listSubagentSessionsImpl: async () => [],
-        sendSubagentInputImpl: async () => {},
-        waitForSubagentImpl: async () => ({ sessionId: "sub-1", status: "completed" as const, busy: false }),
-        closeSubagentImpl: async () => ({
+        createAgentSessionImpl,
+        listAgentSessionsImpl: async () => [],
+        sendAgentInputImpl: async () => {},
+        waitForAgentImpl: async () => ({ sessionId: "sub-1", status: "completed" as const, busy: false }),
+        closeAgentImpl: async () => ({
           sessionId: "sub-1",
           parentSessionId: "parent-1",
-          agentType: "general" as const,
+          role: "worker" as const,
           title: "Child",
           provider: "google" as const,
           model: "gemini-3-flash-preview",

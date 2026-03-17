@@ -11,12 +11,14 @@ import { defaultModelForProvider, getModelForProvider, getProviderKeyCandidates 
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
 import {
   normalizeRuntimeNameForProvider,
+  resolveChildModelRoutingMode,
   resolveProviderName,
   resolveRuntimeName as resolveRuntimeNameFromValue,
 } from "./types";
 import type { AgentConfig, CommandTemplateConfig, ProviderName, RuntimeName } from "./types";
-import { resolveCoworkHomedir } from "./utils/coworkHome";
+import { resolveAuthHomeDir } from "./utils/authHome";
 import { assertSupportedModel, defaultSupportedModel, getSupportedModel } from "./models/registry";
+import { normalizeChildRoutingConfig } from "./models/childModelRouting";
 
 export { defaultModelForProvider } from "./providers";
 
@@ -110,15 +112,6 @@ function resolveSupportedConfiguredModel(provider: ProviderName, modelId: string
     `[config] Ignoring unsupported ${source} "${modelId}" for provider ${provider}; using "${fallback.id}".`
   );
   return fallback;
-}
-
-function resolveSupportedConfiguredSubAgentModel(provider: ProviderName, subAgentModelId: string, fallbackModelId: string): string {
-  const supported = getSupportedModel(provider, subAgentModelId);
-  if (supported) return supported.id;
-  console.warn(
-    `[config] Ignoring unsupported sub-agent model "${subAgentModelId}" for provider ${provider}; using "${fallbackModelId}".`
-  );
-  return fallbackModelId;
 }
 
 async function loadJsonSafe(filePath: string): Promise<Record<string, unknown>> {
@@ -262,12 +255,7 @@ function normalizeNullableNonNegativeInt(v: unknown): number | null | undefined 
   return normalizeNonNegativeInt(v);
 }
 
-function resolveUserHomeFromConfig(config: AgentConfig): string {
-  return resolveCoworkHomedir(config.userAgentDir);
-}
-
-export function getSavedProviderApiKey(config: AgentConfig, provider: ProviderName): string | undefined {
-  const home = resolveUserHomeFromConfig(config);
+export function getSavedProviderApiKeyForHome(home: string, provider: ProviderName): string | undefined {
   const paths = getAiCoworkerPaths({ homedir: home });
   const keyCandidates = getProviderKeyCandidates(provider);
 
@@ -289,6 +277,10 @@ export function getSavedProviderApiKey(config: AgentConfig, provider: ProviderNa
   }
 
   return undefined;
+}
+
+export function getSavedProviderApiKey(config: AgentConfig, provider: ProviderName): string | undefined {
+  return getSavedProviderApiKeyForHome(resolveAuthHomeDir(config), provider);
 }
 
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<AgentConfig> {
@@ -332,12 +324,44 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     defaultModelForProvider(provider);
   const supportedModel = resolveSupportedConfiguredModel(provider, model, "model");
 
-  const subAgentModel =
+  const childModelRoutingMode =
+    resolveChildModelRoutingMode(projectConfig.childModelRoutingMode) ||
+    resolveChildModelRoutingMode(userConfig.childModelRoutingMode) ||
+    resolveChildModelRoutingMode(builtInDefaults.childModelRoutingMode) ||
+    "same-provider";
+  const rawAllowedChildModelRefs =
+    (Array.isArray(projectConfig.allowedChildModelRefs) ? projectConfig.allowedChildModelRefs : undefined) ||
+    (Array.isArray(userConfig.allowedChildModelRefs) ? userConfig.allowedChildModelRefs : undefined) ||
+    (Array.isArray(builtInDefaults.allowedChildModelRefs) ? builtInDefaults.allowedChildModelRefs : undefined);
+  const preferredChildModelRef =
+    asNonEmptyString(projectConfig.preferredChildModelRef) ||
+    asNonEmptyString(userConfig.preferredChildModelRef) ||
+    asNonEmptyString(builtInDefaults.preferredChildModelRef) ||
+    asNonEmptyString(projectConfig.preferredChildModel) ||
+    asNonEmptyString(userConfig.preferredChildModel) ||
+    asNonEmptyString(builtInDefaults.preferredChildModel) ||
     asNonEmptyString(projectConfig.subAgentModel) ||
     asNonEmptyString(userConfig.subAgentModel) ||
     asNonEmptyString(builtInDefaults.subAgentModel) ||
     supportedModel.id;
-  const supportedSubAgentModelId = resolveSupportedConfiguredSubAgentModel(provider, subAgentModel, supportedModel.id);
+  let normalizedChildRouting = {
+    childModelRoutingMode,
+    preferredChildModel: supportedModel.id,
+    preferredChildModelRef: `${provider}:${supportedModel.id}`,
+    allowedChildModelRefs: [] as string[],
+  };
+  try {
+    normalizedChildRouting = normalizeChildRoutingConfig({
+      provider,
+      model: supportedModel.id,
+      childModelRoutingMode,
+      preferredChildModelRef,
+      allowedChildModelRefs: rawAllowedChildModelRefs?.filter((value): value is string => typeof value === "string"),
+      source: "config",
+    });
+  } catch (error) {
+    console.warn(`[config] Ignoring invalid child model routing config: ${String(error)}`);
+  }
 
   const parsedToolOutputOverflowChars = normalizeNullableNonNegativeInt(
     (merged as Record<string, unknown>).toolOutputOverflowChars
@@ -478,7 +502,10 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
     provider,
     runtime,
     model: supportedModel.id,
-    subAgentModel: supportedSubAgentModelId,
+    preferredChildModel: normalizedChildRouting.preferredChildModel,
+    childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
+    preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
+    allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
     toolOutputOverflowChars,
     inheritedToolOutputOverflowChars,
     ...(projectToolOutputOverflowChars !== undefined

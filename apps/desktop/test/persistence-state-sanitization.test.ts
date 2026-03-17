@@ -47,7 +47,7 @@ describe("desktop persistence state validation", () => {
           path: validWorkspace,
           createdAt: TS,
           lastOpenedAt: TS,
-          defaultSubAgentModel: "gpt-5.2-mini",
+          defaultPreferredChildModel: "gpt-5.2-mini",
           defaultEnableMcp: true,
           defaultBackupsEnabled: false,
           yolo: false,
@@ -237,6 +237,42 @@ describe("desktop persistence state validation", () => {
     });
   });
 
+  test("saveState preserves workspace cross-provider child routing defaults", async () => {
+    const persistence = new PersistenceService();
+    const routingWorkspace = path.join(userDataDir, "workspace-child-routing");
+    await fs.mkdir(routingWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_child_routing",
+          name: "Child routing workspace",
+          path: routingWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultProvider: "codex-cli",
+          defaultModel: "gpt-5.4",
+          defaultPreferredChildModel: "gpt-5.4",
+          defaultChildModelRoutingMode: "cross-provider-allowlist",
+          defaultPreferredChildModelRef: "opencode-zen:glm-5",
+          defaultAllowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.workspaces[0]?.defaultChildModelRoutingMode).toBe("cross-provider-allowlist");
+    expect(loaded.workspaces[0]?.defaultPreferredChildModelRef).toBe("opencode-zen:glm-5");
+    expect(loaded.workspaces[0]?.defaultAllowedChildModelRefs).toEqual(["opencode-zen:glm-5", "opencode-go:glm-5"]);
+  });
+
   test("saveState drops recoverable expired codex status snapshots that would look disconnected on restart", async () => {
     const persistence = new PersistenceService();
     const validWorkspace = path.join(userDataDir, "workspace-provider-recoverable");
@@ -335,6 +371,46 @@ describe("desktop persistence state validation", () => {
     expect(loaded.developerMode).toBe(false);
     expect(loaded.showHiddenFiles).toBe(false);
     expect(loaded.providerState).toBeUndefined();
+  });
+
+  test("loadState migrates legacy defaultSubAgentModel values from disk", async () => {
+    const persistence = new PersistenceService();
+    const validWorkspace = path.join(userDataDir, "workspace-legacy-child-model");
+    await fs.mkdir(validWorkspace, { recursive: true });
+
+    const statePath = path.join(userDataDir, "state.json");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 2,
+          workspaces: [
+            {
+              id: "ws_legacy_child_model",
+              name: "Legacy child model workspace",
+              path: validWorkspace,
+              createdAt: TS,
+              lastOpenedAt: TS,
+              defaultProvider: "openai",
+              defaultModel: "gpt-5.2",
+              defaultSubAgentModel: "gpt-5.2-mini",
+              defaultEnableMcp: true,
+              defaultBackupsEnabled: true,
+              yolo: false,
+            },
+          ],
+          threads: [],
+          developerMode: false,
+          showHiddenFiles: false,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const loaded = await persistence.loadState();
+    expect(loaded.workspaces[0]?.defaultPreferredChildModel).toBe("gpt-5.2-mini");
   });
 
   test("loadState recovers from invalid JSON", async () => {

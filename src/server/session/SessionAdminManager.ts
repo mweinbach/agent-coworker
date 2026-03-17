@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { SubagentAgentType } from "../../shared/persistentSubagents";
+import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 import { deletePersistedSessionSnapshot, listPersistedSessionSnapshots } from "../sessionStore";
 import type { SessionContext } from "./SessionContext";
 
@@ -57,42 +57,138 @@ export class SessionAdminManager {
     }
   }
 
-  async listSubagentSessions() {
+  async listAgentSessions() {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
-      this.context.emitError("validation_failed", "session", "Only root sessions can list subagents");
+      this.context.emitError("validation_failed", "session", "Only root sessions can list child agents");
       return;
     }
-    if (!this.context.deps.listSubagentSessionsImpl) {
-      this.context.emitError("internal_error", "session", "Subagent listing is unavailable");
+    if (!this.context.deps.listAgentSessionsImpl) {
+      this.context.emitError("internal_error", "session", "Child-agent listing is unavailable");
       return;
     }
     try {
-      const subagents = await this.context.deps.listSubagentSessionsImpl(this.context.id);
-      this.context.emit({ type: "subagent_sessions", sessionId: this.context.id, subagents });
+      const agents = await this.context.deps.listAgentSessionsImpl(this.context.id);
+      this.context.emit({ type: "agent_list", sessionId: this.context.id, agents });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to list subagents: ${String(err)}`);
+      this.context.emitError("internal_error", "session", `Failed to list child agents: ${String(err)}`);
     }
   }
 
-  async createSubagentSession(agentType: SubagentAgentType, task: string) {
+  async createAgentSession(opts: {
+    message: string;
+    role?: AgentRole;
+    model?: string;
+    reasoningEffort?: AgentReasoningEffort;
+    forkContext?: boolean;
+  }) {
     if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
-      this.context.emitError("validation_failed", "session", "Only root sessions can create subagents");
+      this.context.emitError("validation_failed", "session", "Only root sessions can create child agents");
       return;
     }
-    if (!this.context.deps.createSubagentSessionImpl) {
-      this.context.emitError("internal_error", "session", "Subagent creation is unavailable");
+    if (!this.context.deps.createAgentSessionImpl) {
+      this.context.emitError("internal_error", "session", "Child-agent creation is unavailable");
       return;
     }
     try {
-      const subagent = await this.context.deps.createSubagentSessionImpl({
+      const agent = await this.context.deps.createAgentSessionImpl({
         parentSessionId: this.context.id,
         parentConfig: this.context.state.config,
-        agentType,
-        task,
+        message: opts.message,
+        role: opts.role,
+        ...(opts.model ? { model: opts.model } : {}),
+        ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
+        ...(opts.forkContext !== undefined ? { forkContext: opts.forkContext } : {}),
+        parentDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
       });
-      this.context.emit({ type: "subagent_created", sessionId: this.context.id, subagent });
+      this.context.emit({ type: "agent_spawned", sessionId: this.context.id, agent });
     } catch (err) {
-      this.context.emitError("internal_error", "session", `Failed to create subagent: ${String(err)}`);
+      this.context.emitError("internal_error", "session", `Failed to create child agent: ${String(err)}`);
+    }
+  }
+
+  async sendAgentInput(agentId: string, message: string, interrupt?: boolean) {
+    if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
+      this.context.emitError("validation_failed", "session", "Only root sessions can control child agents");
+      return;
+    }
+    if (!this.context.deps.sendAgentInputImpl) {
+      this.context.emitError("internal_error", "session", "Child-agent input is unavailable");
+      return;
+    }
+    try {
+      await this.context.deps.sendAgentInputImpl({
+        parentSessionId: this.context.id,
+        agentId,
+        message,
+        ...(interrupt !== undefined ? { interrupt } : {}),
+      });
+    } catch (err) {
+      this.context.emitError("internal_error", "session", `Failed to send child-agent input: ${String(err)}`);
+    }
+  }
+
+  async waitForAgents(agentIds: string[], timeoutMs?: number) {
+    if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
+      this.context.emitError("validation_failed", "session", "Only root sessions can wait on child agents");
+      return;
+    }
+    if (!this.context.deps.waitForAgentImpl) {
+      this.context.emitError("internal_error", "session", "Child-agent waiting is unavailable");
+      return;
+    }
+    try {
+      const result = await this.context.deps.waitForAgentImpl({
+        parentSessionId: this.context.id,
+        agentIds,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      });
+      this.context.emit({
+        type: "agent_wait_result",
+        sessionId: this.context.id,
+        agentIds,
+        timedOut: result.timedOut,
+        agents: result.agents,
+      });
+    } catch (err) {
+      this.context.emitError("internal_error", "session", `Failed to wait on child agents: ${String(err)}`);
+    }
+  }
+
+  async resumeAgent(agentId: string) {
+    if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
+      this.context.emitError("validation_failed", "session", "Only root sessions can resume child agents");
+      return;
+    }
+    if (!this.context.deps.resumeAgentImpl) {
+      this.context.emitError("internal_error", "session", "Child-agent resume is unavailable");
+      return;
+    }
+    try {
+      await this.context.deps.resumeAgentImpl({
+        parentSessionId: this.context.id,
+        agentId,
+      });
+    } catch (err) {
+      this.context.emitError("internal_error", "session", `Failed to resume child agent: ${String(err)}`);
+    }
+  }
+
+  async closeAgent(agentId: string) {
+    if ((this.context.state.sessionInfo.sessionKind ?? "root") !== "root") {
+      this.context.emitError("validation_failed", "session", "Only root sessions can close child agents");
+      return;
+    }
+    if (!this.context.deps.closeAgentImpl) {
+      this.context.emitError("internal_error", "session", "Child-agent close is unavailable");
+      return;
+    }
+    try {
+      await this.context.deps.closeAgentImpl({
+        parentSessionId: this.context.id,
+        agentId,
+      });
+    } catch (err) {
+      this.context.emitError("internal_error", "session", `Failed to close child agent: ${String(err)}`);
     }
   }
 

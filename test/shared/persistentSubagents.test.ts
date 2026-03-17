@@ -1,24 +1,27 @@
 import { describe, expect, test } from "bun:test";
 
-import { persistentSubagentSummarySchema } from "../../src/shared/persistentSubagents";
+import { persistentAgentSummarySchema } from "../../src/shared/persistentSubagents";
 import { PROVIDER_NAMES } from "../../src/types";
 
 const BASE_SUMMARY = {
-  sessionId: "child-1",
+  agentId: "child-1",
   parentSessionId: "root-1",
-  agentType: "general" as const,
+  role: "worker" as const,
+  mode: "collaborative" as const,
+  depth: 1,
   title: "Child Session",
-  model: "gpt-5.2",
+  effectiveModel: "gpt-5.2",
   createdAt: "2026-03-12T00:00:00.000Z",
   updatedAt: "2026-03-12T00:00:01.000Z",
-  status: "active" as const,
+  lifecycleState: "active" as const,
+  executionState: "running" as const,
   busy: false,
 };
 
-describe("persistentSubagentSummarySchema", () => {
+describe("persistentAgentSummarySchema", () => {
   test("accepts every shared provider name", () => {
     for (const provider of PROVIDER_NAMES) {
-      const parsed = persistentSubagentSummarySchema.parse({
+      const parsed = persistentAgentSummarySchema.parse({
         ...BASE_SUMMARY,
         provider,
       });
@@ -29,7 +32,7 @@ describe("persistentSubagentSummarySchema", () => {
 
   test("rejects unknown providers", () => {
     expect(() =>
-      persistentSubagentSummarySchema.parse({
+      persistentAgentSummarySchema.parse({
         ...BASE_SUMMARY,
         provider: "azure-openai",
       }),

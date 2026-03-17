@@ -15,7 +15,7 @@ function makeConfig(baseDir: string, configDir: string): AgentConfig {
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
-    subAgentModel: "gemini-3-flash-preview",
+    preferredChildModel: "gemini-3-flash-preview",
     workingDirectory: baseDir,
     outputDirectory: path.join(baseDir, "output"),
     uploadsDirectory: path.join(baseDir, "uploads"),
@@ -54,6 +54,7 @@ describe("local MCP integration", () => {
       expect(loaded.tools).toHaveProperty("mcp__local__echo");
 
       const tool = loaded.tools["mcp__local__echo"] as any;
+      expect(tool.annotations).toEqual(expect.objectContaining({ readOnlyHint: true }));
       const result = await tool.execute({ text: "hello" });
       const firstText = result?.content?.find((part: any) => part?.type === "text")?.text;
       expect(firstText).toBe("echo:hello");

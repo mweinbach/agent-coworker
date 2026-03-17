@@ -27,7 +27,11 @@ export {
   PROVIDER_MODEL_CHOICES,
   availableModelsForProvider,
   defaultModelForProvider,
+  isUserFacingProviderEnabled,
   modelChoicesByProvider,
+  USER_FACING_DISABLED_PROVIDERS,
+  userFacingAvailableModelsForProvider,
+  userFacingProviders,
 } from "./catalog";
 export { getProviderCatalog, listProviderCatalogEntries, type ProviderCatalogEntry, type ProviderCatalogPayload } from "./connectionCatalog";
 

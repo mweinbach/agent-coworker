@@ -12,7 +12,7 @@ export class ProviderCatalogManager {
     private readonly opts: {
       sessionId: string;
       getConfig: () => { provider: string; model: string };
-      getCoworkPaths: () => ReturnType<typeof getAiCoworkerPaths>;
+      getGlobalAuthPaths: () => ReturnType<typeof getAiCoworkerPaths>;
       getProviderCatalog: typeof getProviderCatalog;
       getProviderStatuses: typeof getProviderStatuses;
       emit: (evt: ServerEvent) => void;
@@ -29,7 +29,9 @@ export class ProviderCatalogManager {
 
   async emitProviderCatalog() {
     try {
-      const payload = await this.opts.getProviderCatalog({ paths: this.opts.getCoworkPaths() });
+      const payload = await this.opts.getProviderCatalog({
+        paths: this.opts.getGlobalAuthPaths(),
+      });
       const cfg = this.opts.getConfig();
       const defaults = { ...payload.default, [cfg.provider]: cfg.model };
       this.opts.emit({
@@ -61,8 +63,9 @@ export class ProviderCatalogManager {
     this.refreshingProviderStatus = true;
     const startedAt = Date.now();
     try {
-      const paths = this.opts.getCoworkPaths();
-      const providers = await this.opts.getProviderStatuses({ paths });
+      const providers = await this.opts.getProviderStatuses({
+        paths: this.opts.getGlobalAuthPaths(),
+      });
       this.opts.emit({ type: "provider_status", sessionId: this.opts.sessionId, providers });
       this.opts.emitTelemetry(
         "provider.status.refresh",

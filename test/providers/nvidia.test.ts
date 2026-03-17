@@ -14,7 +14,7 @@ describe("NVIDIA provider", () => {
       provider: "nvidia",
       runtime: "pi",
       model: "nvidia/nemotron-3-super-120b-a12b",
-      subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+      preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
       workingDirectory: "/tmp",
       outputDirectory: "/tmp/output",
       uploadsDirectory: "/tmp/uploads",
@@ -55,7 +55,7 @@ describe("NVIDIA provider", () => {
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       provider: "nvidia",
       model: "nvidia/nemotron-3-super-120b-a12b",
-      subAgentModel: "nvidia/nemotron-3-super-120b-a12b",
+      preferredChildModel: "nvidia/nemotron-3-super-120b-a12b",
     });
 
     const cfg = await loadConfig({

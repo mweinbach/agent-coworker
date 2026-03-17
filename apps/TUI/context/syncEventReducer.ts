@@ -1,7 +1,7 @@
 import { produce, type SetStoreFunction } from "solid-js/store";
 import { z } from "zod";
 import type { ServerEvent } from "../../../src/server/protocol";
-import type { FeedItem, ServerHelloEvent, SyncState, ToolDescriptor } from "./syncTypes";
+import type { AgentSummaryState, FeedItem, ServerHelloEvent, SyncState, ToolDescriptor } from "./syncTypes";
 import type { SyncModelStreamLifecycle } from "./syncModelStreamLifecycle";
 
 type ParsedToolLog = { sub?: string; dir: ">" | "<"; name: string; payload: Record<string, unknown> };
@@ -103,6 +103,20 @@ function normalizeToolsPayload(value: unknown): ToolDescriptor[] {
   return normalized;
 }
 
+function sortAgentSummaries(agents: AgentSummaryState[]): AgentSummaryState[] {
+  return [...agents].sort((left, right) => {
+    const updatedDiff = Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+    if (Number.isFinite(updatedDiff) && updatedDiff !== 0) return updatedDiff;
+    return left.title.localeCompare(right.title);
+  });
+}
+
+function upsertAgentSummary(agents: AgentSummaryState[], nextAgent: AgentSummaryState): AgentSummaryState[] {
+  const next = agents.filter((agent) => agent.agentId !== nextAgent.agentId);
+  next.push(nextAgent);
+  return sortAgentSummaries(next);
+}
+
 export function shouldSuppressRawDebugLogLine(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed) return false;
@@ -159,9 +173,26 @@ export function reduceNonProviderEvent(evt: ServerEvent, deps: SyncEventReducerD
       return true;
 
     case "session_info":
-      deps.setState("sessionTitle", evt.title);
-      deps.setState("provider", evt.provider);
-      deps.setState("model", evt.model);
+      deps.setState(produce((state) => {
+        state.sessionTitle = evt.title;
+        state.provider = evt.provider;
+        state.model = evt.model;
+        state.sessionKind = evt.sessionKind ?? state.sessionKind;
+        state.parentSessionId = evt.parentSessionId ?? state.parentSessionId;
+        state.role = evt.role ?? state.role;
+        state.mode = evt.mode ?? state.mode;
+        state.depth = typeof evt.depth === "number" ? evt.depth : state.depth;
+        state.nickname = evt.nickname ?? state.nickname;
+        state.requestedModel = evt.requestedModel ?? state.requestedModel;
+        state.effectiveModel = evt.effectiveModel ?? state.effectiveModel;
+        state.requestedReasoningEffort = evt.requestedReasoningEffort ?? state.requestedReasoningEffort;
+        state.effectiveReasoningEffort = evt.effectiveReasoningEffort ?? state.effectiveReasoningEffort;
+        state.executionState = evt.executionState ?? state.executionState;
+        state.lastMessagePreview = evt.lastMessagePreview ?? state.lastMessagePreview;
+        if ((evt.sessionKind ?? state.sessionKind) === "agent") {
+          state.agents = [];
+        }
+      }));
       return true;
 
     case "observability_status":
@@ -349,6 +380,25 @@ export function reduceNonProviderEvent(evt: ServerEvent, deps: SyncEventReducerD
 
     case "sessions":
       deps.setState("sessionSummaries", evt.sessions);
+      return true;
+
+    case "agent_list":
+      deps.setState("agents", sortAgentSummaries(evt.agents));
+      return true;
+
+    case "agent_spawned":
+    case "agent_status":
+      deps.setState("agents", (agents) => upsertAgentSummary(agents, evt.agent));
+      return true;
+
+    case "agent_wait_result":
+      deps.setState("agents", (agents) => {
+        let nextAgents = agents;
+        for (const agent of evt.agents) {
+          nextAgents = upsertAgentSummary(nextAgents, agent);
+        }
+        return nextAgents;
+      });
       return true;
 
     case "error":

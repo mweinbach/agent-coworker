@@ -170,6 +170,7 @@ function ProviderDialog(props: { onDismiss: () => void; initialProvider?: string
     setPendingAutoOauthChallenge(null);
     setAwaitingResult(true);
     setStage("waiting");
+    if (!selectedMethod) return;
     syncActions.callbackProviderAuth(provider(), selectedMethod.id);
   });
 

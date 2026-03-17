@@ -1,5 +1,5 @@
 import { getObservabilityHealth } from "../../observability/runtime";
-import { assertSupportedModel } from "../../models/registry";
+import { normalizeChildRoutingConfig } from "../../models/childModelRouting";
 import {
   mergeEditableOpenAiCompatibleProviderOptions,
   pickEditableOpenAiCompatibleProviderOptions,
@@ -71,7 +71,12 @@ export class SessionMetadataManager {
         enableMemory: this.context.state.config.enableMemory ?? true,
         memoryRequireApproval: this.context.state.config.memoryRequireApproval ?? false,
         defaultBackupsEnabled,
-        subAgentModel: this.context.state.config.subAgentModel,
+        preferredChildModel: this.context.state.config.preferredChildModel,
+        childModelRoutingMode: this.context.state.config.childModelRoutingMode ?? "same-provider",
+        preferredChildModelRef:
+          this.context.state.config.preferredChildModelRef
+          ?? `${this.context.state.config.provider}:${this.context.state.config.preferredChildModel}`,
+        allowedChildModelRefs: this.context.state.config.allowedChildModelRefs ?? [],
         maxSteps: this.context.state.maxSteps,
         toolOutputOverflowChars,
         ...(defaultToolOutputOverflowChars !== undefined ? { defaultToolOutputOverflowChars } : {}),
@@ -114,26 +119,18 @@ export class SessionMetadataManager {
     };
   }
 
-  updateSessionInfo(
-    patch: Partial<{
-      title: string;
-      titleSource: SessionTitleSource;
-      titleModel: string | null;
-      provider: AgentConfig["provider"];
-      model: string;
-    }>
-  ) {
+  updateSessionInfo(patch: Partial<import("./SessionContext").SessionInfoState>) {
     const next = {
       ...this.context.state.sessionInfo,
       ...patch,
       updatedAt: new Date().toISOString(),
     };
-    const changed =
-      next.title !== this.context.state.sessionInfo.title ||
-      next.titleSource !== this.context.state.sessionInfo.titleSource ||
-      next.titleModel !== this.context.state.sessionInfo.titleModel ||
-      next.provider !== this.context.state.sessionInfo.provider ||
-      next.model !== this.context.state.sessionInfo.model;
+    const changed = Object.entries(patch).some(([key, value]) => {
+      return !Object.is(
+        this.context.state.sessionInfo[key as keyof typeof this.context.state.sessionInfo],
+        value,
+      );
+    });
 
     if (!changed) return;
 
@@ -205,14 +202,30 @@ export class SessionMetadataManager {
       return;
     }
 
-    let normalizedSubAgentModel: string | undefined;
-    if (patch.subAgentModel !== undefined) {
+    let normalizedChildRouting:
+      | ReturnType<typeof normalizeChildRoutingConfig>
+      | undefined;
+    if (
+      patch.preferredChildModel !== undefined
+      || patch.childModelRoutingMode !== undefined
+      || patch.preferredChildModelRef !== undefined
+      || patch.allowedChildModelRefs !== undefined
+    ) {
       try {
-        normalizedSubAgentModel = assertSupportedModel(
-          this.context.state.config.provider,
-          patch.subAgentModel,
-          "sub-agent model",
-        ).id;
+        normalizedChildRouting = normalizeChildRoutingConfig({
+          provider: this.context.state.config.provider,
+          model: this.context.state.config.model,
+          childModelRoutingMode: patch.childModelRoutingMode ?? this.context.state.config.childModelRoutingMode,
+          preferredChildModel: patch.preferredChildModel ?? this.context.state.config.preferredChildModel,
+          preferredChildModelRef:
+            patch.preferredChildModelRef !== undefined
+              ? patch.preferredChildModelRef
+              : patch.preferredChildModel !== undefined
+                ? undefined
+                : this.context.state.config.preferredChildModelRef,
+          allowedChildModelRefs: patch.allowedChildModelRefs ?? this.context.state.config.allowedChildModelRefs,
+          source: "session config",
+        });
       } catch (err) {
         this.context.emitError("validation_failed", "session", err instanceof Error ? err.message : String(err));
         return;
@@ -234,8 +247,11 @@ export class SessionMetadataManager {
     }
 
     const persistPatch: import("./SessionContext").PersistedProjectConfigPatch = {};
-    if (normalizedSubAgentModel !== undefined) {
-      persistPatch.subAgentModel = normalizedSubAgentModel;
+    if (normalizedChildRouting !== undefined) {
+      persistPatch.preferredChildModel = normalizedChildRouting.preferredChildModel;
+      persistPatch.childModelRoutingMode = normalizedChildRouting.childModelRoutingMode;
+      persistPatch.preferredChildModelRef = normalizedChildRouting.preferredChildModelRef;
+      persistPatch.allowedChildModelRefs = normalizedChildRouting.allowedChildModelRefs;
     }
     if (patch.observabilityEnabled !== undefined) {
       persistPatch.observabilityEnabled = patch.observabilityEnabled;
@@ -292,8 +308,14 @@ export class SessionMetadataManager {
     if (patch.memoryRequireApproval !== undefined) {
       this.context.state.config = { ...this.context.state.config, memoryRequireApproval: patch.memoryRequireApproval };
     }
-    if (normalizedSubAgentModel !== undefined) {
-      this.context.state.config = { ...this.context.state.config, subAgentModel: normalizedSubAgentModel };
+    if (normalizedChildRouting !== undefined) {
+      this.context.state.config = {
+        ...this.context.state.config,
+        preferredChildModel: normalizedChildRouting.preferredChildModel,
+        childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
+        preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
+        allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
+      };
     }
     if (patch.toolOutputOverflowChars !== undefined) {
       this.context.state.config = {

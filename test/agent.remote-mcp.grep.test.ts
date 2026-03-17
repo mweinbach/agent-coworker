@@ -7,9 +7,9 @@ import type { AgentConfig } from "../src/types";
 import { runTurnWithDeps } from "../src/agent";
 
 const RUN_REMOTE =
-  process.env.RUN_REMOTE_MCP_TESTS === "1" ||
-  process.env.RUN_REMOTE_MCP_TESTS === "true" ||
-  process.env.RUN_REMOTE_MCP_TESTS === "yes";
+  process.env.RUN_REMOTE_MCP_AGENT_TESTS === "1" ||
+  process.env.RUN_REMOTE_MCP_AGENT_TESTS === "true" ||
+  process.env.RUN_REMOTE_MCP_AGENT_TESTS === "yes";
 
 const it = RUN_REMOTE ? test : test.skip;
 
@@ -17,7 +17,7 @@ function makeConfig(baseDir: string, configDir: string): AgentConfig {
   return {
     provider: "google",
     model: "gemini-3-flash-preview",
-    subAgentModel: "gemini-3-flash-preview",
+    preferredChildModel: "gemini-3-flash-preview",
     workingDirectory: baseDir,
     outputDirectory: path.join(baseDir, "output"),
     uploadsDirectory: path.join(baseDir, "uploads"),

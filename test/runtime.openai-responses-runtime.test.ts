@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { z } from "zod";
+
 import { createOpenAiResponsesRuntime } from "../src/runtime/openaiResponsesRuntime";
 import { defaultSupportedModel } from "../src/models/registry";
 import { writeCodexAuthMaterial } from "../src/providers/codex-auth";
@@ -18,7 +20,7 @@ function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): Agen
   return {
     provider: "openai",
     model: "gpt-5.2",
-    subAgentModel: "gpt-5.2",
+    preferredChildModel: "gpt-5.2",
     workingDirectory: homeDir,
     outputDirectory: path.join(homeDir, "output"),
     uploadsDirectory: path.join(homeDir, "uploads"),
@@ -28,7 +30,7 @@ function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): Agen
     userAgentDir: path.join(homeDir, ".agent"),
     builtInDir: homeDir,
     builtInConfigDir: path.join(homeDir, "config"),
-    skillsDirs: [],
+    skillsDirs: [path.join(homeDir, ".cowork", "skills")],
     memoryDirs: [],
     configDirs: [],
     ...overrides,
@@ -386,7 +388,7 @@ describe("openai responses runtime", () => {
       makeParams(makeConfig(homeDir, {
         provider: "codex-cli",
         model: pickCodexModelId(),
-        subAgentModel: pickCodexModelId(),
+        preferredChildModel: pickCodexModelId(),
       }), {
         messages: [{ role: "user", content: "latest" }],
         allMessages: [
@@ -466,7 +468,7 @@ describe("openai responses runtime", () => {
       makeParams(makeConfig(homeDir, {
         provider: "codex-cli",
         model: modelId,
-        subAgentModel: modelId,
+        preferredChildModel: modelId,
       }), {
         messages: [{ role: "user", content: "find it" }],
         allMessages: [{ role: "user", content: "find it" }] as ModelMessage[],
@@ -493,6 +495,67 @@ describe("openai responses runtime", () => {
     });
     expect(secondPiMessages[2]?.toolCallId).toBe("call_1");
     expect(result.providerState).toBeUndefined();
+  });
+
+  test("injects a reminder message into the next responses step after malformed tool-call format errors", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-tool-format-reminder-"));
+    const nativeCalls: Array<Record<string, unknown>> = [];
+    let step = 0;
+    const runtime = createOpenAiResponsesRuntime({
+      runStepImpl: async (opts) => {
+        step += 1;
+        nativeCalls.push({
+          previousResponseId: opts.previousResponseId,
+          piMessages: opts.piMessages,
+        });
+
+        if (step === 1) {
+          return {
+            assistant: {
+              role: "assistant",
+              content: [{ type: "toolCall", id: "call_bad", name: "tool", arguments: {} }],
+              usage: { input: 1, output: 1, totalTokens: 2 },
+              stopReason: "toolUse",
+            },
+            responseId: "resp_1",
+          };
+        }
+
+        return {
+          assistant: {
+            role: "assistant",
+            content: [{ type: "text", text: "fixed" }],
+            usage: { input: 1, output: 1, totalTokens: 2 },
+            stopReason: "stop",
+          },
+          responseId: "resp_2",
+        };
+      },
+    });
+
+    await runtime.runTurn(
+      makeParams(makeConfig(homeDir, {
+        provider: "openai",
+        model: "gpt-5.4",
+        preferredChildModel: "gpt-5.4",
+      }), {
+        maxSteps: 2,
+        tools: {
+          read: {
+            inputSchema: z.object({ filePath: z.string() }),
+            execute: async () => "unused",
+          },
+        },
+      }),
+    );
+
+    expect(nativeCalls).toHaveLength(2);
+    const secondPiMessages = (nativeCalls[1]?.piMessages as Array<Record<string, unknown>>) ?? [];
+    expect(secondPiMessages.some((message) => message.role === "toolResult" && message.toolName === "tool")).toBe(true);
+    expect(secondPiMessages.some((message) => {
+      if (message.role !== "assistant") return false;
+      return JSON.stringify(message.content).includes("Possible invalid tool call format detected");
+    })).toBe(true);
   });
 
   test("request builder disables strict tools and unsupported continuation fields for codex chatgpt backend", () => {

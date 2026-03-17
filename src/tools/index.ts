@@ -9,9 +9,9 @@ import { createMemoryTool } from "./memory";
 import { createNotebookEditTool } from "./notebookEdit";
 import {
   createCloseAgentTool,
-  createListPersistentAgentsTool,
+  createListAgentsTool,
+  createResumeAgentTool,
   createSendAgentInputTool,
-  createSpawnPersistentAgentTool,
   createWaitForAgentTool,
 } from "./persistentAgents";
 import { createReadTool } from "./read";
@@ -22,6 +22,8 @@ import { createUsageTool } from "./usage";
 import { createWebFetchTool } from "./webFetch";
 import { createWebSearchTool } from "./webSearch";
 import { createWriteTool } from "./write";
+import { filterToolsForRole } from "../server/agents/toolPolicy";
+import { getAgentRoleDefinition } from "../server/agents/roles";
 
 export function createTools(ctx: ToolContext): Record<string, any> {
   const askTool = createAskTool(ctx);
@@ -37,25 +39,29 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     ask: askTool,
     AskUserQuestion: askTool,
     todoWrite: createTodoWriteTool(ctx),
-    spawnAgent: createSpawnAgentTool(ctx),
+    ...(ctx.agentControl ? { spawnAgent: createSpawnAgentTool(ctx) } : {}),
     notebookEdit: createNotebookEditTool(ctx),
     skill: createSkillTool(ctx),
     ...(ctx.config.enableMemory ?? true ? { memory: createMemoryTool(ctx) } : {}),
     usage: createUsageTool(ctx),
   };
 
-  if (!ctx.persistentAgentControl) {
-    return baseTools;
+  const roleFilteredTools = ctx.agentRole
+    ? filterToolsForRole(baseTools, getAgentRoleDefinition(ctx.agentRole))
+    : baseTools;
+
+  if (!ctx.agentControl || ctx.agentRole) {
+    return roleFilteredTools;
   }
 
   return {
-    ...baseTools,
-    spawnPersistentAgent: createSpawnPersistentAgentTool(ctx),
-    listPersistentAgents: createListPersistentAgentsTool(ctx),
+    ...roleFilteredTools,
+    listAgents: createListAgentsTool(ctx),
     sendAgentInput: createSendAgentInputTool(ctx),
     waitForAgent: createWaitForAgentTool(ctx),
+    resumeAgent: createResumeAgentTool(ctx),
     closeAgent: createCloseAgentTool(ctx),
   };
 }
 
-export type { PersistentAgentControl, PersistentAgentWaitResult, ToolContext } from "./context";
+export type { AgentControl, AgentWaitResult, ToolContext } from "./context";

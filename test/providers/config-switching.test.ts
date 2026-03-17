@@ -60,7 +60,7 @@ describe("Provider switching via config", () => {
 
     expect(cfg.provider).toBe("anthropic");
     expect(cfg.model).toBe("claude-opus-4-6");
-    expect(cfg.subAgentModel).toBe("claude-opus-4-6");
+    expect(cfg.preferredChildModel).toBe("claude-opus-4-6");
   });
 
   test("provider from user config can be overridden by project config", async () => {

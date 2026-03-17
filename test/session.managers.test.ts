@@ -12,7 +12,7 @@ function makeBaseContext(): SessionContext {
       config: {
         provider: "google",
         model: "gemini-3-flash-preview",
-        subAgentModel: "gemini-3-flash-preview",
+        preferredChildModel: "gemini-3-flash-preview",
         workingDirectory: "/tmp/project",
         userName: "",
         knowledgeCutoff: "unknown",

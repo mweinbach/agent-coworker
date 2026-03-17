@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 
-import type { PersistentSubagentSummary } from "../../shared/persistentSubagents";
+import type { PersistentAgentSummary } from "../../shared/agents";
 import type { PersistedModelStreamChunk, PersistedSessionMutation, PersistedSessionRecord } from "../sessionDb";
 import type { PersistedSessionSnapshot, PersistedSessionSummary } from "../sessionStore";
 import type { ModelMessage } from "../../types";
@@ -37,12 +37,39 @@ export class SessionDbRepository {
     return rows.map(mapPersistedSessionSummaryRow);
   }
 
-  listSubagentSessions(parentSessionId: string): PersistentSubagentSummary[] {
+  listAgentSessions(parentSessionId: string): PersistentAgentSummary[] {
     const rows = this.db
       .query(
-        `SELECT session_id, parent_session_id, agent_type, title, provider, model, created_at, updated_at, status
+        `SELECT
+           session_id,
+           parent_session_id,
+           COALESCE(
+             role,
+             CASE agent_type
+               WHEN 'general' THEN 'worker'
+               WHEN 'explore' THEN 'explorer'
+               ELSE agent_type
+             END
+           ) AS role,
+           agent_type,
+           title,
+           provider,
+           model,
+           mode,
+           depth,
+           nickname,
+           requested_model,
+           effective_model,
+           requested_reasoning_effort,
+           effective_reasoning_effort,
+           created_at,
+           updated_at,
+           status,
+           execution_state,
+           last_message_preview
          FROM sessions
          WHERE parent_session_id = ?
+           AND session_kind IN ('agent', 'subagent')
          ORDER BY updated_at DESC`,
       )
       .all(parentSessionId) as Array<Record<string, unknown>>;
@@ -80,7 +107,24 @@ export class SessionDbRepository {
            s.session_id,
            s.session_kind,
            s.parent_session_id,
+           COALESCE(
+             s.role,
+             CASE s.agent_type
+               WHEN 'general' THEN 'worker'
+               WHEN 'explore' THEN 'explorer'
+               ELSE s.agent_type
+             END
+           ) AS role,
            s.agent_type,
+           s.mode,
+           s.depth,
+           s.nickname,
+           s.requested_model,
+           s.effective_model,
+           s.requested_reasoning_effort,
+           s.effective_reasoning_effort,
+           s.execution_state,
+           s.last_message_preview,
            s.title,
            s.title_source,
            s.title_model,
@@ -101,6 +145,7 @@ export class SessionDbRepository {
            st.system_prompt,
            st.messages_json,
            st.provider_state_json,
+           st.provider_options_json,
            st.todos_json,
            st.harness_context_json,
            st.cost_tracker_json
@@ -128,12 +173,23 @@ export class SessionDbRepository {
       const uploadsDirectory = snapshot.uploadsDirectory ?? null;
       const providerStateJson =
         snapshot.providerState === null ? null : toJsonString(snapshot.providerState);
+      const providerOptionsJson =
+        snapshot.providerOptions === undefined ? null : toJsonString(snapshot.providerOptions);
       const costTrackerJson =
         snapshot.costTracker === null ? null : toJsonString(snapshot.costTracker);
       const backupsEnabledOverride =
         snapshot.backupsEnabledOverride === null ? null : snapshot.backupsEnabledOverride ? 1 : 0;
       const parentSessionId = snapshot.parentSessionId ?? null;
-      const agentType = snapshot.agentType ?? null;
+      const role = snapshot.role ?? null;
+      const mode = snapshot.mode ?? null;
+      const depth = snapshot.depth ?? null;
+      const nickname = snapshot.nickname ?? null;
+      const requestedModel = snapshot.requestedModel ?? null;
+      const effectiveModel = snapshot.effectiveModel ?? null;
+      const requestedReasoningEffort = snapshot.requestedReasoningEffort ?? null;
+      const effectiveReasoningEffort = snapshot.effectiveReasoningEffort ?? null;
+      const executionState = snapshot.executionState ?? null;
+      const lastMessagePreview = snapshot.lastMessagePreview ?? null;
       const createdAt = parseRequiredIsoTimestamp(snapshot.createdAt, "snapshot.createdAt");
       const updatedAt = parseRequiredIsoTimestamp(snapshot.updatedAt, "snapshot.updatedAt");
       const ts = parseRequiredIsoTimestamp(input.eventTs ?? updatedAt, "event timestamp");
@@ -146,7 +202,17 @@ export class SessionDbRepository {
              session_id,
              session_kind,
              parent_session_id,
+             role,
              agent_type,
+             mode,
+             depth,
+             nickname,
+             requested_model,
+             effective_model,
+             requested_reasoning_effort,
+             effective_reasoning_effort,
+             execution_state,
+             last_message_preview,
              title,
              title_source,
              title_model,
@@ -164,11 +230,21 @@ export class SessionDbRepository {
              has_pending_approval,
              message_count,
              last_event_seq
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
              session_kind = excluded.session_kind,
              parent_session_id = excluded.parent_session_id,
+             role = excluded.role,
              agent_type = excluded.agent_type,
+             mode = excluded.mode,
+             depth = excluded.depth,
+             nickname = excluded.nickname,
+             requested_model = excluded.requested_model,
+             effective_model = excluded.effective_model,
+             requested_reasoning_effort = excluded.requested_reasoning_effort,
+             effective_reasoning_effort = excluded.effective_reasoning_effort,
+             execution_state = excluded.execution_state,
+             last_message_preview = excluded.last_message_preview,
              title = excluded.title,
              title_source = excluded.title_source,
              title_model = excluded.title_model,
@@ -190,7 +266,17 @@ export class SessionDbRepository {
           input.sessionId,
           snapshot.sessionKind,
           parentSessionId,
-          agentType,
+          role,
+          null,
+          mode,
+          depth,
+          nickname,
+          requestedModel,
+          effectiveModel,
+          requestedReasoningEffort,
+          effectiveReasoningEffort,
+          executionState,
+          lastMessagePreview,
           snapshot.title,
           snapshot.titleSource,
           snapshot.titleModel,
@@ -217,14 +303,16 @@ export class SessionDbRepository {
              system_prompt,
              messages_json,
              provider_state_json,
+             provider_options_json,
              todos_json,
              harness_context_json,
              cost_tracker_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
              system_prompt = excluded.system_prompt,
              messages_json = excluded.messages_json,
              provider_state_json = excluded.provider_state_json,
+             provider_options_json = excluded.provider_options_json,
              todos_json = excluded.todos_json,
              harness_context_json = excluded.harness_context_json,
              cost_tracker_json = excluded.cost_tracker_json`,
@@ -234,6 +322,7 @@ export class SessionDbRepository {
           snapshot.systemPrompt,
           toJsonString(snapshot.messages),
           providerStateJson,
+          providerOptionsJson,
           toJsonString(snapshot.todos),
           toJsonString(snapshot.harnessContext),
           costTrackerJson,
@@ -335,7 +424,17 @@ export class SessionDbRepository {
          session_id TEXT PRIMARY KEY,
          session_kind TEXT NOT NULL DEFAULT 'root',
          parent_session_id TEXT NULL,
+         role TEXT NULL,
          agent_type TEXT NULL,
+         mode TEXT NULL,
+         depth INTEGER NULL,
+         nickname TEXT NULL,
+         requested_model TEXT NULL,
+         effective_model TEXT NULL,
+         requested_reasoning_effort TEXT NULL,
+         effective_reasoning_effort TEXT NULL,
+         execution_state TEXT NULL,
+         last_message_preview TEXT NULL,
          title TEXT NOT NULL,
          title_source TEXT NOT NULL,
          title_model TEXT NULL,
@@ -362,6 +461,7 @@ export class SessionDbRepository {
              system_prompt TEXT NOT NULL,
              messages_json TEXT NOT NULL,
              provider_state_json TEXT NULL,
+             provider_options_json TEXT NULL,
              todos_json TEXT NOT NULL,
              harness_context_json TEXT NULL,
              cost_tracker_json TEXT NULL
@@ -433,6 +533,11 @@ export class SessionDbRepository {
     this.db.exec("ALTER TABLE session_state ADD COLUMN cost_tracker_json TEXT NULL");
   }
 
+  addProviderOptionsColumn(): void {
+    if (this.hasSessionStateColumn("provider_options_json")) return;
+    this.db.exec("ALTER TABLE session_state ADD COLUMN provider_options_json TEXT NULL");
+  }
+
   hasSessionsColumn(columnName: string): boolean {
     const rows = this.db.query("PRAGMA table_info(sessions)").all() as Array<Record<string, unknown>>;
     return rows.some((row) => row.name === columnName);
@@ -445,10 +550,60 @@ export class SessionDbRepository {
     if (!this.hasSessionsColumn("parent_session_id")) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT NULL");
     }
+    if (!this.hasSessionsColumn("role")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN role TEXT NULL");
+    }
     if (!this.hasSessionsColumn("agent_type")) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN agent_type TEXT NULL");
     }
+    if (!this.hasSessionsColumn("mode")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN mode TEXT NULL");
+    }
+    if (!this.hasSessionsColumn("depth")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN depth INTEGER NULL");
+    }
+    if (!this.hasSessionsColumn("nickname")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN nickname TEXT NULL");
+    }
+    if (!this.hasSessionsColumn("requested_model")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN requested_model TEXT NULL");
+    }
+    if (!this.hasSessionsColumn("effective_model")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN effective_model TEXT NULL");
+    }
+    if (!this.hasSessionsColumn("requested_reasoning_effort")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN requested_reasoning_effort TEXT NULL");
+    }
+    if (!this.hasSessionsColumn("effective_reasoning_effort")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN effective_reasoning_effort TEXT NULL");
+    }
+    if (!this.hasSessionsColumn("execution_state")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN execution_state TEXT NULL");
+    }
+    if (!this.hasSessionsColumn("last_message_preview")) {
+      this.db.exec("ALTER TABLE sessions ADD COLUMN last_message_preview TEXT NULL");
+    }
     this.db.exec("UPDATE sessions SET session_kind = 'root' WHERE session_kind IS NULL OR session_kind = ''");
+    this.db.exec("UPDATE sessions SET session_kind = 'agent' WHERE session_kind = 'subagent'");
+    this.db.exec(
+      `UPDATE sessions
+       SET role = CASE
+         WHEN role IS NOT NULL AND role != '' THEN role
+         WHEN agent_type = 'general' THEN 'worker'
+         WHEN agent_type = 'explore' THEN 'explorer'
+         ELSE agent_type
+       END
+       WHERE role IS NULL OR role = ''`,
+    );
+    this.db.exec("UPDATE sessions SET effective_model = model WHERE effective_model IS NULL OR effective_model = ''");
+    this.db.exec(
+      `UPDATE sessions
+       SET execution_state = CASE
+         WHEN execution_state IS NOT NULL AND execution_state != '' THEN execution_state
+         WHEN status = 'closed' THEN 'closed'
+         ELSE 'completed'
+       END`,
+    );
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_parent_updated ON sessions(parent_session_id, updated_at DESC)");
   }
 
@@ -501,11 +656,36 @@ export class SessionDbRepository {
       const costTracker =
         "costTracker" in legacy.context ? legacy.context.costTracker : null;
       const backupsEnabledOverride =
-        legacy.version === 5 ? legacy.config.backupsEnabledOverride : null;
-      const hasSubagentMetadata = legacy.version === 3 || legacy.version === 4 || legacy.version === 5;
+        legacy.version === 5 || legacy.version === 6 || legacy.version === 7
+          ? legacy.config.backupsEnabledOverride
+          : null;
+      const providerOptions =
+        legacy.version === 7 ? legacy.config.providerOptions : undefined;
+      const hasSubagentMetadata =
+        legacy.version === 3 || legacy.version === 4 || legacy.version === 5 || legacy.version === 6 || legacy.version === 7;
+      const hasAgentExecutionMetadata = legacy.version === 6 || legacy.version === 7;
       const sessionKind = hasSubagentMetadata ? legacy.session.sessionKind : "root";
       const parentSessionId = hasSubagentMetadata ? legacy.session.parentSessionId : null;
-      const agentType = hasSubagentMetadata ? legacy.session.agentType : null;
+      const role = hasSubagentMetadata ? legacy.session.role : null;
+      const effectiveModel =
+        hasAgentExecutionMetadata ? legacy.session.effectiveModel : legacy.config.model;
+      const requestedModel =
+        hasAgentExecutionMetadata ? legacy.session.requestedModel : null;
+      const requestedReasoningEffort =
+        hasAgentExecutionMetadata ? legacy.session.requestedReasoningEffort : null;
+      const effectiveReasoningEffort =
+        hasAgentExecutionMetadata ? legacy.session.effectiveReasoningEffort : null;
+      const mode = hasAgentExecutionMetadata ? legacy.session.mode : null;
+      const depth = hasAgentExecutionMetadata ? legacy.session.depth : null;
+      const nickname = hasAgentExecutionMetadata ? legacy.session.nickname : null;
+      const executionState =
+        hasAgentExecutionMetadata
+          ? legacy.session.executionState
+          : status === "closed"
+            ? "closed"
+            : "completed";
+      const lastMessagePreview =
+        hasAgentExecutionMetadata ? legacy.session.lastMessagePreview : null;
       const createdAt = parseRequiredIsoTimestamp(legacy.createdAt, "legacy.createdAt");
       const updatedAt = parseRequiredIsoTimestamp(legacy.updatedAt, "legacy.updatedAt");
 
@@ -515,7 +695,17 @@ export class SessionDbRepository {
              session_id,
              session_kind,
              parent_session_id,
+             role,
              agent_type,
+             mode,
+             depth,
+             nickname,
+             requested_model,
+             effective_model,
+             requested_reasoning_effort,
+             effective_reasoning_effort,
+             execution_state,
+             last_message_preview,
              title,
              title_source,
              title_model,
@@ -533,11 +723,21 @@ export class SessionDbRepository {
              has_pending_approval,
              message_count,
              last_event_seq
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
              session_kind = excluded.session_kind,
              parent_session_id = excluded.parent_session_id,
+             role = excluded.role,
              agent_type = excluded.agent_type,
+             mode = excluded.mode,
+             depth = excluded.depth,
+             nickname = excluded.nickname,
+             requested_model = excluded.requested_model,
+             effective_model = excluded.effective_model,
+             requested_reasoning_effort = excluded.requested_reasoning_effort,
+             effective_reasoning_effort = excluded.effective_reasoning_effort,
+             execution_state = excluded.execution_state,
+             last_message_preview = excluded.last_message_preview,
              title = excluded.title,
              title_source = excluded.title_source,
              title_model = excluded.title_model,
@@ -560,7 +760,17 @@ export class SessionDbRepository {
           legacy.sessionId,
           sessionKind,
           parentSessionId,
-          agentType,
+          role,
+          null,
+          mode,
+          depth,
+          nickname,
+          requestedModel,
+          effectiveModel,
+          requestedReasoningEffort,
+          effectiveReasoningEffort,
+          executionState,
+          lastMessagePreview,
           legacy.session.title,
           legacy.session.titleSource,
           legacy.session.titleModel,
@@ -587,14 +797,16 @@ export class SessionDbRepository {
              system_prompt,
              messages_json,
              provider_state_json,
+             provider_options_json,
              todos_json,
              harness_context_json,
              cost_tracker_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(session_id) DO UPDATE SET
              system_prompt = excluded.system_prompt,
              messages_json = excluded.messages_json,
              provider_state_json = excluded.provider_state_json,
+             provider_options_json = excluded.provider_options_json,
              todos_json = excluded.todos_json,
              harness_context_json = excluded.harness_context_json,
              cost_tracker_json = excluded.cost_tracker_json`,
@@ -604,6 +816,7 @@ export class SessionDbRepository {
           legacy.context.system,
           toJsonString(legacy.context.messages),
           providerState === null ? null : toJsonString(providerState),
+          providerOptions === undefined ? null : toJsonString(providerOptions),
           toJsonString(legacy.context.todos),
           toJsonString(legacy.context.harnessContext),
           costTracker === null ? null : toJsonString(costTracker),

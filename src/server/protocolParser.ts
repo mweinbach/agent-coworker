@@ -7,8 +7,8 @@ import {
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
 } from "../shared/openaiCompatibleOptions";
-import { SUBAGENT_AGENT_TYPE_VALUES } from "../shared/persistentSubagents";
-import { isProviderName } from "../types";
+import { AGENT_ROLE_VALUES, agentReasoningEffortSchema } from "../shared/agents";
+import { CHILD_MODEL_ROUTING_MODES, isProviderName } from "../types";
 
 import type { ClientMessage } from "./protocol";
 
@@ -28,7 +28,10 @@ const setConfigFieldErrorMessages: Record<string, string> = {
   backupsEnabled: "set_config config.backupsEnabled must be boolean",
   enableMemory: "set_config config.enableMemory must be boolean",
   memoryRequireApproval: "set_config config.memoryRequireApproval must be boolean",
-  subAgentModel: "set_config config.subAgentModel must be non-empty string",
+  preferredChildModel: "set_config config.preferredChildModel must be non-empty string",
+  childModelRoutingMode: `set_config config.childModelRoutingMode must be one of ${CHILD_MODEL_ROUTING_MODES.join(", ")}`,
+  preferredChildModelRef: "set_config config.preferredChildModelRef must be non-empty string",
+  allowedChildModelRefs: "set_config config.allowedChildModelRefs must be an array of non-empty strings",
   maxSteps: "set_config config.maxSteps must be number 1-1000",
   toolOutputOverflowChars: "set_config config.toolOutputOverflowChars must be null or non-negative integer",
   clearToolOutputOverflowChars: "set_config config.clearToolOutputOverflowChars must be boolean",
@@ -95,7 +98,10 @@ const setConfigPayloadSchema = z.object({
   backupsEnabled: z.boolean().optional(),
   enableMemory: z.boolean().optional(),
   memoryRequireApproval: z.boolean().optional(),
-  subAgentModel: z.string().trim().min(1).optional(),
+  preferredChildModel: z.string().trim().min(1).optional(),
+  childModelRoutingMode: z.enum(CHILD_MODEL_ROUTING_MODES).optional(),
+  preferredChildModelRef: z.string().trim().min(1).optional(),
+  allowedChildModelRefs: z.array(z.string().trim().min(1)).optional(),
   maxSteps: z.number().min(1).max(1000).optional(),
   toolOutputOverflowChars: z.number().int().nonnegative().nullable().optional(),
   clearToolOutputOverflowChars: z.boolean().optional(),
@@ -251,7 +257,7 @@ const sessionOnlyTypes = [
   "list_commands",
   "list_skills",
   "list_sessions",
-  "subagent_sessions_get",
+  "agent_list_get",
   "refresh_provider_status",
   "provider_catalog_get",
   "provider_auth_methods_get",
@@ -569,10 +575,36 @@ const deleteSessionSchema = schemaWithType("delete_session", {
   targetSessionId: requiredNonEmptyTrimmedString("delete_session missing/invalid targetSessionId"),
 });
 
-const subagentCreateSchema = schemaWithType("subagent_create", {
-  sessionId: requiredSessionId("subagent_create"),
-  agentType: z.enum(SUBAGENT_AGENT_TYPE_VALUES, { error: "subagent_create missing/invalid agentType" }),
-  task: requiredNonEmptyTrimmedString("subagent_create missing/invalid task"),
+const agentSpawnSchema = schemaWithType("agent_spawn", {
+  sessionId: requiredSessionId("agent_spawn"),
+  message: requiredNonEmptyTrimmedString("agent_spawn missing/invalid message"),
+  role: z.enum(AGENT_ROLE_VALUES, { error: "agent_spawn invalid role" }).optional(),
+  model: optionalNonEmptyTrimmedString("agent_spawn invalid model"),
+  reasoningEffort: agentReasoningEffortSchema.optional(),
+  forkContext: z.boolean({ error: "agent_spawn invalid forkContext" }).optional(),
+});
+
+const agentInputSendSchema = schemaWithType("agent_input_send", {
+  sessionId: requiredSessionId("agent_input_send"),
+  agentId: requiredNonEmptyTrimmedString("agent_input_send missing/invalid agentId"),
+  message: requiredNonEmptyTrimmedString("agent_input_send missing/invalid message"),
+  interrupt: z.boolean({ error: "agent_input_send invalid interrupt" }).optional(),
+});
+
+const agentWaitSchema = schemaWithType("agent_wait", {
+  sessionId: requiredSessionId("agent_wait"),
+  agentIds: z.array(requiredNonEmptyTrimmedString("agent_wait invalid agentIds")).min(1, { error: "agent_wait missing/invalid agentIds" }),
+  timeoutMs: optionalNumberAtLeast("agent_wait invalid timeoutMs", 0),
+});
+
+const agentResumeSchema = schemaWithType("agent_resume", {
+  sessionId: requiredSessionId("agent_resume"),
+  agentId: requiredNonEmptyTrimmedString("agent_resume missing/invalid agentId"),
+});
+
+const agentCloseSchema = schemaWithType("agent_close", {
+  sessionId: requiredSessionId("agent_close"),
+  agentId: requiredNonEmptyTrimmedString("agent_close missing/invalid agentId"),
 });
 
 const setConfigSchema = schemaWithType("set_config", {
@@ -680,7 +712,11 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   getMessagesSchema,
   setSessionTitleSchema,
   deleteSessionSchema,
-  subagentCreateSchema,
+  agentSpawnSchema,
+  agentInputSendSchema,
+  agentWaitSchema,
+  agentResumeSchema,
+  agentCloseSchema,
   setConfigSchema,
   uploadFileSchema,
   setSessionUsageBudgetSchema,

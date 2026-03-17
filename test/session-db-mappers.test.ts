@@ -38,7 +38,7 @@ describe("sessionDb mappers", () => {
     ).toThrow("Invalid session summary row");
   });
 
-  test("mapPersistedSessionRecordRow parses strict row shape and JSON payloads", () => {
+  test("mapPersistedSessionRecordRow normalizes legacy child-session rows into the current shape", () => {
     const mapped = mapPersistedSessionRecordRow({
       session_id: "sess-2",
       session_kind: "subagent",
@@ -63,6 +63,7 @@ describe("sessionDb mappers", () => {
       title_model: "gpt-5",
       messages_json: "[{\"role\":\"user\",\"content\":\"hello\"}]",
       provider_state_json: "{\"provider\":\"openai\",\"model\":\"gpt-5\",\"responseId\":\"resp_1\",\"updatedAt\":\"2026-02-19T00:00:01.000Z\"}",
+      provider_options_json: null,
       todos_json: "[]",
       harness_context_json: "{\"runId\":\"r-1\"}",
       cost_tracker_json: "{\"sessionId\":\"sess-2\",\"totalTurns\":1,\"totalPromptTokens\":10,\"totalCompletionTokens\":5,\"totalTokens\":15,\"estimatedTotalCostUsd\":0.001,\"costTrackingAvailable\":true,\"byModel\":[],\"turns\":[],\"budgetStatus\":{\"configured\":false,\"warnAtUsd\":null,\"stopAtUsd\":null,\"warningTriggered\":false,\"stopTriggered\":false,\"currentCostUsd\":0.001},\"createdAt\":\"2026-02-19T00:00:00.000Z\",\"updatedAt\":\"2026-02-19T00:00:01.000Z\"}",
@@ -71,9 +72,12 @@ describe("sessionDb mappers", () => {
 
     expect(mapped).toMatchObject({
       sessionId: "sess-2",
-      sessionKind: "subagent",
+      sessionKind: "agent",
       parentSessionId: "sess-1",
-      agentType: "general",
+      role: "worker",
+      mode: null,
+      depth: null,
+      effectiveModel: null,
       title: "Session Title",
       provider: "openai",
       model: "gpt-5",
@@ -89,6 +93,7 @@ describe("sessionDb mappers", () => {
       status: "closed",
       titleSource: "manual",
       titleModel: "gpt-5",
+      backupsEnabledOverride: null,
       providerState: {
         provider: "openai",
         model: "gpt-5",
@@ -124,7 +129,7 @@ describe("sessionDb mappers", () => {
     expect(Number.isNaN(Date.parse(mapped.updatedAt))).toBeFalse();
   });
 
-  test("mapPersistedSessionSubagentSummaryRow parses valid child-session rows", () => {
+  test("mapPersistedSessionSubagentSummaryRow parses valid child-agent rows", () => {
     const mapped = mapPersistedSessionSubagentSummaryRow({
       session_id: "child-1",
       parent_session_id: "root-1",
@@ -138,17 +143,41 @@ describe("sessionDb mappers", () => {
     });
 
     expect(mapped).toEqual({
-      sessionId: "child-1",
+      agentId: "child-1",
       parentSessionId: "root-1",
-      agentType: "research",
+      role: "research",
+      mode: "collaborative",
+      depth: 1,
+      effectiveModel: "gpt-5.2",
       title: "Research Child",
       provider: "openai",
-      model: "gpt-5.2",
       createdAt: "2026-02-19T00:00:00.000Z",
       updatedAt: "2026-02-19T00:00:01.000Z",
-      status: "closed",
+      lifecycleState: "closed",
+      executionState: "closed",
       busy: false,
     });
+  });
+
+  test("mapPersistedSessionSubagentSummaryRow normalizes stale non-terminal child execution states when idle", () => {
+    for (const executionState of ["running", "pending_init"] as const) {
+      const mapped = mapPersistedSessionSubagentSummaryRow({
+        session_id: `child-${executionState}`,
+        parent_session_id: "root-1",
+        role: "worker",
+        agent_type: null,
+        title: "Idle Child",
+        provider: "openai",
+        model: "gpt-5.2",
+        created_at: "2026-02-19T00:00:00.000Z",
+        updated_at: "2026-02-19T00:00:01.000Z",
+        status: "active",
+        execution_state: executionState,
+      });
+
+      expect(mapped.executionState).toBe("completed");
+      expect(mapped.busy).toBe(false);
+    }
   });
 
   test("mapPersistedSessionRecordRow throws when required fields are missing", () => {
@@ -189,6 +218,7 @@ describe("sessionDb mappers", () => {
         title_model: null,
         messages_json: "not-json",
         provider_state_json: null,
+        provider_options_json: null,
         todos_json: "[]",
         harness_context_json: null,
         cost_tracker_json: null,
@@ -223,6 +253,7 @@ describe("sessionDb mappers", () => {
         title_model: null,
         messages_json: "[{\"role\":\"user\",\"content\":\"hello\"}]",
         provider_state_json: null,
+        provider_options_json: null,
         todos_json: "[]",
         harness_context_json: null,
         cost_tracker_json: "{}",

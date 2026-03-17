@@ -1,50 +1,34 @@
 import { z } from "zod";
 
-import { SUBAGENT_AGENT_TYPE_VALUES } from "../shared/persistentSubagents";
 import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
-function requirePersistentAgentControl(ctx: ToolContext) {
-  if (!ctx.persistentAgentControl) {
-    throw new Error("Persistent subagents are unavailable outside a session-backed turn.");
+function requireAgentControl(ctx: ToolContext) {
+  if (!ctx.agentControl) {
+    throw new Error("Child agents are unavailable outside a session-backed turn.");
   }
-  return ctx.persistentAgentControl;
+  return ctx.agentControl;
 }
 
-export function createSpawnPersistentAgentTool(ctx: ToolContext) {
+export function createListAgentsTool(ctx: ToolContext) {
   return defineTool({
-    description: "Create a durable subagent session, queue its initial task, and return the child session handle immediately.",
-    inputSchema: z.object({
-      task: z.string().trim().min(1).max(20_000),
-      agentType: z.enum(SUBAGENT_AGENT_TYPE_VALUES).optional().default("general"),
-    }),
-    execute: async ({ task, agentType }: { task: string; agentType: "explore" | "research" | "general" }) => {
-      ctx.log(`tool> spawnPersistentAgent ${JSON.stringify({ agentType })}`);
-      const result = await requirePersistentAgentControl(ctx).spawn({ task, agentType });
-      ctx.log(`tool< spawnPersistentAgent ${JSON.stringify({ sessionId: result.sessionId })}`);
-      return result;
-    },
-  });
-}
-
-export function createListPersistentAgentsTool(ctx: ToolContext) {
-  return defineTool({
-    description: "List durable child subagent sessions for the current parent session.",
+    description: "List collaborative child agents for the current parent session.",
     inputSchema: z.object({}).strict(),
-    execute: async () => await requirePersistentAgentControl(ctx).list(),
+    execute: async () => await requireAgentControl(ctx).list(),
   });
 }
 
 export function createSendAgentInputTool(ctx: ToolContext) {
   return defineTool({
-    description: "Send a follow-up task or message to an existing durable subagent session.",
+    description: "Send a follow-up message to an existing child agent. Use interrupt=true to redirect work immediately.",
     inputSchema: z.object({
       agentId: z.string().trim().min(1),
-      task: z.string().trim().min(1).max(20_000),
+      message: z.string().trim().min(1).max(20_000),
+      interrupt: z.boolean().optional(),
     }),
-    execute: async ({ agentId, task }: { agentId: string; task: string }) => {
-      ctx.log(`tool> sendAgentInput ${JSON.stringify({ agentId })}`);
-      await requirePersistentAgentControl(ctx).sendInput({ agentId, task });
+    execute: async ({ agentId, message, interrupt }: { agentId: string; message: string; interrupt?: boolean }) => {
+      ctx.log(`tool> sendAgentInput ${JSON.stringify({ agentId, interrupt: interrupt === true })}`);
+      await requireAgentControl(ctx).sendInput({ agentId, message, interrupt });
       ctx.log(`tool< sendAgentInput ${JSON.stringify({ agentId })}`);
       return { agentId, queued: true };
     },
@@ -53,25 +37,40 @@ export function createSendAgentInputTool(ctx: ToolContext) {
 
 export function createWaitForAgentTool(ctx: ToolContext) {
   return defineTool({
-    description: "Wait until a durable subagent session is idle or the timeout elapses, then return its latest status.",
+    description: "Wait for one or more child agents to reach a terminal state. Returns empty status when timed out.",
     inputSchema: z.object({
-      agentId: z.string().trim().min(1),
+      agentIds: z.array(z.string().trim().min(1)).min(1),
       timeoutMs: z.number().int().min(1).max(300_000).optional(),
     }),
-    execute: async ({ agentId, timeoutMs }: { agentId: string; timeoutMs?: number }) =>
-      await requirePersistentAgentControl(ctx).wait({ agentId, timeoutMs }),
+    execute: async ({ agentIds, timeoutMs }: { agentIds: string[]; timeoutMs?: number }) =>
+      await requireAgentControl(ctx).wait({ agentIds, timeoutMs }),
+  });
+}
+
+export function createResumeAgentTool(ctx: ToolContext) {
+  return defineTool({
+    description: "Resume a previously closed child agent by id so it can receive new input and waits.",
+    inputSchema: z.object({
+      agentId: z.string().trim().min(1),
+    }),
+    execute: async ({ agentId }: { agentId: string }) => {
+      ctx.log(`tool> resumeAgent ${JSON.stringify({ agentId })}`);
+      const result = await requireAgentControl(ctx).resume({ agentId });
+      ctx.log(`tool< resumeAgent ${JSON.stringify({ agentId })}`);
+      return result;
+    },
   });
 }
 
 export function createCloseAgentTool(ctx: ToolContext) {
   return defineTool({
-    description: "Close a durable subagent session without deleting its persisted history.",
+    description: "Close a child agent when it is no longer needed and return its last known status.",
     inputSchema: z.object({
       agentId: z.string().trim().min(1),
     }),
     execute: async ({ agentId }: { agentId: string }) => {
       ctx.log(`tool> closeAgent ${JSON.stringify({ agentId })}`);
-      const result = await requirePersistentAgentControl(ctx).close({ agentId });
+      const result = await requireAgentControl(ctx).close({ agentId });
       ctx.log(`tool< closeAgent ${JSON.stringify({ agentId })}`);
       return result;
     },

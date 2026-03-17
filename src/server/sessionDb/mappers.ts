@@ -1,6 +1,13 @@
 import { z } from "zod";
 
-import { persistentSubagentSummarySchema, sessionKindSchema, subagentAgentTypeSchema } from "../../shared/persistentSubagents";
+import {
+  agentExecutionStateSchema,
+  agentModeSchema,
+  agentReasoningEffortSchema,
+  agentRoleSchema,
+  mapLegacyAgentTypeToRole,
+  persistentAgentSummarySchema,
+} from "../../shared/agents";
 import type { SessionUsageSnapshot } from "../../session/costTracker";
 import { sessionUsageSnapshotSchema } from "../../session/sessionUsageSchema";
 import type { HarnessContextState, ModelMessage, TodoItem } from "../../types";
@@ -17,6 +24,9 @@ import {
   sqliteBooleanIntSchema,
 } from "./normalizers";
 
+const legacySessionKindSchema = z.enum(["root", "agent", "subagent"]);
+const legacyAgentRoleSchema = z.enum(["default", "explorer", "research", "worker", "reviewer", "general", "explore"]);
+
 const modelMessageSchema = z.custom<ModelMessage>(
   (value) => typeof value === "object" && value !== null,
   "Invalid model message entry",
@@ -28,6 +38,7 @@ const todoItemSchema = z.object({
 }).strict();
 const harnessContextSchema = z.record(z.string(), z.unknown());
 const costTrackerSchema: z.ZodType<SessionUsageSnapshot> = sessionUsageSnapshotSchema;
+const providerOptionsSchema = z.record(z.string(), z.unknown());
 
 const summaryRowSchema = z.object({
   session_id: nonEmptyStringSchema,
@@ -42,20 +53,41 @@ const summaryRowSchema = z.object({
 const subagentSummaryRowSchema = z.object({
   session_id: nonEmptyStringSchema,
   parent_session_id: nonEmptyStringSchema,
-  agent_type: subagentAgentTypeSchema,
+  role: legacyAgentRoleSchema.nullable().optional(),
+  agent_type: legacyAgentRoleSchema.nullable().optional(),
   title: nonEmptyStringSchema,
   provider: providerNameSchema,
   model: nonEmptyStringSchema,
+  mode: agentModeSchema.nullable().optional(),
+  depth: nonNegativeIntegerSchema.nullable().optional(),
+  nickname: z.union([nonEmptyStringSchema, z.null()]).optional(),
+  requested_model: z.union([nonEmptyStringSchema, z.null()]).optional(),
+  effective_model: z.union([nonEmptyStringSchema, z.null()]).optional(),
+  requested_reasoning_effort: agentReasoningEffortSchema.nullable().optional(),
+  effective_reasoning_effort: agentReasoningEffortSchema.nullable().optional(),
   created_at: isoTimestampSchema,
   updated_at: isoTimestampSchema,
-  status: z.enum(["active", "closed"]),
+  status: z.enum(["active", "closed"]).optional(),
+  lifecycle_state: z.enum(["active", "closed"]).optional(),
+  execution_state: agentExecutionStateSchema.nullable().optional(),
+  last_message_preview: z.union([nonEmptyStringSchema, z.null()]).optional(),
 }).strict();
 
 const recordRowSchema = z.object({
   session_id: nonEmptyStringSchema,
-  session_kind: sessionKindSchema,
+  session_kind: legacySessionKindSchema,
   parent_session_id: z.union([nonEmptyStringSchema, z.null()]),
-  agent_type: subagentAgentTypeSchema.nullable(),
+  role: legacyAgentRoleSchema.nullable().optional(),
+  agent_type: legacyAgentRoleSchema.nullable().optional(),
+  mode: agentModeSchema.nullable().optional(),
+  depth: nonNegativeIntegerSchema.nullable().optional(),
+  nickname: z.union([nonEmptyStringSchema, z.null()]).optional(),
+  requested_model: z.union([nonEmptyStringSchema, z.null()]).optional(),
+  effective_model: z.union([nonEmptyStringSchema, z.null()]).optional(),
+  requested_reasoning_effort: agentReasoningEffortSchema.nullable().optional(),
+  effective_reasoning_effort: agentReasoningEffortSchema.nullable().optional(),
+  execution_state: agentExecutionStateSchema.nullable().optional(),
+  last_message_preview: z.union([nonEmptyStringSchema, z.null()]).optional(),
   title: nonEmptyStringSchema,
   provider: providerNameSchema,
   model: nonEmptyStringSchema,
@@ -76,10 +108,25 @@ const recordRowSchema = z.object({
   title_model: z.union([nonEmptyStringSchema, z.null()]),
   messages_json: z.string(),
   provider_state_json: z.union([z.string(), z.null()]),
+  provider_options_json: z.union([z.string(), z.null()]),
   todos_json: z.string(),
   harness_context_json: z.union([z.string(), z.null()]),
   cost_tracker_json: z.union([z.string(), z.null()]),
 }).strict();
+
+function normalizeSessionKind(value: z.infer<typeof legacySessionKindSchema>): PersistedSessionRecord["sessionKind"] {
+  return value === "subagent" ? "agent" : value;
+}
+
+function normalizeRole(
+  role: z.infer<typeof legacyAgentRoleSchema> | null | undefined,
+  agentType: z.infer<typeof legacyAgentRoleSchema> | null | undefined,
+): PersistedSessionRecord["role"] {
+  if (role && agentRoleSchema.safeParse(role).success) {
+    return role as PersistedSessionRecord["role"];
+  }
+  return mapLegacyAgentTypeToRole(role ?? agentType);
+}
 
 export function mapPersistedSessionSummaryRow(row: Record<string, unknown>): PersistedSessionSummary {
   const parsed = summaryRowSchema.safeParse(row);
@@ -101,20 +148,40 @@ export function mapPersistedSessionSummaryRow(row: Record<string, unknown>): Per
 export function mapPersistedSessionSubagentSummaryRow(row: Record<string, unknown>) {
   const parsed = subagentSummaryRowSchema.safeParse(row);
   if (!parsed.success) {
-    throw new Error(`Invalid subagent summary row: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
+    throw new Error(`Invalid agent summary row: ${parsed.error.issues[0]?.message ?? "validation_failed"}`);
   }
 
-  return persistentSubagentSummarySchema.parse({
-    sessionId: parsed.data.session_id,
+  const normalizedRole = normalizeRole(parsed.data.role, parsed.data.agent_type);
+  if (!normalizedRole) {
+    throw new Error("Invalid agent summary row: missing normalized role");
+  }
+  const lifecycleState = parsed.data.lifecycle_state ?? parsed.data.status ?? "active";
+  const rawExecutionState = parsed.data.execution_state;
+  const executionState =
+    rawExecutionState === "running" || rawExecutionState === "pending_init"
+      ? (lifecycleState === "closed" ? "closed" : "completed")
+      : rawExecutionState
+        ?? (lifecycleState === "closed" ? "closed" : "completed");
+
+  return persistentAgentSummarySchema.parse({
+    agentId: parsed.data.session_id,
     parentSessionId: parsed.data.parent_session_id,
-    agentType: parsed.data.agent_type,
+    role: normalizedRole,
+    mode: parsed.data.mode ?? "collaborative",
+    depth: parsed.data.depth ?? 1,
+    ...(parsed.data.nickname ? { nickname: parsed.data.nickname } : {}),
+    ...(parsed.data.requested_model ? { requestedModel: parsed.data.requested_model } : {}),
+    effectiveModel: parsed.data.effective_model ?? parsed.data.model,
+    ...(parsed.data.requested_reasoning_effort ? { requestedReasoningEffort: parsed.data.requested_reasoning_effort } : {}),
+    ...(parsed.data.effective_reasoning_effort ? { effectiveReasoningEffort: parsed.data.effective_reasoning_effort } : {}),
     title: parsed.data.title,
     provider: parsed.data.provider,
-    model: parsed.data.model,
     createdAt: parsed.data.created_at,
     updatedAt: parsed.data.updated_at,
-    status: parsed.data.status,
+    lifecycleState,
+    executionState,
     busy: false,
+    ...(parsed.data.last_message_preview ? { lastMessagePreview: parsed.data.last_message_preview } : {}),
   });
 }
 
@@ -133,6 +200,9 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
         openAiContinuationStateSchema.nullable(),
         "provider_state_json",
       );
+  const providerOptions = values.provider_options_json === null
+    ? undefined
+    : parseJsonStringWithSchema(values.provider_options_json, providerOptionsSchema, "provider_options_json");
   const todos = parseJsonStringWithSchema(values.todos_json, z.array(todoItemSchema), "todos_json");
   const harnessContext = values.harness_context_json === null
     ? null
@@ -147,9 +217,18 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
 
   return {
     sessionId: values.session_id,
-    sessionKind: values.session_kind,
+    sessionKind: normalizeSessionKind(values.session_kind),
     parentSessionId: values.parent_session_id,
-    agentType: values.agent_type,
+    role: normalizeRole(values.role, values.agent_type),
+    mode: values.mode ?? null,
+    depth: values.depth ?? null,
+    nickname: values.nickname ?? null,
+    requestedModel: values.requested_model ?? null,
+    effectiveModel: values.effective_model ?? null,
+    requestedReasoningEffort: values.requested_reasoning_effort ?? null,
+    effectiveReasoningEffort: values.effective_reasoning_effort ?? null,
+    executionState: values.execution_state ?? null,
+    lastMessagePreview: values.last_message_preview ?? null,
     title: values.title,
     titleSource: values.title_source,
     titleModel: values.title_model,
@@ -170,6 +249,7 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
     systemPrompt: values.system_prompt,
     messages,
     providerState,
+    providerOptions: providerOptions as PersistedSessionRecord["providerOptions"],
     todos,
     harnessContext: harnessContext as HarnessContextState | null,
     costTracker,

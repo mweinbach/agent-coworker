@@ -288,6 +288,7 @@ Notes:
 | [docs/session-storage-architecture.md](docs/session-storage-architecture.md) | SQLite session storage and resume behavior |
 | [docs/custom-tools.md](docs/custom-tools.md) | Extending Cowork with custom tools |
 | [docs/harness/index.md](docs/harness/index.md) | Harness docs index |
+| [docs/harness/config.md](docs/harness/config.md) | Harness config precedence, env vars, and runtime flags |
 | [docs/harness/runbook.md](docs/harness/runbook.md) | Running harness scenarios and collecting artifacts |
 | [docs/harness/observability.md](docs/harness/observability.md) | Langfuse and observability wiring |
 

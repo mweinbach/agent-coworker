@@ -1,22 +1,26 @@
-import type { PersistentSubagentSummary, SubagentAgentType } from "../shared/persistentSubagents";
+import type { AgentReasoningEffort, PersistentAgentSummary, AgentRole } from "../shared/agents";
 import type { AgentConfig } from "../types";
 import type { TodoItem } from "../types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "../session/costTracker";
 
-export type PersistentAgentWaitResult = {
-  agentId: string;
-  sessionId: string;
-  status: "completed" | "running" | "error" | "closed";
-  busy: boolean;
-  text?: string;
+export type AgentWaitResult = {
+  timedOut: boolean;
+  agents: PersistentAgentSummary[];
 };
 
-export interface PersistentAgentControl {
-  spawn: (opts: { task: string; agentType?: SubagentAgentType }) => Promise<PersistentSubagentSummary>;
-  list: () => Promise<PersistentSubagentSummary[]>;
-  sendInput: (opts: { agentId: string; task: string }) => Promise<void>;
-  wait: (opts: { agentId: string; timeoutMs?: number }) => Promise<PersistentAgentWaitResult>;
-  close: (opts: { agentId: string }) => Promise<PersistentSubagentSummary>;
+export interface AgentControl {
+  spawn: (opts: {
+    message: string;
+    role?: AgentRole;
+    model?: string;
+    reasoningEffort?: AgentReasoningEffort;
+    forkContext?: boolean;
+  }) => Promise<PersistentAgentSummary>;
+  list: () => Promise<PersistentAgentSummary[]>;
+  sendInput: (opts: { agentId: string; message: string; interrupt?: boolean }) => Promise<void>;
+  wait: (opts: { agentIds: string[]; timeoutMs?: number }) => Promise<AgentWaitResult>;
+  resume: (opts: { agentId: string }) => Promise<PersistentAgentSummary>;
+  close: (opts: { agentId: string }) => Promise<PersistentAgentSummary>;
 }
 
 export interface ToolContext {
@@ -47,8 +51,11 @@ export interface ToolContext {
    */
   turnUserPrompt?: string;
 
+  /** Optional role for child-agent tool filtering. */
+  agentRole?: AgentRole;
+
   /** Session-backed persistent agent lifecycle callbacks. */
-  persistentAgentControl?: PersistentAgentControl;
+  agentControl?: AgentControl;
 
   /** Session-level cost tracker. Tools can query and set budget thresholds. */
   costTracker?: SessionCostTracker;

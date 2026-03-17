@@ -9,6 +9,7 @@ import {
   type OauthStdioMode,
 } from "../connect";
 import { PROVIDER_NAMES, type ProviderName } from "../types";
+import { resolveAuthHomeDir } from "../utils/authHome";
 
 export type ProviderAuthMethodType = "api" | "oauth";
 
@@ -109,6 +110,7 @@ export async function setProviderApiKey(opts: {
   paths?: AiCoworkerPaths;
   connect: ConnectProviderHandler;
 }): Promise<ConnectProviderResult> {
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
   const method = resolveProviderAuthMethod(opts.provider, opts.methodId);
   if (!method) {
     return { ok: false, provider: opts.provider, message: `Unsupported auth method "${opts.methodId}".` };
@@ -126,7 +128,7 @@ export async function setProviderApiKey(opts: {
       const saved = await writeToolApiKey({
         name: "exa",
         apiKey,
-        paths: opts.paths,
+        paths,
       });
       return {
         ok: true,
@@ -149,7 +151,7 @@ export async function setProviderApiKey(opts: {
     provider: opts.provider,
     apiKey,
     cwd: opts.cwd,
-    paths: opts.paths,
+    paths,
   });
 }
 
@@ -161,6 +163,7 @@ export async function copyProviderApiKey(opts: {
   paths?: AiCoworkerPaths;
   connect: ConnectProviderHandler;
 }): Promise<ConnectProviderResult> {
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
   const method = resolveProviderAuthMethod(opts.provider, opts.methodId);
   if (!method) {
     return { ok: false, provider: opts.provider, message: `Unsupported auth method "${opts.methodId}".` };
@@ -169,7 +172,6 @@ export async function copyProviderApiKey(opts: {
     return { ok: false, provider: opts.provider, message: `Method "${opts.methodId}" is not an API key method.` };
   }
 
-  const paths = opts.paths ?? getAiCoworkerPaths();
   const store = await readConnectionStore(paths);
   const targetEntry = store.services[opts.provider];
   const targetApiKey = targetEntry?.mode === "api_key" ? targetEntry.apiKey?.trim() ?? "" : "";
@@ -208,6 +210,7 @@ export async function callbackProviderAuth(opts: {
   oauthStdioMode?: OauthStdioMode;
   onOauthLine?: (line: string) => void;
 }): Promise<ConnectProviderResult> {
+  const paths = opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() });
   const method = resolveProviderAuthMethod(opts.provider, opts.methodId);
   if (!method) {
     return { ok: false, provider: opts.provider, message: `Unsupported auth method "${opts.methodId}".` };
@@ -232,7 +235,7 @@ export async function callbackProviderAuth(opts: {
     methodId: opts.methodId,
     code,
     cwd: opts.cwd,
-    paths: opts.paths,
+    paths,
     oauthStdioMode: opts.oauthStdioMode,
     onOauthLine: opts.onOauthLine,
   });
@@ -246,6 +249,6 @@ export async function logoutProviderAuth(opts: {
   const disconnect = opts.disconnect ?? disconnectProvider;
   return await disconnect({
     provider: opts.provider,
-    paths: opts.paths,
+    paths: opts.paths ?? getAiCoworkerPaths({ homedir: resolveAuthHomeDir() }),
   });
 }

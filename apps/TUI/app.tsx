@@ -159,6 +159,13 @@ function GlobalHotkeys() {
       action: () => import("./component/dialog-status").then(({ openStatusDialog }) => openStatusDialog(dialog)),
     },
     {
+      id: "show-agents",
+      name: "Show Agents",
+      description: "Open child agent viewer",
+      category: "system",
+      action: () => import("./routes/session/dialog-subagent").then(({ openSubagentDialog }) => openSubagentDialog(dialog)),
+    },
+    {
       id: "connect-provider",
       name: "Connect Provider",
       description: "Open provider connection dialog",

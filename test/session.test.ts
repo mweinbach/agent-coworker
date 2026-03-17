@@ -2442,6 +2442,381 @@ describe("AgentSession", () => {
       expect(busyFalseIdxAfter).toBeGreaterThan(busyTrueIdx);
     });
 
+    test("accepts steer_message for the active turn without emitting another busy=true", async () => {
+      const { session, events } = makeSession();
+
+      let capturedPrepareStep: ((step: { stepNumber: number; messages: any[] }) => Promise<any>) | undefined;
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementation(
+        (params: any) =>
+          new Promise((resolve) => {
+            capturedPrepareStep = params.prepareStep;
+            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          }),
+      );
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const busyTrue = events.find((e) => e.type === "session_busy" && (e as any).busy === true) as any;
+      expect(busyTrue?.turnId).toBeTruthy();
+
+      await session.sendSteerMessage("narrow the scope", busyTrue.turnId, "steer-1");
+
+      const steerAccepted = events.find((e) => e.type === "steer_accepted") as Extract<ServerEvent, { type: "steer_accepted" }> | undefined;
+      expect(steerAccepted).toBeDefined();
+      expect(steerAccepted?.turnId).toBe(busyTrue.turnId);
+      expect(events.filter((e) => e.type === "session_busy" && (e as any).busy === true)).toHaveLength(1);
+      expect(
+        events.some((e) => e.type === "user_message" && (e as any).text === "narrow the scope"),
+      ).toBe(false);
+
+      await capturedPrepareStep?.({
+        stepNumber: 1,
+        messages: [{ role: "user", content: "go" }],
+      });
+
+      resolveRunTurn();
+      await turnPromise;
+    });
+
+    test("rejects steer_message for the wrong active turn id", async () => {
+      const { session, events } = makeSession();
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          }),
+      );
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.sendSteerMessage("continue", "wrong-turn", "steer-wrong");
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt?.message).toBe("Active turn mismatch.");
+      expect(events.some((e) => e.type === "steer_accepted")).toBe(false);
+
+      resolveRunTurn();
+      await turnPromise;
+    });
+
+    test("commits an accepted steer only when prepareStep drains it", async () => {
+      const { session, events } = makeSession();
+      let capturedPrepareStep: ((step: { stepNumber: number; messages: any[] }) => Promise<any>) | undefined;
+      let resolveRunTurn!: () => void;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        capturedPrepareStep = params.prepareStep;
+        await new Promise<void>((resolve) => {
+          resolveRunTurn = resolve;
+        });
+        return {
+          text: "done",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "done" }],
+        };
+      });
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const activeTurnId = session.activeTurnId;
+      expect(activeTurnId).toBeTruthy();
+      await session.sendSteerMessage("mention the queue behavior", activeTurnId!, "steer-commit");
+
+      expect((session as any).state.allMessages.some((message: any) => message.content === "mention the queue behavior")).toBe(false);
+      expect(
+        events.some((e) => e.type === "user_message" && (e as any).clientMessageId === "steer-commit"),
+      ).toBe(false);
+
+      const baseMessages = [{ role: "user", content: "go" }];
+      const prepareResult = await capturedPrepareStep?.({ stepNumber: 2, messages: baseMessages });
+      expect(prepareResult?.messages).toEqual([
+        ...baseMessages,
+        { role: "user", content: "mention the queue behavior" },
+      ]);
+      expect((session as any).state.allMessages.some((message: any) => message.content === "mention the queue behavior")).toBe(true);
+      expect(
+        events.some((e) =>
+          e.type === "user_message"
+          && (e as any).text === "mention the queue behavior"
+          && (e as any).clientMessageId === "steer-commit"),
+      ).toBe(true);
+
+      resolveRunTurn();
+      await turnPromise;
+    });
+
+    test("injects a steer before the next model step in the same pass", async () => {
+      const { session } = makeSession();
+      const stepMessages: any[][] = [];
+      let allowSecondStep!: () => void;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const initialMessages = [{ role: "user", content: "go" }];
+        const stepOne = await params.prepareStep?.({ stepNumber: 1, messages: initialMessages });
+        stepMessages.push(stepOne?.messages ?? initialMessages);
+
+        await new Promise<void>((resolve) => {
+          allowSecondStep = resolve;
+        });
+
+        const stepTwo = await params.prepareStep?.({
+          stepNumber: 2,
+          messages: stepMessages[0]!,
+        });
+        stepMessages.push(stepTwo?.messages ?? stepMessages[0]!);
+
+        return {
+          text: "done",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "done" }],
+        };
+      });
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      await session.sendSteerMessage("mention tests", session.activeTurnId!, "steer-step");
+      allowSecondStep();
+      await turnPromise;
+
+      expect(stepMessages).toHaveLength(2);
+      expect(stepMessages[1]?.at(-1)).toEqual({ role: "user", content: "mention tests" });
+    });
+
+    test("late steer continuations only receive the remaining maxSteps budget", async () => {
+      const { session } = makeSession();
+      (session as any).state.maxSteps = 2;
+      const seenMaxSteps: number[] = [];
+      let runCount = 0;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        runCount += 1;
+        seenMaxSteps.push(params.maxSteps);
+        await params.onModelStreamPart?.({ type: "start-step", stepNumber: 1 });
+
+        if (runCount === 1) {
+          queueMicrotask(() => {
+            void session.sendSteerMessage("follow up once", session.activeTurnId!, "steer-remaining-steps");
+          });
+        }
+
+        return {
+          text: runCount === 1 ? "first pass" : "second pass",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: runCount === 1 ? "first pass" : "second pass" }],
+        };
+      });
+
+      await session.sendUserMessage("go");
+
+      expect(seenMaxSteps).toEqual([2, 1]);
+    });
+
+    test("continues the same outer turn for a late steer and emits one aggregated turn_usage", async () => {
+      const { session, events } = makeSession();
+      const seenTurnIds: string[] = [];
+      const secondPassMessages: any[][] = [];
+      let runCount = 0;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        runCount += 1;
+        seenTurnIds.push(String(params.telemetryContext?.metadata?.turnId ?? ""));
+
+        if (runCount === 1) {
+          queueMicrotask(() => {
+            void session.sendSteerMessage("follow up in the same turn", session.activeTurnId!, "steer-late");
+          });
+          return {
+            text: "first pass",
+            reasoningText: undefined,
+            responseMessages: [{ role: "assistant", content: "first pass" }],
+            usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+            providerState: {
+              provider: "openai",
+              model: "gpt-5.2",
+              responseId: "resp_1",
+              updatedAt: new Date().toISOString(),
+            },
+          };
+        }
+
+        secondPassMessages.push([...params.messages]);
+        const prepareResult = await params.prepareStep?.({
+          stepNumber: 1,
+          messages: params.messages,
+        });
+        expect(prepareResult).toBeUndefined();
+
+        return {
+          text: "second pass",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "second pass" }],
+          usage: { promptTokens: 2, completionTokens: 3, totalTokens: 5 },
+        };
+      });
+
+      await session.sendUserMessage("go");
+
+      expect(runCount).toBe(2);
+      expect(new Set(seenTurnIds).size).toBe(1);
+      expect(secondPassMessages).toHaveLength(1);
+      expect(secondPassMessages[0]?.at(-1)).toEqual({
+        role: "user",
+        content: "follow up in the same turn",
+      });
+      expect(events.filter((e) => e.type === "session_busy" && (e as any).busy === true)).toHaveLength(1);
+
+      const usageEvents = events.filter((e) => e.type === "turn_usage") as Array<Extract<ServerEvent, { type: "turn_usage" }>>;
+      expect(usageEvents).toHaveLength(1);
+      expect(usageEvents[0]?.turnId).toBe(seenTurnIds[0]);
+      expect(usageEvents[0]?.usage).toMatchObject({
+        promptTokens: 12,
+        completionTokens: 8,
+        totalTokens: 20,
+      });
+
+      const tracker = (session as any).state.costTracker as SessionCostTracker;
+      const compact = tracker.getCompactSnapshot();
+      expect(compact.totalTurns).toBe(1);
+      expect(compact.turns).toHaveLength(1);
+      expect(compact.turns[0]?.turnId).toBe(seenTurnIds[0]);
+    });
+
+    test("does not commit a late steer after the turn is cancelled", async () => {
+      const { session, events } = makeSession();
+      let runCount = 0;
+
+      mockRunTurn.mockImplementation(async () => {
+        runCount += 1;
+        if (runCount === 1) {
+          queueMicrotask(() => {
+            void session.sendSteerMessage("follow up in the same turn", session.activeTurnId!, "steer-cancelled");
+            queueMicrotask(() => {
+              session.cancel();
+            });
+          });
+          return {
+            text: "first pass",
+            reasoningText: undefined,
+            responseMessages: [{ role: "assistant", content: "first pass" }],
+          };
+        }
+
+        throw new Error("late steer continuation should not run after cancellation");
+      });
+
+      await session.sendUserMessage("go");
+
+      expect(runCount).toBe(1);
+      expect(
+        (session as any).state.allMessages.some((message: any) => message.content === "follow up in the same turn"),
+      ).toBe(false);
+      expect(
+        events.some((e) =>
+          e.type === "user_message"
+          && (e as any).clientMessageId === "steer-cancelled"),
+      ).toBe(false);
+    });
+
+    test("persists aggregated usage when a late steer continuation errors after an earlier pass consumed tokens", async () => {
+      const { session, events } = makeSession();
+      let runCount = 0;
+
+      mockRunTurn.mockImplementation(async () => {
+        runCount += 1;
+
+        if (runCount === 1) {
+          queueMicrotask(() => {
+            void session.sendSteerMessage("follow up and fail", session.activeTurnId!, "steer-error");
+          });
+          return {
+            text: "first pass",
+            reasoningText: undefined,
+            responseMessages: [{ role: "assistant", content: "first pass" }],
+            usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          };
+        }
+
+        throw new Error("follow-up provider failed");
+      });
+
+      await session.sendUserMessage("go");
+
+      expect(runCount).toBe(2);
+
+      const busyTrue = events.find(
+        (e) => e.type === "session_busy" && (e as any).busy === true
+      ) as Extract<ServerEvent, { type: "session_busy" }> | undefined;
+      expect(busyTrue?.turnId).toBeTruthy();
+
+      const usageEvents = events.filter((e) => e.type === "turn_usage") as Array<Extract<ServerEvent, { type: "turn_usage" }>>;
+      expect(usageEvents).toHaveLength(1);
+      expect(usageEvents[0]?.turnId).toBe(busyTrue?.turnId);
+      expect(usageEvents[0]?.usage).toMatchObject({
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+      });
+
+      const tracker = (session as any).state.costTracker as SessionCostTracker;
+      const compact = tracker.getCompactSnapshot();
+      expect(compact.totalTurns).toBe(1);
+      expect(compact.turns).toHaveLength(1);
+      expect(compact.turns[0]?.turnId).toBe(busyTrue?.turnId);
+      expect(compact.turns[0]?.usage).toMatchObject({
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+      });
+
+      const sessionUsageEvents = events.filter((e) => e.type === "session_usage") as Array<Extract<ServerEvent, { type: "session_usage" }>>;
+      expect(sessionUsageEvents).toHaveLength(1);
+      expect(sessionUsageEvents[0]?.usage?.totalTurns).toBe(1);
+      expect(sessionUsageEvents[0]?.usage?.turns[0]?.turnId).toBe(busyTrue?.turnId);
+
+      const errorEvt = events.find((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt?.message).toContain("follow-up provider failed");
+
+      const busyFalse = events.find(
+        (e) => e.type === "session_busy" && !(e as any).busy
+      ) as Extract<ServerEvent, { type: "session_busy" }> | undefined;
+      expect(busyFalse?.outcome).toBe("error");
+    });
+
+    test("rejects steer_message once the active turn stops accepting steering", async () => {
+      const { session, events } = makeSession();
+
+      let resolveRunTurn!: () => void;
+      mockRunTurn.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRunTurn = () => resolve({ text: "", reasoningText: undefined, responseMessages: [] });
+          }),
+      );
+
+      const turnPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const activeTurnId = session.activeTurnId;
+      expect(activeTurnId).toBeTruthy();
+      (session as any).state.acceptingSteers = false;
+
+      await session.sendSteerMessage("too late", activeTurnId!, "steer-closed");
+
+      const errorEvt = events.findLast((e) => e.type === "error") as Extract<ServerEvent, { type: "error" }> | undefined;
+      expect(errorEvt?.message).toBe("Active turn no longer accepts steering.");
+      expect(events.some((e) => e.type === "steer_accepted" && (e as any).clientMessageId === "steer-closed")).toBe(false);
+
+      resolveRunTurn();
+      await turnPromise;
+    });
+
     test("updates child session_info executionState across a successful turn", async () => {
       const { session, events } = makeSession({
         sessionInfoPatch: {

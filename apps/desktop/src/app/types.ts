@@ -73,6 +73,7 @@ export type WorkspaceDefaultsPatch = Partial<Omit<WorkspaceRecord, "userProfile"
 };
 
 export type ThreadStatus = "active" | "disconnected";
+export type ThreadBusyPolicy = "reject" | "steer" | "queue";
 
 export type ThreadTitleSource = "default" | "model" | "heuristic" | "manual";
 
@@ -86,6 +87,12 @@ export type ThreadRecord = {
   status: ThreadStatus;
   sessionId: string | null;
   lastEventSeq: number;
+};
+
+export type ThreadPendingSteer = {
+  clientMessageId: string;
+  text: string;
+  status: "sending" | "accepted";
 };
 
 export type PersistedProviderStatus = Extract<ServerEvent, { type: "provider_status" }>["providers"][number];
@@ -230,6 +237,8 @@ export type ThreadRuntime = {
   enableMcp: boolean | null;
   busy: boolean;
   busySince: string | null;
+  activeTurnId: string | null;
+  pendingSteer?: ThreadPendingSteer | null;
   feed: FeedItem[];
   transcriptOnly: boolean;
 };

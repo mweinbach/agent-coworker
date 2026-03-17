@@ -102,6 +102,12 @@ function setupJsdom(): JsdomHarness {
   });
   dom.window.requestAnimationFrame = globalThis.requestAnimationFrame;
   dom.window.cancelAnimationFrame = globalThis.cancelAnimationFrame;
+  if (typeof dom.window.HTMLElement.prototype.attachEvent !== "function") {
+    (dom.window.HTMLElement.prototype as { attachEvent?: (name: string, handler: unknown) => void }).attachEvent = () => {};
+  }
+  if (typeof dom.window.HTMLElement.prototype.detachEvent !== "function") {
+    (dom.window.HTMLElement.prototype as { detachEvent?: (name: string, handler: unknown) => void }).detachEvent = () => {};
+  }
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
   return {
@@ -172,6 +178,7 @@ describe("desktop chat view stability", () => {
           busy: false,
           busySince: null,
           feed: [],
+          pendingSteer: null,
           transcriptOnly: false,
         },
       },
@@ -208,6 +215,111 @@ describe("desktop chat view stability", () => {
       });
     } finally {
       console.error = realError;
+      harness.restore();
+    }
+  });
+
+  test("busy composer stays editable and swaps between stop and send based on draft text", async () => {
+    useAppStore.setState({
+      ready: true,
+      startupError: null,
+      view: "chat",
+      selectedWorkspaceId: "ws-1",
+      selectedThreadId: "thread-1",
+      workspaces: [
+        {
+          id: "ws-1",
+          name: "Workspace 1",
+          path: "/tmp/workspace-1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastOpenedAt: "2026-03-12T00:00:00.000Z",
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "ws-1",
+          title: "Thread 1",
+          createdAt: "2026-03-12T00:00:00.000Z",
+          lastMessageAt: "2026-03-12T00:00:00.000Z",
+          status: "active",
+          sessionId: "session-1",
+          lastEventSeq: 0,
+        },
+      ],
+      threadRuntimeById: {
+        "thread-1": {
+          wsUrl: null,
+          connected: true,
+          sessionId: "session-1",
+          config: {
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+          sessionConfig: null,
+          sessionUsage: null,
+          lastTurnUsage: null,
+          enableMcp: true,
+          busy: true,
+          busySince: "2026-03-12T00:00:05.000Z",
+          feed: [],
+          pendingSteer: null,
+          transcriptOnly: false,
+          activeTurnId: "turn-1",
+        },
+      },
+      composerText: "",
+    });
+
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(StrictMode, null, createElement(ChatView)));
+      });
+
+      const textarea = container.querySelector("textarea");
+      expect(textarea?.hasAttribute("disabled")).toBe(false);
+      expect(container.querySelector('[aria-label="Stop generating response"]')).not.toBeNull();
+
+      await act(async () => {
+        useAppStore.setState({ composerText: "tighten scope" });
+      });
+
+      expect(container.querySelector('[aria-label="Stop generating response"]')).toBeNull();
+      expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
+      expect(container.textContent).toContain("Steer ready. Press Enter to inject it into the current run.");
+
+      await act(async () => {
+        useAppStore.setState((state) => ({
+          threadRuntimeById: {
+            ...state.threadRuntimeById,
+            "thread-1": {
+              ...state.threadRuntimeById["thread-1"]!,
+              pendingSteer: {
+                clientMessageId: "cmid-1",
+                text: "tighten scope",
+                status: "sending",
+              },
+            },
+          },
+        }));
+      });
+
+      expect(container.querySelector('[aria-label="Steer current response"]')).not.toBeNull();
+      expect(container.textContent).toContain("Steer sent. Waiting for the running turn to accept it.");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
       harness.restore();
     }
   });

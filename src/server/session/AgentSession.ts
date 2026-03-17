@@ -241,6 +241,8 @@ export class AgentSession {
       connecting: false,
       abortController: null,
       currentTurnId: null,
+      acceptingSteers: false,
+      pendingSteers: [],
       currentTurnOutcome: initialCurrentTurnOutcome(hydrated),
       maxSteps: 100,
       todos: seededTodos,
@@ -605,6 +607,10 @@ export class AgentSession {
 
   get currentTurnOutcome(): "completed" | "cancelled" | "error" {
     return this.state.currentTurnOutcome;
+  }
+
+  get activeTurnId(): string | null {
+    return this.state.currentTurnId;
   }
 
   get persistenceStatus() {
@@ -1046,6 +1052,11 @@ export class AgentSession {
   async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
     await this.pendingConfigMutation.catch(() => {});
     await this.turnExecutionManager.sendUserMessage(text, clientMessageId, displayText);
+  }
+
+  async sendSteerMessage(text: string, expectedTurnId: string, clientMessageId?: string) {
+    await this.pendingConfigMutation.catch(() => {});
+    await this.turnExecutionManager.sendSteerMessage(text, expectedTurnId, clientMessageId);
   }
 
   getSessionUsage() {

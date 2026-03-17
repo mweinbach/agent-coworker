@@ -93,6 +93,7 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
+const { RUNTIME } = await import("../src/app/store.helpers");
 
 function socketByClient(client: string): MockAgentSocket {
   const socket = [...MOCK_SOCKETS].reverse().find((s) => s.opts.client === client);
@@ -125,6 +126,15 @@ describe("desktop protocol v2 mapping", () => {
   beforeEach(() => {
     workspaceId = `ws-${crypto.randomUUID()}`;
     MOCK_SOCKETS.length = 0;
+    RUNTIME.controlSockets.clear();
+    RUNTIME.threadSockets.clear();
+    RUNTIME.optimisticUserMessageIds.clear();
+    RUNTIME.pendingThreadMessages.clear();
+    RUNTIME.pendingThreadSteers.clear();
+    RUNTIME.pendingWorkspaceDefaultApplyThreadIds.clear();
+    RUNTIME.workspaceStartPromises.clear();
+    RUNTIME.workspaceStartGenerations.clear();
+    RUNTIME.modelStreamByThread.clear();
 
     useAppStore.setState({
       workspaces: [
@@ -222,6 +232,207 @@ describe("desktop protocol v2 mapping", () => {
     const notification = useAppStore.getState().notifications.at(-1);
     expect(notification?.title).toBe("Not connected");
     expect(notification?.detail).toBe("Unable to request memories.");
+  });
+
+  test("stores activeTurnId from resumed busy hello and live session_busy events", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId!;
+    const threadSocket = socketByClient("desktop");
+
+    threadSocket.emit({
+      type: "server_hello",
+      sessionId: "thread-session",
+      isResume: true,
+      busy: true,
+      turnId: "turn-resume",
+      protocolVersion: "2.0",
+      config: {
+        provider: "openai",
+        model: "gpt-5.2",
+        workingDirectory: "/tmp/workspace",
+        outputDirectory: "/tmp/workspace/output",
+      },
+    });
+
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.activeTurnId).toBe("turn-resume");
+
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-live",
+      cause: "user_message",
+    });
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.activeTurnId).toBe("turn-live");
+
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: false,
+      turnId: "turn-live",
+      outcome: "completed",
+    });
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.activeTurnId).toBeNull();
+  });
+
+  test("queues exactly one next-turn message per session_busy false transition", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId!;
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-1",
+      cause: "user_message",
+    });
+
+    await useAppStore.getState().sendMessage("queued one", "queue");
+    await useAppStore.getState().sendMessage("queued two", "queue");
+
+    expect(threadSocket.sent.filter((msg) => msg?.type === "user_message")).toHaveLength(0);
+
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: false,
+      turnId: "turn-1",
+      outcome: "completed",
+    });
+
+    const firstFlush = threadSocket.sent.filter((msg) => msg?.type === "user_message");
+    expect(firstFlush).toHaveLength(1);
+    expect(firstFlush[0]?.text).toBe("queued one");
+
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-2",
+      cause: "user_message",
+    });
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: false,
+      turnId: "turn-2",
+      outcome: "completed",
+    });
+
+    const secondFlush = threadSocket.sent.filter((msg) => msg?.type === "user_message");
+    expect(secondFlush).toHaveLength(2);
+    expect(secondFlush[1]?.text).toBe("queued two");
+  });
+
+  test("busy steer sends steer_message with activeTurnId and tracks acceptance separately from queued messages", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId!;
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-1",
+      cause: "user_message",
+    });
+
+    useAppStore.setState({ composerText: "tighten the answer" });
+    await useAppStore.getState().sendMessage("tighten the answer", "steer");
+
+    const steerMessage = threadSocket.sent.find((msg) => msg?.type === "steer_message");
+    expect(steerMessage).toBeDefined();
+    expect(steerMessage?.expectedTurnId).toBe("turn-1");
+    expect(steerMessage?.clientMessageId).toBeTruthy();
+    expect(useAppStore.getState().composerText).toBe("tighten the answer");
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toEqual({
+      clientMessageId: steerMessage!.clientMessageId,
+      text: "tighten the answer",
+      status: "sending",
+    });
+    expect(RUNTIME.pendingThreadMessages.get(threadId)?.length ?? 0).toBe(0);
+    expect(RUNTIME.pendingThreadSteers.get(threadId)?.get(steerMessage.clientMessageId)?.accepted).toBe(false);
+
+    threadSocket.emit({
+      type: "steer_accepted",
+      sessionId: "thread-session",
+      turnId: "turn-1",
+      text: "tighten the answer",
+      clientMessageId: steerMessage.clientMessageId,
+    });
+    expect(RUNTIME.pendingThreadSteers.get(threadId)?.get(steerMessage.clientMessageId)?.accepted).toBe(true);
+    expect(useAppStore.getState().composerText).toBe("");
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer?.status).toBe("accepted");
+
+    threadSocket.emit({
+      type: "user_message",
+      sessionId: "thread-session",
+      text: "tighten the answer",
+      clientMessageId: steerMessage.clientMessageId,
+    });
+    expect(RUNTIME.pendingThreadSteers.get(threadId)?.has(steerMessage.clientMessageId) ?? false).toBe(false);
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toBeNull();
+  });
+
+  test("busy steer keeps the composer text when the server rejects the steer", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId!;
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-1",
+      cause: "user_message",
+    });
+
+    useAppStore.setState({ composerText: "tighten the answer" });
+    await useAppStore.getState().sendMessage("tighten the answer", "steer");
+
+    expect(useAppStore.getState().composerText).toBe("tighten the answer");
+
+    threadSocket.emit({
+      type: "error",
+      sessionId: "thread-session",
+      message: "Active turn mismatch.",
+      code: "validation_failed",
+      source: "session",
+    });
+
+    expect(useAppStore.getState().composerText).toBe("tighten the answer");
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toBeNull();
+  });
+
+  test("busy steer ignores duplicate submits while the same draft is still pending", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId!;
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-1",
+      cause: "user_message",
+    });
+
+    useAppStore.setState({ composerText: "tighten the answer" });
+    await useAppStore.getState().sendMessage("tighten the answer", "steer");
+    await useAppStore.getState().sendMessage("tighten the answer", "steer");
+
+    const steerMessages = threadSocket.sent.filter((msg) => msg?.type === "steer_message");
+    expect(steerMessages).toHaveLength(1);
+    expect(useAppStore.getState().threadRuntimeById[threadId]?.pendingSteer).toEqual({
+      clientMessageId: steerMessages[0]!.clientMessageId,
+      text: "tighten the answer",
+      status: "sending",
+    });
   });
 
   test("requestWorkspaceMemories replaces a stale control socket when the workspace server URL changes", async () => {

@@ -25,6 +25,7 @@ import {
   appendThreadTranscript,
   basename,
   buildContextPreamble,
+  clearPendingThreadSteers,
   extractAgentStateFromTranscript,
   extractUsageStateFromTranscript,
   ensureControlSocket,
@@ -46,7 +47,7 @@ import {
   normalizeThreadTitleSource,
   truncateTitle,
 } from "../store.helpers";
-import type { ThreadRecord, WorkspaceRecord } from "../types";
+import type { ThreadBusyPolicy, ThreadRecord, WorkspaceRecord } from "../types";
 
 export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "removeThread" | "deleteThreadHistory" | "renameThread" | "newThread" | "selectThread" | "reconnectThread" | "sendMessage" | "cancelThread" | "clearThreadUsageHardCap" | "setThreadModel" | "setComposerText" | "setInjectContext" | "answerAsk" | "answerApproval" | "dismissPrompt"> {
   const closeThreadSession = (threadId: string) => {
@@ -62,6 +63,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       RUNTIME.pendingThreadMessages.delete(threadId);
       RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
+      clearPendingThreadSteers(threadId);
       try {
         sock?.close();
       } catch {
@@ -213,7 +215,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       }));
       await persistNow(get);
   
-      ensureThreadSocket(get, set, threadId, url, opts?.firstMessage);
+      ensureThreadSocket(get, set, threadId, url, opts?.firstMessage, false);
     },
   
 
@@ -290,11 +292,11 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       if (firstMessage && firstMessage.trim()) {
         queuePendingThreadMessage(threadId, firstMessage);
       }
-      ensureThreadSocket(get, set, threadId, url);
+      ensureThreadSocket(get, set, threadId, url, firstMessage, Boolean(firstMessage?.trim()));
     },
   
 
-    sendMessage: async (text: string) => {
+    sendMessage: async (text: string, busyPolicy: ThreadBusyPolicy = "reject") => {
       const activeThreadId = get().selectedThreadId;
       if (!activeThreadId) return;
   
@@ -321,11 +323,10 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         return;
       }
   
-      if (rt.busy) return;
-  
-      const ok = sendUserMessageToThread(get, set, activeThreadId, trimmed);
+      const ok = sendUserMessageToThread(get, set, activeThreadId, trimmed, busyPolicy);
       if (!ok) return;
-  
+      if (busyPolicy === "steer" && rt?.busy) return;
+
       set({ composerText: "" });
     },
   

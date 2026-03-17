@@ -16,13 +16,26 @@ import {
   type ThreadModelStreamRuntime,
 } from "../store.feedMapping";
 import type { StoreGet, StoreSet } from "../store.helpers";
-import type { ApprovalPrompt, AskPrompt, FeedItem, Notification, ThreadAgentSummary, ThreadTitleSource } from "../types";
+import type {
+  ApprovalPrompt,
+  AskPrompt,
+  FeedItem,
+  Notification,
+  ThreadAgentSummary,
+  ThreadBusyPolicy,
+  ThreadTitleSource,
+} from "../types";
 import {
   RUNTIME,
-  drainPendingThreadMessages,
+  clearPendingThreadSteer,
+  clearPendingThreadSteers,
   ensureThreadRuntime,
   getModelStreamRuntime,
+  hasPendingThreadSteer,
+  markPendingThreadSteerAccepted,
+  rememberPendingThreadSteer,
   resetModelStreamRuntime,
+  shiftPendingThreadMessage,
 } from "./runtimeState";
 
 const MAX_FEED_ITEMS = 2000;
@@ -127,7 +140,13 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     return sock.send(build(sessionId));
   }
 
-  function sendUserMessageToThread(get: StoreGet, set: StoreSet, threadId: string, text: string): boolean {
+  function sendUserMessageToThread(
+    get: StoreGet,
+    set: StoreSet,
+    threadId: string,
+    text: string,
+    busyPolicy: ThreadBusyPolicy = "reject",
+  ): boolean {
     const trimmed = text.trim();
     if (!trimmed) return false;
 
@@ -135,7 +154,94 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     if (!thread) return false;
 
     const rt = get().threadRuntimeById[threadId];
-    if (!rt?.sessionId || rt.busy) return false;
+    if (!rt?.sessionId) return false;
+
+    if (rt.busy) {
+      if (busyPolicy === "queue") {
+        RUNTIME.pendingThreadMessages.set(threadId, [
+          ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
+          trimmed,
+        ]);
+        return true;
+      }
+
+      if (busyPolicy === "steer") {
+        if (!rt.activeTurnId) return false;
+        if (rt.pendingSteer?.status === "sending" && rt.pendingSteer.text.trim() === trimmed) {
+          return false;
+        }
+
+        const clientMessageId = deps.makeId();
+        rememberPendingThreadSteer(threadId, {
+          clientMessageId,
+          text: trimmed,
+          expectedTurnId: rt.activeTurnId,
+          accepted: false,
+        });
+        set((s) => {
+          const nextRt = s.threadRuntimeById[threadId];
+          if (!nextRt) return {};
+          return {
+            threadRuntimeById: {
+              ...s.threadRuntimeById,
+              [threadId]: {
+                ...nextRt,
+                pendingSteer: {
+                  clientMessageId,
+                  text: trimmed,
+                  status: "sending",
+                },
+              },
+            },
+          };
+        });
+
+        deps.appendThreadTranscript(threadId, "client", {
+          type: "steer_message",
+          sessionId: rt.sessionId,
+          expectedTurnId: rt.activeTurnId,
+          text: trimmed,
+          clientMessageId,
+        });
+
+        const ok = sendThread(get, threadId, (sessionId) => ({
+          type: "steer_message",
+          sessionId,
+          expectedTurnId: rt.activeTurnId!,
+          text: trimmed,
+          clientMessageId,
+        }));
+
+        if (!ok) {
+          clearPendingThreadSteer(threadId, clientMessageId);
+          set((s) => {
+            const nextRt = s.threadRuntimeById[threadId];
+            if (!nextRt || nextRt.pendingSteer?.clientMessageId !== clientMessageId) return {};
+            return {
+              threadRuntimeById: {
+                ...s.threadRuntimeById,
+                [threadId]: {
+                  ...nextRt,
+                  pendingSteer: null,
+                },
+              },
+            };
+          });
+          pushFeedItem(set, threadId, {
+            id: deps.makeId(),
+            kind: "error",
+            ts: deps.nowIso(),
+            message: "Not connected. Reconnect to continue.",
+            code: "internal_error",
+            source: "protocol",
+          });
+        }
+
+        return ok;
+      }
+
+      return false;
+    }
 
     const clientMessageId = deps.makeId();
     const optimisticSeen = RUNTIME.optimisticUserMessageIds.get(threadId) ?? new Set<string>();
@@ -179,6 +285,19 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     return true;
   }
 
+  function flushOneQueuedThreadMessage(get: StoreGet, set: StoreSet, threadId: string) {
+    const next = shiftPendingThreadMessage(threadId);
+    if (!next) return false;
+    const ok = sendUserMessageToThread(get, set, threadId, next);
+    if (!ok) {
+      RUNTIME.pendingThreadMessages.set(threadId, [
+        next,
+        ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
+      ]);
+    }
+    return ok;
+  }
+
   function applyModelStreamUpdateToThreadFeed(
     get: StoreGet,
     set: StoreSet,
@@ -210,6 +329,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     threadId: string,
     evt: ServerEvent,
     pendingFirstMessage?: string,
+    pendingFirstMessageQueued = false,
   ) {
     if (evt.type !== "server_hello") {
       const activeSessionId = get().threadRuntimeById[threadId]?.sessionId;
@@ -231,10 +351,10 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
 
     if (evt.type === "server_hello") {
       resetModelStreamRuntime(threadId);
+      const resumedBusy = evt.isResume ? Boolean(evt.busy) : false;
       set((s) => {
         const rt = s.threadRuntimeById[threadId];
         if (!rt) return {};
-        const resumedBusy = evt.isResume ? Boolean(evt.busy) : false;
         const sessionKind = evt.sessionKind ?? "root";
         return {
           threadRuntimeById: {
@@ -259,6 +379,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
               agents: sessionKind === "agent" ? [] : (evt.isResume ? rt.agents : []),
               busy: resumedBusy,
               busySince: resumedBusy ? rt.busySince ?? deps.nowIso() : null,
+              activeTurnId: resumedBusy ? (evt.turnId ?? null) : null,
+              pendingSteer: resumedBusy ? rt.pendingSteer : null,
               transcriptOnly: false,
             },
           },
@@ -268,6 +390,9 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         };
       });
       deps.persist(get);
+      if (!resumedBusy) {
+        clearPendingThreadSteers(threadId);
+      }
 
       void get().applyWorkspaceDefaultsToThread(threadId, "auto");
       RUNTIME.threadSockets.get(threadId)?.send({
@@ -281,13 +406,24 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         });
       }
 
+      let sentPendingFirstMessage = false;
       if (pendingFirstMessage && pendingFirstMessage.trim()) {
-        sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
+        if (resumedBusy) {
+          if (!pendingFirstMessageQueued) {
+            RUNTIME.pendingThreadMessages.set(threadId, [
+              pendingFirstMessage.trim(),
+              ...(RUNTIME.pendingThreadMessages.get(threadId) ?? []),
+            ]);
+          }
+        } else {
+          sentPendingFirstMessage = pendingFirstMessageQueued
+            ? flushOneQueuedThreadMessage(get, set, threadId)
+            : sendUserMessageToThread(get, set, threadId, pendingFirstMessage);
+        }
       }
 
-      const queued = drainPendingThreadMessages(threadId);
-      for (const msg of queued) {
-        sendUserMessageToThread(get, set, threadId, msg);
+      if (!resumedBusy && !sentPendingFirstMessage) {
+        flushOneQueuedThreadMessage(get, set, threadId);
       }
       return;
     }
@@ -324,12 +460,51 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         return {
           threadRuntimeById: {
             ...s.threadRuntimeById,
-            [threadId]: { ...rt, busy: evt.busy, busySince: evt.busy ? rt.busySince ?? deps.nowIso() : null },
+            [threadId]: {
+              ...rt,
+              busy: evt.busy,
+              busySince: evt.busy ? rt.busySince ?? deps.nowIso() : null,
+              activeTurnId: evt.busy ? (evt.turnId ?? rt.activeTurnId) : null,
+              pendingSteer: evt.busy ? rt.pendingSteer : null,
+            },
           },
         };
       });
       if (!evt.busy && RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)) {
         void get().applyWorkspaceDefaultsToThread(threadId, "auto");
+      }
+      if (!evt.busy) {
+        clearPendingThreadSteers(threadId);
+        flushOneQueuedThreadMessage(get, set, threadId);
+      }
+      return;
+    }
+
+    if (evt.type === "steer_accepted") {
+      if (typeof evt.clientMessageId === "string") {
+        markPendingThreadSteerAccepted(threadId, evt.clientMessageId);
+        set((s) => {
+          const rt = s.threadRuntimeById[threadId];
+          const pendingSteer = rt?.pendingSteer;
+          if (!rt || !pendingSteer || pendingSteer.clientMessageId !== evt.clientMessageId) return {};
+          return {
+            threadRuntimeById: {
+              ...s.threadRuntimeById,
+              [threadId]: {
+                ...rt,
+                pendingSteer: {
+                  ...pendingSteer,
+                  status: "accepted",
+                },
+              },
+            },
+          };
+        });
+      }
+      const activeThreadId = get().selectedThreadId;
+      const composerText = get().composerText.trim();
+      if (activeThreadId === threadId && composerText.length > 0 && composerText === evt.text.trim()) {
+        set({ composerText: "" });
       }
       return;
     }
@@ -534,6 +709,22 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     if (evt.type === "user_message") {
       resetModelStreamRuntime(threadId);
       const cmid = typeof evt.clientMessageId === "string" ? evt.clientMessageId : null;
+      if (cmid && hasPendingThreadSteer(threadId, cmid)) {
+        clearPendingThreadSteer(threadId, cmid);
+        set((s) => {
+          const rt = s.threadRuntimeById[threadId];
+          if (!rt || rt.pendingSteer?.clientMessageId !== cmid) return {};
+          return {
+            threadRuntimeById: {
+              ...s.threadRuntimeById,
+              [threadId]: {
+                ...rt,
+                pendingSteer: null,
+              },
+            },
+          };
+        });
+      }
       if (cmid) {
         const seen = RUNTIME.optimisticUserMessageIds.get(threadId);
         if (seen && seen.has(cmid)) return;
@@ -686,6 +877,22 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           detail: `${evt.source}/${evt.code}: ${evt.message}`,
         }),
       }));
+      if (evt.code === "validation_failed") {
+        set((s) => {
+          const rt = s.threadRuntimeById[threadId];
+          if (!rt?.pendingSteer) return {};
+          return {
+            threadRuntimeById: {
+              ...s.threadRuntimeById,
+              [threadId]: {
+                ...rt,
+                pendingSteer: null,
+              },
+            },
+          };
+        });
+        clearPendingThreadSteers(threadId);
+      }
       return;
     }
 
@@ -703,6 +910,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     threadId: string,
     url: string,
     pendingFirstMessage?: string,
+    pendingFirstMessageQueued = false,
   ) {
     if (RUNTIME.threadSockets.has(threadId)) return;
 
@@ -716,7 +924,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       client: "desktop",
       version: "0.1.22",
       autoReconnect: true,
-      onEvent: (evt) => handleThreadEvent(get, set, threadId, evt, pendingFirstMessage),
+      onEvent: (evt) => handleThreadEvent(get, set, threadId, evt, pendingFirstMessage, pendingFirstMessageQueued),
       onClose: () => {
         RUNTIME.threadSockets.delete(threadId);
         RUNTIME.modelStreamByThread.delete(threadId);
@@ -732,6 +940,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
                 connected: false,
                 busy: false,
                 busySince: null,
+                activeTurnId: null,
+                pendingSteer: rt.pendingSteer,
               },
             },
             threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "disconnected" } : t)),

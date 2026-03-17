@@ -1,0 +1,14 @@
+{
+  "id": "gpt-5.4-mini",
+  "provider": "openai",
+  "displayName": "GPT-5.4 Mini",
+  "knowledgeCutoff": "August 31, 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/gpt-5.4.md",
+  "providerOptionsDefaults": {
+    "reasoningEffort": "high",
+    "reasoningSummary": "detailed",
+    "textVerbosity": "medium"
+  },
+  "isDefault": false
+}

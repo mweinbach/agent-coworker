@@ -75,6 +75,13 @@ describe("desktop ws protocol parser", () => {
         event: { type: "response.output_item.added", item: { type: "reasoning" } },
       },
       {
+        type: "steer_accepted",
+        sessionId: "desktop-s1",
+        turnId: "turn-1",
+        text: "tighten the answer",
+        clientMessageId: "steer-1",
+      },
+      {
         type: "error",
         sessionId: "desktop-s1",
         message: "boom",

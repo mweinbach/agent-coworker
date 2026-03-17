@@ -6,9 +6,11 @@ import {
 } from "../modelStream";
 import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
 import type { AgentExecutionState } from "../../shared/agents";
+import type { TurnUsage } from "../../session/costTracker";
 import {
   SERVER_ERROR_CODES,
   SERVER_ERROR_SOURCES,
+  type ModelMessage,
   type ServerErrorCode,
   type ServerErrorSource,
 } from "../../types";
@@ -201,6 +203,30 @@ function isInvalidOpenAiContinuationError(error: unknown): boolean {
   );
 }
 
+function mergeTurnUsage(
+  total: TurnUsage | undefined,
+  next: TurnUsage | undefined,
+): TurnUsage | undefined {
+  if (!total) return next;
+  if (!next) return total;
+
+  return {
+    promptTokens: total.promptTokens + next.promptTokens,
+    completionTokens: total.completionTokens + next.completionTokens,
+    totalTokens: total.totalTokens + next.totalTokens,
+    ...(typeof total.cachedPromptTokens === "number" || typeof next.cachedPromptTokens === "number"
+      ? { cachedPromptTokens: (total.cachedPromptTokens ?? 0) + (next.cachedPromptTokens ?? 0) }
+      : {}),
+    ...(typeof total.estimatedCostUsd === "number" || typeof next.estimatedCostUsd === "number"
+      ? { estimatedCostUsd: (total.estimatedCostUsd ?? 0) + (next.estimatedCostUsd ?? 0) }
+      : {}),
+  };
+}
+
+function isStartStepPart(part: unknown): boolean {
+  return typeof part === "object" && part !== null && (part as { type?: unknown }).type === "start-step";
+}
+
 export class TurnExecutionManager {
   constructor(
     private readonly context: SessionContext,
@@ -220,6 +246,82 @@ export class TurnExecutionManager {
   private settledExecutionState(): AgentExecutionState {
     if (this.context.state.persistenceStatus === "closed") return "closed";
     return this.context.state.currentTurnOutcome === "error" ? "errored" : "completed";
+  }
+
+  async sendSteerMessage(text: string, expectedTurnId: string, clientMessageId?: string) {
+    if (!this.context.state.running) {
+      this.context.emitError("validation_failed", "session", "No active turn to steer.");
+      return;
+    }
+
+    const currentTurnId = this.context.state.currentTurnId;
+    if (!currentTurnId) {
+      this.context.emitError("validation_failed", "session", "Active turn is missing an id.");
+      return;
+    }
+
+    if (expectedTurnId !== currentTurnId) {
+      this.context.emitError("validation_failed", "session", "Active turn mismatch.");
+      return;
+    }
+
+    if (!this.context.state.acceptingSteers) {
+      this.context.emitError("validation_failed", "session", "Active turn no longer accepts steering.");
+      return;
+    }
+
+    if (text.trim().length === 0) {
+      this.context.emitError("validation_failed", "session", "Steer text must be non-empty.");
+      return;
+    }
+
+    this.context.state.pendingSteers.push({
+      text,
+      ...(clientMessageId ? { clientMessageId } : {}),
+      acceptedAt: new Date().toISOString(),
+    });
+    this.context.emit({
+      type: "steer_accepted",
+      sessionId: this.context.id,
+      turnId: currentTurnId,
+      text,
+      ...(clientMessageId ? { clientMessageId } : {}),
+    });
+  }
+
+  private commitPendingSteers(): ModelMessage[] {
+    const drained = this.context.state.pendingSteers.splice(0);
+    if (drained.length === 0) return [];
+
+    const steerMessages = drained.map<ModelMessage>((steer) => ({
+      role: "user",
+      content: steer.text,
+    }));
+    this.deps.historyManager.appendMessagesToHistory(steerMessages);
+    for (const steer of drained) {
+      this.context.emit({
+        type: "user_message",
+        sessionId: this.context.id,
+        text: steer.text,
+        ...(steer.clientMessageId ? { clientMessageId: steer.clientMessageId } : {}),
+      });
+    }
+    this.context.queuePersistSessionSnapshot("session.steer_committed");
+    return steerMessages;
+  }
+
+  private drainPendingSteers(stepMessages: ModelMessage[]): { messages: ModelMessage[] } | undefined {
+    const steerMessages = this.commitPendingSteers();
+    if (steerMessages.length === 0) return undefined;
+    return {
+      messages: [...stepMessages, ...steerMessages],
+    };
+  }
+
+  private rejectPendingSteers(message: string) {
+    if (this.context.state.pendingSteers.length === 0) return;
+    this.context.state.pendingSteers.splice(0);
+    this.context.emitError("validation_failed", "session", message);
   }
 
   async sendUserMessage(text: string, clientMessageId?: string, displayText?: string) {
@@ -244,6 +346,7 @@ export class TurnExecutionManager {
 
     this.context.state.running = true;
     this.context.state.abortController = new AbortController();
+    this.context.state.acceptingSteers = true;
     const turnStartedAt = Date.now();
     const turnId = makeId();
     this.context.state.currentTurnId = turnId;
@@ -252,6 +355,202 @@ export class TurnExecutionManager {
     const cause: "user_message" | "command" = displayText?.startsWith("/") ? "command" : "user_message";
     let lastStreamError: unknown = null;
     let lastMessagePreview: string | undefined;
+    let aggregatedUsage: TurnUsage | undefined;
+    let persistedAggregatedUsage = false;
+    let startedStepCount = 0;
+    let streamPartIndex = 0;
+    let rawStreamEventIndex = 0;
+    const includeRawChunks = this.context.state.config.includeRawChunks ?? true;
+    const persistAggregatedUsage = () => {
+      if (persistedAggregatedUsage || !aggregatedUsage) {
+        return;
+      }
+
+      persistedAggregatedUsage = true;
+      this.context.emit({ type: "turn_usage", sessionId: this.context.id, turnId, usage: aggregatedUsage });
+
+      const tracker = this.context.state.costTracker;
+      if (tracker) {
+        tracker.recordTurn({
+          turnId,
+          provider: this.context.state.config.provider,
+          model: this.context.state.config.model,
+          usage: aggregatedUsage,
+        });
+        this.context.emit({
+          type: "session_usage",
+          sessionId: this.context.id,
+          usage: tracker.getCompactSnapshot(),
+        });
+      }
+    };
+    const invokeRunTurn = async (
+      maxSteps: number,
+      providerStateOverride = this.context.state.providerState,
+    ) =>
+      await this.context.deps.runTurnImpl({
+        config: this.context.state.config,
+        system: this.context.state.system,
+        messages: this.context.state.messages,
+        allMessages: this.context.state.allMessages,
+        providerState: providerStateOverride,
+        prepareStep: async ({ messages }) => this.drainPendingSteers(messages),
+        agentControl:
+          this.context.state.sessionInfo.sessionKind === "agent" || !this.context.deps.createAgentSessionImpl
+            ? undefined
+            : {
+                spawn: async ({ message, role, model, reasoningEffort, forkContext }) =>
+                  await this.context.deps.createAgentSessionImpl!({
+                    parentSessionId: this.context.id,
+                    parentConfig: this.context.state.config,
+                    message,
+                    ...(role ? { role } : {}),
+                    ...(model ? { model } : {}),
+                    ...(reasoningEffort ? { reasoningEffort } : {}),
+                    ...(forkContext !== undefined ? { forkContext } : {}),
+                    parentDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
+                  }),
+                list: async () =>
+                  await (this.context.deps.listAgentSessionsImpl?.(this.context.id) ?? Promise.resolve([])),
+                sendInput: async ({ agentId, message, interrupt }) => {
+                  if (!this.context.deps.sendAgentInputImpl) {
+                    throw new Error("Child-agent input is unavailable.");
+                  }
+                  await this.context.deps.sendAgentInputImpl({
+                    parentSessionId: this.context.id,
+                    agentId,
+                    message,
+                    ...(interrupt !== undefined ? { interrupt } : {}),
+                  });
+                },
+                wait: async ({ agentIds, timeoutMs }) => {
+                  if (!this.context.deps.waitForAgentImpl) {
+                    throw new Error("Child-agent waiting is unavailable.");
+                  }
+                  return await this.context.deps.waitForAgentImpl({
+                    parentSessionId: this.context.id,
+                    agentIds,
+                    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+                  });
+                },
+                resume: async ({ agentId }) => {
+                  if (!this.context.deps.resumeAgentImpl) {
+                    throw new Error("Child-agent resume is unavailable.");
+                  }
+                  return await this.context.deps.resumeAgentImpl({
+                    parentSessionId: this.context.id,
+                    agentId,
+                  });
+                },
+                close: async ({ agentId }) => {
+                  if (!this.context.deps.closeAgentImpl) {
+                    throw new Error("Child-agent closing is unavailable.");
+                  }
+                  return await this.context.deps.closeAgentImpl({
+                    parentSessionId: this.context.id,
+                    agentId,
+                  });
+                },
+              },
+        log: (line) => this.log(line),
+        askUser: (q, opts) => this.askUser(q, opts),
+        approveCommand: (cmd) => this.approveCommand(cmd),
+        updateTodos: (todos) => this.updateTodos(todos),
+        discoveredSkills: this.context.state.discoveredSkills,
+        maxSteps,
+        enableMcp: this.context.state.config.enableMcp,
+        spawnDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
+        agentRole: this.context.state.sessionInfo.role,
+        telemetryContext: {
+          functionId: "session.turn",
+          metadata: {
+            sessionId: this.context.id,
+            turnId,
+          },
+        },
+        abortSignal: this.context.state.abortController!.signal,
+        includeRawChunks,
+        costTracker: this.context.state.costTracker ?? undefined,
+        onSessionUsageBudgetUpdated: (snapshot) => {
+          this.context.emit({
+            type: "session_usage",
+            sessionId: this.context.id,
+            usage: this.context.state.costTracker?.getCompactSnapshot() ?? snapshot,
+          });
+          this.context.queuePersistSessionSnapshot("session.usage_budget_updated");
+        },
+        onModelError: async (error) => {
+          lastStreamError = error;
+          this.context.emitTelemetry("agent.stream.error", "error", {
+            sessionId: this.context.id,
+            provider: this.context.state.config.provider,
+            model: this.context.state.config.model,
+            error: this.context.formatError(error),
+          });
+        },
+        onModelAbort: async () => {
+          this.context.emitTelemetry("agent.stream.aborted", "ok", {
+            sessionId: this.context.id,
+            provider: this.context.state.config.provider,
+            model: this.context.state.config.model,
+          });
+        },
+        onModelRawEvent: async (rawEvent) => {
+          const index = rawStreamEventIndex++;
+          const eventPayload = {
+            type: "model_stream_raw" as const,
+            sessionId: this.context.id,
+            turnId,
+            index,
+            provider: this.context.state.config.provider,
+            model: this.context.state.config.model,
+            format: rawEvent.format,
+            normalizerVersion: MODEL_STREAM_NORMALIZER_VERSION,
+            event: rawEvent.event,
+          };
+          this.context.emit(eventPayload);
+          this.context.deps.sessionDb?.persistModelStreamChunk({
+            sessionId: this.context.id,
+            turnId,
+            chunkIndex: index,
+            ts: new Date().toISOString(),
+            provider: this.context.state.config.provider,
+            model: this.context.state.config.model,
+            rawFormat: rawEvent.format,
+            normalizerVersion: MODEL_STREAM_NORMALIZER_VERSION,
+            rawEvent: rawEvent.event,
+          });
+        },
+        onModelStreamPart: async (rawPart) => {
+          if (isStartStepPart(rawPart)) {
+            startedStepCount += 1;
+            this.context.state.acceptingSteers = startedStepCount < this.context.state.maxSteps;
+          }
+
+          const partIndex = streamPartIndex++;
+          const normalized = normalizeModelStreamPart(rawPart, {
+            provider: this.context.state.config.provider,
+            includeRawPart: includeRawChunks,
+            fallbackIdSeed: turnId,
+            rawPartMode: process.env.COWORK_MODEL_STREAM_RAW_MODE === "full" ? "full" : "sanitized",
+          });
+          if (normalized.partType === "error") {
+            lastStreamError = normalized.part.error;
+          }
+          this.context.emit({
+            type: "model_stream_chunk",
+            sessionId: this.context.id,
+            turnId,
+            index: partIndex,
+            provider: this.context.state.config.provider,
+            model: this.context.state.config.model,
+            normalizerVersion: normalized.normalizerVersion,
+            partType: normalized.partType,
+            part: normalized.part,
+            ...(normalized.rawPart !== undefined ? { rawPart: normalized.rawPart } : {}),
+          });
+        },
+      });
     try {
       this.context.emit({ type: "user_message", sessionId: this.context.id, text: displayText ?? text, clientMessageId });
       this.context.emit({ type: "session_busy", sessionId: this.context.id, busy: true, turnId, cause });
@@ -263,238 +562,96 @@ export class TurnExecutionManager {
       this.deps.historyManager.appendMessagesToHistory([{ role: "user", content: text }]);
       this.deps.metadataManager.maybeGenerateTitleFromQuery(text);
       this.context.queuePersistSessionSnapshot("session.user_message");
-
-      let streamPartIndex = 0;
-      let rawStreamEventIndex = 0;
-      const includeRawChunks = this.context.state.config.includeRawChunks ?? true;
-      const invokeRunTurn = async (providerStateOverride = this.context.state.providerState) =>
-        await this.context.deps.runTurnImpl({
-          config: this.context.state.config,
-          system: this.context.state.system,
-          messages: this.context.state.messages,
-          allMessages: this.context.state.allMessages,
-          providerState: providerStateOverride,
-          agentControl:
-            this.context.state.sessionInfo.sessionKind === "agent" || !this.context.deps.createAgentSessionImpl
-              ? undefined
-              : {
-                  spawn: async ({ message, role, model, reasoningEffort, forkContext }) =>
-                    await this.context.deps.createAgentSessionImpl!({
-                      parentSessionId: this.context.id,
-                      parentConfig: this.context.state.config,
-                      message,
-                      ...(role ? { role } : {}),
-                      ...(model ? { model } : {}),
-                      ...(reasoningEffort ? { reasoningEffort } : {}),
-                      ...(forkContext !== undefined ? { forkContext } : {}),
-                      parentDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
-                    }),
-                  list: async () =>
-                    await (this.context.deps.listAgentSessionsImpl?.(this.context.id) ?? Promise.resolve([])),
-                  sendInput: async ({ agentId, message, interrupt }) => {
-                    if (!this.context.deps.sendAgentInputImpl) {
-                      throw new Error("Child-agent input is unavailable.");
-                    }
-                    await this.context.deps.sendAgentInputImpl({
-                      parentSessionId: this.context.id,
-                      agentId,
-                      message,
-                      ...(interrupt !== undefined ? { interrupt } : {}),
-                    });
-                  },
-                  wait: async ({ agentIds, timeoutMs }) => {
-                    if (!this.context.deps.waitForAgentImpl) {
-                      throw new Error("Child-agent waiting is unavailable.");
-                    }
-                    return await this.context.deps.waitForAgentImpl({
-                      parentSessionId: this.context.id,
-                      agentIds,
-                      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-                    });
-                  },
-                  resume: async ({ agentId }) => {
-                    if (!this.context.deps.resumeAgentImpl) {
-                      throw new Error("Child-agent resume is unavailable.");
-                    }
-                    return await this.context.deps.resumeAgentImpl({
-                      parentSessionId: this.context.id,
-                      agentId,
-                    });
-                  },
-                  close: async ({ agentId }) => {
-                    if (!this.context.deps.closeAgentImpl) {
-                      throw new Error("Child-agent closing is unavailable.");
-                    }
-                    return await this.context.deps.closeAgentImpl({
-                      parentSessionId: this.context.id,
-                      agentId,
-                    });
-                  },
-                },
-          log: (line) => this.log(line),
-          askUser: (q, opts) => this.askUser(q, opts),
-          approveCommand: (cmd) => this.approveCommand(cmd),
-          updateTodos: (todos) => this.updateTodos(todos),
-          discoveredSkills: this.context.state.discoveredSkills,
-          maxSteps: this.context.state.maxSteps,
-          enableMcp: this.context.state.config.enableMcp,
-          spawnDepth: typeof this.context.state.sessionInfo.depth === "number" ? this.context.state.sessionInfo.depth : 0,
-          agentRole: this.context.state.sessionInfo.role,
-          telemetryContext: {
-            functionId: "session.turn",
-            metadata: {
-              sessionId: this.context.id,
-              turnId,
-            },
-          },
-          abortSignal: this.context.state.abortController!.signal,
-          includeRawChunks,
-          costTracker: this.context.state.costTracker ?? undefined,
-          onSessionUsageBudgetUpdated: (snapshot) => {
-            this.context.emit({
-              type: "session_usage",
-              sessionId: this.context.id,
-              usage: this.context.state.costTracker?.getCompactSnapshot() ?? snapshot,
-            });
-            this.context.queuePersistSessionSnapshot("session.usage_budget_updated");
-          },
-          onModelError: async (error) => {
-            lastStreamError = error;
-            this.context.emitTelemetry("agent.stream.error", "error", {
-              sessionId: this.context.id,
-              provider: this.context.state.config.provider,
-              model: this.context.state.config.model,
-              error: this.context.formatError(error),
-            });
-          },
-          onModelAbort: async () => {
-            this.context.emitTelemetry("agent.stream.aborted", "ok", {
-              sessionId: this.context.id,
-              provider: this.context.state.config.provider,
-              model: this.context.state.config.model,
-            });
-          },
-          onModelRawEvent: async (rawEvent) => {
-            const index = rawStreamEventIndex++;
-            const eventPayload = {
-              type: "model_stream_raw" as const,
-              sessionId: this.context.id,
-              turnId,
-              index,
-              provider: this.context.state.config.provider,
-              model: this.context.state.config.model,
-              format: rawEvent.format,
-              normalizerVersion: MODEL_STREAM_NORMALIZER_VERSION,
-              event: rawEvent.event,
-            };
-            this.context.emit(eventPayload);
-            this.context.deps.sessionDb?.persistModelStreamChunk({
-              sessionId: this.context.id,
-              turnId,
-              chunkIndex: index,
-              ts: new Date().toISOString(),
-              provider: this.context.state.config.provider,
-              model: this.context.state.config.model,
-              rawFormat: rawEvent.format,
-              normalizerVersion: MODEL_STREAM_NORMALIZER_VERSION,
-              rawEvent: rawEvent.event,
-            });
-          },
-          onModelStreamPart: async (rawPart) => {
-            const partIndex = streamPartIndex++;
-            const normalized = normalizeModelStreamPart(rawPart, {
-              provider: this.context.state.config.provider,
-              includeRawPart: includeRawChunks,
-              fallbackIdSeed: turnId,
-              rawPartMode: process.env.COWORK_MODEL_STREAM_RAW_MODE === "full" ? "full" : "sanitized",
-            });
-            if (normalized.partType === "error") {
-              lastStreamError = normalized.part.error;
-            }
-            this.context.emit({
-              type: "model_stream_chunk",
-              sessionId: this.context.id,
-              turnId,
-              index: partIndex,
-              provider: this.context.state.config.provider,
-              model: this.context.state.config.model,
-              normalizerVersion: normalized.normalizerVersion,
-              partType: normalized.partType,
-              part: normalized.part,
-              ...(normalized.rawPart !== undefined ? { rawPart: normalized.rawPart } : {}),
-            });
-          },
-        });
-
-      let res;
-      try {
-        res = await invokeRunTurn();
-      } catch (error) {
-        const shouldRetryContinuation =
-          supportsOpenAiContinuation(this.context.state.config.provider) &&
-          this.context.state.providerState !== null &&
-          isInvalidOpenAiContinuationError(error);
-
-        if (!shouldRetryContinuation) {
-          throw error;
+      let continueSameTurn = true;
+      while (continueSameTurn) {
+        const remainingSteps = this.context.state.maxSteps - startedStepCount;
+        if (remainingSteps <= 0) {
+          this.context.state.acceptingSteers = false;
+          this.rejectPendingSteers("Active turn reached its max step budget and can no longer accept steering.");
+          break;
         }
 
-        this.log("[warn] stored OpenAI continuation handle was rejected; retrying from local transcript");
-        this.context.state.providerState = null;
-        this.context.queuePersistSessionSnapshot("session.provider_state_invalidated");
-        res = await invokeRunTurn(null);
-      }
+        const startedStepsBeforePass = startedStepCount;
+        let res;
+        try {
+          res = await invokeRunTurn(remainingSteps);
+        } catch (error) {
+          const shouldRetryContinuation =
+            supportsOpenAiContinuation(this.context.state.config.provider) &&
+            this.context.state.providerState !== null &&
+            isInvalidOpenAiContinuationError(error);
 
-      if (supportsOpenAiContinuation(this.context.state.config.provider)) {
-        this.context.state.providerState = res.providerState ?? null;
-      }
+          if (!shouldRetryContinuation) {
+            throw error;
+          }
 
-      const out =
-        (res.text || "").trim() ||
-        extractAssistantTextFromResponseMessages(res.responseMessages);
-      const malformedToolCallFailure = detectMalformedToolCallFailure(res.responseMessages, out);
-      if (malformedToolCallFailure) {
-        throw Object.assign(new Error(malformedToolCallFailure), {
-          code: "provider_error" as const,
-          source: "provider" as const,
-        });
-      }
+          this.log("[warn] stored OpenAI continuation handle was rejected; retrying from local transcript");
+          this.context.state.providerState = null;
+          this.context.queuePersistSessionSnapshot("session.provider_state_invalidated");
+          res = await invokeRunTurn(remainingSteps, null);
+        }
 
-      this.deps.historyManager.appendMessagesToHistory(res.responseMessages);
-      this.context.queuePersistSessionSnapshot("session.turn_response");
+        if (startedStepCount === startedStepsBeforePass) {
+          startedStepCount += 1;
+          this.context.state.acceptingSteers = startedStepCount < this.context.state.maxSteps;
+        }
 
-      const reasoning = (res.reasoningText || "").trim();
-      if (reasoning) {
-        const kind = reasoningModeForProvider(this.context.state.config.provider);
-        this.context.emit({ type: "reasoning", sessionId: this.context.id, kind, text: reasoning });
-      }
+        if (supportsOpenAiContinuation(this.context.state.config.provider)) {
+          this.context.state.providerState = res.providerState ?? null;
+        }
 
-      if (out) {
-        lastMessagePreview = normalizePreviewText(out);
-        this.context.emit({ type: "assistant_message", sessionId: this.context.id, text: out });
-      }
-
-      if (res.usage) {
-        this.context.emit({ type: "turn_usage", sessionId: this.context.id, turnId, usage: res.usage });
-
-        // Record in cost tracker for cumulative tracking.
-        const tracker = this.context.state.costTracker;
-        if (tracker) {
-          const entry = tracker.recordTurn({
-            turnId,
-            provider: this.context.state.config.provider,
-            model: this.context.state.config.model,
-            usage: res.usage,
-          });
-
-          // Emit cumulative session usage after each turn.
-          this.context.emit({
-            type: "session_usage",
-            sessionId: this.context.id,
-            usage: tracker.getCompactSnapshot(),
+        const out =
+          (res.text || "").trim() ||
+          extractAssistantTextFromResponseMessages(res.responseMessages);
+        const malformedToolCallFailure = detectMalformedToolCallFailure(res.responseMessages, out);
+        if (malformedToolCallFailure) {
+          throw Object.assign(new Error(malformedToolCallFailure), {
+            code: "provider_error" as const,
+            source: "provider" as const,
           });
         }
+
+        this.deps.historyManager.appendMessagesToHistory(res.responseMessages);
+        this.context.queuePersistSessionSnapshot("session.turn_response");
+
+        const reasoning = (res.reasoningText || "").trim();
+        if (reasoning) {
+          const kind = reasoningModeForProvider(this.context.state.config.provider);
+          this.context.emit({ type: "reasoning", sessionId: this.context.id, kind, text: reasoning });
+        }
+
+        if (out) {
+          lastMessagePreview = normalizePreviewText(out);
+          this.context.emit({ type: "assistant_message", sessionId: this.context.id, text: out });
+        }
+
+        aggregatedUsage = mergeTurnUsage(aggregatedUsage, res.usage);
+
+        if (startedStepCount >= this.context.state.maxSteps) {
+          this.context.state.acceptingSteers = false;
+          this.rejectPendingSteers("Active turn reached its max step budget and can no longer accept steering.");
+          continueSameTurn = false;
+          continue;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (this.context.state.abortController?.signal.aborted) {
+          this.context.state.pendingSteers.splice(0);
+          continueSameTurn = false;
+          this.context.state.acceptingSteers = false;
+          continue;
+        }
+
+        const lateSteersCommitted = this.commitPendingSteers().length > 0;
+        continueSameTurn =
+          lateSteersCommitted &&
+          !this.context.state.abortController?.signal.aborted;
+        this.context.state.acceptingSteers =
+          continueSameTurn &&
+          startedStepCount < this.context.state.maxSteps;
       }
+
+      persistAggregatedUsage();
 
       this.context.emitTelemetry(
         "agent.turn.completed",
@@ -542,6 +699,9 @@ export class TurnExecutionManager {
         );
       }
     } finally {
+      persistAggregatedUsage();
+      this.context.state.acceptingSteers = false;
+      this.context.state.pendingSteers.splice(0);
       this.deps.metadataManager.updateSessionInfo({
         executionState: this.settledExecutionState(),
         lastMessagePreview,

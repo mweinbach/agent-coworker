@@ -613,6 +613,7 @@ export async function startAgentServer(
                   isResume: true,
                   ...(resumedFromStorage ? { resumedFromStorage: true } : {}),
                   busy: session.isBusy,
+                  ...(session.isBusy && session.activeTurnId ? { turnId: session.activeTurnId } : {}),
                   messageCount: session.messageCount,
                   hasPendingAsk: session.hasPendingAsk,
                   hasPendingApproval: session.hasPendingApproval,

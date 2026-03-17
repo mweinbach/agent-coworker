@@ -299,6 +299,13 @@ const userMessageSchema = schemaWithType("user_message", {
   clientMessageId: optionalString("user_message invalid clientMessageId"),
 });
 
+const steerMessageSchema = schemaWithType("steer_message", {
+  sessionId: requiredSessionId("steer_message"),
+  expectedTurnId: requiredNonEmptyTrimmedString("steer_message missing/invalid expectedTurnId"),
+  text: requiredNonEmptyTrimmedString("steer_message missing/invalid text"),
+  clientMessageId: optionalString("steer_message invalid clientMessageId"),
+});
+
 const askResponseSchema = schemaWithType("ask_response", {
   sessionId: requiredSessionId("ask_response"),
   requestId: requiredNonEmptyTrimmedString("ask_response missing requestId"),
@@ -684,6 +691,7 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   ...sessionAndNameSchemaList,
   clientHelloSchema,
   userMessageSchema,
+  steerMessageSchema,
   askResponseSchema,
   approvalResponseSchema,
   executeCommandSchema,

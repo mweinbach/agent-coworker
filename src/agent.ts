@@ -4,7 +4,7 @@ import { getModel as realGetModel } from "./config";
 import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
-import type { RuntimeModelRawEvent } from "./runtime/types";
+import type { RuntimeModelRawEvent, RuntimePrepareStep, RuntimeStepOverride } from "./runtime/types";
 import type { OpenAiContinuationState } from "./shared/openaiContinuation";
 import type { AgentRole } from "./shared/agents";
 import type { AgentControl } from "./tools";
@@ -55,6 +55,7 @@ export interface RunTurnParams {
   allMessages?: ModelMessage[];
   providerState?: OpenAiContinuationState | null;
   agentControl?: AgentControl;
+  prepareStep?: RuntimePrepareStep;
 
   log: (line: string) => void;
   askUser: (question: string, options?: string[]) => Promise<string>;
@@ -131,6 +132,63 @@ function mergeToolSets(
     merged[alias] = toolDef;
   }
   return merged;
+}
+
+function mergePrepareStepOverrides(
+  base: RuntimeStepOverride | undefined,
+  next: RuntimeStepOverride | undefined,
+): RuntimeStepOverride | undefined {
+  if (!base) return next;
+  if (!next) return base;
+
+  const merged: RuntimeStepOverride = {
+    ...base,
+    ...next,
+  };
+
+  if (base.messages !== undefined || next.messages !== undefined) {
+    merged.messages = next.messages ?? base.messages;
+  }
+  if (base.providerOptions || next.providerOptions) {
+    merged.providerOptions = {
+      ...(base.providerOptions ?? {}),
+      ...(next.providerOptions ?? {}),
+    };
+  }
+  if (base.streamOptions || next.streamOptions) {
+    merged.streamOptions = {
+      ...(base.streamOptions ?? {}),
+      ...(next.streamOptions ?? {}),
+    };
+  }
+
+  return merged;
+}
+
+function composePrepareSteps(
+  first: RuntimePrepareStep | undefined,
+  second: RuntimePrepareStep | undefined,
+  onMessagesUpdated?: (messages: ModelMessage[]) => void,
+): RuntimePrepareStep | undefined {
+  if (!first && !second) return undefined;
+
+  return async ({ stepNumber, messages }) => {
+    let currentMessages = messages;
+    onMessagesUpdated?.(currentMessages);
+
+    let mergedOverride: RuntimeStepOverride | undefined;
+    for (const prepareStep of [first, second]) {
+      if (!prepareStep) continue;
+      const override = await prepareStep({ stepNumber, messages: currentMessages });
+      mergedOverride = mergePrepareStepOverrides(mergedOverride, override);
+      if (override?.messages) {
+        currentMessages = override.messages;
+        onMessagesUpdated?.(currentMessages);
+      }
+    }
+
+    return mergedOverride;
+  };
 }
 
 function extractTurnUserPrompt(messages: ModelMessage[]): string | undefined {
@@ -224,6 +282,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
     providerState?: OpenAiContinuationState;
   }> {
     const { config, system, messages, log, askUser, approveCommand, updateTodos, discoveredSkills, abortSignal } = params;
+    let latestTurnMessages = messages;
 
     const toolCtx = {
       config,
@@ -235,6 +294,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       abortSignal,
       availableSkills: discoveredSkills,
       turnUserPrompt: extractTurnUserPrompt(messages),
+      getTurnUserPrompt: () => extractTurnUserPrompt(latestTurnMessages),
       agentRole: params.agentRole,
       agentControl: params.agentControl,
       costTracker: params.costTracker,
@@ -265,6 +325,13 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       config.provider === "google" && Object.keys(tools).length > 0
         ? buildGooglePrepareStep(turnProviderOptions, log)
         : undefined;
+    const prepareStep = composePrepareSteps(
+      params.prepareStep,
+      googlePrepareStep,
+      (nextMessages) => {
+        latestTurnMessages = nextMessages;
+      },
+    );
 
     const result = await (async (): Promise<{
       text: string;
@@ -294,7 +361,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
             providerOptions: turnProviderOptions,
             ...(telemetry ? { experimental_telemetry: telemetry } : {}),
             stopWhen: legacyStepCountIs(params.maxSteps ?? 100),
-            ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
+            ...(prepareStep ? { prepareStep } : {}),
             abortSignal,
             ...(typeof config.modelSettings?.maxRetries === "number"
               ? { maxRetries: config.modelSettings.maxRetries }
@@ -401,7 +468,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
           abortSignal,
           includeRawChunks: params.includeRawChunks ?? true,
           telemetry,
-          ...(googlePrepareStep ? { prepareStep: googlePrepareStep } : {}),
+          ...(prepareStep ? { prepareStep } : {}),
           onModelStreamPart: params.onModelStreamPart,
           onModelRawEvent: params.onModelRawEvent,
           onModelError: params.onModelError,

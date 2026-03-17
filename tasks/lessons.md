@@ -106,6 +106,7 @@
 - When a review surfaces a missing provider capability, verify the repo’s intended product contract before turning it into a bug; `opencode-go` intentionally has no local pricing or pricing overrides here.
 - When a tool has both saved credentials and environment fallback, match the repo’s standard precedence: user-saved auth should win over ambient shell env unless the product explicitly says otherwise.
 - When the user supplies an authoritative model-cutoff table mid-implementation, stop and update the registry assumptions immediately instead of continuing to churn around older local defaults or partial web results.
+- When the user supplies authoritative model pricing or capability metadata mid-implementation, replace any mirrored sibling-model assumptions immediately and update the local pricing/tests to match that contract in the same pass.
 - When the user gives exact provider model IDs for a requested integration, implement those exact IDs first; do not swap in a different documented catalog just because it appears more current.
 - When adding profile metadata, do not introduce a second name field; keep identity sourced from existing `userName` unless the user explicitly asks for a separate profile-name concept.
 - For optional prompt metadata fields, do not leave placeholder labels like "(if provided)" in templates; injection should conditionally remove whole lines when values are empty.
@@ -115,3 +116,5 @@
 - When the user broadens PR follow-up scope from specific review threads to "every comment that needs work," sweep both unresolved review threads and newer top-level review/comment bodies on the latest commit before declaring PR feedback handled.
 - When the user explicitly asks for subagent verification first, spawn the requested subagents before editing, use their issue-by-issue findings to drive the fix plan, and then confirm the same conclusions locally before patching.
 - When the desktop app is meant to feel native, do not ship renderer-wide ::-webkit-scrollbar skins; let Electron fall back to OS scrollbars and focus styling only on layout/containers.
+- For desktop steering UX in this repo, do not stop at store/runtime support; the chat composer itself must stay editable during busy turns, route non-empty busy submits through `busyPolicy: "steer"`, and only show the stop control when the composer is empty.
+- When desktop steering is user-visible, distinguish `steer ready` from `steer pending` in the composer itself; a generic send icon is not enough once the draft is targeting the active run.

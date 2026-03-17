@@ -126,6 +126,11 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     outputPerMillion: 15,
     cachedInputPerMillion: 0.25,
   },
+  "openai:gpt-5.4-mini": {
+    inputPerMillion: 0.75,
+    outputPerMillion: 4.5,
+    cachedInputPerMillion: 0.075,
+  },
   "openai:gpt-5.2": {
     inputPerMillion: 1.75,
     outputPerMillion: 14,
@@ -157,6 +162,11 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
     inputPerMillion: 2.5,
     outputPerMillion: 15,
     cachedInputPerMillion: 0.25,
+  },
+  "codex-cli:gpt-5.4-mini": {
+    inputPerMillion: 0.75,
+    outputPerMillion: 4.5,
+    cachedInputPerMillion: 0.075,
   },
   "codex-cli:gpt-5-codex": {
     inputPerMillion: 1.25,

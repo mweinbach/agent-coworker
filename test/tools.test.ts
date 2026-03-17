@@ -1285,6 +1285,39 @@ describe("webSearch tool", () => {
     }
   });
 
+  test("prefers the original turnUserPrompt over the latest steer fallback query", async () => {
+    const dir = await tmpDir();
+    const oldExa = process.env.EXA_API_KEY;
+    process.env.EXA_API_KEY = "exa_test_key";
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      expect(body.query).toBe("find recent bun releases");
+      return new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as any;
+
+    try {
+      await withAuthHome(dir, async () => {
+        const t: any = createWebSearchTool(
+          makeCtx(dir, {
+            turnUserPrompt: "find recent bun releases",
+            getTurnUserPrompt: () => "make it concise",
+          })
+        );
+        await t.execute({});
+        expect((globalThis.fetch as any).mock.calls).toHaveLength(1);
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldExa) process.env.EXA_API_KEY = oldExa;
+      else delete process.env.EXA_API_KEY;
+    }
+  });
+
   test("uses Exa even when BRAVE_API_KEY is configured", async () => {
     const dir = await tmpDir();
     const oldExa = process.env.EXA_API_KEY;

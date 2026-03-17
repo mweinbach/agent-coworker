@@ -7,11 +7,19 @@ import {
 import type { AppStoreState } from "../store.helpers";
 import type { ThreadRuntime, WorkspaceRuntime } from "../types";
 
+export type PendingThreadSteer = {
+  clientMessageId: string;
+  text: string;
+  expectedTurnId: string;
+  accepted: boolean;
+};
+
 export type RuntimeMaps = {
   controlSockets: Map<string, AgentSocket>;
   threadSockets: Map<string, AgentSocket>;
   optimisticUserMessageIds: Map<string, Set<string>>;
   pendingThreadMessages: Map<string, string[]>;
+  pendingThreadSteers: Map<string, Map<string, PendingThreadSteer>>;
   pendingWorkspaceDefaultApplyThreadIds: Set<string>;
   workspaceStartPromises: Map<string, { generation: number; promise: Promise<void> }>;
   workspaceStartGenerations: Map<string, number>;
@@ -24,6 +32,7 @@ export const RUNTIME: RuntimeMaps = {
   threadSockets: new Map(),
   optimisticUserMessageIds: new Map(),
   pendingThreadMessages: new Map(),
+  pendingThreadSteers: new Map(),
   pendingWorkspaceDefaultApplyThreadIds: new Set(),
   workspaceStartPromises: new Map(),
   workspaceStartGenerations: new Map(),
@@ -61,6 +70,48 @@ export function drainPendingThreadMessages(threadId: string): string[] {
   if (!existing || existing.length === 0) return [];
   RUNTIME.pendingThreadMessages.delete(threadId);
   return existing;
+}
+
+export function shiftPendingThreadMessage(threadId: string): string | undefined {
+  const existing = RUNTIME.pendingThreadMessages.get(threadId);
+  if (!existing || existing.length === 0) return undefined;
+  const next = existing.shift();
+  if (existing.length === 0) {
+    RUNTIME.pendingThreadMessages.delete(threadId);
+  } else {
+    RUNTIME.pendingThreadMessages.set(threadId, existing);
+  }
+  return next;
+}
+
+export function rememberPendingThreadSteer(threadId: string, steer: PendingThreadSteer) {
+  const existing = RUNTIME.pendingThreadSteers.get(threadId) ?? new Map<string, PendingThreadSteer>();
+  existing.set(steer.clientMessageId, steer);
+  RUNTIME.pendingThreadSteers.set(threadId, existing);
+}
+
+export function hasPendingThreadSteer(threadId: string, clientMessageId: string): boolean {
+  return RUNTIME.pendingThreadSteers.get(threadId)?.has(clientMessageId) ?? false;
+}
+
+export function markPendingThreadSteerAccepted(threadId: string, clientMessageId: string) {
+  const existing = RUNTIME.pendingThreadSteers.get(threadId);
+  const steer = existing?.get(clientMessageId);
+  if (!existing || !steer) return;
+  existing.set(clientMessageId, { ...steer, accepted: true });
+}
+
+export function clearPendingThreadSteer(threadId: string, clientMessageId: string) {
+  const existing = RUNTIME.pendingThreadSteers.get(threadId);
+  if (!existing) return;
+  existing.delete(clientMessageId);
+  if (existing.size === 0) {
+    RUNTIME.pendingThreadSteers.delete(threadId);
+  }
+}
+
+export function clearPendingThreadSteers(threadId: string) {
+  RUNTIME.pendingThreadSteers.delete(threadId);
 }
 
 export function defaultWorkspaceRuntime(): WorkspaceRuntime {
@@ -120,6 +171,8 @@ export function defaultThreadRuntime(): ThreadRuntime {
     enableMcp: null,
     busy: false,
     busySince: null,
+    activeTurnId: null,
+    pendingSteer: null,
     feed: [],
     transcriptOnly: false,
   };

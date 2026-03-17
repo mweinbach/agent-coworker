@@ -26,6 +26,7 @@ import {
   basename,
   bumpWorkspaceStartGeneration,
   buildContextPreamble,
+  clearPendingThreadSteers,
   clearWorkspaceStartState,
   ensureControlSocket,
   ensureServerRunning,
@@ -127,6 +128,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
         RUNTIME.pendingThreadMessages.delete(thread.id);
         RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(thread.id);
         RUNTIME.modelStreamByThread.delete(thread.id);
+        clearPendingThreadSteers(thread.id);
         try {
           sock?.close();
         } catch {

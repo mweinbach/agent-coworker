@@ -5,12 +5,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   canClearSessionHardCap,
   ChatThreadHeader,
+  composerBusyHint,
   filterFeedForDeveloperMode,
   formatSessionBudgetLine,
   formatSessionUsageHeadline,
   getComposerSubmitState,
   reasoningLabelForMode,
   reasoningPreviewText,
+  resolveComposerBusyPolicy,
   sessionUsageTone,
   shouldToggleReasoningExpanded,
 } from "../src/ui/ChatView";
@@ -196,30 +198,66 @@ describe("desktop reasoning UI helpers", () => {
     })).toBe(true);
   });
 
-  test("keeps the stop action enabled while a run is active", () => {
+  test("keeps the stop action enabled while a run is active and the composer is empty", () => {
     expect(getComposerSubmitState({
       busy: true,
       hasPromptModal: false,
       composerText: "",
+      pendingSteer: null,
       sessionId: "session-1",
       threadStatus: "active",
-    })).toEqual({ status: "streaming", disabled: false });
+    })).toEqual({ status: "streaming", disabled: false, mode: "send" });
 
     expect(getComposerSubmitState({
       busy: true,
       hasPromptModal: false,
       composerText: "",
+      pendingSteer: null,
       sessionId: null,
       threadStatus: "active",
-    })).toEqual({ status: "streaming", disabled: true });
+    })).toEqual({ status: "streaming", disabled: true, mode: "send" });
+
+    expect(getComposerSubmitState({
+      busy: true,
+      hasPromptModal: false,
+      composerText: "tighten scope",
+      pendingSteer: null,
+      sessionId: "session-1",
+      threadStatus: "active",
+    })).toEqual({ status: "ready", disabled: false, mode: "steer-ready" });
+
+    expect(getComposerSubmitState({
+      busy: true,
+      hasPromptModal: false,
+      composerText: "tighten scope",
+      pendingSteer: {
+        clientMessageId: "cmid-1",
+        text: "tighten scope",
+        status: "sending",
+      },
+      sessionId: "session-1",
+      threadStatus: "active",
+    })).toEqual({ status: "ready", disabled: true, mode: "steer-pending" });
 
     expect(getComposerSubmitState({
       busy: false,
       hasPromptModal: false,
       composerText: "",
+      pendingSteer: null,
       sessionId: "session-1",
       threadStatus: "active",
-    })).toEqual({ status: "ready", disabled: true });
+    })).toEqual({ status: "ready", disabled: true, mode: "send" });
+  });
+
+  test("routes busy composer submits through steer mode", () => {
+    expect(resolveComposerBusyPolicy(true)).toBe("steer");
+    expect(resolveComposerBusyPolicy(false)).toBe("reject");
+  });
+
+  test("renders steer-specific composer helper copy", () => {
+    expect(composerBusyHint({ status: "streaming", disabled: false, mode: "send" })).toBe("Type to steer, or use stop to cancel.");
+    expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-ready" })).toBe("Steer ready. Press Enter to inject it into the current run.");
+    expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-pending" })).toBe("Steer sent. Waiting for the running turn to accept it.");
   });
 
   test("renders usage stats as a title hover/focus reveal instead of an always-on header row", () => {

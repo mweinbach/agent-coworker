@@ -50,6 +50,7 @@ export interface ToolContext {
    * Tools can use this as context when a provider-native-style tool call omits explicit arguments.
    */
   turnUserPrompt?: string;
+  getTurnUserPrompt?: () => string | undefined;
 
   /** Optional role for child-agent tool filtering. */
   agentRole?: AgentRole;

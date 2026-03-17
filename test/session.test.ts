@@ -4491,6 +4491,60 @@ describe("AgentSession", () => {
       expect(session.getSessionInfoEvent().executionState).toBe("errored");
     });
 
+    test("rehydrates stale in-flight child execution states as completed when no turn is active", () => {
+      for (const executionState of ["running", "pending_init"] as const) {
+        const { emit } = makeEmit();
+
+        const session = AgentSession.fromPersisted({
+          persisted: {
+            sessionId: `persisted-child-${executionState}`,
+            sessionKind: "agent",
+            parentSessionId: "root-1",
+            role: "worker",
+            mode: "collaborative",
+            depth: 1,
+            nickname: null,
+            requestedModel: null,
+            effectiveModel: "gpt-5.2",
+            requestedReasoningEffort: null,
+            effectiveReasoningEffort: null,
+            executionState,
+            lastMessagePreview: "Task was in progress",
+            title: "Persisted child",
+            titleSource: "manual",
+            titleModel: null,
+            provider: "openai",
+            model: "gpt-5.2",
+            workingDirectory: "/tmp/persisted",
+            outputDirectory: undefined,
+            uploadsDirectory: undefined,
+            enableMcp: true,
+            backupsEnabledOverride: null,
+            createdAt: "2026-03-09T00:00:00.000Z",
+            updatedAt: "2026-03-09T00:00:01.000Z",
+            status: "active",
+            hasPendingAsk: false,
+            hasPendingApproval: false,
+            messageCount: 1,
+            lastEventSeq: 1,
+            systemPrompt: "system",
+            messages: [{ role: "user", content: "hello" }] as any,
+            providerState: null,
+            todos: [],
+            harnessContext: null,
+            costTracker: null,
+          },
+          baseConfig: makeConfig("/tmp/persisted"),
+          emit,
+          sessionBackupFactory: makeSessionBackupFactory(),
+          getProviderStatusesImpl: async () => [],
+        });
+
+        expect(session.currentTurnOutcome).toBe("completed");
+        expect(session.getSessionInfoEvent().executionState).toBe("completed");
+      }
+    });
+
     test("restores persisted providerOptions into resumed runtime config", async () => {
       const { emit } = makeEmit();
       const providerOptions = {

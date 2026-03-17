@@ -156,9 +156,12 @@ export function mapPersistedSessionSubagentSummaryRow(row: Record<string, unknow
     throw new Error("Invalid agent summary row: missing normalized role");
   }
   const lifecycleState = parsed.data.lifecycle_state ?? parsed.data.status ?? "active";
+  const rawExecutionState = parsed.data.execution_state;
   const executionState =
-    parsed.data.execution_state
-    ?? (lifecycleState === "closed" ? "closed" : "completed");
+    rawExecutionState === "running" || rawExecutionState === "pending_init"
+      ? (lifecycleState === "closed" ? "closed" : "completed")
+      : rawExecutionState
+        ?? (lifecycleState === "closed" ? "closed" : "completed");
 
   return persistentAgentSummarySchema.parse({
     agentId: parsed.data.session_id,

@@ -79,8 +79,49 @@ function contentText(value: unknown): string {
     .trim();
 }
 
+function normalizeHydratedExecutionState(
+  sessionKind: SessionInfoState["sessionKind"] | undefined,
+  executionState: SessionInfoState["executionState"],
+  status: HydratedSessionState["status"] | undefined,
+): SessionInfoState["executionState"] {
+  if ((sessionKind ?? "root") !== "agent") {
+    return executionState;
+  }
+  if (status === "closed") {
+    return "closed";
+  }
+  if (!executionState || executionState === "completed" || executionState === "errored" || executionState === "closed") {
+    return executionState;
+  }
+  return "completed";
+}
+
+function normalizeHydratedSessionInfo(hydrated?: HydratedSessionState): SessionInfoState | undefined {
+  if (!hydrated) {
+    return undefined;
+  }
+  const executionState = normalizeHydratedExecutionState(
+    hydrated.sessionInfo.sessionKind,
+    hydrated.sessionInfo.executionState,
+    hydrated.status,
+  );
+  if (executionState === hydrated.sessionInfo.executionState) {
+    return hydrated.sessionInfo;
+  }
+  return {
+    ...hydrated.sessionInfo,
+    executionState,
+  };
+}
+
 function initialCurrentTurnOutcome(hydrated?: HydratedSessionState): SessionRuntimeState["currentTurnOutcome"] {
-  if (hydrated?.sessionInfo.executionState === "errored") {
+  if (
+    normalizeHydratedExecutionState(
+      hydrated?.sessionInfo.sessionKind,
+      hydrated?.sessionInfo.executionState,
+      hydrated?.status,
+    ) === "errored"
+  ) {
     return "error";
   }
   return "completed";
@@ -180,6 +221,7 @@ export class AgentSession {
     skipInitialPersist?: boolean;
   }) {
     const hydrated = opts.hydratedState;
+    const hydratedSessionInfo = normalizeHydratedSessionInfo(hydrated);
     const seededMessages = hydrated?.messages ?? (opts.seedContext ? structuredClone(opts.seedContext.messages) : []);
     const seededTodos = hydrated?.todos ?? (opts.seedContext ? structuredClone(opts.seedContext.todos) : []);
     const seededHarnessContext = hydrated?.harnessContext
@@ -202,7 +244,7 @@ export class AgentSession {
       currentTurnOutcome: initialCurrentTurnOutcome(hydrated),
       maxSteps: 100,
       todos: seededTodos,
-      sessionInfo: hydrated?.sessionInfo ?? {
+      sessionInfo: hydratedSessionInfo ?? {
         title: DEFAULT_SESSION_TITLE,
         titleSource: "default",
         titleModel: null,

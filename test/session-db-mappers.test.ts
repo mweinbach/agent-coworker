@@ -159,6 +159,27 @@ describe("sessionDb mappers", () => {
     });
   });
 
+  test("mapPersistedSessionSubagentSummaryRow normalizes stale non-terminal child execution states when idle", () => {
+    for (const executionState of ["running", "pending_init"] as const) {
+      const mapped = mapPersistedSessionSubagentSummaryRow({
+        session_id: `child-${executionState}`,
+        parent_session_id: "root-1",
+        role: "worker",
+        agent_type: null,
+        title: "Idle Child",
+        provider: "openai",
+        model: "gpt-5.2",
+        created_at: "2026-02-19T00:00:00.000Z",
+        updated_at: "2026-02-19T00:00:01.000Z",
+        status: "active",
+        execution_state: executionState,
+      });
+
+      expect(mapped.executionState).toBe("completed");
+      expect(mapped.busy).toBe(false);
+    }
+  });
+
   test("mapPersistedSessionRecordRow throws when required fields are missing", () => {
     expect(() =>
       mapPersistedSessionRecordRow({

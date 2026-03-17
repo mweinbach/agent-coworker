@@ -20,6 +20,7 @@ function executionStateForSession(session: AgentSession, fallback: AgentExecutio
   if (session.persistenceStatus === "closed") return "closed";
   if (session.isBusy) return "running";
   if (session.currentTurnOutcome === "error") return "errored";
+  if (info.executionState === "running" || info.executionState === "pending_init") return fallback;
   if (info.executionState) return info.executionState;
   return fallback;
 }

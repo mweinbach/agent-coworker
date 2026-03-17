@@ -397,6 +397,73 @@ describe("AgentControl persisted child control", () => {
     expect(emitParentAgentStatus).toHaveBeenCalled();
   });
 
+  test("wait normalizes hydrated stale running child status to completed when idle", async () => {
+    const config = makeConfig();
+    const childSession = makeChildSession(config);
+    const getSessionInfoEvent = childSession.getSessionInfoEvent;
+    childSession.getSessionInfoEvent = () => ({
+      ...getSessionInfoEvent(),
+      executionState: "running",
+    });
+    const control = new AgentControl({
+      sessionBindings: new Map(),
+      sessionDb: {
+        getSessionRecord: (sessionId: string) =>
+          sessionId === "child-1" ? makePersistedChildRecord(config, { executionState: "running" }) : null,
+      } as any,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: ((binding: SessionBinding) => {
+        binding.session = childSession;
+        return { session: childSession, isResume: true, resumedFromStorage: true };
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    const result = await control.wait({
+      parentSessionId: "root-1",
+      agentIds: ["child-1"],
+      timeoutMs: 10,
+    });
+
+    expect(result.timedOut).toBe(false);
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0]?.executionState).toBe("completed");
+  });
+
+  test("list normalizes hydrated stale pending_init child status to completed when idle", async () => {
+    const config = makeConfig();
+    const childSession = makeChildSession(config);
+    const getSessionInfoEvent = childSession.getSessionInfoEvent;
+    childSession.getSessionInfoEvent = () => ({
+      ...getSessionInfoEvent(),
+      executionState: "pending_init",
+    });
+    const control = new AgentControl({
+      sessionBindings: new Map([
+        ["child-1", { session: childSession, socket: null }],
+      ]) as Map<string, SessionBinding>,
+      sessionDb: {
+        listAgentSessions: () => [],
+      } as any,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: mock(() => {
+        throw new Error("should not build a new session");
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog: () => {},
+    });
+
+    const summaries = await control.list("root-1");
+
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]?.executionState).toBe("completed");
+  });
+
   test("resume reopens a hydrated closed child session", async () => {
     const config = makeConfig();
     const childSession = makeChildSession(config);

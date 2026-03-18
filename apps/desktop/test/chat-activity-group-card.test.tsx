@@ -165,8 +165,8 @@ describe("desktop activity group card", () => {
     );
 
     expect(html).toContain("Needs review");
-    expect(html).toContain("Awaiting Approval");
-    expect(html).toContain("Command");
+    expect(html).toContain("Review");
+    expect(html).toContain("Bash");
     expect(html).toContain("rm -rf /tmp/x");
   });
 });

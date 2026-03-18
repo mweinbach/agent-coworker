@@ -41,7 +41,7 @@ describe("desktop chat activity groups", () => {
       { id: "t1", kind: "tool", ts: "2024-01-01T00:00:02.000Z", name: "read", state: "output-available", args: { path: "model.py" } },
     ]);
 
-    expect(summary.title).toBe("Thinking");
+    expect(summary.title).toBe("Thought process");
     expect(summary.preview).toContain("Need to validate the tax assumptions");
     expect(summary.toolCount).toBe(1);
     expect(summary.reasoningCount).toBe(1);

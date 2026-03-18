@@ -341,7 +341,7 @@ export function summarizeActivityGroup(items: ActivityFeedItem[]): ActivityGroup
     reasoningCount: reasoningItems.length,
     status,
     statusLabel: statusLabel(status, toolItems.length),
-    title: "Thinking",
+    title: "Thought process",
     toolCount: toolItems.length,
   };
 }

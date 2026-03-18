@@ -49,7 +49,7 @@ import {
 } from "../store.helpers";
 import type { ThreadBusyPolicy, ThreadRecord, WorkspaceRecord } from "../types";
 
-export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "removeThread" | "deleteThreadHistory" | "renameThread" | "newThread" | "selectThread" | "reconnectThread" | "sendMessage" | "cancelThread" | "clearThreadUsageHardCap" | "setThreadModel" | "setComposerText" | "setInjectContext" | "answerAsk" | "answerApproval" | "dismissPrompt"> {
+export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "removeThread" | "deleteThreadHistory" | "renameThread" | "newThread" | "selectThread" | "reconnectThread" | "sendMessage" | "cancelThread" | "clearThreadUsageHardCap" | "setThreadModel" | "setComposerText" | "setInjectContext" | "answerAsk" | "answerApproval" | "dismissPrompt" | "loadAllThreadUsage"> {
   const closeThreadSession = (threadId: string) => {
     sendThread(get, threadId, (sessionId) => ({ type: "session_close", sessionId }));
   };
@@ -411,6 +411,37 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
   
 
     dismissPrompt: () => set({ promptModal: null }),
-  
+
+    loadAllThreadUsage: async () => {
+      const threads = get().threads;
+      const existing = get().threadRuntimeById;
+
+      await Promise.all(
+        threads.map(async (thread) => {
+          // Skip threads that already have usage loaded
+          const rt = existing[thread.id];
+          if (rt?.sessionUsage !== undefined && rt.sessionUsage !== null) return;
+
+          try {
+            const transcript = await readTranscript({ threadId: thread.id });
+            const usageState = extractUsageStateFromTranscript(transcript);
+            if (!usageState.sessionUsage) return; // No usage in this thread
+
+            ensureThreadRuntime(get, set, thread.id);
+            set((s) => ({
+              threadRuntimeById: {
+                ...s.threadRuntimeById,
+                [thread.id]: {
+                  ...s.threadRuntimeById[thread.id],
+                  ...usageState,
+                },
+              },
+            }));
+          } catch {
+            // Skip threads whose transcripts can't be read
+          }
+        }),
+      );
+    },
   };
 }

@@ -67,201 +67,173 @@ mock.module("../src/lib/agentSocket", () => ({
   },
 }));
 
-const { UsagePage } = await import("../src/ui/settings/pages/UsagePage");
+const { UsagePage, aggregateUsageFromRuntimes } = await import("../src/ui/settings/pages/UsagePage");
 
 describe("desktop usage page", () => {
-  test("renders session usage breakdown, recent turns, and the estimate notice popup", () => {
+  test("aggregateUsageFromRuntimes sums across multiple thread runtimes by provider and model", () => {
+    const runtimes = {
+      "thread-1": {
+        sessionUsage: {
+          sessionId: "s1",
+          totalTurns: 3,
+          totalPromptTokens: 3200,
+          totalCompletionTokens: 900,
+          totalTokens: 4100,
+          estimatedTotalCostUsd: 0.0235,
+          costTrackingAvailable: true,
+          byModel: [
+            { provider: "openai", model: "gpt-5.2", turns: 2, totalPromptTokens: 2400, totalCompletionTokens: 700, totalTokens: 3100, estimatedCostUsd: 0.0184 },
+            { provider: "google", model: "gemini-3-flash-preview", turns: 1, totalPromptTokens: 800, totalCompletionTokens: 200, totalTokens: 1000, estimatedCostUsd: 0.0051 },
+          ],
+          turns: [],
+          budgetStatus: { configured: false, warnAtUsd: null, stopAtUsd: null, warningTriggered: false, stopTriggered: false, currentCostUsd: null },
+          createdAt: "2026-03-10T00:00:00.000Z",
+          updatedAt: "2026-03-10T00:05:00.000Z",
+        },
+      },
+      "thread-2": {
+        sessionUsage: {
+          sessionId: "s2",
+          totalTurns: 2,
+          totalPromptTokens: 1000,
+          totalCompletionTokens: 500,
+          totalTokens: 1500,
+          estimatedTotalCostUsd: 0.01,
+          costTrackingAvailable: true,
+          byModel: [
+            { provider: "openai", model: "gpt-5.2", turns: 2, totalPromptTokens: 1000, totalCompletionTokens: 500, totalTokens: 1500, estimatedCostUsd: 0.01 },
+          ],
+          turns: [],
+          budgetStatus: { configured: false, warnAtUsd: null, stopAtUsd: null, warningTriggered: false, stopTriggered: false, currentCostUsd: null },
+          createdAt: "2026-03-10T00:00:00.000Z",
+          updatedAt: "2026-03-10T00:06:00.000Z",
+        },
+      },
+      "thread-3": {
+        sessionUsage: null,
+      },
+    } as any;
+
+    const agg = aggregateUsageFromRuntimes(runtimes);
+
+    expect(agg.totalSessions).toBe(2);
+    expect(agg.totalTurns).toBe(5);
+    expect(agg.totalTokens).toBe(5600);
+    expect(agg.totalPromptTokens).toBe(4200);
+    expect(agg.totalCompletionTokens).toBe(1400);
+    expect(agg.totalCostUsd).toBeCloseTo(0.0335, 4);
+    expect(agg.costTrackingAvailable).toBe(true);
+    expect(agg.providers.length).toBe(2);
+
+    // openai should be first (higher cost)
+    const openai = agg.providers.find((p: any) => p.provider === "openai")!;
+    expect(openai.models.length).toBe(1);
+    expect(openai.models[0].model).toBe("gpt-5.2");
+    expect(openai.models[0].turns).toBe(4);
+    expect(openai.models[0].sessions).toBe(2);
+    expect(openai.models[0].totalTokens).toBe(4600);
+    expect(openai.models[0].estimatedCostUsd).toBeCloseTo(0.0284, 4);
+
+    const google = agg.providers.find((p: any) => p.provider === "google")!;
+    expect(google.models.length).toBe(1);
+    expect(google.models[0].sessions).toBe(1);
+  });
+
+  test("renders aggregate usage breakdown with provider groups and the estimate notice popup", () => {
     const html = renderToStaticMarkup(
       createElement(UsagePage, {
         estimateNoticeOpen: true,
-        thread: {
-          id: "thread-1",
-          workspaceId: "ws-1",
-          title: "Budget thread",
-          createdAt: "2026-03-10T00:00:00.000Z",
-          lastMessageAt: "2026-03-10T00:05:00.000Z",
-          status: "active",
-          sessionId: "session-1",
-          lastEventSeq: 12,
-        },
-        runtime: {
-          wsUrl: "ws://mock",
-          connected: true,
-          sessionId: "session-1",
-          config: null,
-          sessionConfig: null,
-          sessionUsage: {
-            sessionId: "session-1",
-            totalTurns: 3,
-            totalPromptTokens: 3200,
-            totalCompletionTokens: 900,
-            totalTokens: 4100,
-            estimatedTotalCostUsd: 0.0235,
-            costTrackingAvailable: true,
-            byModel: [
-              {
-                provider: "openai",
-                model: "gpt-5.2",
-                turns: 2,
-                totalPromptTokens: 2400,
-                totalCompletionTokens: 700,
-                totalTokens: 3100,
-                estimatedCostUsd: 0.0184,
-              },
-              {
-                provider: "google",
-                model: "gemini-3-flash-preview",
-                turns: 1,
-                totalPromptTokens: 800,
-                totalCompletionTokens: 200,
-                totalTokens: 1000,
-                estimatedCostUsd: 0.0051,
-              },
-            ],
-            turns: [
-              {
-                turnId: "turn-2",
-                turnIndex: 1,
-                timestamp: "2026-03-10T00:03:00.000Z",
-                provider: "openai",
-                model: "gpt-5.2",
-                usage: {
-                  promptTokens: 1400,
-                  completionTokens: 400,
-                  totalTokens: 1800,
-                  cachedPromptTokens: 300,
-                },
-                estimatedCostUsd: 0.0102,
-                pricing: null,
-              },
-            ],
-            budgetStatus: {
-              configured: true,
-              warnAtUsd: 0.02,
-              stopAtUsd: 0.03,
-              warningTriggered: true,
-              stopTriggered: false,
-              currentCostUsd: 0.0235,
+        aggregate: {
+          totalCostUsd: 0.0335,
+          costTrackingAvailable: true,
+          totalTokens: 5600,
+          totalPromptTokens: 4200,
+          totalCompletionTokens: 1400,
+          totalTurns: 5,
+          totalSessions: 2,
+          providers: [
+            {
+              provider: "openai",
+              models: [
+                { provider: "openai", model: "gpt-5.2", turns: 4, sessions: 2, totalPromptTokens: 3400, totalCompletionTokens: 1200, totalTokens: 4600, estimatedCostUsd: 0.0284 },
+              ],
+              totalTokens: 4600,
+              totalTurns: 4,
+              estimatedCostUsd: 0.0284,
             },
-            createdAt: "2026-03-10T00:00:00.000Z",
-            updatedAt: "2026-03-10T00:05:00.000Z",
-          },
-          lastTurnUsage: {
-            turnId: "turn-3",
-            usage: {
-              promptTokens: 600,
-              completionTokens: 200,
-              totalTokens: 800,
-              cachedPromptTokens: 100,
-              estimatedCostUsd: 0.0049,
+            {
+              provider: "google",
+              models: [
+                { provider: "google", model: "gemini-3-flash-preview", turns: 1, sessions: 1, totalPromptTokens: 800, totalCompletionTokens: 200, totalTokens: 1000, estimatedCostUsd: 0.0051 },
+              ],
+              totalTokens: 1000,
+              totalTurns: 1,
+              estimatedCostUsd: 0.0051,
             },
-          },
-          enableMcp: true,
-          busy: false,
-          busySince: null,
-          feed: [],
-          transcriptOnly: false,
+          ],
         },
-        onClearHardCap: () => {},
       } as any),
     );
 
     expect(html).toContain("Usage");
-    expect(html).toContain("Budget thread");
-    expect(html).toContain("Model breakdown");
-    expect(html).toContain("Recent turns");
+    expect(html).toContain("By provider");
     expect(html).toContain("gpt-5.2");
     expect(html).toContain("gemini-3-flash-preview");
-    expect(html).toContain("est. $0.02");
-    expect(html).toContain("Warning triggered");
+    expect(html).toContain("openai");
+    expect(html).toContain("google");
+    expect(html).toContain("$0.03");
     expect(html).toContain("How estimates work");
+    expect(html).toContain("5.6k");
   });
 
-  test("renders an empty-state prompt when no thread is selected", () => {
-    const html = renderToStaticMarkup(createElement(UsagePage, { thread: null, runtime: null }));
-
-    expect(html).toContain("No thread selected");
-    expect(html).toContain("Select a thread to inspect its session usage.");
-    expect(html).toContain("Choose a thread first to see its model breakdown.");
-  });
-
-  test("keeps model and recent-turn estimates when only the session total is unavailable", () => {
+  test("renders empty state when no usage data exists", () => {
     const html = renderToStaticMarkup(
       createElement(UsagePage, {
-        thread: {
-          id: "thread-2",
-          workspaceId: "ws-1",
-          title: "Mixed pricing thread",
-          createdAt: "2026-03-10T00:00:00.000Z",
-          lastMessageAt: "2026-03-10T00:05:00.000Z",
-          status: "active",
-          sessionId: "session-2",
-          lastEventSeq: 5,
-        },
-        runtime: {
-          wsUrl: "ws://mock",
-          connected: true,
-          sessionId: "session-2",
-          config: null,
-          sessionConfig: null,
-          sessionUsage: {
-            sessionId: "session-2",
-            totalTurns: 2,
-            totalPromptTokens: 2000,
-            totalCompletionTokens: 400,
-            totalTokens: 2400,
-            estimatedTotalCostUsd: null,
-            costTrackingAvailable: false,
-            byModel: [
-              {
-                provider: "openai",
-                model: "gpt-5.2",
-                turns: 1,
-                totalPromptTokens: 1000,
-                totalCompletionTokens: 200,
-                totalTokens: 1200,
-                estimatedCostUsd: 0.004,
-              },
-            ],
-            turns: [
-              {
-                turnId: "turn-2",
-                turnIndex: 1,
-                timestamp: "2026-03-10T00:03:00.000Z",
-                provider: "openai",
-                model: "gpt-5.2",
-                usage: {
-                  promptTokens: 1000,
-                  completionTokens: 200,
-                  totalTokens: 1200,
-                },
-                estimatedCostUsd: 0.0012,
-                pricing: null,
-              },
-            ],
-            budgetStatus: {
-              configured: false,
-              warnAtUsd: null,
-              stopAtUsd: null,
-              warningTriggered: false,
-              stopTriggered: false,
-              currentCostUsd: null,
-            },
-            createdAt: "2026-03-10T00:00:00.000Z",
-            updatedAt: "2026-03-10T00:05:00.000Z",
-          },
-          lastTurnUsage: null,
-          enableMcp: true,
-          busy: false,
-          busySince: null,
-          feed: [],
-          transcriptOnly: false,
+        aggregate: {
+          totalCostUsd: null,
+          costTrackingAvailable: false,
+          totalTokens: 0,
+          totalPromptTokens: 0,
+          totalCompletionTokens: 0,
+          totalTurns: 0,
+          totalSessions: 0,
+          providers: [],
         },
       } as any),
     );
 
-    expect(html).toContain("Estimate unavailable");
-    expect(html).toContain("est. $0.0040");
-    expect(html).toContain("est. $0.0012");
+    expect(html).toContain("No usage data recorded yet");
+    expect(html).toContain("Usage");
+  });
+
+  test("handles models with unavailable pricing gracefully", () => {
+    const html = renderToStaticMarkup(
+      createElement(UsagePage, {
+        aggregate: {
+          totalCostUsd: null,
+          costTrackingAvailable: false,
+          totalTokens: 2400,
+          totalPromptTokens: 2000,
+          totalCompletionTokens: 400,
+          totalTurns: 2,
+          totalSessions: 1,
+          providers: [
+            {
+              provider: "openai",
+              models: [
+                { provider: "openai", model: "gpt-5.2", turns: 2, sessions: 1, totalPromptTokens: 2000, totalCompletionTokens: 400, totalTokens: 2400, estimatedCostUsd: null },
+              ],
+              totalTokens: 2400,
+              totalTurns: 2,
+              estimatedCostUsd: null,
+            },
+          ],
+        },
+      } as any),
+    );
+
+    expect(html).toContain("No pricing");
+    expect(html).toContain("gpt-5.2");
+    expect(html).toContain("2.4k");
   });
 });

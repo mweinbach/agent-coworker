@@ -1,18 +1,12 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { AlertTriangleIcon, RotateCcwIcon } from "lucide-react";
+import { AlertTriangleIcon, ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { useAutoAnimate } from "@formkit/auto-animate/react";
 
 import { useAppStore } from "../../../app/store";
-import type { ThreadRecord, ThreadRuntime } from "../../../app/types";
+import type { ThreadRuntime } from "../../../app/types";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../../../components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -22,46 +16,146 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "../../../components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../../../components/ui/select";
+import { cn } from "../../../lib/utils";
 import { formatCost, formatTokenCount } from "../../../../../../src/session/pricing";
+import type { ModelUsageSummary } from "../../../../../../src/session/costTracker";
 
-type UsagePageProps = {
-  thread?: ThreadRecord | null;
-  runtime?: ThreadRuntime | null;
-  estimateNoticeOpen?: boolean;
-  onClearHardCap?: () => void | Promise<void>;
+// ── Aggregation types ────────────────────────────────────────────────
+
+type AggregateModelEntry = {
+  provider: string;
+  model: string;
+  turns: number;
+  sessions: number;
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number | null;
 };
 
-function formatTimestamp(value: string | null | undefined): string {
-  if (!value) return "Unavailable";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString();
+type ProviderGroup = {
+  provider: string;
+  models: AggregateModelEntry[];
+  totalTokens: number;
+  totalTurns: number;
+  estimatedCostUsd: number | null;
+};
+
+export type AggregateUsage = {
+  totalCostUsd: number | null;
+  costTrackingAvailable: boolean;
+  totalTokens: number;
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  totalTurns: number;
+  totalSessions: number;
+  providers: ProviderGroup[];
+};
+
+// ── Pure aggregation (exported for testing) ──────────────────────────
+
+export function aggregateUsageFromRuntimes(
+  runtimes: Record<string, ThreadRuntime>,
+): AggregateUsage {
+  const byKey = new Map<string, AggregateModelEntry>();
+  let totalCostUsd: number | null = null;
+  let costTrackingAvailable = false;
+  let totalTokens = 0;
+  let totalPromptTokens = 0;
+  let totalCompletionTokens = 0;
+  let totalTurns = 0;
+  let totalSessions = 0;
+
+  for (const runtime of Object.values(runtimes)) {
+    const usage = runtime.sessionUsage;
+    if (!usage) continue;
+
+    totalSessions++;
+    totalTurns += usage.totalTurns;
+    totalTokens += usage.totalTokens;
+    totalPromptTokens += usage.totalPromptTokens;
+    totalCompletionTokens += usage.totalCompletionTokens;
+
+    if (usage.costTrackingAvailable) costTrackingAvailable = true;
+    if (typeof usage.estimatedTotalCostUsd === "number") {
+      totalCostUsd = (totalCostUsd ?? 0) + usage.estimatedTotalCostUsd;
+    }
+
+    for (const entry of usage.byModel) {
+      const key = `${entry.provider}:${entry.model}`;
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.turns += entry.turns;
+        existing.sessions += 1;
+        existing.totalPromptTokens += entry.totalPromptTokens;
+        existing.totalCompletionTokens += entry.totalCompletionTokens;
+        existing.totalTokens += entry.totalTokens;
+        if (typeof entry.estimatedCostUsd === "number") {
+          existing.estimatedCostUsd = (existing.estimatedCostUsd ?? 0) + entry.estimatedCostUsd;
+        }
+      } else {
+        byKey.set(key, {
+          provider: entry.provider,
+          model: entry.model,
+          turns: entry.turns,
+          sessions: 1,
+          totalPromptTokens: entry.totalPromptTokens,
+          totalCompletionTokens: entry.totalCompletionTokens,
+          totalTokens: entry.totalTokens,
+          estimatedCostUsd: entry.estimatedCostUsd,
+        });
+      }
+    }
+  }
+
+  // Group by provider, sort providers by total cost desc, models within by cost desc
+  const providerMap = new Map<string, AggregateModelEntry[]>();
+  for (const entry of byKey.values()) {
+    const list = providerMap.get(entry.provider) ?? [];
+    list.push(entry);
+    providerMap.set(entry.provider, list);
+  }
+
+  const providers: ProviderGroup[] = [];
+  for (const [provider, models] of providerMap) {
+    models.sort((a, b) => (b.estimatedCostUsd ?? 0) - (a.estimatedCostUsd ?? 0));
+    let providerCost: number | null = null;
+    let providerTokens = 0;
+    let providerTurns = 0;
+    for (const m of models) {
+      providerTokens += m.totalTokens;
+      providerTurns += m.turns;
+      if (typeof m.estimatedCostUsd === "number") {
+        providerCost = (providerCost ?? 0) + m.estimatedCostUsd;
+      }
+    }
+    providers.push({
+      provider,
+      models,
+      totalTokens: providerTokens,
+      totalTurns: providerTurns,
+      estimatedCostUsd: providerCost,
+    });
+  }
+  providers.sort((a, b) => (b.estimatedCostUsd ?? 0) - (a.estimatedCostUsd ?? 0));
+
+  return {
+    totalCostUsd,
+    costTrackingAvailable,
+    totalTokens,
+    totalPromptTokens,
+    totalCompletionTokens,
+    totalTurns,
+    totalSessions,
+    providers,
+  };
 }
+
+// ── Helpers ──────────────────────────────────────────────────────────
 
 function formatEstimatedCost(value: number | null, available: boolean): string {
-  if (available && value !== null) return `est. ${formatCost(value)}`;
-  return "Estimate unavailable";
-}
-
-function budgetTone(runtime: ThreadRuntime | null): "destructive" | "secondary" | "outline" {
-  const budget = runtime?.sessionUsage?.budgetStatus;
-  if (budget?.stopTriggered) return "destructive";
-  if (budget?.warningTriggered) return "secondary";
-  return "outline";
-}
-
-function sessionSourceLabel(thread: ThreadRecord | null, runtime: ThreadRuntime | null): string {
-  if (runtime?.transcriptOnly) return "Transcript snapshot";
-  if (runtime?.connected) return "Live session";
-  if (thread?.status === "active") return "Reconnecting";
-  return "Disconnected snapshot";
+  if (available && value !== null) return formatCost(value);
+  return "—";
 }
 
 function UsageStat(props: { label: string; value: string; detail?: string }) {
@@ -74,46 +168,42 @@ function UsageStat(props: { label: string; value: string; detail?: string }) {
   );
 }
 
+// ── Component ────────────────────────────────────────────────────────
+
+export type UsagePageProps = {
+  aggregate?: AggregateUsage | null;
+  estimateNoticeOpen?: boolean;
+};
+
 export function UsagePage(props: UsagePageProps = {}) {
-  const selectedThreadIdFromStore = useAppStore((s) => s.selectedThreadId);
-  const threadsFromStore = useAppStore((s) => s.threads);
   const threadRuntimeByIdFromStore = useAppStore((s) => s.threadRuntimeById);
-  const selectThreadFromStore = useAppStore((s) => s.selectThread);
-  const clearThreadUsageHardCapFromStore = useAppStore((s) => s.clearThreadUsageHardCap);
+  const loadAllThreadUsage = useAppStore((s) => s.loadAllThreadUsage);
   const serverState = typeof window === "undefined" ? useAppStore.getState() : null;
-
-  const selectedThreadId = serverState?.selectedThreadId ?? selectedThreadIdFromStore;
-  const threads = serverState?.threads ?? threadsFromStore;
   const threadRuntimeById = serverState?.threadRuntimeById ?? threadRuntimeByIdFromStore;
-  const selectThread = selectThreadFromStore;
 
-  const thread = props.thread !== undefined
-    ? props.thread
-    : (selectedThreadId ? threads.find((entry) => entry.id === selectedThreadId) ?? null : null);
-  const runtime = props.runtime !== undefined ? props.runtime : (thread ? threadRuntimeById[thread.id] ?? null : null);
-  const sessionUsage = runtime?.sessionUsage ?? null;
-  const lastTurnUsage = runtime?.lastTurnUsage ?? null;
+  // Load usage data for all threads on mount so the aggregate view is complete
+  useEffect(() => {
+    if (props.aggregate !== undefined) return; // skip when overridden (tests)
+    void loadAllThreadUsage();
+  }, []);
+
+  const aggregate = props.aggregate !== undefined
+    ? props.aggregate
+    : useMemo(() => aggregateUsageFromRuntimes(threadRuntimeById), [threadRuntimeById]);
 
   const [estimateNoticeOpenInternal, setEstimateNoticeOpenInternal] = useState(false);
   const estimateNoticeOpen = props.estimateNoticeOpen ?? estimateNoticeOpenInternal;
   const handleEstimateNoticeOpenChange =
     props.estimateNoticeOpen === undefined ? setEstimateNoticeOpenInternal : undefined;
 
-  const canClearHardCap = Boolean(
-    thread
-      && runtime?.connected
-      && runtime.sessionId
-      && sessionUsage?.budgetStatus.stopTriggered,
-  );
+  const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
+  const toggleProvider = (provider: string) => {
+    setExpandedProviders((prev) => ({ ...prev, [provider]: !prev[provider] }));
+  };
 
-  const clearHardCap =
-    props.onClearHardCap
-    ?? (thread ? () => clearThreadUsageHardCapFromStore(thread.id) : undefined);
+  const [parent] = useAutoAnimate();
 
-  const recentTurns = sessionUsage ? [...sessionUsage.turns].slice(-8).reverse() : [];
-  const budget = sessionUsage?.budgetStatus ?? null;
-  const selectedThreadTitle = thread?.title ?? "No thread selected";
-  const modelCount = sessionUsage?.byModel.length ?? 0;
+  const hasUsage = aggregate && aggregate.totalSessions > 0;
 
   return (
     <div className="space-y-5" data-usage-page="true">
@@ -121,7 +211,7 @@ export function UsagePage(props: UsagePageProps = {}) {
         <div className="space-y-2">
           <h1 className="text-3xl font-semibold tracking-tight text-foreground">Usage</h1>
           <p className="max-w-2xl text-sm text-muted-foreground">
-            Thread-level token totals, model breakdowns, recent turn costs, and budget status.
+            Token usage and estimated costs across all sessions, broken down by provider and model.
           </p>
         </div>
 
@@ -146,7 +236,7 @@ export function UsagePage(props: UsagePageProps = {}) {
                 change prices independently of what is bundled in the app.
               </p>
               <p>
-                Be careful while using these estimates for spend decisions. Treat hard caps and totals as protective
+                Be careful while using these estimates for spend decisions. Treat totals as protective
                 guidance, not exact invoices.
               </p>
             </div>
@@ -159,242 +249,113 @@ export function UsagePage(props: UsagePageProps = {}) {
         </Dialog>
       </div>
 
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 max-[960px]:flex-col">
-          <div>
-            <CardTitle>Viewing usage for: {selectedThreadTitle}</CardTitle>
-            <CardDescription>
-              {thread
-                ? "Usage is scoped to the currently selected thread."
-                : "Select a thread to inspect its session usage."}
-            </CardDescription>
-          </div>
-          <div className="flex items-center gap-3">
-            {threads.length > 0 && (
-              <Select value={thread?.id ?? ""} onValueChange={(value) => void selectThread(value)}>
-                <SelectTrigger aria-label="Selected thread" className="w-[200px]">
-                  <SelectValue placeholder="Select a thread" />
-                </SelectTrigger>
-                <SelectContent>
-                  {threads.map((t) => (
-                    <SelectItem key={t.id} value={t.id}>
-                      {t.title || "Untitled Thread"}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            <Badge variant={budgetTone(runtime)}>{sessionSourceLabel(thread, runtime)}</Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-3">
-          <div>
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Thread status</div>
-            <div className="text-sm font-medium text-foreground">
-              {thread ? thread.status : "Unavailable"}
-            </div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Last usage update</div>
-            <div className="text-sm text-foreground">{formatTimestamp(sessionUsage?.updatedAt)}</div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-wide text-muted-foreground">Session source</div>
-            <div className="text-sm text-foreground">{sessionSourceLabel(thread, runtime)}</div>
-          </div>
-        </CardContent>
-      </Card>
+      {/* ── Overview stats ──────────────────────────────────────────── */}
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <UsageStat
+          label="Estimated total cost"
+          value={hasUsage ? formatEstimatedCost(aggregate.totalCostUsd, aggregate.costTrackingAvailable) : "—"}
+          detail={hasUsage && aggregate.costTrackingAvailable ? "Based on local pricing data" : hasUsage ? "Pricing unavailable for some models" : "No usage recorded yet"}
+        />
+        <UsageStat
+          label="Total tokens"
+          value={hasUsage ? formatTokenCount(aggregate.totalTokens) : "0"}
+          detail={hasUsage ? `${formatTokenCount(aggregate.totalPromptTokens)} in · ${formatTokenCount(aggregate.totalCompletionTokens)} out` : "No usage recorded yet"}
+        />
+        <UsageStat
+          label="Total turns"
+          value={hasUsage ? String(aggregate.totalTurns) : "0"}
+          detail={hasUsage ? `Across ${aggregate.totalSessions} session${aggregate.totalSessions === 1 ? "" : "s"}` : "No sessions yet"}
+        />
+        <UsageStat
+          label="Providers"
+          value={hasUsage ? String(aggregate.providers.length) : "0"}
+          detail={hasUsage ? `${aggregate.providers.reduce((n, p) => n + p.models.length, 0)} model${aggregate.providers.reduce((n, p) => n + p.models.length, 0) === 1 ? "" : "s"} used` : "No models used yet"}
+        />
+      </div>
 
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader>
-          <CardTitle>Overview</CardTitle>
-          <CardDescription>High-level session totals from the selected thread.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <UsageStat
-            label="Estimated cost"
-            value={formatEstimatedCost(sessionUsage?.estimatedTotalCostUsd ?? null, sessionUsage?.costTrackingAvailable === true)}
-            detail={sessionUsage?.costTrackingAvailable ? "Based on current local pricing data." : "Pricing unavailable for this session."}
-          />
-          <UsageStat
-            label="Total tokens"
-            value={sessionUsage ? formatTokenCount(sessionUsage.totalTokens) : "0"}
-            detail={sessionUsage ? `${formatTokenCount(sessionUsage.totalPromptTokens)} in • ${formatTokenCount(sessionUsage.totalCompletionTokens)} out` : "No turn usage recorded yet."}
-          />
-          <UsageStat
-            label="Turns"
-            value={sessionUsage ? String(sessionUsage.totalTurns) : "0"}
-            detail={modelCount > 0 ? `${modelCount} model bucket${modelCount === 1 ? "" : "s"}` : "No model breakdown yet."}
-          />
-          <UsageStat
-            label="Last turn"
-            value={lastTurnUsage ? formatTokenCount(lastTurnUsage.usage.totalTokens) : "None"}
-            detail={
-              lastTurnUsage
-                ? [
-                    `${formatTokenCount(lastTurnUsage.usage.promptTokens)} in`,
-                    `${formatTokenCount(lastTurnUsage.usage.completionTokens)} out`,
-                    typeof lastTurnUsage.usage.cachedPromptTokens === "number"
-                      ? `${formatTokenCount(lastTurnUsage.usage.cachedPromptTokens)} cached`
-                      : null,
-                    typeof lastTurnUsage.usage.estimatedCostUsd === "number"
-                      ? `est. ${formatCost(lastTurnUsage.usage.estimatedCostUsd)}`
-                      : null,
-                  ].filter(Boolean).join(" • ")
-                : "No completed turn captured yet."
-            }
-          />
-        </CardContent>
-      </Card>
-
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 max-[960px]:flex-col">
-          <div>
-            <CardTitle>Budget status</CardTitle>
-            <CardDescription>Current warning and hard-stop thresholds for this session.</CardDescription>
-          </div>
-          {canClearHardCap && clearHardCap ? (
-            <Button type="button" variant="outline" size="sm" onClick={() => void clearHardCap()}>
-              <RotateCcwIcon className="h-4 w-4" />
-              Clear hard cap
-            </Button>
-          ) : null}
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <UsageStat
-            label="Status"
-            value={
-              budget?.stopTriggered
-                ? "Hard cap exceeded"
-                : budget?.warningTriggered
-                  ? "Warning triggered"
-                  : budget?.configured
-                    ? "Tracking"
-                    : "Inactive"
-            }
-            detail={
-              budget?.stopTriggered && !canClearHardCap
-                ? "Reconnect the thread to clear the hard cap."
-                : "Budget thresholds are optional session estimates."
-            }
-          />
-          <UsageStat
-            label="Current cost"
-            value={formatEstimatedCost(budget?.currentCostUsd ?? null, sessionUsage?.costTrackingAvailable === true)}
-            detail="Current cumulative estimate for the session."
-          />
-          <UsageStat
-            label="Warning threshold"
-            value={typeof budget?.warnAtUsd === "number" ? formatCost(budget.warnAtUsd) : "Not set"}
-            detail={budget?.warningTriggered ? "Reached in this session." : "Soft warning only."}
-          />
-          <UsageStat
-            label="Hard stop"
-            value={typeof budget?.stopAtUsd === "number" ? formatCost(budget.stopAtUsd) : "Not set"}
-            detail={budget?.stopTriggered ? "New turns are blocked until cleared." : "Blocks new turns when exceeded."}
-          />
-        </CardContent>
-      </Card>
-
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader>
-          <CardTitle>Model breakdown</CardTitle>
-          <CardDescription>Aggregated totals by provider and model.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {sessionUsage && sessionUsage.byModel.length > 0 ? (
-            sessionUsage.byModel.map((summary) => (
-              <div
-                key={`${summary.provider}:${summary.model}`}
-                className="rounded-xl border border-border/70 bg-background/70 p-4"
-              >
-                <div className="flex items-start justify-between gap-3 max-[960px]:flex-col">
-                  <div>
-                    <div className="text-sm font-medium text-foreground">{summary.model}</div>
-                    <div className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
-                      {summary.provider} • {summary.turns} turn{summary.turns === 1 ? "" : "s"}
+      {/* ── Provider / model breakdown ──────────────────────────────── */}
+      {hasUsage && aggregate.providers.length > 0 ? (
+        <div className="space-y-3" ref={parent}>
+          <h2 className="text-lg font-medium text-foreground">By provider</h2>
+          <div className="rounded-xl border border-border/70 overflow-hidden bg-background/50">
+            {aggregate.providers.map((group) => {
+              const isExpanded = expandedProviders[group.provider] ?? true;
+              return (
+                <div key={group.provider} className="border-b border-border/70 last:border-b-0">
+                  {/* Provider header */}
+                  <div
+                    className="flex items-center justify-between p-4 cursor-pointer hover:bg-card/60 transition-colors"
+                    onClick={() => toggleProvider(group.provider)}
+                  >
+                    <div className="flex items-center gap-3">
+                      {isExpanded ? (
+                        <ChevronDownIcon className="w-4 h-4 text-muted-foreground" />
+                      ) : (
+                        <ChevronRightIcon className="w-4 h-4 text-muted-foreground" />
+                      )}
+                      <span className="font-medium text-foreground text-sm capitalize">{group.provider}</span>
+                      <Badge variant="secondary" className="text-[10px] uppercase h-5">
+                        {group.models.length} model{group.models.length === 1 ? "" : "s"}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                      <span>{formatTokenCount(group.totalTokens)} tokens</span>
+                      <span>{group.totalTurns} turn{group.totalTurns === 1 ? "" : "s"}</span>
+                      {typeof group.estimatedCostUsd === "number" ? (
+                        <Badge variant="outline">{formatCost(group.estimatedCostUsd)}</Badge>
+                      ) : null}
                     </div>
                   </div>
-                  <Badge variant="outline">
-                    {formatEstimatedCost(summary.estimatedCostUsd, summary.estimatedCostUsd !== null)}
-                  </Badge>
-                </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-3">
-                  <UsageStat
-                    label="Prompt"
-                    value={formatTokenCount(summary.totalPromptTokens)}
-                  />
-                  <UsageStat
-                    label="Completion"
-                    value={formatTokenCount(summary.totalCompletionTokens)}
-                  />
-                  <UsageStat
-                    label="Total"
-                    value={formatTokenCount(summary.totalTokens)}
-                  />
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="rounded-xl border border-dashed border-border/70 bg-background/60 p-5 text-sm text-muted-foreground">
-              {thread
-                ? "No model usage has been recorded for this thread yet."
-                : "Choose a thread first to see its model breakdown."}
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader>
-          <CardTitle>Recent turns</CardTitle>
-          <CardDescription>The latest recorded turns for this session.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {recentTurns.length > 0 ? (
-            recentTurns.map((turn) => (
-              <div
-                key={turn.turnId}
-                className="rounded-xl border border-border/70 bg-background/70 p-4"
-              >
-                <div className="flex items-start justify-between gap-3 max-[960px]:flex-col">
-                  <div>
-                    <div className="text-sm font-medium text-foreground">
-                      #{turn.turnIndex + 1} • {turn.model}
+                  {/* Model rows */}
+                  {isExpanded && (
+                    <div className="border-t border-border/50">
+                      {group.models.map((model) => (
+                        <div
+                          key={model.model}
+                          className="px-10 py-3 border-b border-border/40 last:border-b-0 bg-card/20"
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-foreground">{model.model}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {model.turns} turn{model.turns === 1 ? "" : "s"} across {model.sessions} session{model.sessions === 1 ? "" : "s"}
+                              </span>
+                            </div>
+                            {typeof model.estimatedCostUsd === "number" ? (
+                              <Badge variant="outline">{formatCost(model.estimatedCostUsd)}</Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">No pricing</span>
+                            )}
+                          </div>
+                          <div className="grid gap-2 grid-cols-3 text-xs">
+                            <div>
+                              <span className="text-muted-foreground">Prompt: </span>
+                              <span className="text-foreground font-medium">{formatTokenCount(model.totalPromptTokens)}</span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Completion: </span>
+                              <span className="text-foreground font-medium">{formatTokenCount(model.totalCompletionTokens)}</span>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Total: </span>
+                              <span className="text-foreground font-medium">{formatTokenCount(model.totalTokens)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    <div className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
-                      {turn.provider} • {formatTimestamp(turn.timestamp)}
-                    </div>
-                  </div>
-                  <Badge variant="outline">
-                    {formatEstimatedCost(turn.estimatedCostUsd, turn.estimatedCostUsd !== null)}
-                  </Badge>
+                  )}
                 </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-4">
-                  <UsageStat label="Prompt" value={formatTokenCount(turn.usage.promptTokens)} />
-                  <UsageStat label="Completion" value={formatTokenCount(turn.usage.completionTokens)} />
-                  <UsageStat label="Total" value={formatTokenCount(turn.usage.totalTokens)} />
-                  <UsageStat
-                    label="Cached"
-                    value={
-                      typeof turn.usage.cachedPromptTokens === "number"
-                        ? formatTokenCount(turn.usage.cachedPromptTokens)
-                        : "—"
-                    }
-                    detail="Prompt tokens served from cache."
-                  />
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="rounded-xl border border-dashed border-border/70 bg-background/60 p-5 text-sm text-muted-foreground">
-              {thread
-                ? "Recent turn estimates will appear after the selected thread completes a turn."
-                : "Choose a thread first to inspect recent turns."}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-dashed border-border/70 bg-background/60 p-8 text-center text-sm text-muted-foreground">
+          No usage data recorded yet. Usage will appear here as you use models across sessions.
+        </div>
+      )}
     </div>
   );
 }

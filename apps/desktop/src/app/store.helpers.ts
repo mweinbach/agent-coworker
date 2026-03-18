@@ -260,6 +260,8 @@ export type AppStoreState = {
   requestProviderAuthMethods: () => Promise<void>;
   refreshProviderStatus: () => Promise<void>;
 
+  loadAllThreadUsage: () => Promise<void>;
+
   answerAsk: (threadId: string, requestId: string, answer: string) => void;
   answerApproval: (threadId: string, requestId: string, approved: boolean) => void;
   dismissPrompt: () => void;

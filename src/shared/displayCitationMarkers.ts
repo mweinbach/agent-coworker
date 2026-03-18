@@ -58,6 +58,19 @@ function extractToolResultText(value: unknown): string | null {
   return null;
 }
 
+function maybeParseJson(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
 function toMarkdownCitationLabel(id: string, citationUrlsByIndex?: ReadonlyMap<number, string>): string | null {
   const numericId = Number.parseInt(id, 10);
   const url = Number.isFinite(numericId) ? citationUrlsByIndex?.get(numericId) : undefined;
@@ -143,6 +156,59 @@ export type CitationSource = {
   url: string;
   title?: string;
 };
+
+function exaResultsArray(value: unknown): unknown[] {
+  if (typeof value === "string") {
+    const parsed = maybeParseJson(value);
+    if (parsed !== undefined) {
+      return exaResultsArray(parsed);
+    }
+    return [];
+  }
+
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  if (Array.isArray(value.results)) {
+    return value.results;
+  }
+
+  if (isRecord(value.response) && Array.isArray(value.response.results)) {
+    return value.response.results;
+  }
+
+  if ("output" in value) {
+    return exaResultsArray(value.output);
+  }
+
+  if ("result" in value) {
+    return exaResultsArray(value.result);
+  }
+
+  return [];
+}
+
+function extractStructuredCitationSourcesFromWebSearchResult(result: unknown): CitationSource[] {
+  const sources: CitationSource[] = [];
+  const seenUrls = new Set<string>();
+
+  for (const entry of exaResultsArray(result)) {
+    if (!isRecord(entry)) continue;
+    const url = typeof entry.url === "string" ? entry.url.trim() : "";
+    if (!url || seenUrls.has(url)) continue;
+    seenUrls.add(url);
+
+    const source: CitationSource = { url };
+    const title = typeof entry.title === "string" ? entry.title.trim() : "";
+    if (title) {
+      source.title = title;
+    }
+    sources.push(source);
+  }
+
+  return sources;
+}
 
 function extractCitationUrlsFromNativeWebSearchResult(result: unknown): Map<number, string> {
   const record = isRecord(result) ? result : null;
@@ -279,6 +345,11 @@ function insertNativeCitationMarkers(text: string, options: CitationDisplayOptio
 }
 
 export function extractCitationSourcesFromWebSearchResult(result: unknown): CitationSource[] {
+  const structuredSources = extractStructuredCitationSourcesFromWebSearchResult(result);
+  if (structuredSources.length > 0) {
+    return structuredSources;
+  }
+
   const text = extractToolResultText(result);
   if (!text) return [];
 
@@ -301,6 +372,11 @@ export function extractCitationSourcesFromWebSearchResult(result: unknown): Cita
 }
 
 export function extractCitationUrlsFromWebSearchResult(result: unknown): Map<number, string> {
+  const structuredSources = extractStructuredCitationSourcesFromWebSearchResult(result);
+  if (structuredSources.length > 0) {
+    return new Map(structuredSources.map((source, index) => [index + 1, source.url] as const));
+  }
+
   const text = extractToolResultText(result);
   if (!text) {
     return new Map();
@@ -357,9 +433,7 @@ export function buildCitationUrlsByMessageId<T extends CitationFeedItem>(feed: r
 
     if (itemKind === "tool" && item.name === "webSearch") {
       const nextCitationUrls = extractCitationUrlsFromWebSearchResult(item.result);
-      if (nextCitationUrls.size > 0) {
-        currentCitationUrls = nextCitationUrls;
-      }
+      currentCitationUrls = nextCitationUrls;
       continue;
     }
 
@@ -409,9 +483,7 @@ export function buildCitationSourcesByMessageId<T extends CitationFeedItem>(feed
 
     if (itemKind === "tool" && item.name === "webSearch") {
       const nextSources = extractCitationSourcesFromWebSearchResult(item.result);
-      if (nextSources.length > 0) {
-        currentSources = nextSources;
-      }
+      currentSources = nextSources;
       continue;
     }
 

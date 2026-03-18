@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 
 import {
   buildCitationOverflowFilePathsByMessageId,
+  buildCitationSourcesByMessageId,
   buildCitationUrlsByMessageId,
+  extractCitationSourcesFromWebSearchResult,
   extractCitationOverflowFilePathFromWebSearchResult,
   extractCitationUrlsFromWebSearchResult,
   normalizeDisplayCitationMarkers,
@@ -95,6 +97,50 @@ describe("display citation markers", () => {
     ]));
   });
 
+  test("extracts ordered URLs and titles from structured webSearch results", () => {
+    const result = {
+      provider: "exa",
+      count: 2,
+      response: {
+        results: [
+          { title: "Source One", url: "https://example.com/one", highlights: ["One"] },
+          { title: "Source Two", url: "https://example.com/two", highlights: ["Two"] },
+        ],
+      },
+    };
+
+    expect(extractCitationUrlsFromWebSearchResult(result)).toEqual(new Map([
+      [1, "https://example.com/one"],
+      [2, "https://example.com/two"],
+    ]));
+    expect(extractCitationSourcesFromWebSearchResult(result)).toEqual([
+      { title: "Source One", url: "https://example.com/one" },
+      { title: "Source Two", url: "https://example.com/two" },
+    ]);
+  });
+
+  test("extracts citation sources from overflowed JSON spill content", () => {
+    const spillContent = JSON.stringify({
+      provider: "exa",
+      count: 2,
+      response: {
+        results: [
+          { title: "Source One", url: "https://example.com/one" },
+          { title: "Source Two", url: "https://example.com/two" },
+        ],
+      },
+    }, null, 2);
+
+    expect(extractCitationUrlsFromWebSearchResult(spillContent)).toEqual(new Map([
+      [1, "https://example.com/one"],
+      [2, "https://example.com/two"],
+    ]));
+    expect(extractCitationSourcesFromWebSearchResult(spillContent)).toEqual([
+      { title: "Source One", url: "https://example.com/one" },
+      { title: "Source Two", url: "https://example.com/two" },
+    ]);
+  });
+
   test("prefers native assistant annotations when present", () => {
     const feed = [
       { id: "user-1", kind: "message", role: "user" as const },
@@ -152,6 +198,89 @@ describe("display citation markers", () => {
         [1, "https://example.com/one"],
         [2, "https://example.com/two"],
       ])],
+    ]));
+  });
+
+  test("tracks latest structured webSearch sources by assistant message id", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "webSearch",
+        result: {
+          provider: "exa",
+          count: 2,
+          response: {
+            results: [
+              { title: "Source One", url: "https://example.com/one" },
+              { title: "Source Two", url: "https://example.com/two" },
+            ],
+          },
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", new Map([
+        [1, "https://example.com/one"],
+        [2, "https://example.com/two"],
+      ])],
+    ]));
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", [
+        { title: "Source One", url: "https://example.com/one" },
+        { title: "Source Two", url: "https://example.com/two" },
+      ]],
+    ]));
+  });
+
+  test("clears stale webSearch citations when a later search returns no results", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "webSearch",
+        result: {
+          provider: "exa",
+          count: 2,
+          response: {
+            results: [
+              { title: "Source One", url: "https://example.com/one" },
+              { title: "Source Two", url: "https://example.com/two" },
+            ],
+          },
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+      {
+        id: "tool-2",
+        kind: "tool" as const,
+        name: "webSearch",
+        result: {
+          provider: "exa",
+          count: 0,
+          response: {
+            results: [],
+          },
+        },
+      },
+      { id: "assistant-2", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", new Map([
+        [1, "https://example.com/one"],
+        [2, "https://example.com/two"],
+      ])],
+    ]));
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", [
+        { title: "Source One", url: "https://example.com/one" },
+        { title: "Source Two", url: "https://example.com/two" },
+      ]],
     ]));
   });
 

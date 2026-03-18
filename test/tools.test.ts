@@ -1270,14 +1270,27 @@ describe("webSearch tool", () => {
 
     try {
       const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
-      const out: string = await t.execute({
+      const out = await t.execute({
         searchQuery: "latest sdk changelog",
         maxResults: 3,
       });
-      expect(out).toContain("Result title");
-      expect(out).toContain("https://example.com");
-      expect(out).toContain("Primary highlight");
-      expect(out).not.toContain("Fallback snippet");
+      expect(out).toMatchObject({
+        provider: "exa",
+        count: 1,
+        request: {
+          query: "latest sdk changelog",
+          numResults: 3,
+          type: "auto",
+        },
+      });
+      expect((out as any).response.results).toEqual([
+        {
+          title: "Result title",
+          url: "https://example.com",
+          highlights: ["Primary highlight"],
+          text: "Fallback snippet",
+        },
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;
@@ -1350,14 +1363,29 @@ describe("webSearch tool", () => {
 
     try {
       const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
-      const out: string = await t.execute({
+      const out = await t.execute({
         query: "latest nvidia news",
         maxResults: 5,
         type: "deep",
         category: "company",
       });
-      expect(out).toContain("Nvidia result");
-      expect(out).toContain("Deep company highlight");
+      expect(out).toMatchObject({
+        provider: "exa",
+        count: 1,
+        request: {
+          query: "latest nvidia news",
+          numResults: 5,
+          type: "deep",
+          category: "company",
+        },
+      });
+      expect((out as any).response.results).toEqual([
+        {
+          title: "Nvidia result",
+          url: "https://example.com/nvda",
+          highlights: ["Deep company highlight"],
+        },
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;
@@ -1395,12 +1423,27 @@ describe("webSearch tool", () => {
 
     try {
       const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
-      const out: string = await t.execute({
+      const out = await t.execute({
         query: "latest nvidia news",
         category: "news article",
       });
-      expect(out).toContain("News result");
-      expect(out).toContain("News highlight");
+      expect(out).toMatchObject({
+        provider: "exa",
+        count: 1,
+        request: {
+          query: "latest nvidia news",
+          numResults: 10,
+          type: "auto",
+          category: "news",
+        },
+      });
+      expect((out as any).response.results).toEqual([
+        {
+          title: "News result",
+          url: "https://example.com/news",
+          highlights: ["News highlight"],
+        },
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;

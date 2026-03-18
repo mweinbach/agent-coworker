@@ -50,6 +50,7 @@ import {
   buildCitationOverflowFilePathsByMessageId,
   buildCitationSourcesByMessageId,
   buildCitationUrlsByMessageId,
+  extractCitationSourcesFromWebSearchResult,
   extractCitationUrlsFromWebSearchResult,
 } from "../../../../src/shared/displayCitationMarkers";
 import type { CitationSource } from "../../../../src/shared/displayCitationMarkers";
@@ -210,6 +211,41 @@ export function composerBusyHint(submitState: ReturnType<typeof getComposerSubmi
 
 export function resolveComposerBusyPolicy(busy: boolean): "reject" | "steer" {
   return busy ? "steer" : "reject";
+}
+
+type OverflowCitationContext = {
+  sourcesByMessageId: Map<string, CitationSource[]>;
+  urlsByMessageId: Map<string, Map<number, string>>;
+};
+
+export async function loadOverflowCitationContext(
+  entries: Array<[messageId: string, filePath: string]>,
+  readFileFn: (input: { path: string }) => Promise<string> = readFile,
+): Promise<OverflowCitationContext> {
+  const urlsByMessageId = new Map<string, Map<number, string>>();
+  const sourcesByMessageId = new Map<string, CitationSource[]>();
+  const textByPath = new Map<string, string>();
+
+  for (const [messageId, filePath] of entries) {
+    try {
+      let content = textByPath.get(filePath);
+      if (content === undefined) {
+        content = await readFileFn({ path: filePath });
+        textByPath.set(filePath, content);
+      }
+
+      urlsByMessageId.set(messageId, extractCitationUrlsFromWebSearchResult(content));
+
+      const sources = extractCitationSourcesFromWebSearchResult(content);
+      if (sources.length > 0) {
+        sourcesByMessageId.set(messageId, sources);
+      }
+    } catch {
+      urlsByMessageId.set(messageId, new Map());
+    }
+  }
+
+  return { urlsByMessageId, sourcesByMessageId };
 }
 
 export function ChatThreadHeader(props: {
@@ -467,6 +503,9 @@ export function ChatView() {
   const [overflowCitationUrlsByMessageId, setOverflowCitationUrlsByMessageId] = useState<Map<string, Map<number, string>>>(
     () => new Map(),
   );
+  const [overflowCitationSourcesByMessageId, setOverflowCitationSourcesByMessageId] = useState<Map<string, CitationSource[]>>(
+    () => new Map(),
+  );
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
@@ -497,7 +536,16 @@ export function ChatView() {
     }
     return merged;
   }, [inlineCitationUrlsByMessageId, overflowCitationUrlsByMessageId]);
-  const citationSourcesByMessageId = useMemo(() => buildCitationSourcesByMessageId(visibleFeed), [visibleFeed]);
+  const inlineCitationSourcesByMessageId = useMemo(() => buildCitationSourcesByMessageId(visibleFeed), [visibleFeed]);
+  const citationSourcesByMessageId = useMemo(() => {
+    const merged = new Map(inlineCitationSourcesByMessageId);
+    for (const [messageId, sources] of overflowCitationSourcesByMessageId) {
+      if (sources.length > 0) {
+        merged.set(messageId, sources);
+      }
+    }
+    return merged;
+  }, [inlineCitationSourcesByMessageId, overflowCitationSourcesByMessageId]);
   const renderItems = useMemo(() => buildChatRenderItems(visibleFeed), [visibleFeed]);
   const contextValue = useMemo<ChatViewContextValue>(
     () => ({
@@ -550,28 +598,16 @@ export function ChatView() {
     const entries = [...citationOverflowFilePathsByMessageId.entries()];
     if (entries.length === 0) {
       setOverflowCitationUrlsByMessageId((current) => (current.size === 0 ? current : new Map()));
+      setOverflowCitationSourcesByMessageId((current) => (current.size === 0 ? current : new Map()));
       return;
     }
 
     void (async () => {
-      const urlsByMessageId = new Map<string, Map<number, string>>();
-      const textByPath = new Map<string, string>();
-
-      for (const [messageId, filePath] of entries) {
-        try {
-          let content = textByPath.get(filePath);
-          if (content === undefined) {
-            content = await readFile({ path: filePath });
-            textByPath.set(filePath, content);
-          }
-          urlsByMessageId.set(messageId, extractCitationUrlsFromWebSearchResult(content));
-        } catch {
-          urlsByMessageId.set(messageId, new Map());
-        }
-      }
+      const { urlsByMessageId, sourcesByMessageId } = await loadOverflowCitationContext(entries);
 
       if (!cancelled) {
         setOverflowCitationUrlsByMessageId(urlsByMessageId);
+        setOverflowCitationSourcesByMessageId(sourcesByMessageId);
       }
     })();
 

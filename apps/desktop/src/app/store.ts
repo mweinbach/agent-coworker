@@ -40,6 +40,7 @@ const initialState: AppStoreDataState = {
   injectContext: false,
   developerMode: false,
   showHiddenFiles: false,
+  perWorkspaceSettings: false,
   updateState: createDefaultUpdaterState(),
 
   onboardingVisible: false,

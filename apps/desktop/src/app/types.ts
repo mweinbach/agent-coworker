@@ -118,6 +118,7 @@ export type PersistedState = {
   threads: ThreadRecord[];
   developerMode?: boolean;
   showHiddenFiles?: boolean;
+  perWorkspaceSettings?: boolean;
   providerState?: PersistedProviderState;
   onboarding?: PersistedOnboardingState;
 };

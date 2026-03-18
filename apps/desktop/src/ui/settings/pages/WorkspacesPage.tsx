@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { ChevronDownIcon, InfoIcon, PlusIcon, XIcon } from "lucide-react";
 
@@ -273,6 +273,18 @@ function providerFromModelRef(ref: string): ProviderName | null {
 
 function hasConfiguredProviderStatus(status: { verified?: boolean; authorized?: boolean } | undefined): boolean {
   return Boolean(status?.verified || status?.authorized);
+}
+
+function useSharedUpdateWorkspaceDefaults() {
+  const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
+  const workspaces = useAppStore((s) => s.workspaces);
+  const rawUpdate = useAppStore((s) => s.updateWorkspaceDefaults);
+  return useMemo(() => {
+    if (perWorkspaceSettings) return rawUpdate;
+    return async (workspaceId: string, patch: any) => {
+      await Promise.all(workspaces.map((ws) => rawUpdate(ws.id, patch)));
+    };
+  }, [perWorkspaceSettings, workspaces, rawUpdate]);
 }
 
 type OpenAiCompatibleModelSettingsCardProps = {
@@ -800,6 +812,7 @@ type WorkspaceDefaultsSummaryProps = {
   model: string;
   childModelRoutingMode: "same-provider" | "cross-provider-allowlist";
   preferredChildLabel: string;
+  shared?: boolean;
 };
 
 function WorkspaceDefaultsSummary({
@@ -807,9 +820,15 @@ function WorkspaceDefaultsSummary({
   model,
   childModelRoutingMode,
   preferredChildLabel,
+  shared,
 }: WorkspaceDefaultsSummaryProps) {
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-lg border border-border/60 bg-card/70 px-3 py-2 text-xs text-muted-foreground">
+      {shared && (
+        <Badge variant="secondary" className="rounded-sm">
+          Shared
+        </Badge>
+      )}
       <span>Current provider:</span>
       <Badge variant="outline" className="rounded-sm">
         {displayProviderName(provider)}
@@ -838,10 +857,13 @@ export function WorkspacesPage() {
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerDefaultModelByProvider = useAppStore((s) => s.providerDefaultModelByProvider);
 
+  const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
+  const setPerWorkspaceSettings = useAppStore((s) => s.setPerWorkspaceSettings);
+
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const selectWorkspace = useAppStore((s) => s.selectWorkspace);
-  const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
+  const updateWorkspaceDefaults = useSharedUpdateWorkspaceDefaults();
   const restartWorkspaceServer = useAppStore((s) => s.restartWorkspaceServer);
 
   const ws = useMemo(
@@ -935,6 +957,7 @@ export function WorkspacesPage() {
             model={model}
             childModelRoutingMode={childModelRoutingMode}
             preferredChildLabel={childModelRoutingMode === "same-provider" ? (preferredChildModel || model) : friendlyModelRef(preferredChildModelRef)}
+            shared={!perWorkspaceSettings}
           />
 
           <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2 relative">
@@ -965,7 +988,11 @@ export function WorkspacesPage() {
               <CardHeader className="flex-row items-center justify-between space-y-0">
                 <div>
                   <CardTitle>Active workspace</CardTitle>
-                  <CardDescription>Selected project for this desktop session.</CardDescription>
+                  <CardDescription>
+                    {perWorkspaceSettings
+                      ? "Selected project for this desktop session."
+                      : "Selected project folder. Settings are shared across all workspaces."}
+                  </CardDescription>
                 </div>
                 <Button variant="outline" type="button" onClick={() => void addWorkspace()}>
                   Add
@@ -1366,6 +1393,33 @@ export function WorkspacesPage() {
                 <CardDescription>Maintenance and destructive actions.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+                  <div>
+                    <div className="text-sm font-medium">Configure settings by workspace</div>
+                    <div className="text-xs text-muted-foreground">When enabled, each workspace has its own provider, model, and behavior settings.</div>
+                  </div>
+                  <Checkbox
+                    checked={perWorkspaceSettings}
+                    aria-label="Configure settings by workspace"
+                    onCheckedChange={async (checked) => {
+                      const next = toBoolean(checked);
+                      if (!next && workspaces.length > 1) {
+                        const confirmed = await confirmAction({
+                          title: "Share settings across workspaces",
+                          message: "All workspaces will be synced to the current workspace's settings.",
+                          detail: "This will overwrite provider, model, and behavior settings on other workspaces.",
+                          confirmLabel: "Share settings",
+                          cancelLabel: "Cancel",
+                          kind: "warning",
+                          defaultAction: "cancel",
+                        });
+                        if (!confirmed) return;
+                      }
+                      setPerWorkspaceSettings(next);
+                    }}
+                  />
+                </div>
+
                 <div className="flex items-center justify-between gap-3 max-[960px]:items-start max-[960px]:flex-col">
                   <div>
                     <div className="text-sm font-medium">Restart server</div>

@@ -183,6 +183,7 @@ const persistedStateSchema = z.object({
   threads: z.preprocess((value) => value ?? [], z.array(persistedThreadSchema)),
   developerMode: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   showHiddenFiles: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+  perWorkspaceSettings: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough().transform((state) => {
   const providerState = normalizePersistedProviderState((state as { providerState?: unknown }).providerState);
   const onboarding = (state as { onboarding?: PersistedOnboardingState }).onboarding;
@@ -204,12 +205,13 @@ const persistedStateSchema = z.object({
     selectedThreadId,
     developerMode: state.developerMode,
     showHiddenFiles: state.showHiddenFiles,
+    perWorkspaceSettings: state.perWorkspaceSettings,
     providerState,
     onboarding,
   };
 });
 
-export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "init" | "openSettings" | "closeSettings" | "setSettingsPage" | "setDeveloperMode" | "setShowHiddenFiles" | "setUpdateState" | "checkForUpdates" | "quitAndInstallUpdate" | "toggleSidebar" | "toggleContextSidebar" | "setSidebarWidth" | "setContextSidebarWidth" | "setMessageBarHeight"> {
+export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "init" | "openSettings" | "closeSettings" | "setSettingsPage" | "setDeveloperMode" | "setShowHiddenFiles" | "setPerWorkspaceSettings" | "setUpdateState" | "checkForUpdates" | "quitAndInstallUpdate" | "toggleSidebar" | "toggleContextSidebar" | "setSidebarWidth" | "setContextSidebarWidth" | "setMessageBarHeight"> {
   return {
     init: async () => {
       set({ startupError: null });
@@ -247,6 +249,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           providerConnected: connectedProviders,
           developerMode: state.developerMode,
           showHiddenFiles: state.showHiddenFiles,
+          perWorkspaceSettings: state.perWorkspaceSettings,
           updateState,
           ready: true,
           startupError: null,
@@ -330,6 +333,39 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       if (wsId) {
         void get().refreshWorkspaceFiles(wsId);
       }
+    },
+
+    setPerWorkspaceSettings: (enabled) => {
+      set({ perWorkspaceSettings: enabled });
+      if (!enabled) {
+        const state = get();
+        const source = state.workspaces.find((w) => w.id === state.selectedWorkspaceId) ?? state.workspaces[0];
+        if (source && state.workspaces.length > 1) {
+          const settingsFields: (keyof typeof source)[] = [
+            "defaultProvider",
+            "defaultModel",
+            "defaultPreferredChildModel",
+            "defaultChildModelRoutingMode",
+            "defaultPreferredChildModelRef",
+            "defaultAllowedChildModelRefs",
+            "defaultToolOutputOverflowChars",
+            "providerOptions",
+            "userName",
+            "userProfile",
+            "defaultEnableMcp",
+            "defaultBackupsEnabled",
+            "yolo",
+          ];
+          const patch: Record<string, unknown> = {};
+          for (const key of settingsFields) {
+            patch[key] = source[key];
+          }
+          set((s) => ({
+            workspaces: s.workspaces.map((w) => (w.id === source.id ? w : { ...w, ...patch })),
+          }));
+        }
+      }
+      void persistNow(get);
     },
 
     setUpdateState: (updateState) => set({ updateState }),

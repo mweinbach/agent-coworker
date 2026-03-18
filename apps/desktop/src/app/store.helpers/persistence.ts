@@ -19,6 +19,7 @@ function buildPersistedState(state: AppStoreState): PersistedState {
     threads: state.threads,
     developerMode: state.developerMode,
     showHiddenFiles: state.showHiddenFiles,
+    perWorkspaceSettings: state.perWorkspaceSettings,
     ...(providerState ? { providerState } : {}),
     onboarding: state.onboardingState,
   };

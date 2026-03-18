@@ -7,6 +7,7 @@ import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
 import { modelChoicesFromCatalog, UI_DISABLED_PROVIDERS } from "../../../lib/modelChoices";
+import { compareProviderNamesForSettings } from "../../../lib/providerOrdering";
 import type { ProviderName, ServerEvent } from "../../../lib/wsProtocol";
 import { PROVIDER_NAMES } from "../../../lib/wsProtocol";
 import { cn } from "../../../lib/utils";
@@ -33,7 +34,12 @@ function formatAccount(account: any): string {
 
 function providerStatusLabel(status: any): string {
   if (!status) return "Not connected";
-  if (Array.isArray(status.usage?.rateLimits) && status.usage.rateLimits.some((entry: any) => entry?.limitReached === true)) {
+  if (
+    Array.isArray(status.usage?.rateLimits) &&
+    status.usage.rateLimits.some((entry: any) =>
+      (entry?.limitReached === true || entry?.allowed === false) && !isUsingCredits(entry)
+    )
+  ) {
     return "Rate limited";
   }
   if (status.verified) return "Connected";
@@ -62,11 +68,24 @@ function formatDurationSeconds(totalSeconds: unknown): string {
   return `${Math.round(totalSeconds / 86400)}d`;
 }
 
-function formatWindowSummary(window: any): string {
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
+function usedPercentFromWindow(window: any): number | null {
+  if (!window || typeof window !== "object") return null;
+  if (typeof window.usedPercent !== "number" || !Number.isFinite(window.usedPercent)) return null;
+  return clampPercent(window.usedPercent);
+}
+
+function remainingPercentFromWindow(window: any): number | null {
+  const usedPercent = usedPercentFromWindow(window);
+  if (usedPercent === null) return null;
+  return clampPercent(100 - usedPercent);
+}
+
+function formatWindowMeta(window: any): string {
   if (!window || typeof window !== "object") return "No usage data";
-  const remainingPercent = typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent)
-    ? `${Math.max(0, Math.min(100, 100 - window.usedPercent))}% left`
-    : "usage unknown";
   const windowSize = typeof window.windowSeconds === "number" && Number.isFinite(window.windowSeconds)
     ? `${formatDurationSeconds(window.windowSeconds)} window`
     : "window unknown";
@@ -75,14 +94,51 @@ function formatWindowSummary(window: any): string {
       : typeof window.resetAt === "string" && window.resetAt.trim()
       ? `resets ${window.resetAt}`
       : "reset unknown";
-  return `${remainingPercent} • ${windowSize} • ${reset}`;
+  return `${windowSize} • ${reset}`;
 }
 
-function formatCreditsSummary(credits: any): string {
+function formatCreditsBalance(balance: unknown): string | null {
+  if (typeof balance !== "string" || !balance.trim()) return null;
+  const parsed = Number(balance);
+  if (!Number.isFinite(parsed)) return balance.trim();
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(parsed);
+}
+
+function hasUsableCredits(credits: any): boolean {
+  if (!credits || typeof credits !== "object") return false;
+  if (credits.unlimited === true) return true;
+  if (credits.hasCredits === true) return true;
+  const parsedBalance = Number(credits.balance);
+  return Number.isFinite(parsedBalance) && parsedBalance > 0;
+}
+
+function isUsingCredits(entry: any): boolean {
+  return remainingPercentFromWindow(entry?.primaryWindow) === 0 && hasUsableCredits(entry?.credits);
+}
+
+function formatCreditsSummary(entry: any): string {
+  const credits = entry?.credits;
   if (!credits || typeof credits !== "object") return "";
+
+  const usingCredits = isUsingCredits(entry);
+  const balance = formatCreditsBalance(credits.balance);
+
+  if (usingCredits) {
+    if (credits.unlimited === true) return "Using credits";
+    if (balance) return `Using credits • ${balance} remaining`;
+    return "Using credits";
+  }
+
   if (credits.unlimited === true) return "Unlimited credits";
-  if (typeof credits.balance === "string" && credits.balance.trim()) return `Credits balance: ${credits.balance.trim()}`;
-  return credits.hasCredits === true ? "Credits available" : "No credits available";
+  if (balance && hasUsableCredits(credits)) return `${balance} credits remaining`;
+  if (credits.hasCredits === true) return "Credits available";
+  return "";
+}
+
+function isVisibleUsageRateLimit(entry: any): boolean {
+  const limitId = typeof entry?.limitId === "string" ? entry.limitId.trim().toLowerCase() : "";
+  const limitName = typeof entry?.limitName === "string" ? entry.limitName.trim().toLowerCase() : "";
+  return limitId !== "code_review" && limitName !== "code review";
 }
 
 function siblingOpenCodeProvider(provider: ProviderName): ProviderName | null {
@@ -105,7 +161,6 @@ function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
   if (provider === "codex-cli") {
     return [
       { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
-      { id: "api_key", type: "api", label: "API key" },
     ];
   }
   return [{ id: "api_key", type: "api", label: "API key" }];
@@ -120,8 +175,13 @@ function providerSectionId(provider: ProviderName): string {
 }
 
 function visibleAuthMethods(provider: ProviderName, methods: ProviderAuthMethod[]): ProviderAuthMethod[] {
-  if (provider !== "google") return methods;
-  return methods.filter((method) => method.id !== EXA_AUTH_METHOD_ID);
+  if (provider === "google") {
+    return methods.filter((method) => method.id !== EXA_AUTH_METHOD_ID);
+  }
+  if (provider === "codex-cli") {
+    return methods.filter((method) => method.id !== "api_key");
+  }
+  return methods;
 }
 
 function exaConnectionSummary(hasSavedApiKey: boolean): string {
@@ -183,8 +243,8 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const source = fromCatalog.length > 0 ? fromCatalog : [...PROVIDER_NAMES];
     const filtered = source.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider));
 
-    const isModelProvider = (p: ProviderName) => p in modelChoices && modelChoices[p]!.length > 0;
-    
+    const isModelProvider = (provider: ProviderName) => provider in modelChoices && modelChoices[provider]!.length > 0;
+
     const sortProviders = (providers: ProviderName[]) => [...providers].sort((a, b) => {
       const aStatus = providerStatusByName[a];
       const bStatus = providerStatusByName[b];
@@ -195,12 +255,12 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       if (aConnected && !bConnected) return -1;
       if (!aConnected && bConnected) return 1;
 
-      // 2. Alphabetical tie breaker
-      return displayProviderName(a).localeCompare(displayProviderName(b));
+      // 2. Preserve the product-specific provider sequence within each group
+      return compareProviderNamesForSettings(a, b);
     });
 
     const mProviders = sortProviders(filtered.filter(isModelProvider));
-    const tProviders = sortProviders(filtered.filter(p => !isModelProvider(p)));
+    const tProviders = sortProviders(filtered.filter((provider) => !isModelProvider(provider)));
 
     return { modelProviders: mProviders, toolProviders: tProviders };
   }, [providerCatalog, providerStatusByName, modelChoices]);
@@ -472,6 +532,9 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const connected = Boolean(status?.authorized || status?.verified);
     const providerDisplayName = catalogNameByProvider.get(provider) ?? displayProviderName(provider);
     const models = (modelChoices[provider] ?? []).slice(0, 8);
+    const visibleRateLimits = Array.isArray(status?.usage?.rateLimits)
+      ? status.usage.rateLimits.filter(isVisibleUsageRateLimit)
+      : [];
 
     return (
       <Card key={provider} className={cn("border-border/80 bg-card/85", isExpanded && "border-primary/35")}>
@@ -499,7 +562,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
         </button>
 
         {isExpanded ? (
-          <CardContent id={`provider-panel-${provider}`} className="space-y-4 border-t border-border/70 px-5 py-4">
+          <CardContent id={`provider-panel-${provider}`} className="space-y-3.5 border-t border-border/70 px-4 py-3.5">
             {methods.map((method) =>
               renderAuthMethod({
                 provider,
@@ -510,42 +573,82 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
             )}
 
             {status?.usage ? (
-              <div className="space-y-3 border-t border-border/70 pt-4">
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Usage status</div>
-                <div className="space-y-1 text-sm text-muted-foreground">
+              <div className="space-y-2.5 border-t border-border/70 pt-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Usage</div>
                   {typeof status.usage.planType === "string" && status.usage.planType.trim() ? (
-                    <div>Plan: <span className="text-foreground">{status.usage.planType}</span></div>
-                  ) : null}
-                  {typeof status.usage.accountId === "string" && status.usage.accountId.trim() ? (
-                    <div>Account ID: <span className="font-mono text-foreground">{status.usage.accountId}</span></div>
-                  ) : null}
-                  {typeof status.message === "string" && status.message.trim() ? (
-                    <div>Status: <span className="text-foreground">{status.message}</span></div>
+                    <div className="text-xs text-muted-foreground">
+                      Plan <span className="font-medium text-foreground">{status.usage.planType.trim()}</span>
+                    </div>
                   ) : null}
                 </div>
 
-                {Array.isArray(status.usage.rateLimits) && status.usage.rateLimits.length > 0 ? (
-                  <div className="space-y-2">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Rate limits</div>
-                    <div className="space-y-2">
-                      {status.usage.rateLimits.map((entry: any, index: number) => {
-                        const creditsSummary = formatCreditsSummary(entry?.credits);
+                <div className="grid gap-x-3 gap-y-1 text-sm sm:grid-cols-[4.75rem_minmax(0,1fr)]">
+                  {typeof status.usage.email === "string" && status.usage.email.trim() ? (
+                    <>
+                      <div className="text-xs uppercase tracking-wide text-muted-foreground">Email</div>
+                      <div className="min-w-0 truncate text-sm text-foreground/95" title={status.usage.email}>
+                        {status.usage.email}
+                      </div>
+                    </>
+                  ) : null}
+                  {typeof status.message === "string" && status.message.trim() ? (
+                    <>
+                      <div className="text-xs uppercase tracking-wide text-muted-foreground">Status</div>
+                      <div className="text-sm text-foreground/95">{status.message}</div>
+                    </>
+                  ) : null}
+                </div>
+
+                {visibleRateLimits.length > 0 ? (
+                  <div className="space-y-1.5">
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Rate limits</div>
+                    <div className="divide-y divide-border/50 rounded-sm border border-border/50 bg-muted/5">
+                      {visibleRateLimits.map((entry: any, index: number) => {
+                        const creditsSummary = formatCreditsSummary(entry);
+                        const primaryUsedPercent = usedPercentFromWindow(entry?.primaryWindow);
+                        const primaryRemainingPercent = remainingPercentFromWindow(entry?.primaryWindow);
+                        const isQuotaBlocked = (entry?.limitReached === true || entry?.allowed === false) && !isUsingCredits(entry);
+                        const primaryMeta = formatWindowMeta(entry.primaryWindow);
+                        const secondaryMeta = entry?.secondaryWindow ? `Secondary ${formatWindowMeta(entry.secondaryWindow)}` : "";
+                        const detailLine = [creditsSummary, primaryMeta, secondaryMeta].filter(Boolean).join(" • ");
                         return (
-                          <div key={`${entry?.limitId ?? "limit"}:${index}`} className="rounded-md border border-border/70 bg-muted/20 p-3">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div key={`${entry?.limitId ?? "limit"}:${index}`} className="space-y-1 px-2.5 py-2">
+                            <div className="flex items-baseline justify-between gap-3">
                               <div className="text-sm font-medium text-foreground">{formatRateLimitName(entry)}</div>
-                              <Badge variant={entry?.limitReached ? "destructive" : entry?.allowed === false ? "secondary" : "outline"}>
-                                {entry?.limitReached ? "Limit reached" : entry?.allowed === false ? "Blocked" : "Allowed"}
-                              </Badge>
+                              <div className="text-[11px] font-medium text-foreground/90">
+                                {primaryRemainingPercent === null ? "--" : `${Math.round(primaryRemainingPercent)}% remaining`}
+                              </div>
                             </div>
                             {entry?.primaryWindow ? (
-                              <div className="mt-2 text-xs text-muted-foreground">Primary: {formatWindowSummary(entry.primaryWindow)}</div>
+                              <div className="space-y-1">
+                                <div className="h-1 overflow-hidden rounded-full bg-border/70">
+                                  <div
+                                    className={cn(
+                                      "h-full rounded-full transition-[width]",
+                                      isQuotaBlocked
+                                        ? "bg-destructive/90"
+                                        : isUsingCredits(entry)
+                                        ? "bg-foreground/70"
+                                        : "bg-primary/70",
+                                    )}
+                                    style={{ width: `${primaryUsedPercent ?? 0}%` }}
+                                  />
+                                </div>
+                                {detailLine ? (
+                                  <div className="text-[11px] leading-4 text-muted-foreground">{detailLine}</div>
+                                ) : null}
+                              </div>
                             ) : null}
-                            {entry?.secondaryWindow ? (
-                              <div className="mt-1 text-xs text-muted-foreground">Secondary: {formatWindowSummary(entry.secondaryWindow)}</div>
-                            ) : null}
-                            {creditsSummary ? (
-                              <div className="mt-1 text-xs text-muted-foreground">{creditsSummary}</div>
+                            {isQuotaBlocked ? (
+                              <div className="pt-0.5">
+                                <Badge
+                                  variant="destructive"
+                                  className="h-5 rounded-sm px-1.5 text-[10px] font-medium"
+                                >
+                                  Limit reached
+                                </Badge>
+                              </div>
                             ) : null}
                           </div>
                         );
@@ -628,15 +731,15 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
 
   // Add Exa manually into tool providers sorting if we want, but it's easier to just split render arrays based on connected state.
   // Since we want connected first, we split toolProviders + exa into connected / disconnected
-  const connectedToolProviders = toolProviders.filter(p => {
-      const s = providerStatusByName[p];
-      return s?.verified || s?.authorized;
+  const connectedToolProviders = toolProviders.filter((provider) => {
+    const s = providerStatusByName[provider];
+    return s?.verified || s?.authorized;
   });
-  const disconnectedToolProviders = toolProviders.filter(p => {
-      const s = providerStatusByName[p];
-      return !(s?.verified || s?.authorized);
+  const disconnectedToolProviders = toolProviders.filter((provider) => {
+    const s = providerStatusByName[provider];
+    return !(s?.verified || s?.authorized);
   });
-  
+
   const allToolElements = [
     ...connectedToolProviders.map(renderProviderCard),
     ...(isExaConnected ? [renderExaCard()] : []),

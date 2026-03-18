@@ -281,6 +281,124 @@ describe("desktop providers page", () => {
     }
   });
 
+  test("sorts model providers by connection state while preserving the product order within each group", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerCatalog: [
+        { id: "together", name: "Together AI" },
+        { id: "openai", name: "OpenAI" },
+        { id: "google", name: "Google" },
+        { id: "opencode-zen", name: "OpenCode Zen" },
+        { id: "codex-cli", name: "Codex CLI" },
+        { id: "anthropic", name: "Anthropic" },
+        { id: "baseten", name: "Baseten" },
+        { id: "nvidia", name: "NVIDIA" },
+        { id: "opencode-go", name: "OpenCode Go" },
+      ] as any,
+      providerStatusByName: {
+        google: {
+          provider: "google",
+          authorized: false,
+          verified: false,
+          mode: "missing",
+          account: null,
+          message: "Not connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+        openai: {
+          provider: "openai",
+          authorized: false,
+          verified: false,
+          mode: "missing",
+          account: null,
+          message: "Not connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+        "codex-cli": {
+          provider: "codex-cli",
+          authorized: true,
+          verified: true,
+          mode: "oauth",
+          account: null,
+          message: "Connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+        anthropic: {
+          provider: "anthropic",
+          authorized: true,
+          verified: false,
+          mode: "api_key",
+          account: null,
+          message: "Connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+        "opencode-go": {
+          provider: "opencode-go",
+          authorized: true,
+          verified: false,
+          mode: "api_key",
+          account: null,
+          message: "Connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+        "opencode-zen": {
+          provider: "opencode-zen",
+          authorized: false,
+          verified: false,
+          mode: "missing",
+          account: null,
+          message: "Not connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+        nvidia: {
+          provider: "nvidia",
+          authorized: false,
+          verified: false,
+          mode: "missing",
+          account: null,
+          message: "Not connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+        together: {
+          provider: "together",
+          authorized: false,
+          verified: false,
+          mode: "missing",
+          account: null,
+          message: "Not connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+        baseten: {
+          provider: "baseten",
+          authorized: true,
+          verified: true,
+          mode: "api_key",
+          account: null,
+          message: "Connected.",
+          checkedAt: "2026-03-07T00:00:00.000Z",
+        },
+      } as any,
+    });
+
+    const html = renderToStaticMarkup(createElement(ProvidersPage));
+    const expectedVisibleOrder = [
+      "Codex CLI",
+      "OpenCode Go",
+      "Anthropic",
+      "Google",
+      "OpenCode Zen",
+      "NVIDIA",
+      "Together AI",
+      "OpenAI",
+    ];
+    const providerIndexes = expectedVisibleOrder.map((name) => html.indexOf(name));
+    expect(providerIndexes.every((index) => index >= 0)).toBe(true);
+    for (let index = 1; index < providerIndexes.length; index += 1) {
+      expect(providerIndexes[index - 1]).toBeLessThan(providerIndexes[index]);
+    }
+    expect(html).not.toContain("Baseten");
+  });
+
   test("codex browser auth ignores stale challenge URLs", () => {
     useAppStore.setState({
       ...useAppStore.getState(),
@@ -423,19 +541,35 @@ describe("desktop providers page", () => {
             rateLimits: [
               {
                 limitId: "codex",
-                allowed: true,
-                limitReached: false,
+                allowed: false,
+                limitReached: true,
                 primaryWindow: {
-                  usedPercent: 4,
+                  usedPercent: 100,
                   windowSeconds: 18_000,
                   resetAfterSeconds: 1_800,
                   resetAt: "2026-03-07T01:00:00.000Z",
                 },
                 secondaryWindow: null,
                 credits: {
+                  hasCredits: true,
+                  unlimited: false,
+                  balance: "42.125",
+                },
+              },
+              {
+                limitId: "code_review",
+                limitName: "Code Review",
+                allowed: true,
+                limitReached: false,
+                primaryWindow: {
+                  usedPercent: 12,
+                  windowSeconds: 18_000,
+                  resetAfterSeconds: 900,
+                },
+                credits: {
                   hasCredits: false,
                   unlimited: false,
-                  balance: "0",
+                  balance: "7.9999",
                 },
               },
             ],
@@ -467,15 +601,25 @@ describe("desktop providers page", () => {
       }),
     );
 
-    expect(html).toContain("Usage status");
-    expect(html).toContain("Plan:");
+    expect(html).toContain("Usage");
+    expect(html).toContain("Plan");
     expect(html).toContain("pro");
-    expect(html).toContain("Account ID:");
-    expect(html).toContain("acct-123");
+    expect(html).toContain("Email");
+    expect(html).toContain("max@example.com");
+    expect(html).not.toContain("acct-123");
+    expect(html).toContain("Verified via Codex usage endpoint (pro).");
     expect(html).toContain("Rate limits");
     expect(html).toContain("Codex");
-    expect(html).toContain("96% left");
-    expect(html).toContain("Credits balance: 0");
+    expect(html).toContain("0% remaining");
+    expect(html).toContain("Using credits");
+    expect(html).toContain("42.13 remaining");
+    expect(html).not.toContain("Allowed");
+    expect(html).not.toContain("Limit reached");
+    expect(html).not.toContain("Rate limited");
+    expect(html).not.toContain("Code Review");
+    expect(html).not.toContain("API key");
+    expect(html).not.toContain("Credits balance");
+    expect(html).not.toContain("42.125");
   });
 
   test("opencode sibling provider card shows saved-key reuse action", () => {

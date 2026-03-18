@@ -139,6 +139,11 @@ export function extractCitationUrlsFromAnnotations(annotations: unknown): Map<nu
   return out;
 }
 
+export type CitationSource = {
+  url: string;
+  title?: string;
+};
+
 function extractCitationUrlsFromNativeWebSearchResult(result: unknown): Map<number, string> {
   const record = isRecord(result) ? result : null;
   const directSources = Array.isArray(record?.sources)
@@ -153,6 +158,27 @@ function extractCitationUrlsFromNativeWebSearchResult(result: unknown): Map<numb
     })
     .filter((url): url is string => !!url);
   return new Map(urls.map((url, index) => [index + 1, url] as const));
+}
+
+function extractCitationSourcesFromNativeWebSearchResult(result: unknown): Map<number, CitationSource> {
+  const record = isRecord(result) ? result : null;
+  const directSources = Array.isArray(record?.sources)
+    ? record.sources
+    : isRecord(record?.action) && Array.isArray(record.action.sources)
+      ? record.action.sources
+      : [];
+  const sources = directSources
+    .map((source) => {
+      if (!isRecord(source)) return null;
+      if (typeof source.url !== "string" || source.url.trim().length === 0) return null;
+      const entry: CitationSource = { url: source.url };
+      if (typeof source.title === "string" && source.title.trim().length > 0) {
+        entry.title = source.title;
+      }
+      return entry;
+    })
+    .filter((s): s is CitationSource => !!s);
+  return new Map(sources.map((source, index) => [index + 1, source] as const));
 }
 
 function renderCitationIds(
@@ -252,6 +278,28 @@ function insertNativeCitationMarkers(text: string, options: CitationDisplayOptio
   return out;
 }
 
+export function extractCitationSourcesFromWebSearchResult(result: unknown): CitationSource[] {
+  const text = extractToolResultText(result);
+  if (!text) return [];
+
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  const sources: CitationSource[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (/^https?:\/\/\S+$/.test(lines[i])) {
+      const url = lines[i];
+      // The line before the URL is typically the title
+      const titleCandidate = i > 0 ? lines[i - 1] : "";
+      const title = titleCandidate && !/^https?:\/\//.test(titleCandidate) && titleCandidate.length > 0
+        ? titleCandidate
+        : undefined;
+      sources.push({ url, title });
+    }
+  }
+
+  return sources;
+}
+
 export function extractCitationUrlsFromWebSearchResult(result: unknown): Map<number, string> {
   const text = extractToolResultText(result);
   if (!text) {
@@ -337,6 +385,42 @@ export function buildCitationUrlsByMessageId<T extends CitationFeedItem>(feed: r
   }
 
   return citationUrlsByMessageId;
+}
+
+export function buildCitationSourcesByMessageId<T extends CitationFeedItem>(feed: readonly T[]): Map<string, CitationSource[]> {
+  const sourcesByMessageId = new Map<string, CitationSource[]>();
+  let currentSources: CitationSource[] = [];
+
+  for (const item of feed) {
+    const itemKind = item.kind ?? item.type ?? "";
+
+    if (itemKind === "message" && item.role === "user") {
+      currentSources = [];
+      continue;
+    }
+
+    if (itemKind === "tool" && item.name === "nativeWebSearch") {
+      const nextSources = extractCitationSourcesFromNativeWebSearchResult(item.result);
+      if (nextSources.size > 0) {
+        currentSources = [...nextSources.values()];
+      }
+      continue;
+    }
+
+    if (itemKind === "tool" && item.name === "webSearch") {
+      const nextSources = extractCitationSourcesFromWebSearchResult(item.result);
+      if (nextSources.length > 0) {
+        currentSources = nextSources;
+      }
+      continue;
+    }
+
+    if (itemKind === "message" && item.role === "assistant" && currentSources.length > 0) {
+      sourcesByMessageId.set(item.id, [...currentSources]);
+    }
+  }
+
+  return sourcesByMessageId;
 }
 
 export function normalizeDisplayCitationMarkers(text: string, options: CitationDisplayOptions = {}): string {

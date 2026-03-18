@@ -8,15 +8,32 @@ export type InstallDesktopMenuOptions = {
   sendCommand: (command: DesktopMenuCommand) => void;
 };
 
+function sfSymbol(name: string): Electron.NativeImage | undefined {
+  if (process.platform !== "darwin") {
+    return undefined;
+  }
+  try {
+    // Lazy import to avoid test-environment errors where Electron native modules
+    // are unavailable.
+    const { nativeImage } = require("electron") as typeof import("electron");
+    const img = nativeImage.createFromNamedImage(name);
+    return img.isEmpty() ? undefined : img;
+  } catch {
+    return undefined;
+  }
+}
+
 function commandItem(
   label: string,
   command: DesktopMenuCommand,
   sendCommand: (command: DesktopMenuCommand) => void,
   accelerator?: string,
+  icon?: Electron.NativeImage,
 ): MenuItemConstructorOptions {
   return {
     label,
     accelerator,
+    ...(icon ? { icon } : {}),
     click: () => {
       sendCommand(command);
     },
@@ -28,16 +45,16 @@ export function buildDesktopMenuTemplate(
   platform: NodeJS.Platform = process.platform,
 ): MenuItemConstructorOptions[] {
   const isMac = platform === "darwin";
-  const buildUpdatesItem = () => commandItem("Check for Updates…", "openUpdates", options.sendCommand);
+  const buildUpdatesItem = () => commandItem("Check for Updates…", "openUpdates", options.sendCommand, undefined, sfSymbol("arrow.triangle.2.circlepath"));
 
   const fileMenu: MenuItemConstructorOptions = {
     label: isMac ? "File" : "&File",
     submenu: [
-      commandItem("New Thread", "newThread", options.sendCommand, "CmdOrCtrl+N"),
-      commandItem("Skills", "openSkills", options.sendCommand, "CmdOrCtrl+Shift+K"),
+      commandItem("New Thread", "newThread", options.sendCommand, "CmdOrCtrl+N", sfSymbol("plus.message")),
+      commandItem("Skills", "openSkills", options.sendCommand, "CmdOrCtrl+Shift+K", sfSymbol("wand.and.stars")),
       { type: "separator" },
-      commandItem("Settings", "openSettings", options.sendCommand, "CmdOrCtrl+,"),
-      commandItem("Workspace Settings", "openWorkspacesSettings", options.sendCommand),
+      commandItem("Settings", "openSettings", options.sendCommand, "CmdOrCtrl+,", sfSymbol("gearshape")),
+      commandItem("Workspace Settings", "openWorkspacesSettings", options.sendCommand, undefined, sfSymbol("folder.badge.gearshape")),
       ...(isMac
         ? [{ type: "separator" as const }, { role: "close" as const }]
         : [{ type: "separator" as const }, { role: "quit" as const }]),
@@ -60,7 +77,7 @@ export function buildDesktopMenuTemplate(
   const viewMenu: MenuItemConstructorOptions = {
     label: isMac ? "View" : "&View",
     submenu: [
-      commandItem("Toggle Sidebar", "toggleSidebar", options.sendCommand, "CmdOrCtrl+B"),
+      commandItem("Toggle Sidebar", "toggleSidebar", options.sendCommand, "CmdOrCtrl+B", sfSymbol("sidebar.left")),
       { type: "separator" },
       { role: "resetZoom" },
       { role: "zoomIn" },

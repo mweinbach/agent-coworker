@@ -167,6 +167,7 @@ export default function App() {
     function applySystemAppearance(appearance: SystemAppearance): void {
       const root = document.documentElement;
       root.dataset.systemTheme = appearance.shouldUseDarkColors ? "dark" : "light";
+      root.dataset.systemUiTheme = appearance.shouldUseDarkColorsForSystemIntegratedUI ? "dark" : "light";
       root.dataset.platform = appearance.platform;
       root.dataset.highContrast = appearance.shouldUseHighContrastColors || appearance.inForcedColorsMode ? "true" : "false";
       root.dataset.reducedTransparency = appearance.prefersReducedTransparency ? "true" : "false";

@@ -278,6 +278,7 @@ export const systemAppearanceSchema: z.ZodType<SystemAppearance> = z.object({
   platform: z.enum(["darwin", "linux", "win32", "aix", "freebsd", "openbsd", "sunos", "android"]),
   themeSource: z.enum(["system", "light", "dark"]),
   shouldUseDarkColors: z.boolean(),
+  shouldUseDarkColorsForSystemIntegratedUI: z.boolean(),
   shouldUseHighContrastColors: z.boolean(),
   shouldUseInvertedColorScheme: z.boolean(),
   prefersReducedTransparency: z.boolean(),

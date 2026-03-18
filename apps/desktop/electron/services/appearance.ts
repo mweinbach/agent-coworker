@@ -11,6 +11,7 @@ export function getSystemAppearanceSnapshot(): SystemAppearance {
     platform: process.platform,
     themeSource: nativeTheme.themeSource,
     shouldUseDarkColors: nativeTheme.shouldUseDarkColors,
+    shouldUseDarkColorsForSystemIntegratedUI: nativeTheme.shouldUseDarkColorsForSystemIntegratedUI,
     shouldUseHighContrastColors: nativeTheme.shouldUseHighContrastColors,
     shouldUseInvertedColorScheme: nativeTheme.shouldUseInvertedColorScheme,
     prefersReducedTransparency: nativeTheme.prefersReducedTransparency,

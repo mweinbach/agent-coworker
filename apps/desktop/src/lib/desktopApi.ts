@@ -105,6 +105,7 @@ export type SystemAppearance = {
   platform: string;
   themeSource: ThemeSource;
   shouldUseDarkColors: boolean;
+  shouldUseDarkColorsForSystemIntegratedUI: boolean;
   shouldUseHighContrastColors: boolean;
   shouldUseInvertedColorScheme: boolean;
   prefersReducedTransparency: boolean;

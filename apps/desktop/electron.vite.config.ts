@@ -28,6 +28,7 @@ const desktopRendererPort = resolveDesktopRendererPort(process.env.COWORK_DESKTO
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
+    future: "warn",
     build: {
       outDir: "out/main",
       rollupOptions: {
@@ -37,6 +38,7 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
+    future: "warn",
     build: {
       outDir: "out/preload",
       rollupOptions: {
@@ -52,6 +54,7 @@ export default defineConfig({
     root: appRoot,
     base: "./",
     plugins: [react(), tailwindcss()],
+    future: "warn",
     resolve: {
       alias: {
         "@": path.resolve(appRoot, "src"),

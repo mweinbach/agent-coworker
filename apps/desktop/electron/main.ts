@@ -69,11 +69,38 @@ function showUpdateReadyNotification(state: UpdaterState): void {
     return;
   }
   const version = state.release?.version;
+  const isWindows = process.platform === "win32";
   const notification = new Notification({
     title: "Update ready",
     body: version ? `Cowork ${version} is ready. Restart to install.` : "Cowork update is ready. Restart to install.",
     silent: false,
+    ...(isWindows
+      ? {
+          actions: [
+            { type: "button" as const, text: "Restart Now" },
+            { type: "button" as const, text: "Later" },
+          ],
+        }
+      : {}),
   });
+
+  if (isWindows) {
+    notification.on("action", (_event: Electron.Event, index: number) => {
+      if (index === 0) {
+        updater.quitAndInstall();
+      }
+    });
+  }
+
+  notification.on("click", () => {
+    const win = mainWindow ?? BrowserWindow.getAllWindows()[0];
+    if (win && !win.isDestroyed()) {
+      if (win.isMinimized()) win.restore();
+      win.focus();
+      sendMenuCommand("openUpdates");
+    }
+  });
+
   notification.show();
 }
 

@@ -145,3 +145,8 @@
 - When the user asks to fix release automation for the next build only, land the workflow update as a separate follow-up commit and do not conflate it with the in-flight tagged release state.
 - For Bun-compiled desktop sidecars in this repo, never read `package.json` via runtime filesystem paths like `resolve(__dirname, "../package.json")`; compiled binaries run from `/$bunfs` and must get version data from bundled imports or explicit build-time/env injection.
 - For local OpenAI-compatible providers like LM Studio, do not treat a transport library's required `apiKey` parameter as a user-facing auth requirement; satisfy that client internally when necessary, but never surface `OPENAI_API_KEY` or API-key UI as mandatory for local inference.
+- For tool-output overflow policy, keep the generic spill-to-workspace guard enabled for oversized tool results, but exempt `read` so large file contents can stay inline for the model when explicitly requested.
+
+## 2026-03-18 Tool Output Overflow Audit
+
+- Plan: confirm the shared overflow path, exempt `read` from spill-to-workspace truncation, and add regressions for direct tool execution plus provider-managed continuation.

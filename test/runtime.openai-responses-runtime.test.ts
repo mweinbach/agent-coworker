@@ -280,6 +280,73 @@ describe("openai responses runtime", () => {
     expect(result.providerState?.responseId).toBe("resp_2");
   });
 
+  test("provider-managed continuation keeps oversized read results inline", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-read-inline-"));
+    const nativeCalls: Array<Record<string, unknown>> = [];
+    const hugeTailMarker = "__READ_TAIL_MARKER__";
+    const hugeReadOutput = `${"0123456789abcdef".repeat(
+      Math.ceil((TOOL_OUTPUT_OVERFLOW_PREVIEW_CHARS + 256) / 16),
+    )}${hugeTailMarker}`;
+    let step = 0;
+    const runtime = createOpenAiResponsesRuntime({
+      runStepImpl: async (opts) => {
+        step += 1;
+        nativeCalls.push({
+          previousResponseId: opts.previousResponseId,
+          piMessages: opts.piMessages,
+        });
+
+        if (step === 1) {
+          return {
+            assistant: {
+              role: "assistant",
+              content: [{ type: "toolCall", id: "call_1", name: "read", arguments: { filePath: "/tmp/big.txt" } }],
+              usage: { input: 1, output: 1, totalTokens: 2 },
+              stopReason: "toolUse",
+            },
+            responseId: "resp_1",
+          };
+        }
+
+        return {
+          assistant: {
+            role: "assistant",
+            content: [{ type: "text", text: "final answer" }],
+            usage: { input: 1, output: 1, totalTokens: 2 },
+            stopReason: "stop",
+          },
+          responseId: "resp_2",
+        };
+      },
+    });
+
+    const result = await runtime.runTurn(
+      makeParams(makeConfig(homeDir, { toolOutputOverflowChars: 80 }), {
+        messages: [{ role: "user", content: "read it" }],
+        allMessages: [{ role: "user", content: "read it" }] as ModelMessage[],
+        maxSteps: 2,
+        tools: {
+          read: {
+            inputSchema: z.object({ filePath: z.string() }),
+            execute: async () => hugeReadOutput,
+          },
+        },
+      }),
+    );
+
+    expect(nativeCalls).toHaveLength(2);
+    const secondPiMessages = (nativeCalls[1]?.piMessages as Array<Record<string, unknown>>) ?? [];
+    expect(secondPiMessages).toHaveLength(1);
+    expect(secondPiMessages[0]?.role).toBe("toolResult");
+
+    const toolContent = (secondPiMessages[0]?.content as Array<Record<string, unknown>> | undefined) ?? [];
+    expect(toolContent).toEqual([{ type: "text", text: hugeReadOutput }]);
+    expect(JSON.stringify(secondPiMessages[0])).toContain(hugeTailMarker);
+    expect(JSON.stringify(secondPiMessages[0])).not.toContain("Tool output overflowed");
+    await expect(fs.readdir(path.join(homeDir, MODEL_SCRATCHPAD_DIRNAME))).rejects.toThrow();
+    expect(result.providerState?.responseId).toBe("resp_2");
+  });
+
   test("chains overflowed tool results through continuation using the spill-file pointer text", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-runtime-overflow-chain-"));
     const nativeCalls: Array<Record<string, unknown>> = [];

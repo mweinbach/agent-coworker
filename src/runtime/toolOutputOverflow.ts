@@ -14,6 +14,8 @@ type OverflowSummaryField = "exitCode" | "ok" | "count" | "provider";
 const SUMMARY_FIELDS: OverflowSummaryField[] = ["exitCode", "ok", "count", "provider"];
 const PRIVATE_SCRATCHPAD_DIR_MODE = 0o700;
 const PRIVATE_SCRATCHPAD_FILE_MODE = 0o600;
+// `read` is intentionally exempt so the model can inspect large file contents inline.
+const TOOL_OUTPUT_OVERFLOW_EXEMPT_TOOLS = new Set(["read"]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -88,6 +90,10 @@ function buildOverflowPointerText(filePath: string, chars: number, preview: stri
   return sections.join("\n\n");
 }
 
+function isToolOutputOverflowExempt(toolName: string): boolean {
+  return TOOL_OUTPUT_OVERFLOW_EXEMPT_TOOLS.has(toolName);
+}
+
 function pickSummaryFields(output: unknown): Record<string, unknown> {
   const record = asRecord(output);
   if (!record) return {};
@@ -123,6 +129,7 @@ export async function maybeSpillToolOutputToWorkspace(opts: {
 }): Promise<ToolOutputOverflowResolution | null> {
   const threshold = effectiveToolOutputOverflowChars(opts.toolOutputOverflowChars);
   if (threshold === null) return null;
+  if (isToolOutputOverflowExempt(opts.toolName)) return null;
 
   const content = toolResultContentFromOutput(opts.output);
   if (content.some((part) => part.type === "image")) return null;

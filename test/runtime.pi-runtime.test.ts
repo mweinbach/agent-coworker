@@ -1026,6 +1026,39 @@ describe("pi runtime regressions", () => {
     expect(result.content).toEqual([{ type: "text", text: String(overflowOutput.value) }]);
   });
 
+  test("executeToolCall keeps oversized read output inline even over the overflow threshold", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-read-inline-"));
+    const emitted: Array<Record<string, unknown>> = [];
+    const oversized = "read-output-".repeat(400);
+
+    const result = await piRuntimeInternal.executeToolCall(
+      { id: "call-read-overflow", name: "read", arguments: { filePath: "/tmp/large.txt" } },
+      makeParams(makeConfig(homeDir, { toolOutputOverflowChars: 80 }), {
+        tools: {
+          read: {
+            execute: async () => oversized,
+          },
+        },
+      }),
+      async (part) => {
+        emitted.push(part as Record<string, unknown>);
+      }
+    );
+
+    expect(emitted).toEqual([
+      {
+        type: "tool-result",
+        toolCallId: "call-read-overflow",
+        toolName: "read",
+        output: oversized,
+      },
+    ]);
+    expect(result.isError).toBe(false);
+    expect(result.details).toBe(oversized);
+    expect(result.content).toEqual([{ type: "text", text: oversized }]);
+    await expect(fs.readdir(path.join(homeDir, MODEL_SCRATCHPAD_DIRNAME))).rejects.toThrow();
+  });
+
   test("executeToolCall preserves multimodal image tool results", async () => {
     const emitted: Array<Record<string, unknown>> = [];
     const imageResult = {

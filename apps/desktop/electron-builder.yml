@@ -1,7 +1,6 @@
 appId: com.cowork.desktop
 productName: Cowork
 asar: true
-asarIntegrity: true
 directories:
   output: release
 files:

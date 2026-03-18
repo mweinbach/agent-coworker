@@ -9,6 +9,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { z } from "zod";
 
 import type { AgentConfig, MCPServerConfig } from "../types";
+import { VERSION } from "../version";
 import {
   completeMCPServerOAuth,
   resolveMCPServerAuthState,
@@ -99,7 +100,7 @@ async function createRuntimeMcpClient(opts: {
   name: string;
   transport: RuntimeMcpTransport;
 }): Promise<RuntimeMcpClient> {
-  const client = new McpClient({ name: `agent-coworker/${opts.name}`, version: "0.1.25" });
+  const client = new McpClient({ name: `agent-coworker/${opts.name}`, version: VERSION });
 
   const requestInit = (() => {
     if (opts.transport.type === "stdio") return undefined;

@@ -5,8 +5,7 @@ import { useKV } from "../context/kv";
 import { Logo } from "../component/logo";
 import { Tips } from "../component/tips";
 import { Prompt } from "../component/prompt/index";
-
-const VERSION = "0.1.25";
+import { VERSION } from "../../../src/version";
 
 export function Home() {
   const theme = useTheme();

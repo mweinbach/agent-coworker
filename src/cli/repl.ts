@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 
+import { VERSION } from "../version";
+
 import { handleSlashCommand } from "./repl/commandRouter";
 import { activateNextPrompt, type ReplPromptStateAdapter } from "./repl/promptController";
 import {
@@ -413,7 +415,7 @@ export async function runCliRepl(
       url,
       resumeSessionId: resumeSessionId?.trim() || lastKnownSessionId || undefined,
       client: "cli",
-      version: "0.1.25",
+      version: VERSION,
       onEvent: (evt) => {
         if (epoch !== socketEpoch) return;
         handleServerEvent(evt, rl);

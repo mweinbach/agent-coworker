@@ -1,4 +1,5 @@
 import { AgentSocket } from "../../lib/agentSocket";
+import { VERSION } from "../../lib/version";
 import type { ClientMessage, ProviderName, ServerEvent } from "../../lib/wsProtocol";
 import type { StoreGet, StoreSet } from "../store.helpers";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
@@ -69,7 +70,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
       url,
       resumeSessionId,
       client: "desktop-control",
-      version: "0.1.25",
+      version: VERSION,
       autoReconnect: true,
       onEvent: (evt) => {
         if (evt.type === "server_hello") {

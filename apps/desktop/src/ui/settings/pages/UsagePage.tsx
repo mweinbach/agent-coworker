@@ -187,9 +187,8 @@ export function UsagePage(props: UsagePageProps = {}) {
     void loadAllThreadUsage();
   }, []);
 
-  const aggregate = props.aggregate !== undefined
-    ? props.aggregate
-    : useMemo(() => aggregateUsageFromRuntimes(threadRuntimeById), [threadRuntimeById]);
+  const computedAggregate = useMemo(() => aggregateUsageFromRuntimes(threadRuntimeById), [threadRuntimeById]);
+  const aggregate = props.aggregate ?? computedAggregate;
 
   const [estimateNoticeOpenInternal, setEstimateNoticeOpenInternal] = useState(false);
   const estimateNoticeOpen = props.estimateNoticeOpen ?? estimateNoticeOpenInternal;

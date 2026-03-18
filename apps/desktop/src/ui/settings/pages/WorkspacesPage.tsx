@@ -49,6 +49,7 @@ import {
   SelectValue,
 } from "../../../components/ui/select";
 import { Textarea } from "../../../components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { confirmAction } from "../../../lib/desktopCommands";
 import {
   modelChoicesFromCatalog,
@@ -250,8 +251,17 @@ function childTargetLabel(ref: string): string {
   return ref.slice(colonIndex + 1);
 }
 
+/** Render a `provider:model` ref as `ProviderName | "model"` for display. */
+function friendlyModelRef(ref: string): string {
+  const colonIndex = ref.indexOf(":");
+  if (colonIndex <= 0) return ref;
+  const providerKey = ref.slice(0, colonIndex) as ProviderName;
+  const model = ref.slice(colonIndex + 1);
+  return `${displayProviderName(providerKey)} | ${model}`;
+}
+
 function subagentRoutingModeLabel(mode: "same-provider" | "cross-provider-allowlist"): string {
-  return mode === "same-provider" ? "Same provider only" : "Cross-provider allowlist";
+  return mode === "same-provider" ? "Same model" : "Multiple providers";
 }
 
 function providerFromModelRef(ref: string): ProviderName | null {
@@ -302,7 +312,7 @@ export function OpenAiCompatibleModelSettingsCard({
   const sections = ([
     {
       key: "codex-cli",
-      label: "Codex CLI",
+      label: "ChatGPT Subscription",
       verbosity: codexVerbosity,
       reasoningEffort: codexReasoningEffort,
       reasoningSummary: codexReasoningSummary,
@@ -326,97 +336,96 @@ export function OpenAiCompatibleModelSettingsCard({
       <CardHeader>
         <CardTitle>OpenAI &amp; ChatGPT Settings</CardTitle>
         <CardDescription>
-          Workspace defaults for Codex CLI and OpenAI API models.
+          Workspace defaults for ChatGPT Subscription and OpenAI API models.
         </CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-4 md:grid-cols-2">
+      <CardContent className="space-y-4">
         {sections.map((section) => (
-          <div key={section.key} className="space-y-3 rounded-lg border border-border/60 px-4 py-3.5">
-            <div className="space-y-1">
-              <div className="text-sm font-medium text-foreground">{section.label}</div>
-              <div className="text-xs text-muted-foreground">
-                Applies when this workspace runs on {section.label}.
+          <div key={section.key} className="space-y-4 rounded-lg border border-border/60 px-4 py-4">
+            <Badge variant="outline" className="rounded-sm text-xs font-medium">
+              {section.label}
+            </Badge>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className={MODEL_CARD_FIELD_CLASS}>
+                <div className="text-[13px] font-medium text-foreground">Verbosity</div>
+                <Select
+                  value={section.verbosity}
+                  onValueChange={(value) => {
+                    void updateWorkspaceDefaults(workspace.id, {
+                      providerOptions: updateProviderOption(workspace.providerOptions, section.key, {
+                        textVerbosity: value as TextVerbosityValue,
+                      }),
+                    });
+                  }}
+                >
+                  <SelectTrigger aria-label={`${section.label} verbosity`} className={MODEL_CARD_SELECT_CLASS} size="sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TEXT_VERBOSITY_VALUES.map((entry) => (
+                      <SelectItem key={entry} value={entry}>
+                        {entry}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className={MODEL_CARD_FIELD_CLASS}>
+                <div className="text-[13px] font-medium text-foreground">Reasoning effort</div>
+                <Select
+                  value={section.reasoningEffort}
+                  onValueChange={(value) => {
+                    void updateWorkspaceDefaults(workspace.id, {
+                      providerOptions: updateProviderOption(workspace.providerOptions, section.key, {
+                        reasoningEffort: value as ReasoningEffortValue,
+                      }),
+                    });
+                  }}
+                >
+                  <SelectTrigger aria-label={`${section.label} reasoning effort`} className={MODEL_CARD_SELECT_CLASS} size="sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {REASONING_EFFORT_VALUES.map((entry) => (
+                      <SelectItem key={entry} value={entry}>
+                        {entry}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className={MODEL_CARD_FIELD_CLASS}>
+                <div className="text-[13px] font-medium text-foreground">Reasoning summary</div>
+                <Select
+                  value={section.reasoningSummary}
+                  onValueChange={(value) => {
+                    void updateWorkspaceDefaults(workspace.id, {
+                      providerOptions: updateProviderOption(workspace.providerOptions, section.key, {
+                        reasoningSummary: value as ReasoningSummaryValue,
+                      }),
+                    });
+                  }}
+                >
+                  <SelectTrigger aria-label={`${section.label} reasoning summary`} className={MODEL_CARD_SELECT_CLASS} size="sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {REASONING_SUMMARY_VALUES.map((entry) => (
+                      <SelectItem key={entry} value={entry}>
+                        {entry}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <div className="text-[13px] font-medium text-foreground">Verbosity</div>
-              <Select
-                value={section.verbosity}
-                onValueChange={(value) => {
-                  void updateWorkspaceDefaults(workspace.id, {
-                    providerOptions: updateProviderOption(workspace.providerOptions, section.key, {
-                      textVerbosity: value as TextVerbosityValue,
-                    }),
-                  });
-                }}
-              >
-                <SelectTrigger aria-label={`${section.label} verbosity`} className={MODEL_SETTINGS_SELECT_CLASS} size="sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {TEXT_VERBOSITY_VALUES.map((entry) => (
-                    <SelectItem key={entry} value={entry}>
-                      {entry}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="text-[13px] font-medium text-foreground">Reasoning effort</div>
-              <Select
-                value={section.reasoningEffort}
-                onValueChange={(value) => {
-                  void updateWorkspaceDefaults(workspace.id, {
-                    providerOptions: updateProviderOption(workspace.providerOptions, section.key, {
-                      reasoningEffort: value as ReasoningEffortValue,
-                    }),
-                  });
-                }}
-              >
-                <SelectTrigger aria-label={`${section.label} reasoning effort`} className={MODEL_SETTINGS_SELECT_CLASS} size="sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {REASONING_EFFORT_VALUES.map((entry) => (
-                    <SelectItem key={entry} value={entry}>
-                      {entry}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="text-[13px] font-medium text-foreground">Reasoning summary</div>
-              <Select
-                value={section.reasoningSummary}
-                onValueChange={(value) => {
-                  void updateWorkspaceDefaults(workspace.id, {
-                    providerOptions: updateProviderOption(workspace.providerOptions, section.key, {
-                      reasoningSummary: value as ReasoningSummaryValue,
-                    }),
-                  });
-                }}
-              >
-                <SelectTrigger aria-label={`${section.label} reasoning summary`} className={MODEL_SETTINGS_SELECT_CLASS} size="sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {REASONING_SUMMARY_VALUES.map((entry) => (
-                    <SelectItem key={entry} value={entry}>
-                      {entry}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
             {section.key === "codex-cli" ? (
-              <div className="space-y-2 border-t border-border/50 pt-3">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-3 border-t border-border/50 pt-3">
+                <div className="flex items-center justify-between">
                   <div className="text-[13px] font-medium text-foreground">Web search</div>
                   <Select
                     value={codexWebSearchBackend}
@@ -430,7 +439,7 @@ export function OpenAiCompatibleModelSettingsCard({
                   >
                     <SelectTrigger
                       aria-label="Codex web search backend"
-                      className={cn(MODEL_SETTINGS_SELECT_CLASS, "sm:w-40")}
+                      className={cn(MODEL_CARD_SELECT_CLASS, "w-32")}
                       size="sm"
                     >
                       <SelectValue />
@@ -438,7 +447,7 @@ export function OpenAiCompatibleModelSettingsCard({
                     <SelectContent>
                       {WEB_SEARCH_BACKEND_VALUES.map((entry) => (
                         <SelectItem key={entry} value={entry}>
-                          {entry === "native" ? "Native Codex" : "Exa"}
+                          {entry === "native" ? "Built-in" : "Exa"}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -463,78 +472,78 @@ export function OpenAiCompatibleModelSettingsCard({
                   <CollapsibleContent className="space-y-4 border-t border-border/60 pt-3">
                     {codexUsesNativeWebSearch ? (
                       <>
-                        <div className="space-y-1.5">
-                          <div className="text-[13px] font-medium text-foreground">Web search mode</div>
-                          <Select
-                            value={codexWebSearchMode}
-                            onValueChange={(value) => {
-                              void updateWorkspaceDefaults(workspace.id, {
-                                providerOptions: updateCodexProviderOption(workspace.providerOptions, {
-                                  webSearchMode: value as WebSearchModeValue,
-                                }),
-                              });
-                            }}
-                          >
-                            <SelectTrigger aria-label="Codex web search mode" className={cn(MODEL_SETTINGS_SELECT_CLASS, "sm:w-32")} size="sm">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {WEB_SEARCH_MODE_VALUES.map((entry) => (
-                                <SelectItem key={entry} value={entry}>
-                                  {entry}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <div className="text-xs text-muted-foreground">
-                            Cached uses indexed results only. Live allows live internet access. Domains should omit protocol.
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div className={MODEL_CARD_FIELD_CLASS}>
+                            <div className="text-[13px] font-medium text-foreground">Search mode</div>
+                            <Select
+                              value={codexWebSearchMode}
+                              onValueChange={(value) => {
+                                void updateWorkspaceDefaults(workspace.id, {
+                                  providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                                    webSearchMode: value as WebSearchModeValue,
+                                  }),
+                                });
+                              }}
+                            >
+                              <SelectTrigger aria-label="Codex web search mode" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {WEB_SEARCH_MODE_VALUES.map((entry) => (
+                                  <SelectItem key={entry} value={entry}>
+                                    {entry}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <div className="text-xs text-muted-foreground">
+                              Cached uses indexed results. Live allows live internet access.
+                            </div>
+                          </div>
+
+                          <div className={MODEL_CARD_FIELD_CLASS}>
+                            <div className="text-[13px] font-medium text-foreground">Context size</div>
+                            <Select
+                              value={codexWebSearchContextSize}
+                              onValueChange={(value) => {
+                                void updateWorkspaceDefaults(workspace.id, {
+                                  providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                                    webSearch: {
+                                      contextSize: value as WebSearchContextSizeValue,
+                                    },
+                                  }),
+                                });
+                              }}
+                            >
+                              <SelectTrigger aria-label="Codex web search context size" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {WEB_SEARCH_CONTEXT_SIZE_VALUES.map((entry) => (
+                                  <SelectItem key={entry} value={entry}>
+                                    {entry}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                           </div>
                         </div>
 
-                        <div className="space-y-1.5">
-                          <div className="text-[13px] font-medium text-foreground">Context size</div>
-                          <Select
-                            value={codexWebSearchContextSize}
-                            onValueChange={(value) => {
-                              void updateWorkspaceDefaults(workspace.id, {
-                                providerOptions: updateCodexProviderOption(workspace.providerOptions, {
-                                  webSearch: {
-                                    contextSize: value as WebSearchContextSizeValue,
-                                  },
-                                }),
-                              });
-                            }}
-                          >
-                            <SelectTrigger aria-label="Codex web search context size" className={cn(MODEL_SETTINGS_SELECT_CLASS, "sm:w-32")} size="sm">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {WEB_SEARCH_CONTEXT_SIZE_VALUES.map((entry) => (
-                                <SelectItem key={entry} value={entry}>
-                                  {entry}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
+                        <AllowedDomainsField
+                          domains={codexWebSearchAllowedDomains}
+                          onChange={(allowedDomains) => {
+                            void updateWorkspaceDefaults(workspace.id, {
+                              providerOptions: updateCodexProviderOption(workspace.providerOptions, {
+                                webSearch: {
+                                  allowedDomains,
+                                },
+                              }),
+                            });
+                          }}
+                        />
 
-                        <div className="space-y-2">
-                          <AllowedDomainsField
-                            domains={codexWebSearchAllowedDomains}
-                            onChange={(allowedDomains) => {
-                              void updateWorkspaceDefaults(workspace.id, {
-                                providerOptions: updateCodexProviderOption(workspace.providerOptions, {
-                                  webSearch: {
-                                    allowedDomains,
-                                  },
-                                }),
-                              });
-                            }}
-                          />
-                        </div>
-
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <div className="space-y-1.5">
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                          <div className={MODEL_CARD_FIELD_CLASS}>
                             <div className="text-[13px] font-medium text-foreground">Country</div>
                             <Input
                               aria-label="Codex web search country"
@@ -554,7 +563,7 @@ export function OpenAiCompatibleModelSettingsCard({
                               }}
                             />
                           </div>
-                          <div className="space-y-1.5">
+                          <div className={MODEL_CARD_FIELD_CLASS}>
                             <div className="text-[13px] font-medium text-foreground">Region</div>
                             <Input
                               aria-label="Codex web search region"
@@ -574,7 +583,7 @@ export function OpenAiCompatibleModelSettingsCard({
                               }}
                             />
                           </div>
-                          <div className="space-y-1.5">
+                          <div className={MODEL_CARD_FIELD_CLASS}>
                             <div className="text-[13px] font-medium text-foreground">City</div>
                             <Input
                               aria-label="Codex web search city"
@@ -594,7 +603,7 @@ export function OpenAiCompatibleModelSettingsCard({
                               }}
                             />
                           </div>
-                          <div className="space-y-1.5">
+                          <div className={MODEL_CARD_FIELD_CLASS}>
                             <div className="text-[13px] font-medium text-foreground">Timezone</div>
                             <Input
                               aria-label="Codex web search timezone"
@@ -619,7 +628,7 @@ export function OpenAiCompatibleModelSettingsCard({
                       </>
                     ) : (
                       <div className="rounded-lg border border-border/60 bg-background/70 p-3 text-xs text-muted-foreground">
-                        Native-only mode, context, domain, and location settings appear here when web search is set to Native Codex.
+                        Context, domain, and location settings appear here when web search is set to Built-in.
                       </div>
                     )}
                   </CollapsibleContent>
@@ -908,7 +917,7 @@ export function WorkspacesPage() {
     <div className="space-y-5">
       <div className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">Workspaces</h1>
-        <p className="text-sm text-muted-foreground">Choose a project folder and configure how the agent behaves in it.</p>
+        <p className="text-sm text-muted-foreground">Set up how your AI works in this project.</p>
       </div>
 
       {workspaces.length === 0 || !ws ? (
@@ -925,7 +934,7 @@ export function WorkspacesPage() {
             provider={provider}
             model={model}
             childModelRoutingMode={childModelRoutingMode}
-            preferredChildLabel={childModelRoutingMode === "same-provider" ? (preferredChildModel || model) : preferredChildModelRef}
+            preferredChildLabel={childModelRoutingMode === "same-provider" ? (preferredChildModel || model) : friendlyModelRef(preferredChildModelRef)}
           />
 
           <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2 relative">
@@ -1077,7 +1086,7 @@ export function WorkspacesPage() {
                       </div>
                     ) : (
                       <div className="text-xs text-muted-foreground">
-                        Only providers that are already set up appear here.
+                        Don't see your provider? Add one in Providers settings.
                       </div>
                     )}
 
@@ -1116,7 +1125,7 @@ export function WorkspacesPage() {
                       </div>
 
                       <div className={MODEL_CARD_FIELD_CLASS}>
-                        <div className="text-sm font-medium text-foreground">Primary model</div>
+                        <div className="text-sm font-medium text-foreground">Default model</div>
                         <Select
                           value={model}
                           onValueChange={(value) => {
@@ -1146,7 +1155,23 @@ export function WorkspacesPage() {
                       </div>
 
                       <div className={MODEL_CARD_FIELD_CLASS}>
-                        <div className="text-sm font-medium text-foreground">Subagent routing</div>
+                        <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                          Subagent routing
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="cursor-help">
+                                  <InfoIcon className="size-3.5 text-muted-foreground" />
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent side="top">
+                                {childModelRoutingMode === "same-provider"
+                                  ? "Subagents use your default model by default. This setting preselects which model from the same provider to suggest instead."
+                                  : "If a selected subagent model isn't available, your default model will be used instead."}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </div>
                         <Select
                           value={childModelRoutingMode}
                           onValueChange={(value) => {
@@ -1167,12 +1192,12 @@ export function WorkspacesPage() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="same-provider">Same provider only</SelectItem>
-                            <SelectItem value="cross-provider-allowlist">Cross-provider allowlist</SelectItem>
+                            <SelectItem value="same-provider">Same model</SelectItem>
+                            <SelectItem value="cross-provider-allowlist">Multiple providers</SelectItem>
                           </SelectContent>
                         </Select>
                         <div className="text-xs text-muted-foreground">
-                          Cross-provider mode lets subagents target exact `provider:modelId` refs from the workspace allowlist.
+                          Lets subagents use models from different providers you've set up.
                         </div>
                       </div>
 
@@ -1219,7 +1244,7 @@ export function WorkspacesPage() {
                             <SelectContent>
                               {preferredChildTargetOptions.map((entry) => (
                                 <SelectItem key={entry} value={entry}>
-                                  {entry}
+                                  {friendlyModelRef(entry)}
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -1228,14 +1253,7 @@ export function WorkspacesPage() {
                       )}
                     </div>
 
-                    {childModelRoutingMode === "same-provider" ? (
-                      <div className={MODEL_CARD_PANEL_CLASS}>
-                        <div className="text-sm font-medium text-foreground">Routing behavior</div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          Subagents inherit the live parent provider/model unless a spawn request overrides it. This workspace default only preselects the suggested same-provider override.
-                        </div>
-                      </div>
-                    ) : (
+                    {childModelRoutingMode === "same-provider" ? null : (
                       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(16rem,20rem)]">
                         <Collapsible
                           open={subagentModelsOpen}
@@ -1246,7 +1264,7 @@ export function WorkspacesPage() {
                             <div>
                               <div className="text-sm font-medium text-foreground">Subagent Models</div>
                               <div className="text-xs text-muted-foreground">
-                                Only configured providers appear here.
+                                Only providers you've set up are shown.
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
@@ -1314,20 +1332,12 @@ export function WorkspacesPage() {
                               </div>
                             ) : (
                               <div className="text-xs text-muted-foreground">
-                                Set up another provider if you want more subagent model choices here.
+                                Set up another provider for more subagent model options.
                               </div>
                             )}
                           </CollapsibleContent>
                         </Collapsible>
 
-                        <div className="space-y-3">
-                          <div className={MODEL_CARD_PANEL_CLASS}>
-                            <div className="text-sm font-medium text-foreground">Routing behavior</div>
-                            <div className="mt-1 text-xs text-muted-foreground">
-                              Explicit cross-provider subagent requests fall back to the live parent provider/model when the target ref is not allowlisted or the provider is disconnected.
-                            </div>
-                          </div>
-                        </div>
                       </div>
                     )}
                   </>

@@ -186,15 +186,15 @@ describe("desktop workspaces page", () => {
     );
 
     expect(html).toContain("OpenAI &amp; ChatGPT Settings");
-    expect(html).toContain("Workspace defaults for Codex CLI and OpenAI API models.");
+    expect(html).toContain("Workspace defaults for ChatGPT Subscription and OpenAI API models.");
     expect(html).toContain("OpenAI API");
-    expect(html).toContain("Codex CLI");
+    expect(html).toContain("ChatGPT Subscription");
     expect(html).toContain("Verbosity");
     expect(html).toContain("Reasoning effort");
     expect(html).toContain("Reasoning summary");
     expect(html).toContain("Web search");
     expect(html).toContain("Advanced options");
-    expect(html).toContain("Applies when this workspace runs on OpenAI API.");
+    expect(html).toContain("OpenAI API");
   });
 
   test("reveals codex web search advanced controls and manages optional allowed domains", async () => {
@@ -251,7 +251,7 @@ describe("desktop workspaces page", () => {
       });
 
       const text = container.textContent ?? "";
-      expect(text).toContain("Web search mode");
+      expect(text).toContain("Search mode");
       expect(text).toContain("Context size");
       expect(text).toContain("Allowed domains");
       expect(text).toContain("Country");
@@ -474,7 +474,7 @@ describe("desktop workspaces page", () => {
 
       const text = container.textContent ?? "";
       expect(text).toContain("Subagent routing");
-      expect(text).toContain("Cross-provider allowlist");
+      expect(text).toContain("Multiple providers");
       expect(text).toContain("Subagent Models");
       expect(text).toContain("Preferred subagent model");
 
@@ -490,9 +490,14 @@ describe("desktop workspaces page", () => {
       });
 
       const expandedText = container.textContent ?? "";
-      expect(expandedText).toContain("opencode-zen:glm-5");
+      expect(expandedText).toContain("OpenCode Zen | glm-5");
+      // Search within the subagent models section to avoid matching provider
+      // names that appear earlier in the summary bar or dropdowns.
+      const sectionStart = expandedText.indexOf("Subagent Models");
+      expect(sectionStart).toBeGreaterThanOrEqual(0);
+      const sectionText = expandedText.slice(sectionStart);
       const expectedProviderOrder = [
-        "Codex CLI",
+        "ChatGPT Subscription",
         "OpenCode Go",
         "Google",
         "Anthropic",
@@ -500,7 +505,7 @@ describe("desktop workspaces page", () => {
         "NVIDIA",
         "Together AI",
       ];
-      const providerIndexes = expectedProviderOrder.map((name) => expandedText.indexOf(name));
+      const providerIndexes = expectedProviderOrder.map((name) => sectionText.indexOf(name));
       expect(providerIndexes.every((index) => index >= 0)).toBe(true);
       for (let index = 1; index < providerIndexes.length; index += 1) {
         expect(providerIndexes[index - 1]).toBeLessThan(providerIndexes[index]);

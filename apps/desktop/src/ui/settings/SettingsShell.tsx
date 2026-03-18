@@ -26,7 +26,7 @@ const SETTINGS_GROUPS = [
     label: "Models & Tools",
     pages: [
       { id: "providers", label: "Providers", render: () => <ProvidersPage /> },
-      { id: "mcp", label: "MCP Servers", render: () => <McpServersPage /> },
+      { id: "mcp", label: "Integrations", render: () => <McpServersPage /> },
     ] as SettingsPageDefinition[],
   },
   {

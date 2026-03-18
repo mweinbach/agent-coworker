@@ -363,7 +363,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   nvidia: "NVIDIA",
   "opencode-go": "OpenCode Go",
   "opencode-zen": "OpenCode Zen",
-  "codex-cli": "Codex CLI",
+  "codex-cli": "ChatGPT Subscription",
 };
 
 function ThreadModelSelector({

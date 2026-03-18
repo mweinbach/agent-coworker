@@ -99,7 +99,7 @@ function pickStringArray(value: unknown): string[] | undefined {
   const next = value
     .map((entry) => pickTrimmedString(entry))
     .filter((entry): entry is string => !!entry);
-  return next.length > 0 ? next : undefined;
+  return next;
 }
 
 function pickCodexWebSearchLocation(value: unknown): CodexWebSearchLocation | undefined {
@@ -115,7 +115,7 @@ function pickCodexWebSearchLocation(value: unknown): CodexWebSearchLocation | un
   const timezone = pickTrimmedString(value.timezone);
   if (timezone) next.timezone = timezone;
 
-  return Object.keys(next).length > 0 ? next : undefined;
+  return next;
 }
 
 function pickCodexWebSearchOptions(value: unknown): CodexWebSearchOptions | undefined {
@@ -224,21 +224,29 @@ export function mergeEditableOpenAiCompatibleProviderOptions(
       const currentWebSearch = isPlainObject(currentSection.webSearch) ? { ...currentSection.webSearch } : {};
       const patchWebSearch = isPlainObject(codexPatch.webSearch) ? { ...codexPatch.webSearch } : {};
       const currentLocation = isPlainObject(currentWebSearch.location) ? { ...currentWebSearch.location } : {};
+      const patchHasLocation = "location" in patchWebSearch;
       const patchLocation = isPlainObject(patchWebSearch.location) ? { ...patchWebSearch.location } : {};
+
+      let resolvedLocation: Record<string, unknown> | undefined;
+      if (patchHasLocation) {
+        // Explicit patch: empty = clear, non-empty = merge
+        resolvedLocation = Object.keys(patchLocation).length > 0
+          ? { ...currentLocation, ...patchLocation }
+          : undefined;
+      } else if (Object.keys(currentLocation).length > 0) {
+        resolvedLocation = currentLocation;
+      }
+
+      const { location: _dropped, ...patchWebSearchRest } = patchWebSearch as Record<string, unknown>;
       const nextWebSearch = {
         ...currentWebSearch,
-        ...patchWebSearch,
-        ...(
-          Object.keys(currentLocation).length > 0 || Object.keys(patchLocation).length > 0
-            ? {
-                location: {
-                  ...currentLocation,
-                  ...patchLocation,
-                },
-              }
-            : {}
-        ),
+        ...patchWebSearchRest,
+        ...(resolvedLocation ? { location: resolvedLocation } : {}),
       };
+      // When patch explicitly cleared location, remove stale key from merge
+      if (patchHasLocation && !resolvedLocation) {
+        delete (nextWebSearch as Record<string, unknown>).location;
+      }
       current[provider] = {
         ...currentSection,
         ...codexPatch,

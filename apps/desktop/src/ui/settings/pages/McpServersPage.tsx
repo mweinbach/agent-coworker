@@ -4,7 +4,8 @@ import {
   XCircleIcon,
   PlusIcon,
   ChevronDownIcon,
-  ChevronRightIcon
+  ChevronRightIcon,
+  WrenchIcon,
 } from "lucide-react";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -14,6 +15,7 @@ import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../../../components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Input } from "../../../components/ui/input";
@@ -73,6 +75,7 @@ export function McpServersPage() {
   const [oauthCodeByName, setOauthCodeByName] = useState<Record<string, string>>({});
   const [apiKeyByName, setApiKeyByName] = useState<Record<string, string>>({});
   const [expandedServers, setExpandedServers] = useState<Record<string, boolean>>({});
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const autoValidateSchedulerRef = useRef(
     createMcpAutoValidateScheduler((workspaceId: string, name: string) => {
       void validateWorkspaceMcpServer(workspaceId, name);
@@ -450,29 +453,43 @@ export function McpServersPage() {
           })}
       </div>
 
-      <Card className="border-border/80 bg-card/85">
-        <CardHeader>
-          <CardTitle>Config files</CardTitle>
-          <CardDescription>Layer sources and parse warnings.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2 text-xs">
-          {files.map((file) => (
-            <div key={file.path} className="rounded-md border border-border/70 bg-muted/20 px-3 py-2">
-              <div className="font-medium text-foreground">
-                {sourceLabel(file.source)} {file.editable ? "(editable)" : "(read-only)"}
-              </div>
-              <div className="font-mono text-muted-foreground">{file.path}</div>
-              <div className="text-muted-foreground">exists={String(file.exists)}, servers={file.serverCount}</div>
-              {file.parseError ? <div className="text-destructive">parse error: {file.parseError}</div> : null}
-            </div>
-          ))}
-          {warnings.length > 0 ? (
-            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
-              {warnings.join(" | ")}
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
+      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <WrenchIcon className="size-4" />
+            <span>Advanced</span>
+            <ChevronDownIcon className={cn("ml-auto size-4 transition-transform", advancedOpen && "rotate-180")} />
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="space-y-5 pt-2">
+          <Card className="border-border/80 bg-card/85">
+            <CardHeader>
+              <CardTitle>Config files</CardTitle>
+              <CardDescription>Layer sources and parse warnings.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-xs">
+              {files.map((file) => (
+                <div key={file.path} className="rounded-md border border-border/70 bg-muted/20 px-3 py-2">
+                  <div className="font-medium text-foreground">
+                    {sourceLabel(file.source)} {file.editable ? "(editable)" : "(read-only)"}
+                  </div>
+                  <div className="font-mono text-muted-foreground">{file.path}</div>
+                  <div className="text-muted-foreground">exists={String(file.exists)}, servers={file.serverCount}</div>
+                  {file.parseError ? <div className="text-destructive">parse error: {file.parseError}</div> : null}
+                </div>
+              ))}
+              {warnings.length > 0 ? (
+                <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-destructive">
+                  {warnings.join(" | ")}
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   );
 }

@@ -363,6 +363,19 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           set((s) => ({
             workspaces: s.workspaces.map((w) => (w.id === source.id ? w : { ...w, ...patch })),
           }));
+
+          // Push updated defaults to active threads in other workspaces
+          const affectedWorkspaceIds = state.workspaces
+            .filter((w) => w.id !== source.id)
+            .map((w) => w.id);
+          for (const wsId of affectedWorkspaceIds) {
+            const threadIds = get()
+              .threads.filter((t) => t.workspaceId === wsId)
+              .map((t) => t.id);
+            for (const threadId of threadIds) {
+              void get().applyWorkspaceDefaultsToThread(threadId, "explicit");
+            }
+          }
         }
       }
       void persistNow(get);

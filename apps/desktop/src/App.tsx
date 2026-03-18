@@ -64,6 +64,7 @@ export default function App() {
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
   const threadRuntimeById = useAppStore((s) => s.threadRuntimeById);
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed);
+  const sidebarWidth = useAppStore((s) => s.sidebarWidth);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
   const toggleContextSidebar = useAppStore((s) => s.toggleContextSidebar);
@@ -228,15 +229,16 @@ export default function App() {
         busy={busy}
         onToggleSidebar={toggleSidebar}
         sidebarCollapsed={sidebarCollapsed}
+        sidebarWidth={sidebarWidth}
         contextSidebarCollapsed={contextSidebarCollapsed}
         onToggleContextSidebar={toggleContextSidebar}
       />
       <div className="flex min-h-0 flex-1">
         <LeftSidebarPane collapsed={sidebarCollapsed} />
 
-        <main className="flex min-w-0 flex-1 flex-col bg-panel">
+        <main className="flex min-w-0 min-h-0 flex-1 flex-col bg-panel">
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <div className="min-w-0 flex-1 overflow-hidden relative">
+            <div className="relative min-w-0 min-h-0 flex-1 overflow-hidden">
               <PrimaryContent init={init} ready={ready} startupError={startupError} view={view} />
             </div>
             {showContextSidebar ? (

@@ -782,6 +782,41 @@ describe("desktop providers page", () => {
     expect(html).not.toContain("Reveal");
   });
 
+  test("uses provider status fallback when LM Studio is enabled but the catalog entry is missing", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerStatusByName: {
+        ...useAppStore.getState().providerStatusByName,
+        lmstudio: {
+          provider: "lmstudio",
+          authorized: false,
+          verified: false,
+          mode: "error",
+          account: null,
+          message: "LM Studio server is unreachable at http://localhost:1234.",
+          checkedAt: "2026-03-18T00:00:00.000Z",
+        },
+      } as any,
+      providerCatalog: [],
+      providerUiState: {
+        lmstudio: {
+          enabled: true,
+          hiddenModels: [],
+        },
+      },
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:lmstudio",
+      }),
+    );
+
+    expect(html).toContain("Unavailable");
+    expect(html).toContain("LM Studio server is unreachable at http://localhost:1234.");
+    expect(html).not.toContain(">Checking<");
+  });
+
   test("LM Studio card actions call local enable and model visibility handlers", async () => {
     const harness = setupJsdom();
     const setLmStudioEnabled = mock(async () => {});

@@ -103,12 +103,50 @@ body {
   -webkit-app-region: no-drag;
 }
 
-:root[data-platform="darwin"] .app-topbar.app-topbar--macos-inset {
-  padding-left: 5.75rem;
+.app-topbar__inline-sidebar-toggle {
+  z-index: 1;
+}
+
+.app-topbar__sidebar-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: color-mix(in srgb, var(--sidebar-bg) 92%, white 8%);
+  border-right-style: solid;
+  border-right-color: color-mix(in srgb, var(--border) 70%, transparent);
+  backdrop-filter: blur(16px);
+  transition:
+    width 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-right-width 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.app-topbar__content-fill {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: color-mix(in srgb, var(--sidebar-bg) 84%, var(--app-bg) 16%);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  backdrop-filter: blur(24px);
+  transition: left 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:root[data-platform="darwin"] .app-topbar__inline-sidebar-toggle {
+  left: 5.75rem;
+}
+
+:root[data-platform="win32"] .app-topbar__inline-sidebar-toggle {
+  left: auto;
+  right: 8.75rem;
 }
 
 :root[data-platform="win32"] .app-topbar {
-  padding-right: 9rem; /* Prevent overlap with native Windows controls */
+  padding-right: 12rem; /* Prevent overlap with the sidebar toggle and native Windows controls */
 }
 
 .app-shell {
@@ -150,6 +188,10 @@ body {
 .app-left-sidebar-pane,
 .app-right-sidebar-pane {
   will-change: width;
+}
+
+.app-left-sidebar-pane {
+  border-right-color: color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 @keyframes collapsible-open {
@@ -301,6 +343,11 @@ body.app-resizing-sidebars {
 
 body.app-resizing-sidebars .app-left-sidebar-pane,
 body.app-resizing-sidebars .app-right-sidebar-pane {
+  transition: none;
+}
+
+body.app-resizing-sidebars .app-topbar__sidebar-fill,
+body.app-resizing-sidebars .app-topbar__content-fill {
   transition: none;
 }
 

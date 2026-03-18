@@ -19,6 +19,7 @@ import {
 
 type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
 type ProviderCatalogEntry = Extract<ServerEvent, { type: "provider_catalog" }>["all"][number];
+type ProviderStatus = Extract<ServerEvent, { type: "provider_status" }>["providers"][number];
 
 const EXA_AUTH_METHOD_ID = "exa_api_key";
 export const EXA_SECTION_ID = "provider:exa-search";
@@ -48,6 +49,84 @@ function providerStatusLabel(status: any): string {
   if (status.authorized) return "Connected";
   if (status.mode === "oauth_pending") return "Pending";
   return "Not connected";
+}
+
+function lmStudioStatusMessage(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function lmStudioStatusKind(opts: {
+  enabled: boolean;
+  status?: ProviderStatus;
+  catalogEntry?: ProviderCatalogEntry;
+}): "disabled" | "connected" | "no-models" | "unavailable" | "checking" {
+  if (!opts.enabled) return "disabled";
+  if (opts.catalogEntry?.state === "empty") return "no-models";
+  if (opts.catalogEntry?.state === "unreachable") return "unavailable";
+  if (opts.status?.mode === "error") return "unavailable";
+  if (lmStudioStatusMessage(opts.status?.message).toLowerCase().includes("no llms are available")) {
+    return "no-models";
+  }
+  if (opts.status?.authorized || opts.status?.verified) return "connected";
+  return "checking";
+}
+
+function describeLmStudioCard(opts: {
+  enabled: boolean;
+  status?: ProviderStatus;
+  catalogEntry?: ProviderCatalogEntry;
+  visibleModelCount: number;
+  totalModelCount: number;
+}): {
+  badgeLabel: string;
+  subtitle: string;
+  emptyStateMessage: string;
+} {
+  const statusMessage = lmStudioStatusMessage(opts.status?.message);
+  const catalogMessage = lmStudioStatusMessage(opts.catalogEntry?.message);
+  const anyMessage = catalogMessage || statusMessage;
+  const noModelsMessage = anyMessage || "LM Studio is reachable, but it is not exposing any LLMs right now.";
+  const kind = lmStudioStatusKind(opts);
+
+  if (kind === "disabled") {
+    return {
+      badgeLabel: "Disabled",
+      subtitle: "Connect once to show LM Studio in Cowork.",
+      emptyStateMessage: "Refresh once LM Studio is running to discover available models.",
+    };
+  }
+
+  if (kind === "no-models") {
+    return {
+      badgeLabel: "No models",
+      subtitle: noModelsMessage,
+      emptyStateMessage: "LM Studio is reachable, but it is not exposing any LLMs right now.",
+    };
+  }
+
+  if (kind === "unavailable") {
+    return {
+      badgeLabel: "Unavailable",
+      subtitle: anyMessage || "Unable to reach your local LM Studio server.",
+      emptyStateMessage: "Refresh once LM Studio is running to discover available models.",
+    };
+  }
+
+  if (kind === "connected") {
+    return {
+      badgeLabel: "Connected",
+      subtitle: opts.totalModelCount > 0
+        ? `${opts.visibleModelCount}/${opts.totalModelCount} model${opts.totalModelCount === 1 ? "" : "s"} shown in chat`
+        : noModelsMessage,
+      emptyStateMessage: "LM Studio is reachable, but it is not exposing any LLMs right now.",
+    };
+  }
+
+  return {
+    badgeLabel: "Checking",
+    subtitle: anyMessage || "Checking your local LM Studio server.",
+    emptyStateMessage: "Refresh once LM Studio is running to discover available models.",
+  };
 }
 
 function formatRateLimitName(entry: any): string {
@@ -556,20 +635,13 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
       const lmStudioModels = Array.isArray(catalogEntry?.models) ? catalogEntry.models : [];
       const hiddenModels = new Set(providerUiState.lmstudio.hiddenModels);
       const visibleLmStudioModels = lmStudioModels.filter((model) => !hiddenModels.has(model.id));
-      const statusLabel = !lmStudioEnabled
-        ? "Disabled"
-        : connected
-          ? "Connected"
-          : catalogEntry?.state === "unreachable"
-            ? "Unavailable"
-            : catalogEntry?.state === "empty"
-              ? "No models"
-              : "Checking";
-      const subtitle = !lmStudioEnabled
-        ? "Connect once to show LM Studio in Cowork."
-        : connected
-          ? `${visibleLmStudioModels.length}/${lmStudioModels.length} model${lmStudioModels.length === 1 ? "" : "s"} shown in chat`
-          : catalogEntry?.message?.trim() || status?.message || "Checking your local LM Studio server.";
+      const lmStudioCard = describeLmStudioCard({
+        enabled: lmStudioEnabled,
+        status,
+        catalogEntry,
+        visibleModelCount: visibleLmStudioModels.length,
+        totalModelCount: lmStudioModels.length,
+      });
 
       return (
         <Card key={provider} className={cn("border-border/80 bg-card/85", isExpanded && "border-primary/35")}>
@@ -582,10 +654,10 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
           >
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-foreground">{providerDisplayName}</div>
-              <div className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle}</div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">{lmStudioCard.subtitle}</div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <Badge variant={lmStudioEnabled && connected ? "default" : "secondary"}>{statusLabel}</Badge>
+              <Badge variant={lmStudioEnabled && connected ? "default" : "secondary"}>{lmStudioCard.badgeLabel}</Badge>
               <span className="text-xs text-muted-foreground">{isExpanded ? "▾" : "▸"}</span>
             </div>
           </button>
@@ -615,8 +687,8 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                 </Button>
               </div>
 
-              {subtitle ? (
-                <div className="text-sm text-muted-foreground">{subtitle}</div>
+              {lmStudioCard.subtitle ? (
+                <div className="text-sm text-muted-foreground">{lmStudioCard.subtitle}</div>
               ) : null}
 
               <div className="space-y-2 border-t border-border/70 pt-4">
@@ -672,9 +744,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
                   </div>
                 ) : (
                   <div className="rounded-sm border border-dashed border-border/60 px-3 py-2 text-sm text-muted-foreground">
-                    {catalogEntry?.state === "empty"
-                      ? "LM Studio is reachable, but it is not exposing any LLMs right now."
-                      : "Refresh once LM Studio is running to discover available models."}
+                    {lmStudioCard.emptyStateMessage}
                   </div>
                 )}
               </div>

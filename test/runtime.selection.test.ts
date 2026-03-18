@@ -80,11 +80,34 @@ describe("runtime selection", () => {
     expect(createRuntime(config).name).toBe("pi");
   });
 
-  test("normalizes stale OpenAI Responses runtime config away for unsupported providers", () => {
+  test("defaults google provider to the Google Interactions runtime", () => {
     const config = makeConfig({
       provider: "google",
       model: "gemini-3-flash-preview",
       preferredChildModel: "gemini-3-flash-preview",
+    });
+
+    expect(resolveRuntimeName(config)).toBe("google-interactions");
+    expect(createRuntime(config).name).toBe("google-interactions");
+  });
+
+  test("normalizes stale OpenAI Responses runtime config away for google provider", () => {
+    const config = makeConfig({
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      preferredChildModel: "gemini-3-flash-preview",
+      runtime: "openai-responses",
+    });
+
+    expect(resolveRuntimeName(config)).toBe("google-interactions");
+    expect(createRuntime(config).name).toBe("google-interactions");
+  });
+
+  test("normalizes stale OpenAI Responses runtime config away for unsupported providers", () => {
+    const config = makeConfig({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      preferredChildModel: "claude-sonnet-4-6",
       runtime: "openai-responses",
     });
 

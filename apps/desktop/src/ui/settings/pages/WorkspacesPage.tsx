@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { ChevronDownIcon, InfoIcon, PlusIcon, XIcon } from "lucide-react";
 
@@ -812,7 +812,6 @@ type WorkspaceDefaultsSummaryProps = {
   model: string;
   childModelRoutingMode: "same-provider" | "cross-provider-allowlist";
   preferredChildLabel: string;
-  shared?: boolean;
 };
 
 function WorkspaceDefaultsSummary({
@@ -820,15 +819,9 @@ function WorkspaceDefaultsSummary({
   model,
   childModelRoutingMode,
   preferredChildLabel,
-  shared,
 }: WorkspaceDefaultsSummaryProps) {
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-lg border border-border/60 bg-card/70 px-3 py-2 text-xs text-muted-foreground">
-      {shared && (
-        <Badge variant="secondary" className="rounded-sm">
-          Shared
-        </Badge>
-      )}
       <span>Current provider:</span>
       <Badge variant="outline" className="rounded-sm">
         {displayProviderName(provider)}
@@ -957,7 +950,6 @@ export function WorkspacesPage() {
             model={model}
             childModelRoutingMode={childModelRoutingMode}
             preferredChildLabel={childModelRoutingMode === "same-provider" ? (preferredChildModel || model) : friendlyModelRef(preferredChildModelRef)}
-            shared={!perWorkspaceSettings}
           />
 
           <div className="flex space-x-1 rounded-lg bg-muted p-1 border border-border/70 max-w-fit mb-2 relative">
@@ -984,41 +976,39 @@ export function WorkspacesPage() {
           </div>
 
           <div className={cn("space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300", activeTab !== "general" && "hidden")}>
-            <Card className="border-border/80 bg-card/85">
-              <CardHeader className="flex-row items-center justify-between space-y-0">
-                <div>
-                  <CardTitle>Active workspace</CardTitle>
-                  <CardDescription>
-                    {perWorkspaceSettings
-                      ? "Selected project for this desktop session."
-                      : "Selected project folder. Settings are shared across all workspaces."}
-                  </CardDescription>
-                </div>
-                <Button variant="outline" type="button" onClick={() => void addWorkspace()}>
-                  Add
-                </Button>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div>
-                  <div className="text-sm font-medium text-foreground">{ws.name}</div>
-                  <div className="text-xs text-muted-foreground">{ws.path}</div>
-                </div>
-                {workspaces.length > 1 ? (
-                  <Select value={ws.id} onValueChange={(value) => void selectWorkspace(value)}>
-                    <SelectTrigger aria-label="Active workspace">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {workspaces.map((workspace) => (
-                        <SelectItem key={workspace.id} value={workspace.id}>
-                          {workspace.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : null}
-              </CardContent>
-            </Card>
+            {perWorkspaceSettings && (
+              <Card className="border-border/80 bg-card/85">
+                <CardHeader className="flex-row items-center justify-between space-y-0">
+                  <div>
+                    <CardTitle>Active workspace</CardTitle>
+                    <CardDescription>Selected project for this desktop session.</CardDescription>
+                  </div>
+                  <Button variant="outline" type="button" onClick={() => void addWorkspace()}>
+                    Add
+                  </Button>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div>
+                    <div className="text-sm font-medium text-foreground">{ws.name}</div>
+                    <div className="text-xs text-muted-foreground">{ws.path}</div>
+                  </div>
+                  {workspaces.length > 1 ? (
+                    <Select value={ws.id} onValueChange={(value) => void selectWorkspace(value)}>
+                      <SelectTrigger aria-label="Active workspace">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {workspaces.map((workspace) => (
+                          <SelectItem key={workspace.id} value={workspace.id}>
+                            {workspace.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : null}
+                </CardContent>
+              </Card>
+            )}
 
             <Card className="border-border/80 bg-card/85">
               <CardHeader>

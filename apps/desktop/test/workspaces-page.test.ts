@@ -352,6 +352,7 @@ describe("desktop workspaces page", () => {
   test("renders cross-provider child routing controls for workspace defaults", async () => {
     useAppStore.setState((state) => ({
       ...state,
+      perWorkspaceSettings: true,
       workspaces: [
         {
           id: "ws-1",
@@ -599,6 +600,7 @@ describe("desktop workspaces page", () => {
           view: "settings",
           settingsPage: "workspaces",
           lastNonSettingsView: "chat",
+          perWorkspaceSettings: true,
           workspaces: [
             {
               id: "ws-1",

@@ -64,6 +64,7 @@ function SettingsNavigation({
   onBack: () => void;
 }) {
   const currentWorkspace = useAppStore((s) => s.workspaces.find(w => w.id === s.selectedWorkspaceId));
+  const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
 
   return (
     <aside className="settings-shell__nav flex min-h-0 flex-col border-r border-border/80 bg-sidebar max-[960px]:border-r-0 max-[960px]:border-b">
@@ -72,7 +73,7 @@ function SettingsNavigation({
           <ArrowLeftIcon className="h-4 w-4 mr-2" />
           Back to app
         </Button>
-        {currentWorkspace && (
+        {perWorkspaceSettings && currentWorkspace && (
           <div className="text-xs text-muted-foreground mt-2 px-1 font-medium truncate">
             {currentWorkspace.name}
           </div>

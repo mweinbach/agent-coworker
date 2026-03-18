@@ -1,7 +1,6 @@
 import {
   buildInvalidToolCallFormatReminderMessage,
   buildStepState,
-  emitPiEventAsRawPart,
   executeToolCall,
   isAbortLikeError,
   markModelCallSpanError,
@@ -36,26 +35,22 @@ type GoogleInteractionsRuntimeOverrides = {
 };
 
 function buildGoogleStreamOptions(
-  params: RuntimeRunTurnParams,
+  providerOptions: Record<string, unknown> | undefined,
+  abortSignal: AbortSignal | undefined,
   apiKey?: string,
 ): Record<string, unknown> {
   const options: Record<string, unknown> = {};
   if (apiKey) options.apiKey = apiKey;
-  if (params.abortSignal) options.signal = params.abortSignal;
+  if (abortSignal) options.signal = abortSignal;
 
-  const providerOptions = params.providerOptions ?? params.config.providerOptions;
   const googleSection = asRecord(providerOptions?.google) ?? asRecord(providerOptions?.vertex) ?? {};
 
   const thinkingConfig = asRecord(googleSection.thinkingConfig);
   if (thinkingConfig) {
     const includeThoughts = thinkingConfig.includeThoughts !== false;
-    if (includeThoughts) {
-      const level = asNonEmptyString(thinkingConfig.thinkingLevel);
-      if (level) options.thinkingLevel = level;
-      options.thinkingSummaries = "auto";
-    } else {
-      options.thinkingLevel = "none";
-    }
+    const level = asNonEmptyString(thinkingConfig.thinkingLevel);
+    if (level) options.thinkingLevel = level;
+    options.thinkingSummaries = includeThoughts ? "auto" : "none";
     const budget = typeof thinkingConfig.thinkingBudget === "number"
       ? thinkingConfig.thinkingBudget
       : undefined;
@@ -95,6 +90,7 @@ export function createGoogleInteractionsRuntime(
         let previousInteractionId: string | undefined;
         let stepMessages: ModelMessage[] = [...(params.allMessages ?? params.messages)];
         let stepProviderOptions: Record<string, unknown> | undefined = asRecord(params.providerOptions) ?? undefined;
+        let nextInteractionInputStartIndex = 0;
 
         // Build a PiModel-compatible object for shared utilities (telemetry, etc.)
         const piModelCompat = {
@@ -144,7 +140,11 @@ export function createGoogleInteractionsRuntime(
           stepMessages = stepState.modelMessages;
           stepProviderOptions = stepState.providerOptions;
 
-          const googleStreamOptions = buildGoogleStreamOptions(params, resolved.apiKey);
+          const googleStreamOptions = buildGoogleStreamOptions(
+            stepProviderOptions ?? asRecord(params.config.providerOptions) ?? undefined,
+            params.abortSignal,
+            resolved.apiKey,
+          );
           const mergedStreamOptions = {
             ...googleStreamOptions,
             ...(overrides.streamOptions ?? {}),
@@ -164,16 +164,22 @@ export function createGoogleInteractionsRuntime(
           let assistantRecord: Record<string, unknown> = {};
           let interactionId: string | undefined;
           try {
+            const requestStartIndex = Math.min(nextInteractionInputStartIndex, stepMessages.length);
+            const requestMessages =
+              previousInteractionId
+                ? stepMessages.slice(requestStartIndex)
+                : stepMessages;
             const result = await runStepImpl({
               model: resolved.model,
               apiKey: asNonEmptyString(mergedStreamOptions.apiKey as unknown) ?? resolved.apiKey,
               systemPrompt: params.system,
-              messages: stepMessages,
+              messages: requestMessages.length > 0 ? requestMessages : stepMessages,
               tools: piTools,
               streamOptions: mergedStreamOptions as any,
               previousInteractionId,
               onEvent: async (event) => {
-                await emitPiEventAsRawPart(event, params.config.provider, includeUnknownRawParts, emitPart);
+                if (!includeUnknownRawParts && event.type === "unknown") return;
+                await emitPart(event);
               },
               onRawEvent: async (event) => {
                 await params.onModelRawEvent?.({
@@ -198,6 +204,7 @@ export function createGoogleInteractionsRuntime(
             ...stepMessages,
             ...assistantModelMessages,
           ];
+          nextInteractionInputStartIndex = stepMessages.length;
 
           await emitPart({
             type: "finish-step",

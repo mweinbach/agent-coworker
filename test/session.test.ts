@@ -1349,8 +1349,8 @@ describe("AgentSession", () => {
       await session.setModel("gemini-3-flash-preview", "google");
 
       expect((session as any).state.config.provider).toBe("google");
-      expect((session as any).state.config.runtime).toBe("pi");
-      expect(createRuntime((session as any).state.config).name).toBe("pi");
+      expect((session as any).state.config.runtime).toBe("google-interactions");
+      expect(createRuntime((session as any).state.config).name).toBe("google-interactions");
     });
 
     test("clears persisted OpenAI continuation state when provider/model changes", async () => {

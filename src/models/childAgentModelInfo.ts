@@ -53,6 +53,8 @@ const CHILD_AGENT_MODEL_INFO_BY_KEY: Readonly<Record<string, ChildAgentModelInfo
   [key("anthropic", "claude-haiku-4-5")]: claudeFast,
 
   [key("google", "gemini-3-pro-preview")]: geminiPro,
+  [key("google", "gemini-3.1-pro-preview")]: geminiPro,
+  [key("google", "gemini-3.1-pro-preview-customtools")]: geminiPro,
   [key("google", "gemini-3-flash-preview")]: geminiFlash,
 
   [key("nvidia", "nvidia/nemotron-3-super-120b-a12b")]: openReasoner,

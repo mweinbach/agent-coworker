@@ -19,6 +19,7 @@ import {
 } from "./modelStream";
 
 export type ThreadModelStreamRuntime = {
+  activeTurnId: string | null;
   assistantItemIdByStream: Map<string, string>;
   assistantTextByStream: Map<string, string>;
   lastAssistantStreamKeyByTurn: Map<string, string>;
@@ -148,6 +149,7 @@ export function unhandledEventSystemLine(type: string): string {
 
 export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
   return {
+    activeTurnId: null,
     assistantItemIdByStream: new Map(),
     assistantTextByStream: new Map(),
     lastAssistantStreamKeyByTurn: new Map(),
@@ -164,18 +166,23 @@ export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
 }
 
 export function clearThreadModelStreamRuntime(runtime: ThreadModelStreamRuntime) {
+  runtime.activeTurnId = null;
+  clearStepLocalModelStreamRuntime(runtime);
+  runtime.reasoningTurns.clear();
+  runtime.toolItemIdByKey.clear();
+  runtime.latestToolKeyByTurnAndName.clear();
+  runtime.toolInputByKey.clear();
+  runtime.lastReasoningTurnId = null;
+  clearModelStreamReplayRuntime(runtime.replay);
+}
+
+function clearStepLocalModelStreamRuntime(runtime: ThreadModelStreamRuntime) {
   runtime.assistantItemIdByStream.clear();
   runtime.assistantTextByStream.clear();
   runtime.lastAssistantStreamKeyByTurn.clear();
   runtime.reasoningItemIdByStream.clear();
   runtime.reasoningTextByStream.clear();
-  runtime.reasoningTurns.clear();
-  runtime.toolItemIdByKey.clear();
-  runtime.latestToolKeyByTurnAndName.clear();
-  runtime.toolInputByKey.clear();
   runtime.lastAssistantTurnId = null;
-  runtime.lastReasoningTurnId = null;
-  clearModelStreamReplayRuntime(runtime.replay);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -505,7 +512,12 @@ function applyModelStreamUpdate(
   };
 
   if (update.kind === "turn_start") {
-    clearThreadModelStreamRuntime(stream);
+    if (stream.activeTurnId !== update.turnId) {
+      clearThreadModelStreamRuntime(stream);
+      stream.activeTurnId = update.turnId;
+    } else {
+      clearStepLocalModelStreamRuntime(stream);
+    }
     return;
   }
 

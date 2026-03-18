@@ -74,14 +74,15 @@ User Message → System Prompt + History + Tools → AI Model → Tool Calls →
 
 **Turn Lifecycle:**
 1. Build system prompt with skills, memory, and context
-2. Call the configured LLM runtime (`pi` for Google/Anthropic/OpenCode, `openai-responses` for OpenAI/Codex) with model, tools, and history
+2. Call the configured LLM runtime (`google-interactions` for Google, `pi` for Anthropic/OpenCode/local-compatible providers, `openai-responses` for OpenAI/Codex) with model, tools, and history
 3. Execute tool calls (with approval for risky operations)
 4. Stream results back to client via WebSocket events
 5. Update message history
 
 The runtime boundary lives in `src/runtime/`:
-- `createRuntime()` selects either the PI runtime or the OpenAI Responses runtime; OpenAI and Codex are always routed through `openai-responses`, and incompatible saved runtime values are normalized back to the provider default
-- `piRuntime` handles Google/Anthropic/OpenCode streaming/tool loops and maps events into the existing stream contract
+- `createRuntime()` selects `google-interactions`, `pi`, or `openai-responses`; providers are normalized back to their supported default runtime when stale saved values are encountered
+- `googleInteractionsRuntime` handles Gemini Interactions API turns, including server-side interaction continuation and Google-native stream/raw event handling
+- `piRuntime` handles Anthropic/OpenCode/local-compatible streaming/tool loops and shared tool execution utilities
 - `openaiResponsesRuntime` handles OpenAI and Codex Responses flows, including the ChatGPT Codex backend path
 
 ### 3. Tools (`src/tools/`)

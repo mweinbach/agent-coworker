@@ -2999,7 +2999,7 @@ describe("Protocol Doc Parity", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(seenConfigs).toContainEqual({
         provider: "google",
-        runtime: "pi",
+        runtime: "google-interactions",
         model: "gemini-3-flash-preview",
       });
     } finally {

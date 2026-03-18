@@ -219,7 +219,7 @@ describe("loadConfig", () => {
       builtInDir: repoRoot(),
       env: {},
     });
-    expect(cfg.runtime).toBe("pi");
+    expect(cfg.runtime).toBe("google-interactions");
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       provider: "openai",
@@ -299,7 +299,7 @@ describe("loadConfig", () => {
     });
 
     expect(cfg.provider).toBe("google");
-    expect(cfg.runtime).toBe("pi");
+    expect(cfg.runtime).toBe("google-interactions");
   });
 
   // ---- New tests ----

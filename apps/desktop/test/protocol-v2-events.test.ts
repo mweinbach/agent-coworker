@@ -1042,6 +1042,87 @@ describe("desktop protocol v2 mapping", () => {
     expect(tool.result).toEqual({ chars: 42 });
   });
 
+  test("repeated same-turn start chunks do not re-enable legacy reasoning duplicates", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-google-1",
+      index: 0,
+      provider: "google",
+      model: "gemini-3.1-pro-preview-customtools",
+      partType: "start",
+      part: {},
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-google-1",
+      index: 1,
+      provider: "google",
+      model: "gemini-3.1-pro-preview-customtools",
+      partType: "reasoning_delta",
+      part: { id: "s0", mode: "reasoning", text: "Searching for the latest GTC details." },
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-google-1",
+      index: 2,
+      provider: "google",
+      model: "gemini-3.1-pro-preview-customtools",
+      partType: "tool_call",
+      part: { toolCallId: "tool-1", toolName: "webSearch", input: { query: "NVIDIA GTC 2026" } },
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-google-1",
+      index: 3,
+      provider: "google",
+      model: "gemini-3.1-pro-preview-customtools",
+      partType: "tool_result",
+      part: { toolCallId: "tool-1", toolName: "webSearch", output: "result" },
+    });
+    threadSocket.emit({
+      type: "model_stream_chunk",
+      sessionId: "thread-session",
+      turnId: "turn-google-1",
+      index: 4,
+      provider: "google",
+      model: "gemini-3.1-pro-preview-customtools",
+      partType: "start",
+      part: {},
+    });
+
+    threadSocket.emit({
+      type: "reasoning",
+      sessionId: "thread-session",
+      kind: "reasoning",
+      text: "Searching for the latest GTC details.",
+    });
+    threadSocket.emit({
+      type: "assistant_message",
+      sessionId: "thread-session",
+      text: "Here is the summary.",
+    });
+
+    const feed = useAppStore.getState().threadRuntimeById[threadId]?.feed ?? [];
+    const reasoning = feed.filter((item) => item.kind === "reasoning");
+
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0]?.text).toBe("Searching for the latest GTC details.");
+    expect(feed.map((item) => item.kind)).toEqual(["reasoning", "tool", "message"]);
+  });
+
   test("model_stream_raw drives live feed replay and suppresses stale normalized reasoning chunks", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const threadId = useAppStore.getState().selectedThreadId;

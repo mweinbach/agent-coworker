@@ -2594,11 +2594,13 @@ Provider-native raw model stream event. Emitted before any derived `model_stream
 | `index` | `number` | Sequential raw-event index within the turn (starting at 0). Fallback: `-1` |
 | `provider` | `ProviderName \| "unknown"` | Provider that generated this event. Fallback: `"unknown"` |
 | `model` | `string` | Model that generated this event. Fallback: `"unknown"` |
-| `format` | `"openai-responses-v1"` | Raw event envelope format |
+| `format` | `"openai-responses-v1" \| "google-interactions-v1"` | Raw event envelope format |
 | `normalizerVersion` | `number` | Version identifier for the client/server raw-event normalizer |
 | `event` | `object` | Provider-native raw event payload. If a non-object payload is received, it is normalized to `{ "value": <original> }` |
 
 For OpenAI Responses providers, `event.item.type` may be `web_search_call`. Clients may surface these raw events as synthetic native web-search activity (for example `nativeWebSearch`) without treating them as executable local function tools.
+
+For Google Interactions providers, `event` is the provider-native SSE payload and typically uses `event_type` values like `interaction.start`, `content.delta`, and `interaction.complete`.
 
 ---
 

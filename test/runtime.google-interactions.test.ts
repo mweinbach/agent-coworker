@@ -217,6 +217,92 @@ describe("google interactions runtime", () => {
     expect(result.usage!.totalTokens).toBeGreaterThan(0);
   });
 
+  test("prepareStep providerOptions overrides control thought summaries for the step", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-step-opts-"));
+    const seenStreamOptions: Array<Record<string, unknown>> = [];
+    const runtime = createGoogleInteractionsRuntime({
+      runStepImpl: async (opts) => {
+        seenStreamOptions.push(opts.streamOptions as Record<string, unknown>);
+        return {
+          assistant: {
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+          interactionId: "step-opts",
+        };
+      },
+    });
+
+    await runtime.runTurn(makeParams(makeConfig(homeDir), {
+      prepareStep: async () => ({
+        providerOptions: {
+          google: {
+            thinkingConfig: {
+              includeThoughts: false,
+              thinkingLevel: "high",
+            },
+          },
+        },
+      }),
+    }));
+
+    expect(seenStreamOptions).toHaveLength(1);
+    expect(seenStreamOptions[0]?.thinkingLevel).toBe("high");
+    expect(seenStreamOptions[0]?.thinkingSummaries).toBe("none");
+  });
+
+  test("subsequent Google interaction steps only send incremental follow-up messages", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-delta-"));
+    const seenMessages: ModelMessage[][] = [];
+    let stepCount = 0;
+    const runtime = createGoogleInteractionsRuntime({
+      runStepImpl: async (opts) => {
+        stepCount += 1;
+        seenMessages.push(opts.messages);
+        if (stepCount === 1) {
+          return {
+            assistant: {
+              role: "assistant",
+              content: [
+                { type: "toolCall", id: "call_1", name: "testTool", arguments: { query: "test" } },
+              ],
+              stopReason: "tool_calls",
+              timestamp: Date.now(),
+            },
+            interactionId: "interaction_step1",
+          };
+        }
+        return {
+          assistant: {
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+          interactionId: "interaction_step2",
+        };
+      },
+    });
+
+    await runtime.runTurn(makeParams(makeConfig(homeDir), {
+      maxSteps: 5,
+      tools: {
+        testTool: {
+          description: "A test tool",
+          inputSchema: undefined,
+          execute: async () => ({ type: "text", value: "tool result" }),
+        },
+      },
+    }));
+
+    expect(seenMessages).toHaveLength(2);
+    expect(seenMessages[0]?.[0]?.role).toBe("user");
+    expect(seenMessages[1]).toHaveLength(1);
+    expect(seenMessages[1]?.[0]?.role).toBe("tool");
+  });
+
   test("emits start-step and finish-step stream parts", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-parts-"));
     const runtime = createGoogleInteractionsRuntime({
@@ -308,21 +394,53 @@ describe("google native interactions request building", () => {
     expect(request.store).toBe(true);
     expect(Array.isArray(request.input)).toBe(true);
     expect(Array.isArray(request.tools)).toBe(true);
+    expect((request.input as Array<Record<string, unknown>>)[0]).toEqual({
+      role: "user",
+      content: "Hello",
+    });
 
     const genConfig = request.generation_config as Record<string, unknown>;
     expect(genConfig.thinking_level).toBe("high");
     expect(genConfig.temperature).toBe(0.7);
   });
 
-  test("convertMessagesToInteractionsInput handles user messages", () => {
+  test("convertMessagesToInteractionsInput preserves roleful conversation turns", () => {
     const input = googleNativeInternal.convertMessagesToInteractionsInput([
       { role: "user", content: "Hello world" },
+      { role: "assistant", content: [{ type: "text", text: "Hi there." }] },
+      { role: "user", content: "What is my name?" },
     ] as ModelMessage[]);
 
-    expect(input).toEqual([{ type: "text", text: "Hello world" }]);
+    expect(input).toEqual([
+      { role: "user", content: "Hello world" },
+      { role: "model", content: [{ type: "text", text: "Hi there." }] },
+      { role: "user", content: "What is my name?" },
+    ]);
   });
 
-  test("convertMessagesToInteractionsInput handles assistant tool calls", () => {
+  test("convertMessagesToInteractionsInput preserves multimodal user input", () => {
+    const input = googleNativeInternal.convertMessagesToInteractionsInput([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Describe this image" },
+          { type: "image", data: "abc123", mimeType: "image/png" },
+        ],
+      },
+    ] as ModelMessage[]);
+
+    expect(input).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Describe this image" },
+          { type: "image", data: "abc123", mime_type: "image/png" },
+        ],
+      },
+    ]);
+  });
+
+  test("convertMessagesToInteractionsInput handles assistant tool calls with repaired thought signatures", () => {
     const input = googleNativeInternal.convertMessagesToInteractionsInput([
       {
         role: "assistant",
@@ -332,19 +450,28 @@ describe("google native interactions request building", () => {
             toolCallId: "call_123|fc_456",
             toolName: "bash",
             input: { command: "ls" },
+            providerOptions: { google: { thoughtSignature: "sig_123" } },
           },
         ],
       },
     ] as ModelMessage[]);
 
     expect(input.length).toBe(1);
-    expect(input[0].type).toBe("function_call");
-    expect(input[0].id).toBe("call_123");
-    expect(input[0].name).toBe("bash");
-    expect(input[0].arguments).toEqual({ command: "ls" });
+    expect(input[0]).toEqual({
+      role: "model",
+      content: [
+        {
+          type: "function_call",
+          id: "call_123",
+          name: "bash",
+          arguments: { command: "ls" },
+          signature: "sig_123",
+        },
+      ],
+    });
   });
 
-  test("convertMessagesToInteractionsInput handles tool results", () => {
+  test("convertMessagesToInteractionsInput handles rich tool results", () => {
     const input = googleNativeInternal.convertMessagesToInteractionsInput([
       {
         role: "tool",
@@ -352,18 +479,37 @@ describe("google native interactions request building", () => {
           {
             type: "tool-result",
             toolCallId: "call_123|fc_456",
-            toolName: "bash",
-            output: { type: "text", value: "file.txt" },
+            toolName: "read",
+            output: {
+              type: "content",
+              content: [
+                { type: "text", text: "image attached" },
+                { type: "image", data: "abc123", mimeType: "image/png" },
+              ],
+            },
             isError: false,
           },
         ],
       },
     ] as ModelMessage[]);
 
-    expect(input.length).toBe(1);
-    expect(input[0].type).toBe("function_result");
-    expect(input[0].call_id).toBe("call_123");
-    expect(input[0].is_error).toBe(false);
+    expect(input).toEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "function_result",
+            call_id: "call_123",
+            name: "read",
+            result: [
+              { type: "text", text: "image attached" },
+              { type: "image", data: "abc123", mime_type: "image/png" },
+            ],
+            is_error: false,
+          },
+        ],
+      },
+    ]);
   });
 
   test("convertToolsToInteractionsTools maps to function type", () => {
@@ -424,6 +570,43 @@ describe("google native interactions request building", () => {
     expect(block.arguments).toEqual({ path: "/tmp/test.txt" });
   });
 
+  test("processStreamEvent updates function_call name from later delta", () => {
+    const blocks = new Map();
+
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.start",
+        index: 0,
+        content: {
+          type: "function_call",
+          id: "call_abc",
+        },
+      },
+      blocks,
+    );
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.delta",
+        index: 0,
+        delta: {
+          type: "function_call",
+          name: "webSearch",
+          arguments: { query: "NVIDIA GTC 2026 dates announcements keynote" },
+          signature: "sig_call",
+        },
+      },
+      blocks,
+    );
+
+    const block = blocks.get(0);
+    expect(block).toBeDefined();
+    expect(block.type).toBe("toolCall");
+    expect(block.id).toBe("call_abc");
+    expect(block.name).toBe("webSearch");
+    expect(block.arguments).toEqual({ query: "NVIDIA GTC 2026 dates announcements keynote" });
+    expect(block.thoughtSignature).toBe("sig_call");
+  });
+
   test("processStreamEvent handles thought content with signature", () => {
     const blocks = new Map();
 
@@ -457,6 +640,93 @@ describe("google native interactions request building", () => {
     expect(block.type).toBe("thinking");
     expect(block.thinking).toBe("Thinking about it...");
     expect(block.thinkingSignature).toBe("sig_final");
+  });
+
+  test("mapGoogleEventToStreamParts emits normalized model stream parts", () => {
+    const blocks = new Map();
+
+    googleNativeInternal.processStreamEvent(
+      { event_type: "content.start", index: 0, content: { type: "text", text: "" } },
+      blocks,
+    );
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(
+      { event_type: "content.start", index: 0, content: { type: "text", text: "" } },
+      blocks,
+    )).toEqual([{ type: "text-start", id: "s0" }]);
+
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.start",
+        index: 1,
+        content: { type: "thought", signature: "sig_1" },
+      },
+      blocks,
+    );
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(
+      {
+        event_type: "content.delta",
+        index: 1,
+        delta: { type: "thought_summary", content: { type: "text", text: "Thinking..." } },
+      },
+      blocks,
+    )).toEqual([{ type: "reasoning-delta", id: "s1", text: "Thinking..." }]);
+
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.start",
+        index: 2,
+        content: { type: "function_call", id: "call_1", name: "bash", arguments: { command: "ls" } },
+      },
+      blocks,
+    );
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(
+      {
+        event_type: "content.stop",
+        index: 2,
+      },
+      blocks,
+    )).toEqual([
+      { type: "tool-input-end", id: "call_1" },
+      { type: "tool-call", toolCallId: "call_1", toolName: "bash", input: { command: "ls" } },
+    ]);
+  });
+
+  test("mapGoogleEventToStreamParts emits tool calls with names learned from deltas", () => {
+    const blocks = new Map();
+
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.start",
+        index: 0,
+        content: { type: "function_call", id: "call_1" },
+      },
+      blocks,
+    );
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.delta",
+        index: 0,
+        delta: {
+          type: "function_call",
+          name: "webSearch",
+          arguments: { query: "NVIDIA GTC 2026 dates announcements keynote" },
+        },
+      },
+      blocks,
+    );
+
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(
+      { event_type: "content.stop", index: 0 },
+      blocks,
+    )).toEqual([
+      { type: "tool-input-end", id: "call_1" },
+      {
+        type: "tool-call",
+        toolCallId: "call_1",
+        toolName: "webSearch",
+        input: { query: "NVIDIA GTC 2026 dates announcements keynote" },
+      },
+    ]);
   });
 
   test("resolveGoogleApiKey throws when no key is available", () => {

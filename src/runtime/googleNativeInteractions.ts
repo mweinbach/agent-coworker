@@ -1,6 +1,7 @@
 import { GoogleGenAI, type Interactions } from "@google/genai";
 
 import type { GoogleInteractionsModelInfo } from "./googleInteractionsModel";
+import { toolResultContentFromOutput } from "./piMessageBridge";
 import type { ModelMessage } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -64,9 +65,198 @@ function createGoogleClient(apiKey: string): GoogleGenAI {
 
 type InteractionsInput = Array<Record<string, unknown>>;
 
+type InteractionTurn = {
+  role: "user" | "model";
+  content: string | Array<Record<string, unknown>>;
+};
+
 function convertToolCallId(id: string): string {
   // Strip PI-style composite IDs (call_id|item_id) → just call_id
   return id.includes("|") ? id.split("|")[0]! : id;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function getGoogleThoughtSignature(record: Record<string, unknown>): string | undefined {
+  const directSignature = asNonEmptyString(record.thoughtSignature) ?? asNonEmptyString(record.thinkingSignature);
+  if (directSignature) return directSignature;
+
+  const providerOptions = asRecord(record.providerOptions);
+  if (!providerOptions) return undefined;
+
+  for (const key of ["google", "vertex"] as const) {
+    const providerValue = asRecord(providerOptions[key]);
+    const signature =
+      asNonEmptyString(providerValue?.thoughtSignature) ??
+      asNonEmptyString(providerValue?.thought_signature) ??
+      asNonEmptyString(providerValue?.thinkingSignature) ??
+      asNonEmptyString(providerValue?.thinking_signature);
+    if (signature) return signature;
+  }
+
+  return undefined;
+}
+
+function buildTextContent(text: unknown): Record<string, unknown> | null {
+  const value = asNonEmptyString(text);
+  return value ? { type: "text", text: value } : null;
+}
+
+function buildImageContent(record: Record<string, unknown>): Record<string, unknown> | null {
+  const data = asNonEmptyString(record.data);
+  const mimeType = asNonEmptyString(record.mimeType) ?? asNonEmptyString(record.mime_type);
+  if (!data || !mimeType) return null;
+  return {
+    type: "image",
+    data,
+    mime_type: mimeType,
+  };
+}
+
+function convertRichContentParts(parts: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(parts)) return [];
+
+  const content: Array<Record<string, unknown>> = [];
+  for (const rawPart of parts) {
+    if (typeof rawPart === "string") {
+      const textPart = buildTextContent(rawPart);
+      if (textPart) content.push(textPart);
+      continue;
+    }
+
+    const record = asRecord(rawPart);
+    if (!record) continue;
+
+    const partType = asNonEmptyString(record.type);
+    if (partType === "text" || partType === "input_text") {
+      const textPart = buildTextContent(record.text ?? record.inputText ?? record.value);
+      if (textPart) content.push(textPart);
+      continue;
+    }
+
+    if (partType === "image" || partType === "input_image") {
+      const imagePart = buildImageContent(record);
+      if (imagePart) content.push(imagePart);
+    }
+  }
+
+  return content;
+}
+
+function turnFromUserMessage(message: ModelMessage): InteractionTurn | null {
+  if (typeof message.content === "string") {
+    const text = message.content.trim();
+    return text ? { role: "user", content: text } : null;
+  }
+
+  const parts = convertRichContentParts(message.content);
+  return parts.length > 0 ? { role: "user", content: parts } : null;
+}
+
+function turnFromAssistantMessage(message: ModelMessage): InteractionTurn | null {
+  if (!Array.isArray(message.content)) return null;
+
+  const parts: Array<Record<string, unknown>> = [];
+  for (const rawPart of message.content) {
+    const record = asRecord(rawPart);
+    if (!record) continue;
+
+    if (record.type === "text") {
+      const textPart = buildTextContent(record.text);
+      if (textPart) parts.push(textPart);
+      continue;
+    }
+
+    if (record.type === "reasoning" || record.type === "thinking") {
+      const signature = getGoogleThoughtSignature(record);
+      if (!signature) continue;
+      const summaryPart = buildTextContent(record.text ?? record.thinking);
+      parts.push({
+        type: "thought",
+        signature,
+        ...(summaryPart ? { summary: [summaryPart] } : {}),
+      });
+      continue;
+    }
+
+    if (record.type === "tool-call" || record.type === "toolCall") {
+      const toolCallId = asNonEmptyString(record.toolCallId) ?? asNonEmptyString(record.id);
+      const toolName = asNonEmptyString(record.toolName) ?? asNonEmptyString(record.name);
+      if (!toolCallId || !toolName) continue;
+      const args = asRecord(record.input) ?? asRecord(record.arguments) ?? {};
+      const signature = getGoogleThoughtSignature(record);
+      parts.push({
+        type: "function_call",
+        id: convertToolCallId(toolCallId),
+        name: toolName,
+        arguments: args,
+        ...(signature ? { signature } : {}),
+      });
+    }
+  }
+
+  return parts.length > 0 ? { role: "model", content: parts } : null;
+}
+
+function turnFromToolMessage(message: ModelMessage): InteractionTurn | null {
+  if (!Array.isArray(message.content)) return null;
+
+  const parts: Array<Record<string, unknown>> = [];
+  for (const rawPart of message.content) {
+    const record = asRecord(rawPart);
+    if (!record) continue;
+    if (record.type !== "tool-result" && record.type !== "toolResult") continue;
+
+    const toolCallId = asNonEmptyString(record.toolCallId) ?? asNonEmptyString(record.id);
+    if (!toolCallId) continue;
+
+    const toolName = asNonEmptyString(record.toolName);
+    const richResult = toolResultContentFromOutput(record.output ?? record.content);
+    const resultParts = richResult.flatMap<Record<string, unknown>>((part) => {
+      if (part.type === "text") {
+        const textPart = buildTextContent(part.text);
+        return textPart ? [textPart] : [];
+      }
+      const imagePart = buildImageContent(part);
+      return imagePart ? [imagePart] : [];
+    });
+
+    const result =
+      resultParts.length === 1 && resultParts[0]?.type === "text"
+        ? resultParts[0].text
+        : resultParts.length > 0
+          ? resultParts
+          : safeJsonStringify(record.output ?? record.content);
+    const signature = getGoogleThoughtSignature(record);
+
+    parts.push({
+      type: "function_result",
+      call_id: convertToolCallId(toolCallId),
+      result,
+      is_error: record.isError === true,
+      ...(toolName ? { name: toolName } : {}),
+      ...(signature ? { signature } : {}),
+    });
+  }
+
+  return parts.length > 0 ? { role: "user", content: parts } : null;
 }
 
 function convertMessagesToInteractionsInput(
@@ -76,91 +266,15 @@ function convertMessagesToInteractionsInput(
 
   for (const msg of messages) {
     const role = msg.role;
-
-    if (role === "user") {
-      const text = extractTextFromContent(msg.content);
-      if (text) {
-        input.push({ type: "text", text });
-      }
-      continue;
-    }
-
-    if (role === "assistant") {
-      const content = Array.isArray(msg.content) ? msg.content : [];
-      for (const part of content) {
-        const record = part as Record<string, unknown>;
-        if (!record || typeof record !== "object") continue;
-
-        if (record.type === "text") {
-          input.push({ type: "text", text: record.text as string });
-          continue;
-        }
-
-        if (record.type === "reasoning" || record.type === "thinking") {
-          // Thought content with signature for replay
-          const thoughtSignature = record.thinkingSignature as string | undefined;
-          if (thoughtSignature) {
-            input.push({
-              type: "thought",
-              signature: thoughtSignature,
-              summary: record.text
-                ? [{ type: "text", text: record.text as string }]
-                : undefined,
-            });
-          }
-          continue;
-        }
-
-        if (record.type === "tool-call" || record.type === "toolCall") {
-          const toolCallId = (record.toolCallId ?? record.id) as string;
-          const toolName = (record.toolName ?? record.name) as string;
-          const args = (record.input ?? record.arguments ?? {}) as Record<string, unknown>;
-          const thoughtSignature = record.thoughtSignature as string | undefined;
-          input.push({
-            type: "function_call",
-            id: convertToolCallId(toolCallId),
-            name: toolName,
-            arguments: args,
-            ...(thoughtSignature ? { signature: thoughtSignature } : {}),
-          });
-          continue;
-        }
-      }
-      continue;
-    }
-
-    if (role === "tool") {
-      const content = Array.isArray(msg.content) ? msg.content : [];
-      for (const part of content) {
-        const record = part as Record<string, unknown>;
-        if (!record || typeof record !== "object") continue;
-
-        if (record.type === "tool-result" || record.type === "toolResult") {
-          const toolCallId = (record.toolCallId ?? record.id) as string;
-          const isError = record.isError === true;
-          const output = record.output;
-          let resultText: string;
-          if (typeof output === "string") {
-            resultText = output;
-          } else {
-            const outputRecord = output as Record<string, unknown> | undefined;
-            if (outputRecord?.type === "text" && typeof outputRecord.value === "string") {
-              resultText = outputRecord.value;
-            } else {
-              resultText = JSON.stringify(output);
-            }
-          }
-
-          input.push({
-            type: "function_result",
-            call_id: convertToolCallId(toolCallId),
-            result: resultText,
-            is_error: isError,
-          });
-        }
-      }
-      continue;
-    }
+    const turn =
+      role === "user"
+        ? turnFromUserMessage(msg)
+        : role === "assistant"
+          ? turnFromAssistantMessage(msg)
+          : role === "tool"
+            ? turnFromToolMessage(msg)
+            : null;
+    if (turn) input.push(turn);
   }
 
   return input;
@@ -263,6 +377,18 @@ type AssistantContentBlock =
   | { type: "text"; text: string }
   | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown>; thoughtSignature?: string };
 
+function streamIdForIndex(index: number): string {
+  return `s${index}`;
+}
+
+function queueEventDelivery(
+  pendingEventDelivery: Promise<void>,
+  emitEvent: (event: Record<string, unknown>) => Promise<void>,
+  event: Record<string, unknown>,
+): Promise<void> {
+  return pendingEventDelivery.then(() => emitEvent(event));
+}
+
 function processStreamEvent(
   event: Record<string, unknown>,
   contentBlocks: Map<number, AssistantContentBlock>,
@@ -309,6 +435,18 @@ function processStreamEvent(
       contentBlocks.set(index, { type: "text", text: (delta.text as string) ?? "" });
     } else if (deltaType === "function_call") {
       if (existing?.type === "toolCall") {
+        const deltaName = asNonEmptyString(delta.name);
+        if (deltaName) {
+          existing.name = deltaName;
+        }
+        const deltaId = asNonEmptyString(delta.id);
+        if (deltaId) {
+          existing.id = deltaId;
+        }
+        const deltaSignature = asNonEmptyString(delta.signature);
+        if (deltaSignature) {
+          existing.thoughtSignature = deltaSignature;
+        }
         // Merge arguments incrementally
         const deltaArgs = delta.arguments as Record<string, unknown> | undefined;
         if (deltaArgs) {
@@ -337,6 +475,89 @@ function processStreamEvent(
     }
     return;
   }
+}
+
+function mapGoogleEventToStreamParts(
+  event: Record<string, unknown>,
+  contentBlocks: Map<number, AssistantContentBlock>,
+): Array<Record<string, unknown>> {
+  const eventType = event.event_type as string;
+  if (eventType !== "content.start" && eventType !== "content.delta" && eventType !== "content.stop") {
+    return [];
+  }
+
+  const index = typeof event.index === "number" ? event.index : 0;
+
+  if (eventType === "content.start") {
+    const content = asRecord(event.content);
+    const contentType = asNonEmptyString(content?.type);
+
+    if (contentType === "text") {
+      const parts: Array<Record<string, unknown>> = [{ type: "text-start", id: streamIdForIndex(index) }];
+      const initialText = asNonEmptyString(content?.text);
+      if (initialText) {
+        parts.push({ type: "text-delta", id: streamIdForIndex(index), text: initialText });
+      }
+      return parts;
+    }
+
+    if (contentType === "thought") {
+      return [{ type: "reasoning-start", id: streamIdForIndex(index) }];
+    }
+
+    if (contentType === "function_call") {
+      const block = contentBlocks.get(index);
+      if (block?.type !== "toolCall") return [];
+      const parts: Array<Record<string, unknown>> = [{ type: "tool-input-start", id: block.id, toolName: block.name }];
+      if (Object.keys(block.arguments).length > 0) {
+        parts.push({ type: "tool-input-delta", id: block.id, delta: safeJsonStringify(block.arguments) });
+      }
+      return parts;
+    }
+
+    return [];
+  }
+
+  if (eventType === "content.delta") {
+    const delta = asRecord(event.delta);
+    const deltaType = asNonEmptyString(delta?.type);
+
+    if (deltaType === "text") {
+      return [{ type: "text-delta", id: streamIdForIndex(index), text: String(delta?.text ?? "") }];
+    }
+
+    if (deltaType === "thought_summary") {
+      const summaryContent = asRecord(delta?.content);
+      if (summaryContent?.type === "text") {
+        return [{ type: "reasoning-delta", id: streamIdForIndex(index), text: String(summaryContent.text ?? "") }];
+      }
+      return [];
+    }
+
+    if (deltaType === "function_call") {
+      const block = contentBlocks.get(index);
+      const deltaArgs = asRecord(delta?.arguments);
+      if (block?.type !== "toolCall" || !deltaArgs) return [];
+      return [{ type: "tool-input-delta", id: block.id, delta: safeJsonStringify(deltaArgs) }];
+    }
+
+    return [];
+  }
+
+  const block = contentBlocks.get(index);
+  if (block?.type === "text") {
+    return [{ type: "text-end", id: streamIdForIndex(index) }];
+  }
+  if (block?.type === "thinking") {
+    return [{ type: "reasoning-end", id: streamIdForIndex(index) }];
+  }
+  if (block?.type === "toolCall") {
+    return [
+      { type: "tool-input-end", id: block.id },
+      { type: "tool-call", toolCallId: block.id, toolName: block.name, input: block.arguments },
+    ];
+  }
+  return [];
 }
 
 // ---------------------------------------------------------------------------
@@ -412,37 +633,12 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
 
       if (eventType === "content.start" || eventType === "content.delta" || eventType === "content.stop") {
         processStreamEvent(eventRecord, contentBlocks);
-
-        // Emit streaming parts
-        if (eventType === "content.delta") {
-          const delta = eventRecord.delta as Record<string, unknown> | undefined;
-          if (delta) {
-            const deltaType = delta.type as string;
-            if (deltaType === "text") {
-              pendingEventDelivery = pendingEventDelivery.then(() =>
-                emitEvent({ type: "text-delta", textDelta: delta.text })
-              );
-            } else if (deltaType === "thought_summary") {
-              const summaryContent = delta.content as Record<string, unknown> | undefined;
-              if (summaryContent?.type === "text") {
-                pendingEventDelivery = pendingEventDelivery.then(() =>
-                  emitEvent({ type: "reasoning-delta", reasoningDelta: summaryContent.text })
-                );
-              }
-            } else if (deltaType === "function_call") {
-              const index = eventRecord.index as number;
-              const block = contentBlocks.get(index);
-              if (block?.type === "toolCall") {
-                pendingEventDelivery = pendingEventDelivery.then(() =>
-                  emitEvent({
-                    type: "tool-call-delta",
-                    toolCallId: block.id,
-                    toolName: block.name,
-                  })
-                );
-              }
-            }
-          }
+        for (const part of mapGoogleEventToStreamParts(eventRecord, contentBlocks)) {
+          pendingEventDelivery = queueEventDelivery(
+            pendingEventDelivery,
+            emitEvent,
+            part,
+          );
         }
         continue;
       }
@@ -479,9 +675,9 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
     }
 
     await emitEvent({
-      type: "done",
-      reason: assistant.stopReason,
-      message: assistant,
+      type: "finish",
+      finishReason: assistant.stopReason,
+      totalUsage: assistant.usage,
     });
 
     return { assistant, interactionId };
@@ -489,9 +685,7 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
     await pendingEventDelivery;
     await emitEvent({
       type: "error",
-      error: {
-        errorMessage: error instanceof Error ? error.message : String(error),
-      },
+      error: error instanceof Error ? error.message : String(error),
     });
     throw error;
   }
@@ -501,6 +695,7 @@ export const __internal = {
   buildGoogleNativeRequest,
   convertMessagesToInteractionsInput,
   convertToolsToInteractionsTools,
+  mapGoogleEventToStreamParts,
   processStreamEvent,
   resolveGoogleApiKey,
 } as const;

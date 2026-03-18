@@ -922,7 +922,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       url,
       resumeSessionId,
       client: "desktop",
-      version: "0.1.25",
+      version: "0.1.26",
       autoReconnect: true,
       onEvent: (evt) => handleThreadEvent(get, set, threadId, evt, pendingFirstMessage, pendingFirstMessageQueued),
       onClose: () => {

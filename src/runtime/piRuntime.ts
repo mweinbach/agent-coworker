@@ -484,12 +484,7 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
   }
 
   if (provider === "google") {
-    const model = pickKnownPiModel("google", modelId);
-    if (!model) throw new Error(`No PI model metadata available for provider google (model: ${modelId}).`);
-    return {
-      model: applySupportedModelMetadata(model, provider, modelId),
-      apiKey: getSavedProviderApiKey(params.config, "google"),
-    };
+    throw new Error("Google is handled by the Google Interactions runtime. Set runtime to 'google-interactions'.");
   }
 
   if (provider === "anthropic") {

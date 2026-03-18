@@ -154,23 +154,7 @@ export function buildPiStreamOptions(
     }
   }
 
-  if (params.config.provider === "google") {
-    const thinkingConfig = asRecord(providerSection.thinkingConfig);
-    if (thinkingConfig) {
-      const includeThoughts = thinkingConfig.includeThoughts !== false;
-      const level = toGoogleThinkingLevel(thinkingConfig.thinkingLevel);
-      const budget = asFiniteNumber(thinkingConfig.thinkingBudget);
-      options.thinking = {
-        enabled: includeThoughts,
-        ...(level ? { level } : {}),
-        ...(budget !== undefined ? { budgetTokens: budget } : {}),
-      };
-    }
-    const temperature = asFiniteNumber(providerSection.temperature);
-    if (temperature !== undefined) options.temperature = temperature;
-    const toolChoice = asNonEmptyString(providerSection.toolChoice);
-    if (toolChoice) options.toolChoice = toolChoice;
-  }
+  // Google is handled by the Google Interactions runtime — no PI stream options needed.
 
   if (params.config.provider === "nvidia") {
     options.reasoningEffort = "high";

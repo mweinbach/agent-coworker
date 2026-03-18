@@ -25,6 +25,7 @@
     "typecheck:desktop": "bunx tsc --noEmit -p apps/desktop/tsconfig.json"
   },
   "dependencies": {
+    "@google/genai": "^1.46.0",
     "@langfuse/otel": "^4.6.1",
     "@mariozechner/pi-ai": "^0.55.4",
     "@modelcontextprotocol/sdk": "^1.27.1",

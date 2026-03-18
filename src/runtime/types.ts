@@ -3,7 +3,7 @@ import type { ModelMessage } from "../types";
 import type { OpenAiContinuationState } from "../shared/openaiContinuation";
 
 export type RuntimeModelRawEvent = {
-  format: "openai-responses-v1";
+  format: "openai-responses-v1" | "google-interactions-v1";
   event: Record<string, unknown>;
 };
 

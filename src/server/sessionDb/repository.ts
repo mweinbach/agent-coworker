@@ -15,7 +15,7 @@ import {
 } from "./normalizers";
 
 const messagesJsonSchema = z.array(z.unknown());
-const modelStreamRawFormatSchema = z.enum(["openai-responses-v1"]);
+const modelStreamRawFormatSchema = z.enum(["openai-responses-v1", "google-interactions-v1"]);
 
 export class SessionDbRepository {
   private readonly db: Database;

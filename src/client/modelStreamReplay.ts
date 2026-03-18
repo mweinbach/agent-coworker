@@ -57,6 +57,14 @@ export function replayModelStreamRawEvent(
   evt: ModelStreamRawEvent,
 ): ModelStreamUpdate[] {
   const directUpdates = mapModelStreamRawEvent(evt);
+
+  // Google Interactions raw events use a different format and are not
+  // replayed through the OpenAI responses projector. The Google runtime
+  // already emits normalized stream parts during execution.
+  if (evt.format === "google-interactions-v1") {
+    return directUpdates;
+  }
+
   const projector = getOrCreateProjector(runtime, evt);
   const piEvents: Array<Record<string, unknown>> = [];
 

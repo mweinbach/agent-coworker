@@ -31,7 +31,7 @@ export type ModelStreamReasoningMode = "reasoning" | "summary";
 
 export const MODEL_STREAM_NORMALIZER_VERSION = 1;
 
-export type ModelStreamRawFormat = "openai-responses-v1";
+export type ModelStreamRawFormat = "openai-responses-v1" | "google-interactions-v1";
 
 export interface ModelStreamRawEvent {
   format: ModelStreamRawFormat;

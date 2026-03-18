@@ -32,6 +32,42 @@ describe("local context provider/model helpers", () => {
     expect(providers).toEqual(["google", "openai"]);
   });
 
+  test("preserves the current provider even when it disappears from the live catalog", () => {
+    const providers = availableProvidersFromCatalogState(
+      [
+        {
+          id: "google",
+          name: "Google",
+          models: [{ id: "gemini-2", displayName: "Gemini 2", knowledgeCutoff: "Unknown", supportsImageInput: true }],
+          defaultModel: "gemini-2",
+        },
+      ],
+      ["google"],
+      "lmstudio",
+    );
+
+    expect(providers).toEqual(["google", "lmstudio"]);
+
+    const choices = modelChoicesFromSyncState(
+      [
+        {
+          id: "google",
+          name: "Google",
+          models: [{ id: "gemini-2", displayName: "Gemini 2", knowledgeCutoff: "Unknown", supportsImageInput: true }],
+          defaultModel: "gemini-2",
+        },
+      ] as ProviderCatalogState,
+      ["google"],
+      "lmstudio",
+      "local/qwen-2.5",
+    );
+
+    expect(choices).toEqual([
+      { provider: "google", model: "gemini-2" },
+      { provider: "lmstudio", model: "local/qwen-2.5" },
+    ]);
+  });
+
   test("preserves the active model for disconnected provider in model choices", () => {
     const choices = modelChoicesFromSyncState(
       catalog,

@@ -22,6 +22,7 @@ export type ProviderModelAdapter = {
   specificationVersion: "v3";
   config: {
     headers: HeaderResolver;
+    baseUrl?: string;
   };
 };
 
@@ -41,13 +42,19 @@ function envKey(...candidates: string[]): string | undefined {
   return undefined;
 }
 
-function createModelAdapter(modelId: string, provider: string, headers: HeaderResolver): ProviderModelAdapter {
+function createModelAdapter(
+  modelId: string,
+  provider: string,
+  headers: HeaderResolver,
+  baseUrl?: string,
+): ProviderModelAdapter {
   return {
     modelId,
     provider,
     specificationVersion: "v3",
     config: {
       headers,
+      ...(baseUrl ? { baseUrl } : {}),
     },
   };
 }
@@ -185,4 +192,33 @@ export function createCodexCliModelAdapter(
     if (key) return { authorization: `Bearer ${key}` };
     return await resolveCodexAuthHeaders(config);
   });
+}
+
+export function createLmStudioModelAdapter(
+  config: AgentConfig,
+  modelId: string,
+  savedKey?: string,
+): ProviderModelAdapter {
+  const root = typeof config.providerOptions === "object" && config.providerOptions !== null
+    ? (config.providerOptions as Record<string, unknown>)
+    : {};
+  const section = typeof root.lmstudio === "object" && root.lmstudio !== null
+    ? root.lmstudio as Record<string, unknown>
+    : {};
+  const baseUrl =
+    (typeof process.env.LM_STUDIO_BASE_URL === "string" && process.env.LM_STUDIO_BASE_URL.trim())
+    || (typeof section.baseUrl === "string" && section.baseUrl.trim())
+    || "http://localhost:1234";
+  return createModelAdapter(modelId, "lmstudio.openai-compat", async () => {
+    const key = firstNonEmpty(
+      savedKey,
+      process.env.LM_STUDIO_API_KEY,
+      process.env.LM_STUDIO_API_TOKEN,
+    );
+    const headers: HeaderMap = {};
+    if (key) {
+      headers.authorization = `Bearer ${key}`;
+    }
+    return headers;
+  }, baseUrl);
 }

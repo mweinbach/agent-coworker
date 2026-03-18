@@ -1374,6 +1374,30 @@ describe("desktop protocol v2 mapping", () => {
     expect(useAppStore.getState().providerConnected).toEqual([]);
   });
 
+  test("verified-only local providers stay in providerConnected", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const controlSocket = socketByClient("desktop-control");
+
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.emit({
+      type: "provider_status",
+      sessionId: "control-session",
+      providers: [
+        {
+          provider: "lmstudio",
+          authorized: false,
+          verified: true,
+          mode: "local",
+          account: null,
+          message: "LM Studio reachable",
+          checkedAt: new Date().toISOString(),
+        },
+      ],
+    } as any);
+
+    expect(useAppStore.getState().providerConnected).toEqual(["lmstudio"]);
+  });
+
   test("legacy log events still map to log feed items when no model stream exists", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const threadId = useAppStore.getState().selectedThreadId;

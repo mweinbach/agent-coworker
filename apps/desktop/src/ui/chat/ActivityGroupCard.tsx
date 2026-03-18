@@ -86,8 +86,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: { items:
     if (shouldAutoExpand) setExpanded(true);
   }, [shouldAutoExpand]);
 
-  const isDone = summary.status === "done";
-  const showDoneMarker = isDone && summary.toolCount > 0;
+  const isDone = summary.status === "done" && summary.toolCount > 0;
 
   return (
     <Card className="max-w-3xl border-border/60 bg-card/60 shadow-[0_1px_2px_0_rgb(0_0_0/0.03)] backdrop-blur-sm">
@@ -127,7 +126,7 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: { items:
           <CardContent className="border-t border-border/50 px-3.5 pb-3 pt-2.5">
             <div className="max-h-[26rem] overflow-y-auto pr-1" style={{ maskImage: "linear-gradient(to bottom, black calc(100% - 1.5rem), transparent)" }}>
               {summary.entries.map((entry, i) => {
-                const isLast = i === summary.entries.length - 1 && !showDoneMarker;
+                const isLast = i === summary.entries.length - 1;
 
                 if (entry.kind === "reasoning") {
                   return (
@@ -165,15 +164,6 @@ export const ActivityGroupCard = memo(function ActivityGroupCard(props: { items:
                   </div>
                 );
               })}
-
-              {showDoneMarker && (
-                <div className="flex items-center gap-3 pb-1">
-                  <div className="flex size-5 items-center justify-center">
-                    <CheckCircleIcon className="size-3.5 text-emerald-500/60" />
-                  </div>
-                  <span className="text-sm text-muted-foreground/50">Done</span>
-                </div>
-              )}
             </div>
           </CardContent>
         </CollapsibleContent>

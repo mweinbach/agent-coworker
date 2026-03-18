@@ -233,7 +233,12 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
 
       case "provider_status":
         setState("providerStatuses", evt.providers);
-        setState("providerConnected", evt.providers.filter((provider) => provider.authorized).map((provider) => provider.provider));
+        setState(
+          "providerConnected",
+          evt.providers
+            .filter((provider) => provider.authorized || provider.verified)
+            .map((provider) => provider.provider),
+        );
         break;
 
       case "provider_auth_challenge": {

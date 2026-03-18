@@ -2,10 +2,12 @@ import { z } from "zod";
 
 import { getAiCoworkerPaths, maskApiKey, readConnectionStore, type AiCoworkerPaths, type ConnectionStore } from "./connect";
 import { CODEX_BACKEND_BASE_URL, decodeJwtPayload, isTokenExpiring, readCodexAuthMaterial, refreshCodexAuthMaterial } from "./providers/codex-auth";
+import { listLmStudioLlms } from "./providers/lmstudio/catalog";
+import { isLmStudioError, listLmStudioModels, resolveLmStudioProviderOptions } from "./providers/lmstudio/client";
 import { PROVIDER_NAMES, type ProviderName } from "./types";
 import { resolveAuthHomeDir } from "./utils/authHome";
 
-export type ProviderStatusMode = "missing" | "error" | "api_key" | "oauth" | "oauth_pending";
+export type ProviderStatusMode = "missing" | "error" | "api_key" | "oauth" | "oauth_pending" | "local";
 
 export type ProviderAccount = {
   email?: string;
@@ -58,7 +60,7 @@ export type ProviderStatus = {
 
 const nonEmptyTrimmedStringSchema = z.string().trim().min(1);
 const finiteNumberSchema = z.number().finite();
-const providerStatusModeSchema = z.enum(["api_key", "oauth", "oauth_pending"]);
+const providerStatusModeSchema = z.enum(["api_key", "oauth", "oauth_pending", "local"]);
 
 function normalizeProviderStatusMode(mode: unknown): ProviderStatusMode {
   const parsed = providerStatusModeSchema.safeParse(mode);
@@ -88,6 +90,12 @@ function buildSavedApiKeyMasks(opts: {
   }
 
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function storedProviderApiKey(store: ConnectionStore, provider: ProviderName): string | undefined {
+  const entry = store.services[provider];
+  const apiKey = entry?.mode === "api_key" ? entry.apiKey?.trim() : "";
+  return apiKey || undefined;
 }
 
 function statusFromConnectionStore(opts: {
@@ -441,11 +449,59 @@ async function getCodexCliStatus(opts: {
   };
 }
 
+async function getLmStudioStatus(opts: {
+  store: ConnectionStore;
+  checkedAt: string;
+  providerOptions?: unknown;
+  env?: NodeJS.ProcessEnv;
+  fetchImpl: typeof fetch;
+}): Promise<ProviderStatus> {
+  const providerConfig = resolveLmStudioProviderOptions(opts.providerOptions, opts.env);
+  const savedApiKeyMasks = buildSavedApiKeyMasks({ provider: "lmstudio", store: opts.store });
+
+  try {
+    const models = (await listLmStudioModels({
+      baseUrl: providerConfig.baseUrl,
+      apiKey: providerConfig.apiKey ?? storedProviderApiKey(opts.store, "lmstudio"),
+      fetchImpl: opts.fetchImpl,
+    })).models;
+    const llmCount = listLmStudioLlms(models).length;
+    return {
+      provider: "lmstudio",
+      authorized: true,
+      verified: true,
+      mode: "local",
+      account: null,
+      message: llmCount > 0
+        ? `LM Studio server reachable at ${providerConfig.baseUrl}.`
+        : `LM Studio server reachable at ${providerConfig.baseUrl}, but no LLMs are available.`,
+      checkedAt: opts.checkedAt,
+      ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
+    };
+  } catch (error) {
+    const message = isLmStudioError(error)
+      ? error.message
+      : `Failed to query LM Studio at ${providerConfig.baseUrl}: ${String(error)}`;
+    return {
+      provider: "lmstudio",
+      authorized: false,
+      verified: false,
+      mode: "error",
+      account: null,
+      message,
+      checkedAt: opts.checkedAt,
+      ...(savedApiKeyMasks ? { savedApiKeyMasks } : {}),
+    };
+  }
+}
+
 export async function getProviderStatuses(opts: {
   homedir?: string;
   paths?: AiCoworkerPaths;
   fetchImpl?: typeof fetch;
   now?: () => Date;
+  providerOptions?: unknown;
+  env?: NodeJS.ProcessEnv;
 } = {}): Promise<ProviderStatus[]> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const fetchImpl = opts.fetchImpl ?? fetch;
@@ -458,6 +514,16 @@ export async function getProviderStatuses(opts: {
   for (const provider of PROVIDER_NAMES) {
     if (provider === "codex-cli") {
       out.push(await getCodexCliStatus({ paths, store, checkedAt, fetchImpl }));
+      continue;
+    }
+    if (provider === "lmstudio") {
+      out.push(await getLmStudioStatus({
+        store,
+        checkedAt,
+        providerOptions: opts.providerOptions,
+        env: opts.env,
+        fetchImpl,
+      }));
       continue;
     }
     out.push(statusFromConnectionStore({ provider, store, checkedAt }));

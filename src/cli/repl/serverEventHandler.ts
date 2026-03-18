@@ -21,6 +21,7 @@ export type ReplServerEventState = {
   selectedProvider: string | null;
   busy: boolean;
   providerList: string[];
+  providerDefaultModels: Record<string, string>;
   providerAuthMethods: Record<string, ProviderAuthMethod[]>;
   providerStatuses: ProviderStatus[];
   pendingAsk: AskPrompt[];
@@ -226,6 +227,7 @@ export function createServerEventHandler(ctx: ReplServerEventContext) {
         break;
       case "provider_catalog":
         ctx.state.providerList = evt.all.map((entry) => entry.id);
+        ctx.state.providerDefaultModels = evt.default;
         break;
       case "provider_auth_methods":
         ctx.state.providerAuthMethods = evt.methods;

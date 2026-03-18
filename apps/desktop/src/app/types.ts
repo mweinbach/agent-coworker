@@ -102,6 +102,15 @@ export type PersistedProviderState = {
   statusLastUpdatedAt?: string | null;
 };
 
+export type LmStudioUiState = {
+  enabled: boolean;
+  hiddenModels: string[];
+};
+
+export type PersistedProviderUiState = {
+  lmstudio: LmStudioUiState;
+};
+
 export type OnboardingStatus = "pending" | "dismissed" | "completed";
 
 export type PersistedOnboardingState = {
@@ -120,6 +129,7 @@ export type PersistedState = {
   showHiddenFiles?: boolean;
   perWorkspaceSettings?: boolean;
   providerState?: PersistedProviderState;
+  providerUiState?: PersistedProviderUiState;
   onboarding?: PersistedOnboardingState;
 };
 

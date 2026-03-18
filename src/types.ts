@@ -7,6 +7,7 @@ export const PROVIDER_NAMES = [
   "baseten",
   "together",
   "nvidia",
+  "lmstudio",
   "opencode-go",
   "opencode-zen",
   "codex-cli",

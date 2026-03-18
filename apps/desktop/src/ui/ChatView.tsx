@@ -37,7 +37,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
-import { availableProvidersFromCatalog, modelChoicesFromCatalog } from "../lib/modelChoices";
+import {
+  availableProvidersFromCatalog,
+  modelChoicesFromCatalog,
+  type CatalogVisibilityOptions,
+} from "../lib/modelChoices";
 import { readFile } from "../lib/desktopCommands";
 import type { ProviderName } from "../lib/wsProtocol";
 import { cn } from "../lib/utils";
@@ -370,6 +374,7 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   baseten: "Baseten",
   together: "Together AI",
   nvidia: "NVIDIA",
+  lmstudio: "LM Studio",
   "opencode-go": "OpenCode Go",
   "opencode-zen": "OpenCode Zen",
   "codex-cli": "ChatGPT Subscription",
@@ -389,10 +394,23 @@ function ThreadModelSelector({
   const setThreadModel = useAppStore((s) => s.setThreadModel);
   const providerCatalog = useAppStore((s) => s.providerCatalog);
   const providerConnected = useAppStore((s) => s.providerConnected);
-  const choices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
+  const providerUiState = useAppStore((s) => s.providerUiState);
+  const chatCatalogVisibility = useMemo<CatalogVisibilityOptions>(() => ({
+    hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
+    hiddenModelsByProvider: {
+      lmstudio: providerUiState.lmstudio.hiddenModels,
+    },
+  }), [providerUiState]);
+  const choices = useMemo(
+    () => modelChoicesFromCatalog(providerCatalog, chatCatalogVisibility),
+    [providerCatalog, chatCatalogVisibility],
+  );
   const providers = useMemo(
-    () => availableProvidersFromCatalog(providerCatalog, providerConnected, provider),
-    [providerCatalog, providerConnected, provider],
+    () => availableProvidersFromCatalog(providerCatalog, providerConnected, provider, {
+      ...chatCatalogVisibility,
+      visibleModelsByProvider: choices,
+    }),
+    [providerCatalog, providerConnected, provider, chatCatalogVisibility, choices],
   );
   const value = `${provider}:${model}`;
 

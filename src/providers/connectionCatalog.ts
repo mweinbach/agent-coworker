@@ -2,8 +2,21 @@ import { getAiCoworkerPaths, readConnectionStore, type AiCoworkerPaths } from ".
 import { PROVIDER_NAMES, type ProviderName } from "../types";
 import { defaultSupportedModel, listSupportedModels, type SupportedModel } from "../models/registry";
 import { readCodexAuthMaterial } from "./codex-auth";
+import {
+  listLmStudioLlms,
+  lmStudioCatalogStateMessage,
+  mapLmStudioModelToResolvedMetadata,
+  selectDefaultLmStudioModel,
+} from "./lmstudio/catalog";
+import { isLmStudioError, listLmStudioModels, resolveLmStudioProviderOptions } from "./lmstudio/client";
 import { getOpenCodeDisplayName } from "./opencodeShared";
 import { resolveAuthHomeDir } from "../utils/authHome";
+
+function storedProviderApiKey(store: Awaited<ReturnType<typeof readConnectionStore>>, provider: ProviderName): string | undefined {
+  const entry = store.services[provider];
+  const apiKey = entry?.mode === "api_key" ? entry.apiKey?.trim() : "";
+  return apiKey || undefined;
+}
 
 export type ProviderCatalogModelEntry = Pick<
   SupportedModel,
@@ -15,6 +28,8 @@ export type ProviderCatalogEntry = {
   name: string;
   models: ProviderCatalogModelEntry[];
   defaultModel: string;
+  state?: "ready" | "empty" | "unreachable";
+  message?: string;
 };
 
 export type ProviderCatalogPayload = {
@@ -30,13 +45,14 @@ const PROVIDER_LABELS: Record<ProviderName, string> = {
   baseten: "Baseten",
   together: "Together AI",
   nvidia: "NVIDIA",
+  lmstudio: "LM Studio",
   "opencode-go": getOpenCodeDisplayName("opencode-go"),
   "opencode-zen": getOpenCodeDisplayName("opencode-zen"),
   "codex-cli": "Codex CLI",
 };
 
-export function listProviderCatalogEntries(): ProviderCatalogEntry[] {
-  return PROVIDER_NAMES.map((provider) => ({
+function staticCatalogEntry(provider: Exclude<ProviderName, "lmstudio">): ProviderCatalogEntry {
+  return {
     id: provider,
     name: PROVIDER_LABELS[provider],
     models: listSupportedModels(provider).map((model) => ({
@@ -46,7 +62,84 @@ export function listProviderCatalogEntries(): ProviderCatalogEntry[] {
       supportsImageInput: model.supportsImageInput,
     })),
     defaultModel: defaultSupportedModel(provider).id,
-  }));
+  };
+}
+
+async function lmStudioCatalogEntry(opts: {
+  store?: Awaited<ReturnType<typeof readConnectionStore>>;
+  providerOptions?: unknown;
+  env?: NodeJS.ProcessEnv;
+  lmstudioFetchImpl?: typeof fetch;
+}): Promise<{ entry: ProviderCatalogEntry; connected: boolean }> {
+  const provider = resolveLmStudioProviderOptions(opts.providerOptions, opts.env);
+  try {
+    const models = (await listLmStudioModels({
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey ?? (opts.store ? storedProviderApiKey(opts.store, "lmstudio") : undefined),
+      fetchImpl: opts.lmstudioFetchImpl,
+    })).models;
+    const llms = listLmStudioLlms(models);
+    const defaultModel = llms.length > 0 ? selectDefaultLmStudioModel(models, provider.baseUrl).key : "";
+    return {
+      entry: {
+        id: "lmstudio",
+        name: PROVIDER_LABELS.lmstudio,
+        models: llms.map((model) => {
+          const metadata = mapLmStudioModelToResolvedMetadata(model);
+          return {
+            id: metadata.id,
+            displayName: metadata.displayName,
+            knowledgeCutoff: metadata.knowledgeCutoff,
+            supportsImageInput: metadata.supportsImageInput,
+          };
+        }),
+        defaultModel,
+        state: "ready",
+      },
+      connected: true,
+    };
+  } catch (error) {
+    if (isLmStudioError(error) && error.code === "no_llms") {
+      return {
+        entry: {
+          id: "lmstudio",
+          name: PROVIDER_LABELS.lmstudio,
+          models: [],
+          defaultModel: "",
+          state: "empty",
+          message: error.message,
+        },
+        connected: true,
+      };
+    }
+    return {
+      entry: {
+        id: "lmstudio",
+        name: PROVIDER_LABELS.lmstudio,
+        models: [],
+        defaultModel: "",
+        state: "unreachable",
+        message: lmStudioCatalogStateMessage({
+          error,
+          baseUrl: provider.baseUrl,
+        }),
+      },
+      connected: false,
+    };
+  }
+}
+
+export async function listProviderCatalogEntries(opts: {
+  store?: Awaited<ReturnType<typeof readConnectionStore>>;
+  providerOptions?: unknown;
+  env?: NodeJS.ProcessEnv;
+  lmstudioFetchImpl?: typeof fetch;
+} = {}): Promise<ProviderCatalogEntry[]> {
+  const lmstudio = await lmStudioCatalogEntry(opts);
+  return PROVIDER_NAMES.map((provider) => {
+    if (provider === "lmstudio") return lmstudio.entry;
+    return staticCatalogEntry(provider);
+  });
 }
 
 export async function getProviderCatalog(opts: {
@@ -54,16 +147,31 @@ export async function getProviderCatalog(opts: {
   paths?: AiCoworkerPaths;
   readStore?: typeof readConnectionStore;
   readCodexAuthMaterialImpl?: typeof readCodexAuthMaterial;
+  providerOptions?: unknown;
+  env?: NodeJS.ProcessEnv;
+  lmstudioFetchImpl?: typeof fetch;
 } = {}): Promise<ProviderCatalogPayload> {
   const paths = opts.paths ?? getAiCoworkerPaths({ homedir: opts.homedir ?? resolveAuthHomeDir() });
   const readStore = opts.readStore ?? readConnectionStore;
   const readCodexAuthMaterialImpl = opts.readCodexAuthMaterialImpl ?? readCodexAuthMaterial;
   const store = await readStore(paths);
-  const all = listProviderCatalogEntries();
+  const lmstudio = await lmStudioCatalogEntry({
+    store,
+    providerOptions: opts.providerOptions,
+    env: opts.env,
+    lmstudioFetchImpl: opts.lmstudioFetchImpl,
+  });
+  const all = PROVIDER_NAMES.map((provider) => {
+    if (provider === "lmstudio") return lmstudio.entry;
+    return staticCatalogEntry(provider);
+  });
   const defaults: Record<string, string> = {};
   for (const entry of all) defaults[entry.id] = entry.defaultModel;
   const hasCodexOauth = Boolean((await readCodexAuthMaterialImpl(paths))?.accessToken);
   const connected = PROVIDER_NAMES.filter((provider) => {
+    if (provider === "lmstudio") {
+      return lmstudio.connected;
+    }
     const entry = store.services[provider];
     if (entry?.mode === "api_key" || entry?.mode === "oauth") return true;
     return provider === "codex-cli" && hasCodexOauth;

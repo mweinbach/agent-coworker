@@ -52,6 +52,7 @@ import { Textarea } from "../../../components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../../components/ui/tooltip";
 import { confirmAction } from "../../../lib/desktopCommands";
 import {
+  type CatalogVisibilityOptions,
   modelChoicesFromCatalog,
   modelOptionsFromCatalog,
   UI_DISABLED_PROVIDERS,
@@ -849,6 +850,7 @@ export function WorkspacesPage() {
   const providerCatalog = useAppStore((s) => s.providerCatalog);
   const providerConnected = useAppStore((s) => s.providerConnected);
   const providerDefaultModelByProvider = useAppStore((s) => s.providerDefaultModelByProvider);
+  const providerUiState = useAppStore((s) => s.providerUiState);
 
   const perWorkspaceSettings = useAppStore((s) => s.perWorkspaceSettings);
   const setPerWorkspaceSettings = useAppStore((s) => s.setPerWorkspaceSettings);
@@ -874,28 +876,47 @@ export function WorkspacesPage() {
   const backupsEnabled = ws?.defaultBackupsEnabled ?? true;
   const yolo = ws?.yolo ?? false;
 
-  const modelChoices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
+  const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(() => ({
+    hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
+    hiddenModelsByProvider: {
+      lmstudio: providerUiState.lmstudio.hiddenModels,
+    },
+  }), [providerUiState]);
+  const modelChoices = useMemo(
+    () => modelChoicesFromCatalog(providerCatalog, modelSelectorVisibility),
+    [providerCatalog, modelSelectorVisibility],
+  );
   const availableProviders = useMemo(() => {
+    const hiddenProviders = new Set(modelSelectorVisibility.hiddenProviders ?? []);
     const catalogProviders = (
       providerCatalog.length === 0
         ? PROVIDER_NAMES
         : providerCatalog.map((entry) => entry.id)
-    ).filter((entry) => !UI_DISABLED_PROVIDERS.has(entry));
-    return sortProviderNamesForSettings(
+    ).filter((entry) => !UI_DISABLED_PROVIDERS.has(entry) && !hiddenProviders.has(entry));
+    const visibleProviders = sortProviderNamesForSettings(
       [...new Set(catalogProviders)].filter((entry) => {
         const status = providerStatusByName[entry];
         return status ? hasConfiguredProviderStatus(status) : providerConnected.includes(entry);
       }),
     );
-  }, [providerCatalog, providerConnected, providerStatusByName]);
+    if (!UI_DISABLED_PROVIDERS.has(provider) && !visibleProviders.includes(provider)) {
+      visibleProviders.push(provider);
+    }
+    return visibleProviders;
+  }, [modelSelectorVisibility, provider, providerCatalog, providerConnected, providerStatusByName]);
   const currentProviderIsConfigured = availableProviders.includes(provider);
   const effectiveProvider = currentProviderIsConfigured ? provider : (availableProviders[0] ?? provider);
   const modelControlsDisabled = !currentProviderIsConfigured;
   const configuredProviderSet = useMemo(() => new Set(availableProviders), [availableProviders]);
   const curatedModels = modelChoices[effectiveProvider] ?? [];
-  const modelOptions = modelOptionsFromCatalog(providerCatalog, effectiveProvider, model);
+  const modelOptions = modelOptionsFromCatalog(providerCatalog, effectiveProvider, model, modelSelectorVisibility);
   const hasCustomModel = Boolean(model && !curatedModels.includes(model));
-  const preferredChildModelOptions = modelOptionsFromCatalog(providerCatalog, effectiveProvider, preferredChildModel);
+  const preferredChildModelOptions = modelOptionsFromCatalog(
+    providerCatalog,
+    effectiveProvider,
+    preferredChildModel,
+    modelSelectorVisibility,
+  );
   const hasCustomChildModel = Boolean(preferredChildModel && !curatedModels.includes(preferredChildModel));
   const visibleAllowedChildModelRefs = useMemo(
     () =>
@@ -1116,7 +1137,11 @@ export function WorkspacesPage() {
                             if (!ws) return;
                             const nextProvider = value as ProviderName;
                             if (UI_DISABLED_PROVIDERS.has(nextProvider)) return;
-                            const nextDefault = providerDefaultModelByProvider[nextProvider] ?? defaultModelForProvider(nextProvider);
+                            const nextDefault =
+                              providerDefaultModelByProvider[nextProvider]?.trim()
+                              || modelChoices[nextProvider]?.[0]
+                              || defaultModelForProvider(nextProvider);
+                            if (!nextDefault) return;
                             void updateWorkspaceDefaults(ws.id, {
                               defaultProvider: nextProvider,
                               defaultModel: nextDefault,

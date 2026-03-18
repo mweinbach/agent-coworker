@@ -13,7 +13,7 @@ import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
 import { defaultRuntimeNameForProvider, isProviderName } from "../../types";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import type { ServerEvent } from "../protocol";
-import { assertSupportedModel } from "../../models/registry";
+import { resolveModelMetadata } from "../../models/metadata";
 import { normalizeChildRoutingConfig } from "../../models/childModelRouting";
 
 export class ProviderAuthManager {
@@ -72,19 +72,23 @@ export class ProviderAuthManager {
 
     const currentConfig = this.opts.getConfig();
     const nextProvider = providerRaw ?? currentConfig.provider;
+    let resolvedModel;
     try {
-      assertSupportedModel(nextProvider, modelId, "model");
+      resolvedModel = await resolveModelMetadata(nextProvider, modelId, {
+        providerOptions: currentConfig.providerOptions,
+        source: "model",
+      });
     } catch (error) {
       this.opts.emitError("validation_failed", "provider", error instanceof Error ? error.message : String(error));
       return;
     }
     const normalizedChildRouting = normalizeChildRoutingConfig({
       provider: nextProvider,
-      model: modelId,
+      model: resolvedModel.id,
       childModelRoutingMode: currentConfig.childModelRoutingMode,
       preferredChildModelRef:
         currentConfig.provider !== nextProvider || currentConfig.preferredChildModel === currentConfig.model
-          ? `${nextProvider}:${modelId}`
+          ? `${nextProvider}:${resolvedModel.id}`
           : currentConfig.preferredChildModelRef ?? currentConfig.preferredChildModel,
       allowedChildModelRefs: currentConfig.allowedChildModelRefs,
       source: "model selection",
@@ -93,17 +97,18 @@ export class ProviderAuthManager {
       ? currentConfig.runtime
       : defaultRuntimeNameForProvider(nextProvider);
     const shouldClearProviderState =
-      currentConfig.provider !== nextProvider || currentConfig.model !== modelId;
+      currentConfig.provider !== nextProvider || currentConfig.model !== resolvedModel.id;
 
     this.opts.setConfig({
       ...currentConfig,
       provider: nextProvider,
       ...(nextRuntime !== undefined ? { runtime: nextRuntime } : {}),
-      model: modelId,
+      model: resolvedModel.id,
       preferredChildModel: normalizedChildRouting.preferredChildModel,
       childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
       preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
       allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
+      knowledgeCutoff: resolvedModel.knowledgeCutoff,
     });
     if (shouldClearProviderState) {
       this.opts.clearProviderState();
@@ -114,7 +119,7 @@ export class ProviderAuthManager {
       try {
         await this.opts.persistModelSelection({
           provider: nextProvider,
-          model: modelId,
+          model: resolvedModel.id,
           preferredChildModel: normalizedChildRouting.preferredChildModel,
           childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
           preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
@@ -128,7 +133,7 @@ export class ProviderAuthManager {
     this.opts.emitConfigUpdated();
     this.opts.updateSessionInfo({
       provider: nextProvider,
-      model: modelId,
+      model: resolvedModel.id,
     });
 
     this.opts.queuePersistSessionSnapshot("session.model_updated");

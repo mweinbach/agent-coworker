@@ -1,5 +1,6 @@
 # Lessons
 
+- For local model providers in the desktop app, do not force them through the generic auth/API-key card; give them local connect/refresh controls and persist model-visibility preferences in dedicated desktop UI state so chat selectors can hide or show them cleanly.
 - When the user explicitly asks for PR triage via subagents, spawn the requested reviewers before local implementation so the final fix plan is grounded in the current branch state instead of only your own read.
 - For provider auth and saved-key lookups in this repo, treat `~/.cowork` as the only auth home; never derive auth storage from a workspace `.agent` path, and pin `HOME` in tests that fabricate auth state so they cannot accidentally read real machine credentials.
 - For desktop admin pages that auto-fetch data, do not assume store-level success/error handling is enough; add a UI-level fallback so an orphaned request cannot leave the page stuck on a perpetual loading message when the correct end state is simply empty.
@@ -135,3 +136,4 @@
 - For Electron desktop shutdown in this repo, keep `ipcMain.handle(...)` registrations alive until async shutdown actually finishes; unregistering IPC at `before-quit` entry can leave the renderer open long enough to hit `No handler registered for 'desktop:...'` recovery failures.
 - When the user asks to fix release automation for the next build only, land the workflow update as a separate follow-up commit and do not conflate it with the in-flight tagged release state.
 - For Bun-compiled desktop sidecars in this repo, never read `package.json` via runtime filesystem paths like `resolve(__dirname, "../package.json")`; compiled binaries run from `/$bunfs` and must get version data from bundled imports or explicit build-time/env injection.
+- For local OpenAI-compatible providers like LM Studio, do not treat a transport library's required `apiKey` parameter as a user-facing auth requirement; satisfy that client internally when necessary, but never surface `OPENAI_API_KEY` or API-key UI as mandatory for local inference.

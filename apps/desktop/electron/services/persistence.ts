@@ -15,6 +15,7 @@ import type {
 import { normalizeWorkspaceUserProfile } from "../../src/app/types";
 import { normalizeWorkspaceProviderOptions } from "../../src/app/openaiCompatibleProviderOptions";
 import { normalizePersistedProviderState } from "../../src/app/persistedProviderState";
+import { deriveDefaultLmStudioUiEnabled, normalizePersistedProviderUiState } from "../../src/app/providerUiState";
 import type { TranscriptBatchInput } from "../../src/lib/desktopApi";
 
 import { assertDirection, assertSafeId, assertWithinTranscriptsDir } from "./validation";
@@ -49,6 +50,7 @@ function defaultState(): PersistedState {
     threads: [],
     developerMode: false,
     showHiddenFiles: false,
+    providerUiState: normalizePersistedProviderUiState(undefined),
   };
 }
 
@@ -281,6 +283,12 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
   const workspaceIds = new Set(workspaces.map((workspace) => workspace.id));
   const threads = sanitizeThreads(value.threads, workspaceIds);
   const providerState = normalizePersistedProviderState(value.providerState);
+  const providerUiState = normalizePersistedProviderUiState(value.providerUiState, {
+    defaultLmStudioEnabled: deriveDefaultLmStudioUiEnabled({
+      providerState,
+      workspaces,
+    }),
+  });
   const parsedVersion =
     typeof value.version === "number" && Number.isFinite(value.version)
       ? Math.max(0, Math.floor(value.version))
@@ -293,6 +301,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     developerMode: typeof value.developerMode === "boolean" ? value.developerMode : false,
     showHiddenFiles: typeof value.showHiddenFiles === "boolean" ? value.showHiddenFiles : false,
     ...(providerState ? { providerState } : {}),
+    providerUiState,
     ...(onboarding ? { onboarding } : {}),
   };
 }

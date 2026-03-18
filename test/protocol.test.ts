@@ -1243,6 +1243,35 @@ describe("safeParseClientMessage", () => {
       }
     });
 
+    test("valid set_config accepts lmstudio provider options", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_config",
+          sessionId: "s1",
+          config: {
+            providerOptions: {
+              lmstudio: {
+                baseUrl: "http://127.0.0.1:1234",
+                contextLength: 16384,
+                autoLoad: false,
+                reloadOnContextMismatch: true,
+              },
+            },
+          },
+        }),
+      );
+
+      expect(msg.type).toBe("set_config");
+      if (msg.type === "set_config") {
+        expect(msg.config.providerOptions?.lmstudio).toEqual({
+          baseUrl: "http://127.0.0.1:1234",
+          contextLength: 16384,
+          autoLoad: false,
+          reloadOnContextMismatch: true,
+        });
+      }
+    });
+
     test("valid set_config accepts clearToolOutputOverflowChars", () => {
       const msg = expectOk(
         JSON.stringify({
@@ -1334,7 +1363,7 @@ describe("safeParseClientMessage", () => {
             config: { providerOptions: { anthropic: { reasoningEffort: "high" } } },
           }),
         ),
-      ).toBe("set_config config.providerOptions only supports openai and codex-cli");
+      ).toBe("set_config config.providerOptions only supports openai, codex-cli, and lmstudio");
       expect(
         expectErr(
           JSON.stringify({
@@ -1407,6 +1436,33 @@ describe("safeParseClientMessage", () => {
           }),
         ),
       ).toBe("set_config config.providerOptions.codex-cli.webSearch.location.country must be a non-empty string");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { providerOptions: { lmstudio: { unsupported: true } } },
+          }),
+        ),
+      ).toBe("set_config config.providerOptions.lmstudio only supports baseUrl, contextLength, autoLoad, and reloadOnContextMismatch");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { providerOptions: { lmstudio: { contextLength: 0 } } },
+          }),
+        ),
+      ).toBe("set_config config.providerOptions.lmstudio.contextLength must be a positive integer");
+      expect(
+        expectErr(
+          JSON.stringify({
+            type: "set_config",
+            sessionId: "s1",
+            config: { providerOptions: { lmstudio: { autoLoad: "yes" } } },
+          }),
+        ),
+      ).toBe("set_config config.providerOptions.lmstudio.autoLoad must be boolean");
     });
 
     test("set_config accepts userName with non-empty string", () => {

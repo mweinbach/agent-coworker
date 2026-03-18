@@ -5,6 +5,7 @@ import { useAppStore } from "../../../app/store";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
+import { Checkbox } from "../../../components/ui/checkbox";
 import { Input } from "../../../components/ui/input";
 import { modelChoicesFromCatalog, UI_DISABLED_PROVIDERS } from "../../../lib/modelChoices";
 import { compareProviderNamesForSettings } from "../../../lib/providerOrdering";
@@ -17,6 +18,7 @@ import {
 } from "../../../lib/providerDisplayNames";
 
 type ProviderAuthMethod = Extract<ServerEvent, { type: "provider_auth_methods" }>["methods"][string][number];
+type ProviderCatalogEntry = Extract<ServerEvent, { type: "provider_catalog" }>["all"][number];
 
 const EXA_AUTH_METHOD_ID = "exa_api_key";
 export const EXA_SECTION_ID = "provider:exa-search";
@@ -163,6 +165,9 @@ function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[] {
       { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
     ];
   }
+  if (provider === "lmstudio") {
+    return [];
+  }
   return [{ id: "api_key", type: "api", label: "API key" }];
 }
 
@@ -220,12 +225,16 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
   const providerAuthMethodsByProviderFromStore = useAppStore((s) => s.providerAuthMethodsByProvider);
   const providerLastAuthChallengeFromStore = useAppStore((s) => s.providerLastAuthChallenge);
   const providerLastAuthResultFromStore = useAppStore((s) => s.providerLastAuthResult);
+  const providerUiStateFromStore = useAppStore((s) => s.providerUiState);
+  const setLmStudioEnabled = useAppStore((s) => s.setLmStudioEnabled);
+  const setLmStudioModelVisible = useAppStore((s) => s.setLmStudioModelVisible);
   const providerStatusByName = serverState?.providerStatusByName ?? providerStatusByNameFromStore;
   const providerStatusRefreshing = serverState?.providerStatusRefreshing ?? providerStatusRefreshingFromStore;
   const providerCatalog = serverState?.providerCatalog ?? providerCatalogFromStore;
   const providerAuthMethodsByProvider = serverState?.providerAuthMethodsByProvider ?? providerAuthMethodsByProviderFromStore;
   const providerLastAuthChallenge = serverState?.providerLastAuthChallenge ?? providerLastAuthChallengeFromStore;
   const providerLastAuthResult = serverState?.providerLastAuthResult ?? providerLastAuthResultFromStore;
+  const providerUiState = serverState?.providerUiState ?? providerUiStateFromStore;
 
   const [apiKeysByMethod, setApiKeysByMethod] = useState<Record<string, string>>({});
   const [apiKeyEditingByMethod, setApiKeyEditingByMethod] = useState<Record<string, boolean>>({});
@@ -243,13 +252,18 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const source = fromCatalog.length > 0 ? fromCatalog : [...PROVIDER_NAMES];
     const filtered = source.filter((provider) => !UI_DISABLED_PROVIDERS.has(provider));
 
-    const isModelProvider = (provider: ProviderName) => provider in modelChoices && modelChoices[provider]!.length > 0;
+    const isModelProvider = (provider: ProviderName) =>
+      provider === "lmstudio" || (provider in modelChoices && modelChoices[provider]!.length > 0);
 
     const sortProviders = (providers: ProviderName[]) => [...providers].sort((a, b) => {
       const aStatus = providerStatusByName[a];
       const bStatus = providerStatusByName[b];
-      const aConnected = aStatus?.verified || aStatus?.authorized;
-      const bConnected = bStatus?.verified || bStatus?.authorized;
+      const aConnected = a === "lmstudio"
+        ? providerUiState.lmstudio.enabled && Boolean(aStatus?.verified || aStatus?.authorized)
+        : Boolean(aStatus?.verified || aStatus?.authorized);
+      const bConnected = b === "lmstudio"
+        ? providerUiState.lmstudio.enabled && Boolean(bStatus?.verified || bStatus?.authorized)
+        : Boolean(bStatus?.verified || bStatus?.authorized);
 
       // 1. Connected vs Disconnected
       if (aConnected && !bConnected) return -1;
@@ -263,7 +277,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const tProviders = sortProviders(filtered.filter((provider) => !isModelProvider(provider)));
 
     return { modelProviders: mProviders, toolProviders: tProviders };
-  }, [providerCatalog, providerStatusByName, modelChoices]);
+  }, [providerCatalog, providerStatusByName, modelChoices, providerUiState]);
 
   const catalogNameByProvider = useMemo(() => {
     const map = new Map<ProviderName, string>();
@@ -528,6 +542,7 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const label = providerStatusLabel(status);
     const sectionId = providerSectionId(provider);
     const isExpanded = expandedSectionId === sectionId;
+    const catalogEntry = providerCatalog.find((entry): entry is ProviderCatalogEntry => entry.id === provider);
     const methods = visibleAuthMethods(provider, authMethodsForProvider(provider));
     const connected = Boolean(status?.authorized || status?.verified);
     const providerDisplayName = catalogNameByProvider.get(provider) ?? displayProviderName(provider);
@@ -535,6 +550,139 @@ export function ProvidersPage({ initialExpandedSectionId = null }: ProvidersPage
     const visibleRateLimits = Array.isArray(status?.usage?.rateLimits)
       ? status.usage.rateLimits.filter(isVisibleUsageRateLimit)
       : [];
+
+    if (provider === "lmstudio") {
+      const lmStudioEnabled = providerUiState.lmstudio.enabled;
+      const lmStudioModels = Array.isArray(catalogEntry?.models) ? catalogEntry.models : [];
+      const hiddenModels = new Set(providerUiState.lmstudio.hiddenModels);
+      const visibleLmStudioModels = lmStudioModels.filter((model) => !hiddenModels.has(model.id));
+      const statusLabel = !lmStudioEnabled
+        ? "Disabled"
+        : connected
+          ? "Connected"
+          : catalogEntry?.state === "unreachable"
+            ? "Unavailable"
+            : catalogEntry?.state === "empty"
+              ? "No models"
+              : "Checking";
+      const subtitle = !lmStudioEnabled
+        ? "Connect once to show LM Studio in Cowork."
+        : connected
+          ? `${visibleLmStudioModels.length}/${lmStudioModels.length} model${lmStudioModels.length === 1 ? "" : "s"} shown in chat`
+          : catalogEntry?.message?.trim() || status?.message || "Checking your local LM Studio server.";
+
+      return (
+        <Card key={provider} className={cn("border-border/80 bg-card/85", isExpanded && "border-primary/35")}>
+          <button
+            className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
+            type="button"
+            aria-expanded={isExpanded}
+            aria-controls={`provider-panel-${provider}`}
+            onClick={() => setExpandedSectionId(isExpanded ? null : sectionId)}
+          >
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-foreground">{providerDisplayName}</div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle}</div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Badge variant={lmStudioEnabled && connected ? "default" : "secondary"}>{statusLabel}</Badge>
+              <span className="text-xs text-muted-foreground">{isExpanded ? "▾" : "▸"}</span>
+            </div>
+          </button>
+
+          {isExpanded ? (
+            <CardContent id={`provider-panel-${provider}`} className="space-y-4 border-t border-border/70 px-4 py-3.5">
+              <div className="text-sm text-muted-foreground">
+                LM Studio runs on a local server. Connect it once to make its models available in Cowork, then choose which discovered models should appear in the main chat UI.
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  onClick={() => {
+                    void setLmStudioEnabled(!lmStudioEnabled);
+                  }}
+                >
+                  {lmStudioEnabled ? "Disable" : "Connect"}
+                </Button>
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={() => void refreshProviderStatus()}
+                  disabled={providerStatusRefreshing}
+                >
+                  {providerStatusRefreshing ? "Refreshing..." : "Refresh"}
+                </Button>
+              </div>
+
+              {subtitle ? (
+                <div className="text-sm text-muted-foreground">{subtitle}</div>
+              ) : null}
+
+              <div className="space-y-2 border-t border-border/70 pt-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Models shown in chat</div>
+                  {providerUiState.lmstudio.hiddenModels.length > 0 ? (
+                    <Button
+                      variant="outline"
+                      type="button"
+                      size="sm"
+                      className="h-7 rounded-sm px-2 text-xs shadow-none"
+                      onClick={() => {
+                        for (const modelId of providerUiState.lmstudio.hiddenModels) {
+                          void setLmStudioModelVisible(modelId, true);
+                        }
+                      }}
+                    >
+                      Show all
+                    </Button>
+                  ) : null}
+                </div>
+
+                {lmStudioModels.length > 0 ? (
+                  <div className="space-y-2">
+                    <div className="grid gap-2">
+                      {lmStudioModels.map((model) => {
+                        const checked = !hiddenModels.has(model.id);
+                        return (
+                          <label
+                            key={model.id}
+                            className="flex items-start gap-3 rounded-sm border border-border/60 px-3 py-2 text-sm"
+                          >
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={(nextChecked) => {
+                                void setLmStudioModelVisible(model.id, nextChecked === true);
+                              }}
+                              aria-label={`Show LM Studio model ${model.id} in chat`}
+                            />
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-foreground">
+                                {typeof model.displayName === "string" && model.displayName.trim() ? model.displayName : model.id}
+                              </div>
+                              <div className="truncate text-xs text-muted-foreground">{model.id}</div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Hidden models stay available in LM Studio but are removed from the main chat selector. Newly discovered models are shown automatically.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-sm border border-dashed border-border/60 px-3 py-2 text-sm text-muted-foreground">
+                    {catalogEntry?.state === "empty"
+                      ? "LM Studio is reachable, but it is not exposing any LLMs right now."
+                      : "Refresh once LM Studio is running to discover available models."}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          ) : null}
+        </Card>
+      );
+    }
 
     return (
       <Card key={provider} className={cn("border-border/80 bg-card/85", isExpanded && "border-primary/35")}>

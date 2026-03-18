@@ -110,7 +110,8 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
             : "google";
 
       const provider = inferredProvider;
-      const model = (ws.defaultModel?.trim() || rt.config?.model?.trim() || "") || undefined;
+      const liveDefaultModel = get().providerDefaultModelByProvider[provider]?.trim() || "";
+      const model = (ws.defaultModel?.trim() || liveDefaultModel || rt.config?.model?.trim() || "") || undefined;
       const preferredChildModel =
         (ws.defaultPreferredChildModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.preferredChildModel?.trim() || "") || undefined;
       const childModelRoutingMode =
@@ -238,10 +239,11 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           ? workspace.defaultProvider
           : "google"
       );
-      const model = workspace.defaultModel?.trim() || defaultModelForProvider(provider);
-      const preferredChildModel = workspace.defaultPreferredChildModel?.trim() || model;
+      const liveDefaultModel = get().providerDefaultModelByProvider[provider]?.trim() || "";
+      const model = workspace.defaultModel?.trim() || liveDefaultModel || defaultModelForProvider(provider);
+      const preferredChildModel = workspace.defaultPreferredChildModel?.trim() || model || "";
       const childModelRoutingMode = workspace.defaultChildModelRoutingMode ?? "same-provider";
-      const preferredChildModelRef = workspace.defaultPreferredChildModelRef?.trim() || `${provider}:${preferredChildModel}`;
+      const preferredChildModelRef = workspace.defaultPreferredChildModelRef?.trim() || (preferredChildModel ? `${provider}:${preferredChildModel}` : "");
       const allowedChildModelRefs = workspace.defaultAllowedChildModelRefs ?? [];
       const toolOutputOverflowChars = workspace.defaultToolOutputOverflowChars;
       const providerOptions = workspace.providerOptions;
@@ -249,20 +251,22 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const userProfile = workspace.userProfile ? normalizeWorkspaceUserProfile(workspace.userProfile) : undefined;
       const clearToolOutputOverflowChars = clearDefaultToolOutputOverflowChars === true;
 
-      const modelPersisted = sendControl(get, workspaceId, (sessionId) => ({
-        type: "set_model",
-        sessionId,
-        provider,
-        model,
-      }));
+      const modelPersisted = model
+        ? sendControl(get, workspaceId, (sessionId) => ({
+            type: "set_model",
+            sessionId,
+            provider,
+            model,
+          }))
+        : false;
       const subAgentPersisted = sendControl(get, workspaceId, (sessionId) => ({
         type: "set_config",
         sessionId,
         config: {
           backupsEnabled: workspace.defaultBackupsEnabled,
-          preferredChildModel,
+          ...(preferredChildModel ? { preferredChildModel } : {}),
           childModelRoutingMode,
-          preferredChildModelRef,
+          ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
           allowedChildModelRefs,
           ...(toolOutputOverflowChars !== undefined
             ? { toolOutputOverflowChars }

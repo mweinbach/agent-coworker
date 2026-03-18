@@ -168,6 +168,13 @@ describe("desktop providers page", () => {
       } as any,
       providerLastAuthChallenge: null,
       providerLastAuthResult: null,
+      providerConnected: [],
+      providerUiState: {
+        lmstudio: {
+          enabled: false,
+          hiddenModels: [],
+        },
+      },
       ...defaultProviderActions,
     });
   });
@@ -719,5 +726,144 @@ describe("desktop providers page", () => {
 
     expect(html).toContain("OpenCode Zen");
     expect(html).not.toContain("Use OpenCode Go key");
+  });
+
+  test("renders LM Studio as a local provider card without API token controls", () => {
+    useAppStore.setState({
+      ...useAppStore.getState(),
+      providerStatusByName: {
+        ...useAppStore.getState().providerStatusByName,
+        lmstudio: {
+          provider: "lmstudio",
+          authorized: true,
+          verified: true,
+          mode: "local",
+          account: null,
+          message: "LM Studio reachable.",
+          checkedAt: "2026-03-18T00:00:00.000Z",
+        },
+      } as any,
+      providerCatalog: [
+        {
+          id: "lmstudio",
+          name: "LM Studio",
+          state: "ready",
+          message: "LM Studio reachable.",
+          models: [
+            { id: "qwen/qwen3-30b-a3b", displayName: "Qwen 3 30B", knowledgeCutoff: "Unknown", supportsImageInput: false },
+            { id: "llama/llama-3.2-vision", displayName: "Llama 3.2 Vision", knowledgeCutoff: "Unknown", supportsImageInput: true },
+          ],
+          defaultModel: "qwen/qwen3-30b-a3b",
+        },
+      ] as any,
+      providerUiState: {
+        lmstudio: {
+          enabled: true,
+          hiddenModels: ["llama/llama-3.2-vision"],
+        },
+      },
+    });
+
+    const html = renderToStaticMarkup(
+      createElement(ProvidersPage, {
+        initialExpandedSectionId: "provider:lmstudio",
+      }),
+    );
+
+    expect(html).toContain("LM Studio runs on a local server.");
+    expect(html).toContain("Disable");
+    expect(html).toContain("Refresh");
+    expect(html).toContain("Models shown in chat");
+    expect(html).toContain("Show all");
+    expect(html).toContain("Qwen 3 30B");
+    expect(html).toContain("Llama 3.2 Vision");
+    expect(html).not.toContain("API TOKEN");
+    expect(html).not.toContain("Paste your API key");
+    expect(html).not.toContain("Reveal");
+  });
+
+  test("LM Studio card actions call local enable and model visibility handlers", async () => {
+    const harness = setupJsdom();
+    const setLmStudioEnabled = mock(async () => {});
+    const setLmStudioModelVisible = mock(async () => {});
+    const refreshProviderStatus = mock(async () => {});
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          ...useAppStore.getState(),
+          providerStatusByName: {
+            ...useAppStore.getState().providerStatusByName,
+            lmstudio: {
+              provider: "lmstudio",
+              authorized: false,
+              verified: false,
+              mode: "local",
+              account: null,
+              message: "LM Studio unavailable.",
+              checkedAt: "2026-03-18T00:00:00.000Z",
+            },
+          } as any,
+          providerCatalog: [
+            {
+              id: "lmstudio",
+              name: "LM Studio",
+              state: "unreachable",
+              message: "LM Studio unavailable.",
+              models: [
+                { id: "qwen/qwen3-30b-a3b", displayName: "Qwen 3 30B", knowledgeCutoff: "Unknown", supportsImageInput: false },
+              ],
+              defaultModel: "qwen/qwen3-30b-a3b",
+            },
+          ] as any,
+          providerUiState: {
+            lmstudio: {
+              enabled: false,
+              hiddenModels: [],
+            },
+          },
+          setLmStudioEnabled,
+          setLmStudioModelVisible,
+          refreshProviderStatus,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(ProvidersPage, { initialExpandedSectionId: "provider:lmstudio" }));
+      });
+
+      const connectButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Connect");
+      if (!connectButton) throw new Error("missing LM Studio connect button");
+      await act(async () => {
+        connectButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      expect(setLmStudioEnabled).toHaveBeenCalledWith(true);
+
+      const refreshButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Refresh");
+      if (!refreshButton) throw new Error("missing LM Studio refresh button");
+      await act(async () => {
+        refreshButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      expect(refreshProviderStatus).toHaveBeenCalled();
+
+      const modelCheckbox = container.querySelector('[aria-label="Show LM Studio model qwen/qwen3-30b-a3b in chat"]');
+      if (!(modelCheckbox instanceof harness.dom.window.HTMLElement)) {
+        throw new Error("missing LM Studio model checkbox");
+      }
+      await act(async () => {
+        modelCheckbox.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+      expect(setLmStudioModelVisible).toHaveBeenCalledWith("qwen/qwen3-30b-a3b", false);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
   });
 });

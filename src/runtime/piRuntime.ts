@@ -17,6 +17,8 @@ import { mapPiEventToRawParts } from "./piStreamParts";
 
 import { getSavedProviderApiKey } from "../config";
 import { getBasetenModelSpec, resolveBasetenApiKey } from "../providers/basetenShared";
+import { prepareLmStudioModelMetadataForInference } from "../providers/lmstudio/catalog";
+import { lmStudioOpenAiBaseUrl } from "../providers/lmstudio/client";
 import { getNvidiaModelSpec, resolveNvidiaApiKey } from "../providers/nvidiaShared";
 import {
   getOpenCodeModelPricing,
@@ -29,7 +31,7 @@ import {
 } from "../providers/opencodeShared";
 import { getTogetherModelSpec, resolveTogetherApiKey } from "../providers/togetherShared";
 import type { ModelMessage, ProviderName } from "../types";
-import { assertSupportedModel } from "../models/registry";
+import { getResolvedModelMetadataSync } from "../models/metadata";
 import type { TelemetrySettings } from "../observability/runtime";
 import {
   continuationMatchesTarget,
@@ -48,6 +50,8 @@ import {
 } from "./piMessageBridge";
 import { maybeSpillToolOutputToWorkspace } from "./toolOutputOverflow";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeStepOverride, RuntimeToolDefinition } from "./types";
+
+const LM_STUDIO_LOCAL_SENTINEL_API_KEY = "lmstudio-local";
 
 function safeJsonStringify(value: unknown): string {
   try {
@@ -190,13 +194,42 @@ function stripPlaceholderCostFromAssistantRecord(
 }
 
 function applySupportedModelMetadata(model: PiModel, provider: ProviderName, modelId: string): PiModel {
-  const supported = assertSupportedModel(provider, modelId, "model");
+  const supported = getResolvedModelMetadataSync(provider, modelId, "model");
   const input: Array<"text" | "image"> = supported.supportsImageInput ? ["text", "image"] : ["text"];
   return {
     ...model,
     id: supported.id,
     name: supported.displayName,
     input,
+  };
+}
+
+function safeLmStudioMaxTokens(contextWindow: number): number {
+  return Math.max(1, Math.floor(contextWindow / 4));
+}
+
+function buildLmStudioPiModel(opts: {
+  metadata: ReturnType<typeof getResolvedModelMetadataSync>;
+  baseUrl: string;
+}): PiModel {
+  const contextWindow = opts.metadata.effectiveContextLength ?? opts.metadata.maxContextLength ?? 8192;
+  return {
+    id: opts.metadata.id,
+    name: opts.metadata.displayName,
+    api: "openai-completions",
+    provider: "lmstudio",
+    baseUrl: lmStudioOpenAiBaseUrl(opts.baseUrl),
+    reasoning: false,
+    input: opts.metadata.supportsImageInput ? ["text", "image"] : ["text"],
+    contextWindow,
+    maxTokens: safeLmStudioMaxTokens(contextWindow),
+    compat: {
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      supportsReasoningEffort: false,
+      maxTokensField: "max_tokens",
+      thinkingFormat: "openai",
+    },
   };
 }
 
@@ -498,6 +531,31 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
       apiKey: resolveNvidiaApiKey({
         savedKey: getSavedProviderApiKey(params.config, "nvidia"),
       }),
+    };
+  }
+
+  if (provider === "lmstudio") {
+    const prepared = await prepareLmStudioModelMetadataForInference({
+      modelId,
+      providerOptions: params.providerOptions ?? params.config.providerOptions,
+      log: params.log,
+    });
+    const configuredApiKey = prepared.provider.apiKey ?? getSavedProviderApiKey(params.config, "lmstudio");
+    return {
+      model: buildLmStudioPiModel({
+        metadata: prepared.metadata,
+        baseUrl: prepared.provider.baseUrl,
+      }),
+      // pi-ai's OpenAI-compatible client refuses to initialize without a truthy apiKey,
+      // even for local endpoints that do not require authentication.
+      apiKey: configuredApiKey ?? LM_STUDIO_LOCAL_SENTINEL_API_KEY,
+      ...(configuredApiKey
+        ? {
+            headers: {
+              authorization: `Bearer ${configuredApiKey}`,
+            },
+          }
+        : {}),
     };
   }
 

@@ -229,6 +229,91 @@ describe("DeveloperPage rerun onboarding button", () => {
     }
   });
 
+  test("provider step shows LM Studio local connect controls instead of an API key field", async () => {
+    const harness = setupJsdom();
+    const setLmStudioEnabled = mock(async () => {});
+    const refreshProviderStatus = mock(async () => {});
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) throw new Error("missing root");
+      const root = createRoot(container);
+
+      await act(async () => {
+        useAppStore.setState({
+          onboardingVisible: true,
+          onboardingStep: "provider",
+          providerCatalog: [
+            {
+              id: "lmstudio",
+              name: "LM Studio",
+              state: "unreachable",
+              message: "LM Studio unavailable.",
+              models: [
+                { id: "qwen/qwen3-30b-a3b", displayName: "Qwen 3 30B", knowledgeCutoff: "Unknown", supportsImageInput: false },
+              ],
+              defaultModel: "qwen/qwen3-30b-a3b",
+            },
+          ] as any,
+          providerStatusByName: {
+            lmstudio: {
+              provider: "lmstudio",
+              authorized: false,
+              verified: false,
+              mode: "local",
+              account: null,
+              message: "LM Studio unavailable.",
+              checkedAt: "2026-03-18T00:00:00.000Z",
+            },
+          } as any,
+          providerConnected: [],
+          providerUiState: {
+            lmstudio: {
+              enabled: false,
+              hiddenModels: [],
+            },
+          },
+          setLmStudioEnabled,
+          ...defaultProviderActions,
+          refreshProviderStatus,
+        });
+      });
+
+      await act(async () => {
+        root.render(createElement(DesktopOnboarding));
+      });
+
+      const lmStudioButton = [...container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("LM Studio"),
+      );
+      if (!lmStudioButton) throw new Error("missing LM Studio onboarding card");
+
+      await act(async () => {
+        lmStudioButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(container.textContent).toContain("LM Studio runs on a local server.");
+      expect(container.textContent).toContain("Connect");
+      expect(container.textContent).toContain("Refresh");
+      expect(container.textContent).not.toContain("Paste your API key");
+      expect(container.textContent).not.toContain("API token");
+
+      const connectButton = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Connect");
+      if (!connectButton) throw new Error("missing LM Studio connect button");
+      await act(async () => {
+        connectButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+      });
+
+      expect(setLmStudioEnabled).toHaveBeenCalledWith(true);
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      harness.restore();
+    }
+  });
+
   test("clicking 'Run onboarding again' calls startOnboarding", async () => {
     const startOnboarding = mock(() => {});
     const harness = setupJsdom();

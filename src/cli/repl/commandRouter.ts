@@ -26,6 +26,7 @@ export type ReplCommandContext = {
   getSelectedProvider: () => string | null;
   setSelectedProvider: (provider: string | null) => void;
   getProviderList: () => string[];
+  getProviderDefaultModel: (provider: string) => string | null;
   getProviderAuthMethods: () => Record<string, ProviderAuthMethod[]>;
   trySend: (msg: ClientMessage) => boolean;
   activateNextPrompt: () => void;
@@ -118,7 +119,16 @@ export async function handleSlashCommand(input: string, ctx: ReplCommandContext)
       ctx.activateNextPrompt();
       return true;
     }
-    const nextModel = defaultModelForProvider(name);
+    const nextModel = ctx.getProviderDefaultModel(name) ?? defaultModelForProvider(name);
+    if (!nextModel) {
+      console.log(
+        name === "lmstudio"
+          ? "LM Studio has no default LLM right now. Make sure the LM Studio server is reachable and exposes at least one LLM, then retry /provider lmstudio or set a model explicitly with /model <key>."
+          : `provider ${name} has no selectable default model right now`,
+      );
+      ctx.activateNextPrompt();
+      return true;
+    }
     if (sessionId()) {
       const ok = ctx.trySend({ type: "set_model", sessionId: sessionId()!, provider: name, model: nextModel });
       if (!ok) return true;

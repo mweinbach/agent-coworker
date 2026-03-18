@@ -52,10 +52,18 @@ describe("Cross-provider model creation", () => {
 describe("Provider model catalog invariants", () => {
   for (const provider of PROVIDER_NAMES) {
     test(`${provider}: available model list is non-empty`, () => {
+      if (provider === "lmstudio") {
+        expect(PROVIDER_MODEL_CATALOG[provider].availableModels).toEqual([]);
+        return;
+      }
       expect(PROVIDER_MODEL_CATALOG[provider].availableModels.length).toBeGreaterThan(0);
     });
 
     test(`${provider}: default model exists in available models`, () => {
+      if (provider === "lmstudio") {
+        expect(PROVIDER_MODEL_CATALOG[provider].defaultModel).toBe("");
+        return;
+      }
       expect(PROVIDER_MODEL_CATALOG[provider].availableModels).toContain(PROVIDER_MODEL_CATALOG[provider].defaultModel);
     });
   }

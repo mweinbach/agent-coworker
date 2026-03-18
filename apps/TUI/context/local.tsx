@@ -54,7 +54,6 @@ export function availableProvidersFromCatalogState(
   if (
     normalizedPreserveProvider
     && isUserFacingProviderEnabled(normalizedPreserveProvider as ProviderName)
-    && providers.includes(normalizedPreserveProvider as ProviderName)
     && !base.includes(normalizedPreserveProvider as ProviderName)
   ) {
     base.push(normalizedPreserveProvider as ProviderName);

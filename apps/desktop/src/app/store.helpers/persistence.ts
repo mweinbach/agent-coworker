@@ -1,4 +1,5 @@
 import { saveState } from "../../lib/desktopCommands";
+import { normalizePersistedProviderUiState } from "../providerUiState";
 import { normalizePersistedProviderState } from "../persistedProviderState";
 import type { AppStoreState } from "../store.helpers";
 import type { PersistedState } from "../types";
@@ -12,6 +13,7 @@ function buildPersistedState(state: AppStoreState): PersistedState {
     statusByName: state.providerStatusByName,
     statusLastUpdatedAt: state.providerStatusLastUpdatedAt,
   });
+  const providerUiState = normalizePersistedProviderUiState(state.providerUiState);
 
   return {
     version: 2,
@@ -21,6 +23,7 @@ function buildPersistedState(state: AppStoreState): PersistedState {
     showHiddenFiles: state.showHiddenFiles,
     perWorkspaceSettings: state.perWorkspaceSettings,
     ...(providerState ? { providerState } : {}),
+    providerUiState,
     onboarding: state.onboardingState,
   };
 }

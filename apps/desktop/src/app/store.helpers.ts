@@ -4,6 +4,7 @@ import type { MCPServerConfig, ProviderName, ServerEvent, TodoItem } from "../li
 import { PROVIDER_NAMES } from "../lib/wsProtocol";
 
 import type {
+  PersistedProviderUiState,
   Notification,
   OnboardingStep,
   PersistedOnboardingState,
@@ -120,6 +121,9 @@ function defaultProviderAuthMethods(provider: ProviderName): ProviderAuthMethod[
       { id: "api_key", type: "api", label: "API key" },
     ];
   }
+  if (provider === "lmstudio") {
+    return [];
+  }
   return [{ id: "api_key", type: "api", label: "API key" }];
 }
 
@@ -161,6 +165,7 @@ export type AppStoreState = {
   providerAuthMethodsByProvider: Record<string, ProviderAuthMethod[]>;
   providerLastAuthChallenge: ProviderAuthChallengeEvent | null;
   providerLastAuthResult: ProviderAuthResultEvent | null;
+  providerUiState: PersistedProviderUiState;
 
   composerText: string;
   injectContext: boolean;
@@ -259,6 +264,8 @@ export type AppStoreState = {
   requestProviderCatalog: () => Promise<void>;
   requestProviderAuthMethods: () => Promise<void>;
   refreshProviderStatus: () => Promise<void>;
+  setLmStudioEnabled: (enabled: boolean) => Promise<void>;
+  setLmStudioModelVisible: (modelId: string, visible: boolean) => Promise<void>;
 
   loadAllThreadUsage: () => Promise<void>;
 

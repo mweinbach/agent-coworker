@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import { createAppActions } from "./store.actions";
+import { DEFAULT_PROVIDER_UI_STATE } from "./providerUiState";
 import { createDefaultUpdaterState, type AppStoreDataState, type AppStoreState } from "./store.helpers";
 
 const initialState: AppStoreDataState = {
@@ -35,6 +36,7 @@ const initialState: AppStoreDataState = {
   providerAuthMethodsByProvider: {},
   providerLastAuthChallenge: null,
   providerLastAuthResult: null,
+  providerUiState: DEFAULT_PROVIDER_UI_STATE,
 
   composerText: "",
   injectContext: false,

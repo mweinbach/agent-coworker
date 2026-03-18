@@ -114,6 +114,25 @@ describe("src/providers/index.ts", () => {
       expect(model.provider).toBe("codex-cli.responses");
       expect(headers.authorization).toBe("Bearer openai-fallback-key");
     });
+
+    test("creates LM Studio model adapters for arbitrary discovered model ids", async () => {
+      const config = makeConfig({
+        provider: "lmstudio",
+        model: "local/qwen-2.5",
+        preferredChildModel: "local/qwen-2.5",
+        providerOptions: {
+          lmstudio: {
+            baseUrl: "http://127.0.0.1:1234",
+          },
+        },
+      });
+      const model = getModelForProvider(config, "local/qwen-2.5", "lmstudio-token") as any;
+      const headers = await model.config.headers();
+      expect(model.modelId).toBe("local/qwen-2.5");
+      expect(model.provider).toBe("lmstudio.openai-compat");
+      expect(model.config.baseUrl).toBe("http://127.0.0.1:1234");
+      expect(headers.authorization).toBe("Bearer lmstudio-token");
+    });
   });
 
   describe("defaultModelForProvider", () => {
@@ -165,6 +184,10 @@ describe("src/providers/index.ts", () => {
 
     test("returns key candidates for codex-cli", () => {
       expect(getProviderKeyCandidates("codex-cli")).toBe(PROVIDERS["codex-cli"].keyCandidates);
+    });
+
+    test("returns key candidates for lmstudio", () => {
+      expect(getProviderKeyCandidates("lmstudio")).toBe(PROVIDERS.lmstudio.keyCandidates);
     });
   });
 });

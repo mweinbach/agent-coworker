@@ -2,7 +2,7 @@ import { listProviderAuthMethods } from "../../providers/authRegistry";
 import type { getAiCoworkerPaths } from "../../connect";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { getProviderStatuses } from "../../providerStatus";
-import type { ServerErrorCode, ServerErrorSource } from "../../types";
+import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import type { ServerEvent } from "../protocol";
 
 export class ProviderCatalogManager {
@@ -11,7 +11,7 @@ export class ProviderCatalogManager {
   constructor(
     private readonly opts: {
       sessionId: string;
-      getConfig: () => { provider: string; model: string };
+      getConfig: () => AgentConfig;
       getGlobalAuthPaths: () => ReturnType<typeof getAiCoworkerPaths>;
       getProviderCatalog: typeof getProviderCatalog;
       getProviderStatuses: typeof getProviderStatuses;
@@ -31,6 +31,7 @@ export class ProviderCatalogManager {
     try {
       const payload = await this.opts.getProviderCatalog({
         paths: this.opts.getGlobalAuthPaths(),
+        providerOptions: this.opts.getConfig().providerOptions,
       });
       const cfg = this.opts.getConfig();
       const defaults = { ...payload.default, [cfg.provider]: cfg.model };
@@ -65,6 +66,7 @@ export class ProviderCatalogManager {
     try {
       const providers = await this.opts.getProviderStatuses({
         paths: this.opts.getGlobalAuthPaths(),
+        providerOptions: this.opts.getConfig().providerOptions,
       });
       this.opts.emit({ type: "provider_status", sessionId: this.opts.sessionId, providers });
       this.opts.emitTelemetry(

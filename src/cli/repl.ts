@@ -159,6 +159,7 @@ export async function runCliRepl(
   let activeApproval: ApprovalPrompt | null = null;
   let busy = false;
   let providerList: string[] = [...UI_PROVIDER_NAMES];
+  let providerDefaultModels: Record<string, string> = {};
   let providerAuthMethods: Record<string, ProviderAuthMethod[]> = {};
   let providerStatuses: ProviderStatus[] = [];
   let lastStreamedAssistantTurnId: string | null = null;
@@ -269,6 +270,7 @@ export async function runCliRepl(
     selectedProvider = null;
     busy = false;
     providerList = [...UI_PROVIDER_NAMES];
+    providerDefaultModels = {};
     providerAuthMethods = {};
     providerStatuses = [];
     resetModelStreamState();
@@ -324,6 +326,12 @@ export async function runCliRepl(
     },
     set providerList(value) {
       providerList = value;
+    },
+    get providerDefaultModels() {
+      return providerDefaultModels;
+    },
+    set providerDefaultModels(value) {
+      providerDefaultModels = value;
     },
     get providerAuthMethods() {
       return providerAuthMethods;
@@ -540,6 +548,10 @@ export async function runCliRepl(
             selectedProvider = provider;
           },
           getProviderList: () => providerList,
+          getProviderDefaultModel: (provider) => {
+            const value = providerDefaultModels[provider];
+            return typeof value === "string" && value.trim().length > 0 ? value : null;
+          },
           getProviderAuthMethods: () => providerAuthMethods,
           trySend: (msg) => {
             const ok = send(msg);

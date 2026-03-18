@@ -18,6 +18,7 @@ import {
   availableProvidersFromCatalog,
   modelChoicesFromCatalog,
   modelOptionsFromCatalog,
+  type CatalogVisibilityOptions,
   UI_DISABLED_PROVIDERS,
 } from "../../lib/modelChoices";
 import type { ProviderName, ServerEvent } from "../../lib/wsProtocol";
@@ -246,6 +247,8 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   const providerLastAuthResult = useAppStore((s) => s.providerLastAuthResult);
   const providerConnected = useAppStore((s) => s.providerConnected);
   const setProviderApiKey = useAppStore((s) => s.setProviderApiKey);
+  const providerUiState = useAppStore((s) => s.providerUiState);
+  const setLmStudioEnabled = useAppStore((s) => s.setLmStudioEnabled);
   const authorizeProviderAuth = useAppStore((s) => s.authorizeProviderAuth);
   const callbackProviderAuth = useAppStore((s) => s.callbackProviderAuth);
   const refreshProviderStatus = useAppStore((s) => s.refreshProviderStatus);
@@ -263,20 +266,26 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
     const source = fromCatalog.length > 0 ? fromCatalog : [...PROVIDER_NAMES];
     const filtered = source.filter((p) => !UI_DISABLED_PROVIDERS.has(p));
     return filtered.filter((p) => {
+      if (p === "lmstudio") return true;
       const models = modelChoices[p];
       return models && models.length > 0;
     }).sort((a, b) => {
-      const aConnected = Boolean(providerStatusByName[a]?.authorized || providerStatusByName[a]?.verified);
-      const bConnected = Boolean(providerStatusByName[b]?.authorized || providerStatusByName[b]?.verified);
+      const aConnected = a === "lmstudio"
+        ? providerUiState.lmstudio.enabled && Boolean(providerStatusByName[a]?.authorized || providerStatusByName[a]?.verified)
+        : Boolean(providerStatusByName[a]?.authorized || providerStatusByName[a]?.verified);
+      const bConnected = b === "lmstudio"
+        ? providerUiState.lmstudio.enabled && Boolean(providerStatusByName[b]?.authorized || providerStatusByName[b]?.verified)
+        : Boolean(providerStatusByName[b]?.authorized || providerStatusByName[b]?.verified);
       if (aConnected && !bConnected) return -1;
       if (!aConnected && bConnected) return 1;
       return displayProviderName(a).localeCompare(displayProviderName(b));
     });
-  }, [providerCatalog, providerStatusByName, modelChoices]);
+  }, [providerCatalog, providerStatusByName, modelChoices, providerUiState]);
 
   const hasConnectedModelProvider = providerConnected.some((p) => {
     const models = modelChoices[p];
-    return models && models.length > 0;
+    if (!models || models.length === 0) return false;
+    return p === "lmstudio" ? providerUiState.lmstudio.enabled : true;
   });
 
   // Initial fetch
@@ -325,6 +334,7 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
           const isExpanded = expandedProvider === provider;
           const methods = authMethodsFor(provider);
           const providerDisplayName = displayProviderName(provider);
+          const lmStudioEnabled = providerUiState.lmstudio.enabled;
 
           return (
             <Card key={provider} className={cn("border-border/80 bg-card/85", isExpanded && "border-primary/35")}>
@@ -338,7 +348,13 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <Badge variant={connected ? "default" : "secondary"}>
-                    {connected ? "Connected" : "Not connected"}
+                    {provider === "lmstudio"
+                      ? lmStudioEnabled
+                        ? (connected ? "Connected" : "Unavailable")
+                        : "Disabled"
+                      : connected
+                        ? "Connected"
+                        : "Not connected"}
                   </Badge>
                   <span className="text-xs text-muted-foreground">{isExpanded ? "▾" : "▸"}</span>
                 </div>
@@ -346,7 +362,31 @@ function ProviderStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
 
               {isExpanded ? (
                 <CardContent className="space-y-3 border-t border-border/70 px-4 py-3">
-                  {methods.map((method) => {
+                  {provider === "lmstudio" ? (
+                    <div className="space-y-3">
+                      <div className="text-sm text-muted-foreground">
+                        LM Studio runs on a local server. Connect it once to make its local models available in Cowork.
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          type="button"
+                          onClick={() => {
+                            void setLmStudioEnabled(!lmStudioEnabled);
+                          }}
+                        >
+                          {lmStudioEnabled ? "Disable" : "Connect"}
+                        </Button>
+                        <Button type="button" variant="outline" onClick={() => void refreshProviderStatus()}>
+                          Refresh
+                        </Button>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {lmStudioEnabled
+                          ? (status?.message || "Cowork will use the models exposed by your local LM Studio server.")
+                          : "Disabled providers stay out of the main chat UI until you connect them here."}
+                      </div>
+                    </div>
+                  ) : methods.map((method) => {
                     const stateKey = `${provider}:${method.id}`;
                     const apiKeyValue = apiKeys[stateKey] ?? "";
                     const codeValue = oauthCodes[stateKey] ?? "";
@@ -483,6 +523,7 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   const selectedWorkspaceId = useAppStore((s) => s.selectedWorkspaceId);
   const providerCatalog = useAppStore((s) => s.providerCatalog);
   const providerConnected = useAppStore((s) => s.providerConnected);
+  const providerUiState = useAppStore((s) => s.providerUiState);
   const updateWorkspaceDefaults = useAppStore((s) => s.updateWorkspaceDefaults);
 
   const workspace = useMemo(
@@ -495,13 +536,25 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
   const enableMcp = workspace?.defaultEnableMcp ?? true;
   const backupsEnabled = workspace?.defaultBackupsEnabled ?? true;
 
-  const modelChoices = useMemo(() => modelChoicesFromCatalog(providerCatalog), [providerCatalog]);
+  const modelSelectorVisibility = useMemo<CatalogVisibilityOptions>(() => ({
+    hiddenProviders: providerUiState.lmstudio.enabled ? [] : (["lmstudio"] as const),
+    hiddenModelsByProvider: {
+      lmstudio: providerUiState.lmstudio.hiddenModels,
+    },
+  }), [providerUiState]);
+  const modelChoices = useMemo(
+    () => modelChoicesFromCatalog(providerCatalog, modelSelectorVisibility),
+    [providerCatalog, modelSelectorVisibility],
+  );
   const availableProviders = useMemo(
-    () => availableProvidersFromCatalog(providerCatalog, providerConnected, provider),
-    [providerCatalog, providerConnected, provider],
+    () => availableProvidersFromCatalog(providerCatalog, providerConnected, provider, {
+      ...modelSelectorVisibility,
+      visibleModelsByProvider: modelChoices,
+    }),
+    [providerCatalog, providerConnected, provider, modelChoices, modelSelectorVisibility],
   );
   const effectiveProvider = availableProviders.includes(provider) ? provider : (availableProviders[0] ?? provider);
-  const modelOptions = modelOptionsFromCatalog(providerCatalog, effectiveProvider, model);
+  const modelOptions = modelOptionsFromCatalog(providerCatalog, effectiveProvider, model, modelSelectorVisibility);
 
   // Auto-fix: if the current workspace default provider isn't connected but another is, swap it
   useEffect(() => {
@@ -509,7 +562,8 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
     const isDefaultConnected = providerConnected.includes(provider);
     if (!isDefaultConnected && availableProviders.length > 0 && availableProviders[0] !== provider) {
       const newProvider = availableProviders[0]!;
-      const newModel = (modelChoices[newProvider] ?? [])[0] ?? "";
+      const providerDefault = providerCatalog.find((entry) => entry.id === newProvider)?.defaultModel?.trim() || "";
+      const newModel = providerDefault || ((modelChoices[newProvider] ?? [])[0] ?? "");
       void updateWorkspaceDefaults(workspace.id, {
         defaultProvider: newProvider,
         defaultModel: newModel,
@@ -537,7 +591,8 @@ function DefaultsStep({ onContinue, onBack }: { onContinue: () => void; onBack: 
             value={effectiveProvider}
             onValueChange={(value) => {
               if (!isProviderNameString(value)) return;
-              const newModel = (modelChoices[value] ?? [])[0] ?? "";
+              const providerDefault = providerCatalog.find((entry) => entry.id === value)?.defaultModel?.trim() || "";
+              const newModel = providerDefault || ((modelChoices[value] ?? [])[0] ?? "");
               void updateWorkspaceDefaults(workspace.id, {
                 defaultProvider: value,
                 defaultModel: newModel,

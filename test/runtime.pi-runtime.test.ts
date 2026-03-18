@@ -77,6 +77,19 @@ async function withEnv<T>(
   }
 }
 
+async function withMockedFetch<T>(
+  fetchImpl: typeof fetch,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = previous;
+  }
+}
+
 describe("pi runtime regressions", () => {
   test("calls onModelAbort exactly once when turn starts with an aborted signal", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-abort-"));
@@ -238,6 +251,150 @@ describe("pi runtime regressions", () => {
     expect(resolved.model.api).toBe("openai-responses");
     expect(resolved.model.contextWindow).toBe(400000);
     expect(resolved.model.maxTokens).toBe(128000);
+  });
+
+  test("LM Studio PI model resolution builds a dynamic openai-completions model from live metadata", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-lmstudio-"));
+    const paths = getAiCoworkerPaths({ homedir: homeDir });
+    await fs.mkdir(path.dirname(paths.connectionsFile), { recursive: true });
+    await fs.writeFile(
+      paths.connectionsFile,
+      JSON.stringify({
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        services: {
+          lmstudio: {
+            service: "lmstudio",
+            mode: "api_key",
+            apiKey: "lmstudio-token",
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const config = makeConfig(homeDir, {
+      provider: "lmstudio",
+      model: "local/qwen-2.5",
+      preferredChildModel: "local/qwen-2.5",
+      knowledgeCutoff: "Unknown",
+      providerOptions: {
+        lmstudio: {
+          baseUrl: "http://127.0.0.1:1234",
+          contextLength: 8192,
+        },
+      },
+    });
+
+    const resolved = await withMockedFetch(
+      (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/models")) {
+          return new Response(JSON.stringify({
+            models: [
+              {
+                type: "llm",
+                publisher: "local",
+                key: "local/qwen-2.5",
+                display_name: "Qwen 2.5 Local",
+                loaded_instances: [],
+                max_context_length: 32768,
+                capabilities: { vision: true, trained_for_tool_use: false },
+                size_bytes: 1,
+                architecture: "llama",
+                format: "gguf",
+              },
+            ],
+          }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+
+        return new Response(JSON.stringify({
+          type: "llm",
+          instance_id: "inst-1",
+          load_time_seconds: 0.25,
+          status: "loaded",
+          load_config: {
+            context_length: 8192,
+          },
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch,
+      async () => await piRuntimeInternal.resolvePiModel(makeParams(config, {
+        providerOptions: config.providerOptions,
+      })),
+    );
+
+    expect(resolved.model.id).toBe("local/qwen-2.5");
+    expect(resolved.model.name).toBe("Qwen 2.5 Local");
+    expect(resolved.model.api).toBe("openai-completions");
+    expect(resolved.model.provider).toBe("lmstudio");
+    expect(resolved.model.baseUrl).toBe("http://127.0.0.1:1234/v1");
+    expect(resolved.model.contextWindow).toBe(8192);
+    expect(resolved.model.maxTokens).toBe(2048);
+    expect(resolved.model.input).toEqual(["text", "image"]);
+    expect(resolved.headers).toEqual({ authorization: "Bearer lmstudio-token" });
+    expect(resolved.apiKey).toBe("lmstudio-token");
+  });
+
+  test("LM Studio PI model resolution does not require an API key for local inference", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-lmstudio-local-"));
+    const config = makeConfig(homeDir, {
+      provider: "lmstudio",
+      model: "local/qwen-2.5",
+      preferredChildModel: "local/qwen-2.5",
+      knowledgeCutoff: "Unknown",
+      providerOptions: {
+        lmstudio: {
+          baseUrl: "http://127.0.0.1:1234",
+          autoLoad: false,
+        },
+      },
+    });
+
+    const resolved = await withEnv("OPENAI_API_KEY", undefined, async () =>
+      await withMockedFetch(
+        (async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.endsWith("/api/v1/models")) {
+            return new Response(JSON.stringify({
+              models: [
+                {
+                  type: "llm",
+                  publisher: "local",
+                  key: "local/qwen-2.5",
+                  display_name: "Qwen 2.5 Local",
+                  loaded_instances: [],
+                  max_context_length: 32768,
+                  capabilities: { vision: false, trained_for_tool_use: false },
+                  size_bytes: 1,
+                  architecture: "llama",
+                  format: "gguf",
+                },
+              ],
+            }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          throw new Error(`unexpected fetch url: ${url}`);
+        }) as typeof fetch,
+        async () => await piRuntimeInternal.resolvePiModel(makeParams(config, {
+          providerOptions: config.providerOptions,
+        })),
+      )
+    );
+
+    expect(resolved.model.id).toBe("local/qwen-2.5");
+    expect(resolved.model.provider).toBe("lmstudio");
+    expect(resolved.model.baseUrl).toBe("http://127.0.0.1:1234/v1");
+    expect(resolved.apiKey).toBe("lmstudio-local");
+    expect(resolved.headers).toBeUndefined();
   });
 
   test("codex openai-key runtime model resolution keeps supported token limits for gpt-5.4-mini", async () => {

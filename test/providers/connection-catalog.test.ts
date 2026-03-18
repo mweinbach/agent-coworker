@@ -19,7 +19,7 @@ describe("providers/connectionCatalog", () => {
 
     const entryIds = payload.all.map((entry) => entry.id);
     expect(entryIds).toEqual(PROVIDER_NAMES);
-    expect(payload.all).toEqual(listProviderCatalogEntries());
+    expect(payload.all).toEqual(await listProviderCatalogEntries());
     expect(Object.keys(payload.default)).toEqual(PROVIDER_NAMES);
     for (const entry of payload.all) {
       expect(payload.default[entry.id]).toBe(entry.defaultModel);

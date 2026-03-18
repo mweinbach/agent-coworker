@@ -109,9 +109,17 @@ const codexCliProviderOptionsSchema = openAiCompatibleProviderOptionsSchema.exte
   webSearch: codexWebSearchSchema.optional(),
 }).strict();
 
+const lmStudioProviderOptionsSchema = z.object({
+  baseUrl: z.string().trim().min(1).optional(),
+  contextLength: z.number().int().positive().optional(),
+  autoLoad: z.boolean().optional(),
+  reloadOnContextMismatch: z.boolean().optional(),
+}).strict();
+
 const editableOpenAiProviderOptionsByProviderSchema = z.object({
   openai: openAiCompatibleProviderOptionsSchema.optional(),
   "codex-cli": codexCliProviderOptionsSchema.optional(),
+  lmstudio: lmStudioProviderOptionsSchema.optional(),
 }).strict();
 
 const setConfigPayloadSchema = z.object({
@@ -211,7 +219,7 @@ function setConfigIssueMessage(issue: z.ZodIssue): string {
   if (field === "providerOptions") {
     if (issue.code === "unrecognized_keys") {
       if (provider === undefined) {
-        return "set_config config.providerOptions only supports openai and codex-cli";
+        return "set_config config.providerOptions only supports openai, codex-cli, and lmstudio";
       }
       if (provider === "codex-cli" && option === "webSearch" && nestedOption === "location") {
         return "set_config config.providerOptions.codex-cli.webSearch.location only supports country, region, city, and timezone";
@@ -221,6 +229,9 @@ function setConfigIssueMessage(issue: z.ZodIssue): string {
       }
       if (provider === "codex-cli") {
         return "set_config config.providerOptions.codex-cli only supports reasoningEffort, reasoningSummary, textVerbosity, webSearchBackend, webSearchMode, and webSearch";
+      }
+      if (provider === "lmstudio") {
+        return "set_config config.providerOptions.lmstudio only supports baseUrl, contextLength, autoLoad, and reloadOnContextMismatch";
       }
       return `set_config config.providerOptions.${provider} only supports reasoningEffort, reasoningSummary, and textVerbosity`;
     }
@@ -270,6 +281,18 @@ function setConfigIssueMessage(issue: z.ZodIssue): string {
 
     if (option === "reasoningSummary") {
       return `set_config config.providerOptions.${provider}.reasoningSummary must be one of ${OPENAI_REASONING_SUMMARY_VALUES.join(", ")}`;
+    }
+
+    if (provider === "lmstudio" && option === "baseUrl") {
+      return "set_config config.providerOptions.lmstudio.baseUrl must be a non-empty string";
+    }
+
+    if (provider === "lmstudio" && option === "contextLength") {
+      return "set_config config.providerOptions.lmstudio.contextLength must be a positive integer";
+    }
+
+    if (provider === "lmstudio" && (option === "autoLoad" || option === "reloadOnContextMismatch")) {
+      return `set_config config.providerOptions.lmstudio.${option} must be boolean`;
     }
 
     return "set_config missing/invalid config";

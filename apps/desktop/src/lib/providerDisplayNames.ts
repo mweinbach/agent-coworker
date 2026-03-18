@@ -10,6 +10,7 @@ const DISPLAY_NAMES: Partial<Record<ProviderName, string>> = {
   baseten: "Baseten",
   together: "Together AI",
   nvidia: "NVIDIA",
+  lmstudio: "LM Studio",
   "opencode-go": "OpenCode Go",
   "opencode-zen": "OpenCode Zen",
   "codex-cli": "ChatGPT Subscription",
@@ -34,6 +35,9 @@ export function fallbackAuthMethods(provider: ProviderName): ProviderAuthMethod[
       { id: "oauth_cli", type: "oauth", label: "Sign in with ChatGPT (browser)", oauthMode: "auto" },
       { id: "api_key", type: "api", label: "API key" },
     ];
+  }
+  if (provider === "lmstudio") {
+    return [];
   }
   return [{ id: "api_key", type: "api", label: "API key" }];
 }

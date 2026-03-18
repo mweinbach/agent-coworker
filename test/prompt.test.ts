@@ -55,6 +55,19 @@ async function writeFile(p: string, content: string) {
   await fs.writeFile(p, content, "utf-8");
 }
 
+async function withMockedFetch<T>(
+  fetchImpl: typeof fetch,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = previous;
+  }
+}
+
 function skillDoc(name: string, description: string, body = "# Skill Body\n"): string {
   return ["---", `name: \"${name}\"`, `description: \"${description}\"`, "---", "", body].join("\n");
 }
@@ -154,6 +167,26 @@ describe("loadSystemPrompt", () => {
     const prompt = await loadSystemPrompt(config);
     expect(prompt).toContain("GPT-5.4");
     expect(prompt).not.toContain("{{modelName}}");
+  });
+
+  test("falls back to the generic system prompt for dynamic LM Studio models", async () => {
+    const config = makeConfig({
+      provider: "lmstudio",
+      model: "local/qwen-2.5",
+      preferredChildModel: "local/qwen-2.5",
+      knowledgeCutoff: "Unknown",
+    });
+
+    const prompt = await withMockedFetch(
+      (async () => {
+        throw new Error("connect ECONNREFUSED");
+      }) as typeof fetch,
+      async () => await loadSystemPrompt(config),
+    );
+
+    expect(prompt).toContain("local/qwen-2.5");
+    expect(prompt).toContain("Available model overrides for the current provider (LM Studio):");
+    expect(prompt).toContain("Any LM Studio LLM key discovered at runtime is allowed.");
   });
 
   test("renders dynamic spawnAgent roles and current-provider model guidance", async () => {

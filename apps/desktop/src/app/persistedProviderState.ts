@@ -1,7 +1,7 @@
 import { PROVIDER_NAMES, type ProviderName } from "../lib/wsProtocol";
 import type { PersistedProviderState, PersistedProviderStatus } from "./types";
 
-const PROVIDER_STATUS_MODES = new Set(["missing", "error", "api_key", "oauth", "oauth_pending"]);
+const PROVIDER_STATUS_MODES = new Set(["missing", "error", "api_key", "oauth", "oauth_pending", "local"]);
 const DEFAULT_CHECKED_AT = new Date(0).toISOString();
 
 function isRecord(value: unknown): value is Record<string, unknown> {

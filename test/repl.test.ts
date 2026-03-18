@@ -374,6 +374,12 @@ describe("REPL slash command routing", () => {
         selectedProvider = provider;
       },
       getProviderList: () => ["openai", "codex-cli", "google"],
+      getProviderDefaultModel: (provider) => {
+        if (provider === "codex-cli") return "gpt-5.4";
+        if (provider === "openai") return "gpt-5.4";
+        if (provider === "google") return "gemini-3-pro-preview";
+        return null;
+      },
       getProviderAuthMethods: () => ({}),
       trySend: mock(() => true),
       activateNextPrompt: mock(() => {}),

@@ -7,6 +7,7 @@ import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import { getProviderCatalog } from "../../providers/connectionCatalog";
 import { getProviderStatuses } from "../../providerStatus";
 import { defaultSupportedModel, getSupportedModel } from "../../models/registry";
+import { getKnownResolvedModelMetadata, isDynamicModelProvider } from "../../models/metadata";
 import { MemoryStore, type MemoryScope } from "../../memoryStore";
 import type {
   AgentConfig,
@@ -499,9 +500,9 @@ export class AgentSession {
     getWorkspaceBackupDeltaImpl?: SessionDependencies["getWorkspaceBackupDeltaImpl"];
   }): AgentSession {
     const { persisted } = opts;
-    const supportedPersistedModel = getSupportedModel(persisted.provider, persisted.model);
-    const resumedModel = supportedPersistedModel ?? defaultSupportedModel(persisted.provider);
-    const migratedLegacyModel = supportedPersistedModel === null;
+    const resolvedPersistedModel = getKnownResolvedModelMetadata(persisted.provider, persisted.model);
+    const resumedModel = resolvedPersistedModel ?? defaultSupportedModel(persisted.provider);
+    const migratedLegacyModel = resolvedPersistedModel === null && !isDynamicModelProvider(persisted.provider);
     const clearedContinuationState = migratedLegacyModel && persisted.providerState !== null;
     const config: AgentConfig = {
       ...opts.baseConfig,

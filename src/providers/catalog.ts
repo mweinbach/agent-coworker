@@ -13,7 +13,7 @@ export function isUserFacingProviderEnabled(provider: ProviderName): boolean {
   return !USER_FACING_DISABLED_PROVIDER_SET.has(provider);
 }
 
-export const PROVIDER_MODEL_CATALOG = {
+const STATIC_PROVIDER_MODEL_CATALOG = {
   anthropic: {
     defaultModel: defaultModelIdForProvider("anthropic"),
     availableModels: listSupportedModelIds("anthropic"),
@@ -50,7 +50,15 @@ export const PROVIDER_MODEL_CATALOG = {
     defaultModel: defaultModelIdForProvider("openai"),
     availableModels: listSupportedModelIds("openai"),
   },
-} as const satisfies Record<ProviderName, ProviderModelDefinition>;
+} as const satisfies Record<Exclude<ProviderName, "lmstudio">, ProviderModelDefinition>;
+
+export const PROVIDER_MODEL_CATALOG: Record<ProviderName, ProviderModelDefinition> = {
+  ...STATIC_PROVIDER_MODEL_CATALOG,
+  lmstudio: {
+    defaultModel: "",
+    availableModels: [],
+  },
+};
 
 export function defaultModelForProvider(provider: ProviderName): string {
   return PROVIDER_MODEL_CATALOG[provider].defaultModel;
@@ -69,6 +77,7 @@ export const PROVIDER_MODEL_CHOICES: Record<ProviderName, readonly string[]> = {
   baseten: PROVIDER_MODEL_CATALOG.baseten.availableModels,
   together: PROVIDER_MODEL_CATALOG.together.availableModels,
   nvidia: PROVIDER_MODEL_CATALOG.nvidia.availableModels,
+  lmstudio: PROVIDER_MODEL_CATALOG.lmstudio.availableModels,
   "opencode-go": PROVIDER_MODEL_CATALOG["opencode-go"].availableModels,
   "opencode-zen": PROVIDER_MODEL_CATALOG["opencode-zen"].availableModels,
   "codex-cli": PROVIDER_MODEL_CATALOG["codex-cli"].availableModels,
@@ -81,5 +90,6 @@ export function modelChoicesByProvider(): Record<ProviderName, readonly string[]
 }
 
 export function userFacingProviders(): ProviderName[] {
-  return (Object.keys(PROVIDER_MODEL_CATALOG) as ProviderName[]).filter((provider) => isUserFacingProviderEnabled(provider));
+  return (Object.keys(PROVIDER_MODEL_CATALOG) as ProviderName[])
+    .filter((provider) => isUserFacingProviderEnabled(provider));
 }

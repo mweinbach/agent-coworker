@@ -1,11 +1,12 @@
 import type { AgentConfig, ProviderName } from "../types";
-import { assertSupportedModel } from "../models/registry";
+import { normalizeModelIdForProvider } from "../models/metadata";
 
 import { anthropicProvider } from "./anthropic";
 import { basetenProvider } from "./baseten";
 import { PROVIDER_MODEL_CATALOG } from "./catalog";
 import { codexCliProvider } from "./codex-cli";
 import { googleProvider } from "./google";
+import { lmstudioProvider } from "./lmstudio";
 import { nvidiaProvider } from "./nvidia";
 import { opencodeGoProvider } from "./opencode-go";
 import { opencodeZenProvider } from "./opencode-zen";
@@ -50,6 +51,7 @@ const PROVIDER_RUNTIMES: Record<ProviderName, ProviderRuntimeDefinition> = {
   baseten: basetenProvider,
   together: togetherProvider,
   nvidia: nvidiaProvider,
+  lmstudio: lmstudioProvider,
   "opencode-go": opencodeGoProvider,
   "opencode-zen": opencodeZenProvider,
   "codex-cli": codexCliProvider,
@@ -62,6 +64,7 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
   baseten: { ...PROVIDER_RUNTIMES.baseten, ...PROVIDER_MODEL_CATALOG.baseten },
   together: { ...PROVIDER_RUNTIMES.together, ...PROVIDER_MODEL_CATALOG.together },
   nvidia: { ...PROVIDER_RUNTIMES.nvidia, ...PROVIDER_MODEL_CATALOG.nvidia },
+  lmstudio: { ...PROVIDER_RUNTIMES.lmstudio, ...PROVIDER_MODEL_CATALOG.lmstudio },
   "opencode-go": { ...PROVIDER_RUNTIMES["opencode-go"], ...PROVIDER_MODEL_CATALOG["opencode-go"] },
   "opencode-zen": { ...PROVIDER_RUNTIMES["opencode-zen"], ...PROVIDER_MODEL_CATALOG["opencode-zen"] },
   "codex-cli": { ...PROVIDER_RUNTIMES["codex-cli"], ...PROVIDER_MODEL_CATALOG["codex-cli"] },
@@ -70,8 +73,8 @@ export const PROVIDERS: Record<ProviderName, ProviderDefinition> = {
 };
 
 export function getModelForProvider(config: AgentConfig, modelId: string, savedKey?: string) {
-  const supported = assertSupportedModel(config.provider, modelId);
-  return PROVIDERS[config.provider].createModel({ config, modelId: supported.id, savedKey });
+  const normalizedModelId = normalizeModelIdForProvider(config.provider, modelId);
+  return PROVIDERS[config.provider].createModel({ config, modelId: normalizedModelId, savedKey });
 }
 
 export function getProviderKeyCandidates(provider: ProviderName): readonly ProviderName[] {

@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.21`
+- Current protocol version: `7.22`
 
 ## Table of Contents
 
@@ -48,6 +48,12 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.22`:
+
+- Added `lmstudio` as a first-class dynamic local provider.
+- `provider_catalog` entries may now include optional provider-level `state` (`"ready" | "empty" | "unreachable"`) and `message` fields for dynamic providers such as LM Studio.
+- `set_config.config.providerOptions.lmstudio` and `session_config.config.providerOptions.lmstudio` now support `baseUrl`, `contextLength`, `autoLoad`, and `reloadOnContextMismatch`.
 
 Changes in `7.21`:
 
@@ -161,7 +167,7 @@ Changes in `7.2`:
 
 Changes in `7.1`:
 
-- `set_config.config` now accepts editable OpenAI-compatible `providerOptions` for `openai` and `codex-cli` only.
+- `set_config.config` now accepts editable OpenAI-compatible `providerOptions` for `openai`, `codex-cli`, and `lmstudio`.
 - `session_config.config` now includes the same normalized OpenAI-compatible `providerOptions` subset when configured.
 - OpenAI API and Codex CLI provider defaults now use `gpt-5.4`.
 
@@ -244,7 +250,7 @@ Types referenced across multiple messages.
 ### ProviderName
 
 ```
-"google" | "openai" | "anthropic" | "opencode-go" | "opencode-zen" | "codex-cli"
+"google" | "openai" | "anthropic" | "baseten" | "together" | "nvidia" | "lmstudio" | "opencode-go" | "opencode-zen" | "codex-cli"
 ```
 
 ### PublicConfig
@@ -265,10 +271,19 @@ Returned in `server_hello` and `config_updated`:
 
 ```json
 {
-  "id": "opencode-zen",
-  "name": "OpenCode Zen",
-  "models": ["glm-5", "kimi-k2.5", "nemotron-3-super-free", "mimo-v2-flash-free", "big-pickle", "minimax-m2.5-free", "minimax-m2.5"],
-  "defaultModel": "glm-5"
+  "id": "lmstudio",
+  "name": "LM Studio",
+  "models": [
+    {
+      "id": "local/qwen-2.5",
+      "displayName": "Qwen 2.5 Local",
+      "knowledgeCutoff": "Unknown",
+      "supportsImageInput": false
+    }
+  ],
+  "defaultModel": "local/qwen-2.5",
+  "state": "ready",
+  "message": "LM Studio server reachable at http://localhost:1234."
 }
 ```
 
@@ -343,9 +358,9 @@ Returned in `server_hello` and `config_updated`:
 | Field | Type | Description |
 |-------|------|-------------|
 | `provider` | `ProviderName` | Provider identifier |
-| `authorized` | `boolean` | Whether auth credentials exist |
+| `authorized` | `boolean` | Whether the provider is immediately usable. For local providers like LM Studio this can be `true` based on reachability rather than stored auth |
 | `verified` | `boolean` | Whether credentials have been verified working |
-| `mode` | `"missing" \| "error" \| "api_key" \| "oauth" \| "oauth_pending"` | Current auth mode |
+| `mode` | `"missing" \| "error" \| "api_key" \| "oauth" \| "oauth_pending" \| "local"` | Current auth/connection mode |
 | `account` | `{ email?: string, name?: string } \| null` | Account info if available |
 | `message` | `string` | Human-readable status message |
 | `checkedAt` | `string` | ISO 8601 timestamp of last check |
@@ -1908,6 +1923,12 @@ Update runtime configuration values.
             "timezone": "America/New_York"
           }
         }
+      },
+      "lmstudio": {
+        "baseUrl": "http://127.0.0.1:1234",
+        "contextLength": 16384,
+        "autoLoad": true,
+        "reloadOnContextMismatch": true
       }
     }
   }
@@ -1929,7 +1950,7 @@ Update runtime configuration values.
 | `config.preferredChildModelRef` | `string` | No | Preferred child target ref. Accepts either a plain same-provider model id or a canonical `provider:modelId` ref |
 | `config.allowedChildModelRefs` | `string[]` | No | Exact cross-provider child target refs allowed for this workspace |
 | `config.maxSteps` | `number` | No | Max steps per turn (1-1000) |
-| `config.providerOptions` | `object` | No | Editable OpenAI-compatible provider option patch. Only `openai` and `codex-cli` are allowed |
+| `config.providerOptions` | `object` | No | Editable provider option patch. Only `openai`, `codex-cli`, and `lmstudio` are allowed |
 | `config.providerOptions.openai.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | OpenAI reasoning effort |
 | `config.providerOptions.openai.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | No | OpenAI reasoning summary |
 | `config.providerOptions.openai.textVerbosity` | `"low" \| "medium" \| "high"` | No | OpenAI verbosity |
@@ -1944,6 +1965,10 @@ Update runtime configuration values.
 | `config.providerOptions.codex-cli.webSearch.location.region` | `string` | No | Approximate region/state hint for Codex native web search |
 | `config.providerOptions.codex-cli.webSearch.location.city` | `string` | No | Approximate city hint for Codex native web search |
 | `config.providerOptions.codex-cli.webSearch.location.timezone` | `string` | No | Approximate timezone hint for Codex native web search |
+| `config.providerOptions.lmstudio.baseUrl` | `string` | No | Override the LM Studio server base URL. Defaults to `http://localhost:1234` |
+| `config.providerOptions.lmstudio.contextLength` | `number` | No | Preferred LM Studio load context length |
+| `config.providerOptions.lmstudio.autoLoad` | `boolean` | No | Whether the harness proactively loads the LM Studio model before inference when needed |
+| `config.providerOptions.lmstudio.reloadOnContextMismatch` | `boolean` | No | Whether the harness reloads an already-loaded LM Studio model when the requested context length differs |
 | `config.userProfile` | `object` | No | User profile patch merged into persisted workspace config. Empty-string fields clear the corresponding prompt context |
 | `config.userName` | `string` | No | User name used for prompt injection. An empty string clears it |
 | `config.userProfile.instructions` | `string` | No | Custom behavioral instructions the agent should follow. An empty string clears it |
@@ -1954,7 +1979,7 @@ Update runtime configuration values.
 
 Notes:
 - `providerOptions` is a deep-merged patch against the workspace config. Unrelated provider settings outside this editable subset are preserved.
-- Only `openai` and `codex-cli` are editable through this message. Other provider option trees remain internal.
+- `lmstudio` provider options affect harness-side discovery/load behavior; inference still runs through the normal runtime path.
 - `toolOutputOverflowChars: null` disables spill files explicitly. `clearToolOutputOverflowChars: true` removes the persisted override so future sessions inherit the default again.
 
 ---
@@ -2296,12 +2321,26 @@ Provider catalog metadata. Sent on connection and after model changes.
   "type": "provider_catalog",
   "sessionId": "...",
   "all": [
-    { "id": "openai", "name": "OpenAI", "models": ["gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.2-codex"], "defaultModel": "gpt-5.4" },
-    { "id": "opencode-go", "name": "OpenCode Go", "models": ["glm-5", "kimi-k2.5"], "defaultModel": "glm-5" },
-    { "id": "opencode-zen", "name": "OpenCode Zen", "models": ["glm-5", "kimi-k2.5", "nemotron-3-super-free", "mimo-v2-flash-free", "big-pickle", "minimax-m2.5-free", "minimax-m2.5"], "defaultModel": "glm-5" }
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "models": [
+        { "id": "gpt-5.4", "displayName": "GPT-5.4", "knowledgeCutoff": "August 2025", "supportsImageInput": true }
+      ],
+      "defaultModel": "gpt-5.4"
+    },
+    {
+      "id": "lmstudio",
+      "name": "LM Studio",
+      "models": [
+        { "id": "local/qwen-2.5", "displayName": "Qwen 2.5 Local", "knowledgeCutoff": "Unknown", "supportsImageInput": false }
+      ],
+      "defaultModel": "local/qwen-2.5",
+      "state": "ready"
+    }
   ],
-  "default": { "openai": "gpt-5.4", "opencode-go": "glm-5", "opencode-zen": "glm-5", "google": "gemini-3.1-pro-preview-customtools" },
-  "connected": ["openai", "opencode-go", "opencode-zen"]
+  "default": { "openai": "gpt-5.4", "lmstudio": "local/qwen-2.5", "opencode-go": "glm-5", "opencode-zen": "glm-5", "google": "gemini-3-pro-preview" },
+  "connected": ["openai", "lmstudio", "opencode-go", "opencode-zen"]
 }
 ```
 
@@ -2311,7 +2350,7 @@ Provider catalog metadata. Sent on connection and after model changes.
 | `sessionId` | `string` | Session identifier |
 | `all` | `ProviderCatalogEntry[]` | All available providers with their models |
 | `default` | `Record<string, string>` | Default model per provider (includes current session's selection) |
-| `connected` | `string[]` | Provider IDs that have active auth |
+| `connected` | `string[]` | Provider IDs that are currently usable. For local providers like LM Studio this can be based on reachability rather than stored auth |
 
 ---
 
@@ -3430,6 +3469,12 @@ Current runtime config. Sent on connection and after `set_config`.
             "timezone": "America/New_York"
           }
         }
+      },
+      "lmstudio": {
+        "baseUrl": "http://127.0.0.1:1234",
+        "contextLength": 16384,
+        "autoLoad": true,
+        "reloadOnContextMismatch": true
       }
     }
   }
@@ -3451,7 +3496,7 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.preferredChildModelRef` | `string` | Canonical preferred child target ref shown in workspace/UI suggestions |
 | `config.allowedChildModelRefs` | `string[]` | Exact cross-provider child target refs allowed for this workspace |
 | `config.maxSteps` | `number` | Maximum steps per turn |
-| `config.providerOptions` | `object?` | Editable OpenAI-compatible provider options when configured |
+| `config.providerOptions` | `object?` | Editable provider options when configured |
 | `config.userName` | `string` | Effective user name |
 | `config.userProfile` | `object` | Effective user profile metadata used for prompt injection |
 | `config.userProfile.instructions` | `string` | Effective profile instructions |
@@ -3471,6 +3516,10 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.providerOptions.codex-cli.webSearch.location.region` | `string` | Current editable Codex native web-search region/state |
 | `config.providerOptions.codex-cli.webSearch.location.city` | `string` | Current editable Codex native web-search city |
 | `config.providerOptions.codex-cli.webSearch.location.timezone` | `string` | Current editable Codex native web-search timezone |
+| `config.providerOptions.lmstudio.baseUrl` | `string` | Current LM Studio base URL override |
+| `config.providerOptions.lmstudio.contextLength` | `number` | Current requested LM Studio context length override |
+| `config.providerOptions.lmstudio.autoLoad` | `boolean` | Current LM Studio eager-load toggle |
+| `config.providerOptions.lmstudio.reloadOnContextMismatch` | `boolean` | Current LM Studio reload-on-context-mismatch toggle |
 
 ---
 

@@ -39,7 +39,7 @@ import togetherQwenQwen35397bA17b from "../../config/models/together/qwen-qwen3.
 import togetherZaiOrgGlm5 from "../../config/models/together/zai-org-glm-5.json";
 import type { ProviderName } from "../types";
 
-const providerNameSchema = z.enum([
+export const STATIC_MODEL_PROVIDER_NAMES = [
   "google",
   "openai",
   "anthropic",
@@ -49,7 +49,11 @@ const providerNameSchema = z.enum([
   "opencode-go",
   "opencode-zen",
   "codex-cli",
-]);
+ ] as const satisfies readonly ProviderName[];
+
+export type StaticModelProviderName = (typeof STATIC_MODEL_PROVIDER_NAMES)[number];
+
+const providerNameSchema = z.enum(STATIC_MODEL_PROVIDER_NAMES);
 
 const supportedModelSchema = z.object({
   id: z.string().trim().min(1),
@@ -108,7 +112,7 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
 // supplying the JSON file and including it in this array so buildRegistry actually sees it.
 
 function buildRegistry(entries: SupportedModel[]) {
-  const byProvider: Record<ProviderName, SupportedModel[]> = {
+  const byProvider: Record<StaticModelProviderName, SupportedModel[]> = {
     google: [],
     openai: [],
     anthropic: [],
@@ -120,7 +124,7 @@ function buildRegistry(entries: SupportedModel[]) {
     "codex-cli": [],
   };
   const byKey = new Map<string, SupportedModel>();
-  const defaults = new Map<ProviderName, SupportedModel>();
+  const defaults = new Map<StaticModelProviderName, SupportedModel>();
 
   for (const entry of entries) {
     byProvider[entry.provider].push(entry);
@@ -137,7 +141,7 @@ function buildRegistry(entries: SupportedModel[]) {
     }
   }
 
-  for (const provider of Object.keys(byProvider) as ProviderName[]) {
+  for (const provider of STATIC_MODEL_PROVIDER_NAMES) {
     if (byProvider[provider].length === 0) {
       throw new Error(`No supported models configured for provider ${provider}.`);
     }
@@ -157,15 +161,23 @@ const MODEL_REGISTRY = buildRegistry(MODEL_REGISTRY_ENTRIES);
 
 export { MODEL_REGISTRY_ENTRIES };
 
+export function isStaticRegistryProvider(provider: ProviderName): provider is StaticModelProviderName {
+  return (STATIC_MODEL_PROVIDER_NAMES as readonly string[]).includes(provider);
+}
+
 export function listSupportedModels(provider: ProviderName): readonly SupportedModel[] {
-  return MODEL_REGISTRY.byProvider[provider];
+  return isStaticRegistryProvider(provider) ? MODEL_REGISTRY.byProvider[provider] : [];
 }
 
 export function getSupportedModel(provider: ProviderName, modelId: string): SupportedModel | null {
+  if (!isStaticRegistryProvider(provider)) return null;
   return MODEL_REGISTRY.byKey.get(`${provider}:${modelId.trim()}`) ?? null;
 }
 
 export function defaultSupportedModel(provider: ProviderName): SupportedModel {
+  if (!isStaticRegistryProvider(provider)) {
+    throw new Error(`Provider ${provider} uses dynamic model discovery and has no static default model.`);
+  }
   const entry = MODEL_REGISTRY.defaults.get(provider);
   if (!entry) throw new Error(`Missing default model for provider ${provider}.`);
   return entry;

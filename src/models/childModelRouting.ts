@@ -1,4 +1,4 @@
-import { assertSupportedModel } from "./registry";
+import { normalizeModelIdForProvider } from "./metadata";
 import {
   type ChildModelRoutingMode,
   isChildModelRoutingMode,
@@ -28,7 +28,7 @@ export function parseChildModelRef(raw: string, defaultProvider?: ProviderName, 
     if (!defaultProvider) {
       throw new Error(`Unsupported ${source} "${trimmed}". Expected provider:modelId.`);
     }
-    const modelId = assertSupportedModel(defaultProvider, trimmed, source).id;
+    const modelId = normalizeModelIdForProvider(defaultProvider, trimmed, source);
     return {
       provider: defaultProvider,
       modelId,
@@ -43,7 +43,7 @@ export function parseChildModelRef(raw: string, defaultProvider?: ProviderName, 
     throw new Error(`Unsupported ${source} "${trimmed}". Expected provider:modelId.`);
   }
 
-  const modelId = assertSupportedModel(providerRaw, modelRaw, source).id;
+  const modelId = normalizeModelIdForProvider(providerRaw, modelRaw, source);
   return {
     provider: providerRaw,
     modelId,
@@ -100,7 +100,8 @@ export function normalizeChildRoutingConfig(opts: {
   const mode = isChildModelRoutingMode(opts.childModelRoutingMode)
     ? opts.childModelRoutingMode
     : "same-provider";
-  const fallbackRef = childModelRef(opts.provider, assertSupportedModel(opts.provider, opts.model, "model").id);
+  const fallbackModelId = normalizeModelIdForProvider(opts.provider, opts.model, "model");
+  const fallbackRef = childModelRef(opts.provider, fallbackModelId);
   const allowedChildModelRefs = normalizeAllowedChildModelRefs(
     opts.allowedChildModelRefs ?? undefined,
     opts.provider,

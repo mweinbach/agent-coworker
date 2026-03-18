@@ -142,6 +142,88 @@ describe("desktop persistence state validation", () => {
     expect(loaded.providerState?.statusByName?.["codex-cli"]?.account?.email).toBe("max@example.com");
   });
 
+  test("saveState preserves LM Studio UI visibility preferences", async () => {
+    const persistence = new PersistenceService();
+    const validWorkspace = path.join(userDataDir, "workspace-lmstudio-ui");
+    await fs.mkdir(validWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_lmstudio_ui",
+          name: "LM Studio workspace",
+          path: validWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+      providerUiState: {
+        lmstudio: {
+          enabled: true,
+          hiddenModels: ["llama-3.2-vision"],
+        },
+      },
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.providerUiState).toEqual({
+      lmstudio: {
+        enabled: true,
+        hiddenModels: ["llama-3.2-vision"],
+      },
+    });
+  });
+
+  test("loadState enables LM Studio UI by default when the saved provider status is already connected", async () => {
+    const persistence = new PersistenceService();
+    const validWorkspace = path.join(userDataDir, "workspace-lmstudio-default");
+    await fs.mkdir(validWorkspace, { recursive: true });
+
+    await persistence.saveState({
+      version: 2,
+      workspaces: [
+        {
+          id: "ws_lmstudio_default",
+          name: "LM Studio workspace",
+          path: validWorkspace,
+          createdAt: TS,
+          lastOpenedAt: TS,
+          defaultEnableMcp: true,
+          defaultBackupsEnabled: true,
+          yolo: false,
+        },
+      ],
+      threads: [],
+      developerMode: false,
+      showHiddenFiles: false,
+      providerState: {
+        statusByName: {
+          lmstudio: {
+            provider: "lmstudio",
+            authorized: true,
+            verified: true,
+            mode: "local",
+            account: null,
+            message: "LM Studio reachable.",
+            checkedAt: TS,
+          },
+        },
+        statusLastUpdatedAt: TS,
+      },
+    });
+
+    const loaded = await persistence.loadState();
+    expect(loaded.providerUiState?.lmstudio.enabled).toBe(true);
+    expect(loaded.providerUiState?.lmstudio.hiddenModels).toEqual([]);
+  });
+
   test("saveState preserves workspace tool output overflow defaults", async () => {
     const persistence = new PersistenceService();
     const customWorkspace = path.join(userDataDir, "workspace-overflow-custom");
@@ -426,6 +508,12 @@ describe("desktop persistence state validation", () => {
       threads: [],
       developerMode: false,
       showHiddenFiles: false,
+      providerUiState: {
+        lmstudio: {
+          enabled: false,
+          hiddenModels: [],
+        },
+      },
     });
   });
 

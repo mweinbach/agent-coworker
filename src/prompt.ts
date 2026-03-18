@@ -3,7 +3,8 @@ import path from "node:path";
 
 import type { AgentConfig } from "./types";
 import { discoverSkills } from "./skills";
-import { assertSupportedModel, type SupportedModel } from "./models/registry";
+import { getResolvedModelMetadataSync, resolveModelMetadata } from "./models/metadata";
+import type { ResolvedModelMetadata } from "./models/metadataTypes";
 import { getChildAgentModelInfo, listChildAgentModelsWithInfo } from "./models/childAgentModelInfo";
 import { parseChildModelRef } from "./models/childModelRouting";
 import { MemoryStore } from "./memoryStore";
@@ -17,8 +18,13 @@ import { isUserFacingProviderEnabled } from "./providers/catalog";
 import type { ProviderName } from "./types";
 
 async function resolveSystemTemplatePath(config: AgentConfig): Promise<string> {
-  const supportedModel = assertSupportedModel(config.provider, config.model, "model");
-  const modelSystemPath = path.join(config.builtInDir, "prompts", supportedModel.promptTemplate);
+  const modelMetadata = await resolveModelMetadata(config.provider, config.model, {
+    allowPlaceholder: true,
+    providerOptions: config.providerOptions,
+    source: "model",
+    log: (line) => console.warn(line),
+  });
+  const modelSystemPath = path.join(config.builtInDir, "prompts", modelMetadata.promptTemplate);
   try {
     await fs.access(modelSystemPath);
     return modelSystemPath;
@@ -50,8 +56,8 @@ function renderTemplateVariables(prompt: string, vars: Record<string, string>): 
   return out.replace(/\{\{([A-Za-z0-9_]+)\}\}/g, (match, key: string) => vars[key] ?? match);
 }
 
-function renderCapabilitySpecificPrompt(prompt: string, supportedModel: SupportedModel): string {
-  if (supportedModel.supportsImageInput) return prompt;
+function renderCapabilitySpecificPrompt(prompt: string, modelMetadata: ResolvedModelMetadata): string {
+  if (modelMetadata.supportsImageInput) return prompt;
 
   let out = prompt;
   const replacements: Array<[RegExp, string]> = [
@@ -141,6 +147,7 @@ const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
   baseten: "Baseten",
   together: "Together AI",
   nvidia: "NVIDIA",
+  lmstudio: "LM Studio",
   "opencode-go": "OpenCode Go",
   "opencode-zen": "OpenCode Zen",
   "codex-cli": "Codex CLI",
@@ -148,7 +155,7 @@ const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
 
 function buildSpawnAgentPromptBody(config: AgentConfig): string {
   const providerLabel = PROVIDER_DISPLAY_NAMES[config.provider] ?? config.provider;
-  const currentModel = assertSupportedModel(config.provider, config.model, "model");
+  const currentModel = getResolvedModelMetadataSync(config.provider, config.model, "model");
 
   const roleLines = Object.values(AGENT_ROLE_DEFINITIONS)
     .map((role) => `- **${role.id}**: ${role.description}`)
@@ -158,7 +165,7 @@ function buildSpawnAgentPromptBody(config: AgentConfig): string {
     .map((ref) => {
       try {
         const parsed = parseChildModelRef(ref, config.provider, "child target");
-        const supported = assertSupportedModel(parsed.provider, parsed.modelId, "child target");
+        const supported = getResolvedModelMetadataSync(parsed.provider, parsed.modelId, "child target");
         const bestFor = getChildAgentModelInfo(parsed.provider, parsed.modelId)?.bestFor ?? "general-purpose work on this provider";
         const displayProvider = PROVIDER_DISPLAY_NAMES[parsed.provider] ?? parsed.provider;
         return `- **${displayProvider} / ${supported.displayName}** (\`${parsed.ref}\`): ${bestFor}.`;
@@ -170,6 +177,8 @@ function buildSpawnAgentPromptBody(config: AgentConfig): string {
   const providerSupportsUserFacingModels = isUserFacingProviderEnabled(config.provider);
   const modelLines = config.childModelRoutingMode === "cross-provider-allowlist" && crossProviderRefs.length > 0
     ? crossProviderRefs.join("\n")
+    : config.provider === "lmstudio"
+      ? "- Any LM Studio LLM key discovered at runtime is allowed. Use either the bare key or `lmstudio:<modelKey>`."
     : !providerSupportsUserFacingModels
       ? "- No user-facing child model overrides are available for this provider."
       : listChildAgentModelsWithInfo(config.provider)
@@ -284,7 +293,12 @@ export interface SystemPromptResult {
  * Use this when you need the skill metadata (e.g. for dynamic tool descriptions).
  */
 export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<SystemPromptResult> {
-  const supportedModel = assertSupportedModel(config.provider, config.model, "model");
+  const supportedModel = await resolveModelMetadata(config.provider, config.model, {
+    allowPlaceholder: true,
+    providerOptions: config.providerOptions,
+    source: "model",
+    log: (line) => console.warn(line),
+  });
   const systemPath = await resolveSystemTemplatePath(config);
   let prompt = await fs.readFile(systemPath, "utf-8");
 

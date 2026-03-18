@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { getAiCoworkerPaths } from "./connect";
 import { parseConnectionStoreJson } from "./store/connections";
-import { defaultModelForProvider, getModelForProvider, getProviderKeyCandidates } from "./providers";
+import { getModelForProvider, getProviderKeyCandidates } from "./providers";
 import { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } from "./shared/toolOutputOverflow";
 import {
   normalizeRuntimeNameForProvider,
@@ -17,8 +17,14 @@ import {
 } from "./types";
 import type { AgentConfig, CommandTemplateConfig, ProviderName, RuntimeName } from "./types";
 import { resolveAuthHomeDir } from "./utils/authHome";
-import { assertSupportedModel, defaultSupportedModel, getSupportedModel } from "./models/registry";
+import { defaultSupportedModel, getSupportedModel } from "./models/registry";
 import { normalizeChildRoutingConfig } from "./models/childModelRouting";
+import {
+  getResolvedModelMetadataSync,
+  normalizeModelIdForProvider,
+  resolveDefaultModelMetadata,
+  resolveModelMetadata,
+} from "./models/metadata";
 
 export { defaultModelForProvider } from "./providers";
 
@@ -84,7 +90,7 @@ function mergeProviderOptionDefaults(
   modelId: string,
   providerOptions: Record<string, any> | undefined,
 ): Record<string, any> | undefined {
-  const defaults = assertSupportedModel(provider, modelId, "model").providerOptionsDefaults;
+  const defaults = getResolvedModelMetadataSync(provider, modelId, "model").providerOptionsDefaults;
   const current = isPlainObject(providerOptions) ? deepMerge({}, providerOptions) as Record<string, any> : undefined;
   const currentProviderOptions =
     current && isPlainObject(current[provider]) ? current[provider] as Record<string, unknown> : undefined;
@@ -104,7 +110,22 @@ function mergeProviderOptionDefaults(
   };
 }
 
-function resolveSupportedConfiguredModel(provider: ProviderName, modelId: string, source: string) {
+async function resolveConfiguredModelMetadata(
+  provider: ProviderName,
+  modelId: string,
+  source: string,
+  providerOptions: Record<string, unknown> | undefined,
+  env: Record<string, string | undefined>,
+) {
+  if (provider === "lmstudio") {
+    return await resolveModelMetadata(provider, modelId, {
+      allowPlaceholder: true,
+      providerOptions,
+      env,
+      source,
+      log: (line) => console.warn(`[config] ${line}`),
+    });
+  }
   const supported = getSupportedModel(provider, modelId);
   if (supported) return supported;
   const fallback = defaultSupportedModel(provider);
@@ -316,13 +337,18 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
   const workingDirectory = env.AGENT_WORKING_DIR || cwd;
 
-  const model =
+  const providerOptions = isPlainObject((merged as Record<string, unknown>).providerOptions)
+    ? (deepMerge({}, (merged as Record<string, unknown>).providerOptions as Record<string, unknown>) as Record<string, unknown>)
+    : undefined;
+
+  const configuredModel =
     asNonEmptyString(env.AGENT_MODEL) ||
     asNonEmptyString(projectConfig.model) ||
     asNonEmptyString(userConfig.model) ||
-    (asProviderName(builtInDefaults.provider) === provider && asNonEmptyString(builtInDefaults.model)) ||
-    defaultModelForProvider(provider);
-  const supportedModel = resolveSupportedConfiguredModel(provider, model, "model");
+    (asProviderName(builtInDefaults.provider) === provider && asNonEmptyString(builtInDefaults.model));
+  const supportedModel = configuredModel
+    ? await resolveConfiguredModelMetadata(provider, configuredModel, "model", providerOptions, env)
+    : await resolveDefaultModelMetadata(provider, { providerOptions, env });
 
   const childModelRoutingMode =
     resolveChildModelRoutingMode(projectConfig.childModelRoutingMode) ||
@@ -486,12 +512,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
   };
 
   const command = parseCommandConfig((merged as Record<string, unknown>).command);
-  const providerOptions = isPlainObject((merged as Record<string, unknown>).providerOptions)
-    ? (deepMerge({}, (merged as Record<string, unknown>).providerOptions as Record<string, unknown>) as Record<string, any>)
-    : undefined;
   const disableBuiltInSkills = asBoolean(env.COWORK_DISABLE_BUILTIN_SKILLS) ?? false;
 
-  const normalizedProviderOptions = mergeProviderOptionDefaults(provider, supportedModel.id, providerOptions);
+  const normalizedProviderOptions = mergeProviderOptionDefaults(
+    provider,
+    supportedModel.id,
+    providerOptions as Record<string, any> | undefined,
+  );
 
   const mergedModelSettings = parseLayer(modelSettingsLayerSchema, (merged as Record<string, unknown>).modelSettings, {});
   const maxRetries = normalizeNonNegativeInt(env.AGENT_MODEL_MAX_RETRIES) ?? mergedModelSettings.maxRetries;
@@ -552,7 +579,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Agent
 
 export function getModel(config: AgentConfig, id?: string) {
   const modelId = id || config.model;
-  assertSupportedModel(config.provider, modelId, id ? "model override" : "model");
+  const normalizedModelId = normalizeModelIdForProvider(config.provider, modelId, id ? "model override" : "model");
   const savedKey = getSavedProviderApiKey(config, config.provider);
-  return getModelForProvider(config, modelId, savedKey);
+  return getModelForProvider(config, normalizedModelId, savedKey);
 }

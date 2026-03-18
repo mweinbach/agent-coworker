@@ -43,6 +43,19 @@ async function withEnv<T>(
   }
 }
 
+async function withMockedFetch<T>(
+  fetchImpl: typeof fetch,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = previous;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // loadConfig
 // ---------------------------------------------------------------------------
@@ -107,6 +120,94 @@ describe("loadConfig", () => {
 
     expect(cfg.provider).toBe("openai");
     expect(cfg.model).toBe("gpt-5.4");
+  });
+
+  test("accepts arbitrary LM Studio model ids discovered at runtime", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await withMockedFetch(
+      (async () => new Response(JSON.stringify({
+        models: [
+          {
+            type: "llm",
+            publisher: "local",
+            key: "local/qwen-2.5",
+            display_name: "Qwen 2.5 Local",
+            loaded_instances: [],
+            max_context_length: 32768,
+            capabilities: { vision: false, trained_for_tool_use: false },
+            size_bytes: 1,
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch,
+      async () => {
+        const cfg = await loadConfig({
+          cwd,
+          homedir: home,
+          builtInDir: repoRoot(),
+          env: {
+            AGENT_PROVIDER: "lmstudio",
+            AGENT_MODEL: "local/qwen-2.5",
+          },
+        });
+
+        expect(cfg.provider).toBe("lmstudio");
+        expect(cfg.model).toBe("local/qwen-2.5");
+        expect(cfg.preferredChildModel).toBe("local/qwen-2.5");
+        expect(cfg.knowledgeCutoff).toBe("Unknown");
+      },
+    );
+  });
+
+  test("uses the live LM Studio default selection policy when no model is configured", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    await withMockedFetch(
+      (async () => new Response(JSON.stringify({
+        models: [
+          {
+            type: "llm",
+            publisher: "local",
+            key: "local/beta",
+            display_name: "Beta",
+            loaded_instances: [],
+            max_context_length: 32768,
+            capabilities: { vision: false, trained_for_tool_use: false },
+            size_bytes: 1,
+          },
+          {
+            type: "llm",
+            publisher: "local",
+            key: "local/alpha",
+            display_name: "Alpha",
+            loaded_instances: [{ id: "inst-1", config: { context_length: 8192 } }],
+            max_context_length: 32768,
+            capabilities: { vision: false, trained_for_tool_use: false },
+            size_bytes: 1,
+          },
+        ],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch,
+      async () => {
+        const cfg = await loadConfig({
+          cwd,
+          homedir: home,
+          builtInDir: repoRoot(),
+          env: {
+            AGENT_PROVIDER: "lmstudio",
+          },
+        });
+
+        expect(cfg.provider).toBe("lmstudio");
+        expect(cfg.model).toBe("local/alpha");
+        expect(cfg.preferredChildModel).toBe("local/alpha");
+      },
+    );
   });
 
   test("runtime defaults follow the resolved provider and ignore unsupported AGENT_RUNTIME values", async () => {

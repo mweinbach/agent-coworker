@@ -2,7 +2,7 @@ import { defaultModelForProvider } from "../config";
 import { createRuntime } from "../runtime";
 import type { AgentConfig } from "../types";
 
-const TITLE_MODEL_BY_PROVIDER = {
+const TITLE_MODEL_BY_PROVIDER: Partial<Record<AgentConfig["provider"], string>> = {
   anthropic: "claude-haiku-4-5",
   baseten: "moonshotai/Kimi-K2.5",
   "codex-cli": "gpt-5.2-codex",
@@ -12,7 +12,7 @@ const TITLE_MODEL_BY_PROVIDER = {
   together: "moonshotai/Kimi-K2.5",
   "opencode-go": "glm-5",
   "opencode-zen": "glm-5",
-} as const satisfies Record<AgentConfig["provider"], string>;
+};
 
 const TITLE_MAX_TOKENS = 150;
 const TITLE_MAX_CHARS = 50;
@@ -96,10 +96,12 @@ export function heuristicTitleFromQuery(query: string): string {
 
 function modelCandidatesForProvider(
   provider: AgentConfig["provider"],
+  currentModel: string,
   defaultModelForProviderImpl: typeof defaultModelForProvider
 ): string[] {
   const candidates = [
     TITLE_MODEL_BY_PROVIDER[provider],
+    currentModel,
     defaultModelForProviderImpl(provider),
   ];
 
@@ -148,7 +150,11 @@ export function createSessionTitleGenerator(overrides: Partial<SessionTitleDeps>
       };
     }
 
-    const candidates = modelCandidatesForProvider(opts.config.provider, deps.defaultModelForProvider);
+    const candidates = modelCandidatesForProvider(
+      opts.config.provider,
+      opts.config.model,
+      deps.defaultModelForProvider,
+    );
 
     for (const modelId of candidates) {
       try {

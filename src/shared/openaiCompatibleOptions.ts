@@ -49,10 +49,18 @@ export type CodexCliProviderOptions = OpenAiCompatibleProviderOptions & {
   webSearch?: CodexWebSearchOptions;
 };
 
+export type LmStudioProviderOptions = {
+  baseUrl?: string;
+  contextLength?: number;
+  autoLoad?: boolean;
+  reloadOnContextMismatch?: boolean;
+};
+
 export type OpenAiCompatibleProviderOptionsByProvider = Partial<
   {
     openai: OpenAiProviderOptions;
     "codex-cli": CodexCliProviderOptions;
+    lmstudio: LmStudioProviderOptions;
   }
 >;
 
@@ -100,6 +108,27 @@ function pickStringArray(value: unknown): string[] | undefined {
     .map((entry) => pickTrimmedString(entry))
     .filter((entry): entry is string => !!entry);
   return next;
+}
+
+function pickPositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const normalized = Math.floor(value);
+    return normalized > 0 ? normalized : undefined;
+  }
+  if (typeof value !== "string") return undefined;
+  const parsed = Number(value.trim());
+  if (!Number.isFinite(parsed)) return undefined;
+  const normalized = Math.floor(parsed);
+  return normalized > 0 ? normalized : undefined;
+}
+
+function pickBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return undefined;
 }
 
 function pickCodexWebSearchLocation(value: unknown): CodexWebSearchLocation | undefined {
@@ -174,6 +203,30 @@ function pickCodexCliProviderOptionsSection(value: unknown): CodexCliProviderOpt
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+function pickLmStudioProviderOptionsSection(value: unknown): LmStudioProviderOptions | undefined {
+  if (!isPlainObject(value)) return undefined;
+
+  const next: LmStudioProviderOptions = {};
+  const baseUrl = pickTrimmedString(value.baseUrl);
+  if (baseUrl) {
+    next.baseUrl = baseUrl;
+  }
+  const contextLength = pickPositiveInteger(value.contextLength);
+  if (contextLength !== undefined) {
+    next.contextLength = contextLength;
+  }
+  const autoLoad = pickBoolean(value.autoLoad);
+  if (autoLoad !== undefined) {
+    next.autoLoad = autoLoad;
+  }
+  const reloadOnContextMismatch = pickBoolean(value.reloadOnContextMismatch);
+  if (reloadOnContextMismatch !== undefined) {
+    next.reloadOnContextMismatch = reloadOnContextMismatch;
+  }
+
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 export function pickEditableOpenAiCompatibleProviderOptions(
   providerOptions: unknown,
 ): OpenAiCompatibleProviderOptionsByProvider | undefined {
@@ -187,6 +240,10 @@ export function pickEditableOpenAiCompatibleProviderOptions(
   const codex = pickCodexCliProviderOptionsSection(providerOptions["codex-cli"]);
   if (codex) {
     out["codex-cli"] = codex;
+  }
+  const lmstudio = pickLmStudioProviderOptionsSection(providerOptions.lmstudio);
+  if (lmstudio) {
+    out.lmstudio = lmstudio;
   }
 
   return Object.keys(out).length > 0 ? out : undefined;
@@ -262,6 +319,15 @@ export function mergeEditableOpenAiCompatibleProviderOptions(
     current[provider] = {
       ...currentSection,
       ...cleanedPatch,
+    };
+  }
+
+  const lmstudioPatch = pickLmStudioProviderOptionsSection(patch.lmstudio);
+  if (lmstudioPatch) {
+    const currentSection = isPlainObject(current.lmstudio) ? { ...current.lmstudio } : {};
+    current.lmstudio = {
+      ...currentSection,
+      ...lmstudioPatch,
     };
   }
 

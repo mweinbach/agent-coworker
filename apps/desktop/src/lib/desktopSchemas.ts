@@ -204,6 +204,16 @@ const persistedOnboardingSchema = z.object({
   dismissedAt: z.preprocess((value) => (typeof value === "string" && value.trim() ? value : null), z.string().nullable()),
 }).optional();
 
+const persistedProviderUiStateSchema = z.object({
+  lmstudio: z.object({
+    enabled: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+    hiddenModels: z.preprocess(
+      (value) => Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [],
+      z.array(nonEmptyStringSchema),
+    ),
+  }).optional(),
+}).optional();
+
 export const persistedStateInputSchema: z.ZodType<PersistedState> = z.object({
   workspaces: z.array(persistedWorkspaceSchema),
   threads: z.array(persistedThreadSchema),
@@ -213,6 +223,7 @@ export const persistedStateInputSchema: z.ZodType<PersistedState> = z.object({
     (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 2),
     z.number().int().nonnegative(),
   ),
+  providerUiState: persistedProviderUiStateSchema,
   onboarding: persistedOnboardingSchema,
 }).passthrough() as z.ZodType<PersistedState>;
 

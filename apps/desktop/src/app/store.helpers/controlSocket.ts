@@ -322,7 +322,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
           const byName: Partial<Record<ProviderName, ProviderStatus>> = {};
           for (const p of evt.providers) byName[p.provider] = p;
           const connected = evt.providers
-            .filter((p) => p.authorized)
+            .filter((p) => p.authorized || p.verified)
             .map((p) => p.provider)
             .filter((provider): provider is ProviderName => deps.isProviderName(provider));
           set((s) => ({

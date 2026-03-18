@@ -1,4 +1,4 @@
-import { assertSupportedModel, providerOptionsDefaultsForModel } from "../../models/registry";
+import { getResolvedModelMetadataSync, normalizeModelIdForProvider } from "../../models/metadata";
 import {
   childModelRef,
   normalizeChildRoutingConfig,
@@ -32,7 +32,7 @@ function currentReasoningEffort(config: AgentConfig): AgentReasoningEffort | und
 }
 
 function modelDefaultReasoningEffort(provider: ProviderName, model: string): AgentReasoningEffort | undefined {
-  const defaults = providerOptionsDefaultsForModel(provider, model);
+  const defaults = getResolvedModelMetadataSync(provider, model, "child model").providerOptionsDefaults;
   const section = isPlainObject(defaults) ? defaults : {};
   return isOpenAiReasoningEffort(section.reasoningEffort) ? section.reasoningEffort : undefined;
 }
@@ -43,7 +43,7 @@ function applyReasoningEffort(
   effectiveReasoningEffort: AgentReasoningEffort | undefined,
 ): AgentConfig["providerOptions"] {
   const nextProviderOptions = isPlainObject(config.providerOptions) ? { ...config.providerOptions } : {};
-  const modelDefaults = providerOptionsDefaultsForModel(provider, config.model);
+  const modelDefaults = getResolvedModelMetadataSync(provider, config.model, "child model").providerOptionsDefaults;
   if (Object.keys(modelDefaults).length > 0) {
     const nextSection = isPlainObject(nextProviderOptions[provider])
       ? { ...(nextProviderOptions[provider] as Record<string, unknown>) }
@@ -89,11 +89,21 @@ export function routeAgentConfig(
   let fallbackLine: string | undefined;
 
   if (opts.role.modelPolicy?.fixedModel) {
-    effectiveModel = assertSupportedModel(parentConfig.provider, opts.role.modelPolicy.fixedModel, "child role model").id;
+    effectiveModel = normalizeModelIdForProvider(parentConfig.provider, opts.role.modelPolicy.fixedModel, "child role model");
   } else if (requestedModel) {
     const requestedTarget = parseChildModelRef(requestedModel, parentConfig.provider, "child model");
     if (requestedTarget.provider === parentConfig.provider) {
-      effectiveModel = requestedTarget.modelId;
+      if (
+        requestedTarget.provider === "lmstudio"
+        && requestedTarget.modelId !== parentConfig.model
+        && connectedProviders.size > 0
+        && !connectedProviders.has("lmstudio")
+      ) {
+        fallbackLine =
+          `[agent] Requested child target ${requestedTarget.ref} could not be used because LM Studio is not connected; falling back to ${childModelRef(parentConfig.provider, parentConfig.model)}.`;
+      } else {
+        effectiveModel = requestedTarget.modelId;
+      }
     } else {
       const allowedRefs = new Set(parentConfig.allowedChildModelRefs ?? []);
       const crossProviderEnabled = (parentConfig.childModelRoutingMode ?? "same-provider") === "cross-provider-allowlist";
@@ -121,10 +131,10 @@ export function routeAgentConfig(
       : undefined)
     ?? currentReasoningEffort(parentConfig);
 
-  const supportedEffectiveModel = assertSupportedModel(effectiveProvider, effectiveModel, "child model");
+  const resolvedEffectiveModel = getResolvedModelMetadataSync(effectiveProvider, effectiveModel, "child model");
   const normalizedChildRouting = normalizeChildRoutingConfig({
     provider: effectiveProvider,
-    model: supportedEffectiveModel.id,
+    model: resolvedEffectiveModel.id,
     childModelRoutingMode: parentConfig.childModelRoutingMode,
     preferredChildModelRef: parentConfig.preferredChildModelRef,
     allowedChildModelRefs: parentConfig.allowedChildModelRefs,
@@ -137,21 +147,21 @@ export function routeAgentConfig(
       ...parentConfig,
       provider: effectiveProvider,
       runtime: defaultRuntimeNameForProvider(effectiveProvider),
-      model: supportedEffectiveModel.id,
+      model: resolvedEffectiveModel.id,
       preferredChildModel: normalizedChildRouting.preferredChildModel,
       childModelRoutingMode: normalizedChildRouting.childModelRoutingMode,
       preferredChildModelRef: normalizedChildRouting.preferredChildModelRef,
       allowedChildModelRefs: normalizedChildRouting.allowedChildModelRefs,
-      knowledgeCutoff: supportedEffectiveModel.knowledgeCutoff,
+      knowledgeCutoff: resolvedEffectiveModel.knowledgeCutoff,
       providerOptions: applyReasoningEffort(
-        { ...parentConfig, provider: effectiveProvider, model: supportedEffectiveModel.id },
+        { ...parentConfig, provider: effectiveProvider, model: resolvedEffectiveModel.id },
         effectiveProvider,
         effectiveReasoningEffort,
       ),
     },
     ...(requestedModel ? { requestedModel } : {}),
     effectiveProvider,
-    effectiveModel: supportedEffectiveModel.id,
+    effectiveModel: resolvedEffectiveModel.id,
     ...(requestedReasoningEffort ? { requestedReasoningEffort } : {}),
     ...(effectiveReasoningEffort ? { effectiveReasoningEffort } : {}),
     ...(fallbackLine ? { fallbackLine } : {}),

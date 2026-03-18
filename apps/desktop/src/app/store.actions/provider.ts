@@ -46,7 +46,7 @@ import {
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
 
-export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "copyProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus"> {
+export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "connectProvider" | "setProviderApiKey" | "copyProviderApiKey" | "authorizeProviderAuth" | "logoutProviderAuth" | "callbackProviderAuth" | "requestProviderCatalog" | "requestProviderAuthMethods" | "refreshProviderStatus" | "setLmStudioEnabled" | "setLmStudioModelVisible"> {
   const resolveProviderWorkspaceId = (): string | null =>
     get().selectedWorkspaceId ?? get().workspaces[0]?.id ?? null;
 
@@ -66,6 +66,11 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
 
   return {
     connectProvider: async (provider, apiKey) => {
+      if (provider === "lmstudio") {
+        await get().setLmStudioEnabled(true);
+        return;
+      }
+
       const methods = providerAuthMethodsFor(get(), provider);
       const normalizedKey = (apiKey ?? "").trim();
   
@@ -406,6 +411,45 @@ export function createProviderActions(set: StoreSet, get: StoreGet): Pick<AppSto
           notifications: pushNotification(s.notifications, { id: makeId(), ts: nowIso(), kind: "error", title: "Not connected", detail: "Unable to refresh provider status." }),
         }));
       }
+    },
+
+    setLmStudioEnabled: async (enabled) => {
+      set((s) => ({
+        providerUiState: {
+          ...s.providerUiState,
+          lmstudio: {
+            ...s.providerUiState.lmstudio,
+            enabled,
+          },
+        },
+      }));
+      await persistNow(get);
+      if (enabled) {
+        await get().refreshProviderStatus();
+      }
+    },
+
+    setLmStudioModelVisible: async (modelId, visible) => {
+      const normalizedModelId = modelId.trim();
+      if (!normalizedModelId) return;
+      set((s) => {
+        const hiddenModels = new Set(s.providerUiState.lmstudio.hiddenModels);
+        if (visible) {
+          hiddenModels.delete(normalizedModelId);
+        } else {
+          hiddenModels.add(normalizedModelId);
+        }
+        return {
+          providerUiState: {
+            ...s.providerUiState,
+            lmstudio: {
+              ...s.providerUiState.lmstudio,
+              hiddenModels: [...hiddenModels].sort((a, b) => a.localeCompare(b)),
+            },
+          },
+        };
+      });
+      await persistNow(get);
     },
   
   };

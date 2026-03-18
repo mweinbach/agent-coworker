@@ -49,6 +49,7 @@ import {
   truncateTitle,
 } from "../store.helpers";
 import { deriveConnectedProviders, normalizePersistedProviderState } from "../persistedProviderState";
+import { deriveDefaultLmStudioUiEnabled, normalizePersistedProviderUiState } from "../providerUiState";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import {
   normalizeWorkspaceUserProfile,
@@ -128,12 +129,14 @@ const persistedWorkspaceSchema = z.object({
     const legacy = typeof asRecord.defaultSubAgentModel === "string" ? asRecord.defaultSubAgentModel.trim() : "";
     return legacy.length > 0 ? legacy : undefined;
   })();
-  const model = workspace.defaultModel ?? defaultModelForProvider(workspace.defaultProvider);
+  const model = workspace.defaultModel ?? (defaultModelForProvider(workspace.defaultProvider) || "");
   const childModelRoutingMode = (workspace.defaultChildModelRoutingMode ?? "same-provider") as ChildModelRoutingMode;
   const legacyPreferredValue = workspace.defaultPreferredChildModel ?? legacySubAgentModel ?? model;
   const preferredChildModelRef =
     workspace.defaultPreferredChildModelRef
-    ?? (legacyPreferredValue.includes(":") ? legacyPreferredValue : `${workspace.defaultProvider}:${legacyPreferredValue}`);
+    ?? (legacyPreferredValue
+      ? (legacyPreferredValue.includes(":") ? legacyPreferredValue : `${workspace.defaultProvider}:${legacyPreferredValue}`)
+      : "");
   return {
     id: workspace.id,
     name: workspace.name,
@@ -186,6 +189,12 @@ const persistedStateSchema = z.object({
   perWorkspaceSettings: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
 }).passthrough().transform((state) => {
   const providerState = normalizePersistedProviderState((state as { providerState?: unknown }).providerState);
+  const providerUiState = normalizePersistedProviderUiState((state as { providerUiState?: unknown }).providerUiState, {
+    defaultLmStudioEnabled: deriveDefaultLmStudioUiEnabled({
+      providerState,
+      workspaces: state.workspaces,
+    }),
+  });
   const onboarding = (state as { onboarding?: PersistedOnboardingState }).onboarding;
   const workspaceByRecency = [...state.workspaces].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
   const selectedWorkspaceId = workspaceByRecency[0]?.id ?? null;
@@ -207,6 +216,7 @@ const persistedStateSchema = z.object({
     showHiddenFiles: state.showHiddenFiles,
     perWorkspaceSettings: state.perWorkspaceSettings,
     providerState,
+    providerUiState,
     onboarding,
   };
 });
@@ -247,6 +257,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           providerStatusByName: state.providerState?.statusByName ?? {},
           providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
           providerConnected: connectedProviders,
+          providerUiState: state.providerUiState,
           developerMode: state.developerMode,
           showHiddenFiles: state.showHiddenFiles,
           perWorkspaceSettings: state.perWorkspaceSettings,
@@ -285,6 +296,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           providerAuthMethodsByProvider: {},
           providerLastAuthChallenge: null,
           providerLastAuthResult: null,
+          providerUiState: normalizePersistedProviderUiState(undefined),
           ready: true,
           startupError: detail,
           onboardingVisible: false,

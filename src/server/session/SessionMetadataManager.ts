@@ -25,6 +25,14 @@ export class SessionMetadataManager {
   private promptRefreshConfig(patch: SessionConfigPatch): AgentConfig {
     return {
       ...this.context.state.config,
+      ...(patch.providerOptions !== undefined
+        ? {
+            providerOptions: mergeEditableOpenAiCompatibleProviderOptions(
+              this.context.state.config.providerOptions,
+              patch.providerOptions,
+            ),
+          }
+        : {}),
       ...(patch.userName !== undefined ? { userName: patch.userName } : {}),
       ...(patch.userProfile !== undefined
         ? {
@@ -233,7 +241,12 @@ export class SessionMetadataManager {
     }
 
     let refreshedSystemPrompt: Awaited<ReturnType<SessionContext["deps"]["loadSystemPromptWithSkillsImpl"]>> | null = null;
-    if (patch.userName !== undefined || patch.userProfile !== undefined || patch.enableMemory !== undefined) {
+    if (
+      patch.userName !== undefined
+      || patch.userProfile !== undefined
+      || patch.enableMemory !== undefined
+      || patch.providerOptions !== undefined
+    ) {
       try {
         refreshedSystemPrompt = await this.context.deps.loadSystemPromptWithSkillsImpl(this.promptRefreshConfig(patch));
       } catch (err) {

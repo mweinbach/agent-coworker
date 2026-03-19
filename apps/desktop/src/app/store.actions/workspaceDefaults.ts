@@ -44,6 +44,7 @@ import {
   sendUserMessageToThread,
   normalizeThreadTitleSource,
   truncateTitle,
+  waitForControlSession,
 } from "../store.helpers";
 import { mergeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import { normalizeWorkspaceUserProfile } from "../types";
@@ -51,7 +52,10 @@ import type { ThreadRecord, WorkspaceDefaultsPatch, WorkspaceRecord } from "../t
 
 export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "applyWorkspaceDefaultsToThread" | "updateWorkspaceDefaults"> {
   return {
-    applyWorkspaceDefaultsToThread: async (threadId: string, mode: "auto" | "explicit" = "explicit") => {
+    applyWorkspaceDefaultsToThread: async (
+      threadId: string,
+      mode: "auto" | "auto-resume" | "explicit" = "explicit",
+    ) => {
       const thread = get().threads.find((t) => t.id === threadId);
       if (!thread) return;
       const ws = get().workspaces.find((w) => w.id === thread.workspaceId);
@@ -98,12 +102,16 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       // busy — changing the model mid-turn is not safe.
       if (rt.busy) {
         RUNTIME.pendingWorkspaceDefaultApplyThreadIds.add(threadId);
+        RUNTIME.pendingWorkspaceDefaultApplyModeByThread.set(threadId, mode);
         return;
       }
       RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
+      RUNTIME.pendingWorkspaceDefaultApplyModeByThread.delete(threadId);
+
+      const preserveSessionModel = mode === "auto-resume";
 
       const inferredProvider =
-        ws.defaultProvider && isProviderName(ws.defaultProvider)
+        !preserveSessionModel && ws.defaultProvider && isProviderName(ws.defaultProvider)
           ? ws.defaultProvider
           : isProviderName((rt.config as any)?.provider)
             ? ((rt.config as any).provider as ProviderName)
@@ -111,27 +119,41 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
 
       const provider = inferredProvider;
       const liveDefaultModel = get().providerDefaultModelByProvider[provider]?.trim() || "";
-      const model = (ws.defaultModel?.trim() || liveDefaultModel || rt.config?.model?.trim() || "") || undefined;
-      const preferredChildModel =
-        (ws.defaultPreferredChildModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.preferredChildModel?.trim() || "") || undefined;
+      const model = (
+        preserveSessionModel
+          ? rt.config?.model?.trim()
+          : ws.defaultModel?.trim() || liveDefaultModel || rt.config?.model?.trim() || ""
+      ) || undefined;
+      const preferredChildModel = (
+        preserveSessionModel
+          ? rt.sessionConfig?.preferredChildModel?.trim() || rt.config?.model?.trim() || ""
+          : ws.defaultPreferredChildModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.preferredChildModel?.trim() || ""
+      ) || undefined;
       const childModelRoutingMode =
-        ws.defaultChildModelRoutingMode
-        ?? rt.sessionConfig?.childModelRoutingMode
-        ?? "same-provider";
+        preserveSessionModel
+          ? rt.sessionConfig?.childModelRoutingMode ?? "same-provider"
+          : ws.defaultChildModelRoutingMode
+            ?? rt.sessionConfig?.childModelRoutingMode
+            ?? "same-provider";
       const preferredChildModelRef =
-        ws.defaultPreferredChildModelRef?.trim()
-        || rt.sessionConfig?.preferredChildModelRef?.trim()
+        (
+          preserveSessionModel
+            ? rt.sessionConfig?.preferredChildModelRef?.trim()
+            : ws.defaultPreferredChildModelRef?.trim() || rt.sessionConfig?.preferredChildModelRef?.trim()
+        )
         || (provider && preferredChildModel ? `${provider}:${preferredChildModel}` : undefined);
       const allowedChildModelRefs =
-        ws.defaultAllowedChildModelRefs
-        ?? rt.sessionConfig?.allowedChildModelRefs
-        ?? [];
+        preserveSessionModel
+          ? rt.sessionConfig?.allowedChildModelRefs ?? []
+          : ws.defaultAllowedChildModelRefs
+            ?? rt.sessionConfig?.allowedChildModelRefs
+            ?? [];
       const providerOptions = ws.providerOptions;
       const userName = ws.userName;
       const userProfile = ws.userProfile ? normalizeWorkspaceUserProfile(ws.userProfile) : undefined;
       const hasProfileDefaults = userName !== undefined || userProfile !== undefined;
 
-      if (provider && model) {
+      if (!preserveSessionModel && provider && model) {
         const ok = sendThread(get, threadId, (sessionId) => ({
           type: "set_model",
           sessionId,
@@ -228,11 +250,11 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         return;
       }
 
-      const workspace = get().workspaces.find((w) => w.id === workspaceId);
-      if (!workspace) return;
-
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
+      const controlReady = await waitForControlSession(get, workspaceId);
+      const workspace = get().workspaces.find((w) => w.id === workspaceId);
+      if (!workspace) return;
 
       const provider = (
         workspace.defaultProvider && isProviderName(workspace.defaultProvider)
@@ -251,7 +273,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const userProfile = workspace.userProfile ? normalizeWorkspaceUserProfile(workspace.userProfile) : undefined;
       const clearToolOutputOverflowChars = clearDefaultToolOutputOverflowChars === true;
 
-      const modelPersisted = model
+      const modelPersisted = controlReady && model
         ? sendControl(get, workspaceId, (sessionId) => ({
             type: "set_model",
             sessionId,
@@ -259,7 +281,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
             model,
           }))
         : false;
-      const subAgentPersisted = sendControl(get, workspaceId, (sessionId) => ({
+      const subAgentPersisted = controlReady && sendControl(get, workspaceId, (sessionId) => ({
         type: "set_config",
         sessionId,
         config: {
@@ -278,7 +300,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           ...(userProfile !== undefined ? { userProfile } : {}),
         },
       }));
-      const mcpPersisted = sendControl(get, workspaceId, (sessionId) => ({
+      const mcpPersisted = controlReady && sendControl(get, workspaceId, (sessionId) => ({
         type: "set_enable_mcp",
         sessionId,
         enableMcp: workspace.defaultEnableMcp,

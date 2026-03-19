@@ -10,7 +10,7 @@ import type { ToolContext } from "../src/tools/context";
 import { createReadTool } from "../src/tools/read";
 import { createWriteTool } from "../src/tools/write";
 import { createEditTool } from "../src/tools/edit";
-import { createBashTool } from "../src/tools/bash";
+import { __internal as bashInternal, createBashTool } from "../src/tools/bash";
 import { createGlobTool } from "../src/tools/glob";
 import { createGrepTool } from "../src/tools/grep";
 import { createWebSearchTool } from "../src/tools/webSearch";
@@ -496,6 +496,52 @@ describe("edit tool", () => {
 // ---------------------------------------------------------------------------
 
 describe("bash tool", () => {
+  test("advertises Windows PowerShell guidance in the tool description", async () => {
+    const dir = await tmpDir();
+    const t: any = createBashTool(makeCtx(dir));
+    expect(t.description).toContain("preferring `pwsh` and falling back to `powershell.exe`");
+    expect(t.description).toContain("do not rely on `&&`, `export`, or `source`");
+    expect(t.description).toContain("prefer `py -3` or `python`");
+  });
+
+  test("prefers pwsh before powershell.exe on Windows", async () => {
+    const seen: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/tmp",
+      platform: "win32",
+      execRunner: async (file: string) => {
+        seen.push(file);
+        if (file === "pwsh") {
+          return { stdout: "hi\n", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "", stderr: "", exitCode: 1, errorCode: "ENOENT" };
+      },
+    });
+
+    expect(seen).toEqual(["pwsh"]);
+    expect(result.stdout.trim()).toBe("hi");
+  });
+
+  test("falls back to powershell.exe when pwsh is unavailable", async () => {
+    const seen: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/tmp",
+      platform: "win32",
+      execRunner: async (file: string) => {
+        seen.push(file);
+        if (file === "pwsh") {
+          return { stdout: "", stderr: "", exitCode: 1, errorCode: "ENOENT" };
+        }
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(seen).toEqual(["pwsh", "powershell.exe"]);
+    expect(result.stdout.trim()).toBe("hi");
+  });
+
   test("executes simple command and returns stdout", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
@@ -1180,8 +1226,8 @@ describe("webSearch tool", () => {
           makeCtx(dir, {
             config: makeConfig(dir, {
               provider: "google",
-              model: "gemini-3-pro-preview",
-              preferredChildModel: "gemini-3-pro-preview",
+              model: "gemini-3.1-pro-preview",
+              preferredChildModel: "gemini-3.1-pro-preview",
             }),
           })
         );
@@ -1270,14 +1316,27 @@ describe("webSearch tool", () => {
 
     try {
       const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
-      const out: string = await t.execute({
+      const out = await t.execute({
         searchQuery: "latest sdk changelog",
         maxResults: 3,
       });
-      expect(out).toContain("Result title");
-      expect(out).toContain("https://example.com");
-      expect(out).toContain("Primary highlight");
-      expect(out).not.toContain("Fallback snippet");
+      expect(out).toMatchObject({
+        provider: "exa",
+        count: 1,
+        request: {
+          query: "latest sdk changelog",
+          numResults: 3,
+          type: "auto",
+        },
+      });
+      expect((out as any).response.results).toEqual([
+        {
+          title: "Result title",
+          url: "https://example.com",
+          highlights: ["Primary highlight"],
+          text: "Fallback snippet",
+        },
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;
@@ -1350,14 +1409,29 @@ describe("webSearch tool", () => {
 
     try {
       const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
-      const out: string = await t.execute({
+      const out = await t.execute({
         query: "latest nvidia news",
         maxResults: 5,
         type: "deep",
         category: "company",
       });
-      expect(out).toContain("Nvidia result");
-      expect(out).toContain("Deep company highlight");
+      expect(out).toMatchObject({
+        provider: "exa",
+        count: 1,
+        request: {
+          query: "latest nvidia news",
+          numResults: 5,
+          type: "deep",
+          category: "company",
+        },
+      });
+      expect((out as any).response.results).toEqual([
+        {
+          title: "Nvidia result",
+          url: "https://example.com/nvda",
+          highlights: ["Deep company highlight"],
+        },
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;
@@ -1395,12 +1469,27 @@ describe("webSearch tool", () => {
 
     try {
       const t: any = createWebSearchTool(makeCustomSearchCtx(dir));
-      const out: string = await t.execute({
+      const out = await t.execute({
         query: "latest nvidia news",
         category: "news article",
       });
-      expect(out).toContain("News result");
-      expect(out).toContain("News highlight");
+      expect(out).toMatchObject({
+        provider: "exa",
+        count: 1,
+        request: {
+          query: "latest nvidia news",
+          numResults: 10,
+          type: "auto",
+          category: "news",
+        },
+      });
+      expect((out as any).response.results).toEqual([
+        {
+          title: "News result",
+          url: "https://example.com/news",
+          highlights: ["News highlight"],
+        },
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
       if (oldExa) process.env.EXA_API_KEY = oldExa;
@@ -3061,6 +3150,34 @@ describe("skill tool", () => {
     expect(res).toContain("shared Cowork cache");
   });
 
+  test("loads built-in slides when project/global/user skill dirs are empty", async () => {
+    const dir = await tmpDir();
+    const projectSkills = path.join(dir, "project-skills");
+    const globalSkills = path.join(dir, "global-skills");
+    const userSkills = path.join(dir, "user-skills");
+    const builtInSkills = path.join(dir, "built-in-skills");
+    await fs.mkdir(projectSkills, { recursive: true });
+    await fs.mkdir(globalSkills, { recursive: true });
+    await fs.mkdir(userSkills, { recursive: true });
+    await fs.mkdir(path.join(builtInSkills, "slides"), { recursive: true });
+    await fs.writeFile(
+      path.join(builtInSkills, "slides", "SKILL.md"),
+      skillDoc("slides", "Built-in slides skill.", "# Slides Skill\nBuilt-in deck workflow."),
+      "utf-8"
+    );
+
+    const config = makeConfig(dir, {
+      skillsDirs: [projectSkills, globalSkills, userSkills, builtInSkills],
+    });
+    const ctx = makeCtx(dir);
+    ctx.config = config;
+
+    const t: any = createSkillTool(ctx);
+    const res: string = await t.execute({ skillName: "slides" });
+    expect(res).toContain("Built-in deck workflow.");
+    expect(res).toContain("## Cowork Addendum");
+  });
+
   test("returns not found when skillsDirs is empty", async () => {
     const dir = await tmpDir();
     const config = makeConfig(dir);
@@ -3344,6 +3461,43 @@ describe("createTools", () => {
     );
 
     expect(tools).toHaveProperty("webSearch");
+  });
+
+  test("replaces local webSearch but keeps webFetch for google when native web tools are enabled", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          preferredChildModel: "gemini-3-flash-preview",
+          providerOptions: {
+            google: {
+              nativeWebSearch: true,
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(tools).not.toHaveProperty("webSearch");
+    expect(tools).toHaveProperty("webFetch");
+  });
+
+  test("keeps local webSearch and webFetch for google when native web search is disabled", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          preferredChildModel: "gemini-3-flash-preview",
+        }),
+      }),
+    );
+
+    expect(tools).toHaveProperty("webSearch");
+    expect(tools).toHaveProperty("webFetch");
   });
 
   test("omits memory tool when enableMemory is false", async () => {

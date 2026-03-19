@@ -228,4 +228,17 @@ export class AgentControl {
     this.deps.sessionBindings.delete(binding.session.id);
     return this.publish(opts.parentSessionId, binding.session, { executionState: "closed" });
   }
+
+  cancelAll(parentSessionId: string): void {
+    for (const binding of this.deps.sessionBindings.values()) {
+      const session = binding.session;
+      if (!session?.isAgentOf(parentSessionId)) continue;
+      try {
+        session.cancel();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.deps.emitParentLog(parentSessionId, `Failed to cancel child agent ${session.id}: ${message}`);
+      }
+    }
+  }
 }

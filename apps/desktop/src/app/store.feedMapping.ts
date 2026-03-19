@@ -19,11 +19,13 @@ import {
 } from "./modelStream";
 
 export type ThreadModelStreamRuntime = {
+  activeTurnId: string | null;
   assistantItemIdByStream: Map<string, string>;
   assistantTextByStream: Map<string, string>;
   lastAssistantStreamKeyByTurn: Map<string, string>;
   reasoningItemIdByStream: Map<string, string>;
   reasoningTextByStream: Map<string, string>;
+  reasoningTextsSeenInTurn: Set<string>;
   reasoningTurns: Set<string>;
   toolItemIdByKey: Map<string, string>;
   latestToolKeyByTurnAndName: Map<string, string>;
@@ -148,11 +150,13 @@ export function unhandledEventSystemLine(type: string): string {
 
 export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
   return {
+    activeTurnId: null,
     assistantItemIdByStream: new Map(),
     assistantTextByStream: new Map(),
     lastAssistantStreamKeyByTurn: new Map(),
     reasoningItemIdByStream: new Map(),
     reasoningTextByStream: new Map(),
+    reasoningTextsSeenInTurn: new Set(),
     reasoningTurns: new Set(),
     toolItemIdByKey: new Map(),
     latestToolKeyByTurnAndName: new Map(),
@@ -164,18 +168,67 @@ export function createThreadModelStreamRuntime(): ThreadModelStreamRuntime {
 }
 
 export function clearThreadModelStreamRuntime(runtime: ThreadModelStreamRuntime) {
+  runtime.activeTurnId = null;
+  clearStepLocalModelStreamRuntime(runtime, { snapshotReasoning: false });
+  runtime.reasoningTextsSeenInTurn.clear();
+  runtime.reasoningTurns.clear();
+  runtime.toolItemIdByKey.clear();
+  runtime.latestToolKeyByTurnAndName.clear();
+  runtime.toolInputByKey.clear();
+  runtime.lastReasoningTurnId = null;
+  clearModelStreamReplayRuntime(runtime.replay);
+}
+
+function normalizeReasoningText(text: string): string | null {
+  const normalized = text.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function rememberStreamedReasoningTexts(runtime: ThreadModelStreamRuntime) {
+  for (const text of runtime.reasoningTextByStream.values()) {
+    const normalized = normalizeReasoningText(text);
+    if (normalized) {
+      runtime.reasoningTextsSeenInTurn.add(normalized);
+    }
+  }
+}
+
+function clearStepLocalModelStreamRuntime(
+  runtime: ThreadModelStreamRuntime,
+  opts: { snapshotReasoning?: boolean } = {},
+) {
+  if (opts.snapshotReasoning !== false) {
+    rememberStreamedReasoningTexts(runtime);
+  }
   runtime.assistantItemIdByStream.clear();
   runtime.assistantTextByStream.clear();
   runtime.lastAssistantStreamKeyByTurn.clear();
   runtime.reasoningItemIdByStream.clear();
   runtime.reasoningTextByStream.clear();
-  runtime.reasoningTurns.clear();
+  runtime.lastAssistantTurnId = null;
+  runtime.lastReasoningTurnId = null;
+}
+
+export function hasMatchingStreamedReasoningText(
+  runtime: ThreadModelStreamRuntime,
+  text: string,
+): boolean {
+  const normalized = normalizeReasoningText(text);
+  if (!normalized) return false;
+  if (runtime.reasoningTextsSeenInTurn.has(normalized)) return true;
+
+  for (const current of runtime.reasoningTextByStream.values()) {
+    if (normalizeReasoningText(current) === normalized) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function clearStepLocalToolRuntime(runtime: ThreadModelStreamRuntime) {
   runtime.toolItemIdByKey.clear();
   runtime.latestToolKeyByTurnAndName.clear();
   runtime.toolInputByKey.clear();
-  runtime.lastAssistantTurnId = null;
-  runtime.lastReasoningTurnId = null;
-  clearModelStreamReplayRuntime(runtime.replay);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -325,7 +378,7 @@ function rememberLatestToolKey(stream: ThreadModelStreamRuntime, turnId: string,
 }
 
 function shouldReuseLatestToolItemByName(name: string): boolean {
-  return name !== "nativeWebSearch";
+  return name !== "nativeWebSearch" && name !== "nativeUrlContext";
 }
 
 function resolveToolItem(
@@ -505,7 +558,13 @@ function applyModelStreamUpdate(
   };
 
   if (update.kind === "turn_start") {
-    clearThreadModelStreamRuntime(stream);
+    if (stream.activeTurnId !== update.turnId) {
+      clearThreadModelStreamRuntime(stream);
+      stream.activeTurnId = update.turnId;
+    } else {
+      clearStepLocalModelStreamRuntime(stream);
+      clearStepLocalToolRuntime(stream);
+    }
     return;
   }
 
@@ -992,7 +1051,7 @@ export function mapTranscriptToFeed(events: TranscriptEvent[]): FeedItem[] {
     }
 
     if (payload.type === "reasoning" || payload.type === "assistant_reasoning" || payload.type === "reasoning_summary") {
-      if (stream.lastReasoningTurnId && stream.reasoningTurns.has(stream.lastReasoningTurnId)) continue;
+      if (hasMatchingStreamedReasoningText(stream, String(payload.text ?? ""))) continue;
       const mode =
         payload.type === "reasoning_summary"
           ? "summary"

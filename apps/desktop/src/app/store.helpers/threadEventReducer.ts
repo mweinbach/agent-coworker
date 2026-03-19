@@ -10,6 +10,7 @@ import {
 import {
   applyModelStreamUpdateToThreadFeed as applyModelStreamUpdateToThreadFeedCore,
   developerDiagnosticSystemLineFromServerEvent,
+  hasMatchingStreamedReasoningText,
   reasoningInsertBeforeAssistantAfterStreamReplay,
   shouldSkipAssistantMessageAfterStreamReplay,
   shouldSuppressRawDebugLogLine,
@@ -395,7 +396,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         clearPendingThreadSteers(threadId);
       }
 
-      void get().applyWorkspaceDefaultsToThread(threadId, "auto");
+      void get().applyWorkspaceDefaultsToThread(threadId, evt.isResume ? "auto-resume" : "auto");
       RUNTIME.threadSockets.get(threadId)?.send({
         type: "get_session_usage",
         sessionId: evt.sessionId,
@@ -472,7 +473,8 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         };
       });
       if (!evt.busy && RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)) {
-        void get().applyWorkspaceDefaultsToThread(threadId, "auto");
+        const pendingMode = RUNTIME.pendingWorkspaceDefaultApplyModeByThread.get(threadId) ?? "auto";
+        void get().applyWorkspaceDefaultsToThread(threadId, pendingMode);
       }
       if (!evt.busy) {
         clearPendingThreadSteers(threadId);
@@ -823,7 +825,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     }
 
     if (evt.type === "reasoning") {
-      if (stream.lastReasoningTurnId && stream.reasoningTurns.has(stream.lastReasoningTurnId)) {
+      if (hasMatchingStreamedReasoningText(stream, evt.text)) {
         return;
       }
 
@@ -930,6 +932,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
         RUNTIME.threadSockets.delete(threadId);
         RUNTIME.modelStreamByThread.delete(threadId);
         RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
+        RUNTIME.pendingWorkspaceDefaultApplyModeByThread.delete(threadId);
         set((s) => {
           const rt = s.threadRuntimeById[threadId];
           if (!rt) return {};

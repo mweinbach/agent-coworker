@@ -1,0 +1,14 @@
+{
+  "id": "gemini-3.1-flash-lite-preview",
+  "provider": "google",
+  "displayName": "Gemini 3.1 Flash-Lite Preview",
+  "knowledgeCutoff": "January 2025",
+  "supportsImageInput": true,
+  "promptTemplate": "system-models/gemini-3-flash-preview.md",
+  "providerOptionsDefaults": {
+    "thinkingConfig": {
+      "includeThoughts": true
+    }
+  },
+  "isDefault": false
+}

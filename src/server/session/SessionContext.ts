@@ -6,8 +6,8 @@ import type { HarnessContextStore } from "../../harness/contextStore";
 import type { MCPRegistryServer } from "../../mcp/configRegistry";
 import type { getProviderCatalog } from "../../providers/connectionCatalog";
 import type { getProviderStatuses } from "../../providerStatus";
-import type { OpenAiContinuationState } from "../../shared/openaiContinuation";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../../shared/openaiCompatibleOptions";
+import type { ProviderContinuationState } from "../../shared/providerContinuation";
 import type { AgentReasoningEffort, PersistentAgentSummary, AgentRole } from "../../shared/agents";
 import type {
   AgentConfig,
@@ -72,7 +72,7 @@ export type HydratedSessionState = {
   status: SessionPersistenceStatus;
   hasGeneratedTitle: boolean;
   messages: ModelMessage[];
-  providerState: OpenAiContinuationState | null;
+  providerState: ProviderContinuationState | null;
   todos: TodoItem[];
   harnessContext: HarnessContextState | null;
   backupsEnabledOverride: boolean | null;
@@ -99,7 +99,7 @@ export type SessionRuntimeState = {
   yolo: boolean;
   messages: ModelMessage[];
   allMessages: ModelMessage[];
-  providerState: OpenAiContinuationState | null;
+  providerState: ProviderContinuationState | null;
   running: boolean;
   connecting: boolean;
   abortController: AbortController | null;
@@ -165,6 +165,7 @@ export type SessionDependencies = {
     parentSessionId: string;
     agentId: string;
   }) => Promise<PersistentAgentSummary>;
+  cancelAgentSessionsImpl?: (parentSessionId: string) => void;
   deleteSessionImpl?: (opts: {
     requesterSessionId: string;
     targetSessionId: string;

@@ -58,6 +58,19 @@ function extractToolResultText(value: unknown): string | null {
   return null;
 }
 
+function maybeParseJson(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
 function toMarkdownCitationLabel(id: string, citationUrlsByIndex?: ReadonlyMap<number, string>): string | null {
   const numericId = Number.parseInt(id, 10);
   const url = Number.isFinite(numericId) ? citationUrlsByIndex?.get(numericId) : undefined;
@@ -97,21 +110,22 @@ function extractOverflowFilePath(value: unknown): string | null {
   return null;
 }
 
-type UrlCitationAnnotation = {
+type LinkCitationAnnotation = {
   startIndex: number;
   endIndex: number;
   url: string;
+  title?: string;
 };
 
-function extractUrlCitationAnnotations(value: unknown): UrlCitationAnnotation[] {
+function extractLinkCitationAnnotations(value: unknown): LinkCitationAnnotation[] {
   if (!Array.isArray(value)) {
     return [];
   }
 
-  const annotations: UrlCitationAnnotation[] = [];
+  const annotations: LinkCitationAnnotation[] = [];
   for (const entry of value) {
     if (!isRecord(entry)) continue;
-    if (entry.type !== "url_citation") continue;
+    if (entry.type !== "url_citation" && entry.type !== "place_citation") continue;
     if (typeof entry.url !== "string" || entry.url.trim().length === 0) continue;
     if (typeof entry.start_index !== "number" || !Number.isFinite(entry.start_index)) continue;
     if (typeof entry.end_index !== "number" || !Number.isFinite(entry.end_index)) continue;
@@ -119,6 +133,11 @@ function extractUrlCitationAnnotations(value: unknown): UrlCitationAnnotation[] 
       startIndex: Math.max(0, Math.trunc(entry.start_index)),
       endIndex: Math.max(0, Math.trunc(entry.end_index)),
       url: entry.url,
+      ...(typeof entry.title === "string" && entry.title.trim().length > 0
+        ? { title: entry.title }
+        : typeof entry.name === "string" && entry.name.trim().length > 0
+          ? { title: entry.name }
+          : {}),
     });
   }
 
@@ -129,7 +148,7 @@ export function extractCitationUrlsFromAnnotations(annotations: unknown): Map<nu
   const byUrl = new Map<string, number>();
   const out = new Map<number, string>();
 
-  for (const annotation of extractUrlCitationAnnotations(annotations)) {
+  for (const annotation of extractLinkCitationAnnotations(annotations)) {
     if (byUrl.has(annotation.url)) continue;
     const nextIndex = byUrl.size + 1;
     byUrl.set(annotation.url, nextIndex);
@@ -143,6 +162,59 @@ export type CitationSource = {
   url: string;
   title?: string;
 };
+
+function exaResultsArray(value: unknown): unknown[] {
+  if (typeof value === "string") {
+    const parsed = maybeParseJson(value);
+    if (parsed !== undefined) {
+      return exaResultsArray(parsed);
+    }
+    return [];
+  }
+
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  if (Array.isArray(value.results)) {
+    return value.results;
+  }
+
+  if (isRecord(value.response) && Array.isArray(value.response.results)) {
+    return value.response.results;
+  }
+
+  if ("output" in value) {
+    return exaResultsArray(value.output);
+  }
+
+  if ("result" in value) {
+    return exaResultsArray(value.result);
+  }
+
+  return [];
+}
+
+function extractStructuredCitationSourcesFromWebSearchResult(result: unknown): CitationSource[] {
+  const sources: CitationSource[] = [];
+  const seenUrls = new Set<string>();
+
+  for (const entry of exaResultsArray(result)) {
+    if (!isRecord(entry)) continue;
+    const url = typeof entry.url === "string" ? entry.url.trim() : "";
+    if (!url || seenUrls.has(url)) continue;
+    seenUrls.add(url);
+
+    const source: CitationSource = { url };
+    const title = typeof entry.title === "string" ? entry.title.trim() : "";
+    if (title) {
+      source.title = title;
+    }
+    sources.push(source);
+  }
+
+  return sources;
+}
 
 function extractCitationUrlsFromNativeWebSearchResult(result: unknown): Map<number, string> {
   const record = isRecord(result) ? result : null;
@@ -179,6 +251,31 @@ function extractCitationSourcesFromNativeWebSearchResult(result: unknown): Map<n
     })
     .filter((s): s is CitationSource => !!s);
   return new Map(sources.map((source, index) => [index + 1, source] as const));
+}
+
+function extractCitationSourcesFromNativeUrlContextResult(result: unknown): Map<number, CitationSource> {
+  const record = isRecord(result) ? result : null;
+  const urls = [
+    ...(
+      Array.isArray(record?.urls)
+        ? record.urls
+        : []
+    ),
+    ...(
+      Array.isArray(record?.results)
+        ? record.results.map((entry) => isRecord(entry) ? entry.url : undefined)
+        : []
+    ),
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const deduped = [...new Set(urls)];
+  return new Map(deduped.map((url, index) => [index + 1, { url }] as const));
+}
+
+function extractCitationUrlsFromNativeUrlContextResult(result: unknown): Map<number, string> {
+  return new Map(
+    [...extractCitationSourcesFromNativeUrlContextResult(result).entries()].map(([index, source]) => [index, source.url] as const),
+  );
 }
 
 function renderCitationIds(
@@ -234,7 +331,7 @@ function renderSourcesFooter(options: CitationDisplayOptions): string {
 }
 
 function insertNativeCitationMarkers(text: string, options: CitationDisplayOptions): string {
-  const annotations = extractUrlCitationAnnotations(options.annotations);
+  const annotations = extractLinkCitationAnnotations(options.annotations);
   if (annotations.length === 0) {
     return text;
   }
@@ -279,6 +376,11 @@ function insertNativeCitationMarkers(text: string, options: CitationDisplayOptio
 }
 
 export function extractCitationSourcesFromWebSearchResult(result: unknown): CitationSource[] {
+  const structuredSources = extractStructuredCitationSourcesFromWebSearchResult(result);
+  if (structuredSources.length > 0) {
+    return structuredSources;
+  }
+
   const text = extractToolResultText(result);
   if (!text) return [];
 
@@ -301,6 +403,11 @@ export function extractCitationSourcesFromWebSearchResult(result: unknown): Cita
 }
 
 export function extractCitationUrlsFromWebSearchResult(result: unknown): Map<number, string> {
+  const structuredSources = extractStructuredCitationSourcesFromWebSearchResult(result);
+  if (structuredSources.length > 0) {
+    return new Map(structuredSources.map((source, index) => [index + 1, source.url] as const));
+  }
+
   const text = extractToolResultText(result);
   if (!text) {
     return new Map();
@@ -357,17 +464,19 @@ export function buildCitationUrlsByMessageId<T extends CitationFeedItem>(feed: r
 
     if (itemKind === "tool" && item.name === "webSearch") {
       const nextCitationUrls = extractCitationUrlsFromWebSearchResult(item.result);
-      if (nextCitationUrls.size > 0) {
-        currentCitationUrls = nextCitationUrls;
-      }
+      currentCitationUrls = nextCitationUrls;
       continue;
     }
 
     if (itemKind === "tool" && item.name === "nativeWebSearch") {
       const nextCitationUrls = extractCitationUrlsFromNativeWebSearchResult(item.result);
-      if (nextCitationUrls.size > 0) {
-        currentCitationUrls = nextCitationUrls;
-      }
+      currentCitationUrls = nextCitationUrls;
+      continue;
+    }
+
+    if (itemKind === "tool" && item.name === "nativeUrlContext") {
+      const nextCitationUrls = extractCitationUrlsFromNativeUrlContextResult(item.result);
+      currentCitationUrls = nextCitationUrls;
       continue;
     }
 
@@ -401,17 +510,19 @@ export function buildCitationSourcesByMessageId<T extends CitationFeedItem>(feed
 
     if (itemKind === "tool" && item.name === "nativeWebSearch") {
       const nextSources = extractCitationSourcesFromNativeWebSearchResult(item.result);
-      if (nextSources.size > 0) {
-        currentSources = [...nextSources.values()];
-      }
+      currentSources = [...nextSources.values()];
+      continue;
+    }
+
+    if (itemKind === "tool" && item.name === "nativeUrlContext") {
+      const nextSources = extractCitationSourcesFromNativeUrlContextResult(item.result);
+      currentSources = [...nextSources.values()];
       continue;
     }
 
     if (itemKind === "tool" && item.name === "webSearch") {
       const nextSources = extractCitationSourcesFromWebSearchResult(item.result);
-      if (nextSources.length > 0) {
-        currentSources = nextSources;
-      }
+      currentSources = nextSources;
       continue;
     }
 

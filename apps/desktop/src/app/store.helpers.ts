@@ -203,7 +203,7 @@ export type AppStoreState = {
   renameThread: (threadId: string, newTitle: string) => void;
 
   sendMessage: (text: string, busyPolicy?: ThreadBusyPolicy) => Promise<void>;
-  cancelThread: (threadId: string) => void;
+  cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;
   clearThreadUsageHardCap: (threadId: string) => void;
   setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;
   setComposerText: (text: string) => void;
@@ -221,7 +221,7 @@ export type AppStoreState = {
   enableSkill: (skillName: string) => Promise<void>;
   deleteSkill: (skillName: string) => Promise<void>;
 
-  applyWorkspaceDefaultsToThread: (threadId: string, mode?: "auto" | "explicit") => Promise<void>;
+  applyWorkspaceDefaultsToThread: (threadId: string, mode?: "auto" | "auto-resume" | "explicit") => Promise<void>;
   updateWorkspaceDefaults: (workspaceId: string, patch: WorkspaceDefaultsPatch) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
   requestWorkspaceMcpServers: (workspaceId: string) => Promise<void>;
@@ -318,7 +318,7 @@ function pushNotification(notifications: Notification[], entry: Notification): N
 }
 
 const { appendThreadTranscript } = createTranscriptBuffer({ nowIso });
-const { ensureControlSocket, sendControl } = createControlSocketHelpers({
+const { ensureControlSocket, waitForControlSession, sendControl } = createControlSocketHelpers({
   nowIso,
   makeId,
   persist,
@@ -437,6 +437,7 @@ export {
   persistNow,
   ensureServerRunning,
   ensureControlSocket,
+  waitForControlSession,
   ensureThreadSocket,
   sendControl,
   sendThread,

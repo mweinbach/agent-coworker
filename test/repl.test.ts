@@ -377,7 +377,7 @@ describe("REPL slash command routing", () => {
       getProviderDefaultModel: (provider) => {
         if (provider === "codex-cli") return "gpt-5.4";
         if (provider === "openai") return "gpt-5.4";
-        if (provider === "google") return "gemini-3-pro-preview";
+        if (provider === "google") return "gemini-3.1-pro-preview";
         return null;
       },
       getProviderAuthMethods: () => ({}),
@@ -484,7 +484,7 @@ describe("REPL slash command routing", () => {
       activateNextPrompt,
       getConfig: () => ({
         provider: "google",
-        model: "gemini-3-pro-preview",
+        model: "gemini-3.1-pro-preview",
         workingDirectory: "/tmp",
       }),
     });

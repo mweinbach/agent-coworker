@@ -9,7 +9,7 @@ import {
   setProviderApiKey as setProviderApiKeyMethod,
 } from "../../providers/authRegistry";
 import { getOpenCodeDisplayName, isOpenCodeProviderName, isOpenCodeSiblingPair } from "../../providers/opencodeShared";
-import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
+import { supportsProviderManagedContinuationProvider } from "../../shared/providerContinuation";
 import { defaultRuntimeNameForProvider, isProviderName } from "../../types";
 import type { AgentConfig, ServerErrorCode, ServerErrorSource } from "../../types";
 import type { ServerEvent } from "../protocol";
@@ -232,7 +232,7 @@ export class ProviderAuthManager {
       });
 
       if (result.ok) {
-        if (supportsOpenAiContinuation(providerRaw)) {
+        if (supportsProviderManagedContinuationProvider(providerRaw)) {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.callback");
@@ -293,7 +293,7 @@ export class ProviderAuthManager {
       });
 
       if (result.ok) {
-        if (supportsOpenAiContinuation(providerRaw)) {
+        if (supportsProviderManagedContinuationProvider(providerRaw)) {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.logout");
@@ -367,7 +367,7 @@ export class ProviderAuthManager {
       });
 
       if (result.ok) {
-        if (supportsOpenAiContinuation(providerRaw)) {
+        if (supportsProviderManagedContinuationProvider(providerRaw)) {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.api_key");
@@ -462,7 +462,7 @@ export class ProviderAuthManager {
       });
 
       if (result.ok) {
-        if (supportsOpenAiContinuation(providerRaw)) {
+        if (supportsProviderManagedContinuationProvider(providerRaw)) {
           this.opts.clearProviderState();
         }
         this.opts.queuePersistSessionSnapshot("provider.auth.api_key_copy");

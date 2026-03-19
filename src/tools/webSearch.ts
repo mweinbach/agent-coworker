@@ -46,19 +46,6 @@ function firstString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
-function formatResults(results: Array<{ title?: string; url?: string; description?: string }>): string {
-  return (
-    results
-      .map((r) => {
-        const title = r.title || "(no title)";
-        const url = r.url || "";
-        const desc = r.description || "";
-        return `${title}\n${url}\n${desc}`.trim();
-      })
-      .join("\n\n") || "No results"
-  );
-}
-
 function sanitizeQuery(raw: string): string {
   const query = raw.replace(/\s+/g, " ").trim();
   if (!query) throw new Error("webSearch requires a non-empty query");
@@ -113,7 +100,7 @@ function createCustomWebSearchTool(ctx: ToolContext) {
 
   return defineTool({
     description:
-      "Search the web for current information using Exa. Requires EXA_API_KEY. Supports optional Exa search type/category controls and returns titles, URLs, and snippets/highlights.",
+      "Search the web for current information using Exa. Requires EXA_API_KEY. Supports optional Exa search type/category controls and returns the raw Exa search response JSON with titles, URLs, and snippets/highlights.",
     inputSchema: webSearchInputSchema,
     execute: async (input) => {
       const parsedInput = webSearchInputSchema.safeParse(input);
@@ -177,16 +164,29 @@ function createCustomWebSearchTool(ctx: ToolContext) {
           }
 
           const data = await res.json();
+          const rawResponse = recordSchema.safeParse(data);
           const parsedData = exaResponseSchema.safeParse(data);
           const exaResults = parsedData.success ? (parsedData.data.results ?? []) : [];
-          const results = exaResults.map((r) => ({
-            title: firstNonEmptyString(r.title),
-            url: firstNonEmptyString(r.url) ?? "",
-            description: getExaSnippet(r),
-          }));
-
-          const out = formatResults(results);
-          ctx.log(`tool< webSearch ${JSON.stringify({ provider: "exa" })}`);
+          const out = {
+            provider: "exa" as const,
+            request: {
+              query: safeQuery,
+              numResults: maxResults,
+              type: exaType,
+              ...(exaCategory ? { category: exaCategory } : {}),
+            },
+            count: exaResults.length,
+            response: rawResponse.success
+              ? rawResponse.data
+              : {
+                  results: exaResults.map((result) => ({
+                    title: firstNonEmptyString(result.title),
+                    url: firstNonEmptyString(result.url),
+                    snippet: getExaSnippet(result),
+                  })),
+                },
+          };
+          ctx.log(`tool< webSearch ${JSON.stringify({ provider: "exa", count: exaResults.length })}`);
           return out;
         } catch (error) {
           const msg = `Exa search failed: ${error instanceof Error ? error.message : String(error)}`;

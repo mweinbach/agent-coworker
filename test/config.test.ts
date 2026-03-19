@@ -122,6 +122,26 @@ describe("loadConfig", () => {
     expect(cfg.model).toBe("gpt-5.4");
   });
 
+  test("built-in skills stay enabled by default and only disable on explicit opt-out", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+    expect(cfg.skillsDirs).toContain(path.join(repoRoot(), "skills"));
+
+    const disabled = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: { COWORK_DISABLE_BUILTIN_SKILLS: "1" },
+    });
+    expect(disabled.skillsDirs).not.toContain(path.join(repoRoot(), "skills"));
+  });
+
   test("accepts arbitrary LM Studio model ids discovered at runtime", async () => {
     const { cwd, home } = await makeTmpDirs();
 
@@ -219,7 +239,7 @@ describe("loadConfig", () => {
       builtInDir: repoRoot(),
       env: {},
     });
-    expect(cfg.runtime).toBe("pi");
+    expect(cfg.runtime).toBe("google-interactions");
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
       provider: "openai",
@@ -299,7 +319,7 @@ describe("loadConfig", () => {
     });
 
     expect(cfg.provider).toBe("google");
-    expect(cfg.runtime).toBe("pi");
+    expect(cfg.runtime).toBe("google-interactions");
   });
 
   // ---- New tests ----
@@ -620,7 +640,7 @@ describe("loadConfig", () => {
     });
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
-      preferredChildModel: "gemini-3-pro-preview",
+      preferredChildModel: "gemini-3.1-pro-preview",
     });
 
     const cfg = await loadConfig({
@@ -630,7 +650,7 @@ describe("loadConfig", () => {
       env: {},
     });
 
-    expect(cfg.preferredChildModel).toBe("gemini-3-pro-preview");
+    expect(cfg.preferredChildModel).toBe("gemini-3.1-pro-preview");
   });
 
   test("legacy subAgentModel config still seeds the preferred child model", async () => {

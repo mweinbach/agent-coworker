@@ -24,7 +24,7 @@ export function supportsOpenAiContinuation(provider: unknown): provider is OpenA
 }
 
 export function continuationMatchesTarget(
-  state: OpenAiContinuationState | null | undefined,
+  state: { provider?: unknown; model?: unknown; accountId?: unknown } | null | undefined,
   target: { provider: OpenAiContinuationProvider; model: string; accountId?: string }
 ): state is OpenAiContinuationState {
   if (!state) return false;

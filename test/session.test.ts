@@ -209,6 +209,7 @@ function makeSession(
     sendAgentInputImpl: (opts: any) => Promise<void>;
     waitForAgentImpl: (opts: any) => Promise<any>;
     closeAgentImpl: (opts: any) => Promise<any>;
+    cancelAgentSessionsImpl: (parentSessionId: string) => void;
     deleteSessionImpl: (opts: any) => Promise<void>;
     sessionInfoPatch: Partial<SessionInfoState>;
   }>
@@ -238,6 +239,7 @@ function makeSession(
     sendAgentInputImpl: overrides?.sendAgentInputImpl,
     waitForAgentImpl: overrides?.waitForAgentImpl,
     closeAgentImpl: overrides?.closeAgentImpl,
+    cancelAgentSessionsImpl: overrides?.cancelAgentSessionsImpl,
     deleteSessionImpl: overrides?.deleteSessionImpl,
     sessionInfoPatch: overrides?.sessionInfoPatch,
   });
@@ -844,6 +846,7 @@ describe("AgentSession", () => {
               textVerbosity: "low",
             },
             google: {
+              nativeWebSearch: true,
               thinkingConfig: {
                 includeThoughts: true,
                 thinkingLevel: "high",
@@ -864,8 +867,13 @@ describe("AgentSession", () => {
           reasoningEffort: "none",
           textVerbosity: "low",
         },
+        google: {
+          nativeWebSearch: true,
+          thinkingConfig: {
+            thinkingLevel: "high",
+          },
+        },
       });
-      expect((evt.config.providerOptions as any)?.google).toBeUndefined();
     });
 
     test("setConfig emits session_config and persists preferredChildModel/observability/backupsEnabled/toolOutputOverflowChars", async () => {
@@ -873,7 +881,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
       await session.setConfig({
-        preferredChildModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3.1-pro-preview",
         observabilityEnabled: true,
         backupsEnabled: false,
         toolOutputOverflowChars: null,
@@ -882,7 +890,7 @@ describe("AgentSession", () => {
 
       const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
       expect(cfgEvt).toBeDefined();
-      expect(cfgEvt.config.preferredChildModel).toBe("gemini-3-pro-preview");
+      expect(cfgEvt.config.preferredChildModel).toBe("gemini-3.1-pro-preview");
       expect(cfgEvt.config.observabilityEnabled).toBe(true);
       expect(cfgEvt.config.backupsEnabled).toBe(false);
       expect(cfgEvt.config.defaultBackupsEnabled).toBe(false);
@@ -890,13 +898,13 @@ describe("AgentSession", () => {
       expect(cfgEvt.config.defaultToolOutputOverflowChars).toBeNull();
       expect(cfgEvt.config.maxSteps).toBe(25);
       expect(cfgEvt.config.childModelRoutingMode).toBe("same-provider");
-      expect(cfgEvt.config.preferredChildModelRef).toBe("google:gemini-3-pro-preview");
+      expect(cfgEvt.config.preferredChildModelRef).toBe("google:gemini-3.1-pro-preview");
       expect(cfgEvt.config.allowedChildModelRefs).toEqual([]);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
-        preferredChildModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3.1-pro-preview",
         childModelRoutingMode: "same-provider",
-        preferredChildModelRef: "google:gemini-3-pro-preview",
+        preferredChildModelRef: "google:gemini-3.1-pro-preview",
         allowedChildModelRefs: [],
         observabilityEnabled: true,
         backupsEnabled: false,
@@ -936,6 +944,48 @@ describe("AgentSession", () => {
       const configEvent = session.getSessionConfigEvent();
       expect(configEvent.config.userName).toBe("Casey");
       expect(configEvent.config.userProfile.work).toBe("Engineer");
+    });
+
+    test("setConfig refreshes the cached system prompt when provider options change", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const loadSystemPromptWithSkillsImpl = mock(async (config: AgentConfig) => ({
+        prompt: `prompt:${config.providerOptions?.google?.nativeWebSearch === true}`,
+        discoveredSkills: [{ name: "native-web", description: "Native web" }],
+      }));
+      const { session } = makeSession({
+        config: makeConfig("/tmp/test-session", {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          preferredChildModel: "gemini-3-flash-preview",
+        }),
+        persistProjectConfigPatchImpl,
+        loadSystemPromptWithSkillsImpl,
+        system: "prompt:false",
+      });
+
+      await session.setConfig({
+        providerOptions: {
+          google: {
+            nativeWebSearch: true,
+          },
+        },
+      });
+      await session.sendUserMessage("hello");
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        providerOptions: {
+          google: {
+            nativeWebSearch: true,
+          },
+        },
+      });
+
+      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(runTurnArgs.system).toBe("prompt:true");
+      expect(runTurnArgs.discoveredSkills).toEqual([
+        { name: "native-web", description: "Native web" },
+      ]);
     });
 
     test("sendUserMessage waits for an in-flight setConfig prompt refresh", async () => {
@@ -985,7 +1035,7 @@ describe("AgentSession", () => {
       });
 
       await session.setConfig({
-        preferredChildModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3.1-pro-preview",
       });
 
       expect(persistProjectConfigPatchImpl).not.toHaveBeenCalled();
@@ -997,7 +1047,7 @@ describe("AgentSession", () => {
       if (errEvt) {
         expect(errEvt.code).toBe("validation_failed");
         expect(errEvt.source).toBe("session");
-        expect(errEvt.message).toContain('Unsupported session config preferred child target "gemini-3-pro-preview" for provider openai');
+        expect(errEvt.message).toContain('Unsupported session config preferred child target "gemini-3.1-pro-preview" for provider openai');
       }
     });
 
@@ -1046,7 +1096,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
       await session.setConfig({
-        preferredChildModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3.1-pro-preview",
         observabilityEnabled: true,
         maxSteps: 25,
       });
@@ -1069,6 +1119,10 @@ describe("AgentSession", () => {
 
     test("setConfig merges editable providerOptions and preserves unrelated keys", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "prompt:provider-options",
+        discoveredSkills: [],
+      }));
       const dir = path.join(os.tmpdir(), `session-config-merge-${Date.now()}`);
       const { session, events } = makeSession({
         config: {
@@ -1082,6 +1136,7 @@ describe("AgentSession", () => {
           },
         },
         persistProjectConfigPatchImpl,
+        loadSystemPromptWithSkillsImpl,
       });
 
       await session.setConfig({
@@ -1349,8 +1404,8 @@ describe("AgentSession", () => {
       await session.setModel("gemini-3-flash-preview", "google");
 
       expect((session as any).state.config.provider).toBe("google");
-      expect((session as any).state.config.runtime).toBe("pi");
-      expect(createRuntime((session as any).state.config).name).toBe("pi");
+      expect((session as any).state.config.runtime).toBe("google-interactions");
+      expect(createRuntime((session as any).state.config).name).toBe("google-interactions");
     });
 
     test("clears persisted OpenAI continuation state when provider/model changes", async () => {
@@ -2724,6 +2779,67 @@ describe("AgentSession", () => {
       ).toBe(false);
     });
 
+    test("does not cancel child agents unless explicitly requested", async () => {
+      const cancelAgentSessionsImpl = mock(() => {});
+      const { session } = makeSession({ cancelAgentSessionsImpl });
+
+      mockRunTurn.mockImplementationOnce(async (params: any) => {
+        await new Promise((_, reject) => {
+          params.abortSignal.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("Aborted"), { name: "AbortError" })),
+            { once: true },
+          );
+        });
+
+        throw new Error("unreachable");
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      session.cancel();
+      await sendPromise;
+
+      expect(cancelAgentSessionsImpl).not.toHaveBeenCalled();
+    });
+
+    test("can cancel child agents when a root turn is cancelled explicitly", async () => {
+      const cancelAgentSessionsImpl = mock(() => {});
+      const { session } = makeSession({ cancelAgentSessionsImpl });
+
+      mockRunTurn.mockImplementationOnce(async (params: any) => {
+        await new Promise((_, reject) => {
+          params.abortSignal.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("Aborted"), { name: "AbortError" })),
+            { once: true },
+          );
+        });
+
+        throw new Error("unreachable");
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      session.cancel({ includeSubagents: true });
+      await sendPromise;
+
+      expect(cancelAgentSessionsImpl).toHaveBeenCalledTimes(1);
+      expect(cancelAgentSessionsImpl).toHaveBeenCalledWith(session.id);
+    });
+
+    test("can cancel child agents explicitly even when the root session is idle", () => {
+      const cancelAgentSessionsImpl = mock(() => {});
+      const { session } = makeSession({ cancelAgentSessionsImpl });
+
+      session.cancel({ includeSubagents: true });
+
+      expect(cancelAgentSessionsImpl).toHaveBeenCalledTimes(1);
+      expect(cancelAgentSessionsImpl).toHaveBeenCalledWith(session.id);
+    });
+
     test("persists aggregated usage when a late steer continuation errors after an earlier pass consumed tokens", async () => {
       const { session, events } = makeSession();
       let runCount = 0;
@@ -3238,6 +3354,77 @@ describe("AgentSession", () => {
         responseId: "resp_fresh",
         updatedAt: "2026-02-16T00:00:02.000Z",
       });
+    });
+
+    test("persists Google continuation state returned by runTurn", async () => {
+      const googleProviderState = {
+        provider: "google" as const,
+        model: "gemini-3-flash-preview",
+        interactionId: "interaction_fresh",
+        updatedAt: "2026-03-18T14:00:00.000Z",
+      };
+      mockRunTurn.mockResolvedValueOnce({
+        text: "ok",
+        reasoningText: undefined,
+        responseMessages: [{ role: "assistant", content: "ok" }],
+        providerState: googleProviderState,
+      });
+
+      const dir = "/tmp/test-session";
+      const config = makeConfig(dir, {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        preferredChildModel: "gemini-3-flash-preview",
+      });
+      const { session } = makeSession({ config });
+
+      await session.sendUserMessage("hello");
+      await flushAsyncWork();
+      await flushAsyncWork();
+
+      expect((session as any).state.providerState).toEqual(googleProviderState);
+      const lastPersistCall = mockWritePersistedSessionSnapshot.mock.calls.at(-1)?.[0] as any;
+      expect(lastPersistCall.snapshot.context.providerState).toEqual(googleProviderState);
+    });
+
+    test("retries once when the stored Google continuation handle is rejected", async () => {
+      const freshGoogleProviderState = {
+        provider: "google" as const,
+        model: "gemini-3-flash-preview",
+        interactionId: "interaction_fresh",
+        updatedAt: "2026-03-19T18:30:00.000Z",
+      };
+      mockRunTurn
+        .mockImplementationOnce(async () => {
+          throw new Error("Invalid previous_interaction_id: interaction_id not found");
+        })
+        .mockImplementationOnce(async () => ({
+          text: "ok",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "ok" }],
+          providerState: freshGoogleProviderState,
+        }));
+
+      const dir = "/tmp/test-session";
+      const config = makeConfig(dir, {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        preferredChildModel: "gemini-3-flash-preview",
+      });
+      const { session } = makeSession({ config });
+      (session as any).state.providerState = {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        interactionId: "interaction_stale",
+        updatedAt: "2026-03-19T18:00:00.000Z",
+      };
+
+      await session.sendUserMessage("hello");
+
+      expect(mockRunTurn).toHaveBeenCalledTimes(2);
+      expect((mockRunTurn.mock.calls[0][0] as any).providerState?.interactionId).toBe("interaction_stale");
+      expect((mockRunTurn.mock.calls[1][0] as any).providerState).toBeNull();
+      expect((session as any).state.providerState).toEqual(freshGoogleProviderState);
     });
 
     test("persists full session context including response history", async () => {

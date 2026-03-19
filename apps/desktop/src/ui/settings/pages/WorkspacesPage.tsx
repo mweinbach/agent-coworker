@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { ChevronDownIcon, InfoIcon, PlusIcon, XIcon } from "lucide-react";
 
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 
 import {
+  getGoogleReasoningEffortValuesForModel,
+  getWorkspaceGoogleNativeWebSearchEnabled,
+  getWorkspaceGoogleReasoningEffort,
   getWorkspaceReasoningEffort,
   getWorkspaceReasoningSummary,
   getWorkspaceTextVerbosity,
@@ -21,6 +24,8 @@ import {
   WEB_SEARCH_CONTEXT_SIZE_VALUES,
   WEB_SEARCH_MODE_VALUES,
   type CodexCliProviderOptions,
+  type GoogleReasoningEffortValue,
+  type GoogleProviderOptions,
   type OpenAICompatibleProviderName,
   type ReasoningEffortValue,
   type ReasoningSummaryValue,
@@ -29,6 +34,10 @@ import {
   type WebSearchContextSizeValue,
   type WebSearchModeValue,
 } from "../../../app/openaiCompatibleProviderOptions";
+import {
+  GOOGLE_DYNAMIC_REASONING_EFFORT,
+  googleThinkingLevelFromReasoningEffort,
+} from "../../../../../../src/shared/googleThinking";
 import {
   normalizeWorkspaceUserProfile,
   type WorkspaceRecord,
@@ -90,6 +99,42 @@ function updateCodexProviderOption(
 ) {
   return mergeWorkspaceProviderOptions(providerOptions, {
     "codex-cli": patch,
+  });
+}
+
+function updateGoogleProviderOption(
+  providerOptions: ReturnType<typeof mergeWorkspaceProviderOptions>,
+  patch: Partial<GoogleProviderOptions>,
+) {
+  const current = providerOptions ? { ...providerOptions } : {};
+  const currentGoogle = (current.google && typeof current.google === "object" && !Array.isArray(current.google))
+    ? { ...current.google }
+    : {};
+
+  if ("nativeWebSearch" in patch) {
+    currentGoogle.nativeWebSearch = patch.nativeWebSearch;
+  }
+  if ("thinkingConfig" in patch) {
+    const currentThinkingConfig =
+      currentGoogle.thinkingConfig && typeof currentGoogle.thinkingConfig === "object" && !Array.isArray(currentGoogle.thinkingConfig)
+        ? { ...currentGoogle.thinkingConfig }
+        : {};
+    const patchThinkingConfig = patch.thinkingConfig ?? {};
+    if ("thinkingLevel" in patchThinkingConfig) {
+      const level = patchThinkingConfig.thinkingLevel;
+      if (typeof level === "string" && level.trim().length > 0) {
+        currentThinkingConfig.thinkingLevel = level;
+      } else {
+        delete currentThinkingConfig.thinkingLevel;
+      }
+    } else {
+      delete currentThinkingConfig.thinkingLevel;
+    }
+    currentGoogle.thinkingConfig = Object.keys(currentThinkingConfig).length > 0 ? currentThinkingConfig : {};
+  }
+
+  return mergeWorkspaceProviderOptions(providerOptions, {
+    google: currentGoogle,
   });
 }
 
@@ -655,6 +700,109 @@ export function OpenAiCompatibleModelSettingsCard({
   );
 }
 
+type GeminiApiSettingsCardProps = {
+  workspace: Pick<WorkspaceRecord, "id" | "providerOptions" | "defaultProvider" | "defaultModel">;
+  updateWorkspaceDefaults: (
+    workspaceId: string,
+    patch: { providerOptions?: ReturnType<typeof mergeWorkspaceProviderOptions> },
+  ) => Promise<unknown> | void;
+  providerStatusByName: Record<string, any>;
+  googleDefaultModel: string;
+};
+
+export function GeminiApiSettingsCard({
+  workspace,
+  updateWorkspaceDefaults,
+  providerStatusByName,
+  googleDefaultModel,
+}: GeminiApiSettingsCardProps) {
+  if (!hasConfiguredProviderStatus(providerStatusByName.google)) {
+    return null;
+  }
+
+  const nativeWebSearchEnabled = getWorkspaceGoogleNativeWebSearchEnabled(workspace.providerOptions);
+  const selectedGoogleModel = workspace.defaultProvider === "google"
+    ? (workspace.defaultModel?.trim() || googleDefaultModel)
+    : googleDefaultModel;
+  const googleReasoningEffort = getWorkspaceGoogleReasoningEffort(workspace.providerOptions, selectedGoogleModel);
+  const googleReasoningEffortOptions = getGoogleReasoningEffortValuesForModel(selectedGoogleModel);
+
+  return (
+    <Card className="border-border/80 bg-card/85">
+      <CardHeader>
+        <CardTitle>Gemini API settings</CardTitle>
+        <CardDescription>
+          Workspace defaults for Gemini API built-in Google Search and URL Context tools.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="rounded-lg border border-border/60 px-4 py-4">
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <div className="text-sm font-medium text-foreground">Reasoning effort</div>
+              <div className="text-xs text-muted-foreground">
+                Applies to <span className="font-mono">{selectedGoogleModel}</span>. Dynamic leaves
+                Gemini&apos;s `thinking_level` unset and lets the model choose its own reasoning depth. Available
+                values depend on the selected Google model.
+              </div>
+            </div>
+            <div className="max-w-56">
+              <Select
+                value={googleReasoningEffort}
+                onValueChange={(value) => {
+                  const nextEffort = value as GoogleReasoningEffortValue;
+                  void updateWorkspaceDefaults(workspace.id, {
+                    providerOptions: updateGoogleProviderOption(workspace.providerOptions, {
+                      thinkingConfig:
+                        nextEffort === GOOGLE_DYNAMIC_REASONING_EFFORT
+                          ? {}
+                          : { thinkingLevel: googleThinkingLevelFromReasoningEffort(nextEffort) },
+                    }),
+                  });
+                }}
+              >
+                <SelectTrigger aria-label="Gemini reasoning effort" className={MODEL_CARD_SELECT_CLASS} size="sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {googleReasoningEffortOptions.map((entry) => (
+                    <SelectItem key={entry} value={entry}>
+                      {entry === GOOGLE_DYNAMIC_REASONING_EFFORT ? "dynamic (default)" : entry}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border/60 px-4 py-4">
+          <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
+            <div className="space-y-1">
+              <div className="text-sm font-medium text-foreground">Native web search</div>
+              <div className="text-xs text-muted-foreground">
+                Enables Gemini built-in Google Search and URL Context. This replaces local `webSearch` and `webFetch`
+                for Google sessions in this workspace.
+              </div>
+            </div>
+            <Checkbox
+              checked={nativeWebSearchEnabled}
+              aria-label="Enable Gemini native web search"
+              onCheckedChange={(checked) => {
+                void updateWorkspaceDefaults(workspace.id, {
+                  providerOptions: updateGoogleProviderOption(workspace.providerOptions, {
+                    nativeWebSearch: toBoolean(checked),
+                  }),
+                });
+              }}
+            />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 type WorkspaceUserProfileCardProps = {
   workspace: Pick<WorkspaceRecord, "id" | "userName" | "userProfile">;
   updateWorkspaceDefaults: (
@@ -942,11 +1090,15 @@ export function WorkspacesPage() {
 
   const [activeTab, setActiveTab] = useState<"general" | "models" | "profile" | "advanced">("general");
   const [subagentModelsOpen, setSubagentModelsOpen] = useState(false);
+  const subagentModelsOpenSeedKey = useRef<string | null>(null);
 
   useEffect(() => {
-    setSubagentModelsOpen(
-      childModelRoutingMode === "cross-provider-allowlist" && visibleAllowedChildModelRefs.length === 0,
-    );
+    const seedKey = `${ws?.id ?? "none"}:${childModelRoutingMode}`;
+    if (subagentModelsOpenSeedKey.current === seedKey) {
+      return;
+    }
+    subagentModelsOpenSeedKey.current = seedKey;
+    setSubagentModelsOpen(childModelRoutingMode === "cross-provider-allowlist" && visibleAllowedChildModelRefs.length === 0);
   }, [childModelRoutingMode, visibleAllowedChildModelRefs.length, ws?.id]);
 
   return (
@@ -1391,6 +1543,12 @@ export function WorkspacesPage() {
               workspace={ws}
               updateWorkspaceDefaults={updateWorkspaceDefaults}
               providerStatusByName={providerStatusByName}
+            />
+            <GeminiApiSettingsCard
+              workspace={ws}
+              updateWorkspaceDefaults={updateWorkspaceDefaults}
+              providerStatusByName={providerStatusByName}
+              googleDefaultModel={providerDefaultModelByProvider.google?.trim() || defaultModelForProvider("google")}
             />
           </div>
 

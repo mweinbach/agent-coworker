@@ -5,7 +5,6 @@ export const DEFAULT_GOOGLE_PROVIDER_OPTIONS = {
   thinkingConfig: {
     // Gemini maps "thought" parts to reasoning parts when includeThoughts is enabled.
     includeThoughts: true,
-    thinkingLevel: "high",
   },
 
   // Other Google Generative AI provider options you can enable/override:

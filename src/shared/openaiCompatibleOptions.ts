@@ -1,5 +1,20 @@
+import {
+  GOOGLE_THINKING_LEVEL_VALUES,
+  isGoogleThinkingLevel,
+  type GoogleThinkingLevel,
+} from "./googleThinking";
+
+export { GOOGLE_THINKING_LEVEL_VALUES } from "./googleThinking";
+
 export const OPENAI_COMPATIBLE_PROVIDER_NAMES = ["openai", "codex-cli"] as const;
 export type OpenAiCompatibleProviderName = (typeof OPENAI_COMPATIBLE_PROVIDER_NAMES)[number];
+export const EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES = [
+  "openai",
+  "codex-cli",
+  "google",
+  "lmstudio",
+] as const;
+export type EditableProviderOptionsProviderName = (typeof EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES)[number];
 
 // "none" and "xhigh" are client-side sentinel values used to represent "disable reasoning"
 // and "maximum effort" respectively. They are mapped to API-specific parameters before
@@ -56,10 +71,20 @@ export type LmStudioProviderOptions = {
   reloadOnContextMismatch?: boolean;
 };
 
+export type GoogleThinkingConfig = {
+  thinkingLevel?: GoogleThinkingLevel;
+};
+
+export type GoogleProviderOptions = {
+  nativeWebSearch?: boolean;
+  thinkingConfig?: GoogleThinkingConfig;
+};
+
 export type OpenAiCompatibleProviderOptionsByProvider = Partial<
   {
     openai: OpenAiProviderOptions;
     "codex-cli": CodexCliProviderOptions;
+    google: GoogleProviderOptions;
     lmstudio: LmStudioProviderOptions;
   }
 >;
@@ -227,6 +252,37 @@ function pickLmStudioProviderOptionsSection(value: unknown): LmStudioProviderOpt
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+function pickGoogleThinkingConfig(value: unknown): GoogleThinkingConfig | undefined {
+  if (!isPlainObject(value)) return undefined;
+
+  const next: GoogleThinkingConfig = {};
+  if (isGoogleThinkingLevel(value.thinkingLevel)) {
+    next.thinkingLevel = value.thinkingLevel;
+  }
+
+  if (Object.keys(next).length > 0) {
+    return next;
+  }
+
+  return Object.keys(value).length === 0 ? {} : undefined;
+}
+
+function pickGoogleProviderOptionsSection(value: unknown): GoogleProviderOptions | undefined {
+  if (!isPlainObject(value)) return undefined;
+
+  const next: GoogleProviderOptions = {};
+  const nativeWebSearch = pickBoolean(value.nativeWebSearch);
+  if (nativeWebSearch !== undefined) {
+    next.nativeWebSearch = nativeWebSearch;
+  }
+  const thinkingConfig = pickGoogleThinkingConfig(value.thinkingConfig);
+  if (thinkingConfig) {
+    next.thinkingConfig = thinkingConfig;
+  }
+
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 export function pickEditableOpenAiCompatibleProviderOptions(
   providerOptions: unknown,
 ): OpenAiCompatibleProviderOptionsByProvider | undefined {
@@ -240,6 +296,10 @@ export function pickEditableOpenAiCompatibleProviderOptions(
   const codex = pickCodexCliProviderOptionsSection(providerOptions["codex-cli"]);
   if (codex) {
     out["codex-cli"] = codex;
+  }
+  const google = pickGoogleProviderOptionsSection(providerOptions.google);
+  if (google) {
+    out.google = google;
   }
   const lmstudio = pickLmStudioProviderOptionsSection(providerOptions.lmstudio);
   if (lmstudio) {
@@ -258,6 +318,23 @@ export function getCodexWebSearchBackendFromProviderOptions(
   return codex?.webSearchBackend ?? fallback;
 }
 
+export function getGoogleNativeWebSearchFromProviderOptions(
+  providerOptions: unknown,
+  fallback = false,
+): boolean {
+  if (!isPlainObject(providerOptions)) return fallback;
+  const google = pickGoogleProviderOptionsSection(providerOptions.google);
+  return google?.nativeWebSearch ?? fallback;
+}
+
+export function getGoogleThinkingLevelFromProviderOptions(
+  providerOptions: unknown,
+): GoogleThinkingLevel | undefined {
+  if (!isPlainObject(providerOptions)) return undefined;
+  const google = pickGoogleProviderOptionsSection(providerOptions.google);
+  return google?.thinkingConfig?.thinkingLevel;
+}
+
 export function mergeEditableOpenAiCompatibleProviderOptions(
   base: unknown,
   patch: OpenAiCompatibleProviderOptionsByProvider | undefined,
@@ -267,12 +344,17 @@ export function mergeEditableOpenAiCompatibleProviderOptions(
     return Object.keys(current).length > 0 ? current : undefined;
   }
 
-  for (const provider of OPENAI_COMPATIBLE_PROVIDER_NAMES) {
+  for (const provider of EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES) {
     const sectionPatch = patch[provider];
     if (!sectionPatch) continue;
-    const cleanedPatch = provider === "codex-cli"
-      ? pickCodexCliProviderOptionsSection(sectionPatch)
-      : pickOpenAiCompatibleProviderOptionsSection(sectionPatch);
+    const cleanedPatch =
+      provider === "codex-cli"
+        ? pickCodexCliProviderOptionsSection(sectionPatch)
+        : provider === "openai"
+          ? pickOpenAiCompatibleProviderOptionsSection(sectionPatch)
+          : provider === "google"
+            ? pickGoogleProviderOptionsSection(sectionPatch)
+            : pickLmStudioProviderOptionsSection(sectionPatch);
     if (!cleanedPatch) continue;
 
     const currentSection = isPlainObject(current[provider]) ? { ...current[provider] } : {};
@@ -316,18 +398,45 @@ export function mergeEditableOpenAiCompatibleProviderOptions(
       continue;
     }
 
+    if (provider === "google") {
+      const googlePatch = cleanedPatch as GoogleProviderOptions;
+      const rawPatch = isPlainObject(sectionPatch) ? sectionPatch : {};
+      const patchHasThinkingConfig = Object.prototype.hasOwnProperty.call(rawPatch, "thinkingConfig");
+      const currentThinkingConfig = isPlainObject(currentSection.thinkingConfig)
+        ? { ...currentSection.thinkingConfig }
+        : {};
+      const patchThinkingConfig = isPlainObject(googlePatch.thinkingConfig)
+        ? { ...googlePatch.thinkingConfig }
+        : {};
+
+      const nextGoogle = {
+        ...currentSection,
+        ...googlePatch,
+      } as Record<string, unknown>;
+
+      if (patchHasThinkingConfig) {
+        const nextThinkingConfig = { ...currentThinkingConfig };
+        if ("thinkingLevel" in patchThinkingConfig) {
+          const level = patchThinkingConfig.thinkingLevel;
+          if (typeof level === "string" && level.trim().length > 0) {
+            nextThinkingConfig.thinkingLevel = level;
+          } else {
+            delete nextThinkingConfig.thinkingLevel;
+          }
+        } else {
+          delete nextThinkingConfig.thinkingLevel;
+        }
+
+        nextGoogle.thinkingConfig = Object.keys(nextThinkingConfig).length > 0 ? nextThinkingConfig : {};
+      }
+
+      current[provider] = nextGoogle;
+      continue;
+    }
+
     current[provider] = {
       ...currentSection,
       ...cleanedPatch,
-    };
-  }
-
-  const lmstudioPatch = pickLmStudioProviderOptionsSection(patch.lmstudio);
-  if (lmstudioPatch) {
-    const currentSection = isPlainObject(current.lmstudio) ? { ...current.lmstudio } : {};
-    current.lmstudio = {
-      ...currentSection,
-      ...lmstudioPatch,
     };
   }
 

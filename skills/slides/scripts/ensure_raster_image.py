@@ -33,6 +33,15 @@ from os import listdir
 from os.path import basename, dirname, expanduser, isfile, join, splitext
 from subprocess import run
 
+from executable_resolution import (
+    MissingDependencyError,
+    resolve_ghostscript_executable,
+    resolve_heif_convert_executable,
+    resolve_imagemagick_executable,
+    resolve_inkscape_executable,
+    resolve_jxrdec_executable,
+)
+
 RASTER_EXTS = {
     ".png",
     ".jpg",
@@ -69,7 +78,7 @@ SUPPORTED_EXTS = RASTER_EXTS | CONVERTIBLE_EXTS
 
 
 def _imagemagick_convert(src_path: str, dst_path: str) -> None:
-    binary = shutil.which("magick") or "convert"
+    binary = resolve_imagemagick_executable()
     run([binary, src_path, dst_path], check=True)
 
 
@@ -90,18 +99,20 @@ def ensure_raster_image(path: str, out_dir: str | None = None) -> str:
 
     # Convertible formats
     if ext_lower in (".emf", ".wmf"):
-        run(["inkscape", path, "-o", out_path], check=True)
+        inkscape = resolve_inkscape_executable()
+        run([inkscape, path, "-o", out_path], check=True)
         if isfile(out_path):
             return out_path
         raise RuntimeError("inkscape reported success but output file not found: " + out_path)
 
     if ext_lower in (".emz", ".wmz"):
+        inkscape = resolve_inkscape_executable()
         # Decompress into EMF/WMF then rasterize with Inkscape
         decompressed = join(out_dir, basename(base) + (".emf" if ext_lower == ".emz" else ".wmf"))
         with gzip.open(path, "rb") as zin, open(decompressed, "wb") as zout:
             zout.write(zin.read())
         run(
-            ["inkscape", decompressed, "-o", out_path],
+            [inkscape, decompressed, "-o", out_path],
             check=True,
         )
         if isfile(out_path):
@@ -109,14 +120,16 @@ def ensure_raster_image(path: str, out_dir: str | None = None) -> str:
         raise RuntimeError("inkscape reported success but output file not found: " + out_path)
 
     if ext_lower in (".svg", ".svgz"):
-        run(["inkscape", path, "-o", out_path], check=True)
+        inkscape = resolve_inkscape_executable()
+        run([inkscape, path, "-o", out_path], check=True)
         if isfile(out_path):
             return out_path
         raise RuntimeError("inkscape reported success but output file not found: " + out_path)
 
     if ext_lower in (".wdp", ".jxr"):
+        jxrdec = resolve_jxrdec_executable()
         tmp_tiff = join(out_dir, basename(base) + ".tiff")
-        run(["JxrDecApp", "-i", path, "-o", tmp_tiff], check=True)
+        run([jxrdec, "-i", path, "-o", tmp_tiff], check=True)
         _imagemagick_convert(tmp_tiff, out_path)
         if isfile(out_path):
             return out_path
@@ -124,7 +137,7 @@ def ensure_raster_image(path: str, out_dir: str | None = None) -> str:
 
     if ext_lower in (".heic", ".heif"):
         # Use libheif's CLI for robust conversion
-        heif_convert = shutil.which("heif-convert") or "heif-convert"
+        heif_convert = resolve_heif_convert_executable()
         run([heif_convert, path, out_path], check=True)
         if isfile(out_path):
             return out_path
@@ -132,7 +145,7 @@ def ensure_raster_image(path: str, out_dir: str | None = None) -> str:
 
     if ext_lower in (".pdf", ".eps", ".ps"):
         # Rasterize first page via Ghostscript
-        gs = shutil.which("gs") or "gs"
+        gs = resolve_ghostscript_executable()
         run(
             [
                 gs,
@@ -199,4 +212,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except MissingDependencyError as exc:
+        raise SystemExit(str(exc))

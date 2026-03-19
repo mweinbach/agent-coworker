@@ -70,13 +70,18 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from functools import lru_cache
 from os.path import abspath, basename, exists, expanduser, join, splitext
 from zipfile import ZipFile
+
+from executable_resolution import (
+    MissingDependencyError,
+    resolve_fontconfig_executable,
+    resolve_libreoffice_executable,
+)
 
 STYLE_TOKENS = [
     "regular",
@@ -117,9 +122,10 @@ def _or_dummy(node: ET.Element | None) -> ET.Element:
 @lru_cache(maxsize=1)
 def _build_fc_synonym_map() -> dict[str, set[str]]:
     """Build synonym map from fontconfig; raise on failures; memoized (size=1)."""
+    fc_list = resolve_fontconfig_executable()
     proc = subprocess.run(
         [
-            "fc-list",
+            fc_list,
             "--format",
             "%{family}\t%{fullname}\t%{postscriptname}\n",
         ],
@@ -345,7 +351,7 @@ def _run_soffice_convert(cmd: list[str]) -> None:
 
 
 def _export_to_odp(pptx_path: str, user_profile: str, out_dir: str, stem: str) -> str:
-    bin_path = shutil.which("soffice") or shutil.which("libreoffice") or "/usr/bin/libreoffice"
+    bin_path = resolve_libreoffice_executable()
     cmd_odp = [
         bin_path,
         "-env:UserInstallation=file://" + user_profile,
@@ -870,4 +876,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except MissingDependencyError as exc:
+        raise SystemExit(str(exc))

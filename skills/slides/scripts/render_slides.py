@@ -11,6 +11,7 @@ from os.path import abspath, basename, exists, expanduser, join, splitext
 from typing import Sequence, cast
 from zipfile import ZipFile
 
+from executable_resolution import MissingDependencyError, resolve_libreoffice_executable
 from pdf2image import convert_from_path, pdfinfo_from_path
 
 EMU_PER_INCH: int = 914_400
@@ -111,9 +112,11 @@ def convert_to_pdf(
     convert_tmp_dir: str,
     stem: str,
 ) -> str:
+    soffice_bin = resolve_libreoffice_executable()
+
     # Try direct PPTX -> PDF
     cmd_pdf = [
-        "soffice",
+        soffice_bin,
         "-env:UserInstallation=file://" + user_profile,
         "--invisible",
         "--headless",
@@ -134,7 +137,7 @@ def convert_to_pdf(
     # Rationale: Saving as ODP normalizes PPTX-specific constructs via the ODF serializer,
     # which often bypasses Impress PDF export issues on problematic decks.
     cmd_odp = [
-        "soffice",
+        soffice_bin,
         "-env:UserInstallation=file://" + user_profile,
         "--invisible",
         "--headless",
@@ -152,7 +155,7 @@ def convert_to_pdf(
     if exists(odp_path):
         # ODP -> PDF
         cmd_odp_pdf = [
-            "soffice",
+            soffice_bin,
             "-env:UserInstallation=file://" + user_profile,
             "--invisible",
             "--headless",
@@ -270,4 +273,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except MissingDependencyError as exc:
+        raise SystemExit(str(exc))

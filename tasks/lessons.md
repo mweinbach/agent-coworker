@@ -1,5 +1,7 @@
 # Lessons
 
+- When the user asks to remove a retired model, delete the full support surface in one pass: registry entries, config files, prompt-template paths, fixtures, raw-loop cases, and tests. Do not leave the retired model ID behind as a shared filename or example value.
+- For Gemini built-in tools, do not assume individually supported tools can be sent together in one request; verify the exact combination against current docs and backend behavior, and route one tool family per request when the API rejects the combination.
 - For local model providers in the desktop app, do not force them through the generic auth/API-key card; give them local connect/refresh controls and persist model-visibility preferences in dedicated desktop UI state so chat selectors can hide or show them cleanly.
 - When the user explicitly asks for PR triage via subagents, spawn the requested reviewers before local implementation so the final fix plan is grounded in the current branch state instead of only your own read.
 - For provider auth and saved-key lookups in this repo, treat `~/.cowork` as the only auth home; never derive auth storage from a workspace `.agent` path, and pin `HOME` in tests that fabricate auth state so they cannot accidentally read real machine credentials.
@@ -7,6 +9,7 @@
 - For desktop request spinners in this repo, clear the loading flag on both success events and structured control-session errors; server-side failures like `memory_list` SQLite errors may never emit the success payload that normally resets UI state.
 - When the user explicitly changes a CI request from “narrow the trigger” to “delete the workflow,” stop refining the trigger and remove the job/workflow exactly as requested.
 - When the user expands a bugfix to include verification failures found during the lane, treat every concrete error you surfaced as in-scope work instead of stopping after the original fix.
+- When a bugfix run exposes both a touched-area coverage gap and unrelated red tests in the repo verification lane, do not stop at the local fix; add the missing regression and clear the full failing lane before closing the task.
 - For expensive environment-backed CI in this repo, never leave the heavy job gated only on `event_name != 'pull_request'`; explicitly scope it to the intended branch or manual dispatch so ordinary `main` pushes do not burn the testing environment.
 - For automated PR review bots in this repo, optimize for unresolved findings only: cancel in-flight review runs when a PR closes, skip drafts, disable public session-share noise, and never post long “everything looks good now” summaries.
 - When finishing PR review work in this repo, do not stop at local code/test changes; reply on each completed GitHub review thread and resolve it in the PR in the same pass.
@@ -19,6 +22,8 @@
 - When the user narrows a protocol or compatibility requirement, apply that exact direction to the fix; do not keep broader backward-compat or provider-scope assumptions alive in the implementation.
 - When a user turns a review finding into an explicit product direction, implement the requested contract rather than the literal review recommendation; update the affected tests and tool descriptions to match that new source of truth.
 - When the user clarifies a provider contract, follow the repo’s intended behavior instead of extrapolating from public pricing/model docs; for OpenCode specifically, Go can intentionally have no local pricing data even if Zen does.
+- When the user narrows a Google Interactions review fix to "stay native on the backend," preserve Gemini-native history and thought signatures in the runtime instead of routing assistant replay through generic PI/OpenAI-style conversion layers.
+- When reviewing or fixing Google Interactions runtime behavior, verify the contract against both the current official Interactions docs and the installed `@google/genai` typings before deciding a history/tool-content shape is safe to drop or rewrite.
 - When adding or reviewing child-agent model routing, audit the full contract in one pass: model-ref parsing, session/workspace persistence, runtime routing, prompt/tool guidance, desktop defaults sync, and allowlist/disconnected-provider fallback behavior all have to agree or cross-provider spawning silently collapses back to same-provider behavior.
 - When adding a new desktop workspace setting, audit the full renderer-to-Electron persistence round trip in the same pass; updating store state and schemas without `PersistenceService.sanitizeWorkspaces()` will silently drop the field on save/load.
 - When adding multiple desktop workspace defaults in one feature, verify `sanitizeWorkspaces()` preserves every new field, not just the headline one; partial sanitizer updates can quietly reset cross-provider child-routing defaults on restart.
@@ -41,6 +46,7 @@
 - When session budget state changes at a threshold boundary, do not rely on the next aggregate `session_usage` snapshot to surface it; emit a dedicated websocket event at the transition and keep the client/parser contract strict enough to reject malformed nested usage payloads.
 - For desktop transcript hydration, reuse the shared strict protocol snapshot schema for `session_usage` instead of accepting any object-shaped replay payload; malformed transcript rows must be dropped before they reach `threadRuntime.sessionUsage`.
 - For user-facing citation markers, only render indices when you can resolve the target URL; otherwise drop the marker entirely so broken citations do not leave dead numbers or odd spacing in the final text.
+- For legacy Exa-backed `webSearch`, persist the structured raw Exa response in the tool result and parse citations/source cards from that payload (including overflow spill files); do not round-trip through formatted text blobs.
 - For desktop transcript/feed replay, never materialize whitespace-only assistant text as a message item; invisible assistant chunks can still break activity grouping and produce duplicate-looking Thinking cards.
 - For desktop renderer wrappers that re-export core protocol/types, prefer direct repo-root relative imports over `@cowork/*` aliases; `electron-vite` can accept the alias in TypeScript but still fail Rollup resolution at renderer build time.
 - For raw-backed desktop turns, do not just append legacy `reasoning` summaries at turn end; if a streamed final assistant message already exists for that turn, anchor the summary before that assistant item or it will render below the final answer.
@@ -146,6 +152,8 @@
 - For Bun-compiled desktop sidecars in this repo, never read `package.json` via runtime filesystem paths like `resolve(__dirname, "../package.json")`; compiled binaries run from `/$bunfs` and must get version data from bundled imports or explicit build-time/env injection.
 - For local OpenAI-compatible providers like LM Studio, do not treat a transport library's required `apiKey` parameter as a user-facing auth requirement; satisfy that client internally when necessary, but never surface `OPENAI_API_KEY` or API-key UI as mandatory for local inference.
 - For tool-output overflow policy, keep the generic spill-to-workspace guard enabled for oversized tool results, but exempt `read` so large file contents can stay inline for the model when explicitly requested.
+- For collapsible settings sections backed by live workspace state, seed the open state from the current workspace or routing mode and do not let the selected-item count drive `open` on every rerender; otherwise a checkbox click can immediately collapse the section the user is editing.
+- For desktop thread reconnect in this repo, never replay workspace `set_model` defaults onto a resumed session; reconnect-time default sync may still apply safe config like backups or MCP, but provider/model must stay pinned to the session that already started.
 
 ## 2026-03-18 Tool Output Overflow Audit
 

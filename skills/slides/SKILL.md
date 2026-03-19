@@ -13,6 +13,8 @@ Keep work in a task-local directory. Only copy final artifacts to the requested 
 
 Do not turn that task-local directory into a disposable Node project. Unless the user explicitly asked for a reusable Node package or the target folder is already an existing package-managed project, do not create `package.json`, lockfiles, or `node_modules` there. If JavaScript dependencies must be staged, keep that staging area outside the user's deliverable folder.
 
+When the user asks for images in a deck, only count real image files that were downloaded directly or read from local disk. Search result pages, article URLs, metadata-only search payloads, placeholders, or unrelated fallback images do not satisfy the request unless you explicitly disclose the degraded fallback.
+
 ## Bundled Resources
 
 - `assets/pptxgenjs_helpers/`: Copy this folder into the deck workspace and import it locally instead of reimplementing helper logic.
@@ -51,23 +53,26 @@ Do not turn that task-local directory into a disposable Node project. Unless the
 - Match the original aspect ratio before rebuilding layout.
 - Preserve editability where possible: text should stay text, and simple charts should stay native charts.
 - If a reference slide uses raster artwork, use `ensure_raster_image.py` to generate debug PNGs from vector or odd image formats before placing them.
+- If the requested imagery is unavailable, disclose that clearly instead of silently filling the deck with placeholders or unrelated stock art.
 
 ## Validation Commands
 
 Examples below assume you copied the needed scripts into the working directory. If not, invoke the same script paths relative to this skill folder.
 
 ```bash
-# Render slides to PNGs for review
+# Windows PowerShell
+py -3 scripts\render_slides.py deck.pptx --output_dir rendered
+py -3 scripts\create_montage.py --input_dir rendered --output_file montage.png
+py -3 scripts\slides_test.py deck.pptx
+py -3 scripts\detect_font.py deck.pptx --json
+
+# macOS / Linux
 python3 scripts/render_slides.py deck.pptx --output_dir rendered
-
-# Build a montage for quick scanning
 python3 scripts/create_montage.py --input_dir rendered --output_file montage.png
-
-# Check for overflow beyond the original slide canvas
 python3 scripts/slides_test.py deck.pptx
-
-# Detect missing or substituted fonts
 python3 scripts/detect_font.py deck.pptx --json
 ```
+
+The bundled helper scripts use shared executable resolution for LibreOffice, Inkscape, Ghostscript, ImageMagick, fontconfig, and related tools. If one is missing, fix the reported dependency or set the corresponding `COWORK_SLIDES_*_BIN` override before rerunning.
 
 Load `references/pptxgenjs-helpers.md` if you need the helper API summary or dependency details.

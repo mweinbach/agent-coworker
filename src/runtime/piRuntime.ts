@@ -484,12 +484,7 @@ export async function resolvePiModel(params: RuntimeRunTurnParams): Promise<Reso
   }
 
   if (provider === "google") {
-    const model = pickKnownPiModel("google", modelId);
-    if (!model) throw new Error(`No PI model metadata available for provider google (model: ${modelId}).`);
-    return {
-      model: applySupportedModelMetadata(model, provider, modelId),
-      apiKey: getSavedProviderApiKey(params.config, "google"),
-    };
+    throw new Error("Google is handled by the Google Interactions runtime. Set runtime to 'google-interactions'.");
   }
 
   if (provider === "anthropic") {
@@ -759,7 +754,7 @@ export function buildInitialStepMessages(
   resolved: ResolvedPiRuntimeModel,
 ): ModelMessage[] {
   if (!supportsProviderManagedContinuation(params, resolved)) {
-    return [...(params.allMessages ?? params.messages)];
+    return [...params.messages];
   }
   const providerState = matchingProviderState(params, resolved);
   if (providerState) {
@@ -978,7 +973,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
         const includeUnknownRawParts = params.includeRawChunks ?? true;
         const turnMessages: Array<Record<string, unknown>> = [];
         let usage = undefined as RuntimeRunTurnResult["usage"];
-        let stepMessages: ModelMessage[] = [...params.messages];
+        let stepMessages: ModelMessage[] = buildInitialStepMessages(params, resolved);
         let stepProviderOptions: Record<string, unknown> | undefined = asRecord(params.providerOptions) ?? undefined;
 
         const maxSteps = Math.max(1, params.maxSteps);

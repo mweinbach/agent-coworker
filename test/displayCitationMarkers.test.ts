@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 
 import {
   buildCitationOverflowFilePathsByMessageId,
+  buildCitationSourcesByMessageId,
   buildCitationUrlsByMessageId,
+  extractCitationSourcesFromWebSearchResult,
   extractCitationOverflowFilePathFromWebSearchResult,
   extractCitationUrlsFromWebSearchResult,
   normalizeDisplayCitationMarkers,
@@ -95,6 +97,50 @@ describe("display citation markers", () => {
     ]));
   });
 
+  test("extracts ordered URLs and titles from structured webSearch results", () => {
+    const result = {
+      provider: "exa",
+      count: 2,
+      response: {
+        results: [
+          { title: "Source One", url: "https://example.com/one", highlights: ["One"] },
+          { title: "Source Two", url: "https://example.com/two", highlights: ["Two"] },
+        ],
+      },
+    };
+
+    expect(extractCitationUrlsFromWebSearchResult(result)).toEqual(new Map([
+      [1, "https://example.com/one"],
+      [2, "https://example.com/two"],
+    ]));
+    expect(extractCitationSourcesFromWebSearchResult(result)).toEqual([
+      { title: "Source One", url: "https://example.com/one" },
+      { title: "Source Two", url: "https://example.com/two" },
+    ]);
+  });
+
+  test("extracts citation sources from overflowed JSON spill content", () => {
+    const spillContent = JSON.stringify({
+      provider: "exa",
+      count: 2,
+      response: {
+        results: [
+          { title: "Source One", url: "https://example.com/one" },
+          { title: "Source Two", url: "https://example.com/two" },
+        ],
+      },
+    }, null, 2);
+
+    expect(extractCitationUrlsFromWebSearchResult(spillContent)).toEqual(new Map([
+      [1, "https://example.com/one"],
+      [2, "https://example.com/two"],
+    ]));
+    expect(extractCitationSourcesFromWebSearchResult(spillContent)).toEqual([
+      { title: "Source One", url: "https://example.com/one" },
+      { title: "Source Two", url: "https://example.com/two" },
+    ]);
+  });
+
   test("prefers native assistant annotations when present", () => {
     const feed = [
       { id: "user-1", kind: "message", role: "user" as const },
@@ -155,6 +201,89 @@ describe("display citation markers", () => {
     ]));
   });
 
+  test("tracks latest structured webSearch sources by assistant message id", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "webSearch",
+        result: {
+          provider: "exa",
+          count: 2,
+          response: {
+            results: [
+              { title: "Source One", url: "https://example.com/one" },
+              { title: "Source Two", url: "https://example.com/two" },
+            ],
+          },
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", new Map([
+        [1, "https://example.com/one"],
+        [2, "https://example.com/two"],
+      ])],
+    ]));
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", [
+        { title: "Source One", url: "https://example.com/one" },
+        { title: "Source Two", url: "https://example.com/two" },
+      ]],
+    ]));
+  });
+
+  test("clears stale webSearch citations when a later search returns no results", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "webSearch",
+        result: {
+          provider: "exa",
+          count: 2,
+          response: {
+            results: [
+              { title: "Source One", url: "https://example.com/one" },
+              { title: "Source Two", url: "https://example.com/two" },
+            ],
+          },
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+      {
+        id: "tool-2",
+        kind: "tool" as const,
+        name: "webSearch",
+        result: {
+          provider: "exa",
+          count: 0,
+          response: {
+            results: [],
+          },
+        },
+      },
+      { id: "assistant-2", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", new Map([
+        [1, "https://example.com/one"],
+        [2, "https://example.com/two"],
+      ])],
+    ]));
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", [
+        { title: "Source One", url: "https://example.com/one" },
+        { title: "Source Two", url: "https://example.com/two" },
+      ]],
+    ]));
+  });
+
   test("surfaces overflow file paths for later citation hydration", () => {
     const result = {
       type: "text",
@@ -184,6 +313,128 @@ describe("display citation markers", () => {
         ],
       }),
     ).toBe("Search [1](https://example.com/search) result");
+  });
+
+  test("maps place citations from Gemini annotations into inline markers", () => {
+    expect(
+      normalizeDisplayCitationMarkers("Coffee nearby", {
+        citationMode: "markdown",
+        annotations: [
+          {
+            type: "place_citation",
+            start_index: 0,
+            end_index: 6,
+            name: "Blue Bottle Coffee",
+            url: "https://maps.google.com/?cid=123",
+          },
+        ],
+      }),
+    ).toBe("Coffee [1](https://maps.google.com/?cid=123) nearby");
+  });
+
+  test("tracks native URL context sources for assistant messages", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "nativeUrlContext",
+        result: {
+          provider: "google",
+          urls: ["https://example.com/about"],
+          results: [{ url: "https://example.com/about", status: "success" }],
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", new Map([[1, "https://example.com/about"]])],
+    ]));
+  });
+
+  test("clears stale native URL context citations and sources when a later result is empty", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "nativeUrlContext",
+        result: {
+          provider: "google",
+          urls: ["https://example.com/about"],
+          results: [{ url: "https://example.com/about", status: "success" }],
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+      {
+        id: "tool-2",
+        kind: "tool" as const,
+        name: "nativeUrlContext",
+        result: {
+          provider: "google",
+          results: [],
+        },
+      },
+      { id: "assistant-2", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", new Map([[1, "https://example.com/about"]])],
+    ]));
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", [
+        { url: "https://example.com/about" },
+      ]],
+    ]));
+  });
+
+  test("clears stale native web search citations and sources when a later result is empty", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "nativeWebSearch",
+        result: {
+          action: {
+            type: "search",
+            query: "openai responses",
+            sources: [
+              { title: "Source One", url: "https://example.com/one" },
+              { title: "Source Two", url: "https://example.com/two" },
+            ],
+          },
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+      {
+        id: "tool-2",
+        kind: "tool" as const,
+        name: "nativeWebSearch",
+        result: {
+          action: {
+            type: "search",
+            query: "openai responses empty",
+            sources: [],
+          },
+        },
+      },
+      { id: "assistant-2", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", new Map([
+        [1, "https://example.com/one"],
+        [2, "https://example.com/two"],
+      ])],
+    ]));
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", [
+        { title: "Source One", url: "https://example.com/one" },
+        { title: "Source Two", url: "https://example.com/two" },
+      ]],
+    ]));
   });
 
   test("appends a compact sources footer when native citations only exist out of band", () => {

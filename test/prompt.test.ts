@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadSystemPrompt, loadSubAgentPrompt } from "../src/prompt";
+import { loadSystemPrompt, loadSubAgentPrompt, loadSystemPromptWithSkills } from "../src/prompt";
 import type { AgentConfig } from "../src/types";
 
 function repoRoot(): string {
@@ -26,8 +26,8 @@ async function makeTmpDirs() {
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const base: AgentConfig = {
     provider: "google",
-    model: "gemini-3-pro-preview",
-    preferredChildModel: "gemini-3-pro-preview",
+    model: "gemini-3.1-pro-preview",
+    preferredChildModel: "gemini-3.1-pro-preview",
     workingDirectory: "/test/working",
     userName: "TestUser",
     knowledgeCutoff: "End of May 2025",
@@ -89,6 +89,13 @@ function expectNoWorkspacePackageScaffoldingGuidance(prompt: string) {
   expect(prompt).toContain("stage them outside the user's deliverable folder");
 }
 
+function expectWindowsShellGuidance(prompt: string) {
+  expect(prompt).toContain("## Shell Execution Policy");
+  expect(prompt).toContain("the `bash` tool actually runs PowerShell");
+  expect(prompt).toContain("do not rely on `&&`, `export`, or `source`");
+  expect(prompt).toContain("prefer `py -3` or `python`");
+}
+
 function expectImageInspectionGuidance(prompt: string) {
   const normalized = prompt.toLowerCase();
   const hasReadImageGuidance =
@@ -120,12 +127,12 @@ const IMAGE_GUIDANCE_PROMPT_FILES = [
   "prompts/system-models/claude-sonnet-4-6.md",
   "prompts/system-models/claude-opus-4-6.md",
   "prompts/system-models/gemini-3-flash-preview.md",
-  "prompts/system-models/gemini-3-pro-preview.md",
+  "prompts/system-models/gemini-3.1-pro-preview.md",
 ] as const;
 
 const WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_FILES = [
   ...IMAGE_GUIDANCE_PROMPT_FILES,
-  "prompts/system-models/gemini-3-pro-preview.md",
+  "prompts/system-models/gemini-3.1-pro-preview.md",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -470,24 +477,24 @@ describe("loadSystemPrompt", () => {
     }
   });
 
-  test("uses model-specific system template for gemini-3-pro-preview when present", async () => {
+  test("uses model-specific system template for gemini-3.1-pro-preview when present", async () => {
     const { builtIn } = await makeTmpDirs();
 
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
     await writeFile(
-      path.join(builtIn, "prompts", "system-models", "gemini-3-pro-preview.md"),
+      path.join(builtIn, "prompts", "system-models", "gemini-3.1-pro-preview.md"),
       "GEMINI 3.1 PRO TEMPLATE {{modelName}}"
     );
 
     const config = makeConfig({
       builtInDir: builtIn,
       provider: "google",
-      model: "gemini-3-pro-preview",
+      model: "gemini-3.1-pro-preview",
       skillsDirs: ["/nonexistent/skills"],
     });
     const prompt = await loadSystemPrompt(config);
 
-    expect(prompt).toContain("GEMINI 3.1 PRO TEMPLATE Gemini 3 Pro Preview");
+    expect(prompt).toContain("GEMINI 3.1 PRO TEMPLATE Gemini 3.1 Pro Preview");
     expect(prompt).not.toContain("DEFAULT");
   });
 
@@ -570,6 +577,20 @@ describe("loadSystemPrompt", () => {
     const prompt = await loadSystemPrompt(config);
     expect(prompt).toContain("## Skill Loading Policy (Strict)");
     expect(prompt).toContain("call the `skill` tool first");
+    expect(prompt).toContain("Do not count search result pages");
+    expect(prompt).toContain("`python-pptx`");
+    expect(prompt).toContain("Placeholder, stock stand-ins, or unrelated fallback images");
+  });
+
+  test("always appends Windows shell guidance and removes hardcoded && advice", async () => {
+    const config = makeConfig({
+      provider: "openai",
+      model: "gpt-5.4",
+      skillsDirs: ["/nonexistent/skills"],
+    });
+    const prompt = await loadSystemPrompt(config);
+    expectWindowsShellGuidance(prompt);
+    expect(prompt).not.toContain("chain them with && in a single bash call");
   });
 
   test("appends skills section when skills are found", async () => {
@@ -629,6 +650,33 @@ describe("loadSystemPrompt", () => {
 
     const prompt = await loadSystemPrompt(config);
     expect(prompt).not.toContain("## Available Skills");
+  });
+
+  test("includes built-in slides in the prompt and discovered skills when earlier skill dirs are empty", async () => {
+    const { tmp } = await makeTmpDirs();
+    const projectSkills = path.join(tmp, "project-skills");
+    const globalSkills = path.join(tmp, "global-skills");
+    const userSkills = path.join(tmp, "user-skills");
+    const builtInSkills = path.join(tmp, "built-in-skills");
+    await fs.mkdir(projectSkills, { recursive: true });
+    await fs.mkdir(globalSkills, { recursive: true });
+    await fs.mkdir(userSkills, { recursive: true });
+    await fs.mkdir(path.join(builtInSkills, "slides"), { recursive: true });
+    await fs.writeFile(
+      path.join(builtInSkills, "slides", "SKILL.md"),
+      skillDoc("slides", "Built-in slides skill.", "# Slides\n"),
+      "utf-8",
+    );
+
+    const config = makeConfig({
+      skillsDirs: [projectSkills, globalSkills, userSkills, builtInSkills],
+    });
+
+    const { prompt, discoveredSkills } = await loadSystemPromptWithSkills(config);
+    expect(prompt).toContain("## Available Skills");
+    expect(prompt).toContain("**slides**");
+    expect(prompt).toContain("source: built-in");
+    expect(discoveredSkills.map((skill) => skill.name)).toContain("slides");
   });
 
   test("skips skills section when skills dirs do not exist", async () => {

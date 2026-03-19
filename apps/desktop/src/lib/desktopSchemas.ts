@@ -4,6 +4,7 @@ import {
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
+  GOOGLE_THINKING_LEVEL_VALUES,
   OPENAI_REASONING_EFFORT_VALUES,
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
@@ -92,9 +93,23 @@ const codexCliProviderOptionsSchema = providerOptionsSchema.extend({
   }).strict().optional(),
 }).strict();
 
+const googleProviderOptionsSchema = z.object({
+  nativeWebSearch: z.boolean().optional(),
+  thinkingConfig: z.object({
+    thinkingLevel: z.enum(GOOGLE_THINKING_LEVEL_VALUES).optional(),
+  }).strict().optional(),
+}).strict();
+
 const workspaceProviderOptionsSchema = z.object({
   openai: providerOptionsSchema.optional(),
   "codex-cli": codexCliProviderOptionsSchema.optional(),
+  google: googleProviderOptionsSchema.optional(),
+  lmstudio: z.object({
+    baseUrl: z.string().trim().min(1).optional(),
+    contextLength: z.number().int().positive().optional(),
+    autoLoad: z.boolean().optional(),
+    reloadOnContextMismatch: z.boolean().optional(),
+  }).strict().optional(),
 }).strict();
 
 export const startWorkspaceServerInputSchema: z.ZodType<StartWorkspaceServerInput> = z.object({

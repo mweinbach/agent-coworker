@@ -5,6 +5,11 @@ import type { ToolContext } from "./context";
 import { defineTool } from "./defineTool";
 
 type ExecResult = { stdout: string; stderr: string; exitCode: number; errorCode?: string };
+type ExecRunner = (
+  file: string,
+  args: string[],
+  opts: { cwd: string; maxBuffer: number; signal?: AbortSignal }
+) => Promise<ExecResult>;
 
 const abortByNameSchema = z.object({ name: z.literal("AbortError") }).passthrough();
 const errorCodeSchema = z.object({ code: z.union([z.string(), z.number()]) }).passthrough();
@@ -50,44 +55,60 @@ async function runShellCommand(opts: {
   cwd: string;
   abortSignal?: AbortSignal;
 }): Promise<ExecResult> {
-  const maxBuffer = 1024 * 1024 * 10;
-
-  if (process.platform === "win32") {
-    // Prefer PowerShell on Windows. `powershell.exe` is available by default on supported versions.
-    const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", opts.command];
-    const primary = await execFileAsync("powershell.exe", args, {
-      cwd: opts.cwd,
-      maxBuffer,
-      signal: opts.abortSignal,
-    });
-    if (primary.errorCode !== "ENOENT") return primary;
-    return await execFileAsync("pwsh", args, {
-      cwd: opts.cwd,
-      maxBuffer,
-      signal: opts.abortSignal,
-    });
-  }
-
-  // macOS/Linux: prefer bash; fall back to sh.
-  const bash = await execFileAsync("bash", ["-lc", opts.command], {
-    cwd: opts.cwd,
-    maxBuffer,
-    signal: opts.abortSignal,
-  });
-  if (bash.errorCode !== "ENOENT") return bash;
-  return await execFileAsync("sh", ["-lc", opts.command], {
-    cwd: opts.cwd,
-    maxBuffer,
-    signal: opts.abortSignal,
+  return await runShellCommandWithExec({
+    ...opts,
+    platform: process.platform,
+    execRunner: execFileAsync,
   });
 }
 
-export function createBashTool(ctx: ToolContext) {
-  return defineTool({
-    description: `Execute a shell command. Use for git, npm, docker, system operations, and anything requiring the shell.
+function buildShellExecutionPlan(platform: NodeJS.Platform, command: string): Array<{ file: string; args: string[] }> {
+  if (platform === "win32") {
+    const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command];
+    return [
+      { file: "pwsh", args },
+      { file: "powershell.exe", args },
+    ];
+  }
+
+  return [
+    { file: "bash", args: ["-lc", command] },
+    { file: "sh", args: ["-lc", command] },
+  ];
+}
+
+async function runShellCommandWithExec(opts: {
+  command: string;
+  cwd: string;
+  abortSignal?: AbortSignal;
+  platform: NodeJS.Platform;
+  execRunner: ExecRunner;
+}): Promise<ExecResult> {
+  const maxBuffer = 1024 * 1024 * 10;
+  const plan = buildShellExecutionPlan(opts.platform, opts.command);
+
+  for (const candidate of plan) {
+    const result = await opts.execRunner(candidate.file, candidate.args, {
+      cwd: opts.cwd,
+      maxBuffer,
+      signal: opts.abortSignal,
+    });
+    if (result.errorCode !== "ENOENT") return result;
+  }
+
+  return {
+    stdout: "",
+    stderr: `No compatible shell executable was found for platform ${opts.platform}.`,
+    exitCode: 1,
+    errorCode: "ENOENT",
+  };
+}
+
+function buildBashToolDescription(): string {
+  return `Execute a shell command. Use for git, npm, docker, system operations, and anything requiring the shell.
 
 Platform notes:
-- Windows: runs in PowerShell
+- Windows: runs in PowerShell, preferring \`pwsh\` and falling back to \`powershell.exe\`
 - macOS/Linux: runs in bash (or sh fallback)
 
 IMPORTANT: Prefer dedicated tools over bash equivalents:
@@ -100,7 +121,14 @@ IMPORTANT: Prefer dedicated tools over bash equivalents:
 Rules:
 - Always quote file paths containing spaces with double quotes
 - Prefer absolute paths; avoid cd
-- Large text output may be saved to the workspace scratchpad when overflow protection is enabled`,
+- On Windows, do not rely on \`&&\`, \`export\`, or \`source\`; use PowerShell syntax such as \`;\`, \`$env:NAME = "value"\`, and separate tool calls when that is clearer
+- On Windows, prefer \`py -3\` or \`python\` for Python commands
+- Large text output may be saved to the workspace scratchpad when overflow protection is enabled`;
+}
+
+export function createBashTool(ctx: ToolContext) {
+  return defineTool({
+    description: buildBashToolDescription(),
     inputSchema: z.object({
       command: z.string().describe("The shell command to execute"),
     }),
@@ -138,3 +166,9 @@ Rules:
     },
   });
 }
+
+export const __internal = {
+  buildBashToolDescription,
+  buildShellExecutionPlan,
+  runShellCommandWithExec,
+};

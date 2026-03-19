@@ -10,6 +10,7 @@ import {
   formatSessionBudgetLine,
   formatSessionUsageHeadline,
   getComposerSubmitState,
+  loadOverflowCitationContext,
   reasoningLabelForMode,
   reasoningPreviewText,
   resolveComposerBusyPolicy,
@@ -258,6 +259,40 @@ describe("desktop reasoning UI helpers", () => {
     expect(composerBusyHint({ status: "streaming", disabled: false, mode: "send" })).toBe("Type to steer, or use stop to cancel.");
     expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-ready" })).toBe("Steer ready. Press Enter to inject it into the current run.");
     expect(composerBusyHint({ status: "ready", disabled: false, mode: "steer-pending" })).toBe("Steer sent. Waiting for the running turn to accept it.");
+  });
+
+  test("hydrates overflowed citation urls and sources from structured webSearch spill files", async () => {
+    const spillContent = JSON.stringify({
+      provider: "exa",
+      count: 2,
+      response: {
+        results: [
+          { title: "NVIDIA Blog", url: "https://blogs.nvidia.com/gtc" },
+          { title: "CNBC", url: "https://www.cnbc.com/gtc" },
+        ],
+      },
+    }, null, 2);
+
+    const result = await loadOverflowCitationContext(
+      [["assistant-1", "/tmp/exa-results.json"]],
+      async ({ path }) => {
+        expect(path).toBe("/tmp/exa-results.json");
+        return spillContent;
+      },
+    );
+
+    expect(result.urlsByMessageId).toEqual(new Map([
+      ["assistant-1", new Map([
+        [1, "https://blogs.nvidia.com/gtc"],
+        [2, "https://www.cnbc.com/gtc"],
+      ])],
+    ]));
+    expect(result.sourcesByMessageId).toEqual(new Map([
+      ["assistant-1", [
+        { title: "NVIDIA Blog", url: "https://blogs.nvidia.com/gtc" },
+        { title: "CNBC", url: "https://www.cnbc.com/gtc" },
+      ]],
+    ]));
   });
 
   test("renders usage stats as a title hover/focus reveal instead of an always-on header row", () => {

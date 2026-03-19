@@ -11,6 +11,7 @@ export function WebTool(props: ToolPartProps) {
   const theme = useTheme();
 
   const isNativeSearch = () => props.name === "nativeWebSearch";
+  const isNativeUrlContext = () => props.name === "nativeUrlContext";
   const isSearch = () => props.name === "webSearch" || isNativeSearch();
   const nativeAction = () => {
     if (!isRecord(props.result) || !isRecord(props.result.action)) return null;
@@ -18,6 +19,7 @@ export function WebTool(props: ToolPartProps) {
   };
   const label = () => {
     if (isNativeSearch()) return "web";
+    if (isNativeUrlContext()) return "url";
     return isSearch() ? "search" : "fetch";
   };
   const query = () => {
@@ -33,6 +35,12 @@ export function WebTool(props: ToolPartProps) {
         if (pattern) return String(pattern);
       }
       return "Searching the web";
+    }
+    if (isNativeUrlContext()) {
+      const urls = Array.isArray(props.args?.urls) ? props.args.urls : Array.isArray(props.result?.urls) ? props.result.urls : [];
+      if (urls.length === 1) return String(urls[0] ?? "Reading URL context");
+      if (urls.length > 1) return `Reading ${urls.length} URLs`;
+      return props.status === "done" ? "Completed" : "Reading URL context";
     }
     if (props.name === "webSearch") return props.args?.query ?? "";
     return props.args?.url ?? "";

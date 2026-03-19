@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.22`
+- Current protocol version: `7.24`
 
 ## Table of Contents
 
@@ -48,6 +48,15 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.24`:
+
+- `set_config.config.providerOptions.google.thinkingConfig.thinkingLevel` and `session_config.config.providerOptions.google.thinkingConfig.thinkingLevel` now support model-specific Gemini reasoning effort overrides. Omitting `thinkingLevel` keeps Gemini on its dynamic default.
+
+Changes in `7.23`:
+
+- `set_config.config.providerOptions.google` and `session_config.config.providerOptions.google` now support `nativeWebSearch`.
+- Enabling `providerOptions.google.nativeWebSearch` switches Google/Gemini sessions to the Interactions API built-in `google_search` + `url_context` tools in place of the local `webSearch` and `webFetch` tools.
 
 Changes in `7.22`:
 
@@ -1397,13 +1406,16 @@ Migrate legacy `.agent/mcp-servers.json` entries into `.cowork` scope.
 Cancel the currently running agent turn. Aborts the model stream and rejects any pending ask/approval prompts.
 
 ```json
-{ "type": "cancel", "sessionId": "..." }
+{ "type": "cancel", "sessionId": "...", "includeSubagents": true }
 ```
 
 | Field | Type | Required |
 |-------|------|----------|
 | `type` | `"cancel"` | Yes |
 | `sessionId` | `string` | Yes |
+| `includeSubagents` | `boolean` | No |
+
+Set `includeSubagents: true` to also cancel any active child-agent turns that belong to the same root session. Omitting it only stops the current session turn.
 
 **Response:** The in-progress turn will end and emit `session_busy` (`busy: false`). No-op if no turn is running.
 
@@ -1924,6 +1936,12 @@ Update runtime configuration values.
           }
         }
       },
+      "google": {
+        "nativeWebSearch": true,
+        "thinkingConfig": {
+          "thinkingLevel": "medium"
+        }
+      },
       "lmstudio": {
         "baseUrl": "http://127.0.0.1:1234",
         "contextLength": 16384,
@@ -1950,7 +1968,7 @@ Update runtime configuration values.
 | `config.preferredChildModelRef` | `string` | No | Preferred child target ref. Accepts either a plain same-provider model id or a canonical `provider:modelId` ref |
 | `config.allowedChildModelRefs` | `string[]` | No | Exact cross-provider child target refs allowed for this workspace |
 | `config.maxSteps` | `number` | No | Max steps per turn (1-1000) |
-| `config.providerOptions` | `object` | No | Editable provider option patch. Only `openai`, `codex-cli`, and `lmstudio` are allowed |
+| `config.providerOptions` | `object` | No | Editable provider option patch. Only `openai`, `codex-cli`, `google`, and `lmstudio` are allowed |
 | `config.providerOptions.openai.reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "xhigh"` | No | OpenAI reasoning effort |
 | `config.providerOptions.openai.reasoningSummary` | `"auto" \| "concise" \| "detailed"` | No | OpenAI reasoning summary |
 | `config.providerOptions.openai.textVerbosity` | `"low" \| "medium" \| "high"` | No | OpenAI verbosity |
@@ -1965,6 +1983,8 @@ Update runtime configuration values.
 | `config.providerOptions.codex-cli.webSearch.location.region` | `string` | No | Approximate region/state hint for Codex native web search |
 | `config.providerOptions.codex-cli.webSearch.location.city` | `string` | No | Approximate city hint for Codex native web search |
 | `config.providerOptions.codex-cli.webSearch.location.timezone` | `string` | No | Approximate timezone hint for Codex native web search |
+| `config.providerOptions.google.nativeWebSearch` | `boolean` | No | Use Gemini Interactions built-in `google_search` and `url_context` tools instead of the local `webSearch` and `webFetch` tools |
+| `config.providerOptions.google.thinkingConfig.thinkingLevel` | `"minimal" \| "low" \| "medium" \| "high"` | No | Optional explicit Gemini `thinking_level` override. Omit it to leave Gemini on its dynamic default; `minimal` is only valid on Gemini 3 Flash and Gemini 3.1 Flash-Lite |
 | `config.providerOptions.lmstudio.baseUrl` | `string` | No | Override the LM Studio server base URL. Defaults to `http://localhost:1234` |
 | `config.providerOptions.lmstudio.contextLength` | `number` | No | Preferred LM Studio load context length |
 | `config.providerOptions.lmstudio.autoLoad` | `boolean` | No | Whether the harness proactively loads the LM Studio model before inference when needed |
@@ -1979,6 +1999,8 @@ Update runtime configuration values.
 
 Notes:
 - `providerOptions` is a deep-merged patch against the workspace config. Unrelated provider settings outside this editable subset are preserved.
+- `google.nativeWebSearch` replaces the local `webSearch` and `webFetch` tools for Google/Gemini sessions with the Gemini Interactions built-in Search and URL Context tools.
+- `google.thinkingConfig.thinkingLevel` accepts only explicit Gemini thinking levels. Sending an empty `thinkingConfig` object clears the override and returns the workspace to Gemini's dynamic default.
 - `lmstudio` provider options affect harness-side discovery/load behavior; inference still runs through the normal runtime path.
 - `toolOutputOverflowChars: null` disables spill files explicitly. `clearToolOutputOverflowChars: true` removes the persisted override so future sessions inherit the default again.
 
@@ -2339,7 +2361,7 @@ Provider catalog metadata. Sent on connection and after model changes.
       "state": "ready"
     }
   ],
-  "default": { "openai": "gpt-5.4", "lmstudio": "local/qwen-2.5", "opencode-go": "glm-5", "opencode-zen": "glm-5", "google": "gemini-3-pro-preview" },
+  "default": { "openai": "gpt-5.4", "lmstudio": "local/qwen-2.5", "opencode-go": "glm-5", "opencode-zen": "glm-5", "google": "gemini-3.1-pro-preview" },
   "connected": ["openai", "lmstudio", "opencode-go", "opencode-zen"]
 }
 ```
@@ -2594,11 +2616,13 @@ Provider-native raw model stream event. Emitted before any derived `model_stream
 | `index` | `number` | Sequential raw-event index within the turn (starting at 0). Fallback: `-1` |
 | `provider` | `ProviderName \| "unknown"` | Provider that generated this event. Fallback: `"unknown"` |
 | `model` | `string` | Model that generated this event. Fallback: `"unknown"` |
-| `format` | `"openai-responses-v1"` | Raw event envelope format |
+| `format` | `"openai-responses-v1" \| "google-interactions-v1"` | Raw event envelope format |
 | `normalizerVersion` | `number` | Version identifier for the client/server raw-event normalizer |
 | `event` | `object` | Provider-native raw event payload. If a non-object payload is received, it is normalized to `{ "value": <original> }` |
 
 For OpenAI Responses providers, `event.item.type` may be `web_search_call`. Clients may surface these raw events as synthetic native web-search activity (for example `nativeWebSearch`) without treating them as executable local function tools.
+
+For Google Interactions providers, `event` is the provider-native SSE payload and typically uses `event_type` values like `interaction.start`, `content.delta`, and `interaction.complete`.
 
 ---
 
@@ -3470,6 +3494,12 @@ Current runtime config. Sent on connection and after `set_config`.
           }
         }
       },
+      "google": {
+        "nativeWebSearch": true,
+        "thinkingConfig": {
+          "thinkingLevel": "low"
+        }
+      },
       "lmstudio": {
         "baseUrl": "http://127.0.0.1:1234",
         "contextLength": 16384,
@@ -3516,6 +3546,8 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.providerOptions.codex-cli.webSearch.location.region` | `string` | Current editable Codex native web-search region/state |
 | `config.providerOptions.codex-cli.webSearch.location.city` | `string` | Current editable Codex native web-search city |
 | `config.providerOptions.codex-cli.webSearch.location.timezone` | `string` | Current editable Codex native web-search timezone |
+| `config.providerOptions.google.nativeWebSearch` | `boolean` | Current Gemini built-in Search + URL Context toggle |
+| `config.providerOptions.google.thinkingConfig.thinkingLevel` | `"minimal" \| "low" \| "medium" \| "high"` | Current explicit Gemini `thinking_level` override when set. Omitted means the workspace is using Gemini's dynamic default |
 | `config.providerOptions.lmstudio.baseUrl` | `string` | Current LM Studio base URL override |
 | `config.providerOptions.lmstudio.contextLength` | `number` | Current requested LM Studio context length override |
 | `config.providerOptions.lmstudio.autoLoad` | `boolean` | Current LM Studio eager-load toggle |

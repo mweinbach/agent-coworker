@@ -29,4 +29,16 @@ describe("tool card formatting ask summaries", () => {
     expect(out.title).toBe("Web Search");
     expect(out.subtitle).toContain("Search: latest OpenAI");
   });
+
+  test("renders native URL context cards with URL-specific summaries", () => {
+    const out = formatToolCard(
+      "nativeUrlContext",
+      { urls: ["https://example.com/about"] },
+      { provider: "google", urls: ["https://example.com/about"], results: [{ url: "https://example.com/about", status: "success" }] },
+      "output-available"
+    );
+    expect(out.title).toBe("URL Context");
+    expect(out.subtitle).toContain("Read: https://example.com/about");
+  });
+
 });

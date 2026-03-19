@@ -5,7 +5,7 @@ import { AlertTriangleIcon, MessageSquareIcon, RotateCcwIcon } from "lucide-reac
 import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 
 import { useAppStore } from "../app/store";
-import type { FeedItem, ThreadPendingSteer, ThreadStatus } from "../app/types";
+import type { FeedItem, ThreadAgentSummary, ThreadPendingSteer, ThreadStatus } from "../app/types";
 import {
   Conversation,
   ConversationContent,
@@ -37,6 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import {
   availableProvidersFromCatalog,
   modelChoicesFromCatalog,
@@ -50,6 +51,7 @@ import {
   buildCitationOverflowFilePathsByMessageId,
   buildCitationSourcesByMessageId,
   buildCitationUrlsByMessageId,
+  extractCitationSourcesFromWebSearchResult,
   extractCitationUrlsFromWebSearchResult,
 } from "../../../../src/shared/displayCitationMarkers";
 import type { CitationSource } from "../../../../src/shared/displayCitationMarkers";
@@ -86,6 +88,15 @@ export function reasoningPreviewText(text: string, maxLines = 3): string {
 
 export function shouldToggleReasoningExpanded(key: string): boolean {
   return key === "Enter" || key === " " || key === "Spacebar";
+}
+
+export function isActiveChildAgent(agent: ThreadAgentSummary): boolean {
+  if (agent.lifecycleState === "closed") return false;
+  return agent.busy || agent.executionState === "pending_init" || agent.executionState === "running";
+}
+
+export function countActiveChildAgents(agents: ThreadAgentSummary[]): number {
+  return agents.filter(isActiveChildAgent).length;
 }
 
 export function filterFeedForDeveloperMode(feed: FeedItem[], developerMode: boolean): FeedItem[] {
@@ -210,6 +221,41 @@ export function composerBusyHint(submitState: ReturnType<typeof getComposerSubmi
 
 export function resolveComposerBusyPolicy(busy: boolean): "reject" | "steer" {
   return busy ? "steer" : "reject";
+}
+
+type OverflowCitationContext = {
+  sourcesByMessageId: Map<string, CitationSource[]>;
+  urlsByMessageId: Map<string, Map<number, string>>;
+};
+
+export async function loadOverflowCitationContext(
+  entries: Array<[messageId: string, filePath: string]>,
+  readFileFn: (input: { path: string }) => Promise<string> = readFile,
+): Promise<OverflowCitationContext> {
+  const urlsByMessageId = new Map<string, Map<number, string>>();
+  const sourcesByMessageId = new Map<string, CitationSource[]>();
+  const textByPath = new Map<string, string>();
+
+  for (const [messageId, filePath] of entries) {
+    try {
+      let content = textByPath.get(filePath);
+      if (content === undefined) {
+        content = await readFileFn({ path: filePath });
+        textByPath.set(filePath, content);
+      }
+
+      urlsByMessageId.set(messageId, extractCitationUrlsFromWebSearchResult(content));
+
+      const sources = extractCitationSourcesFromWebSearchResult(content);
+      if (sources.length > 0) {
+        sourcesByMessageId.set(messageId, sources);
+      }
+    } catch {
+      urlsByMessageId.set(messageId, new Map());
+    }
+  }
+
+  return { urlsByMessageId, sourcesByMessageId };
 }
 
 export function ChatThreadHeader(props: {
@@ -467,6 +513,10 @@ export function ChatView() {
   const [overflowCitationUrlsByMessageId, setOverflowCitationUrlsByMessageId] = useState<Map<string, Map<number, string>>>(
     () => new Map(),
   );
+  const [overflowCitationSourcesByMessageId, setOverflowCitationSourcesByMessageId] = useState<Map<string, CitationSource[]>>(
+    () => new Map(),
+  );
+  const [cancelScopeDialogOpen, setCancelScopeDialogOpen] = useState(false);
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
@@ -497,14 +547,42 @@ export function ChatView() {
     }
     return merged;
   }, [inlineCitationUrlsByMessageId, overflowCitationUrlsByMessageId]);
-  const citationSourcesByMessageId = useMemo(() => buildCitationSourcesByMessageId(visibleFeed), [visibleFeed]);
+  const inlineCitationSourcesByMessageId = useMemo(() => buildCitationSourcesByMessageId(visibleFeed), [visibleFeed]);
+  const citationSourcesByMessageId = useMemo(() => {
+    const merged = new Map(inlineCitationSourcesByMessageId);
+    for (const [messageId, sources] of overflowCitationSourcesByMessageId) {
+      if (sources.length > 0) {
+        merged.set(messageId, sources);
+      }
+    }
+    return merged;
+  }, [inlineCitationSourcesByMessageId, overflowCitationSourcesByMessageId]);
   const renderItems = useMemo(() => buildChatRenderItems(visibleFeed), [visibleFeed]);
+  const activeChildAgentCount = useMemo(
+    () => countActiveChildAgents(rt?.agents ?? []),
+    [rt?.agents],
+  );
   const contextValue = useMemo<ChatViewContextValue>(
     () => ({
       developerMode,
     }),
     [developerMode],
   );
+
+  const handleStop = useCallback(() => {
+    if (!selectedThreadId) return;
+    if (activeChildAgentCount > 0) {
+      setCancelScopeDialogOpen(true);
+      return;
+    }
+    cancelThread(selectedThreadId);
+  }, [activeChildAgentCount, cancelThread, selectedThreadId]);
+
+  const cancelWithScope = useCallback((includeSubagents: boolean) => {
+    if (!selectedThreadId) return;
+    cancelThread(selectedThreadId, { includeSubagents });
+    setCancelScopeDialogOpen(false);
+  }, [cancelThread, selectedThreadId]);
 
   useEffect(() => {
     const el = feedRef.current;
@@ -550,28 +628,16 @@ export function ChatView() {
     const entries = [...citationOverflowFilePathsByMessageId.entries()];
     if (entries.length === 0) {
       setOverflowCitationUrlsByMessageId((current) => (current.size === 0 ? current : new Map()));
+      setOverflowCitationSourcesByMessageId((current) => (current.size === 0 ? current : new Map()));
       return;
     }
 
     void (async () => {
-      const urlsByMessageId = new Map<string, Map<number, string>>();
-      const textByPath = new Map<string, string>();
-
-      for (const [messageId, filePath] of entries) {
-        try {
-          let content = textByPath.get(filePath);
-          if (content === undefined) {
-            content = await readFile({ path: filePath });
-            textByPath.set(filePath, content);
-          }
-          urlsByMessageId.set(messageId, extractCitationUrlsFromWebSearchResult(content));
-        } catch {
-          urlsByMessageId.set(messageId, new Map());
-        }
-      }
+      const { urlsByMessageId, sourcesByMessageId } = await loadOverflowCitationContext(entries);
 
       if (!cancelled) {
         setOverflowCitationUrlsByMessageId(urlsByMessageId);
+        setOverflowCitationSourcesByMessageId(sourcesByMessageId);
       }
     })();
 
@@ -585,6 +651,12 @@ export function ChatView() {
       textareaRef.current.focus();
     }
   }, [selectedThreadId]);
+
+  useEffect(() => {
+    if (!rt?.busy || activeChildAgentCount === 0) {
+      setCancelScopeDialogOpen(false);
+    }
+  }, [activeChildAgentCount, rt?.busy]);
 
 
   const onComposerKeyDown = useCallback(
@@ -712,9 +784,9 @@ export function ChatView() {
           </ConversationContent>
         </Conversation>
 
-        <div className="relative border-t border-border/60 px-4 py-1.5 flex flex-col shrink-0" style={{ height: messageBarHeight }}>
-          <MessageBarResizer />
-          <PromptInputRoot>
+      <div className="relative border-t border-border/60 px-4 py-1.5 flex flex-col shrink-0" style={{ height: messageBarHeight }}>
+        <MessageBarResizer />
+        <PromptInputRoot>
             <PromptInputForm
               onSubmit={(event) => {
                 event.preventDefault();
@@ -752,13 +824,37 @@ export function ChatView() {
                     mode={composerSubmitState.mode}
                     status={composerSubmitState.status}
                     disabled={composerSubmitState.disabled}
-                    onStop={selectedThreadId ? () => cancelThread(selectedThreadId) : undefined}
+                    onStop={selectedThreadId ? handleStop : undefined}
                   />
                 </div>
               </PromptInputFooter>
             </PromptInputForm>
           </PromptInputRoot>
         </div>
+        <Dialog open={cancelScopeDialogOpen} onOpenChange={setCancelScopeDialogOpen}>
+          <DialogContent showClose className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Stop Subagents Too?</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                This run currently has {activeChildAgentCount} active subagent{activeChildAgentCount === 1 ? "" : "s"}.
+                You can stop only the main agent turn or cancel the subagents as well.
+              </p>
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setCancelScopeDialogOpen(false)}>
+                  Keep running
+                </Button>
+                <Button type="button" variant="secondary" onClick={() => cancelWithScope(false)}>
+                  Stop main agent only
+                </Button>
+                <Button type="button" variant="destructive" onClick={() => cancelWithScope(true)}>
+                  Stop subagents too
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </ChatViewContext.Provider>
   );

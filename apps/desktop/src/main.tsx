@@ -1,7 +1,10 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { maybeLoadReactGrabDevTools } from "./lib/reactGrabDevTools";
 import "./styles.css";
+
+void maybeLoadReactGrabDevTools();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

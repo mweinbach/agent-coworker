@@ -11,7 +11,7 @@ import { loadAgentPrompt, loadSystemPromptWithSkills } from "../prompt";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "../shared/openaiCompatibleOptions";
 import type { SessionKind } from "../shared/agents";
 import {
-  OPENAI_COMPATIBLE_PROVIDER_NAMES,
+  EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES,
   mergeEditableOpenAiCompatibleProviderOptions,
 } from "../shared/openaiCompatibleOptions";
 import { ensureDefaultGlobalSkillsReady } from "../skills/defaultGlobalSkills";
@@ -111,7 +111,7 @@ async function persistProjectConfigPatch(
   for (const [key, value] of entries) {
     if (key === "providerOptions") {
       const currentProviderOptions = isPlainObject(current[key]) ? { ...current[key] } : {};
-      for (const provider of OPENAI_COMPATIBLE_PROVIDER_NAMES) {
+      for (const provider of EDITABLE_PROVIDER_OPTIONS_PROVIDER_NAMES) {
         const sectionPatch = patch.providerOptions?.[provider];
         if (!sectionPatch) continue;
 
@@ -233,12 +233,8 @@ export async function startAgentServer(
   const hostname = opts.hostname ?? "127.0.0.1";
   const rawEnv = opts.env ?? { ...process.env, AGENT_WORKING_DIR: opts.cwd };
   const env: Record<string, string | undefined> & {
-    COWORK_DISABLE_BUILTIN_SKILLS: string;
     COWORK_BUILTIN_DIR?: string;
-  } = {
-    ...rawEnv,
-    COWORK_DISABLE_BUILTIN_SKILLS: rawEnv.COWORK_DISABLE_BUILTIN_SKILLS ?? "1",
-  };
+  } = { ...rawEnv };
 
   await ensureDefaultGlobalSkillsReady({
     homedir: opts.homedir,
@@ -378,6 +374,9 @@ export async function startAgentServer(
       closeAgentImpl: async (
         agentOpts: Parameters<NonNullable<SessionDependencies["closeAgentImpl"]>>[0],
       ) => await agentControl.close(agentOpts),
+      cancelAgentSessionsImpl: (
+        parentSessionId: Parameters<NonNullable<SessionDependencies["cancelAgentSessionsImpl"]>>[0],
+      ) => agentControl.cancelAll(parentSessionId),
       deleteSessionImpl: async (opts: { requesterSessionId: string; targetSessionId: string }): Promise<void> => {
         void opts.requesterSessionId;
         const liveChildIds = [...sessionBindings.values()]

@@ -594,9 +594,23 @@ describe("safeParseClientMessage", () => {
       }
     });
 
+    test("valid cancel message can include subagents", () => {
+      const msg = expectOk(JSON.stringify({ type: "cancel", sessionId: "s1", includeSubagents: true }));
+      expect(msg.type).toBe("cancel");
+      if (msg.type === "cancel") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.includeSubagents).toBe(true);
+      }
+    });
+
     test("cancel missing sessionId fails", () => {
       const err = expectErr(JSON.stringify({ type: "cancel" }));
       expect(err).toBe("cancel missing sessionId");
+    });
+
+    test("cancel invalid includeSubagents fails", () => {
+      const err = expectErr(JSON.stringify({ type: "cancel", sessionId: "s1", includeSubagents: "yes" }));
+      expect(err).toBe("cancel invalid includeSubagents");
     });
   });
 
@@ -1272,6 +1286,35 @@ describe("safeParseClientMessage", () => {
       }
     });
 
+    test("valid set_config accepts Gemini native tool provider options", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_config",
+          sessionId: "s1",
+          config: {
+            providerOptions: {
+              google: {
+                nativeWebSearch: true,
+                thinkingConfig: {
+                  thinkingLevel: "minimal",
+                },
+              },
+            },
+          },
+        }),
+      );
+
+      expect(msg.type).toBe("set_config");
+      if (msg.type === "set_config") {
+        expect(msg.config.providerOptions?.google).toEqual({
+          nativeWebSearch: true,
+          thinkingConfig: {
+            thinkingLevel: "minimal",
+          },
+        });
+      }
+    });
+
     test("valid set_config accepts clearToolOutputOverflowChars", () => {
       const msg = expectOk(
         JSON.stringify({
@@ -1363,7 +1406,7 @@ describe("safeParseClientMessage", () => {
             config: { providerOptions: { anthropic: { reasoningEffort: "high" } } },
           }),
         ),
-      ).toBe("set_config config.providerOptions only supports openai, codex-cli, and lmstudio");
+      ).toBe("set_config config.providerOptions only supports openai, codex-cli, google, and lmstudio");
       expect(
         expectErr(
           JSON.stringify({

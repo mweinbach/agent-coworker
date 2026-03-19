@@ -75,7 +75,7 @@ describe("pi runtime provider option mapping", () => {
     expect(mapped.interleavedThinking).toBe(true);
   });
 
-  test("maps google thinking config options", () => {
+  test("google provider options are not mapped in PI runtime (handled by Google Interactions runtime)", () => {
     const params = makeParams(makeConfig({
       provider: "google",
       providerOptions: {
@@ -91,13 +91,10 @@ describe("pi runtime provider option mapping", () => {
       },
     }));
     const mapped = __internal.buildPiStreamOptions(params);
-    expect(mapped.thinking).toEqual({
-      enabled: true,
-      level: "HIGH",
-      budgetTokens: 123,
-    });
-    expect(mapped.temperature).toBe(0.6);
-    expect(mapped.toolChoice).toBe("auto");
+    // Google-specific options are no longer mapped through PI runtime
+    expect(mapped.thinking).toBeUndefined();
+    expect(mapped.temperature).toBeUndefined();
+    expect(mapped.toolChoice).toBeUndefined();
   });
 
   test("ignores baseten providerOptions until they are exposed through the shared editable contract", () => {

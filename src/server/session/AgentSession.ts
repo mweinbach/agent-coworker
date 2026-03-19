@@ -210,6 +210,7 @@ export class AgentSession {
     waitForAgentImpl?: SessionDependencies["waitForAgentImpl"];
     resumeAgentImpl?: SessionDependencies["resumeAgentImpl"];
     closeAgentImpl?: SessionDependencies["closeAgentImpl"];
+    cancelAgentSessionsImpl?: SessionDependencies["cancelAgentSessionsImpl"];
     deleteSessionImpl?: SessionDependencies["deleteSessionImpl"];
     listWorkspaceBackupsImpl?: SessionDependencies["listWorkspaceBackupsImpl"];
     createWorkspaceBackupCheckpointImpl?: SessionDependencies["createWorkspaceBackupCheckpointImpl"];
@@ -314,6 +315,7 @@ export class AgentSession {
       waitForAgentImpl: opts.waitForAgentImpl,
       resumeAgentImpl: opts.resumeAgentImpl,
       closeAgentImpl: opts.closeAgentImpl,
+      cancelAgentSessionsImpl: opts.cancelAgentSessionsImpl,
       deleteSessionImpl: opts.deleteSessionImpl,
       listWorkspaceBackupsImpl: opts.listWorkspaceBackupsImpl,
       createWorkspaceBackupCheckpointImpl: opts.createWorkspaceBackupCheckpointImpl,
@@ -491,6 +493,7 @@ export class AgentSession {
     waitForAgentImpl?: SessionDependencies["waitForAgentImpl"];
     resumeAgentImpl?: SessionDependencies["resumeAgentImpl"];
     closeAgentImpl?: SessionDependencies["closeAgentImpl"];
+    cancelAgentSessionsImpl?: SessionDependencies["cancelAgentSessionsImpl"];
     deleteSessionImpl?: SessionDependencies["deleteSessionImpl"];
     listWorkspaceBackupsImpl?: SessionDependencies["listWorkspaceBackupsImpl"];
     createWorkspaceBackupCheckpointImpl?: SessionDependencies["createWorkspaceBackupCheckpointImpl"];
@@ -561,6 +564,7 @@ export class AgentSession {
       waitForAgentImpl: opts.waitForAgentImpl,
       resumeAgentImpl: opts.resumeAgentImpl,
       closeAgentImpl: opts.closeAgentImpl,
+      cancelAgentSessionsImpl: opts.cancelAgentSessionsImpl,
       deleteSessionImpl: opts.deleteSessionImpl,
       listWorkspaceBackupsImpl: opts.listWorkspaceBackupsImpl,
       createWorkspaceBackupCheckpointImpl: opts.createWorkspaceBackupCheckpointImpl,
@@ -897,8 +901,8 @@ export class AgentSession {
     this.turnExecutionManager.handleApprovalResponse(requestId, approved);
   }
 
-  cancel() {
-    this.turnExecutionManager.cancel();
+  cancel(opts?: { includeSubagents?: boolean }) {
+    this.turnExecutionManager.cancel(opts);
   }
 
   async closeForHistory(): Promise<void> {

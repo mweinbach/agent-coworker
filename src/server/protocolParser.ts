@@ -6,6 +6,7 @@ import {
   CODEX_WEB_SEARCH_BACKEND_VALUES,
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
+  GOOGLE_THINKING_LEVEL_VALUES,
   OPENAI_REASONING_EFFORT_VALUES,
   OPENAI_REASONING_SUMMARY_VALUES,
   OPENAI_TEXT_VERBOSITY_VALUES,
@@ -116,9 +117,17 @@ const lmStudioProviderOptionsSchema = z.object({
   reloadOnContextMismatch: z.boolean().optional(),
 }).strict();
 
+const googleProviderOptionsSchema = z.object({
+  nativeWebSearch: z.boolean().optional(),
+  thinkingConfig: z.object({
+    thinkingLevel: z.enum(GOOGLE_THINKING_LEVEL_VALUES).optional(),
+  }).strict().optional(),
+}).strict();
+
 const editableOpenAiProviderOptionsByProviderSchema = z.object({
   openai: openAiCompatibleProviderOptionsSchema.optional(),
   "codex-cli": codexCliProviderOptionsSchema.optional(),
+  google: googleProviderOptionsSchema.optional(),
   lmstudio: lmStudioProviderOptionsSchema.optional(),
 }).strict();
 
@@ -216,23 +225,26 @@ function setConfigIssueMessage(issue: z.ZodIssue): string {
   const path = issue.path.map((part) => String(part));
   const [field, provider, option, nestedOption, nestedField] = path;
 
-  if (field === "providerOptions") {
-    if (issue.code === "unrecognized_keys") {
-      if (provider === undefined) {
-        return "set_config config.providerOptions only supports openai, codex-cli, and lmstudio";
-      }
-      if (provider === "codex-cli" && option === "webSearch" && nestedOption === "location") {
-        return "set_config config.providerOptions.codex-cli.webSearch.location only supports country, region, city, and timezone";
+    if (field === "providerOptions") {
+      if (issue.code === "unrecognized_keys") {
+        if (provider === undefined) {
+          return "set_config config.providerOptions only supports openai, codex-cli, google, and lmstudio";
+        }
+        if (provider === "codex-cli" && option === "webSearch" && nestedOption === "location") {
+          return "set_config config.providerOptions.codex-cli.webSearch.location only supports country, region, city, and timezone";
       }
       if (provider === "codex-cli" && option === "webSearch") {
         return "set_config config.providerOptions.codex-cli.webSearch only supports contextSize, allowedDomains, and location";
       }
-      if (provider === "codex-cli") {
-        return "set_config config.providerOptions.codex-cli only supports reasoningEffort, reasoningSummary, textVerbosity, webSearchBackend, webSearchMode, and webSearch";
-      }
-      if (provider === "lmstudio") {
-        return "set_config config.providerOptions.lmstudio only supports baseUrl, contextLength, autoLoad, and reloadOnContextMismatch";
-      }
+        if (provider === "codex-cli") {
+          return "set_config config.providerOptions.codex-cli only supports reasoningEffort, reasoningSummary, textVerbosity, webSearchBackend, webSearchMode, and webSearch";
+        }
+        if (provider === "google") {
+          return "set_config config.providerOptions.google only supports nativeWebSearch and thinkingConfig";
+        }
+        if (provider === "lmstudio") {
+          return "set_config config.providerOptions.lmstudio only supports baseUrl, contextLength, autoLoad, and reloadOnContextMismatch";
+        }
       return `set_config config.providerOptions.${provider} only supports reasoningEffort, reasoningSummary, and textVerbosity`;
     }
 
@@ -283,6 +295,18 @@ function setConfigIssueMessage(issue: z.ZodIssue): string {
       return `set_config config.providerOptions.${provider}.reasoningSummary must be one of ${OPENAI_REASONING_SUMMARY_VALUES.join(", ")}`;
     }
 
+    if (provider === "google" && option === "nativeWebSearch") {
+      return `set_config config.providerOptions.google.${option} must be boolean`;
+    }
+
+    if (provider === "google" && option === "thinkingConfig" && !nestedOption) {
+      return "set_config config.providerOptions.google.thinkingConfig must be an object";
+    }
+
+    if (provider === "google" && option === "thinkingConfig" && nestedOption === "thinkingLevel") {
+      return `set_config config.providerOptions.google.thinkingConfig.thinkingLevel must be one of ${GOOGLE_THINKING_LEVEL_VALUES.join(", ")}`;
+    }
+
     if (provider === "lmstudio" && option === "baseUrl") {
       return "set_config config.providerOptions.lmstudio.baseUrl must be a non-empty string";
     }
@@ -331,7 +355,6 @@ function sessionAndFieldSchema<TType extends string>(
 
 const sessionOnlyTypes = [
   "ping",
-  "cancel",
   "session_close",
   "reset",
   "list_tools",
@@ -766,6 +789,11 @@ const setSessionUsageBudgetSchema = schemaWithType("set_session_usage_budget", {
   }
 });
 
+const cancelSchema = schemaWithType("cancel", {
+  sessionId: requiredSessionId("cancel"),
+  includeSubagents: z.boolean({ error: "cancel invalid includeSubagents" }).optional(),
+});
+
 const clientMessageSchema = z.discriminatedUnion("type", [
   ...sessionOnlySchemaList,
   ...sessionAndSkillNameSchemaList,
@@ -798,6 +826,7 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   workspaceBackupDeleteCheckpointSchema,
   workspaceBackupDeleteEntrySchema,
   workspaceBackupDeltaGetSchema,
+  cancelSchema,
   getMessagesSchema,
   setSessionTitleSchema,
   deleteSessionSchema,

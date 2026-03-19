@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import { createElement, StrictMode } from "react";
 import { act } from "react";
@@ -127,12 +127,16 @@ function setupJsdom(): JsdomHarness {
 }
 
 const {
+  GeminiApiSettingsCard,
   OpenAiCompatibleModelSettingsCard,
   WorkspacesPage,
   WorkspaceUserProfileCard,
 } = await import("../src/ui/settings/pages/WorkspacesPage");
 const App = (await import("../src/App")).default;
 const { useAppStore } = await import("../src/app/store");
+const defaultStoreActions = {
+  updateWorkspaceDefaults: useAppStore.getState().updateWorkspaceDefaults,
+};
 
 describe("desktop workspaces page", () => {
   beforeEach(() => {
@@ -146,7 +150,12 @@ describe("desktop workspaces page", () => {
       providerConnected: [],
       providerDefaultModelByProvider: {},
       providerStatusByName: {},
+      ...defaultStoreActions,
     }));
+  });
+
+  afterEach(() => {
+    useAppStore.setState(defaultStoreActions);
   });
 
   test("renders OpenAI and ChatGPT settings controls with compact web search options", () => {
@@ -324,6 +333,34 @@ describe("desktop workspaces page", () => {
       }
       harness.restore();
     }
+  });
+
+  test("renders Gemini API settings controls for native web search", () => {
+    const html = renderToStaticMarkup(
+      createElement(GeminiApiSettingsCard, {
+        workspace: {
+          id: "ws-1",
+          defaultProvider: "google",
+          defaultModel: "gemini-3-flash-preview",
+          providerOptions: {
+            google: {
+              nativeWebSearch: true,
+            },
+          },
+        },
+        providerStatusByName: {
+          google: { verified: true },
+        },
+        googleDefaultModel: "gemini-3.1-pro-preview",
+        updateWorkspaceDefaults: async () => {},
+      }),
+    );
+
+    expect(html).toContain("Gemini API settings");
+    expect(html).toContain("Reasoning effort");
+    expect(html).toContain("gemini-3-flash-preview");
+    expect(html).toContain("Native web search");
+    expect(html).toContain("Google Search and URL Context");
   });
 
   test("renders workspace controls for user profile context", () => {
@@ -512,6 +549,19 @@ describe("desktop workspaces page", () => {
         expect(providerIndexes[index - 1]).toBeLessThan(providerIndexes[index]);
       }
       expect(expandedText).not.toContain("Baseten");
+
+      const subagentModelCheckbox = container.querySelector('[aria-label="Allow subagent model opencode-go:glm-5"]');
+      if (!(subagentModelCheckbox instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing subagent model checkbox");
+      }
+
+      await act(async () => {
+        subagentModelCheckbox.click();
+      });
+
+      expect(subagentModelCheckbox.isConnected).toBe(true);
+      expect(subagentModelsToggle.textContent).toContain("Hide");
+      expect(useAppStore.getState().workspaces[0]?.defaultAllowedChildModelRefs).toEqual(["opencode-zen:glm-5"]);
     } finally {
       if (root) {
         await act(async () => {

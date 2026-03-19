@@ -5,8 +5,8 @@ import { buildRuntimeTelemetrySettings } from "./observability/runtime";
 import { buildGooglePrepareStep } from "./providers/googleReplay";
 import { createRuntime } from "./runtime";
 import type { RuntimeModelRawEvent, RuntimePrepareStep, RuntimeStepOverride } from "./runtime/types";
-import type { OpenAiContinuationState } from "./shared/openaiContinuation";
 import type { AgentRole } from "./shared/agents";
+import type { ProviderContinuationState } from "./shared/providerContinuation";
 import type { AgentControl } from "./tools";
 import type { AgentConfig, ModelMessage, TodoItem } from "./types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "./session/costTracker";
@@ -53,7 +53,7 @@ export interface RunTurnParams {
   system: string;
   messages: ModelMessage[];
   allMessages?: ModelMessage[];
-  providerState?: OpenAiContinuationState | null;
+  providerState?: ProviderContinuationState | null;
   agentControl?: AgentControl;
   prepareStep?: RuntimePrepareStep;
 
@@ -279,7 +279,7 @@ export function createRunTurn(overrides: RunTurnOverrides = {}) {
       cachedPromptTokens?: number;
       estimatedCostUsd?: number;
     };
-    providerState?: OpenAiContinuationState;
+    providerState?: ProviderContinuationState;
   }> {
     const { config, system, messages, log, askUser, approveCommand, updateTodos, discoveredSkills, abortSignal } = params;
     let latestTurnMessages = messages;
@@ -503,7 +503,7 @@ export async function runTurnWithDeps(
     cachedPromptTokens?: number;
     estimatedCostUsd?: number;
   };
-  providerState?: OpenAiContinuationState;
+  providerState?: ProviderContinuationState;
 }> {
   return await createRunTurn(overrides)(params);
 }

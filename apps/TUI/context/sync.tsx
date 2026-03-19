@@ -562,10 +562,14 @@ export function SyncProvider(props: { serverUrl: string; children: JSX.Element }
       socketLifecycle.send({ type: "reset", sessionId });
     },
 
-    cancel() {
+    cancel(opts?: { includeSubagents?: boolean }) {
       const sessionId = state.sessionId;
       if (!sessionId || !socketLifecycle.hasSocket()) return;
-      socketLifecycle.send({ type: "cancel", sessionId });
+      socketLifecycle.send({
+        type: "cancel",
+        sessionId,
+        ...(opts?.includeSubagents !== undefined ? { includeSubagents: opts.includeSubagents } : {}),
+      });
     },
 
     clearUsageHardCap() {

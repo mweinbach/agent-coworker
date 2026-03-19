@@ -13,7 +13,7 @@ import type { SyncConfigPatch } from "../../context/syncTypes";
 type LocalSlashDependencies = {
   syncActions: {
     reset: () => void;
-    cancel: () => void;
+    cancel: (opts?: { includeSubagents?: boolean }) => void;
     clearUsageHardCap: () => boolean;
     setConfig: (config: SyncConfigPatch) => boolean;
     setProviderApiKey: (provider: string, methodId: string, apiKey: string) => void;
@@ -516,6 +516,15 @@ export function createLocalSlashCommands(deps: LocalSlashDependencies): LocalSla
       icon: "!",
       execute: () => {
         deps.syncActions.cancel();
+      },
+    },
+    {
+      name: "cancel-subagents",
+      aliases: ["cancel-all"],
+      description: "Cancel current turn and active subagents",
+      icon: "!",
+      execute: () => {
+        deps.syncActions.cancel({ includeSubagents: true });
       },
     },
     {

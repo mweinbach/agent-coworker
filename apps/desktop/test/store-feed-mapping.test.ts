@@ -1047,6 +1047,218 @@ describe("desktop transcript feed mapping", () => {
     });
   });
 
+  test("replays raw google interactions reasoning and tool traces from persisted sessions", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:00.000Z",
+        threadId: "thread-1",
+        direction: "client",
+        payload: { type: "user_message", text: "Make the Spider-Man deck better" },
+      },
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-raw",
+          index: 0,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: {
+            event_type: "content.start",
+            index: 0,
+            content: { type: "thought" },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-raw",
+          index: 1,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: {
+            event_type: "content.delta",
+            index: 0,
+            delta: {
+              type: "thought_summary",
+              content: { type: "text", text: "Searching for trailer visuals." },
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-raw",
+          index: 2,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: {
+            event_type: "content.delta",
+            index: 1,
+            delta: {
+              type: "function_call",
+              id: "call_fetch",
+              name: "webFetch",
+              arguments: { url: "https://example.com/trailer" },
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:04.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-raw",
+          index: 3,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: {
+            event_type: "content.stop",
+            index: 1,
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:05.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-raw",
+          index: 4,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: {
+            event_type: "content.delta",
+            index: 2,
+            delta: {
+              type: "google_search_call",
+              id: "native_search",
+              arguments: { queries: ["Spider-Man trailer screenshots"] },
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:06.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-raw",
+          index: 5,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: {
+            event_type: "content.delta",
+            index: 3,
+            delta: {
+              type: "google_search_result",
+              call_id: "native_search",
+              result: {
+                sources: [{ url: "https://example.com/search" }],
+                results: [{ title: "Trailer stills" }],
+              },
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:07.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-raw",
+          index: 6,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: {
+            event_type: "content.stop",
+            index: 3,
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:08.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: { type: "assistant_message", text: "Updated the presentation." },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+
+    expect(feed.map((item) => item.kind)).toEqual(["message", "system", "reasoning", "tool", "tool", "message"]);
+
+    const reasoning = feed.find((item) => item.kind === "reasoning");
+    expect(reasoning?.kind).toBe("reasoning");
+    if (!reasoning || reasoning.kind !== "reasoning") throw new Error("Expected reasoning item");
+    expect(reasoning.text).toBe("Searching for trailer visuals.");
+
+    const system = feed.find((item) => item.kind === "system");
+    expect(system?.kind).toBe("system");
+    if (!system || system.kind !== "system") throw new Error("Expected system item");
+    expect(system.line).toBe("Reasoning started (reasoning)");
+
+    const tools = feed.filter((item) => item.kind === "tool");
+    expect(tools).toHaveLength(2);
+    if (tools[0]?.kind !== "tool" || tools[1]?.kind !== "tool") {
+      throw new Error("Expected tool items");
+    }
+    expect(tools[0]).toMatchObject({
+      name: "webFetch",
+      state: "input-available",
+      args: { url: "https://example.com/trailer" },
+    });
+    expect(tools[1]).toMatchObject({
+      name: "nativeWebSearch",
+      state: "output-available",
+      args: { queries: ["Spider-Man trailer screenshots"] },
+      result: {
+        provider: "google",
+        status: "completed",
+        callId: "native_search",
+        queries: ["Spider-Man trailer screenshots"],
+        results: [{ title: "Trailer stills" }],
+        sources: [{ url: "https://example.com/search" }],
+      },
+    });
+  });
+
   test("keeps separate feed cards for distinct native web search calls", () => {
     const transcript: TranscriptEvent[] = [
       {

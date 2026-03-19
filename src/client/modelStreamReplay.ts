@@ -6,6 +6,12 @@ import {
 import { mapPiEventToRawParts } from "../runtime/piStreamParts";
 import { normalizeModelStreamPart } from "../server/modelStream";
 import type { ServerEvent } from "../server/protocol";
+import {
+  mapGoogleInteractionsEventToStreamParts,
+  processGoogleInteractionsStreamEvent,
+  type GoogleInteractionsContentBlock,
+  type GoogleInteractionsProviderToolCallState,
+} from "../shared/googleInteractionsStreamParts";
 
 import {
   mapModelStreamChunk,
@@ -19,18 +25,24 @@ export type ModelStreamRawEvent = Extract<ServerEvent, { type: "model_stream_raw
 export type ModelStreamReplayRuntime = {
   rawBackedTurns: Set<string>;
   projectorByTurn: Map<string, ResponsesStreamProjector>;
+  googleStateByTurn: Map<string, {
+    contentBlocks: Map<number, GoogleInteractionsContentBlock>;
+    providerToolCallsById: Map<string, GoogleInteractionsProviderToolCallState>;
+  }>;
 };
 
 export function createModelStreamReplayRuntime(): ModelStreamReplayRuntime {
   return {
     rawBackedTurns: new Set(),
     projectorByTurn: new Map(),
+    googleStateByTurn: new Map(),
   };
 }
 
 export function clearModelStreamReplayRuntime(runtime: ModelStreamReplayRuntime): void {
   runtime.rawBackedTurns.clear();
   runtime.projectorByTurn.clear();
+  runtime.googleStateByTurn.clear();
 }
 
 function getOrCreateProjector(
@@ -52,17 +64,89 @@ function getOrCreateProjector(
   return projector;
 }
 
+function getOrCreateGoogleState(
+  runtime: ModelStreamReplayRuntime,
+  turnId: string,
+): {
+  contentBlocks: Map<number, GoogleInteractionsContentBlock>;
+  providerToolCallsById: Map<string, GoogleInteractionsProviderToolCallState>;
+} {
+  const existing = runtime.googleStateByTurn.get(turnId);
+  if (existing) return existing;
+
+  const state = {
+    contentBlocks: new Map<number, GoogleInteractionsContentBlock>(),
+    providerToolCallsById: new Map<string, GoogleInteractionsProviderToolCallState>(),
+  };
+  runtime.googleStateByTurn.set(turnId, state);
+  return state;
+}
+
+function mapRawPartsToUpdates(
+  evt: ModelStreamRawEvent,
+  rawParts: Array<unknown>,
+): ModelStreamUpdate[] {
+  const updates: ModelStreamUpdate[] = [];
+  let derivedIndex = 0;
+
+  for (const rawPart of rawParts) {
+    if (typeof rawPart !== "object" || rawPart === null || Array.isArray(rawPart)) {
+      derivedIndex += 1;
+      continue;
+    }
+    const normalized = normalizeModelStreamPart(rawPart, {
+      provider: evt.provider,
+      fallbackIdSeed: `${evt.turnId}:${evt.index}:${derivedIndex}`,
+    });
+    const mapped = mapModelStreamChunk({
+      type: "model_stream_chunk",
+      sessionId: evt.sessionId,
+      turnId: evt.turnId,
+      index: evt.index * 1000 + derivedIndex,
+      provider: evt.provider,
+      model: evt.model,
+      normalizerVersion: normalized.normalizerVersion,
+      partType: normalized.partType,
+      part: normalized.part,
+      ...(normalized.rawPart !== undefined ? { rawPart: normalized.rawPart } : {}),
+    } satisfies ModelStreamChunkEvent);
+    if (mapped) updates.push(mapped);
+    derivedIndex += 1;
+  }
+
+  return updates;
+}
+
 export function replayModelStreamRawEvent(
   runtime: ModelStreamReplayRuntime,
   evt: ModelStreamRawEvent,
 ): ModelStreamUpdate[] {
   const directUpdates = mapModelStreamRawEvent(evt);
 
-  // Google Interactions raw events use a different format and are not
-  // replayed through the OpenAI responses projector. The Google runtime
-  // already emits normalized stream parts during execution.
   if (evt.format === "google-interactions-v1") {
-    return directUpdates;
+    try {
+      const state = getOrCreateGoogleState(runtime, evt.turnId);
+      processGoogleInteractionsStreamEvent(evt.event as Record<string, unknown>, state.contentBlocks, state.providerToolCallsById);
+      const updates = [
+        ...directUpdates,
+        ...mapRawPartsToUpdates(
+          evt,
+          mapGoogleInteractionsEventToStreamParts(
+            evt.event as Record<string, unknown>,
+            state.contentBlocks,
+            state.providerToolCallsById,
+          ),
+        ),
+      ];
+
+      if (updates.some((update) => update.kind !== "tool_input_start" && update.kind !== "tool_result")) {
+        runtime.rawBackedTurns.add(evt.turnId);
+      }
+
+      return updates;
+    } catch {
+      return directUpdates;
+    }
   }
 
   const projector = getOrCreateProjector(runtime, evt);
@@ -79,28 +163,8 @@ export function replayModelStreamRawEvent(
   }
 
   const updates: ModelStreamUpdate[] = [...directUpdates];
-  let derivedIndex = 0;
   for (const piEvent of piEvents) {
-    for (const rawPart of mapPiEventToRawParts(piEvent, evt.provider, true)) {
-      const normalized = normalizeModelStreamPart(rawPart, {
-        provider: evt.provider,
-        fallbackIdSeed: `${evt.turnId}:${evt.index}:${derivedIndex}`,
-      });
-      const mapped = mapModelStreamChunk({
-        type: "model_stream_chunk",
-        sessionId: evt.sessionId,
-        turnId: evt.turnId,
-        index: evt.index * 1000 + derivedIndex,
-        provider: evt.provider,
-        model: evt.model,
-        normalizerVersion: normalized.normalizerVersion,
-        partType: normalized.partType,
-        part: normalized.part,
-        ...(normalized.rawPart !== undefined ? { rawPart: normalized.rawPart } : {}),
-      } satisfies ModelStreamChunkEvent);
-      if (mapped) updates.push(mapped);
-      derivedIndex += 1;
-    }
+    updates.push(...mapRawPartsToUpdates(evt, mapPiEventToRawParts(piEvent, evt.provider, true)));
   }
 
   if (updates.some((update) => update.kind !== "tool_input_start" && update.kind !== "tool_result")) {

@@ -124,20 +124,30 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           ? rt.config?.model?.trim()
           : ws.defaultModel?.trim() || liveDefaultModel || rt.config?.model?.trim() || ""
       ) || undefined;
-      const preferredChildModel =
-        (ws.defaultPreferredChildModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.preferredChildModel?.trim() || "") || undefined;
+      const preferredChildModel = (
+        preserveSessionModel
+          ? rt.sessionConfig?.preferredChildModel?.trim() || rt.config?.model?.trim() || ""
+          : ws.defaultPreferredChildModel?.trim() || ws.defaultModel?.trim() || rt.sessionConfig?.preferredChildModel?.trim() || ""
+      ) || undefined;
       const childModelRoutingMode =
-        ws.defaultChildModelRoutingMode
-        ?? rt.sessionConfig?.childModelRoutingMode
-        ?? "same-provider";
+        preserveSessionModel
+          ? rt.sessionConfig?.childModelRoutingMode ?? "same-provider"
+          : ws.defaultChildModelRoutingMode
+            ?? rt.sessionConfig?.childModelRoutingMode
+            ?? "same-provider";
       const preferredChildModelRef =
-        ws.defaultPreferredChildModelRef?.trim()
-        || rt.sessionConfig?.preferredChildModelRef?.trim()
+        (
+          preserveSessionModel
+            ? rt.sessionConfig?.preferredChildModelRef?.trim()
+            : ws.defaultPreferredChildModelRef?.trim() || rt.sessionConfig?.preferredChildModelRef?.trim()
+        )
         || (provider && preferredChildModel ? `${provider}:${preferredChildModel}` : undefined);
       const allowedChildModelRefs =
-        ws.defaultAllowedChildModelRefs
-        ?? rt.sessionConfig?.allowedChildModelRefs
-        ?? [];
+        preserveSessionModel
+          ? rt.sessionConfig?.allowedChildModelRefs ?? []
+          : ws.defaultAllowedChildModelRefs
+            ?? rt.sessionConfig?.allowedChildModelRefs
+            ?? [];
       const providerOptions = ws.providerOptions;
       const userName = ws.userName;
       const userProfile = ws.userProfile ? normalizeWorkspaceUserProfile(ws.userProfile) : undefined;

@@ -241,6 +241,16 @@ describe("thread reconnect", () => {
 
     expect(threadSocket.sent.some((message) => message?.type === "set_model")).toBe(false);
     expect(threadSocket.sent).toContainEqual({
+      type: "set_config",
+      sessionId: "persisted-thread-session",
+      config: {
+        preferredChildModel: "gemini-3.1-pro-preview-customtools",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "google:gemini-3.1-pro-preview-customtools",
+        allowedChildModelRefs: [],
+      },
+    });
+    expect(threadSocket.sent).toContainEqual({
       type: "set_enable_mcp",
       sessionId: "persisted-thread-session",
       enableMcp: true,
@@ -297,6 +307,16 @@ describe("thread reconnect", () => {
     });
 
     expect(threadSocket.sent.some((message) => message?.type === "set_model")).toBe(false);
+    expect(threadSocket.sent).toContainEqual({
+      type: "set_config",
+      sessionId: "persisted-thread-session",
+      config: {
+        preferredChildModel: "gemini-3.1-pro-preview-customtools",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "google:gemini-3.1-pro-preview-customtools",
+        allowedChildModelRefs: [],
+      },
+    });
     expect(RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)).toBe(false);
     expect(RUNTIME.pendingWorkspaceDefaultApplyModeByThread.has(threadId)).toBe(false);
   });

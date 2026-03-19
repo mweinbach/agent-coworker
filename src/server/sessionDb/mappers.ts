@@ -11,7 +11,7 @@ import {
 import type { SessionUsageSnapshot } from "../../session/costTracker";
 import { sessionUsageSnapshotSchema } from "../../session/sessionUsageSchema";
 import type { HarnessContextState, ModelMessage, TodoItem } from "../../types";
-import { openAiContinuationStateSchema } from "../../shared/openaiContinuation";
+import { providerContinuationStateSchema } from "../../shared/providerContinuation";
 import type { PersistedSessionRecord } from "../sessionDb";
 import type { PersistedSessionSummary } from "../sessionStore";
 import {
@@ -197,7 +197,7 @@ export function mapPersistedSessionRecordRow(row: Record<string, unknown>): Pers
     ? null
     : parseJsonStringWithSchema(
         values.provider_state_json,
-        openAiContinuationStateSchema.nullable(),
+        providerContinuationStateSchema.nullable(),
         "provider_state_json",
       );
   const providerOptions = values.provider_options_json === null

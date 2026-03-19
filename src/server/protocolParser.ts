@@ -119,7 +119,6 @@ const lmStudioProviderOptionsSchema = z.object({
 
 const googleProviderOptionsSchema = z.object({
   nativeWebSearch: z.boolean().optional(),
-  googleMaps: z.boolean().optional(),
   thinkingConfig: z.object({
     thinkingLevel: z.enum(GOOGLE_THINKING_LEVEL_VALUES).optional(),
   }).strict().optional(),
@@ -241,7 +240,7 @@ function setConfigIssueMessage(issue: z.ZodIssue): string {
           return "set_config config.providerOptions.codex-cli only supports reasoningEffort, reasoningSummary, textVerbosity, webSearchBackend, webSearchMode, and webSearch";
         }
         if (provider === "google") {
-          return "set_config config.providerOptions.google only supports nativeWebSearch, googleMaps, and thinkingConfig";
+          return "set_config config.providerOptions.google only supports nativeWebSearch and thinkingConfig";
         }
         if (provider === "lmstudio") {
           return "set_config config.providerOptions.lmstudio only supports baseUrl, contextLength, autoLoad, and reloadOnContextMismatch";
@@ -296,7 +295,7 @@ function setConfigIssueMessage(issue: z.ZodIssue): string {
       return `set_config config.providerOptions.${provider}.reasoningSummary must be one of ${OPENAI_REASONING_SUMMARY_VALUES.join(", ")}`;
     }
 
-    if (provider === "google" && (option === "nativeWebSearch" || option === "googleMaps")) {
+    if (provider === "google" && option === "nativeWebSearch") {
       return `set_config config.providerOptions.google.${option} must be boolean`;
     }
 

@@ -54,7 +54,6 @@ const codexCliProviderOptionsSchema = openAiCompatibleProviderOptionsSchema.exte
 }).strict();
 const googleProviderOptionsSchema = z.object({
   nativeWebSearch: z.boolean().optional(),
-  googleMaps: z.boolean().optional(),
   thinkingConfig: z.object({
     thinkingLevel: z.enum(GOOGLE_THINKING_LEVEL_VALUES).optional(),
   }).strict().optional(),

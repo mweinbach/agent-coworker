@@ -327,7 +327,7 @@ describe("desktop workspaces page", () => {
     }
   });
 
-  test("renders Gemini API settings controls for native web search and Google Maps", () => {
+  test("renders Gemini API settings controls for native web search", () => {
     const html = renderToStaticMarkup(
       createElement(GeminiApiSettingsCard, {
         workspace: {
@@ -337,7 +337,6 @@ describe("desktop workspaces page", () => {
           providerOptions: {
             google: {
               nativeWebSearch: true,
-              googleMaps: false,
             },
           },
         },
@@ -353,9 +352,7 @@ describe("desktop workspaces page", () => {
     expect(html).toContain("Reasoning effort");
     expect(html).toContain("gemini-3-flash-preview");
     expect(html).toContain("Native web search");
-    expect(html).toContain("Google Maps");
     expect(html).toContain("Google Search and URL Context");
-    expect(html).toContain("routes either Search + URL Context or Google Maps per turn");
   });
 
   test("renders workspace controls for user profile context", () => {

@@ -6,7 +6,6 @@ import { defaultModelForProvider } from "@cowork/providers/catalog";
 
 import {
   getGoogleReasoningEffortValuesForModel,
-  getWorkspaceGoogleMapsEnabled,
   getWorkspaceGoogleNativeWebSearchEnabled,
   getWorkspaceGoogleReasoningEffort,
   getWorkspaceReasoningEffort,
@@ -114,9 +113,6 @@ function updateGoogleProviderOption(
 
   if ("nativeWebSearch" in patch) {
     currentGoogle.nativeWebSearch = patch.nativeWebSearch;
-  }
-  if ("googleMaps" in patch) {
-    currentGoogle.googleMaps = patch.googleMaps;
   }
   if ("thinkingConfig" in patch) {
     const currentThinkingConfig =
@@ -725,7 +721,6 @@ export function GeminiApiSettingsCard({
   }
 
   const nativeWebSearchEnabled = getWorkspaceGoogleNativeWebSearchEnabled(workspace.providerOptions);
-  const googleMapsEnabled = getWorkspaceGoogleMapsEnabled(workspace.providerOptions);
   const selectedGoogleModel = workspace.defaultProvider === "google"
     ? (workspace.defaultModel?.trim() || googleDefaultModel)
     : googleDefaultModel;
@@ -737,7 +732,7 @@ export function GeminiApiSettingsCard({
       <CardHeader>
         <CardTitle>Gemini API settings</CardTitle>
         <CardDescription>
-          Workspace defaults for Gemini API built-in Google Search, URL Context, and Google Maps tools.
+          Workspace defaults for Gemini API built-in Google Search and URL Context tools.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -802,33 +797,6 @@ export function GeminiApiSettingsCard({
               }}
             />
           </div>
-        </div>
-
-        <div className="rounded-lg border border-border/60 px-4 py-4">
-          <div className="flex items-start justify-between gap-4 max-[960px]:flex-col">
-            <div className="space-y-1">
-              <div className="text-sm font-medium text-foreground">Google Maps</div>
-              <div className="text-xs text-muted-foreground">
-                Enables Gemini built-in Google Maps grounding for places, local businesses, and location-aware answers.
-              </div>
-            </div>
-            <Checkbox
-              checked={googleMapsEnabled}
-              aria-label="Enable Gemini Google Maps"
-              onCheckedChange={(checked) => {
-                void updateWorkspaceDefaults(workspace.id, {
-                  providerOptions: updateGoogleProviderOption(workspace.providerOptions, {
-                    googleMaps: toBoolean(checked),
-                  }),
-                });
-              }}
-            />
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-border/60 bg-background/70 px-4 py-3 text-xs text-muted-foreground">
-          If both settings are enabled, Cowork routes either Search + URL Context or Google Maps per turn. Gemini
-          currently rejects Search and Maps in the same request.
         </div>
       </CardContent>
     </Card>

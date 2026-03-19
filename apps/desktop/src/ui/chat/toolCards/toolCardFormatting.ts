@@ -39,11 +39,10 @@ function getRecordValue(record: Record<string, unknown>, keys: string[]): unknow
   return undefined;
 }
 
-function nativeGoogleToolKind(name: string): "web-search" | "url-context" | "google-maps" | null {
+function nativeGoogleToolKind(name: string): "web-search" | "url-context" | null {
   const normalized = name.toLowerCase();
   if (normalized === "nativewebsearch") return "web-search";
   if (normalized === "nativeurlcontext") return "url-context";
-  if (normalized === "nativegooglemaps") return "google-maps";
   return null;
 }
 
@@ -60,9 +59,6 @@ function humanizeToolName(name: string): string {
   }
   if (nativeKind === "url-context") {
     return "URL Context";
-  }
-  if (nativeKind === "google-maps") {
-    return "Google Maps";
   }
   const compact = name.replace(/^tool[:._-]?/i, "");
   const withSpaces = compact.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ");
@@ -114,12 +110,6 @@ function summarizeArgs(name: string, args: unknown): string {
     if (urls.length === 1) return `Reading: ${truncate(urls[0]!, 90)}`;
     if (urls.length > 1) return `Reading ${urls.length} URLs`;
     return "Reading URL context";
-  }
-  if (nativeKind === "google-maps") {
-    const queries = recordStringArray(args, "queries");
-    if (queries.length === 1) return `Maps: ${truncate(queries[0]!, 90)}`;
-    if (queries.length > 1) return `Maps queries: ${queries.length}`;
-    return "Searching Google Maps";
   }
 
   const base = name.toLowerCase();
@@ -190,13 +180,11 @@ function summarizeAskResult(result: unknown): string | null {
 
 function summarizeResult(name: string, state: ToolFeedState, result: unknown): string {
   const nativeKind = nativeGoogleToolKind(name);
-  if (nativeKind === "web-search" || nativeKind === "url-context" || nativeKind === "google-maps") {
+  if (nativeKind === "web-search" || nativeKind === "url-context") {
     const waitingLabel =
       nativeKind === "url-context"
         ? "Reading URL context"
-        : nativeKind === "google-maps"
-          ? "Searching Google Maps"
-          : "Searching the web";
+        : "Searching the web";
     if (state === "input-streaming" || state === "input-available") {
       return waitingLabel;
     }
@@ -214,9 +202,7 @@ function summarizeResult(name: string, state: ToolFeedState, result: unknown): s
         ? "Denied"
         : nativeKind === "url-context"
           ? "URL context failed"
-          : nativeKind === "google-maps"
-            ? "Google Maps failed"
-            : "Web search failed";
+          : "Web search failed";
     }
 
     if (!isRecord(result)) return "Completed";
@@ -238,12 +224,6 @@ function summarizeResult(name: string, state: ToolFeedState, result: unknown): s
       if (urlResults > 0) return `URL results: ${urlResults}`;
       return "Completed";
     }
-
-    const places = Array.isArray(result.places) ? result.places.length : 0;
-    const queries = recordStringArray(result, "queries");
-    if (places > 0) return places === 1 ? "Found 1 place" : `Found ${places} places`;
-    if (queries.length === 1) return `Maps: ${truncate(queries[0]!, 90)}`;
-    return "Completed";
   }
 
   if (state === "input-streaming") return "Capturing input…";

@@ -77,7 +77,6 @@ export type GoogleThinkingConfig = {
 
 export type GoogleProviderOptions = {
   nativeWebSearch?: boolean;
-  googleMaps?: boolean;
   thinkingConfig?: GoogleThinkingConfig;
 };
 
@@ -276,10 +275,6 @@ function pickGoogleProviderOptionsSection(value: unknown): GoogleProviderOptions
   if (nativeWebSearch !== undefined) {
     next.nativeWebSearch = nativeWebSearch;
   }
-  const googleMaps = pickBoolean(value.googleMaps);
-  if (googleMaps !== undefined) {
-    next.googleMaps = googleMaps;
-  }
   const thinkingConfig = pickGoogleThinkingConfig(value.thinkingConfig);
   if (thinkingConfig) {
     next.thinkingConfig = thinkingConfig;
@@ -330,15 +325,6 @@ export function getGoogleNativeWebSearchFromProviderOptions(
   if (!isPlainObject(providerOptions)) return fallback;
   const google = pickGoogleProviderOptionsSection(providerOptions.google);
   return google?.nativeWebSearch ?? fallback;
-}
-
-export function getGoogleMapsFromProviderOptions(
-  providerOptions: unknown,
-  fallback = false,
-): boolean {
-  if (!isPlainObject(providerOptions)) return fallback;
-  const google = pickGoogleProviderOptionsSection(providerOptions.google);
-  return google?.googleMaps ?? fallback;
 }
 
 export function getGoogleThinkingLevelFromProviderOptions(

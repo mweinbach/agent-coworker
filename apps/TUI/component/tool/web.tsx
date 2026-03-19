@@ -12,7 +12,6 @@ export function WebTool(props: ToolPartProps) {
 
   const isNativeSearch = () => props.name === "nativeWebSearch";
   const isNativeUrlContext = () => props.name === "nativeUrlContext";
-  const isNativeGoogleMaps = () => props.name === "nativeGoogleMaps";
   const isSearch = () => props.name === "webSearch" || isNativeSearch();
   const nativeAction = () => {
     if (!isRecord(props.result) || !isRecord(props.result.action)) return null;
@@ -21,7 +20,6 @@ export function WebTool(props: ToolPartProps) {
   const label = () => {
     if (isNativeSearch()) return "web";
     if (isNativeUrlContext()) return "url";
-    if (isNativeGoogleMaps()) return "maps";
     return isSearch() ? "search" : "fetch";
   };
   const query = () => {
@@ -43,20 +41,6 @@ export function WebTool(props: ToolPartProps) {
       if (urls.length === 1) return String(urls[0] ?? "Reading URL context");
       if (urls.length > 1) return `Reading ${urls.length} URLs`;
       return props.status === "done" ? "Completed" : "Reading URL context";
-    }
-    if (isNativeGoogleMaps()) {
-      const queries = Array.isArray(props.args?.queries)
-        ? props.args.queries
-        : Array.isArray(props.result?.queries)
-          ? props.result.queries
-          : [];
-      if (queries.length === 1) return String(queries[0] ?? "Searching Google Maps");
-      if (queries.length > 1) return `Searching ${queries.length} map queries`;
-      const placeCount = Array.isArray(props.result?.places) ? props.result.places.length : 0;
-      if (props.status === "done" && placeCount > 0) {
-        return placeCount === 1 ? "Found 1 place" : `Found ${placeCount} places`;
-      }
-      return "Searching Google Maps";
     }
     if (props.name === "webSearch") return props.args?.query ?? "";
     return props.args?.url ?? "";

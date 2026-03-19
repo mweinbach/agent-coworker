@@ -44,7 +44,6 @@ export function ToolPart(props: ToolPartProps) {
           || props.name === "webSearch"
           || props.name === "nativeWebSearch"
           || props.name === "nativeUrlContext"
-          || props.name === "nativeGoogleMaps"
         }
       >
         <WebTool {...props} />

@@ -3168,7 +3168,6 @@ describe("Protocol Doc Parity", () => {
               },
               google: {
                 nativeWebSearch: true,
-                googleMaps: false,
               },
             },
           },
@@ -3193,7 +3192,6 @@ describe("Protocol Doc Parity", () => {
         },
         google: {
           nativeWebSearch: true,
-          googleMaps: false,
           thinkingConfig: {
             thinkingLevel: "low",
           },
@@ -3206,7 +3204,6 @@ describe("Protocol Doc Parity", () => {
       expect(persistedConfig.providerOptions.google.thinkingConfig.includeThoughts).toBe(true);
       expect(persistedConfig.providerOptions.google.thinkingConfig.thinkingLevel).toBe("low");
       expect(persistedConfig.providerOptions.google.nativeWebSearch).toBe(true);
-      expect(persistedConfig.providerOptions.google.googleMaps).toBe(false);
       expect(persistedConfig.providerOptions.openai.reasoningEffort).toBe("high");
       expect(persistedConfig.providerOptions.openai.reasoningSummary).toBe("detailed");
       expect(persistedConfig.providerOptions.openai.textVerbosity).toBe("low");

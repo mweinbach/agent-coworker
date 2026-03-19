@@ -278,35 +278,6 @@ function extractCitationUrlsFromNativeUrlContextResult(result: unknown): Map<num
   );
 }
 
-function extractCitationSourcesFromNativeGoogleMapsResult(result: unknown): Map<number, CitationSource> {
-  const record = isRecord(result) ? result : null;
-  const places = Array.isArray(record?.places) ? record.places : [];
-  const sources = places
-    .map((entry) => {
-      if (!isRecord(entry)) return null;
-      if (typeof entry.url !== "string" || entry.url.trim().length === 0) return null;
-      const source: CitationSource = { url: entry.url };
-      if (typeof entry.name === "string" && entry.name.trim().length > 0) {
-        source.title = entry.name;
-      }
-      return source;
-    })
-    .filter((entry): entry is CitationSource => !!entry);
-  const deduped = new Map<string, CitationSource>();
-  for (const source of sources) {
-    if (!deduped.has(source.url)) {
-      deduped.set(source.url, source);
-    }
-  }
-  return new Map([...deduped.values()].map((source, index) => [index + 1, source] as const));
-}
-
-function extractCitationUrlsFromNativeGoogleMapsResult(result: unknown): Map<number, string> {
-  return new Map(
-    [...extractCitationSourcesFromNativeGoogleMapsResult(result).entries()].map(([index, source]) => [index, source.url] as const),
-  );
-}
-
 function renderCitationIds(
   ids: string[],
   options: CitationDisplayOptions,
@@ -513,14 +484,6 @@ export function buildCitationUrlsByMessageId<T extends CitationFeedItem>(feed: r
       continue;
     }
 
-    if (itemKind === "tool" && item.name === "nativeGoogleMaps") {
-      const nextCitationUrls = extractCitationUrlsFromNativeGoogleMapsResult(item.result);
-      if (nextCitationUrls.size > 0) {
-        currentCitationUrls = nextCitationUrls;
-      }
-      continue;
-    }
-
     if (itemKind === "message" && item.role === "assistant") {
       const annotationCitationUrls = extractCitationUrlsFromAnnotations(item.annotations);
       if (annotationCitationUrls.size > 0) {
@@ -559,14 +522,6 @@ export function buildCitationSourcesByMessageId<T extends CitationFeedItem>(feed
 
     if (itemKind === "tool" && item.name === "nativeUrlContext") {
       const nextSources = extractCitationSourcesFromNativeUrlContextResult(item.result);
-      if (nextSources.size > 0) {
-        currentSources = [...nextSources.values()];
-      }
-      continue;
-    }
-
-    if (itemKind === "tool" && item.name === "nativeGoogleMaps") {
-      const nextSources = extractCitationSourcesFromNativeGoogleMapsResult(item.result);
       if (nextSources.size > 0) {
         currentSources = [...nextSources.values()];
       }

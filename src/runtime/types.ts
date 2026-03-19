@@ -1,6 +1,6 @@
 import type { AgentConfig } from "../types";
 import type { ModelMessage } from "../types";
-import type { OpenAiContinuationState } from "../shared/openaiContinuation";
+import type { ProviderContinuationState } from "../shared/providerContinuation";
 
 export type RuntimeModelRawEvent = {
   format: "openai-responses-v1" | "google-interactions-v1";
@@ -43,7 +43,7 @@ export interface RuntimeRunTurnParams {
   tools: RuntimeToolMap;
   maxSteps: number;
   providerOptions?: Record<string, any>;
-  providerState?: OpenAiContinuationState | null;
+  providerState?: ProviderContinuationState | null;
   abortSignal?: AbortSignal;
   includeRawChunks?: boolean;
   telemetry?: unknown;
@@ -60,7 +60,7 @@ export interface RuntimeRunTurnResult {
   reasoningText?: string;
   responseMessages: ModelMessage[];
   usage?: RuntimeUsage;
-  providerState?: OpenAiContinuationState;
+  providerState?: ProviderContinuationState;
 }
 
 import type { RuntimeName } from "../types";

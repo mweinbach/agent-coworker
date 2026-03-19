@@ -5,6 +5,7 @@ import {
   reasoningModeForProvider,
 } from "../modelStream";
 import { supportsOpenAiContinuation } from "../../shared/openaiContinuation";
+import { supportsProviderManagedContinuationProvider } from "../../shared/providerContinuation";
 import type { AgentExecutionState } from "../../shared/agents";
 import type { TurnUsage } from "../../session/costTracker";
 import {
@@ -596,7 +597,7 @@ export class TurnExecutionManager {
           this.context.state.acceptingSteers = startedStepCount < this.context.state.maxSteps;
         }
 
-        if (supportsOpenAiContinuation(this.context.state.config.provider)) {
+        if (supportsProviderManagedContinuationProvider(this.context.state.config.provider)) {
           this.context.state.providerState = res.providerState ?? null;
         }
 

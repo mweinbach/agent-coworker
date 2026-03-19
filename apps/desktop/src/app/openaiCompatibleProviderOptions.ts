@@ -3,7 +3,6 @@ import {
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
   getCodexWebSearchBackendFromProviderOptions,
-  getGoogleMapsFromProviderOptions,
   getGoogleNativeWebSearchFromProviderOptions,
   getGoogleThinkingLevelFromProviderOptions,
   mergeEditableOpenAiCompatibleProviderOptions,
@@ -161,13 +160,6 @@ export function getWorkspaceGoogleNativeWebSearchEnabled(
   fallback = false,
 ): boolean {
   return getGoogleNativeWebSearchFromProviderOptions(options, fallback);
-}
-
-export function getWorkspaceGoogleMapsEnabled(
-  options: WorkspaceProviderOptions | undefined,
-  fallback = false,
-): boolean {
-  return getGoogleMapsFromProviderOptions(options, fallback);
 }
 
 export function getWorkspaceGoogleReasoningEffort(

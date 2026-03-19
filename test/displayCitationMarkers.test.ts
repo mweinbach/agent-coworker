@@ -353,32 +353,6 @@ describe("display citation markers", () => {
     ]));
   });
 
-  test("tracks native Google Maps sources for assistant messages", () => {
-    const feed = [
-      { id: "user-1", kind: "message", role: "user" as const },
-      {
-        id: "tool-1",
-        kind: "tool" as const,
-        name: "nativeGoogleMaps",
-        result: {
-          provider: "google",
-          places: [
-            { name: "Blue Bottle Coffee", url: "https://maps.google.com/?cid=123" },
-            { name: "Sightglass Coffee", url: "https://maps.google.com/?cid=456" },
-          ],
-        },
-      },
-      { id: "assistant-1", kind: "message", role: "assistant" as const },
-    ];
-
-    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
-      ["assistant-1", [
-        { title: "Blue Bottle Coffee", url: "https://maps.google.com/?cid=123" },
-        { title: "Sightglass Coffee", url: "https://maps.google.com/?cid=456" },
-      ]],
-    ]));
-  });
-
   test("appends a compact sources footer when native citations only exist out of band", () => {
     expect(
       normalizeDisplayCitationMarkers("Answer", {

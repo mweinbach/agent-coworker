@@ -10,7 +10,7 @@ import type {
   PersistentAgentSummary,
   SessionKind,
 } from "../shared/agents";
-import type { OpenAiContinuationState } from "../shared/openaiContinuation";
+import type { ProviderContinuationState } from "../shared/providerContinuation";
 import type { SessionUsageSnapshot } from "../session/costTracker";
 import type { ModelStreamRawFormat } from "./modelStream";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../types";
@@ -62,7 +62,7 @@ export type PersistedSessionRecord = {
   lastEventSeq: number;
   systemPrompt: string;
   messages: ModelMessage[];
-  providerState: OpenAiContinuationState | null;
+  providerState: ProviderContinuationState | null;
   todos: TodoItem[];
   harnessContext: HarnessContextState | null;
   costTracker: SessionUsageSnapshot | null;
@@ -105,7 +105,7 @@ export type PersistedSessionMutation = {
     hasPendingApproval: boolean;
     systemPrompt: string;
     messages: ModelMessage[];
-    providerState: OpenAiContinuationState | null;
+    providerState: ProviderContinuationState | null;
     todos: TodoItem[];
     harnessContext: HarnessContextState | null;
     costTracker: SessionUsageSnapshot | null;

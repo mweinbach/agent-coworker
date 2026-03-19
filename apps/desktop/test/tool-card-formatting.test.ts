@@ -41,21 +41,4 @@ describe("tool card formatting ask summaries", () => {
     expect(out.subtitle).toContain("Read: https://example.com/about");
   });
 
-  test("renders native Google Maps cards with place counts", () => {
-    const out = formatToolCard(
-      "nativeGoogleMaps",
-      { queries: ["coffee near union square"] },
-      {
-        provider: "google",
-        queries: ["coffee near union square"],
-        places: [
-          { name: "Blue Bottle", url: "https://maps.google.com/?cid=1" },
-          { name: "Sightglass", url: "https://maps.google.com/?cid=2" },
-        ],
-      },
-      "output-available"
-    );
-    expect(out.title).toBe("Google Maps");
-    expect(out.subtitle).toContain("Found 2 places");
-  });
 });

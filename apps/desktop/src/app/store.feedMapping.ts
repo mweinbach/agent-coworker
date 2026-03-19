@@ -332,7 +332,7 @@ function rememberLatestToolKey(stream: ThreadModelStreamRuntime, turnId: string,
 }
 
 function shouldReuseLatestToolItemByName(name: string): boolean {
-  return name !== "nativeWebSearch" && name !== "nativeUrlContext" && name !== "nativeGoogleMaps";
+  return name !== "nativeWebSearch" && name !== "nativeUrlContext";
 }
 
 function resolveToolItem(

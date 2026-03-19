@@ -18,7 +18,10 @@ import {
   type AgentRole,
   type SessionKind,
 } from "../shared/agents";
-import { openAiContinuationStateSchema, type OpenAiContinuationState } from "../shared/openaiContinuation";
+import {
+  providerContinuationStateSchema,
+  type ProviderContinuationState,
+} from "../shared/providerContinuation";
 import { PROVIDER_NAMES } from "../types";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../types";
 import type { SessionTitleSource } from "./sessionTitleService";
@@ -88,7 +91,7 @@ export type PersistedSessionSnapshotV2 = {
   context: {
     system: string;
     messages: ModelMessage[];
-    providerState: OpenAiContinuationState | null;
+    providerState: ProviderContinuationState | null;
     todos: TodoItem[];
     harnessContext: HarnessContextState | null;
   };
@@ -120,7 +123,7 @@ export type PersistedSessionSnapshotV3 = {
   context: {
     system: string;
     messages: ModelMessage[];
-    providerState: OpenAiContinuationState | null;
+    providerState: ProviderContinuationState | null;
     todos: TodoItem[];
     harnessContext: HarnessContextState | null;
   };
@@ -152,7 +155,7 @@ export type PersistedSessionSnapshotV4 = {
   context: {
     system: string;
     messages: ModelMessage[];
-    providerState: OpenAiContinuationState | null;
+    providerState: ProviderContinuationState | null;
     todos: TodoItem[];
     harnessContext: HarnessContextState | null;
     costTracker: SessionUsageSnapshot | null;
@@ -186,7 +189,7 @@ export type PersistedSessionSnapshotV5 = {
   context: {
     system: string;
     messages: ModelMessage[];
-    providerState: OpenAiContinuationState | null;
+    providerState: ProviderContinuationState | null;
     todos: TodoItem[];
     harnessContext: HarnessContextState | null;
     costTracker: SessionUsageSnapshot | null;
@@ -229,7 +232,7 @@ export type PersistedSessionSnapshotV6 = {
   context: {
     system: string;
     messages: ModelMessage[];
-    providerState: OpenAiContinuationState | null;
+    providerState: ProviderContinuationState | null;
     todos: TodoItem[];
     harnessContext: HarnessContextState | null;
     costTracker: SessionUsageSnapshot | null;
@@ -343,7 +346,7 @@ const persistedSessionSnapshotV2Schema = z.object({
   context: z.object({
     system: z.string(),
     messages: z.array(modelMessageSchema),
-    providerState: openAiContinuationStateSchema.nullable(),
+    providerState: providerContinuationStateSchema.nullable(),
     todos: z.array(todoItemSchema),
     harnessContext: harnessContextStateSchema.nullable(),
   }).strict(),
@@ -379,7 +382,7 @@ const persistedSessionSnapshotV3Schema = z.object({
   context: z.object({
     system: z.string(),
     messages: z.array(modelMessageSchema),
-    providerState: openAiContinuationStateSchema.nullable(),
+    providerState: providerContinuationStateSchema.nullable(),
     todos: z.array(todoItemSchema),
     harnessContext: harnessContextStateSchema.nullable(),
   }).strict(),
@@ -412,7 +415,7 @@ const persistedSessionSnapshotV4Schema = z.object({
   context: z.object({
     system: z.string(),
     messages: z.array(modelMessageSchema),
-    providerState: openAiContinuationStateSchema.nullable(),
+    providerState: providerContinuationStateSchema.nullable(),
     todos: z.array(todoItemSchema),
     harnessContext: harnessContextStateSchema.nullable(),
     costTracker: sessionUsageSnapshotSchema.nullable(),
@@ -447,7 +450,7 @@ const persistedSessionSnapshotV5Schema = z.object({
   context: z.object({
     system: z.string(),
     messages: z.array(modelMessageSchema),
-    providerState: openAiContinuationStateSchema.nullable(),
+    providerState: providerContinuationStateSchema.nullable(),
     todos: z.array(todoItemSchema),
     harnessContext: harnessContextStateSchema.nullable(),
     costTracker: sessionUsageSnapshotSchema.nullable(),
@@ -490,7 +493,7 @@ const persistedSessionSnapshotV6Schema = z.object({
   context: z.object({
     system: z.string(),
     messages: z.array(modelMessageSchema),
-    providerState: openAiContinuationStateSchema.nullable(),
+    providerState: providerContinuationStateSchema.nullable(),
     todos: z.array(todoItemSchema),
     harnessContext: harnessContextStateSchema.nullable(),
     costTracker: sessionUsageSnapshotSchema.nullable(),

@@ -52,3 +52,33 @@ Mirrors: OpenAI → OpenAI Responses runtime → `openai` SDK → Responses API
 ### Phase 8: Cleanup
 - [ ] Verify Google models still work end-to-end
 - [ ] Update any PI runtime references that assumed Google would be there
+
+## Review Execution 2026-03-18
+
+- [x] Review diff vs `f87fd5fb6af644cbccb1f61a6864b4453bf69a2f` for Google Interactions runtime/provider regressions
+- [x] Exclude provider-native Google Maps support changes
+- [x] Exclude Google interaction state persistence changes
+- [x] Cross-check findings with parallel explorer/reviewer/docs passes
+- [x] Record only discrete, line-supported bugs
+
+## Implementation Follow-up 2026-03-18
+
+### Plan
+- [x] Remove Google Maps support from runtime, protocol/schema, desktop/TUI, and docs surfaces
+- [x] Persist Google Interactions continuation state (`interactionId`) across turns and snapshots
+- [x] Verify Google continuation behavior, repo tests, typecheck, and production builds
+
+### Notes
+- Official Gemini Interactions docs now document both `previous_interaction_id` server-side state and a `google_maps` built-in tool.
+- The pinned local SDK in this branch is `@google/genai@1.43.0`, and its TypeScript surface is internally inconsistent: `BaseCreateModelInteractionParams` includes `previous_interaction_id`, but the raw `Tool_2` union only exposes `google_search` and `url_context` while `GoogleMaps` exists as a separate interface.
+- Product direction for this branch is now explicit: remove Google Maps entirely and keep only Google Search + URL Context native tools.
+
+### Verification
+- [x] `~/.bun/bin/bun test test/runtime.google-interactions.test.ts`
+- [x] `~/.bun/bin/bun test test/session.test.ts`
+- [x] `~/.bun/bin/bun test test/shared/openaiCompatibleOptions.test.ts test/protocol.test.ts test/server.test.ts test/displayCitationMarkers.test.ts test/tools.test.ts apps/desktop/test/tool-card-formatting.test.ts apps/desktop/test/workspaces-page.test.ts`
+- [x] `~/.bun/bin/bun run typecheck`
+- [x] `~/.bun/bin/bun test`
+- [x] `~/.bun/bin/bun run build:server-binary`
+- [x] `~/.bun/bin/bun run build:desktop-resources`
+- [x] `~/.bun/bin/bun run desktop:build`

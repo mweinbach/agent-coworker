@@ -1295,7 +1295,6 @@ describe("safeParseClientMessage", () => {
             providerOptions: {
               google: {
                 nativeWebSearch: true,
-                googleMaps: false,
                 thinkingConfig: {
                   thinkingLevel: "minimal",
                 },
@@ -1309,7 +1308,6 @@ describe("safeParseClientMessage", () => {
       if (msg.type === "set_config") {
         expect(msg.config.providerOptions?.google).toEqual({
           nativeWebSearch: true,
-          googleMaps: false,
           thinkingConfig: {
             thinkingLevel: "minimal",
           },

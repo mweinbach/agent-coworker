@@ -3410,7 +3410,7 @@ describe("createTools", () => {
     expect(tools).toHaveProperty("webFetch");
   });
 
-  test("keeps local webSearch and webFetch for google when only maps grounding is enabled", async () => {
+  test("keeps local webSearch and webFetch for google when native web search is disabled", async () => {
     const dir = await tmpDir();
     const tools = createTools(
       makeCtx(dir, {
@@ -3418,11 +3418,6 @@ describe("createTools", () => {
           provider: "google",
           model: "gemini-3-flash-preview",
           preferredChildModel: "gemini-3-flash-preview",
-          providerOptions: {
-            google: {
-              googleMaps: true,
-            },
-          },
         }),
       }),
     );

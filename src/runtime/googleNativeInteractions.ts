@@ -17,7 +17,6 @@ type GoogleInteractionsStreamOptions = {
   maxOutputTokens?: number;
   toolChoice?: string;
   nativeWebSearch?: boolean;
-  googleMaps?: boolean;
 };
 
 export type GoogleNativeStepRequest = {
@@ -94,62 +93,6 @@ function asNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function extractLatestUserPromptText(messages: ModelMessage[]): string | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = asRecord(messages[index]);
-    if (!message || message.role !== "user") continue;
-
-    const directContent = asNonEmptyString(message.content);
-    if (directContent) return directContent;
-
-    if (!Array.isArray(message.content)) continue;
-
-    const parts: string[] = [];
-    for (const rawPart of message.content) {
-      if (typeof rawPart === "string") {
-        const text = asNonEmptyString(rawPart);
-        if (text) parts.push(text);
-        continue;
-      }
-
-      const part = asRecord(rawPart);
-      if (!part) continue;
-
-      const text = asNonEmptyString(part.text) ?? asNonEmptyString(part.inputText);
-      if (text) parts.push(text);
-    }
-
-    if (parts.length > 0) return parts.join("\n");
-  }
-
-  return undefined;
-}
-
-function shouldPreferGoogleMapsForPrompt(prompt: string | undefined): boolean {
-  const normalized = prompt?.trim().toLowerCase();
-  if (!normalized) return false;
-
-  const hasExplicitPageIntent =
-    normalized.includes("http://") ||
-    normalized.includes("https://") ||
-    normalized.includes("www.") ||
-    /\b(url|urls|website|websites|web page|webpage|site|sites|read|summarize|article|page|pages|document|pdf)\b/.test(normalized);
-  if (hasExplicitPageIntent) {
-    return false;
-  }
-
-  if (/\b(near me|nearby|nearest|closest|directions?|route|routing|travel time|distance|address|parking|transit|walk to|drive to)\b/.test(normalized)) {
-    return true;
-  }
-
-  const hasPlaceCategory =
-    /\b(coffee shop|coffee shops|cafe|cafes|restaurant|restaurants|hotel|hotels|bar|bars|pub|pubs|park|parks|museum|museums|store|stores|pharmacy|pharmacies|hospital|hospitals|gas station|gas stations|grocery store|grocery stores|supermarket|supermarkets|airport|airports|train station|train stations|bus station|bus stations|attraction|attractions|landmark|landmarks|local business|local businesses)\b/.test(normalized);
-  const hasLocationQualifier =
-    /\b(in|near|around|within|close to|best)\b/.test(normalized);
-
-  return hasPlaceCategory && hasLocationQualifier;
 }
 
 function getGoogleThoughtSignature(record: Record<string, unknown>): string | undefined {
@@ -355,7 +298,7 @@ function extractTextFromContent(content: unknown): string | undefined {
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
-type NativeGoogleToolName = "nativeWebSearch" | "nativeUrlContext" | "nativeGoogleMaps";
+type NativeGoogleToolName = "nativeWebSearch" | "nativeUrlContext";
 
 function asRecordArray(value: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(value)) return [];
@@ -390,18 +333,15 @@ function nativeToolNameFromContentType(contentType: string): NativeGoogleToolNam
   if (contentType === "url_context_call" || contentType === "url_context_result") {
     return "nativeUrlContext";
   }
-  if (contentType === "google_maps_call" || contentType === "google_maps_result") {
-    return "nativeGoogleMaps";
-  }
   return null;
 }
 
 function isNativeGoogleToolCallContentType(contentType: string): boolean {
-  return contentType === "google_search_call" || contentType === "url_context_call" || contentType === "google_maps_call";
+  return contentType === "google_search_call" || contentType === "url_context_call";
 }
 
 function isNativeGoogleToolResultContentType(contentType: string): boolean {
-  return contentType === "google_search_result" || contentType === "url_context_result" || contentType === "google_maps_result";
+  return contentType === "google_search_result" || contentType === "url_context_result";
 }
 
 function extractStringArray(value: unknown): string[] {
@@ -430,23 +370,6 @@ function extractResultEntries(value: unknown): Array<Record<string, unknown>> {
   const record = asRecord(value);
   if (!record) return [];
   return asRecordArray(record.results);
-}
-
-function flattenGoogleMapsPlaces(result: unknown): Array<Record<string, unknown>> {
-  const directPlaces = asRecordArray(result).flatMap((entry) => asRecordArray(entry.places));
-  if (directPlaces.length > 0) return directPlaces;
-
-  const record = asRecord(result);
-  if (!record) return [];
-  return asRecordArray(record.places);
-}
-
-function extractGoogleMapsWidgetContextToken(result: unknown): string | undefined {
-  for (const entry of asRecordArray(result)) {
-    const token = asNonEmptyString(entry.widget_context_token);
-    if (token) return token;
-  }
-  return undefined;
 }
 
 function buildNativeGoogleToolResultOutput(
@@ -479,17 +402,7 @@ function buildNativeGoogleToolResultOutput(
     };
   }
 
-  const places = flattenGoogleMapsPlaces(result);
-  const widgetContextToken = extractGoogleMapsWidgetContextToken(result);
-  return {
-    provider: "google",
-    status: "completed",
-    callId,
-    queries: extractStringArray(callArguments.queries),
-    places,
-    ...(widgetContextToken ? { widgetContextToken } : {}),
-    raw: result,
-  };
+  throw new Error(`Unknown native Google tool: ${name}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -519,29 +432,12 @@ function buildGoogleBuiltInTools(opts: GoogleNativeStepRequest): Array<Record<st
   const allowProviderNativeWebTools = canUseProviderNativeWebTools(opts.tools);
   const nativeWebSearchEnabled =
     opts.streamOptions.nativeWebSearch === true && allowProviderNativeWebTools;
-  const googleMapsEnabled =
-    opts.streamOptions.googleMaps === true && allowProviderNativeWebTools;
-
-  if (nativeWebSearchEnabled && googleMapsEnabled) {
-    const latestUserPrompt = extractLatestUserPromptText(opts.messages);
-    if (shouldPreferGoogleMapsForPrompt(latestUserPrompt)) {
-      return [{ type: "google_maps" }];
-    }
-    return [
-      { type: "google_search", search_types: ["web_search"] },
-      { type: "url_context" },
-    ];
-  }
 
   if (nativeWebSearchEnabled) {
     return [
       { type: "google_search", search_types: ["web_search"] },
       { type: "url_context" },
     ];
-  }
-
-  if (googleMapsEnabled) {
-    return [{ type: "google_maps" }];
   }
 
   return [];
@@ -1083,9 +979,7 @@ export const __internal = {
   buildGoogleNativeRequest,
   convertMessagesToInteractionsInput,
   convertToolsToInteractionsTools,
-  extractLatestUserPromptText,
   mapGoogleEventToStreamParts,
   processStreamEvent,
   resolveGoogleApiKey,
-  shouldPreferGoogleMapsForPrompt,
 } as const;

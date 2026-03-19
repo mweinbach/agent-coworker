@@ -5,6 +5,7 @@ import {
   isAbortLikeError,
   markModelCallSpanError,
   markModelCallSpanSuccess,
+  messagesAfterLastAssistant,
   parseTelemetrySettings,
   shouldAddInvalidToolCallFormatReminder,
   splitStepOverrides,
@@ -25,6 +26,7 @@ import {
   type RunGoogleNativeInteractionStep,
 } from "./googleNativeInteractions";
 import { normalizeGoogleThinkingLevelForModel } from "../shared/googleThinking";
+import { isGoogleContinuationState, type GoogleContinuationState } from "../shared/providerContinuation";
 
 import type { ModelMessage } from "../types";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeStepOverride } from "./types";
@@ -34,6 +36,32 @@ type RuntimeStepOverrides = RuntimeStepOverride;
 type GoogleInteractionsRuntimeOverrides = {
   runStepImpl?: RunGoogleNativeInteractionStep;
 };
+
+function matchingGoogleProviderState(
+  params: RuntimeRunTurnParams,
+  modelId: string,
+): GoogleContinuationState | null {
+  const providerState = params.providerState;
+  if (!isGoogleContinuationState(providerState)) {
+    return null;
+  }
+  return providerState.model === modelId ? providerState : null;
+}
+
+function nextGoogleProviderState(
+  modelId: string,
+  interactionId?: string,
+): GoogleContinuationState | undefined {
+  const nextInteractionId = interactionId?.trim();
+  if (!nextInteractionId) return undefined;
+
+  return {
+    provider: "google",
+    model: modelId,
+    interactionId: nextInteractionId,
+    updatedAt: new Date().toISOString(),
+  };
+}
 
 function buildGoogleStreamOptions(
   modelId: string,
@@ -70,9 +98,6 @@ function buildGoogleStreamOptions(
   if (googleSection.nativeWebSearch === true) {
     options.nativeWebSearch = true;
   }
-  if (googleSection.googleMaps === true) {
-    options.googleMaps = true;
-  }
 
   return options;
 }
@@ -97,8 +122,15 @@ export function createGoogleInteractionsRuntime(
         const turnMessages: Array<Record<string, unknown>> = [];
         let usage = undefined as RuntimeRunTurnResult["usage"];
         let finalStopReason: string | undefined;
-        let previousInteractionId: string | undefined;
-        let stepMessages: ModelMessage[] = [...(params.allMessages ?? params.messages)];
+        const activeProviderState = matchingGoogleProviderState(params, resolved.model.id);
+        let finalProviderState = undefined as GoogleContinuationState | undefined;
+        let previousInteractionId: string | undefined = activeProviderState?.interactionId;
+        let stepMessages: ModelMessage[] = activeProviderState
+          ? (() => {
+              const deltaMessages = messagesAfterLastAssistant(params.messages);
+              return deltaMessages.length > 0 ? deltaMessages : [...params.messages];
+            })()
+          : [...(params.allMessages ?? params.messages)];
         let stepProviderOptions: Record<string, unknown> | undefined = asRecord(params.providerOptions) ?? undefined;
         let nextInteractionInputStartIndex = 0;
 
@@ -210,6 +242,7 @@ export function createGoogleInteractionsRuntime(
 
           turnMessages.push(assistantRecord);
           usage = mergePiUsage(usage, assistantRecord.usage);
+          finalProviderState = nextGoogleProviderState(resolved.model.id, interactionId) ?? finalProviderState;
           previousInteractionId = interactionId ?? previousInteractionId;
           const assistantModelMessages = piTurnMessagesToModelMessages([assistantRecord as any]);
           stepMessages = [
@@ -268,6 +301,7 @@ export function createGoogleInteractionsRuntime(
           reasoningText: extractPiReasoningText(turnMessages as any),
           responseMessages: piTurnMessagesToModelMessages(turnMessages as any),
           usage,
+          ...(finalProviderState ? { providerState: finalProviderState } : {}),
         };
       } catch (error) {
         if (isAbortLikeError(error, params.abortSignal)) {

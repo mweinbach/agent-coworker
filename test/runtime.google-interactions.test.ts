@@ -81,6 +81,12 @@ describe("google interactions runtime", () => {
     expect(result.text).toBe("Hello! How can I help you?");
     expect(result.responseMessages.length).toBeGreaterThan(0);
     expect(result.responseMessages[0].role).toBe("assistant");
+    expect(result.providerState).toEqual({
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      interactionId: "interaction_abc123",
+      updatedAt: expect.any(String),
+    });
   });
 
   test("thinking content is extracted as reasoningText", async () => {
@@ -214,6 +220,60 @@ describe("google interactions runtime", () => {
     expect(result.usage).toBeDefined();
     expect(result.usage!.promptTokens).toBeGreaterThan(0);
     expect(result.usage!.totalTokens).toBeGreaterThan(0);
+  });
+
+  test("reuses previousInteractionId and only sends new messages when Google continuation state matches", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-continuation-"));
+    const seenRequests: GoogleNativeStepRequest[] = [];
+    const runtime = createGoogleInteractionsRuntime({
+      runStepImpl: async (opts) => {
+        seenRequests.push(opts);
+        return {
+          assistant: {
+            role: "assistant",
+            api: "google-interactions",
+            provider: "google",
+            model: "gemini-3-flash-preview",
+            content: [{ type: "text", text: "Follow-up answer" }],
+            usage: { input: 5, output: 7, totalTokens: 12 },
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+          interactionId: "interaction_next",
+        };
+      },
+    });
+
+    const result = await runtime.runTurn(makeParams(makeConfig(homeDir), {
+      messages: [
+        { role: "user", content: "Find the latest pricing" },
+        { role: "assistant", content: [{ type: "text", text: "Here are the latest prices." }] },
+        { role: "user", content: "Open the second result" },
+      ] as ModelMessage[],
+      allMessages: [
+        { role: "user", content: "Find the latest pricing" },
+        { role: "assistant", content: [{ type: "text", text: "Here are the latest prices." }] },
+        { role: "user", content: "Open the second result" },
+      ] as ModelMessage[],
+      providerState: {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        interactionId: "interaction_prev",
+        updatedAt: "2026-03-18T12:00:00.000Z",
+      },
+    }));
+
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.previousInteractionId).toBe("interaction_prev");
+    expect(seenRequests[0]?.messages).toEqual([
+      { role: "user", content: "Open the second result" },
+    ]);
+    expect(result.providerState).toEqual({
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      interactionId: "interaction_next",
+      updatedAt: expect.any(String),
+    });
   });
 
   test("prepareStep providerOptions overrides control thought summaries for the step", async () => {
@@ -471,7 +531,7 @@ describe("google native interactions request building", () => {
     expect(genConfig.temperature).toBe(0.7);
   });
 
-  test("buildGoogleNativeRequest routes location-aware prompts to Google Maps when both native tool families are enabled", () => {
+  test("buildGoogleNativeRequest adds Google Search and URL Context when native web search is enabled", () => {
     const request = googleNativeInternal.buildGoogleNativeRequest({
       model: {
         id: "gemini-3-flash-preview",
@@ -489,36 +549,6 @@ describe("google native interactions request building", () => {
       ],
       streamOptions: {
         nativeWebSearch: true,
-        googleMaps: true,
-      },
-    });
-
-    expect(request.tools).toEqual([
-      { type: "function", name: "bash", description: "Run bash commands", parameters: { type: "object" } },
-      { type: "function", name: "webFetch", description: "Fetch a web page", parameters: { type: "object" } },
-      { type: "google_maps" },
-    ]);
-  });
-
-  test("buildGoogleNativeRequest routes explicit web/page tasks to Google Search and URL Context when both native tool families are enabled", () => {
-    const request = googleNativeInternal.buildGoogleNativeRequest({
-      model: {
-        id: "gemini-3-flash-preview",
-        name: "Gemini 3 Flash Preview",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 1_048_576,
-        maxTokens: 65_536,
-      },
-      systemPrompt: "You are helpful.",
-      messages: [{ role: "user", content: "Find coffee shops near me and read their websites" }] as ModelMessage[],
-      tools: [
-        { name: "bash", description: "Run bash commands", parameters: { type: "object" } },
-        { name: "webFetch", description: "Fetch a web page", parameters: { type: "object" } },
-      ],
-      streamOptions: {
-        nativeWebSearch: true,
-        googleMaps: true,
       },
     });
 
@@ -545,7 +575,6 @@ describe("google native interactions request building", () => {
       tools: [{ name: "bash", description: "Run bash commands", parameters: { type: "object" } }],
       streamOptions: {
         nativeWebSearch: true,
-        googleMaps: true,
       },
     });
 

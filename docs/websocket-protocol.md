@@ -55,7 +55,7 @@ Changes in `7.24`:
 
 Changes in `7.23`:
 
-- `set_config.config.providerOptions.google` and `session_config.config.providerOptions.google` now support `nativeWebSearch` and `googleMaps`.
+- `set_config.config.providerOptions.google` and `session_config.config.providerOptions.google` now support `nativeWebSearch`.
 - Enabling `providerOptions.google.nativeWebSearch` switches Google/Gemini sessions to the Interactions API built-in `google_search` + `url_context` tools in place of the local `webSearch` and `webFetch` tools.
 
 Changes in `7.22`:
@@ -1938,7 +1938,6 @@ Update runtime configuration values.
       },
       "google": {
         "nativeWebSearch": true,
-        "googleMaps": true,
         "thinkingConfig": {
           "thinkingLevel": "medium"
         }
@@ -1985,7 +1984,6 @@ Update runtime configuration values.
 | `config.providerOptions.codex-cli.webSearch.location.city` | `string` | No | Approximate city hint for Codex native web search |
 | `config.providerOptions.codex-cli.webSearch.location.timezone` | `string` | No | Approximate timezone hint for Codex native web search |
 | `config.providerOptions.google.nativeWebSearch` | `boolean` | No | Use Gemini Interactions built-in `google_search` and `url_context` tools instead of the local `webSearch` and `webFetch` tools |
-| `config.providerOptions.google.googleMaps` | `boolean` | No | Enable Gemini Interactions built-in `google_maps` grounding |
 | `config.providerOptions.google.thinkingConfig.thinkingLevel` | `"minimal" \| "low" \| "medium" \| "high"` | No | Optional explicit Gemini `thinking_level` override. Omit it to leave Gemini on its dynamic default; `minimal` is only valid on Gemini 3 Flash and Gemini 3.1 Flash-Lite |
 | `config.providerOptions.lmstudio.baseUrl` | `string` | No | Override the LM Studio server base URL. Defaults to `http://localhost:1234` |
 | `config.providerOptions.lmstudio.contextLength` | `number` | No | Preferred LM Studio load context length |
@@ -3498,7 +3496,6 @@ Current runtime config. Sent on connection and after `set_config`.
       },
       "google": {
         "nativeWebSearch": true,
-        "googleMaps": false,
         "thinkingConfig": {
           "thinkingLevel": "low"
         }
@@ -3550,7 +3547,6 @@ Current runtime config. Sent on connection and after `set_config`.
 | `config.providerOptions.codex-cli.webSearch.location.city` | `string` | Current editable Codex native web-search city |
 | `config.providerOptions.codex-cli.webSearch.location.timezone` | `string` | Current editable Codex native web-search timezone |
 | `config.providerOptions.google.nativeWebSearch` | `boolean` | Current Gemini built-in Search + URL Context toggle |
-| `config.providerOptions.google.googleMaps` | `boolean` | Current Gemini Google Maps grounding toggle |
 | `config.providerOptions.google.thinkingConfig.thinkingLevel` | `"minimal" \| "low" \| "medium" \| "high"` | Current explicit Gemini `thinking_level` override when set. Omitted means the workspace is using Gemini's dynamic default |
 | `config.providerOptions.lmstudio.baseUrl` | `string` | Current LM Studio base URL override |
 | `config.providerOptions.lmstudio.contextLength` | `number` | Current requested LM Studio context length override |

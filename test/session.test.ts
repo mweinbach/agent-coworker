@@ -847,7 +847,6 @@ describe("AgentSession", () => {
             },
             google: {
               nativeWebSearch: true,
-              googleMaps: false,
               thinkingConfig: {
                 includeThoughts: true,
                 thinkingLevel: "high",
@@ -870,7 +869,6 @@ describe("AgentSession", () => {
         },
         google: {
           nativeWebSearch: true,
-          googleMaps: false,
           thinkingConfig: {
             thinkingLevel: "high",
           },
@@ -3346,6 +3344,37 @@ describe("AgentSession", () => {
         responseId: "resp_fresh",
         updatedAt: "2026-02-16T00:00:02.000Z",
       });
+    });
+
+    test("persists Google continuation state returned by runTurn", async () => {
+      const googleProviderState = {
+        provider: "google" as const,
+        model: "gemini-3-flash-preview",
+        interactionId: "interaction_fresh",
+        updatedAt: "2026-03-18T14:00:00.000Z",
+      };
+      mockRunTurn.mockResolvedValueOnce({
+        text: "ok",
+        reasoningText: undefined,
+        responseMessages: [{ role: "assistant", content: "ok" }],
+        providerState: googleProviderState,
+      });
+
+      const dir = "/tmp/test-session";
+      const config = makeConfig(dir, {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        preferredChildModel: "gemini-3-flash-preview",
+      });
+      const { session } = makeSession({ config });
+
+      await session.sendUserMessage("hello");
+      await flushAsyncWork();
+      await flushAsyncWork();
+
+      expect((session as any).state.providerState).toEqual(googleProviderState);
+      const lastPersistCall = mockWritePersistedSessionSnapshot.mock.calls.at(-1)?.[0] as any;
+      expect(lastPersistCall.snapshot.context.providerState).toEqual(googleProviderState);
     });
 
     test("persists full session context including response history", async () => {

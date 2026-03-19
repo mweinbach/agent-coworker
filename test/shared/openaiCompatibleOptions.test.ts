@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 
 import {
   getCodexWebSearchBackendFromProviderOptions,
-  getGoogleMapsFromProviderOptions,
   getGoogleNativeWebSearchFromProviderOptions,
   getGoogleThinkingLevelFromProviderOptions,
   mergeEditableOpenAiCompatibleProviderOptions,
@@ -37,7 +36,6 @@ describe("OpenAI compatible provider option helpers", () => {
       },
       google: {
         nativeWebSearch: true,
-        googleMaps: false,
         thinkingConfig: { thinkingLevel: "low" },
       },
       invalid: "value",
@@ -68,7 +66,6 @@ describe("OpenAI compatible provider option helpers", () => {
       },
       google: {
         nativeWebSearch: true,
-        googleMaps: false,
         thinkingConfig: {
           thinkingLevel: "low",
         },
@@ -184,13 +181,11 @@ describe("OpenAI compatible provider option helpers", () => {
     const providerOptions = {
       google: {
         nativeWebSearch: true,
-        googleMaps: false,
         thinkingConfig: { thinkingLevel: "medium" },
       },
     };
 
     expect(getGoogleNativeWebSearchFromProviderOptions(providerOptions)).toBe(true);
-    expect(getGoogleMapsFromProviderOptions(providerOptions)).toBe(false);
     expect(getGoogleThinkingLevelFromProviderOptions(providerOptions)).toBe("medium");
   });
 

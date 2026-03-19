@@ -128,7 +128,7 @@ function setupJsdom(): JsdomHarness {
 }
 
 const { useAppStore } = await import("../src/app/store");
-const { ChatView } = await import("../src/ui/ChatView");
+const { ChatView, countActiveChildAgents } = await import("../src/ui/ChatView");
 
 describe("desktop chat view stability", () => {
   test("does not loop when citation overflow state is empty", async () => {
@@ -322,5 +322,55 @@ describe("desktop chat view stability", () => {
     } finally {
       harness.restore();
     }
+  });
+
+  test("counts only active child agents for stop-scope decisions", () => {
+    expect(countActiveChildAgents([
+      {
+        agentId: "agent-running",
+        parentSessionId: "session-1",
+        role: "worker",
+        mode: "delegate",
+        depth: 1,
+        title: "Running worker",
+        provider: "openai",
+        effectiveModel: "gpt-5.4-mini",
+        createdAt: "2026-03-12T00:00:00.000Z",
+        updatedAt: "2026-03-12T00:00:05.000Z",
+        lifecycleState: "active",
+        executionState: "running",
+        busy: true,
+      },
+      {
+        agentId: "agent-complete",
+        parentSessionId: "session-1",
+        role: "worker",
+        mode: "delegate",
+        depth: 1,
+        title: "Completed worker",
+        provider: "openai",
+        effectiveModel: "gpt-5.4-mini",
+        createdAt: "2026-03-12T00:00:00.000Z",
+        updatedAt: "2026-03-12T00:00:05.000Z",
+        lifecycleState: "active",
+        executionState: "completed",
+        busy: false,
+      },
+      {
+        agentId: "agent-closed",
+        parentSessionId: "session-1",
+        role: "worker",
+        mode: "delegate",
+        depth: 1,
+        title: "Closed worker",
+        provider: "openai",
+        effectiveModel: "gpt-5.4-mini",
+        createdAt: "2026-03-12T00:00:00.000Z",
+        updatedAt: "2026-03-12T00:00:05.000Z",
+        lifecycleState: "closed",
+        executionState: "closed",
+        busy: false,
+      },
+    ])).toBe(1);
   });
 });

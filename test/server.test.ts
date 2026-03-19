@@ -1209,7 +1209,7 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
-  test("cancel on a running parent turn also cancels active child agents", async () => {
+  test("cancel on a running parent turn also cancels active child agents when requested", async () => {
     const tmpDir = await makeTmpProject();
     let childAbortCount = 0;
     let resolveChildStarted: (() => void) | null = null;
@@ -1259,7 +1259,11 @@ describe("WebSocket Lifecycle", () => {
 
           if (!sentCancel && msg.type === "session_busy" && msg.busy === true) {
             sentCancel = true;
-            ws.send(JSON.stringify({ type: "cancel", sessionId: created.parentSessionId }));
+            ws.send(JSON.stringify({
+              type: "cancel",
+              sessionId: created.parentSessionId,
+              includeSubagents: true,
+            }));
             return;
           }
 

@@ -411,8 +411,34 @@ function extractStringArray(value: unknown): string[] {
     .filter((entry): entry is string => !!entry);
 }
 
+function extractSourceArray(value: unknown): Array<Record<string, unknown>> | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+
+  const directSources = asRecordArray(record.sources);
+  if (directSources.length > 0) return directSources;
+
+  const action = asRecord(record.action);
+  const actionSources = asRecordArray(action?.sources);
+  return actionSources.length > 0 ? actionSources : undefined;
+}
+
+function extractResultEntries(value: unknown): Array<Record<string, unknown>> {
+  const directResults = asRecordArray(value);
+  if (directResults.length > 0) return directResults;
+
+  const record = asRecord(value);
+  if (!record) return [];
+  return asRecordArray(record.results);
+}
+
 function flattenGoogleMapsPlaces(result: unknown): Array<Record<string, unknown>> {
-  return asRecordArray(result).flatMap((entry) => asRecordArray(entry.places));
+  const directPlaces = asRecordArray(result).flatMap((entry) => asRecordArray(entry.places));
+  if (directPlaces.length > 0) return directPlaces;
+
+  const record = asRecord(result);
+  if (!record) return [];
+  return asRecordArray(record.places);
 }
 
 function extractGoogleMapsWidgetContextToken(result: unknown): string | undefined {
@@ -430,12 +456,14 @@ function buildNativeGoogleToolResultOutput(
   result: unknown,
 ): Record<string, unknown> {
   if (name === "nativeWebSearch") {
+    const sources = extractSourceArray(result);
     return {
       provider: "google",
       status: "completed",
       callId,
       queries: extractStringArray(callArguments.queries),
-      results: asRecordArray(result),
+      results: extractResultEntries(result),
+      ...(sources ? { sources } : {}),
       raw: result,
     };
   }
@@ -664,7 +692,7 @@ function processStreamEvent(
         type: "providerToolResult",
         callId,
         name,
-        result: Array.isArray(content.result) ? content.result : [],
+        result: content.result,
         isError: content.is_error === true,
         ...(asNonEmptyString(content.signature) ? { thoughtSignature: asNonEmptyString(content.signature) } : {}),
       });
@@ -754,7 +782,9 @@ function processStreamEvent(
       if (!name || !callId) return;
       if (existing?.type === "providerToolResult") {
         existing.callId = callId;
-        existing.result = Array.isArray(delta.result) ? delta.result : existing.result;
+        if (delta.result !== undefined) {
+          existing.result = delta.result;
+        }
         existing.isError = delta.is_error === true;
         const deltaSignature = asNonEmptyString(delta.signature);
         if (deltaSignature) {
@@ -765,7 +795,7 @@ function processStreamEvent(
           type: "providerToolResult",
           callId,
           name,
-          result: Array.isArray(delta.result) ? delta.result : [],
+          result: delta.result,
           isError: delta.is_error === true,
           ...(asNonEmptyString(delta.signature) ? { thoughtSignature: asNonEmptyString(delta.signature) } : {}),
         });

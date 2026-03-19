@@ -1406,13 +1406,16 @@ Migrate legacy `.agent/mcp-servers.json` entries into `.cowork` scope.
 Cancel the currently running agent turn. Aborts the model stream and rejects any pending ask/approval prompts.
 
 ```json
-{ "type": "cancel", "sessionId": "..." }
+{ "type": "cancel", "sessionId": "...", "includeSubagents": true }
 ```
 
 | Field | Type | Required |
 |-------|------|----------|
 | `type` | `"cancel"` | Yes |
 | `sessionId` | `string` | Yes |
+| `includeSubagents` | `boolean` | No |
+
+Set `includeSubagents: true` to also cancel any active child-agent turns that belong to the same root session. Omitting it only stops the current session turn.
 
 **Response:** The in-progress turn will end and emit `session_busy` (`busy: false`). No-op if no turn is running.
 

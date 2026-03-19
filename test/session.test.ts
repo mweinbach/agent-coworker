@@ -948,6 +948,48 @@ describe("AgentSession", () => {
       expect(configEvent.config.userProfile.work).toBe("Engineer");
     });
 
+    test("setConfig refreshes the cached system prompt when provider options change", async () => {
+      const persistProjectConfigPatchImpl = mock(async () => {});
+      const loadSystemPromptWithSkillsImpl = mock(async (config: AgentConfig) => ({
+        prompt: `prompt:${config.providerOptions?.google?.nativeWebSearch === true}`,
+        discoveredSkills: [{ name: "native-web", description: "Native web" }],
+      }));
+      const { session } = makeSession({
+        config: makeConfig("/tmp/test-session", {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          preferredChildModel: "gemini-3-flash-preview",
+        }),
+        persistProjectConfigPatchImpl,
+        loadSystemPromptWithSkillsImpl,
+        system: "prompt:false",
+      });
+
+      await session.setConfig({
+        providerOptions: {
+          google: {
+            nativeWebSearch: true,
+          },
+        },
+      });
+      await session.sendUserMessage("hello");
+
+      expect(loadSystemPromptWithSkillsImpl).toHaveBeenCalledTimes(1);
+      expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
+        providerOptions: {
+          google: {
+            nativeWebSearch: true,
+          },
+        },
+      });
+
+      const runTurnArgs = mockRunTurn.mock.calls.at(-1)?.[0] as any;
+      expect(runTurnArgs.system).toBe("prompt:true");
+      expect(runTurnArgs.discoveredSkills).toEqual([
+        { name: "native-web", description: "Native web" },
+      ]);
+    });
+
     test("sendUserMessage waits for an in-flight setConfig prompt refresh", async () => {
       const refreshGate = Promise.withResolvers<void>();
       const loadSystemPromptWithSkillsImpl = mock(async (config: AgentConfig) => {
@@ -1079,6 +1121,10 @@ describe("AgentSession", () => {
 
     test("setConfig merges editable providerOptions and preserves unrelated keys", async () => {
       const persistProjectConfigPatchImpl = mock(async () => {});
+      const loadSystemPromptWithSkillsImpl = mock(async () => ({
+        prompt: "prompt:provider-options",
+        discoveredSkills: [],
+      }));
       const dir = path.join(os.tmpdir(), `session-config-merge-${Date.now()}`);
       const { session, events } = makeSession({
         config: {
@@ -1092,6 +1138,7 @@ describe("AgentSession", () => {
           },
         },
         persistProjectConfigPatchImpl,
+        loadSystemPromptWithSkillsImpl,
       });
 
       await session.setConfig({
@@ -2734,7 +2781,7 @@ describe("AgentSession", () => {
       ).toBe(false);
     });
 
-    test("cancels child agents when a root turn is cancelled", async () => {
+    test("does not cancel child agents unless explicitly requested", async () => {
       const cancelAgentSessionsImpl = mock(() => {});
       const { session } = makeSession({ cancelAgentSessionsImpl });
 
@@ -2754,6 +2801,31 @@ describe("AgentSession", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       session.cancel();
+      await sendPromise;
+
+      expect(cancelAgentSessionsImpl).not.toHaveBeenCalled();
+    });
+
+    test("can cancel child agents when a root turn is cancelled explicitly", async () => {
+      const cancelAgentSessionsImpl = mock(() => {});
+      const { session } = makeSession({ cancelAgentSessionsImpl });
+
+      mockRunTurn.mockImplementationOnce(async (params: any) => {
+        await new Promise((_, reject) => {
+          params.abortSignal.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("Aborted"), { name: "AbortError" })),
+            { once: true },
+          );
+        });
+
+        throw new Error("unreachable");
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      session.cancel({ includeSubagents: true });
       await sendPromise;
 
       expect(cancelAgentSessionsImpl).toHaveBeenCalledTimes(1);

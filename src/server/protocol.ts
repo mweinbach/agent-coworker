@@ -142,7 +142,7 @@ export type ClientMessage =
   | { type: "mcp_server_auth_callback"; sessionId: string; name: string; code?: string }
   | { type: "mcp_server_auth_set_api_key"; sessionId: string; name: string; apiKey: string }
   | { type: "mcp_servers_migrate_legacy"; sessionId: string; scope: "workspace" | "user" }
-  | { type: "cancel"; sessionId: string }
+  | { type: "cancel"; sessionId: string; includeSubagents?: boolean }
   | { type: "session_close"; sessionId: string }
   | { type: "ping"; sessionId: string }
   | { type: "session_backup_get"; sessionId: string }

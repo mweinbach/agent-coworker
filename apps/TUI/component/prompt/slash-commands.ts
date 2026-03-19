@@ -519,6 +519,15 @@ export function createLocalSlashCommands(deps: LocalSlashDependencies): LocalSla
       },
     },
     {
+      name: "cancel-subagents",
+      aliases: ["cancel-all"],
+      description: "Cancel current turn and active subagents",
+      icon: "!",
+      execute: () => {
+        deps.syncActions.cancel({ includeSubagents: true });
+      },
+    },
+    {
       name: "exit",
       aliases: ["quit"],
       description: "Exit",

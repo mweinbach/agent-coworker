@@ -3389,7 +3389,7 @@ describe("createTools", () => {
     expect(tools).toHaveProperty("webSearch");
   });
 
-  test("replaces local webSearch and webFetch for google when native web tools are enabled", async () => {
+  test("replaces local webSearch but keeps webFetch for google when native web tools are enabled", async () => {
     const dir = await tmpDir();
     const tools = createTools(
       makeCtx(dir, {
@@ -3407,7 +3407,7 @@ describe("createTools", () => {
     );
 
     expect(tools).not.toHaveProperty("webSearch");
-    expect(tools).not.toHaveProperty("webFetch");
+    expect(tools).toHaveProperty("webFetch");
   });
 
   test("keeps local webSearch and webFetch for google when only maps grounding is enabled", async () => {

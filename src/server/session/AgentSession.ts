@@ -901,8 +901,8 @@ export class AgentSession {
     this.turnExecutionManager.handleApprovalResponse(requestId, approved);
   }
 
-  cancel() {
-    this.turnExecutionManager.cancel();
+  cancel(opts?: { includeSubagents?: boolean }) {
+    this.turnExecutionManager.cancel(opts);
   }
 
   async closeForHistory(): Promise<void> {

@@ -191,7 +191,7 @@ export type SyncActions = {
   closeAgent: (agentId: string) => boolean;
   resumeSession: (sessionId: string) => void;
   reset: () => void;
-  cancel: () => void;
+  cancel: (opts?: { includeSubagents?: boolean }) => void;
   clearUsageHardCap: () => boolean;
 };
 

@@ -356,7 +356,6 @@ function sessionAndFieldSchema<TType extends string>(
 
 const sessionOnlyTypes = [
   "ping",
-  "cancel",
   "session_close",
   "reset",
   "list_tools",
@@ -791,6 +790,11 @@ const setSessionUsageBudgetSchema = schemaWithType("set_session_usage_budget", {
   }
 });
 
+const cancelSchema = schemaWithType("cancel", {
+  sessionId: requiredSessionId("cancel"),
+  includeSubagents: z.boolean({ error: "cancel invalid includeSubagents" }).optional(),
+});
+
 const clientMessageSchema = z.discriminatedUnion("type", [
   ...sessionOnlySchemaList,
   ...sessionAndSkillNameSchemaList,
@@ -823,6 +827,7 @@ const clientMessageSchema = z.discriminatedUnion("type", [
   workspaceBackupDeleteCheckpointSchema,
   workspaceBackupDeleteEntrySchema,
   workspaceBackupDeltaGetSchema,
+  cancelSchema,
   getMessagesSchema,
   setSessionTitleSchema,
   deleteSessionSchema,

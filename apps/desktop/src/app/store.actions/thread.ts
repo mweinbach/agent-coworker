@@ -331,8 +331,12 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
     },
   
 
-    cancelThread: (threadId: string) => {
-      const ok = sendThread(get, threadId, (sid) => ({ type: "cancel", sessionId: sid }));
+    cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => {
+      const ok = sendThread(get, threadId, (sid) => ({
+        type: "cancel",
+        sessionId: sid,
+        ...(opts?.includeSubagents !== undefined ? { includeSubagents: opts.includeSubagents } : {}),
+      }));
       if (!ok) {
         set((s) => ({
           notifications: pushNotification(s.notifications, {

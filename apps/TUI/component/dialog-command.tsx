@@ -48,6 +48,12 @@ function CommandPaletteDialog(props: { onDismiss: () => void }) {
         category: "Session",
       },
       {
+        label: "Cancel Turn + Subagents",
+        value: "cancel_with_subagents",
+        description: "Cancel the current turn and active subagents",
+        category: "Session",
+      },
+      {
         label: "Copy Last Response",
         value: "copy_last",
         description: "Copy last assistant message",
@@ -194,6 +200,9 @@ function CommandPaletteDialog(props: { onDismiss: () => void }) {
         break;
       case "cancel":
         syncActions.cancel();
+        break;
+      case "cancel_with_subagents":
+        syncActions.cancel({ includeSubagents: true });
         break;
       case "copy_last": {
         const feed = syncState.feed ?? [];

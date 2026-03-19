@@ -594,9 +594,23 @@ describe("safeParseClientMessage", () => {
       }
     });
 
+    test("valid cancel message can include subagents", () => {
+      const msg = expectOk(JSON.stringify({ type: "cancel", sessionId: "s1", includeSubagents: true }));
+      expect(msg.type).toBe("cancel");
+      if (msg.type === "cancel") {
+        expect(msg.sessionId).toBe("s1");
+        expect(msg.includeSubagents).toBe(true);
+      }
+    });
+
     test("cancel missing sessionId fails", () => {
       const err = expectErr(JSON.stringify({ type: "cancel" }));
       expect(err).toBe("cancel missing sessionId");
+    });
+
+    test("cancel invalid includeSubagents fails", () => {
+      const err = expectErr(JSON.stringify({ type: "cancel", sessionId: "s1", includeSubagents: "yes" }));
+      expect(err).toBe("cancel invalid includeSubagents");
     });
   });
 

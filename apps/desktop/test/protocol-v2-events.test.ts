@@ -1604,6 +1604,34 @@ describe("desktop protocol v2 mapping", () => {
     expect(useAppStore.getState().threadRuntimeById[threadId]?.busy).toBe(true);
   });
 
+  test("manual cancel can request stopping subagents too", async () => {
+    await useAppStore.getState().newThread({ workspaceId });
+    const threadId = useAppStore.getState().selectedThreadId;
+    if (!threadId) throw new Error("Expected selected thread");
+
+    const controlSocket = socketByClient("desktop-control");
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(controlSocket, "control-session");
+    emitServerHello(threadSocket, "thread-session");
+    threadSocket.sent = [];
+
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "thread-session",
+      busy: true,
+      turnId: "turn-1",
+      cause: "user_message",
+    });
+
+    useAppStore.getState().cancelThread(threadId, { includeSubagents: true });
+
+    expect(threadSocket.sent).toContainEqual({
+      type: "cancel",
+      sessionId: "thread-session",
+      includeSubagents: true,
+    });
+  });
+
   test("session_busy does not trigger automatic cancel", async () => {
     await useAppStore.getState().newThread({ workspaceId });
     const threadId = useAppStore.getState().selectedThreadId;

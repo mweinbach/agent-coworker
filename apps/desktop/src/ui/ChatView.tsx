@@ -5,7 +5,7 @@ import { AlertTriangleIcon, MessageSquareIcon, RotateCcwIcon } from "lucide-reac
 import coworkIconSvg from "../../build/icon.icon/Assets/svgviewer-output.svg";
 
 import { useAppStore } from "../app/store";
-import type { FeedItem, ThreadPendingSteer, ThreadStatus } from "../app/types";
+import type { FeedItem, ThreadAgentSummary, ThreadPendingSteer, ThreadStatus } from "../app/types";
 import {
   Conversation,
   ConversationContent,
@@ -37,6 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import {
   availableProvidersFromCatalog,
   modelChoicesFromCatalog,
@@ -87,6 +88,15 @@ export function reasoningPreviewText(text: string, maxLines = 3): string {
 
 export function shouldToggleReasoningExpanded(key: string): boolean {
   return key === "Enter" || key === " " || key === "Spacebar";
+}
+
+export function isActiveChildAgent(agent: ThreadAgentSummary): boolean {
+  if (agent.lifecycleState === "closed") return false;
+  return agent.busy || agent.executionState === "pending_init" || agent.executionState === "running";
+}
+
+export function countActiveChildAgents(agents: ThreadAgentSummary[]): number {
+  return agents.filter(isActiveChildAgent).length;
 }
 
 export function filterFeedForDeveloperMode(feed: FeedItem[], developerMode: boolean): FeedItem[] {
@@ -506,6 +516,7 @@ export function ChatView() {
   const [overflowCitationSourcesByMessageId, setOverflowCitationSourcesByMessageId] = useState<Map<string, CitationSource[]>>(
     () => new Map(),
   );
+  const [cancelScopeDialogOpen, setCancelScopeDialogOpen] = useState(false);
 
   const setComposerText = useAppStore((s) => s.setComposerText);
   const sendMessage = useAppStore((s) => s.sendMessage);
@@ -547,12 +558,31 @@ export function ChatView() {
     return merged;
   }, [inlineCitationSourcesByMessageId, overflowCitationSourcesByMessageId]);
   const renderItems = useMemo(() => buildChatRenderItems(visibleFeed), [visibleFeed]);
+  const activeChildAgentCount = useMemo(
+    () => countActiveChildAgents(rt?.agents ?? []),
+    [rt?.agents],
+  );
   const contextValue = useMemo<ChatViewContextValue>(
     () => ({
       developerMode,
     }),
     [developerMode],
   );
+
+  const handleStop = useCallback(() => {
+    if (!selectedThreadId) return;
+    if (activeChildAgentCount > 0) {
+      setCancelScopeDialogOpen(true);
+      return;
+    }
+    cancelThread(selectedThreadId);
+  }, [activeChildAgentCount, cancelThread, selectedThreadId]);
+
+  const cancelWithScope = useCallback((includeSubagents: boolean) => {
+    if (!selectedThreadId) return;
+    cancelThread(selectedThreadId, { includeSubagents });
+    setCancelScopeDialogOpen(false);
+  }, [cancelThread, selectedThreadId]);
 
   useEffect(() => {
     const el = feedRef.current;
@@ -621,6 +651,12 @@ export function ChatView() {
       textareaRef.current.focus();
     }
   }, [selectedThreadId]);
+
+  useEffect(() => {
+    if (!rt?.busy || activeChildAgentCount === 0) {
+      setCancelScopeDialogOpen(false);
+    }
+  }, [activeChildAgentCount, rt?.busy]);
 
 
   const onComposerKeyDown = useCallback(
@@ -748,9 +784,9 @@ export function ChatView() {
           </ConversationContent>
         </Conversation>
 
-        <div className="relative border-t border-border/60 px-4 py-1.5 flex flex-col shrink-0" style={{ height: messageBarHeight }}>
-          <MessageBarResizer />
-          <PromptInputRoot>
+      <div className="relative border-t border-border/60 px-4 py-1.5 flex flex-col shrink-0" style={{ height: messageBarHeight }}>
+        <MessageBarResizer />
+        <PromptInputRoot>
             <PromptInputForm
               onSubmit={(event) => {
                 event.preventDefault();
@@ -788,13 +824,37 @@ export function ChatView() {
                     mode={composerSubmitState.mode}
                     status={composerSubmitState.status}
                     disabled={composerSubmitState.disabled}
-                    onStop={selectedThreadId ? () => cancelThread(selectedThreadId) : undefined}
+                    onStop={selectedThreadId ? handleStop : undefined}
                   />
                 </div>
               </PromptInputFooter>
             </PromptInputForm>
           </PromptInputRoot>
         </div>
+        <Dialog open={cancelScopeDialogOpen} onOpenChange={setCancelScopeDialogOpen}>
+          <DialogContent showClose className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Stop Subagents Too?</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                This run currently has {activeChildAgentCount} active subagent{activeChildAgentCount === 1 ? "" : "s"}.
+                You can stop only the main agent turn or cancel the subagents as well.
+              </p>
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button type="button" variant="outline" onClick={() => setCancelScopeDialogOpen(false)}>
+                  Keep running
+                </Button>
+                <Button type="button" variant="secondary" onClick={() => cancelWithScope(false)}>
+                  Stop main agent only
+                </Button>
+                <Button type="button" variant="destructive" onClick={() => cancelWithScope(true)}>
+                  Stop subagents too
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </ChatViewContext.Provider>
   );

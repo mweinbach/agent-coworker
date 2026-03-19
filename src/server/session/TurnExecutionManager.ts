@@ -730,9 +730,9 @@ export class TurnExecutionManager {
     this.deps.interactionManager.handleApprovalResponse(requestId, approved);
   }
 
-  cancel() {
+  cancel(opts?: { includeSubagents?: boolean }) {
     if (!this.context.state.running) return;
-    if ((this.context.state.sessionInfo.sessionKind ?? "root") === "root") {
+    if (opts?.includeSubagents === true && (this.context.state.sessionInfo.sessionKind ?? "root") === "root") {
       this.context.deps.cancelAgentSessionsImpl?.(this.context.id);
     }
     if (this.context.state.abortController) {

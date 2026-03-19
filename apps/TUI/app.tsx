@@ -115,6 +115,13 @@ function GlobalHotkeys() {
       action: () => syncActions.cancel(),
     },
     {
+      id: "cancel-turn-and-subagents",
+      name: "Cancel Turn + Subagents",
+      description: "Cancel the current turn and any active subagents",
+      category: "session",
+      action: () => syncActions.cancel({ includeSubagents: true }),
+    },
+    {
       id: "toggle-sidebar",
       name: "Toggle Sidebar",
       description: "Show or hide the session sidebar",

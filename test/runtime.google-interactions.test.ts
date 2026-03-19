@@ -887,6 +887,76 @@ describe("google native interactions request building", () => {
     ]);
   });
 
+  test("mapGoogleEventToStreamParts preserves native Google search sources for citation fallbacks", () => {
+    const blocks = new Map();
+    const providerToolCallsById = new Map();
+
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.start",
+        index: 0,
+        content: {
+          type: "google_search_call",
+          id: "gs_2",
+          arguments: { queries: ["latest Gemini announcements"] },
+        },
+      },
+      blocks,
+      providerToolCallsById,
+    );
+
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.start",
+        index: 1,
+        content: {
+          type: "google_search_result",
+          call_id: "gs_2",
+          result: {
+            results: [{ search_suggestions: "Latest Gemini announcements" }],
+            sources: [
+              { title: "Gemini update", url: "https://example.com/gemini-update" },
+            ],
+          },
+        },
+      },
+      blocks,
+      providerToolCallsById,
+    );
+
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(
+      {
+        event_type: "content.stop",
+        index: 1,
+      },
+      blocks,
+      providerToolCallsById,
+    )).toEqual([
+      {
+        type: "tool-result",
+        toolCallId: "gs_2",
+        toolName: "nativeWebSearch",
+        output: {
+          provider: "google",
+          status: "completed",
+          callId: "gs_2",
+          queries: ["latest Gemini announcements"],
+          results: [{ search_suggestions: "Latest Gemini announcements" }],
+          sources: [
+            { title: "Gemini update", url: "https://example.com/gemini-update" },
+          ],
+          raw: {
+            results: [{ search_suggestions: "Latest Gemini announcements" }],
+            sources: [
+              { title: "Gemini update", url: "https://example.com/gemini-update" },
+            ],
+          },
+        },
+        providerExecuted: true,
+      },
+    ]);
+  });
+
   test("mapGoogleEventToStreamParts carries assistant text annotations through text-end", () => {
     const blocks = new Map();
     const providerToolCallsById = new Map();

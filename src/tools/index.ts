@@ -44,7 +44,6 @@ export function createTools(ctx: ToolContext): Record<string, any> {
   const includeLegacyWebSearch =
     !usesGoogleNativeWebTools(ctx)
     && (ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx));
-  const includeWebFetch = !usesGoogleNativeWebTools(ctx);
   const baseTools = {
     bash: createBashTool(ctx),
     read: createReadTool(ctx),
@@ -53,7 +52,7 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     glob: createGlobTool(ctx),
     grep: createGrepTool(ctx),
     ...(includeLegacyWebSearch ? { webSearch: createWebSearchTool(ctx) } : {}),
-    ...(includeWebFetch ? { webFetch: createWebFetchTool(ctx) } : {}),
+    webFetch: createWebFetchTool(ctx),
     ask: askTool,
     AskUserQuestion: askTool,
     todoWrite: createTodoWriteTool(ctx),

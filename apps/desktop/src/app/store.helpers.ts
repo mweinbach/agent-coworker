@@ -203,7 +203,7 @@ export type AppStoreState = {
   renameThread: (threadId: string, newTitle: string) => void;
 
   sendMessage: (text: string, busyPolicy?: ThreadBusyPolicy) => Promise<void>;
-  cancelThread: (threadId: string) => void;
+  cancelThread: (threadId: string, opts?: { includeSubagents?: boolean }) => void;
   clearThreadUsageHardCap: (threadId: string) => void;
   setThreadModel: (threadId: string, provider: ProviderName, model: string) => void;
   setComposerText: (text: string) => void;

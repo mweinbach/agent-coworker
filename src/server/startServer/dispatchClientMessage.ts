@@ -65,7 +65,7 @@ export function dispatchClientMessage({
     case "provider_auth_copy_api_key":
       return void session.copyProviderApiKey(message.provider, message.sourceProvider);
     case "cancel":
-      return session.cancel();
+      return session.cancel({ includeSubagents: message.includeSubagents === true });
     case "session_close":
       return void (async () => {
         await session.closeForHistory();

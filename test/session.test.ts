@@ -2830,6 +2830,16 @@ describe("AgentSession", () => {
       expect(cancelAgentSessionsImpl).toHaveBeenCalledWith(session.id);
     });
 
+    test("can cancel child agents explicitly even when the root session is idle", () => {
+      const cancelAgentSessionsImpl = mock(() => {});
+      const { session } = makeSession({ cancelAgentSessionsImpl });
+
+      session.cancel({ includeSubagents: true });
+
+      expect(cancelAgentSessionsImpl).toHaveBeenCalledTimes(1);
+      expect(cancelAgentSessionsImpl).toHaveBeenCalledWith(session.id);
+    });
+
     test("persists aggregated usage when a late steer continuation errors after an earlier pass consumed tokens", async () => {
       const { session, events } = makeSession();
       let runCount = 0;

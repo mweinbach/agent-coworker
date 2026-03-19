@@ -1207,6 +1207,63 @@ describe("google native interactions request building", () => {
     ]);
   });
 
+  test("mapGoogleEventToStreamParts preserves singleton native URL context result objects", () => {
+    const blocks = new Map();
+    const providerToolCallsById = new Map();
+
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.start",
+        index: 0,
+        content: {
+          type: "url_context_call",
+          id: "uc_1",
+          arguments: { urls: ["https://example.com"] },
+        },
+      },
+      blocks,
+      providerToolCallsById,
+    );
+
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.start",
+        index: 1,
+        content: {
+          type: "url_context_result",
+          call_id: "uc_1",
+          result: { url: "https://example.com", status: "ok" },
+        },
+      },
+      blocks,
+      providerToolCallsById,
+    );
+
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(
+      {
+        event_type: "content.stop",
+        index: 1,
+      },
+      blocks,
+      providerToolCallsById,
+    )).toEqual([
+      {
+        type: "tool-result",
+        toolCallId: "uc_1",
+        toolName: "nativeUrlContext",
+        output: {
+          provider: "google",
+          status: "completed",
+          callId: "uc_1",
+          urls: ["https://example.com"],
+          results: [{ url: "https://example.com", status: "ok" }],
+          raw: { url: "https://example.com", status: "ok" },
+        },
+        providerExecuted: true,
+      },
+    ]);
+  });
+
   test("mapGoogleEventToStreamParts carries assistant text annotations through text-end", () => {
     const blocks = new Map();
     const providerToolCallsById = new Map();

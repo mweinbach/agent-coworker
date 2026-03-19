@@ -116,6 +116,19 @@ function extractResultEntries(value: unknown): Array<Record<string, unknown>> {
   return asRecordArray(record.results);
 }
 
+function extractSingletonOrNestedResultEntries(value: unknown): Array<Record<string, unknown>> {
+  const directResults = asRecordArray(value);
+  if (directResults.length > 0) return directResults;
+
+  const record = asRecord(value);
+  if (!record) return [];
+
+  const nestedResults = asRecordArray(record.results);
+  if (nestedResults.length > 0) return nestedResults;
+
+  return [record];
+}
+
 function buildNativeGoogleToolResultOutput(
   name: NativeGoogleToolName,
   callId: string,
@@ -140,7 +153,7 @@ function buildNativeGoogleToolResultOutput(
     status: "completed",
     callId,
     urls: extractStringArray(callArguments.urls),
-    results: asRecordArray(result),
+    results: extractSingletonOrNestedResultEntries(result),
     raw: result,
   };
 }

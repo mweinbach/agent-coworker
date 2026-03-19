@@ -329,6 +329,74 @@ describe("google interactions runtime", () => {
     expect(types).toContain("finish-step");
   });
 
+  test("emits a single turn start and finish across a multi-step tool loop", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-turn-boundary-"));
+    let stepCount = 0;
+    const runtime = createGoogleInteractionsRuntime({
+      runStepImpl: async () => {
+        stepCount += 1;
+        if (stepCount === 1) {
+          return {
+            assistant: {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_1",
+                  name: "testTool",
+                  arguments: { query: "test" },
+                },
+              ],
+              usage: { input: 10, output: 5, totalTokens: 15 },
+              stopReason: "tool_calls",
+              timestamp: Date.now(),
+            },
+            interactionId: "interaction_step1",
+          };
+        }
+        return {
+          assistant: {
+            role: "assistant",
+            content: [{ type: "text", text: "Tool result received." }],
+            usage: { input: 20, output: 10, totalTokens: 30 },
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+          interactionId: "interaction_step2",
+        };
+      },
+    });
+
+    const streamParts: Array<Record<string, unknown>> = [];
+    await runtime.runTurn(makeParams(makeConfig(homeDir), {
+      maxSteps: 5,
+      tools: {
+        testTool: {
+          description: "A test tool",
+          inputSchema: undefined,
+          execute: async () => ({ type: "text", value: "tool result" }),
+        },
+      },
+      onModelStreamPart: async (part) => {
+        streamParts.push(part as Record<string, unknown>);
+      },
+    }));
+
+    const types = streamParts.map((part) => part.type);
+    expect(types.filter((type) => type === "start")).toHaveLength(1);
+    expect(types.filter((type) => type === "finish")).toHaveLength(1);
+    expect(types[0]).toBe("start");
+    expect(types[types.length - 1]).toBe("finish");
+
+    const finishPart = streamParts[streamParts.length - 1]!;
+    expect(finishPart.finishReason).toBe("stop");
+    expect(finishPart.totalUsage).toMatchObject({
+      promptTokens: 30,
+      completionTokens: 15,
+      totalTokens: 45,
+    });
+  });
+
   test("error in model step propagates and calls onModelError", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-err-"));
     const runtime = createGoogleInteractionsRuntime({
@@ -415,7 +483,10 @@ describe("google native interactions request building", () => {
       },
       systemPrompt: "You are helpful.",
       messages: [{ role: "user", content: "Find coffee shops near me" }] as ModelMessage[],
-      tools: [{ name: "bash", description: "Run bash commands", parameters: { type: "object" } }],
+      tools: [
+        { name: "bash", description: "Run bash commands", parameters: { type: "object" } },
+        { name: "webFetch", description: "Fetch a web page", parameters: { type: "object" } },
+      ],
       streamOptions: {
         nativeWebSearch: true,
         googleMaps: true,
@@ -424,11 +495,42 @@ describe("google native interactions request building", () => {
 
     expect(request.tools).toEqual([
       { type: "function", name: "bash", description: "Run bash commands", parameters: { type: "object" } },
+      { type: "function", name: "webFetch", description: "Fetch a web page", parameters: { type: "object" } },
       { type: "google_maps" },
     ]);
   });
 
   test("buildGoogleNativeRequest routes explicit web/page tasks to Google Search and URL Context when both native tool families are enabled", () => {
+    const request = googleNativeInternal.buildGoogleNativeRequest({
+      model: {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+      },
+      systemPrompt: "You are helpful.",
+      messages: [{ role: "user", content: "Find coffee shops near me and read their websites" }] as ModelMessage[],
+      tools: [
+        { name: "bash", description: "Run bash commands", parameters: { type: "object" } },
+        { name: "webFetch", description: "Fetch a web page", parameters: { type: "object" } },
+      ],
+      streamOptions: {
+        nativeWebSearch: true,
+        googleMaps: true,
+      },
+    });
+
+    expect(request.tools).toEqual([
+      { type: "function", name: "bash", description: "Run bash commands", parameters: { type: "object" } },
+      { type: "function", name: "webFetch", description: "Fetch a web page", parameters: { type: "object" } },
+      { type: "google_search", search_types: ["web_search"] },
+      { type: "url_context" },
+    ]);
+  });
+
+  test("buildGoogleNativeRequest omits provider-native Google tools when no web-capable tool survives filtering", () => {
     const request = googleNativeInternal.buildGoogleNativeRequest({
       model: {
         id: "gemini-3-flash-preview",
@@ -449,8 +551,6 @@ describe("google native interactions request building", () => {
 
     expect(request.tools).toEqual([
       { type: "function", name: "bash", description: "Run bash commands", parameters: { type: "object" } },
-      { type: "google_search", search_types: ["web_search"] },
-      { type: "url_context" },
     ]);
   });
 

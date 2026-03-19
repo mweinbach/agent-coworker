@@ -507,9 +507,20 @@ function convertToolsToInteractionsTools(
   }));
 }
 
+function hasToolNamed(tools: Array<Record<string, unknown>>, name: string): boolean {
+  return tools.some((tool) => asNonEmptyString(tool.name) === name);
+}
+
+function canUseProviderNativeWebTools(tools: Array<Record<string, unknown>>): boolean {
+  return hasToolNamed(tools, "webSearch") || hasToolNamed(tools, "webFetch");
+}
+
 function buildGoogleBuiltInTools(opts: GoogleNativeStepRequest): Array<Record<string, unknown>> {
-  const nativeWebSearchEnabled = opts.streamOptions.nativeWebSearch === true;
-  const googleMapsEnabled = opts.streamOptions.googleMaps === true;
+  const allowProviderNativeWebTools = canUseProviderNativeWebTools(opts.tools);
+  const nativeWebSearchEnabled =
+    opts.streamOptions.nativeWebSearch === true && allowProviderNativeWebTools;
+  const googleMapsEnabled =
+    opts.streamOptions.googleMaps === true && allowProviderNativeWebTools;
 
   if (nativeWebSearchEnabled && googleMapsEnabled) {
     const latestUserPrompt = extractLatestUserPromptText(opts.messages);
@@ -982,8 +993,6 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
     await opts.onRawEvent?.(event);
   };
 
-  await emitEvent({ type: "start" });
-
   try {
     for await (const event of stream) {
       const eventRecord = event as unknown as Record<string, unknown>;
@@ -1058,12 +1067,6 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
         totalTokens: (usageData.total_tokens as number) ?? 0,
       };
     }
-
-    await emitEvent({
-      type: "finish",
-      finishReason: assistant.stopReason,
-      totalUsage: assistant.usage,
-    });
 
     return { assistant, interactionId };
   } catch (error) {

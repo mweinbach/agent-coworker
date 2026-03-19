@@ -96,6 +96,7 @@ export function createGoogleInteractionsRuntime(
         const includeUnknownRawParts = params.includeRawChunks ?? true;
         const turnMessages: Array<Record<string, unknown>> = [];
         let usage = undefined as RuntimeRunTurnResult["usage"];
+        let finalStopReason: string | undefined;
         let previousInteractionId: string | undefined;
         let stepMessages: ModelMessage[] = [...(params.allMessages ?? params.messages)];
         let stepProviderOptions: Record<string, unknown> | undefined = asRecord(params.providerOptions) ?? undefined;
@@ -120,6 +121,7 @@ export function createGoogleInteractionsRuntime(
         };
 
         const maxSteps = Math.max(1, params.maxSteps);
+        await emitPart({ type: "start" });
         for (let step = 0; step < maxSteps; step += 1) {
           if (params.abortSignal?.aborted) {
             throw new Error("Model turn aborted.");
@@ -225,6 +227,7 @@ export function createGoogleInteractionsRuntime(
           });
 
           const stopReason = asString(assistantRecord.stopReason);
+          finalStopReason = stopReason ?? finalStopReason;
           if (stopReason === "error" || stopReason === "aborted") {
             const errorMessage = asString(assistantRecord.errorMessage) ?? "Google Interactions runtime model stream failed.";
             throw new Error(errorMessage);
@@ -253,6 +256,12 @@ export function createGoogleInteractionsRuntime(
 
           stepMessages = [...stepMessages, ...toolResultMessages];
         }
+
+        await emitPart({
+          type: "finish",
+          finishReason: finalStopReason ?? "unknown",
+          totalUsage: usage,
+        });
 
         return {
           text: extractPiAssistantText(turnMessages as any),

@@ -27,7 +27,7 @@ const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed
 
   return (
     <div
-      className="app-left-sidebar-pane relative shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] border-r border-border/70 bg-[color-mix(in_srgb,var(--sidebar-bg)_92%,white_8%)] backdrop-blur-lg"
+      className="app-left-sidebar-pane relative shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] border-r border-border/70"
       style={{ width: collapsed ? 0 : sidebarWidth, borderRightWidth: collapsed ? 0 : 1 }}
     >
       <div className="absolute top-0 bottom-0 right-0 flex" style={{ width: sidebarWidth }}>
@@ -43,7 +43,7 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
 
   return (
     <div
-      className="app-right-sidebar-pane relative shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] bg-panel border-l border-border/80"
+      className="app-right-sidebar-pane relative shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] border-l border-border/80"
       style={{ width: collapsed ? 0 : contextSidebarWidth, borderLeftWidth: collapsed ? 0 : 1 }}
     >
       {!collapsed ? <ContextSidebarResizer /> : null}
@@ -208,10 +208,20 @@ export default function App() {
   const busy = runtime?.busy === true;
   const showContextSidebar = view === "chat" && activeThread !== null;
 
+  useEffect(() => {
+    document.body.classList.add("app-animating-sidebars");
+    const timer = window.setTimeout(() => {
+      document.body.classList.remove("app-animating-sidebars");
+    }, 340);
+    return () => {
+      window.clearTimeout(timer);
+      document.body.classList.remove("app-animating-sidebars");
+    };
+  }, [sidebarCollapsed, contextSidebarCollapsed]);
 
   if (view === "settings") {
     return (
-      <div className="app-shell flex h-full min-h-0 flex-col bg-background text-foreground">
+      <div className="app-shell app-shell--settings flex h-full min-h-0 flex-col text-foreground">
         <div className="app-window-drag-strip" aria-hidden="true" />
         <div className="min-h-0 flex-1">
           <SettingsContent init={init} ready={ready} startupError={startupError} />
@@ -223,7 +233,7 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell h-full flex flex-col bg-background text-foreground">
+    <div className="app-shell h-full flex flex-col text-foreground">
       <div className="app-window-drag-strip" aria-hidden="true" />
       <AppTopBar
         busy={busy}
@@ -236,7 +246,7 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <LeftSidebarPane collapsed={sidebarCollapsed} />
 
-        <main className="flex min-w-0 min-h-0 flex-1 flex-col bg-panel">
+        <main className="app-main-content flex min-w-0 min-h-0 flex-1 flex-col">
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <div className="relative min-w-0 min-h-0 flex-1 overflow-hidden">
               <PrimaryContent init={init} ready={ready} startupError={startupError} view={view} />

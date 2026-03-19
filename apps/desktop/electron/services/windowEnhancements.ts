@@ -13,6 +13,10 @@ interface WindowKitLike {
 }
 
 interface LiquidGlassLike {
+  GlassMaterialVariant?: {
+    sidebar?: number;
+    abuttedSidebar?: number;
+  };
   isGlassSupported?: () => boolean;
   addView?: (
     handle: Buffer,
@@ -22,6 +26,7 @@ interface LiquidGlassLike {
       opaque?: boolean;
     },
   ) => number;
+  unstable_setVariant?: (viewId: number, variant: number) => void;
 }
 
 interface ApplyMacosPremiumEnhancementsOptions {
@@ -29,16 +34,49 @@ interface ApplyMacosPremiumEnhancementsOptions {
   importModule?: ModuleImporter;
   warn?: WarnFn;
   superBrowserWindowKitLicense?: string;
+  enableSuperBrowserWindowKit?: boolean;
+}
+
+export interface MacosPremiumEnhancementResult {
+  liquidGlassApplied: boolean;
+  superBrowserWindowKitApplied: boolean;
+}
+
+function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+  return fallback;
+}
+
+export function shouldUseMacosLiquidGlass(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (platform !== "darwin") {
+    return false;
+  }
+  return parseBooleanEnv(env.COWORK_MACOS_LIQUID_GLASS, true);
 }
 
 export function macosBrowserWindowOptions(
   platform: NodeJS.Platform = process.platform,
+  options: { useMacosLiquidGlass?: boolean } = {},
 ): Partial<BrowserWindowConstructorOptions> {
+  const useMacosLiquidGlass = options.useMacosLiquidGlass ?? shouldUseMacosLiquidGlass(platform);
+
   if (platform === "darwin") {
     return {
       titleBarStyle: "hiddenInset",
       trafficLightPosition: MACOS_TRAFFIC_LIGHT_POSITION,
-      transparent: true,
+      transparent: useMacosLiquidGlass,
     };
   }
 
@@ -143,7 +181,22 @@ async function applyLiquidGlass(
     const viewId = liquidGlass.addView(win.getNativeWindowHandle(), {
       cornerRadius: MACOS_PREMIUM_CORNER_RADIUS,
     });
-    return viewId >= 0;
+    if (viewId < 0) {
+      return false;
+    }
+
+    const sidebarVariant =
+      liquidGlass.GlassMaterialVariant?.abuttedSidebar ??
+      liquidGlass.GlassMaterialVariant?.sidebar;
+    if (typeof sidebarVariant === "number" && typeof liquidGlass.unstable_setVariant === "function") {
+      try {
+        liquidGlass.unstable_setVariant(viewId, sidebarVariant);
+      } catch (error) {
+        warn("electron-liquid-glass sidebar variant unavailable", error);
+      }
+    }
+
+    return true;
   } catch (error) {
     warn("electron-liquid-glass enhancement unavailable", error);
     return false;
@@ -153,19 +206,31 @@ async function applyLiquidGlass(
 export async function applyMacosPremiumEnhancements(
   win: BrowserWindow,
   options: ApplyMacosPremiumEnhancementsOptions = {},
-): Promise<void> {
+): Promise<MacosPremiumEnhancementResult> {
   if ((options.platform ?? process.platform) !== "darwin") {
-    return;
+    return {
+      liquidGlassApplied: false,
+      superBrowserWindowKitApplied: false,
+    };
   }
 
   const importModule = options.importModule ?? defaultImporter;
   const warn = options.warn ?? defaultWarn;
   const license = options.superBrowserWindowKitLicense ?? process.env.COWORK_SBWK_LICENSE?.trim();
+  const useSbwk = options.enableSuperBrowserWindowKit ?? parseBooleanEnv(process.env.COWORK_ENABLE_SBWK, false);
 
-  const cornerEnhancementApplied = await applySuperBrowserWindowKit(win, importModule, warn, license);
   const glassEnhancementApplied = await applyLiquidGlass(win, importModule, warn);
+  const cornerEnhancementApplied =
+    glassEnhancementApplied && useSbwk
+      ? await applySuperBrowserWindowKit(win, importModule, warn, license)
+      : false;
 
   if (!cornerEnhancementApplied && !glassEnhancementApplied) {
     warn("Using native macOS BrowserWindow appearance fallback");
   }
+
+  return {
+    liquidGlassApplied: glassEnhancementApplied,
+    superBrowserWindowKitApplied: cornerEnhancementApplied,
+  };
 }

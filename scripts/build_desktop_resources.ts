@@ -37,37 +37,12 @@ async function copyDir(src: string, dest: string) {
 async function main() {
   const root = path.resolve(import.meta.dirname, "..");
   const distDir = path.join(root, "dist");
-  const serverOutDir = path.join(distDir, "server");
+  const includeDocs = process.env.COWORK_BUNDLE_DESKTOP_DOCS === "1";
 
   await fs.mkdir(distDir, { recursive: true });
-  await rmrf(serverOutDir);
 
   const entry = path.join(root, "src", "server", "index.ts");
-  const proc = Bun.spawn(
-    [
-      "bun",
-      "build",
-      entry,
-      // Inline this env var into the bundle so provider modules can DCE
-      // desktop-only branches.
-      "--env",
-      "COWORK_DESKTOP_BUNDLE*",
-      "--outdir",
-      serverOutDir,
-      "--target",
-      "bun",
-      "--format",
-      "esm",
-    ],
-    {
-      cwd: root,
-      stdout: "inherit",
-      stderr: "inherit",
-      env: { ...process.env, COWORK_DESKTOP_BUNDLE: "1" },
-    }
-  );
-  const code = await proc.exited;
-  if (code !== 0) process.exit(code);
+  await rmrf(path.join(distDir, "server"));
 
   // Build a standalone server sidecar so end users don't need Bun installed.
   // Electron packaging picks this up from apps/desktop/resources/binaries.
@@ -115,13 +90,15 @@ async function main() {
     await copyDir(src, dest);
   }
 
-  // Optional: include a copy of docs for UI builders.
-  const docsSrc = path.join(root, "docs");
   const docsDest = path.join(distDir, "docs");
   await rmrf(docsDest);
-  await copyDir(docsSrc, docsDest);
+  if (includeDocs) {
+    const docsSrc = path.join(root, "docs");
+    await copyDir(docsSrc, docsDest);
+  }
 
-  console.log(`[resources] built server bundle at ${path.relative(root, serverOutDir)}`);
+  console.log("[resources] skipped dist/server desktop bundle (unused at runtime)");
+  console.log(`[resources] bundled docs: ${includeDocs ? "enabled" : "disabled"}`);
   console.log(`[resources] built server sidecar at ${path.relative(root, sidecarOutfile)}`);
 }
 

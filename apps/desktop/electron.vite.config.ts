@@ -37,9 +37,12 @@ export default defineConfig({
     },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin({ exclude: ["zod"] })],
     future: "warn",
     build: {
+      // Sandboxed preloads cannot rely on arbitrary runtime requires from node_modules.
+      // Bundle preload deps so the desktop bridge stays available at startup.
+      externalizeDeps: false,
       outDir: "out/preload",
       rollupOptions: {
         input: path.resolve(appRoot, "electron/preload.ts"),

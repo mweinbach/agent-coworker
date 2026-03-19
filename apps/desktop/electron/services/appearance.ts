@@ -1,10 +1,20 @@
-import { BrowserWindow, nativeTheme } from "electron";
+import { BrowserWindow, type BrowserWindowConstructorOptions, nativeTheme } from "electron";
 
 import type {
   SetWindowAppearanceInput,
   SystemAppearance,
   WindowsBackgroundMaterial,
 } from "../../src/lib/desktopApi";
+import { shouldUseMacosLiquidGlass } from "./windowEnhancements";
+
+const LIGHT_SHELL_BACKGROUND = "#e7dfd4";
+const DARK_SHELL_BACKGROUND = "#1f1913";
+
+export function defaultDesktopShellBackgroundColor(
+  useDarkColors: boolean = nativeTheme.shouldUseDarkColors,
+): string {
+  return useDarkColors ? DARK_SHELL_BACKGROUND : LIGHT_SHELL_BACKGROUND;
+}
 
 export function getSystemAppearanceSnapshot(): SystemAppearance {
   return {
@@ -26,6 +36,29 @@ export function defaultWindowsBackgroundMaterial(
     return undefined;
   }
   return "mica";
+}
+
+export function getInitialWindowAppearanceOptions(options: {
+  platform?: NodeJS.Platform;
+  useMacosLiquidGlass?: boolean;
+  useDarkColors?: boolean;
+} = {}): Pick<BrowserWindowConstructorOptions, "show" | "backgroundColor" | "backgroundMaterial"> {
+  const platform = options.platform ?? process.platform;
+  const useDarkColors = options.useDarkColors ?? nativeTheme.shouldUseDarkColors;
+  const useMacosLiquidGlass = options.useMacosLiquidGlass ?? shouldUseMacosLiquidGlass(platform);
+
+  const backgroundColor =
+    platform === "darwin" && useMacosLiquidGlass
+      ? "#00000000"
+      : defaultDesktopShellBackgroundColor(useDarkColors);
+
+  const backgroundMaterial = defaultWindowsBackgroundMaterial(platform);
+
+  return {
+    show: false,
+    backgroundColor,
+    ...(backgroundMaterial ? { backgroundMaterial } : {}),
+  };
 }
 
 function setWindowBackgroundMaterial(win: BrowserWindow, material: WindowsBackgroundMaterial): void {

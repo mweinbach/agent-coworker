@@ -42,7 +42,7 @@ export function AppTopBar({
           onClick={onToggleSidebar}
           title={sidebarLabel}
           aria-label={sidebarLabel}
-          className="app-topbar__toolbar-button text-muted-foreground hover:text-foreground"
+          className="app-topbar__toolbar-button app-topbar__sidebar-toggle-button text-muted-foreground hover:text-foreground"
         >
           <PanelLeftIcon className="h-[18px] w-[18px]" />
         </Button>

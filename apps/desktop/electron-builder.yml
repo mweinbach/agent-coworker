@@ -7,8 +7,10 @@ files:
   - out/**
   - package.json
 extraResources:
-  - from: ../../dist
-    to: dist
+  - from: ../../dist/prompts
+    to: dist/prompts
+  - from: ../../dist/config
+    to: dist/config
   - from: resources/binaries
     to: binaries
 afterSign: scripts/notarize.cjs

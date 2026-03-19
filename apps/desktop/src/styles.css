@@ -50,7 +50,7 @@ body,
 body {
   margin: 0;
   overflow: hidden;
-  background: var(--app-bg);
+  background: var(--window-bg);
   color: var(--text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
@@ -109,7 +109,7 @@ body {
 }
 
 .app-topbar__inline-sidebar-toggle {
-  z-index: 1;
+  z-index: 2;
 }
 
 .app-topbar__toolbar-button {
@@ -120,6 +120,19 @@ body {
   color: var(--text);
 }
 
+.app-topbar__sidebar-toggle-button {
+  border: 1px solid color-mix(in srgb, var(--glass-border) 88%, transparent);
+  background: color-mix(in srgb, var(--sidebar-surface) 78%, transparent);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--text) 10%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 35%, transparent);
+  backdrop-filter: blur(calc(var(--titlebar-blur) + 2px));
+}
+
+.app-topbar__sidebar-toggle-button:hover {
+  background: color-mix(in srgb, var(--sidebar-surface) 90%, transparent);
+}
+
 .app-topbar__sidebar-fill {
   position: absolute;
   top: 0;
@@ -127,10 +140,10 @@ body {
   left: 0;
   pointer-events: none;
   z-index: 0;
-  background: color-mix(in srgb, var(--sidebar-bg) 92%, white 8%);
+  background: var(--sidebar-surface);
   border-right-style: solid;
-  border-right-color: color-mix(in srgb, var(--border) 70%, transparent);
-  backdrop-filter: blur(16px);
+  border-right-color: var(--glass-border);
+  backdrop-filter: blur(var(--sidebar-titlebar-blur));
   transition:
     width 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
     border-right-width 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -143,14 +156,14 @@ body {
   bottom: 0;
   pointer-events: none;
   z-index: 0;
-  background: color-mix(in srgb, var(--sidebar-bg) 84%, var(--app-bg) 16%);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  backdrop-filter: blur(24px);
+  background: var(--content-surface);
+  border-bottom: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--titlebar-blur));
   transition: left 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 :root[data-platform="darwin"] .app-topbar__inline-sidebar-toggle {
-  left: 5.75rem;
+  left: 5.4rem;
 }
 
 :root[data-platform="darwin"] .app-topbar__toolbar--right {
@@ -173,6 +186,16 @@ body {
 
 .app-shell {
   position: relative;
+  background: var(--shell-bg);
+}
+
+.app-shell--settings {
+  background: var(--shell-bg);
+}
+
+.app-main-content {
+  background: var(--glass-fill);
+  border-left: 1px solid var(--glass-border);
 }
 
 :root[data-platform="darwin"] .app-window-drag-strip,
@@ -207,13 +230,14 @@ body {
   -webkit-app-region: drag;
 }
 
-.app-left-sidebar-pane,
-.app-right-sidebar-pane {
-  will-change: width;
+.app-left-sidebar-pane {
+  border-right-color: var(--glass-border);
+  background: var(--sidebar-surface);
+  backdrop-filter: blur(var(--sidebar-blur));
 }
 
-.app-left-sidebar-pane {
-  border-right-color: color-mix(in srgb, var(--border) 70%, transparent);
+.app-right-sidebar-pane {
+  background: var(--glass-fill);
 }
 
 @keyframes collapsible-open {
@@ -374,6 +398,12 @@ body.app-resizing-sidebars .app-topbar__content-fill {
 }
 
 body.app-resizing-sidebars .app-left-sidebar-pane {
+  backdrop-filter: none;
+}
+
+body.app-animating-sidebars .app-left-sidebar-pane,
+body.app-animating-sidebars .app-topbar__sidebar-fill,
+body.app-animating-sidebars .app-topbar__content-fill {
   backdrop-filter: none;
 }
 

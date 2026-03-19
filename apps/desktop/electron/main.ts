@@ -6,8 +6,8 @@ import { app, BrowserWindow, Menu, Notification, shell } from "electron";
 import { DESKTOP_EVENT_CHANNELS, type DesktopMenuCommand, type UpdaterState } from "../src/lib/desktopApi";
 import { registerDesktopIpc } from "./ipc";
 import {
-  applyInitialWindowAppearance,
-  defaultWindowsBackgroundMaterial,
+  defaultDesktopShellBackgroundColor,
+  getInitialWindowAppearanceOptions,
   getSystemAppearanceSnapshot,
   registerSystemAppearanceListener,
 } from "./services/appearance";
@@ -17,7 +17,11 @@ import { resolveDesktopRendererUrl } from "./services/rendererUrl";
 import { ServerManager } from "./services/serverManager";
 import { createBeforeQuitHandler } from "./services/shutdown";
 import { DesktopUpdaterService } from "./services/updater";
-import { applyMacosPremiumEnhancements, macosBrowserWindowOptions } from "./services/windowEnhancements";
+import {
+  applyMacosPremiumEnhancements,
+  macosBrowserWindowOptions,
+  shouldUseMacosLiquidGlass,
+} from "./services/windowEnhancements";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,6 +42,7 @@ const updater = new DesktopUpdaterService({
 let unregisterIpc = () => {};
 let unregisterAppearanceListener = () => {};
 let mainWindow: BrowserWindow | null = null;
+const WINDOW_SHOW_FALLBACK_TIMEOUT_MS = 2_000;
 
 app.setName("Cowork");
 
@@ -183,14 +188,14 @@ function applyWindowSecurity(win: BrowserWindow): void {
 }
 
 async function createWindow(): Promise<void> {
-  const backgroundMaterial = defaultWindowsBackgroundMaterial();
+  const useMacosLiquidGlass = shouldUseMacosLiquidGlass();
 
   const win = new BrowserWindow({
     title: "Cowork",
     width: 1240,
     height: 820,
-    ...(backgroundMaterial ? { backgroundMaterial } : {}),
-    ...macosBrowserWindowOptions(),
+    ...getInitialWindowAppearanceOptions({ useMacosLiquidGlass }),
+    ...macosBrowserWindowOptions(process.platform, { useMacosLiquidGlass }),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
@@ -209,8 +214,19 @@ async function createWindow(): Promise<void> {
   } else if (process.platform === "win32") {
     win.setMenu(null);
   }
-  applyInitialWindowAppearance(win);
   applyWindowSecurity(win);
+  const showWindow = () => {
+    if (win.isDestroyed()) {
+      return;
+    }
+    win.show();
+  };
+  const readyToShowTimeout = setTimeout(showWindow, WINDOW_SHOW_FALLBACK_TIMEOUT_MS);
+
+  win.once("ready-to-show", () => {
+    clearTimeout(readyToShowTimeout);
+    showWindow();
+  });
 
   win.webContents.on("context-menu", (_event, params) => {
     const hasSelection = params.selectionText.trim().length > 0;
@@ -240,6 +256,7 @@ async function createWindow(): Promise<void> {
   });
 
   win.on("closed", () => {
+    clearTimeout(readyToShowTimeout);
     if (mainWindow === win) {
       mainWindow = null;
     }
@@ -247,9 +264,18 @@ async function createWindow(): Promise<void> {
 
   win.webContents.once("did-finish-load", () => {
     emitSystemAppearance();
-    void applyMacosPremiumEnhancements(win).catch((error) => {
-      console.warn(`[desktop] Failed to apply macOS premium window enhancements: ${String(error)}`);
-    });
+    if (process.platform === "darwin" && useMacosLiquidGlass) {
+      void applyMacosPremiumEnhancements(win)
+        .then((premiumResult) => {
+          if (!premiumResult.liquidGlassApplied) {
+            win.setBackgroundColor(defaultDesktopShellBackgroundColor());
+          }
+        })
+        .catch((error) => {
+          console.warn(`[desktop] Failed to apply macOS liquid glass enhancements: ${String(error)}`);
+          win.setBackgroundColor(defaultDesktopShellBackgroundColor());
+        });
+    }
   });
 
   if (!app.isPackaged) {
@@ -261,10 +287,9 @@ async function createWindow(): Promise<void> {
       console.warn(`[desktop] ${warning}`);
     }
     await win.loadURL(url);
-    return;
+  } else {
+    await win.loadFile(path.join(__dirname, "../renderer/index.html"));
   }
-
-  await win.loadFile(path.join(__dirname, "../renderer/index.html"));
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import { createElement } from "react";
 import { act } from "react";
@@ -141,8 +141,21 @@ const defaultProviderActions = {
   requestProviderAuthMethods: useAppStore.getState().requestProviderAuthMethods,
   refreshProviderStatus: useAppStore.getState().refreshProviderStatus,
 };
+const defaultStoreActions = {
+  ...defaultProviderActions,
+  setLmStudioEnabled: useAppStore.getState().setLmStudioEnabled,
+  startOnboarding: useAppStore.getState().startOnboarding,
+};
 
 describe("DeveloperPage rerun onboarding button", () => {
+  beforeEach(() => {
+    useAppStore.setState(defaultStoreActions);
+  });
+
+  afterEach(() => {
+    useAppStore.setState(defaultStoreActions);
+  });
+
   test("renders the 'Run onboarding again' button", async () => {
     const harness = setupJsdom();
     try {

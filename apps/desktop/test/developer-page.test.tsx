@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import { createElement } from "react";
 import { act } from "react";
@@ -117,7 +117,19 @@ const { useAppStore } = await import("../src/app/store");
 const { DEFAULT_TOOL_OUTPUT_OVERFLOW_CHARS } = await import("../src/lib/wsProtocol");
 const { DeveloperPage } = await import("../src/ui/settings/pages/DeveloperPage");
 
+const defaultStoreActions = {
+  updateWorkspaceDefaults: useAppStore.getState().updateWorkspaceDefaults,
+};
+
 describe("desktop developer page", () => {
+  beforeEach(() => {
+    useAppStore.setState(defaultStoreActions);
+  });
+
+  afterEach(() => {
+    useAppStore.setState(defaultStoreActions);
+  });
+
   test("renders workspace spill-file controls for tool output overflow", async () => {
     const harness = setupJsdom();
     try {

@@ -62,6 +62,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       RUNTIME.optimisticUserMessageIds.delete(threadId);
       RUNTIME.pendingThreadMessages.delete(threadId);
       RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
+      RUNTIME.pendingWorkspaceDefaultApplyModeByThread.delete(threadId);
       RUNTIME.modelStreamByThread.delete(threadId);
       clearPendingThreadSteers(threadId);
       try {

@@ -131,6 +131,7 @@ describe("workspace settings sync", () => {
     RUNTIME.optimisticUserMessageIds.clear();
     RUNTIME.pendingThreadMessages.clear();
     RUNTIME.pendingWorkspaceDefaultApplyThreadIds.clear();
+    RUNTIME.pendingWorkspaceDefaultApplyModeByThread.clear();
     RUNTIME.workspaceStartPromises.clear();
     RUNTIME.workspaceStartGenerations.clear();
     RUNTIME.modelStreamByThread.clear();
@@ -1257,13 +1258,21 @@ describe("workspace settings sync", () => {
       busy: false,
     });
 
-    // After becoming idle, the deferred model/config/mcp messages are sent
+    // After becoming idle, the deferred sync retries the full defaults pass.
     expect(busyThreadSocket.sent.map((message) => message?.type)).toEqual([
+      "set_config",
       "set_model",
       "set_config",
       "set_enable_mcp",
     ]);
-    expect(busyThreadSocket.sent[1]).toMatchObject({
+    expect(busyThreadSocket.sent[0]).toMatchObject({
+      type: "set_config",
+      config: {
+        backupsEnabled: false,
+        toolOutputOverflowChars: 12000,
+      },
+    });
+    expect(busyThreadSocket.sent[2]).toMatchObject({
       type: "set_config",
       config: {
         preferredChildModel: "gpt-5.2-mini",

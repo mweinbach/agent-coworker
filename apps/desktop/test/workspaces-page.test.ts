@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import { createElement, StrictMode } from "react";
 import { act } from "react";
@@ -134,6 +134,9 @@ const {
 } = await import("../src/ui/settings/pages/WorkspacesPage");
 const App = (await import("../src/App")).default;
 const { useAppStore } = await import("../src/app/store");
+const defaultStoreActions = {
+  updateWorkspaceDefaults: useAppStore.getState().updateWorkspaceDefaults,
+};
 
 describe("desktop workspaces page", () => {
   beforeEach(() => {
@@ -147,7 +150,12 @@ describe("desktop workspaces page", () => {
       providerConnected: [],
       providerDefaultModelByProvider: {},
       providerStatusByName: {},
+      ...defaultStoreActions,
     }));
+  });
+
+  afterEach(() => {
+    useAppStore.setState(defaultStoreActions);
   });
 
   test("renders OpenAI and ChatGPT settings controls with compact web search options", () => {

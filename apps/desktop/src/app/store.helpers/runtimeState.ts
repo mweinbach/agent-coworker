@@ -14,6 +14,8 @@ export type PendingThreadSteer = {
   accepted: boolean;
 };
 
+export type WorkspaceDefaultApplyMode = "auto" | "auto-resume" | "explicit";
+
 export type RuntimeMaps = {
   controlSockets: Map<string, AgentSocket>;
   threadSockets: Map<string, AgentSocket>;
@@ -21,6 +23,7 @@ export type RuntimeMaps = {
   pendingThreadMessages: Map<string, string[]>;
   pendingThreadSteers: Map<string, Map<string, PendingThreadSteer>>;
   pendingWorkspaceDefaultApplyThreadIds: Set<string>;
+  pendingWorkspaceDefaultApplyModeByThread: Map<string, WorkspaceDefaultApplyMode>;
   workspaceStartPromises: Map<string, { generation: number; promise: Promise<void> }>;
   workspaceStartGenerations: Map<string, number>;
   modelStreamByThread: Map<string, ThreadModelStreamRuntime>;
@@ -34,6 +37,7 @@ export const RUNTIME: RuntimeMaps = {
   pendingThreadMessages: new Map(),
   pendingThreadSteers: new Map(),
   pendingWorkspaceDefaultApplyThreadIds: new Set(),
+  pendingWorkspaceDefaultApplyModeByThread: new Map(),
   workspaceStartPromises: new Map(),
   workspaceStartGenerations: new Map(),
   modelStreamByThread: new Map(),

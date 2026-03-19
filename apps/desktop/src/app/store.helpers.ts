@@ -221,7 +221,7 @@ export type AppStoreState = {
   enableSkill: (skillName: string) => Promise<void>;
   deleteSkill: (skillName: string) => Promise<void>;
 
-  applyWorkspaceDefaultsToThread: (threadId: string, mode?: "auto" | "explicit") => Promise<void>;
+  applyWorkspaceDefaultsToThread: (threadId: string, mode?: "auto" | "auto-resume" | "explicit") => Promise<void>;
   updateWorkspaceDefaults: (workspaceId: string, patch: WorkspaceDefaultsPatch) => Promise<void>;
   restartWorkspaceServer: (workspaceId: string) => Promise<void>;
   requestWorkspaceMcpServers: (workspaceId: string) => Promise<void>;

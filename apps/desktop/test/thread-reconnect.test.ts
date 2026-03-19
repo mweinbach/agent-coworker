@@ -108,7 +108,11 @@ function socketByClient(client: string): MockAgentSocket {
   return socket;
 }
 
-function emitServerHello(socket: MockAgentSocket, sessionId: string) {
+function emitServerHello(
+  socket: MockAgentSocket,
+  sessionId: string,
+  overrides: Partial<Record<string, unknown>> = {},
+) {
   socket.emit({
     type: "server_hello",
     sessionId,
@@ -119,6 +123,7 @@ function emitServerHello(socket: MockAgentSocket, sessionId: string) {
       workingDirectory: "/tmp/workspace",
       outputDirectory: "/tmp/workspace/output",
     },
+    ...overrides,
   });
 }
 
@@ -138,6 +143,7 @@ describe("thread reconnect", () => {
     RUNTIME.pendingThreadMessages.clear();
     RUNTIME.pendingThreadSteers.clear();
     RUNTIME.pendingWorkspaceDefaultApplyThreadIds.clear();
+    RUNTIME.pendingWorkspaceDefaultApplyModeByThread.clear();
     RUNTIME.workspaceStartPromises.clear();
     RUNTIME.workspaceStartGenerations.clear();
     RUNTIME.modelStreamByThread.clear();
@@ -195,6 +201,104 @@ describe("thread reconnect", () => {
     expect(state.threadRuntimeById[threadId]?.connected).toBe(true);
     expect(state.threadRuntimeById[threadId]?.sessionId).toBe("thread-session");
     expect(state.threadRuntimeById[threadId]?.transcriptOnly).toBe(false);
+  });
+
+  test("resumed threads do not replay workspace default set_model on reconnect", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultProvider: "codex-cli",
+              defaultModel: "gpt-5.4",
+            }
+          : workspace,
+      ),
+      threads: state.threads.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              sessionId: "persisted-thread-session",
+            }
+          : thread,
+      ),
+    }));
+
+    await useAppStore.getState().selectThread(threadId);
+
+    const threadSocket = socketByClient("desktop");
+    threadSocket.sent = [];
+    emitServerHello(threadSocket, "persisted-thread-session", {
+      isResume: true,
+      config: {
+        provider: "google",
+        model: "gemini-3.1-pro-preview-customtools",
+        workingDirectory: "/tmp/workspace",
+        outputDirectory: "/tmp/workspace/output",
+      },
+    });
+
+    expect(threadSocket.sent.some((message) => message?.type === "set_model")).toBe(false);
+    expect(threadSocket.sent).toContainEqual({
+      type: "set_enable_mcp",
+      sessionId: "persisted-thread-session",
+      enableMcp: true,
+    });
+  });
+
+  test("deferred auto-resume defaults preserve the resumed session model when the thread becomes idle", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      workspaces: state.workspaces.map((workspace) =>
+        workspace.id === workspaceId
+          ? {
+              ...workspace,
+              defaultProvider: "codex-cli",
+              defaultModel: "gpt-5.4",
+            }
+          : workspace,
+      ),
+      threads: state.threads.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              sessionId: "persisted-thread-session",
+            }
+          : thread,
+      ),
+    }));
+
+    await useAppStore.getState().selectThread(threadId);
+
+    const threadSocket = socketByClient("desktop");
+    threadSocket.sent = [];
+    emitServerHello(threadSocket, "persisted-thread-session", {
+      isResume: true,
+      busy: true,
+      turnId: "turn-1",
+      config: {
+        provider: "google",
+        model: "gemini-3.1-pro-preview-customtools",
+        workingDirectory: "/tmp/workspace",
+        outputDirectory: "/tmp/workspace/output",
+      },
+    });
+
+    expect(RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)).toBe(true);
+    expect(RUNTIME.pendingWorkspaceDefaultApplyModeByThread.get(threadId)).toBe("auto-resume");
+
+    threadSocket.sent = [];
+    threadSocket.emit({
+      type: "session_busy",
+      sessionId: "persisted-thread-session",
+      busy: false,
+      turnId: "turn-1",
+    });
+
+    expect(threadSocket.sent.some((message) => message?.type === "set_model")).toBe(false);
+    expect(RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)).toBe(false);
+    expect(RUNTIME.pendingWorkspaceDefaultApplyModeByThread.has(threadId)).toBe(false);
   });
 
   test("hydrates usage from transcript replay before reconnect", async () => {

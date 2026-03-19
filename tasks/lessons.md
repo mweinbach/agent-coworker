@@ -151,6 +151,7 @@
 - For local OpenAI-compatible providers like LM Studio, do not treat a transport library's required `apiKey` parameter as a user-facing auth requirement; satisfy that client internally when necessary, but never surface `OPENAI_API_KEY` or API-key UI as mandatory for local inference.
 - For tool-output overflow policy, keep the generic spill-to-workspace guard enabled for oversized tool results, but exempt `read` so large file contents can stay inline for the model when explicitly requested.
 - For collapsible settings sections backed by live workspace state, seed the open state from the current workspace or routing mode and do not let the selected-item count drive `open` on every rerender; otherwise a checkbox click can immediately collapse the section the user is editing.
+- For desktop thread reconnect in this repo, never replay workspace `set_model` defaults onto a resumed session; reconnect-time default sync may still apply safe config like backups or MCP, but provider/model must stay pinned to the session that already started.
 
 ## 2026-03-18 Tool Output Overflow Audit
 

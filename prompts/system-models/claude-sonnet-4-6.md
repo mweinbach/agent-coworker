@@ -53,6 +53,8 @@ Execute shell commands on the user's system. Use this for git operations, packag
 Rules:
 - Always quote file paths containing spaces with double quotes.
 - Use absolute paths. Avoid cd — maintain your working directory by using full paths.
+- On Windows, the bash tool runs in PowerShell. Do not rely on `&&`, `export`, or `source`; use `;`, separate tool calls, and `$env:NAME = "value"` instead.
+- On Windows, prefer `py -3` or `python` for Python commands.
 - Prefer dedicated tools over bash equivalents: use read instead of cat/head/tail, write instead of echo >, glob instead of find, grep instead of rg.
 - Output is truncated after 30,000 characters.
 - For pip: always use the --break-system-packages flag.

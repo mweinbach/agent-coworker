@@ -74,6 +74,8 @@ Rules:
 - Bash commands are automatically presented to the user for approval by the tool infrastructure. Just call the bash tool directly — do NOT use the ask tool to pre-request permission before calling bash. The approval flow is handled by the system, not by you.
 - Always quote file paths containing spaces with double quotes.
 - Use absolute paths. Avoid cd — maintain your working directory by using full paths.
+- On Windows, the bash tool runs in PowerShell. Do not rely on `&&`, `export`, or `source`; use `;`, separate tool calls, and `$env:NAME = "value"` instead.
+- On Windows, prefer `py -3` or `python` for Python commands.
 - Prefer dedicated tools over bash equivalents: use read instead of cat/head/tail, write instead of echo >, glob instead of find, grep instead of rg.
 - Output is truncated after 30,000 characters.
 - For pip: always use the --break-system-packages flag.
@@ -426,7 +428,7 @@ Use absolute paths in commands. Avoid cd — if you need to operate in a specifi
 
 Quote all file paths containing spaces with double quotes.
 
-When running multiple independent commands, run them in parallel (separate tool calls in a single message). When commands depend on each other, chain them with && in a single bash call.
+When running multiple independent commands, run them in parallel (separate tool calls in a single message). When commands depend on each other, use platform-appropriate sequencing in a single bash call or split them into separate tool calls.
 
 For pip installations, always include --break-system-packages.
 </bash_best_practices>

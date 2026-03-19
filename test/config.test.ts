@@ -122,6 +122,26 @@ describe("loadConfig", () => {
     expect(cfg.model).toBe("gpt-5.4");
   });
 
+  test("built-in skills stay enabled by default and only disable on explicit opt-out", async () => {
+    const { cwd, home } = await makeTmpDirs();
+
+    const cfg = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: {},
+    });
+    expect(cfg.skillsDirs).toContain(path.join(repoRoot(), "skills"));
+
+    const disabled = await loadConfig({
+      cwd,
+      homedir: home,
+      builtInDir: repoRoot(),
+      env: { COWORK_DISABLE_BUILTIN_SKILLS: "1" },
+    });
+    expect(disabled.skillsDirs).not.toContain(path.join(repoRoot(), "skills"));
+  });
+
   test("accepts arbitrary LM Studio model ids discovered at runtime", async () => {
     const { cwd, home } = await makeTmpDirs();
 

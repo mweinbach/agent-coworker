@@ -439,12 +439,33 @@ describe("Server Startup", () => {
     }
   });
 
-  test("shared startup omits built-in skills from active runtime config", async () => {
+  test("shared startup keeps built-in skills as the final runtime fallback", async () => {
     const tmpDir = await makeTmpProject();
-    const { server, config } = await startAgentServer(serverOpts(tmpDir));
+    const { server, config, system } = await startAgentServer(serverOpts(tmpDir));
+    try {
+      expect(config.skillsDirs).toHaveLength(4);
+      expect(config.skillsDirs[1]).toBe(path.join(tmpDir, ".cowork", "skills"));
+      expect(config.skillsDirs[3]).toBe(path.join(config.builtInDir, "skills"));
+      expect(system).toContain("## Available Skills");
+      expect(system).toContain("**slides**");
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("shared startup still honors explicit built-in skill opt-out", async () => {
+    const tmpDir = await makeTmpProject();
+    const { server, config } = await startAgentServer(serverOpts(tmpDir, {
+      env: {
+        AGENT_WORKING_DIR: tmpDir,
+        AGENT_PROVIDER: "google",
+        COWORK_SKIP_DEFAULT_SKILLS_BOOTSTRAP: "1",
+        COWORK_DISABLE_BUILTIN_SKILLS: "1",
+      },
+    }));
     try {
       expect(config.skillsDirs).toHaveLength(3);
-      expect(config.skillsDirs[1]).toBe(path.join(tmpDir, ".cowork", "skills"));
+      expect(config.skillsDirs).not.toContain(path.join(config.builtInDir, "skills"));
     } finally {
       server.stop();
     }

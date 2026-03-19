@@ -233,12 +233,8 @@ export async function startAgentServer(
   const hostname = opts.hostname ?? "127.0.0.1";
   const rawEnv = opts.env ?? { ...process.env, AGENT_WORKING_DIR: opts.cwd };
   const env: Record<string, string | undefined> & {
-    COWORK_DISABLE_BUILTIN_SKILLS: string;
     COWORK_BUILTIN_DIR?: string;
-  } = {
-    ...rawEnv,
-    COWORK_DISABLE_BUILTIN_SKILLS: rawEnv.COWORK_DISABLE_BUILTIN_SKILLS ?? "1",
-  };
+  } = { ...rawEnv };
 
   await ensureDefaultGlobalSkillsReady({
     homedir: opts.homedir,

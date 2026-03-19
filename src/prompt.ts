@@ -280,6 +280,9 @@ function buildSkillPolicySection(skillNames: string, skillExamples: string, conf
     "- Do not write build scripts or output artifacts for those domains before loading the corresponding skill.",
     "- If the task spans multiple deliverable domains, load each required skill before creating files.",
     "- Never claim a skill was loaded unless the `skill` tool call actually occurred in this run.",
+    "- If the `slides` skill is available and the task is presentation authoring, use that path instead of defaulting to ad hoc `python-pptx` generation. `python-pptx` is an inspection or last-resort fallback, not the default deck-authoring path.",
+    "- Do not count search result pages, article URLs, provider-native search metadata, or HTML previews as images. Only claim images were added after direct image assets were downloaded or local image files were read.",
+    "- Placeholder, stock stand-ins, or unrelated fallback images are degraded output and must be disclosed explicitly instead of being presented as if they satisfy the original image request.",
     "- For one-off deliverables, keep the user's workspace focused on the requested artifacts and source files instead of scaffolding a disposable package-managed project.",
     "- Do not create `package.json`, `package-lock.json`, `bun.lock`, `yarn.lock`, `pnpm-lock.yaml`, or `node_modules` in the user's deliverable folder unless the user explicitly asked for a reusable Node project or that folder is already an existing package-managed project.",
     "- If extra JavaScript dependencies are genuinely unavoidable, stage them outside the user's deliverable folder (for example a shared Cowork cache) instead of next to the files the user asked for.",
@@ -288,6 +291,17 @@ function buildSkillPolicySection(skillNames: string, skillExamples: string, conf
     "",
     "Examples:",
     skillExamples,
+  ].join("\n");
+}
+
+function buildShellExecutionPolicySection(): string {
+  return [
+    "## Shell Execution Policy",
+    "",
+    "- On Windows, the `bash` tool actually runs PowerShell. Prefer `pwsh` semantics when available and assume a fallback to `powershell.exe`.",
+    "- On Windows, do not rely on `&&`, `export`, or `source`. Use PowerShell-safe sequencing such as `;`, separate tool calls, and `$env:NAME = \"value\"`.",
+    "- On Windows, prefer `py -3` or `python` for Python commands.",
+    "- When commands depend on each other, use platform-appropriate sequencing instead of assuming Unix shell chaining works everywhere.",
   ].join("\n");
 }
 
@@ -378,6 +392,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = normalizeLegacySpawnAgentGuidance(prompt);
 
   prompt += `\n\n${buildSkillPolicySection(vars.skillNames, vars.skillExamples, config)}`;
+  prompt += `\n\n${buildShellExecutionPolicySection()}`;
 
   if (skills.length > 0) {
     const list = skills

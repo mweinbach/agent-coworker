@@ -10,7 +10,7 @@ import type { ToolContext } from "../src/tools/context";
 import { createReadTool } from "../src/tools/read";
 import { createWriteTool } from "../src/tools/write";
 import { createEditTool } from "../src/tools/edit";
-import { createBashTool } from "../src/tools/bash";
+import { __internal as bashInternal, createBashTool } from "../src/tools/bash";
 import { createGlobTool } from "../src/tools/glob";
 import { createGrepTool } from "../src/tools/grep";
 import { createWebSearchTool } from "../src/tools/webSearch";
@@ -496,6 +496,52 @@ describe("edit tool", () => {
 // ---------------------------------------------------------------------------
 
 describe("bash tool", () => {
+  test("advertises Windows PowerShell guidance in the tool description", async () => {
+    const dir = await tmpDir();
+    const t: any = createBashTool(makeCtx(dir));
+    expect(t.description).toContain("preferring `pwsh` and falling back to `powershell.exe`");
+    expect(t.description).toContain("do not rely on `&&`, `export`, or `source`");
+    expect(t.description).toContain("prefer `py -3` or `python`");
+  });
+
+  test("prefers pwsh before powershell.exe on Windows", async () => {
+    const seen: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/tmp",
+      platform: "win32",
+      execRunner: async (file: string) => {
+        seen.push(file);
+        if (file === "pwsh") {
+          return { stdout: "hi\n", stderr: "", exitCode: 0 };
+        }
+        return { stdout: "", stderr: "", exitCode: 1, errorCode: "ENOENT" };
+      },
+    });
+
+    expect(seen).toEqual(["pwsh"]);
+    expect(result.stdout.trim()).toBe("hi");
+  });
+
+  test("falls back to powershell.exe when pwsh is unavailable", async () => {
+    const seen: string[] = [];
+    const result = await bashInternal.runShellCommandWithExec({
+      command: "echo hi",
+      cwd: "C:/tmp",
+      platform: "win32",
+      execRunner: async (file: string) => {
+        seen.push(file);
+        if (file === "pwsh") {
+          return { stdout: "", stderr: "", exitCode: 1, errorCode: "ENOENT" };
+        }
+        return { stdout: "hi\n", stderr: "", exitCode: 0 };
+      },
+    });
+
+    expect(seen).toEqual(["pwsh", "powershell.exe"]);
+    expect(result.stdout.trim()).toBe("hi");
+  });
+
   test("executes simple command and returns stdout", async () => {
     const dir = await tmpDir();
     const t: any = createBashTool(makeCtx(dir));
@@ -3102,6 +3148,34 @@ describe("skill tool", () => {
     expect(res).toContain("## Cowork Addendum");
     expect(res).toContain("do not create `package.json`, lockfiles, or `node_modules`");
     expect(res).toContain("shared Cowork cache");
+  });
+
+  test("loads built-in slides when project/global/user skill dirs are empty", async () => {
+    const dir = await tmpDir();
+    const projectSkills = path.join(dir, "project-skills");
+    const globalSkills = path.join(dir, "global-skills");
+    const userSkills = path.join(dir, "user-skills");
+    const builtInSkills = path.join(dir, "built-in-skills");
+    await fs.mkdir(projectSkills, { recursive: true });
+    await fs.mkdir(globalSkills, { recursive: true });
+    await fs.mkdir(userSkills, { recursive: true });
+    await fs.mkdir(path.join(builtInSkills, "slides"), { recursive: true });
+    await fs.writeFile(
+      path.join(builtInSkills, "slides", "SKILL.md"),
+      skillDoc("slides", "Built-in slides skill.", "# Slides Skill\nBuilt-in deck workflow."),
+      "utf-8"
+    );
+
+    const config = makeConfig(dir, {
+      skillsDirs: [projectSkills, globalSkills, userSkills, builtInSkills],
+    });
+    const ctx = makeCtx(dir);
+    ctx.config = config;
+
+    const t: any = createSkillTool(ctx);
+    const res: string = await t.execute({ skillName: "slides" });
+    expect(res).toContain("Built-in deck workflow.");
+    expect(res).toContain("## Cowork Addendum");
   });
 
   test("returns not found when skillsDirs is empty", async () => {

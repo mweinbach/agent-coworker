@@ -1429,6 +1429,260 @@ describe("desktop transcript feed mapping", () => {
     });
   });
 
+  test("keeps repeated google interaction loops inline within the same persisted turn", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:00.000Z",
+        threadId: "thread-1",
+        direction: "client",
+        payload: { type: "user_message", text: "Create the report" },
+      },
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-loop",
+          index: 0,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: { event_type: "interaction.start" },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:01.100Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-loop",
+          index: 1,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: { event_type: "content.start", index: 0, content: { type: "thought" } },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:01.200Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-loop",
+          index: 2,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: {
+            event_type: "content.delta",
+            index: 0,
+            delta: { type: "thought_summary", content: { type: "text", text: "Planning the report." } },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:01.300Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-loop",
+          index: 3,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: { event_type: "content.stop", index: 0 },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:01.400Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-loop",
+          index: 4,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: {
+            event_type: "content.delta",
+            index: 1,
+            delta: {
+              type: "function_call",
+              id: "call_1",
+              name: "write",
+              arguments: { filePath: "report.md" },
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:01.500Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-loop",
+          index: 5,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: { event_type: "content.stop", index: 1 },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-loop",
+          index: 6,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: { event_type: "interaction.start" },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.100Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-loop",
+          index: 7,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: { event_type: "content.start", index: 0, content: { type: "thought" } },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.200Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-loop",
+          index: 8,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: {
+            event_type: "content.delta",
+            index: 0,
+            delta: { type: "thought_summary", content: { type: "text", text: "Verifying the output." } },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.300Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-loop",
+          index: 9,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: { event_type: "content.stop", index: 0 },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.400Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-loop",
+          index: 10,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: {
+            event_type: "content.delta",
+            index: 1,
+            delta: {
+              type: "function_call",
+              id: "call_2",
+              name: "glob",
+              arguments: { pattern: "report.md" },
+            },
+          },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.500Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_raw",
+          sessionId: "thread-session",
+          turnId: "turn-google-loop",
+          index: 11,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          format: "google-interactions-v1",
+          normalizerVersion: 1,
+          event: { event_type: "content.stop", index: 1 },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: { type: "assistant_message", text: "Done." },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    const contentKinds = feed
+      .filter((item) => item.kind === "reasoning" || item.kind === "tool" || item.kind === "message")
+      .map((item) => item.kind);
+
+    expect(contentKinds).toEqual(["message", "reasoning", "tool", "reasoning", "tool", "message"]);
+
+    const reasoning = feed.filter((item) => item.kind === "reasoning");
+    expect(reasoning.map((item) => item.text)).toEqual([
+      "Planning the report.",
+      "Verifying the output.",
+    ]);
+
+    const tools = feed.filter((item) => item.kind === "tool");
+    if (tools[0]?.kind !== "tool" || tools[1]?.kind !== "tool") {
+      throw new Error("Expected tool items");
+    }
+    expect(tools.map((item) => item.name)).toEqual(["write", "glob"]);
+  });
+
   test("keeps separate feed cards for distinct native web search calls", () => {
     const transcript: TranscriptEvent[] = [
       {

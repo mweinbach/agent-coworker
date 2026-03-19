@@ -442,4 +442,43 @@ describe("modelStreamReplay", () => {
       part: { toolCallId: "call_1", toolName: "webFetch", input: { url: "stale" } },
     })).toBe(true);
   });
+
+  test("treats repeated google interaction.start events as step boundaries within the same turn", () => {
+    const runtime = createModelStreamReplayRuntime();
+    const turnId = "turn-google-loop";
+
+    expect(replayModelStreamRawEvent(runtime, {
+      type: "model_stream_raw",
+      sessionId: "session-5",
+      turnId,
+      index: 0,
+      provider: "google",
+      model: "gemini-3.1-pro-preview-customtools",
+      format: "google-interactions-v1",
+      normalizerVersion: 1,
+      event: {
+        event_type: "interaction.start",
+      },
+    })).toEqual([{
+      kind: "turn_start",
+      turnId,
+    }]);
+
+    expect(replayModelStreamRawEvent(runtime, {
+      type: "model_stream_raw",
+      sessionId: "session-5",
+      turnId,
+      index: 1,
+      provider: "google",
+      model: "gemini-3.1-pro-preview-customtools",
+      format: "google-interactions-v1",
+      normalizerVersion: 1,
+      event: {
+        event_type: "interaction.start",
+      },
+    })).toEqual([{
+      kind: "turn_start",
+      turnId,
+    }]);
+  });
 });

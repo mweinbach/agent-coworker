@@ -121,18 +121,23 @@ export function replayModelStreamRawEvent(
   runtime: ModelStreamReplayRuntime,
   evt: ModelStreamRawEvent,
 ): ModelStreamUpdate[] {
-  const directUpdates = mapModelStreamRawEvent(evt);
-
   if (evt.format === "google-interactions-v1") {
+    const rawEvent = evt.event as Record<string, unknown>;
+    const eventType = typeof rawEvent.event_type === "string" ? rawEvent.event_type : null;
+    const directUpdates: ModelStreamUpdate[] =
+      eventType === "interaction.start"
+        ? [{ kind: "turn_start", turnId: evt.turnId }]
+        : mapModelStreamRawEvent(evt);
+
     try {
       const state = getOrCreateGoogleState(runtime, evt.turnId);
-      processGoogleInteractionsStreamEvent(evt.event as Record<string, unknown>, state.contentBlocks, state.providerToolCallsById);
+      processGoogleInteractionsStreamEvent(rawEvent, state.contentBlocks, state.providerToolCallsById);
       const updates = [
         ...directUpdates,
         ...mapRawPartsToUpdates(
           evt,
           mapGoogleInteractionsEventToStreamParts(
-            evt.event as Record<string, unknown>,
+            rawEvent,
             state.contentBlocks,
             state.providerToolCallsById,
           ),
@@ -149,6 +154,7 @@ export function replayModelStreamRawEvent(
     }
   }
 
+  const directUpdates = mapModelStreamRawEvent(evt);
   const projector = getOrCreateProjector(runtime, evt);
   const piEvents: Array<Record<string, unknown>> = [];
 

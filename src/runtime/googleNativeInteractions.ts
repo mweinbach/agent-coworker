@@ -541,6 +541,22 @@ function buildNativeGoogleToolResultOutput(
   throw new Error(`Unknown native Google tool: ${name}`);
 }
 
+function ensureThinkingBlock(
+  contentBlocks: Map<number, AssistantContentBlock>,
+  index: number,
+): Extract<AssistantContentBlock, { type: "thinking" }> | null {
+  const existing = contentBlocks.get(index);
+  if (existing?.type === "thinking") return existing;
+  if (existing) return null;
+
+  const block: Extract<AssistantContentBlock, { type: "thinking" }> = {
+    type: "thinking",
+    thinking: "",
+  };
+  contentBlocks.set(index, block);
+  return block;
+}
+
 // ---------------------------------------------------------------------------
 // Tool conversion: runtime tools → Interactions API tools
 // ---------------------------------------------------------------------------
@@ -707,11 +723,12 @@ function processStreamEvent(
         ...(asNonEmptyString(content.signature) ? { thoughtSignature: asNonEmptyString(content.signature) } : {}),
       });
     } else if (contentType === "thought") {
-      contentBlocks.set(index, {
-        type: "thinking",
-        thinking: "",
-        ...(asNonEmptyString(content.signature) ? { thinkingSignature: asNonEmptyString(content.signature) } : {}),
-      });
+      const block = ensureThinkingBlock(contentBlocks, index);
+      if (!block) return;
+      const signature = asNonEmptyString(content.signature);
+      if (signature) {
+        block.thinkingSignature = signature;
+      }
     } else if (isNativeGoogleToolCallContentType(contentType)) {
       const name = nativeToolNameFromContentType(contentType);
       if (!name) return;
@@ -844,15 +861,17 @@ function processStreamEvent(
         });
       }
     } else if (deltaType === "thought_summary") {
-      if (existing?.type === "thinking") {
+      const thinkingBlock = ensureThinkingBlock(contentBlocks, index);
+      if (thinkingBlock) {
         const summaryContent = asRecord(delta.content);
         if (summaryContent?.type === "text" && typeof summaryContent.text === "string") {
-          existing.thinking += summaryContent.text;
+          thinkingBlock.thinking += summaryContent.text;
         }
       }
     } else if (deltaType === "thought_signature") {
-      if (existing?.type === "thinking" && typeof delta.signature === "string") {
-        existing.thinkingSignature = delta.signature;
+      const thinkingBlock = ensureThinkingBlock(contentBlocks, index);
+      if (thinkingBlock && typeof delta.signature === "string") {
+        thinkingBlock.thinkingSignature = delta.signature;
       }
     }
     return;

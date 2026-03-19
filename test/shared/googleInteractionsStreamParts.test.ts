@@ -6,6 +6,45 @@ import {
 } from "../../src/shared/googleInteractionsStreamParts";
 
 describe("googleInteractionsStreamParts", () => {
+  test("preserves thought summaries that arrive before thought start", () => {
+    const contentBlocks = new Map();
+    const providerToolCallsById = new Map();
+
+    processGoogleInteractionsStreamEvent(
+      {
+        event_type: "content.delta",
+        index: 0,
+        delta: { type: "thought_summary", content: { type: "text", text: "Buffered reasoning." } },
+      },
+      contentBlocks,
+      providerToolCallsById,
+    );
+    processGoogleInteractionsStreamEvent(
+      {
+        event_type: "content.delta",
+        index: 0,
+        delta: { type: "thought_signature", signature: "sig_buffered" },
+      },
+      contentBlocks,
+      providerToolCallsById,
+    );
+    processGoogleInteractionsStreamEvent(
+      {
+        event_type: "content.start",
+        index: 0,
+        content: { type: "thought" },
+      },
+      contentBlocks,
+      providerToolCallsById,
+    );
+
+    expect(contentBlocks.get(0)).toEqual({
+      type: "thinking",
+      thinking: "Buffered reasoning.",
+      thinkingSignature: "sig_buffered",
+    });
+  });
+
   test("preserves singleton native URL context result objects", () => {
     const contentBlocks = new Map();
     const providerToolCallsById = new Map();

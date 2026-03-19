@@ -580,4 +580,36 @@ describe("AgentControl persisted child control", () => {
     expect(disposeBinding).toHaveBeenCalledWith(expect.anything(), "parent closed child agent");
     expect(summary.executionState).toBe("closed");
   });
+
+  test("cancelAll continues cancelling siblings after one child throws", () => {
+    const config = makeConfig();
+    const firstChild = makeChildSession(config);
+    firstChild.id = "child-err";
+    firstChild.cancel = mock(() => {
+      throw new Error("cancel exploded");
+    });
+    const secondChild = makeChildSession(config);
+    secondChild.id = "child-ok";
+    const emitParentLog = mock(() => {});
+    const control = new AgentControl({
+      sessionBindings: new Map([
+        ["child-err", { session: firstChild, socket: null }],
+        ["child-ok", { session: secondChild, socket: null }],
+      ]) as Map<string, SessionBinding>,
+      sessionDb: null,
+      getConnectedProviders: async () => ["openai"],
+      buildSession: (() => {
+        throw new Error("unused");
+      }) as any,
+      loadAgentPrompt: async () => "child system prompt",
+      disposeBinding: () => {},
+      emitParentAgentStatus: () => {},
+      emitParentLog,
+    });
+
+    expect(() => control.cancelAll("root-1")).not.toThrow();
+    expect(firstChild.cancel).toHaveBeenCalledTimes(1);
+    expect(secondChild.cancel).toHaveBeenCalledTimes(1);
+    expect(emitParentLog).toHaveBeenCalledWith("root-1", "Failed to cancel child agent child-err: cancel exploded");
+  });
 });

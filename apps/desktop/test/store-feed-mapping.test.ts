@@ -84,7 +84,7 @@ describe("desktop transcript feed mapping", () => {
     expect(tool.state).toBe("output-available");
   });
 
-  test("keeps streamed reasoning deduped across repeated start boundaries in the same turn", () => {
+  test("dedupes final reasoning against streamed reasoning from the latest step in the same turn", () => {
     const transcript: TranscriptEvent[] = [
       {
         ts: "2024-01-01T00:00:00.000Z",
@@ -168,7 +168,7 @@ describe("desktop transcript feed mapping", () => {
         },
       },
       {
-        ts: "2024-01-01T00:00:06.000Z",
+        ts: "2024-01-01T00:00:05.500Z",
         threadId: "thread-1",
         direction: "server",
         payload: {
@@ -176,6 +176,21 @@ describe("desktop transcript feed mapping", () => {
           sessionId: "thread-session",
           turnId: "turn-google-1",
           index: 5,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          partType: "reasoning_delta",
+          part: { id: "s1", mode: "reasoning", text: "Verifying the final conference details." },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:06.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-google-1",
+          index: 6,
           provider: "google",
           model: "gemini-3.1-pro-preview-customtools",
           partType: "tool_call",
@@ -190,7 +205,7 @@ describe("desktop transcript feed mapping", () => {
           type: "model_stream_chunk",
           sessionId: "thread-session",
           turnId: "turn-google-1",
-          index: 6,
+          index: 7,
           provider: "google",
           model: "gemini-3.1-pro-preview-customtools",
           partType: "tool_result",
@@ -215,13 +230,93 @@ describe("desktop transcript feed mapping", () => {
     const reasoning = feed.filter((item) => item.kind === "reasoning");
     const tools = feed.filter((item) => item.kind === "tool");
 
-    expect(reasoning).toHaveLength(1);
-    expect(reasoning[0]?.text).toBe("Searching for the latest GTC details.");
+    expect(reasoning).toHaveLength(2);
+    expect(reasoning.map((item) => item.text)).toEqual([
+      "Searching for the latest GTC details.",
+      "Verifying the final conference details.",
+    ]);
     if (tools[0]?.kind !== "tool" || tools[1]?.kind !== "tool") throw new Error("Expected tool feed items");
     expect(tools).toHaveLength(2);
     expect(tools.map((tool) => tool.args)).toEqual([{ query: "NVIDIA GTC 2026" }, { query: "NVIDIA GTC 2027" }]);
     expect(tools.map((tool) => tool.result)).toEqual(["result", "result-2"]);
-    expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "tool", "tool", "message"]);
+    expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "tool", "reasoning", "tool", "message"]);
+  });
+
+  test("allows final reasoning after a repeated start when the latest step had no streamed reasoning", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:00.000Z",
+        threadId: "thread-1",
+        direction: "client",
+        payload: { type: "user_message", text: "tell me about gtc this year" },
+      },
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-google-2",
+          index: 0,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          partType: "start",
+          part: {},
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-google-2",
+          index: 1,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          partType: "reasoning_delta",
+          part: { id: "s0", mode: "reasoning", text: "Initial research pass." },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-google-2",
+          index: 2,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          partType: "start",
+          part: {},
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:04.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: { type: "reasoning", kind: "reasoning", text: "Final synthesis after the second step." },
+      },
+      {
+        ts: "2024-01-01T00:00:05.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: { type: "assistant_message", text: "Here is the summary." },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    const reasoning = feed.filter((item) => item.kind === "reasoning");
+
+    expect(reasoning).toHaveLength(2);
+    expect(reasoning.map((item) => item.text)).toEqual([
+      "Initial research pass.",
+      "Final synthesis after the second step.",
+    ]);
   });
 
   test("preserves transcript event order instead of sorting by timestamps", () => {

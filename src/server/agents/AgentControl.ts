@@ -233,7 +233,12 @@ export class AgentControl {
     for (const binding of this.deps.sessionBindings.values()) {
       const session = binding.session;
       if (!session?.isAgentOf(parentSessionId)) continue;
-      session.cancel();
+      try {
+        session.cancel();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.deps.emitParentLog(parentSessionId, `Failed to cancel child agent ${session.id}: ${message}`);
+      }
     }
   }
 }

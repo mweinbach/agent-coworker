@@ -982,6 +982,41 @@ describe("google native interactions request building", () => {
     expect(block.thinkingSignature).toBe("sig_final");
   });
 
+  test("processStreamEvent preserves thought summaries that arrive before thought start", () => {
+    const blocks = new Map();
+
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.delta",
+        index: 0,
+        delta: { type: "thought_summary", content: { type: "text", text: "Buffered reasoning." } },
+      },
+      blocks,
+    );
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.delta",
+        index: 0,
+        delta: { type: "thought_signature", signature: "sig_buffered" },
+      },
+      blocks,
+    );
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.start",
+        index: 0,
+        content: { type: "thought" },
+      },
+      blocks,
+    );
+
+    const block = blocks.get(0);
+    expect(block).toBeDefined();
+    expect(block.type).toBe("thinking");
+    expect(block.thinking).toBe("Buffered reasoning.");
+    expect(block.thinkingSignature).toBe("sig_buffered");
+  });
+
   test("mapGoogleEventToStreamParts emits normalized model stream parts", () => {
     const blocks = new Map();
 

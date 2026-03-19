@@ -183,6 +183,7 @@ function clearStepLocalModelStreamRuntime(runtime: ThreadModelStreamRuntime) {
   runtime.reasoningItemIdByStream.clear();
   runtime.reasoningTextByStream.clear();
   runtime.lastAssistantTurnId = null;
+  runtime.lastReasoningTurnId = null;
 }
 
 function clearStepLocalToolRuntime(runtime: ThreadModelStreamRuntime) {

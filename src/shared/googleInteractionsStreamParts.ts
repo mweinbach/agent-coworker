@@ -158,6 +158,22 @@ function buildNativeGoogleToolResultOutput(
   };
 }
 
+function ensureThinkingBlock(
+  contentBlocks: Map<number, GoogleInteractionsContentBlock>,
+  index: number,
+): Extract<GoogleInteractionsContentBlock, { type: "thinking" }> | null {
+  const existing = contentBlocks.get(index);
+  if (existing?.type === "thinking") return existing;
+  if (existing) return null;
+
+  const block: Extract<GoogleInteractionsContentBlock, { type: "thinking" }> = {
+    type: "thinking",
+    thinking: "",
+  };
+  contentBlocks.set(index, block);
+  return block;
+}
+
 function streamIdForIndex(index: number): string {
   return `s${index}`;
 }
@@ -205,11 +221,12 @@ export function processGoogleInteractionsStreamEvent(
         ...(asNonEmptyString(content.signature) ? { thoughtSignature: asNonEmptyString(content.signature) } : {}),
       });
     } else if (contentType === "thought") {
-      contentBlocks.set(index, {
-        type: "thinking",
-        thinking: "",
-        ...(asNonEmptyString(content.signature) ? { thinkingSignature: asNonEmptyString(content.signature) } : {}),
-      });
+      const block = ensureThinkingBlock(contentBlocks, index);
+      if (!block) return;
+      const signature = asNonEmptyString(content.signature);
+      if (signature) {
+        block.thinkingSignature = signature;
+      }
     } else if (isNativeGoogleToolCallContentType(contentType)) {
       const name = nativeToolNameFromContentType(contentType);
       if (!name) return;
@@ -344,15 +361,17 @@ export function processGoogleInteractionsStreamEvent(
       });
     }
   } else if (deltaType === "thought_summary") {
-    if (existing?.type === "thinking") {
+    const thinkingBlock = ensureThinkingBlock(contentBlocks, index);
+    if (thinkingBlock) {
       const summaryContent = asRecord(delta.content);
       if (summaryContent?.type === "text" && typeof summaryContent.text === "string") {
-        existing.thinking += summaryContent.text;
+        thinkingBlock.thinking += summaryContent.text;
       }
     }
   } else if (deltaType === "thought_signature") {
-    if (existing?.type === "thinking" && typeof delta.signature === "string") {
-      existing.thinkingSignature = delta.signature;
+    const thinkingBlock = ensureThinkingBlock(contentBlocks, index);
+    if (thinkingBlock && typeof delta.signature === "string") {
+      thinkingBlock.thinkingSignature = delta.signature;
     }
   }
 }

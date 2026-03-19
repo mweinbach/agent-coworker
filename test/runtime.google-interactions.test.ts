@@ -999,6 +999,93 @@ describe("google native interactions request building", () => {
     ]);
   });
 
+  test("processStreamEvent keeps the first emitted native provider tool id stable", () => {
+    const blocks = new Map();
+    const providerToolCallsById = new Map();
+
+    const startEvent = {
+      event_type: "content.start",
+      index: 0,
+      content: {
+        type: "google_search_call",
+      },
+    };
+    googleNativeInternal.processStreamEvent(startEvent, blocks, providerToolCallsById);
+
+    const startBlock = blocks.get(0);
+    expect(startBlock).toBeDefined();
+    expect(startBlock.type).toBe("providerToolCall");
+    const fallbackId = startBlock.id;
+
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(
+      startEvent,
+      blocks,
+      providerToolCallsById,
+    )).toEqual([
+      { type: "tool-input-start", id: fallbackId, toolName: "nativeWebSearch", providerExecuted: true },
+    ]);
+
+    const deltaEvent = {
+      event_type: "content.delta",
+      index: 0,
+      delta: {
+        type: "google_search_call",
+        id: "gs_real",
+        arguments: { queries: ["latest Gemini announcements"] },
+      },
+    };
+    googleNativeInternal.processStreamEvent(deltaEvent, blocks, providerToolCallsById);
+
+    const block = blocks.get(0);
+    expect(block).toBeDefined();
+    expect(block.type).toBe("providerToolCall");
+    expect(block.id).toBe(fallbackId);
+    expect(block.arguments).toEqual({ queries: ["latest Gemini announcements"] });
+
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(
+      deltaEvent,
+      blocks,
+      providerToolCallsById,
+    )).toEqual([
+      { type: "tool-input-delta", id: fallbackId, delta: "{\"queries\":[\"latest Gemini announcements\"]}" },
+    ]);
+
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.start",
+        index: 1,
+        content: {
+          type: "google_search_result",
+          call_id: "gs_real",
+          result: [{ search_suggestions: "Latest Gemini announcements" }],
+        },
+      },
+      blocks,
+      providerToolCallsById,
+    );
+
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(
+      { event_type: "content.stop", index: 1 },
+      blocks,
+      providerToolCallsById,
+    )).toEqual([
+      {
+        type: "tool-result",
+        toolCallId: fallbackId,
+        toolName: "nativeWebSearch",
+        output: {
+          provider: "google",
+          status: "completed",
+          callId: fallbackId,
+          queries: ["latest Gemini announcements"],
+          results: [{ search_suggestions: "Latest Gemini announcements" }],
+          raw: [{ search_suggestions: "Latest Gemini announcements" }],
+        },
+        providerExecuted: true,
+      },
+    ]);
+  });
+
   test("processStreamEvent handles thought content with signature", () => {
     const blocks = new Map();
 

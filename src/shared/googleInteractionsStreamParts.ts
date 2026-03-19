@@ -21,6 +21,7 @@ export type GoogleInteractionsContentBlock =
     };
 
 export type GoogleInteractionsProviderToolCallState = {
+  emittedId: string;
   name: NativeGoogleToolName;
   arguments: Record<string, unknown>;
 };
@@ -180,14 +181,19 @@ function streamIdForIndex(index: number): string {
 
 function rememberProviderToolCall(
   providerToolCallsById: Map<string, GoogleInteractionsProviderToolCallState>,
-  id: string,
+  ids: readonly string[],
+  emittedId: string,
   name: NativeGoogleToolName,
   argumentsRecord: Record<string, unknown>,
 ): void {
-  providerToolCallsById.set(id, {
+  const state: GoogleInteractionsProviderToolCallState = {
+    emittedId,
     name,
     arguments: { ...argumentsRecord },
-  });
+  };
+  for (const id of new Set(ids)) {
+    providerToolCallsById.set(id, state);
+  }
 }
 
 export function processGoogleInteractionsStreamEvent(
@@ -239,16 +245,16 @@ export function processGoogleInteractionsStreamEvent(
         arguments: argumentsRecord,
         ...(asNonEmptyString(content.signature) ? { thoughtSignature: asNonEmptyString(content.signature) } : {}),
       });
-      rememberProviderToolCall(providerToolCallsById, id, name, argumentsRecord);
+      rememberProviderToolCall(providerToolCallsById, [id], id, name, argumentsRecord);
     } else if (isNativeGoogleToolResultContentType(contentType)) {
-      const name =
-        providerToolCallsById.get(asNonEmptyString(content.call_id) ?? "")?.name
-        ?? nativeToolNameFromContentType(contentType);
       const callId = asNonEmptyString(content.call_id);
-      if (!name || !callId) return;
+      const providerToolCall = providerToolCallsById.get(callId ?? "");
+      const name = providerToolCall?.name ?? nativeToolNameFromContentType(contentType);
+      const emittedCallId = providerToolCall?.emittedId ?? callId;
+      if (!name || !callId || !emittedCallId) return;
       contentBlocks.set(index, {
         type: "providerToolResult",
-        callId,
+        callId: emittedCallId,
         name,
         result: content.result,
         isError: content.is_error === true,
@@ -285,10 +291,6 @@ export function processGoogleInteractionsStreamEvent(
       if (deltaName) {
         existing.name = deltaName;
       }
-      const deltaId = asNonEmptyString(delta.id);
-      if (deltaId) {
-        existing.id = deltaId;
-      }
       const deltaSignature = asNonEmptyString(delta.signature);
       if (deltaSignature) {
         existing.thoughtSignature = deltaSignature;
@@ -311,9 +313,6 @@ export function processGoogleInteractionsStreamEvent(
     if (!name) return;
     if (existing?.type === "providerToolCall") {
       const deltaId = asNonEmptyString(delta.id);
-      if (deltaId) {
-        existing.id = deltaId;
-      }
       const deltaSignature = asNonEmptyString(delta.signature);
       if (deltaSignature) {
         existing.thoughtSignature = deltaSignature;
@@ -322,7 +321,13 @@ export function processGoogleInteractionsStreamEvent(
       if (deltaArgs) {
         Object.assign(existing.arguments, deltaArgs);
       }
-      rememberProviderToolCall(providerToolCallsById, existing.id, existing.name, existing.arguments);
+      rememberProviderToolCall(
+        providerToolCallsById,
+        deltaId && deltaId !== existing.id ? [existing.id, deltaId] : [existing.id],
+        existing.id,
+        existing.name,
+        existing.arguments,
+      );
     } else {
       const id = asNonEmptyString(delta.id) ?? `provider_tool_${Date.now()}_${index}`;
       const argumentsRecord = asRecord(delta.arguments) ?? {};
@@ -333,15 +338,16 @@ export function processGoogleInteractionsStreamEvent(
         arguments: argumentsRecord,
         ...(asNonEmptyString(delta.signature) ? { thoughtSignature: asNonEmptyString(delta.signature) } : {}),
       });
-      rememberProviderToolCall(providerToolCallsById, id, name, argumentsRecord);
+      rememberProviderToolCall(providerToolCallsById, [id], id, name, argumentsRecord);
     }
   } else if (isNativeGoogleToolResultContentType(deltaType)) {
     const callId = asNonEmptyString(delta.call_id);
     const providerToolCall = callId ? providerToolCallsById.get(callId) : undefined;
     const name = providerToolCall?.name ?? nativeToolNameFromContentType(deltaType);
-    if (!name || !callId) return;
+    const emittedCallId = providerToolCall?.emittedId ?? callId;
+    if (!name || !callId || !emittedCallId) return;
     if (existing?.type === "providerToolResult") {
-      existing.callId = callId;
+      existing.callId = emittedCallId;
       if (delta.result !== undefined) {
         existing.result = delta.result;
       }
@@ -353,7 +359,7 @@ export function processGoogleInteractionsStreamEvent(
     } else {
       contentBlocks.set(index, {
         type: "providerToolResult",
-        callId,
+        callId: emittedCallId,
         name,
         result: delta.result,
         isError: delta.is_error === true,

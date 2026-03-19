@@ -246,6 +246,52 @@ function turnFromAssistantMessage(message: ModelMessage): InteractionTurn | null
         arguments: args,
         ...(signature ? { signature } : {}),
       });
+      continue;
+    }
+
+    if (partType === "providerToolCall") {
+      const toolCallId = asNonEmptyString(record.id) ?? asNonEmptyString(record.toolCallId);
+      const toolName = asNonEmptyString(record.name) ?? asNonEmptyString(record.toolName);
+      if (!toolCallId || !toolName) continue;
+      const nativeToolName = nativeToolNameFromContentType(toolName) ?? (toolName as NativeGoogleToolName);
+      const nativeToolCallType =
+        nativeToolName === "nativeWebSearch"
+          ? "google_search_call"
+          : nativeToolName === "nativeUrlContext"
+            ? "url_context_call"
+            : null;
+      if (!nativeToolCallType) continue;
+      const args = asRecord(record.arguments) ?? asRecord(record.input) ?? {};
+      const signature = getGoogleThoughtSignature(record);
+      parts.push({
+        type: nativeToolCallType,
+        id: convertToolCallId(toolCallId),
+        arguments: args,
+        ...(signature ? { signature } : {}),
+      });
+      continue;
+    }
+
+    if (partType === "providerToolResult") {
+      const toolCallId = asNonEmptyString(record.callId) ?? asNonEmptyString(record.toolCallId) ?? asNonEmptyString(record.id);
+      const toolName = asNonEmptyString(record.name) ?? asNonEmptyString(record.toolName);
+      if (!toolCallId || !toolName) continue;
+      const nativeToolName = nativeToolNameFromContentType(toolName) ?? (toolName as NativeGoogleToolName);
+      const nativeToolResultType =
+        nativeToolName === "nativeWebSearch"
+          ? "google_search_result"
+          : nativeToolName === "nativeUrlContext"
+            ? "url_context_result"
+            : null;
+      if (!nativeToolResultType) continue;
+      const signature = getGoogleThoughtSignature(record);
+      parts.push({
+        type: nativeToolResultType,
+        call_id: convertToolCallId(toolCallId),
+        result: record.result,
+        ...(record.isError === true ? { is_error: true } : {}),
+        ...(signature ? { signature } : {}),
+      });
     }
   }
 
@@ -366,6 +412,42 @@ function googleAssistantContentBlockToModelPart(rawPart: unknown): Record<string
       toolCallId,
       toolName,
       input,
+      ...(signature ? { thoughtSignature: signature } : {}),
+      ...(providerOptions ? { providerOptions } : {}),
+    };
+  }
+
+  if (partType === "providerToolCall") {
+    const toolCallId = asNonEmptyString(record.id) ?? asNonEmptyString(record.toolCallId);
+    const toolName = asNonEmptyString(record.name) ?? asNonEmptyString(record.toolName);
+    if (!toolCallId || !toolName) return null;
+
+    const input = asRecord(record.arguments) ?? asRecord(record.input) ?? {};
+    const signature = getGoogleThoughtSignature(record);
+    const providerOptions = mergeGoogleThoughtProviderOptions(record, signature);
+    return {
+      type: "providerToolCall",
+      id: toolCallId,
+      name: toolName,
+      arguments: input,
+      ...(signature ? { thoughtSignature: signature } : {}),
+      ...(providerOptions ? { providerOptions } : {}),
+    };
+  }
+
+  if (partType === "providerToolResult") {
+    const toolCallId = asNonEmptyString(record.callId) ?? asNonEmptyString(record.toolCallId) ?? asNonEmptyString(record.id);
+    const toolName = asNonEmptyString(record.name) ?? asNonEmptyString(record.toolName);
+    if (!toolCallId || !toolName) return null;
+
+    const signature = getGoogleThoughtSignature(record);
+    const providerOptions = mergeGoogleThoughtProviderOptions(record, signature);
+    return {
+      type: "providerToolResult",
+      callId: toolCallId,
+      name: toolName,
+      result: record.result,
+      ...(record.is_error === true || record.isError === true ? { isError: true } : {}),
       ...(signature ? { thoughtSignature: signature } : {}),
       ...(providerOptions ? { providerOptions } : {}),
     };
@@ -1103,9 +1185,6 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
     const sortedIndices = [...contentBlocks.keys()].sort((a, b) => a - b);
     for (const index of sortedIndices) {
       const block = contentBlocks.get(index)!;
-      if (block.type === "providerToolCall" || block.type === "providerToolResult") {
-        continue;
-      }
       contentArray.push(block);
     }
     assistant.content = contentArray;

@@ -114,6 +114,65 @@ describe("google interactions runtime", () => {
     expect(result.reasoningText).toBe("Let me think about this...");
   });
 
+  test("native Google tool blocks are preserved in responseMessages", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-native-history-"));
+    const runtime = createGoogleInteractionsRuntime({
+      runStepImpl: async () => ({
+        assistant: {
+          role: "assistant",
+          content: [
+            {
+              type: "providerToolCall",
+              id: "gs_1",
+              name: "nativeWebSearch",
+              arguments: { queries: ["latest Gemini announcements"] },
+              thoughtSignature: "sig_call",
+            },
+            {
+              type: "providerToolResult",
+              callId: "gs_1",
+              name: "nativeWebSearch",
+              result: [{ search_suggestions: "Latest Gemini announcements" }],
+              thoughtSignature: "sig_result",
+            },
+            { type: "text", text: "Here is the latest." },
+          ],
+          usage: { input: 10, output: 20, totalTokens: 30 },
+          stopReason: "stop",
+          timestamp: Date.now(),
+        },
+        interactionId: "interaction_native_history",
+      }),
+    });
+
+    const result = await runtime.runTurn(makeParams(makeConfig(homeDir)));
+
+    expect(result.responseMessages).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "providerToolCall",
+            id: "gs_1",
+            name: "nativeWebSearch",
+            arguments: { queries: ["latest Gemini announcements"] },
+            thoughtSignature: "sig_call",
+            providerOptions: { google: { thoughtSignature: "sig_call" } },
+          },
+          {
+            type: "providerToolResult",
+            callId: "gs_1",
+            name: "nativeWebSearch",
+            result: [{ search_suggestions: "Latest Gemini announcements" }],
+            thoughtSignature: "sig_result",
+            providerOptions: { google: { thoughtSignature: "sig_result" } },
+          },
+          { type: "text", text: "Here is the latest." },
+        ],
+      },
+    ]);
+  });
+
   test("tool calls trigger tool execution and multi-step loop", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-tools-"));
     let stepCount = 0;
@@ -809,6 +868,72 @@ describe("google native interactions request building", () => {
         },
       ],
     });
+  });
+
+  test("convertMessagesToInteractionsInput round-trips native Google tool history", () => {
+    const input = googleNativeInternal.convertMessagesToInteractionsInput([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "providerToolCall",
+            id: "gs_1",
+            name: "nativeWebSearch",
+            arguments: { queries: ["latest Gemini announcements"] },
+            providerOptions: { google: { thoughtSignature: "sig_call" } },
+          },
+          {
+            type: "providerToolResult",
+            callId: "gs_1",
+            name: "nativeWebSearch",
+            result: [{ search_suggestions: "Latest Gemini announcements" }],
+            providerOptions: { google: { thoughtSignature: "sig_result" } },
+          },
+          {
+            type: "providerToolCall",
+            id: "uc_1",
+            name: "nativeUrlContext",
+            arguments: { urls: ["https://example.com"] },
+          },
+          {
+            type: "providerToolResult",
+            callId: "uc_1",
+            name: "nativeUrlContext",
+            result: { url: "https://example.com", status: "ok" },
+          },
+        ],
+      },
+    ] as ModelMessage[]);
+
+    expect(input).toEqual([
+      {
+        role: "model",
+        content: [
+          {
+            type: "google_search_call",
+            id: "gs_1",
+            arguments: { queries: ["latest Gemini announcements"] },
+            signature: "sig_call",
+          },
+          {
+            type: "google_search_result",
+            call_id: "gs_1",
+            result: [{ search_suggestions: "Latest Gemini announcements" }],
+            signature: "sig_result",
+          },
+          {
+            type: "url_context_call",
+            id: "uc_1",
+            arguments: { urls: ["https://example.com"] },
+          },
+          {
+            type: "url_context_result",
+            call_id: "uc_1",
+            result: { url: "https://example.com", status: "ok" },
+          },
+        ],
+      },
+    ]);
   });
 
   test("convertMessagesToInteractionsInput handles rich tool results", () => {

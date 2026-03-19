@@ -79,7 +79,7 @@ describe("utils/browser", () => {
 
     await expect(openExternalUrl("https://example.com")).resolves.toBe(true);
     expect(calls).toHaveLength(1);
-    expect(calls[0].cmd).toMatch(/xdg-open|open|rundll32\\.exe/);
+    expect(calls[0].cmd).toMatch(/xdg-open|open|rundll32\.exe/);
   });
 
   test("openExternalUrl resolves false on nonzero exit", async () => {

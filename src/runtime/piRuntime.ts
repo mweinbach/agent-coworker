@@ -973,7 +973,7 @@ export function createPiRuntime(overrides: PiRuntimeOverrides = {}): LlmRuntime 
         const includeUnknownRawParts = params.includeRawChunks ?? true;
         const turnMessages: Array<Record<string, unknown>> = [];
         let usage = undefined as RuntimeRunTurnResult["usage"];
-        let stepMessages: ModelMessage[] = [...params.messages];
+        let stepMessages: ModelMessage[] = buildInitialStepMessages(params, resolved);
         let stepProviderOptions: Record<string, unknown> | undefined = asRecord(params.providerOptions) ?? undefined;
 
         const maxSteps = Math.max(1, params.maxSteps);

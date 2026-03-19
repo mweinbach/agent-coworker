@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { fileURLToPath } from "node:url";
 
 // ── Pure helper tests (no DOM needed) ──
 
@@ -481,7 +482,7 @@ describe("shared provider display utilities", () => {
 describe("websocket protocol files unchanged", () => {
   test("no websocket protocol types reference onboarding", async () => {
     const fs = await import("node:fs");
-    const protocolPath = new URL("../src/lib/wsProtocol.ts", import.meta.url).pathname;
+    const protocolPath = fileURLToPath(new URL("../src/lib/wsProtocol.ts", import.meta.url));
     const content = fs.readFileSync(protocolPath, "utf8");
     expect(content).not.toContain("onboarding");
   });

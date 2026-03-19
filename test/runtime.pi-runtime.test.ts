@@ -397,6 +397,121 @@ describe("pi runtime regressions", () => {
     expect(resolved.headers).toBeUndefined();
   });
 
+  test("LM Studio PI runtime seeds follow-up turns from the full conversation history", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-lmstudio-history-"));
+    const streamCalls: Array<Record<string, unknown>> = [];
+    const runtime = createPiRuntime({
+      piStreamImpl: ((model: unknown, input: Record<string, unknown>) => {
+        streamCalls.push({
+          model,
+          systemPrompt: input.systemPrompt,
+          messages: input.messages,
+        });
+        return {
+          async *[Symbol.asyncIterator]() {
+            return;
+          },
+          async result() {
+            return {
+              role: "assistant",
+              content: [{ type: "text", text: "follow-up answer" }],
+              usage: { input: 1, output: 1, totalTokens: 2 },
+              stopReason: "stop",
+            };
+          },
+        };
+      }) as any,
+    });
+
+    const config = makeConfig(homeDir, {
+      provider: "lmstudio",
+      model: "local/qwen-2.5",
+      preferredChildModel: "local/qwen-2.5",
+      knowledgeCutoff: "Unknown",
+      providerOptions: {
+        lmstudio: {
+          baseUrl: "http://127.0.0.1:1234",
+          autoLoad: false,
+        },
+      },
+    });
+
+    await withMockedFetch(
+      (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/models")) {
+          return new Response(JSON.stringify({
+            models: [
+              {
+                type: "llm",
+                publisher: "local",
+                key: "local/qwen-2.5",
+                display_name: "Qwen 2.5 Local",
+                loaded_instances: [],
+                max_context_length: 32768,
+                capabilities: { vision: false, trained_for_tool_use: true },
+                size_bytes: 1,
+                architecture: "llama",
+                format: "gguf",
+              },
+            ],
+          }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        throw new Error(`unexpected fetch url: ${url}`);
+      }) as typeof fetch,
+      async () => {
+        const result = await runtime.runTurn(
+          makeParams(config, {
+            messages: [{ role: "user", content: "follow-up question" }] as ModelMessage[],
+            allMessages: [
+              { role: "user", content: "earlier request" },
+              {
+                role: "assistant",
+                content: [
+                  { type: "tool-call", toolCallId: "call-1", toolName: "read", input: { path: "/tmp/a.ts" } },
+                  { type: "text", text: "Earlier answer" },
+                ],
+              },
+              {
+                role: "tool",
+                content: [
+                  {
+                    type: "tool-result",
+                    toolCallId: "call-1",
+                    toolName: "read",
+                    output: { type: "json", value: { ok: true } },
+                  },
+                ],
+              },
+              { role: "user", content: "follow-up question" },
+            ] as ModelMessage[],
+          }),
+        );
+
+        expect(result.text).toBe("follow-up answer");
+      },
+    );
+
+    expect(streamCalls).toHaveLength(1);
+    const piMessages = (streamCalls[0]?.messages as Array<Record<string, unknown>> | undefined) ?? [];
+    expect(piMessages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "user"]);
+    expect(piMessages[0]?.content).toBe("earlier request");
+    expect((piMessages[1]?.content as Array<Record<string, unknown>> | undefined)).toEqual([
+      { type: "toolCall", id: "call-1", name: "read", arguments: { path: "/tmp/a.ts" } },
+      { type: "text", text: "Earlier answer" },
+    ]);
+    expect(piMessages[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "read",
+      content: [{ type: "text", text: "{\"ok\":true}" }],
+    });
+    expect(piMessages[3]?.content).toBe("follow-up question");
+  });
+
   test("codex openai-key runtime model resolution keeps supported token limits for gpt-5.4-mini", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-codex-gpt54mini-"));
     const homeDir = path.join(workspaceDir, "home");
@@ -1001,7 +1116,7 @@ describe("pi runtime regressions", () => {
     const overflowOutput = emitted[0]?.output as Record<string, unknown>;
     const fileEvent = emitted[1]?.file as Record<string, unknown>;
     const spillPath = String(overflowOutput.filePath);
-    expect(spillPath).toContain(`/${MODEL_SCRATCHPAD_DIRNAME}/`);
+    expect(spillPath).toContain(path.join(homeDir, MODEL_SCRATCHPAD_DIRNAME));
     expect(String(overflowOutput.value)).toContain("Tool output overflowed");
     expect(String(overflowOutput.value)).toContain(spillPath);
     expect(Number(overflowOutput.chars)).toBeGreaterThan(80);

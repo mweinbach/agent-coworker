@@ -470,17 +470,13 @@ export function buildCitationUrlsByMessageId<T extends CitationFeedItem>(feed: r
 
     if (itemKind === "tool" && item.name === "nativeWebSearch") {
       const nextCitationUrls = extractCitationUrlsFromNativeWebSearchResult(item.result);
-      if (nextCitationUrls.size > 0) {
-        currentCitationUrls = nextCitationUrls;
-      }
+      currentCitationUrls = nextCitationUrls;
       continue;
     }
 
     if (itemKind === "tool" && item.name === "nativeUrlContext") {
       const nextCitationUrls = extractCitationUrlsFromNativeUrlContextResult(item.result);
-      if (nextCitationUrls.size > 0) {
-        currentCitationUrls = nextCitationUrls;
-      }
+      currentCitationUrls = nextCitationUrls;
       continue;
     }
 
@@ -514,17 +510,13 @@ export function buildCitationSourcesByMessageId<T extends CitationFeedItem>(feed
 
     if (itemKind === "tool" && item.name === "nativeWebSearch") {
       const nextSources = extractCitationSourcesFromNativeWebSearchResult(item.result);
-      if (nextSources.size > 0) {
-        currentSources = [...nextSources.values()];
-      }
+      currentSources = [...nextSources.values()];
       continue;
     }
 
     if (itemKind === "tool" && item.name === "nativeUrlContext") {
       const nextSources = extractCitationSourcesFromNativeUrlContextResult(item.result);
-      if (nextSources.size > 0) {
-        currentSources = [...nextSources.values()];
-      }
+      currentSources = [...nextSources.values()];
       continue;
     }
 

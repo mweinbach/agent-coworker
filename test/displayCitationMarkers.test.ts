@@ -353,6 +353,90 @@ describe("display citation markers", () => {
     ]));
   });
 
+  test("clears stale native URL context citations and sources when a later result is empty", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "nativeUrlContext",
+        result: {
+          provider: "google",
+          urls: ["https://example.com/about"],
+          results: [{ url: "https://example.com/about", status: "success" }],
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+      {
+        id: "tool-2",
+        kind: "tool" as const,
+        name: "nativeUrlContext",
+        result: {
+          provider: "google",
+          results: [],
+        },
+      },
+      { id: "assistant-2", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", new Map([[1, "https://example.com/about"]])],
+    ]));
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", [
+        { url: "https://example.com/about" },
+      ]],
+    ]));
+  });
+
+  test("clears stale native web search citations and sources when a later result is empty", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "nativeWebSearch",
+        result: {
+          action: {
+            type: "search",
+            query: "openai responses",
+            sources: [
+              { title: "Source One", url: "https://example.com/one" },
+              { title: "Source Two", url: "https://example.com/two" },
+            ],
+          },
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+      {
+        id: "tool-2",
+        kind: "tool" as const,
+        name: "nativeWebSearch",
+        result: {
+          action: {
+            type: "search",
+            query: "openai responses empty",
+            sources: [],
+          },
+        },
+      },
+      { id: "assistant-2", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", new Map([
+        [1, "https://example.com/one"],
+        [2, "https://example.com/two"],
+      ])],
+    ]));
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", [
+        { title: "Source One", url: "https://example.com/one" },
+        { title: "Source Two", url: "https://example.com/two" },
+      ]],
+    ]));
+  });
+
   test("appends a compact sources footer when native citations only exist out of band", () => {
     expect(
       normalizeDisplayCitationMarkers("Answer", {

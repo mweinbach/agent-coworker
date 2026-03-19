@@ -13,7 +13,7 @@ import type { SyncConfigPatch } from "../../context/syncTypes";
 type LocalSlashDependencies = {
   syncActions: {
     reset: () => void;
-    cancel: () => void;
+    cancel: (opts?: { includeSubagents?: boolean }) => void;
     clearUsageHardCap: () => boolean;
     setConfig: (config: SyncConfigPatch) => boolean;
     setProviderApiKey: (provider: string, methodId: string, apiKey: string) => void;

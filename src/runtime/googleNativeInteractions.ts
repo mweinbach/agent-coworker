@@ -784,10 +784,6 @@ function processStreamEvent(
         if (deltaName) {
           existing.name = deltaName;
         }
-        const deltaId = asNonEmptyString(delta.id);
-        if (deltaId) {
-          existing.id = deltaId;
-        }
         const deltaSignature = asNonEmptyString(delta.signature);
         if (deltaSignature) {
           existing.thoughtSignature = deltaSignature;

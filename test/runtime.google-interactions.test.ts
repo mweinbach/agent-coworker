@@ -947,6 +947,58 @@ describe("google native interactions request building", () => {
     expect(block.thoughtSignature).toBe("sig_call");
   });
 
+  test("processStreamEvent keeps the first emitted function_call id stable", () => {
+    const blocks = new Map();
+
+    const startEvent = {
+      event_type: "content.start",
+      index: 0,
+      content: {
+        type: "function_call",
+        name: "bash",
+      },
+    };
+    googleNativeInternal.processStreamEvent(startEvent, blocks);
+
+    const startBlock = blocks.get(0);
+    expect(startBlock).toBeDefined();
+    expect(startBlock.type).toBe("toolCall");
+    const fallbackId = startBlock.id;
+
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(startEvent, blocks)).toEqual([
+      { type: "tool-input-start", id: fallbackId, toolName: "bash" },
+    ]);
+
+    const deltaEvent = {
+      event_type: "content.delta",
+      index: 0,
+      delta: {
+        type: "function_call",
+        id: "call_real",
+        arguments: { command: "ls" },
+      },
+    };
+    googleNativeInternal.processStreamEvent(deltaEvent, blocks);
+
+    const block = blocks.get(0);
+    expect(block).toBeDefined();
+    expect(block.type).toBe("toolCall");
+    expect(block.id).toBe(fallbackId);
+    expect(block.arguments).toEqual({ command: "ls" });
+
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(deltaEvent, blocks)).toEqual([
+      { type: "tool-input-delta", id: fallbackId, delta: "{\"command\":\"ls\"}" },
+    ]);
+
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(
+      { event_type: "content.stop", index: 0 },
+      blocks,
+    )).toEqual([
+      { type: "tool-input-end", id: fallbackId },
+      { type: "tool-call", toolCallId: fallbackId, toolName: "bash", input: { command: "ls" } },
+    ]);
+  });
+
   test("processStreamEvent handles thought content with signature", () => {
     const blocks = new Map();
 

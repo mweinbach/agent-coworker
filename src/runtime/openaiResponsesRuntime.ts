@@ -61,7 +61,9 @@ export function createOpenAiResponsesRuntime(
         let usage = undefined as RuntimeRunTurnResult["usage"];
         let activeProviderState = matchingProviderState(params, resolved);
         let finalProviderState = undefined as OpenAiContinuationState | undefined;
-        let stepMessages: ModelMessage[] = buildInitialStepMessages(params, resolved);
+        let stepMessages: ModelMessage[] = activeProviderState
+          ? buildInitialStepMessages(params, resolved)
+          : [...(params.allMessages ?? params.messages)];
         let stepProviderOptions: Record<string, unknown> | undefined = asRecord(params.providerOptions) ?? undefined;
         const providerManagedContinuation = supportsProviderManagedContinuation(params, resolved);
 

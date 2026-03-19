@@ -44,6 +44,7 @@ import {
   sendUserMessageToThread,
   normalizeThreadTitleSource,
   truncateTitle,
+  waitForControlSession,
 } from "../store.helpers";
 import { mergeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import { normalizeWorkspaceUserProfile } from "../types";
@@ -239,11 +240,11 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         return;
       }
 
-      const workspace = get().workspaces.find((w) => w.id === workspaceId);
-      if (!workspace) return;
-
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
+      const controlReady = await waitForControlSession(get, workspaceId);
+      const workspace = get().workspaces.find((w) => w.id === workspaceId);
+      if (!workspace) return;
 
       const provider = (
         workspace.defaultProvider && isProviderName(workspace.defaultProvider)
@@ -262,7 +263,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const userProfile = workspace.userProfile ? normalizeWorkspaceUserProfile(workspace.userProfile) : undefined;
       const clearToolOutputOverflowChars = clearDefaultToolOutputOverflowChars === true;
 
-      const modelPersisted = model
+      const modelPersisted = controlReady && model
         ? sendControl(get, workspaceId, (sessionId) => ({
             type: "set_model",
             sessionId,
@@ -270,7 +271,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
             model,
           }))
         : false;
-      const subAgentPersisted = sendControl(get, workspaceId, (sessionId) => ({
+      const subAgentPersisted = controlReady && sendControl(get, workspaceId, (sessionId) => ({
         type: "set_config",
         sessionId,
         config: {
@@ -289,7 +290,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
           ...(userProfile !== undefined ? { userProfile } : {}),
         },
       }));
-      const mcpPersisted = sendControl(get, workspaceId, (sessionId) => ({
+      const mcpPersisted = controlReady && sendControl(get, workspaceId, (sessionId) => ({
         type: "set_enable_mcp",
         sessionId,
         enableMcp: workspace.defaultEnableMcp,

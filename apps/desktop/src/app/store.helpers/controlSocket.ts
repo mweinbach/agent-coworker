@@ -34,6 +34,17 @@ type ControlSocketDeps = {
 };
 
 export function createControlSocketHelpers(deps: ControlSocketDeps) {
+  const controlSessionWaiters = new Map<string, Set<(sessionId: string | null) => void>>();
+
+  function resolveControlSessionWaiters(workspaceId: string, sessionId: string | null) {
+    const waiters = controlSessionWaiters.get(workspaceId);
+    if (!waiters || waiters.size === 0) return;
+    controlSessionWaiters.delete(workspaceId);
+    for (const resolve of waiters) {
+      resolve(sessionId);
+    }
+  }
+
   function ensureControlSocket(get: StoreGet, set: StoreSet, workspaceId: string) {
     const rt = get().workspaceRuntimeById[workspaceId];
     const url = rt?.serverUrl;
@@ -87,6 +98,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
             providerStatusRefreshing: true,
             providerLastAuthChallenge: null,
           }));
+          resolveControlSessionWaiters(workspaceId, evt.sessionId);
 
           try {
             socket.send({ type: "list_skills", sessionId: evt.sessionId });
@@ -465,6 +477,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
           return;
         }
         RUNTIME.controlSockets.delete(workspaceId);
+        resolveControlSessionWaiters(workspaceId, null);
         set((s) => {
           const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
           const hadPendingMemories = workspaceRuntime?.memoriesLoading ?? false;
@@ -502,6 +515,40 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
     return socket;
   }
 
+  async function waitForControlSession(get: StoreGet, workspaceId: string, timeoutMs = 3_000): Promise<boolean> {
+    if (get().workspaceRuntimeById[workspaceId]?.controlSessionId) {
+      return true;
+    }
+
+    const workspaceRuntime = get().workspaceRuntimeById[workspaceId];
+    if (!workspaceRuntime?.serverUrl || workspaceRuntime.error || !RUNTIME.controlSockets.get(workspaceId)) {
+      return false;
+    }
+
+    return await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const timeout = setTimeout(() => {
+        finish(get().workspaceRuntimeById[workspaceId]?.controlSessionId ?? null);
+      }, timeoutMs);
+
+      const finish = (sessionId: string | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        const waiters = controlSessionWaiters.get(workspaceId);
+        waiters?.delete(finish);
+        if (waiters && waiters.size === 0) {
+          controlSessionWaiters.delete(workspaceId);
+        }
+        resolve(Boolean(sessionId));
+      };
+
+      const waiters = controlSessionWaiters.get(workspaceId) ?? new Set<(sessionId: string | null) => void>();
+      waiters.add(finish);
+      controlSessionWaiters.set(workspaceId, waiters);
+    });
+  }
+
   function sendControl(get: StoreGet, workspaceId: string, build: (sessionId: string) => ClientMessage): boolean {
     const sock = RUNTIME.controlSockets.get(workspaceId);
     const sessionId = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
@@ -511,6 +558,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
 
   return {
     ensureControlSocket,
+    waitForControlSession,
     sendControl,
   };
 }

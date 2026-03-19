@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import os
+import ntpath
+import posixpath
 import shutil
 import sys
 from typing import Callable, Mapping, Sequence
@@ -40,6 +42,11 @@ def _program_files_dirs(env: Mapping[str, str]) -> list[str]:
     )
 
 
+def _candidate_path(platform: str, *parts: str) -> str:
+    join = ntpath.join if platform == "win32" else posixpath.join
+    return join(*parts)
+
+
 def _libreoffice_extra_paths(platform: str, env: Mapping[str, str]) -> list[str]:
     if platform == "darwin":
         return ["/Applications/LibreOffice.app/Contents/MacOS/soffice"]
@@ -50,8 +57,8 @@ def _libreoffice_extra_paths(platform: str, env: Mapping[str, str]) -> list[str]
     for base in _program_files_dirs(env):
         candidates.extend(
             [
-                os.path.join(base, "LibreOffice", "program", "soffice.exe"),
-                os.path.join(base, "Programs", "LibreOffice", "program", "soffice.exe"),
+                _candidate_path(platform, base, "LibreOffice", "program", "soffice.exe"),
+                _candidate_path(platform, base, "Programs", "LibreOffice", "program", "soffice.exe"),
             ]
         )
     return _dedupe(candidates)
@@ -65,8 +72,8 @@ def _inkscape_extra_paths(platform: str, env: Mapping[str, str]) -> list[str]:
     for base in _program_files_dirs(env):
         candidates.extend(
             [
-                os.path.join(base, "Inkscape", "bin", "inkscape.exe"),
-                os.path.join(base, "Inkscape", "inkscape.exe"),
+                _candidate_path(platform, base, "Inkscape", "bin", "inkscape.exe"),
+                _candidate_path(platform, base, "Inkscape", "inkscape.exe"),
             ]
         )
     return _dedupe(candidates)
@@ -78,7 +85,7 @@ def _ghostscript_extra_paths(platform: str, env: Mapping[str, str]) -> list[str]
 
     candidates: list[str] = []
     for base in _program_files_dirs(env):
-        gs_root = os.path.join(base, "gs")
+        gs_root = _candidate_path(platform, base, "gs")
         if not os.path.isdir(gs_root):
             continue
         try:
@@ -86,11 +93,11 @@ def _ghostscript_extra_paths(platform: str, env: Mapping[str, str]) -> list[str]
         except OSError:
             continue
         for entry in entries:
-            bin_dir = os.path.join(gs_root, entry, "bin")
+            bin_dir = _candidate_path(platform, gs_root, entry, "bin")
             candidates.extend(
                 [
-                    os.path.join(bin_dir, "gswin64c.exe"),
-                    os.path.join(bin_dir, "gswin32c.exe"),
+                    _candidate_path(platform, bin_dir, "gswin64c.exe"),
+                    _candidate_path(platform, bin_dir, "gswin32c.exe"),
                 ]
             )
     return _dedupe(candidates)

@@ -119,6 +119,12 @@ function emitServerHello(socket: MockAgentSocket, sessionId: string) {
   });
 }
 
+async function flushAsyncWork() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe("workspace settings sync", () => {
   let workspaceId = "";
 
@@ -730,6 +736,58 @@ describe("workspace settings sync", () => {
     const runtime = useAppStore.getState().workspaceRuntimeById[workspaceId];
     expect(workspace?.providerOptions).toBeUndefined();
     expect((runtime?.controlSessionConfig as any)?.providerOptions).toBeUndefined();
+  });
+
+  test("updateWorkspaceDefaults waits for the initial control hello before warning about partial apply", async () => {
+    const updatePromise = useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      providerOptions: {
+        "codex-cli": {
+          reasoningEffort: "xhigh",
+          reasoningSummary: "detailed",
+        },
+      },
+    });
+
+    await flushAsyncWork();
+    const controlSocket = socketByClient("desktop-control");
+
+    expect(controlSocket.sent.filter((msg) => msg?.type === "set_model")).toHaveLength(0);
+    expect(controlSocket.sent.filter((msg) => msg?.type === "set_config")).toHaveLength(0);
+    expect(controlSocket.sent.filter((msg) => msg?.type === "set_enable_mcp")).toHaveLength(0);
+    expect(useAppStore.getState().notifications).toHaveLength(0);
+
+    emitServerHello(controlSocket, "control-session");
+    await updatePromise;
+
+    const setModelMessages = controlSocket.sent.filter((msg) => msg?.type === "set_model");
+    const setConfigMessages = controlSocket.sent.filter((msg) => msg?.type === "set_config");
+    const setEnableMcpMessages = controlSocket.sent.filter((msg) => msg?.type === "set_enable_mcp");
+
+    expect(setModelMessages).toHaveLength(1);
+    expect(setConfigMessages).toHaveLength(1);
+    expect(setEnableMcpMessages).toHaveLength(1);
+    expect(setConfigMessages[0]?.config?.providerOptions?.["codex-cli"]?.reasoningEffort).toBe("xhigh");
+    expect(setConfigMessages[0]?.config?.providerOptions?.["codex-cli"]?.reasoningSummary).toBe("detailed");
+    expect(useAppStore.getState().notifications).toHaveLength(0);
+  });
+
+  test("updateWorkspaceDefaults reports partial apply when the initial control connection closes before hello", async () => {
+    const updatePromise = useAppStore.getState().updateWorkspaceDefaults(workspaceId, {
+      providerOptions: {
+        "codex-cli": {
+          reasoningEffort: "xhigh",
+        },
+      },
+    });
+
+    await flushAsyncWork();
+    const controlSocket = socketByClient("desktop-control");
+    controlSocket.close();
+    await updatePromise;
+
+    const notification = useAppStore.getState().notifications.at(-1);
+    expect(notification?.title).toBe("Workspace settings partially applied");
+    expect(notification?.detail).toBe("Control session is not fully connected yet. Reopen the workspace settings to retry.");
   });
 
   test("applyWorkspaceDefaultsToThread sends model, session config, and mcp toggle", async () => {

@@ -318,7 +318,7 @@ function pushNotification(notifications: Notification[], entry: Notification): N
 }
 
 const { appendThreadTranscript } = createTranscriptBuffer({ nowIso });
-const { ensureControlSocket, sendControl } = createControlSocketHelpers({
+const { ensureControlSocket, waitForControlSession, sendControl } = createControlSocketHelpers({
   nowIso,
   makeId,
   persist,
@@ -437,6 +437,7 @@ export {
   persistNow,
   ensureServerRunning,
   ensureControlSocket,
+  waitForControlSession,
   ensureThreadSocket,
   sendControl,
   sendThread,

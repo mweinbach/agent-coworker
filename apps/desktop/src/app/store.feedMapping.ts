@@ -185,6 +185,12 @@ function clearStepLocalModelStreamRuntime(runtime: ThreadModelStreamRuntime) {
   runtime.lastAssistantTurnId = null;
 }
 
+function clearStepLocalToolRuntime(runtime: ThreadModelStreamRuntime) {
+  runtime.toolItemIdByKey.clear();
+  runtime.latestToolKeyByTurnAndName.clear();
+  runtime.toolInputByKey.clear();
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -517,6 +523,7 @@ function applyModelStreamUpdate(
       stream.activeTurnId = update.turnId;
     } else {
       clearStepLocalModelStreamRuntime(stream);
+      clearStepLocalToolRuntime(stream);
     }
     return;
   }

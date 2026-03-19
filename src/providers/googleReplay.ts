@@ -26,6 +26,11 @@ function getGoogleProviderKey(providerOptions: Record<string, unknown>): GoogleP
 }
 
 function getGoogleThoughtSignatureFromPart(part: Record<string, unknown>): string | undefined {
+  const directSignature =
+    (typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0 ? part.thoughtSignature : undefined) ??
+    (typeof part.thinkingSignature === "string" && part.thinkingSignature.length > 0 ? part.thinkingSignature : undefined);
+  if (directSignature) return directSignature;
+
   const providerOptions = part.providerOptions;
   if (!isRecord(providerOptions)) return undefined;
   for (const key of ["google", "vertex"] as const) {
@@ -82,7 +87,7 @@ function repairGoogleToolCallSignatures(messages: ModelMessage[]): {
         return part;
       }
 
-      if (part.type !== "tool-call") return part;
+      if (part.type !== "tool-call" && part.type !== "toolCall") return part;
       if (!lastSignature) {
         unresolvedToolCalls += 1;
         return part;

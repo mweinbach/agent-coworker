@@ -171,10 +171,40 @@ describe("desktop transcript feed mapping", () => {
         ts: "2024-01-01T00:00:06.000Z",
         threadId: "thread-1",
         direction: "server",
-        payload: { type: "reasoning", kind: "reasoning", text: "Searching for the latest GTC details." },
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-google-1",
+          index: 5,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          partType: "tool_call",
+          part: { toolCallId: "tool-2", toolName: "webSearch", input: { query: "NVIDIA GTC 2027" } },
+        },
       },
       {
         ts: "2024-01-01T00:00:07.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-google-1",
+          index: 6,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          partType: "tool_result",
+          part: { toolCallId: "tool-2", toolName: "webSearch", output: "result-2" },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:08.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: { type: "reasoning", kind: "reasoning", text: "Searching for the latest GTC details." },
+      },
+      {
+        ts: "2024-01-01T00:00:09.000Z",
         threadId: "thread-1",
         direction: "server",
         payload: { type: "assistant_message", text: "Here is the summary." },
@@ -183,10 +213,15 @@ describe("desktop transcript feed mapping", () => {
 
     const feed = mapTranscriptToFeed(transcript);
     const reasoning = feed.filter((item) => item.kind === "reasoning");
+    const tools = feed.filter((item) => item.kind === "tool");
 
     expect(reasoning).toHaveLength(1);
     expect(reasoning[0]?.text).toBe("Searching for the latest GTC details.");
-    expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "tool", "message"]);
+    if (tools[0]?.kind !== "tool" || tools[1]?.kind !== "tool") throw new Error("Expected tool feed items");
+    expect(tools).toHaveLength(2);
+    expect(tools.map((tool) => tool.args)).toEqual([{ query: "NVIDIA GTC 2026" }, { query: "NVIDIA GTC 2027" }]);
+    expect(tools.map((tool) => tool.result)).toEqual(["result", "result-2"]);
+    expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "tool", "tool", "message"]);
   });
 
   test("preserves transcript event order instead of sorting by timestamps", () => {

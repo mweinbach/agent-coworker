@@ -22,6 +22,7 @@ import {
   piTurnMessagesToModelMessages,
 } from "./piMessageBridge";
 import {
+  googleTurnMessagesToModelMessages,
   runGoogleNativeInteractionStep,
   type RunGoogleNativeInteractionStep,
 } from "./googleNativeInteractions";
@@ -244,7 +245,7 @@ export function createGoogleInteractionsRuntime(
           usage = mergePiUsage(usage, assistantRecord.usage);
           finalProviderState = nextGoogleProviderState(resolved.model.id, interactionId) ?? finalProviderState;
           previousInteractionId = interactionId ?? previousInteractionId;
-          const assistantModelMessages = piTurnMessagesToModelMessages([assistantRecord as any]);
+          const assistantModelMessages = googleTurnMessagesToModelMessages([assistantRecord]);
           stepMessages = [
             ...stepMessages,
             ...assistantModelMessages,
@@ -299,7 +300,7 @@ export function createGoogleInteractionsRuntime(
         return {
           text: extractPiAssistantText(turnMessages as any),
           reasoningText: extractPiReasoningText(turnMessages as any),
-          responseMessages: piTurnMessagesToModelMessages(turnMessages as any),
+          responseMessages: googleTurnMessagesToModelMessages(turnMessages),
           usage,
           ...(finalProviderState ? { providerState: finalProviderState } : {}),
         };

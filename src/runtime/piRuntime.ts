@@ -754,7 +754,7 @@ export function buildInitialStepMessages(
   resolved: ResolvedPiRuntimeModel,
 ): ModelMessage[] {
   if (!supportsProviderManagedContinuation(params, resolved)) {
-    return [...(params.allMessages ?? params.messages)];
+    return [...params.messages];
   }
   const providerState = matchingProviderState(params, resolved);
   if (providerState) {

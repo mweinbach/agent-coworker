@@ -1,7 +1,7 @@
 import { GoogleGenAI, type Interactions } from "@google/genai";
 
 import type { GoogleInteractionsModelInfo } from "./googleInteractionsModel";
-import { toolResultContentFromOutput } from "./piMessageBridge";
+import { piTurnMessagesToModelMessages, toolResultContentFromOutput } from "./piMessageBridge";
 import type { ModelMessage } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -71,6 +71,8 @@ type InteractionTurn = {
   content: string | Array<Record<string, unknown>>;
 };
 
+type GoogleSignatureProviderKey = "google" | "vertex";
+
 function convertToolCallId(id: string): string {
   // Strip PI-style composite IDs (call_id|item_id) → just call_id
   return id.includes("|") ? id.split("|")[0]! : id;
@@ -113,6 +115,29 @@ function getGoogleThoughtSignature(record: Record<string, unknown>): string | un
   }
 
   return undefined;
+}
+
+function getGoogleSignatureProviderKey(record: Record<string, unknown>): GoogleSignatureProviderKey {
+  const providerOptions = asRecord(record.providerOptions);
+  return providerOptions && asRecord(providerOptions.vertex) ? "vertex" : "google";
+}
+
+function mergeGoogleThoughtProviderOptions(
+  record: Record<string, unknown>,
+  signature: string | undefined,
+): Record<string, unknown> | undefined {
+  const providerOptions = asRecord(record.providerOptions);
+  if (!signature) return providerOptions ?? undefined;
+
+  const providerKey = getGoogleSignatureProviderKey(record);
+  const providerValue = asRecord(providerOptions?.[providerKey]);
+  return {
+    ...(providerOptions ?? {}),
+    [providerKey]: {
+      ...(providerValue ?? {}),
+      thoughtSignature: signature,
+    },
+  };
 }
 
 function buildTextContent(text: unknown): Record<string, unknown> | null {
@@ -172,20 +197,31 @@ function turnFromUserMessage(message: ModelMessage): InteractionTurn | null {
 }
 
 function turnFromAssistantMessage(message: ModelMessage): InteractionTurn | null {
+  if (typeof message.content === "string") {
+    const text = message.content.trim();
+    return text ? { role: "model", content: text } : null;
+  }
   if (!Array.isArray(message.content)) return null;
 
   const parts: Array<Record<string, unknown>> = [];
   for (const rawPart of message.content) {
-    const record = asRecord(rawPart);
-    if (!record) continue;
-
-    if (record.type === "text") {
-      const textPart = buildTextContent(record.text);
+    if (typeof rawPart === "string") {
+      const textPart = buildTextContent(rawPart);
       if (textPart) parts.push(textPart);
       continue;
     }
 
-    if (record.type === "reasoning" || record.type === "thinking") {
+    const record = asRecord(rawPart);
+    if (!record) continue;
+    const partType = asNonEmptyString(record.type);
+
+    if (partType === "text" || partType === "input_text" || partType === "output_text") {
+      const textPart = buildTextContent(record.text ?? record.inputText ?? record.outputText ?? record.value);
+      if (textPart) parts.push(textPart);
+      continue;
+    }
+
+    if (partType === "reasoning" || partType === "thinking") {
       const signature = getGoogleThoughtSignature(record);
       if (!signature) continue;
       const summaryPart = buildTextContent(record.text ?? record.thinking);
@@ -197,7 +233,7 @@ function turnFromAssistantMessage(message: ModelMessage): InteractionTurn | null
       continue;
     }
 
-    if (record.type === "tool-call" || record.type === "toolCall") {
+    if (partType === "tool-call" || partType === "toolCall") {
       const toolCallId = asNonEmptyString(record.toolCallId) ?? asNonEmptyString(record.id);
       const toolName = asNonEmptyString(record.toolName) ?? asNonEmptyString(record.name);
       if (!toolCallId || !toolName) continue;
@@ -279,6 +315,93 @@ function convertMessagesToInteractionsInput(
   }
 
   return input;
+}
+
+function googleAssistantContentBlockToModelPart(rawPart: unknown): Record<string, unknown> | null {
+  if (typeof rawPart === "string") {
+    const text = rawPart.trim();
+    return text ? { type: "text", text } : null;
+  }
+
+  const record = asRecord(rawPart);
+  if (!record) return null;
+
+  const partType = asNonEmptyString(record.type);
+  if (partType === "text" || partType === "input_text" || partType === "output_text") {
+    const text = asNonEmptyString(record.text) ?? asNonEmptyString(record.inputText) ?? asNonEmptyString(record.outputText) ?? asNonEmptyString(record.value);
+    if (!text) return null;
+
+    const annotations = asRecordArray(record.annotations);
+    return {
+      type: "text",
+      text,
+      ...(annotations.length > 0 ? { annotations } : {}),
+    };
+  }
+
+  if (partType === "thinking" || partType === "reasoning") {
+    const thinking = asNonEmptyString(record.thinking) ?? asNonEmptyString(record.text);
+    if (!thinking) return null;
+
+    const signature = getGoogleThoughtSignature(record);
+    const providerOptions = mergeGoogleThoughtProviderOptions(record, signature);
+    return {
+      type: "thinking",
+      thinking,
+      ...(signature ? { thinkingSignature: signature } : {}),
+      ...(providerOptions ? { providerOptions } : {}),
+    };
+  }
+
+  if (partType === "toolCall" || partType === "tool-call") {
+    const toolCallId = asNonEmptyString(record.id) ?? asNonEmptyString(record.toolCallId);
+    const toolName = asNonEmptyString(record.name) ?? asNonEmptyString(record.toolName);
+    if (!toolCallId || !toolName) return null;
+
+    const input = asRecord(record.arguments) ?? asRecord(record.input) ?? {};
+    const signature = getGoogleThoughtSignature(record);
+    const providerOptions = mergeGoogleThoughtProviderOptions(record, signature);
+    return {
+      type: "tool-call",
+      toolCallId,
+      toolName,
+      input,
+      ...(signature ? { thoughtSignature: signature } : {}),
+      ...(providerOptions ? { providerOptions } : {}),
+    };
+  }
+
+  return null;
+}
+
+function googleAssistantMessageToModelMessage(message: unknown): ModelMessage | null {
+  const record = asRecord(message);
+  if (!record || record.role !== "assistant") return null;
+
+  if (typeof record.content === "string") {
+    const text = record.content.trim();
+    return text ? { role: "assistant", content: text } : null;
+  }
+
+  if (!Array.isArray(record.content)) return null;
+  const content = record.content.flatMap<Record<string, unknown>>((part) => {
+    const converted = googleAssistantContentBlockToModelPart(part);
+    return converted ? [converted] : [];
+  });
+  return content.length > 0 ? { role: "assistant", content } : null;
+}
+
+export function googleTurnMessagesToModelMessages(messages: unknown[]): ModelMessage[] {
+  const out: ModelMessage[] = [];
+  for (const message of messages) {
+    const assistantMessage = googleAssistantMessageToModelMessage(message);
+    if (assistantMessage) {
+      out.push(assistantMessage);
+      continue;
+    }
+    out.push(...piTurnMessagesToModelMessages([message as any]));
+  }
+  return out;
 }
 
 function extractTextFromContent(content: unknown): string | undefined {
@@ -979,6 +1102,7 @@ export const __internal = {
   buildGoogleNativeRequest,
   convertMessagesToInteractionsInput,
   convertToolsToInteractionsTools,
+  googleTurnMessagesToModelMessages,
   mapGoogleEventToStreamParts,
   processStreamEvent,
   resolveGoogleApiKey,

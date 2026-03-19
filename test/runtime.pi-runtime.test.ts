@@ -397,7 +397,7 @@ describe("pi runtime regressions", () => {
     expect(resolved.headers).toBeUndefined();
   });
 
-  test("LM Studio PI runtime seeds follow-up turns from the full conversation history", async () => {
+  test("LM Studio PI runtime seeds follow-up turns from the bounded runtime message window", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-runtime-lmstudio-history-"));
     const streamCalls: Array<Record<string, unknown>> = [];
     const runtime = createPiRuntime({
@@ -465,9 +465,32 @@ describe("pi runtime regressions", () => {
       async () => {
         const result = await runtime.runTurn(
           makeParams(config, {
-            messages: [{ role: "user", content: "follow-up question" }] as ModelMessage[],
+            messages: [
+              { role: "user", content: "request inside the window" },
+              {
+                role: "assistant",
+                content: [
+                  { type: "tool-call", toolCallId: "call-1", toolName: "read", input: { path: "/tmp/a.ts" } },
+                  { type: "text", text: "Earlier answer" },
+                ],
+              },
+              {
+                role: "tool",
+                content: [
+                  {
+                    type: "tool-result",
+                    toolCallId: "call-1",
+                    toolName: "read",
+                    output: { type: "json", value: { ok: true } },
+                  },
+                ],
+              },
+              { role: "user", content: "follow-up question" },
+            ] as ModelMessage[],
             allMessages: [
-              { role: "user", content: "earlier request" },
+              { role: "user", content: "stale older request" },
+              { role: "assistant", content: [{ type: "text", text: "stale older answer" }] },
+              { role: "user", content: "request inside the window" },
               {
                 role: "assistant",
                 content: [
@@ -498,7 +521,7 @@ describe("pi runtime regressions", () => {
     expect(streamCalls).toHaveLength(1);
     const piMessages = (streamCalls[0]?.messages as Array<Record<string, unknown>> | undefined) ?? [];
     expect(piMessages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "user"]);
-    expect(piMessages[0]?.content).toBe("earlier request");
+    expect(piMessages[0]?.content).toBe("request inside the window");
     expect((piMessages[1]?.content as Array<Record<string, unknown>> | undefined)).toEqual([
       { type: "toolCall", id: "call-1", name: "read", arguments: { path: "/tmp/a.ts" } },
       { type: "text", text: "Earlier answer" },

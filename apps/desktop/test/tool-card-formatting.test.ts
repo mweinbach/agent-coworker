@@ -29,4 +29,33 @@ describe("tool card formatting ask summaries", () => {
     expect(out.title).toBe("Web Search");
     expect(out.subtitle).toContain("Search: latest OpenAI");
   });
+
+  test("renders native URL context cards with URL-specific summaries", () => {
+    const out = formatToolCard(
+      "nativeUrlContext",
+      { urls: ["https://example.com/about"] },
+      { provider: "google", urls: ["https://example.com/about"], results: [{ url: "https://example.com/about", status: "success" }] },
+      "output-available"
+    );
+    expect(out.title).toBe("URL Context");
+    expect(out.subtitle).toContain("Read: https://example.com/about");
+  });
+
+  test("renders native Google Maps cards with place counts", () => {
+    const out = formatToolCard(
+      "nativeGoogleMaps",
+      { queries: ["coffee near union square"] },
+      {
+        provider: "google",
+        queries: ["coffee near union square"],
+        places: [
+          { name: "Blue Bottle", url: "https://maps.google.com/?cid=1" },
+          { name: "Sightglass", url: "https://maps.google.com/?cid=2" },
+        ],
+      },
+      "output-available"
+    );
+    expect(out.title).toBe("Google Maps");
+    expect(out.subtitle).toContain("Found 2 places");
+  });
 });

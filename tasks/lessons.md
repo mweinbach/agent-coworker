@@ -1,5 +1,7 @@
 # Lessons
 
+- When the user asks to remove a retired model, delete the full support surface in one pass: registry entries, config files, prompt-template paths, fixtures, raw-loop cases, and tests. Do not leave the retired model ID behind as a shared filename or example value.
+- For Gemini built-in tools, do not assume individually supported tools can be sent together in one request; verify the exact combination against current docs and backend behavior, and route one tool family per request when the API rejects the combination.
 - For local model providers in the desktop app, do not force them through the generic auth/API-key card; give them local connect/refresh controls and persist model-visibility preferences in dedicated desktop UI state so chat selectors can hide or show them cleanly.
 - When the user explicitly asks for PR triage via subagents, spawn the requested reviewers before local implementation so the final fix plan is grounded in the current branch state instead of only your own read.
 - For provider auth and saved-key lookups in this repo, treat `~/.cowork` as the only auth home; never derive auth storage from a workspace `.agent` path, and pin `HOME` in tests that fabricate auth state so they cannot accidentally read real machine credentials.
@@ -147,6 +149,7 @@
 - For Bun-compiled desktop sidecars in this repo, never read `package.json` via runtime filesystem paths like `resolve(__dirname, "../package.json")`; compiled binaries run from `/$bunfs` and must get version data from bundled imports or explicit build-time/env injection.
 - For local OpenAI-compatible providers like LM Studio, do not treat a transport library's required `apiKey` parameter as a user-facing auth requirement; satisfy that client internally when necessary, but never surface `OPENAI_API_KEY` or API-key UI as mandatory for local inference.
 - For tool-output overflow policy, keep the generic spill-to-workspace guard enabled for oversized tool results, but exempt `read` so large file contents can stay inline for the model when explicitly requested.
+- For collapsible settings sections backed by live workspace state, seed the open state from the current workspace or routing mode and do not let the selected-item count drive `open` on every rerender; otherwise a checkbox click can immediately collapse the section the user is editing.
 
 ## 2026-03-18 Tool Output Overflow Audit
 

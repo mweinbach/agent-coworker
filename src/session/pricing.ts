@@ -206,24 +206,24 @@ const BASE_PRICING_TABLE: Record<string, ModelPricing> = {
 
   // ── Google ───────────────────────────────────────────────────────────
   "google:gemini-3.1-pro-preview-customtools": {
-    inputPerMillion: 1.25,
-    outputPerMillion: 10,
-    cachedInputPerMillion: 0.315,
+    inputPerMillion: 2,
+    outputPerMillion: 12,
+    cachedInputPerMillion: 0.2,
   },
   "google:gemini-3.1-pro-preview": {
-    inputPerMillion: 1.25,
-    outputPerMillion: 10,
-    cachedInputPerMillion: 0.315,
-  },
-  "google:gemini-3-pro-preview": {
-    inputPerMillion: 1.25,
-    outputPerMillion: 5,
-    cachedInputPerMillion: 0.315,
+    inputPerMillion: 2,
+    outputPerMillion: 12,
+    cachedInputPerMillion: 0.2,
   },
   "google:gemini-3-flash-preview": {
-    inputPerMillion: 0.15,
-    outputPerMillion: 0.6,
-    cachedInputPerMillion: 0.0375,
+    inputPerMillion: 0.5,
+    outputPerMillion: 3,
+    cachedInputPerMillion: 0.05,
+  },
+  "google:gemini-3.1-flash-lite-preview": {
+    inputPerMillion: 0.25,
+    outputPerMillion: 1.5,
+    cachedInputPerMillion: 0.025,
   },
 };
 
@@ -317,7 +317,7 @@ function getPricingTable(env: PricingEnv = process.env): Record<string, ModelPri
  * Resolve pricing for a provider + model pair.
  *
  * 1. Try exact key `provider:model`.
- * 2. Try prefix matching (e.g. request `google:gemini-3-pro-preview` matches catalog `google:gemini-3`).
+ * 2. Try prefix matching (e.g. request `google:gemini-3.1-pro-preview` matches catalog `google:gemini-3.1`).
  * 3. Return null when no match is found.
  */
 export function resolveModelPricing(

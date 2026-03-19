@@ -62,7 +62,7 @@ describe("modelOptionsForProvider", () => {
           id: "google",
           name: "Google",
           models: [],
-          defaultModel: "gemini-3-pro-preview",
+          defaultModel: "gemini-3.1-pro-preview",
         },
         {
           id: "openai",

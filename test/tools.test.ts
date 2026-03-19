@@ -1180,8 +1180,8 @@ describe("webSearch tool", () => {
           makeCtx(dir, {
             config: makeConfig(dir, {
               provider: "google",
-              model: "gemini-3-pro-preview",
-              preferredChildModel: "gemini-3-pro-preview",
+              model: "gemini-3.1-pro-preview",
+              preferredChildModel: "gemini-3.1-pro-preview",
             }),
           })
         );
@@ -3387,6 +3387,48 @@ describe("createTools", () => {
     );
 
     expect(tools).toHaveProperty("webSearch");
+  });
+
+  test("replaces local webSearch and webFetch for google when native web tools are enabled", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          preferredChildModel: "gemini-3-flash-preview",
+          providerOptions: {
+            google: {
+              nativeWebSearch: true,
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(tools).not.toHaveProperty("webSearch");
+    expect(tools).not.toHaveProperty("webFetch");
+  });
+
+  test("keeps local webSearch and webFetch for google when only maps grounding is enabled", async () => {
+    const dir = await tmpDir();
+    const tools = createTools(
+      makeCtx(dir, {
+        config: makeConfig(dir, {
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          preferredChildModel: "gemini-3-flash-preview",
+          providerOptions: {
+            google: {
+              googleMaps: true,
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(tools).toHaveProperty("webSearch");
+    expect(tools).toHaveProperty("webFetch");
   });
 
   test("omits memory tool when enableMemory is false", async () => {

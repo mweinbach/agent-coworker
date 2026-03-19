@@ -302,10 +302,10 @@ describe("lmstudio provider", () => {
   test("routeAgentConfig supports cross-provider LM Studio child targets", () => {
     const parentConfig = makeConfig({
       provider: "google",
-      model: "gemini-3-pro-preview",
-      preferredChildModel: "gemini-3-pro-preview",
+      model: "gemini-3.1-pro-preview",
+      preferredChildModel: "gemini-3.1-pro-preview",
       childModelRoutingMode: "cross-provider-allowlist",
-      preferredChildModelRef: "google:gemini-3-pro-preview",
+      preferredChildModelRef: "google:gemini-3.1-pro-preview",
       allowedChildModelRefs: ["lmstudio:local/qwen-2.5"],
     });
 

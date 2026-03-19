@@ -127,6 +127,7 @@ function setupJsdom(): JsdomHarness {
 }
 
 const {
+  GeminiApiSettingsCard,
   OpenAiCompatibleModelSettingsCard,
   WorkspacesPage,
   WorkspaceUserProfileCard,
@@ -326,6 +327,37 @@ describe("desktop workspaces page", () => {
     }
   });
 
+  test("renders Gemini API settings controls for native web search and Google Maps", () => {
+    const html = renderToStaticMarkup(
+      createElement(GeminiApiSettingsCard, {
+        workspace: {
+          id: "ws-1",
+          defaultProvider: "google",
+          defaultModel: "gemini-3-flash-preview",
+          providerOptions: {
+            google: {
+              nativeWebSearch: true,
+              googleMaps: false,
+            },
+          },
+        },
+        providerStatusByName: {
+          google: { verified: true },
+        },
+        googleDefaultModel: "gemini-3.1-pro-preview",
+        updateWorkspaceDefaults: async () => {},
+      }),
+    );
+
+    expect(html).toContain("Gemini API settings");
+    expect(html).toContain("Reasoning effort");
+    expect(html).toContain("gemini-3-flash-preview");
+    expect(html).toContain("Native web search");
+    expect(html).toContain("Google Maps");
+    expect(html).toContain("Google Search and URL Context");
+    expect(html).toContain("routes either Search + URL Context or Google Maps per turn");
+  });
+
   test("renders workspace controls for user profile context", () => {
     const html = renderToStaticMarkup(
       createElement(WorkspaceUserProfileCard, {
@@ -512,6 +544,19 @@ describe("desktop workspaces page", () => {
         expect(providerIndexes[index - 1]).toBeLessThan(providerIndexes[index]);
       }
       expect(expandedText).not.toContain("Baseten");
+
+      const subagentModelCheckbox = container.querySelector('[aria-label="Allow subagent model opencode-go:glm-5"]');
+      if (!(subagentModelCheckbox instanceof harness.dom.window.HTMLButtonElement)) {
+        throw new Error("missing subagent model checkbox");
+      }
+
+      await act(async () => {
+        subagentModelCheckbox.click();
+      });
+
+      expect(subagentModelCheckbox.isConnected).toBe(true);
+      expect(subagentModelsToggle.textContent).toContain("Hide");
+      expect(useAppStore.getState().workspaces[0]?.defaultAllowedChildModelRefs).toEqual(["opencode-zen:glm-5"]);
     } finally {
       if (root) {
         await act(async () => {

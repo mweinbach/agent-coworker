@@ -39,9 +39,30 @@ function getRecordValue(record: Record<string, unknown>, keys: string[]): unknow
   return undefined;
 }
 
+function nativeGoogleToolKind(name: string): "web-search" | "url-context" | "google-maps" | null {
+  const normalized = name.toLowerCase();
+  if (normalized === "nativewebsearch") return "web-search";
+  if (normalized === "nativeurlcontext") return "url-context";
+  if (normalized === "nativegooglemaps") return "google-maps";
+  return null;
+}
+
+function recordStringArray(record: Record<string, unknown>, key: string): string[] {
+  const value = record[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+}
+
 function humanizeToolName(name: string): string {
-  if (name === "nativeWebSearch") {
+  const nativeKind = nativeGoogleToolKind(name);
+  if (nativeKind === "web-search") {
     return "Web Search";
+  }
+  if (nativeKind === "url-context") {
+    return "URL Context";
+  }
+  if (nativeKind === "google-maps") {
+    return "Google Maps";
   }
   const compact = name.replace(/^tool[:._-]?/i, "");
   const withSpaces = compact.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ");
@@ -83,11 +104,25 @@ function nativeWebSearchActionSummary(action: Record<string, unknown>): string {
 function summarizeArgs(name: string, args: unknown): string {
   if (!isRecord(args)) return "";
 
-  const base = name.toLowerCase();
-  if (base === "nativewebsearch") {
+  const nativeKind = nativeGoogleToolKind(name);
+  if (nativeKind === "web-search") {
     const action = nativeWebSearchAction(args);
     return action ? nativeWebSearchActionSummary(action) : "Searching the web";
   }
+  if (nativeKind === "url-context") {
+    const urls = recordStringArray(args, "urls");
+    if (urls.length === 1) return `Reading: ${truncate(urls[0]!, 90)}`;
+    if (urls.length > 1) return `Reading ${urls.length} URLs`;
+    return "Reading URL context";
+  }
+  if (nativeKind === "google-maps") {
+    const queries = recordStringArray(args, "queries");
+    if (queries.length === 1) return `Maps: ${truncate(queries[0]!, 90)}`;
+    if (queries.length > 1) return `Maps queries: ${queries.length}`;
+    return "Searching Google Maps";
+  }
+
+  const base = name.toLowerCase();
   if (base === "websearch") {
     const query = getRecordValue(args, ["query", "q"]);
     return query ? `Searching for: ${truncate(toText(query), 90)}` : "";
@@ -154,9 +189,16 @@ function summarizeAskResult(result: unknown): string | null {
 }
 
 function summarizeResult(name: string, state: ToolFeedState, result: unknown): string {
-  if (name.toLowerCase() === "nativewebsearch") {
+  const nativeKind = nativeGoogleToolKind(name);
+  if (nativeKind === "web-search" || nativeKind === "url-context" || nativeKind === "google-maps") {
+    const waitingLabel =
+      nativeKind === "url-context"
+        ? "Reading URL context"
+        : nativeKind === "google-maps"
+          ? "Searching Google Maps"
+          : "Searching the web";
     if (state === "input-streaming" || state === "input-available") {
-      return "Searching the web";
+      return waitingLabel;
     }
     if (state === "approval-requested") {
       return "Waiting for approval";
@@ -168,11 +210,40 @@ function summarizeResult(name: string, state: ToolFeedState, result: unknown): s
           return truncate(`Error: ${toText(error)}`, 90);
         }
       }
-      return state === "output-denied" ? "Denied" : "Web search failed";
+      return state === "output-denied"
+        ? "Denied"
+        : nativeKind === "url-context"
+          ? "URL context failed"
+          : nativeKind === "google-maps"
+            ? "Google Maps failed"
+            : "Web search failed";
     }
 
-    const action = nativeWebSearchAction(result);
-    return action ? nativeWebSearchActionSummary(action) : "Completed";
+    if (!isRecord(result)) return "Completed";
+
+    if (nativeKind === "web-search") {
+      const action = nativeWebSearchAction(result);
+      if (action) return nativeWebSearchActionSummary(action);
+      const queries = recordStringArray(result, "queries");
+      if (queries.length === 1) return `Search: ${truncate(queries[0]!, 90)}`;
+      if (queries.length > 1) return `Searches: ${queries.length}`;
+      return "Completed";
+    }
+
+    if (nativeKind === "url-context") {
+      const urls = recordStringArray(result, "urls");
+      const urlResults = Array.isArray(result.results) ? result.results.length : 0;
+      if (urls.length === 1) return `Read: ${truncate(urls[0]!, 90)}`;
+      if (urls.length > 1) return `Read ${urls.length} URLs`;
+      if (urlResults > 0) return `URL results: ${urlResults}`;
+      return "Completed";
+    }
+
+    const places = Array.isArray(result.places) ? result.places.length : 0;
+    const queries = recordStringArray(result, "queries");
+    if (places > 0) return places === 1 ? "Found 1 place" : `Found ${places} places`;
+    if (queries.length === 1) return `Maps: ${truncate(queries[0]!, 90)}`;
+    return "Completed";
   }
 
   if (state === "input-streaming") return "Capturing input…";
@@ -246,6 +317,8 @@ function buildDetailsRows(args: unknown, result: unknown, state: ToolFeedState):
     const url = getRecordValue(args, ["url"]);
     const pattern = getRecordValue(args, ["pattern"]);
     const count = getRecordValue(args, ["count"]);
+    const urls = recordStringArray(args, "urls");
+    const queries = recordStringArray(args, "queries");
 
     if (command) rows.push({ label: "Command", value: truncate(toText(command), 140) });
     if (query) rows.push({ label: "Query", value: truncate(toText(query), 140) });
@@ -253,6 +326,10 @@ function buildDetailsRows(args: unknown, result: unknown, state: ToolFeedState):
     if (url) rows.push({ label: "URL", value: truncate(toText(url), 140) });
     if (pattern) rows.push({ label: "Pattern", value: truncate(toText(pattern), 140) });
     if (count !== undefined) rows.push({ label: "Count", value: toText(count) });
+    if (urls.length === 1) rows.push({ label: "URL", value: truncate(urls[0]!, 140) });
+    if (urls.length > 1) rows.push({ label: "URLs", value: toText(urls.length) });
+    if (queries.length === 1) rows.push({ label: "Query", value: truncate(queries[0]!, 140) });
+    if (queries.length > 1) rows.push({ label: "Queries", value: toText(queries.length) });
   }
 
   if (isRecord(result)) {
@@ -272,9 +349,15 @@ function buildDetailsRows(args: unknown, result: unknown, state: ToolFeedState):
     const resultCount = getRecordValue(result, ["count"]);
     const provider = getRecordValue(result, ["provider"]);
     const error = getRecordValue(result, ["error", "message", "reason"]);
+    const urlResults = Array.isArray(result.results) ? result.results.length : undefined;
+    const places = Array.isArray(result.places) ? result.places.length : undefined;
+    const widgetContextToken = getRecordValue(result, ["widgetContextToken"]);
 
     if (exitCode !== undefined) rows.push({ label: "Exit Code", value: toText(exitCode) });
     if (resultCount !== undefined) rows.push({ label: "Result Count", value: toText(resultCount) });
+    if (urlResults !== undefined) rows.push({ label: "Results", value: toText(urlResults) });
+    if (places !== undefined) rows.push({ label: "Places", value: toText(places) });
+    if (widgetContextToken !== undefined) rows.push({ label: "Widget", value: "Available" });
     if (provider !== undefined) rows.push({ label: "Provider", value: toText(provider) });
     if (error !== undefined) rows.push({ label: "Error", value: truncate(toText(error), 140) });
   }

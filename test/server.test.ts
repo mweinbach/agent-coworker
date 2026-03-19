@@ -334,6 +334,30 @@ function collectSessionEventsUntil(
   });
 }
 
+function makeAbortError(): Error & { name: string } {
+  return Object.assign(new Error("Aborted"), { name: "AbortError" });
+}
+
+async function waitForAbort(signal: AbortSignal, onAbort?: () => void): Promise<never> {
+  if (signal.aborted) {
+    onAbort?.();
+    throw makeAbortError();
+  }
+
+  await new Promise((_, reject) => {
+    signal.addEventListener(
+      "abort",
+      () => {
+        onAbort?.();
+        reject(makeAbortError());
+      },
+      { once: true },
+    );
+  });
+
+  throw makeAbortError();
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -993,7 +1017,7 @@ describe("WebSocket Lifecycle", () => {
         role: "worker",
         mode: "collaborative",
         depth: 1,
-        effectiveModel: "gemini-3-pro-preview",
+        effectiveModel: "gemini-3.1-pro-preview",
       });
       expect(typeof hello?.busy).toBe("boolean");
       expect(["running", "completed"]).toContain(hello?.executionState);
@@ -1011,7 +1035,7 @@ describe("WebSocket Lifecycle", () => {
         role: "worker",
         mode: "collaborative",
         depth: 1,
-        effectiveModel: "gemini-3-pro-preview",
+        effectiveModel: "gemini-3.1-pro-preview",
       });
       expect(["running", "completed"]).toContain(info?.executionState);
       if (info?.executionState === "completed") {
@@ -1185,6 +1209,100 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("cancel on a running parent turn also cancels active child agents", async () => {
+    const tmpDir = await makeTmpProject();
+    let childAbortCount = 0;
+    let resolveChildStarted: (() => void) | null = null;
+    const childStarted = new Promise<void>((resolve) => {
+      resolveChildStarted = resolve;
+    });
+    const { server, url } = await startAgentServer(serverOpts(tmpDir, {
+      runTurnImpl: (async (params: any) => {
+        if (params.agentRole === "worker") {
+          resolveChildStarted?.();
+          await waitForAbort(params.abortSignal, () => {
+            childAbortCount += 1;
+          });
+        }
+
+        await waitForAbort(params.abortSignal);
+      }) as any,
+    }));
+
+    try {
+      const created = await createPersistentAgent(url, "child task", "worker");
+      await childStarted;
+
+      const seen = await new Promise<any[]>((resolve, reject) => {
+        const messages: any[] = [];
+        let sentUserMessage = false;
+        let sentCancel = false;
+        let parentCancelled = false;
+        let childStopped = false;
+        const ws = new WebSocket(`${url}?resumeSessionId=${created.parentSessionId}`);
+        const timer = setTimeout(() => {
+          ws.close();
+          reject(new Error("Timed out waiting for parent cancel and child stop"));
+        }, 10000);
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(typeof e.data === "string" ? e.data : "");
+          messages.push(msg);
+
+          if (!sentUserMessage && msg.type === "server_hello") {
+            sentUserMessage = true;
+            ws.send(JSON.stringify({ type: "user_message", sessionId: created.parentSessionId, text: "go" }));
+            return;
+          }
+
+          if (msg.sessionId !== created.parentSessionId) return;
+
+          if (!sentCancel && msg.type === "session_busy" && msg.busy === true) {
+            sentCancel = true;
+            ws.send(JSON.stringify({ type: "cancel", sessionId: created.parentSessionId }));
+            return;
+          }
+
+          if (msg.type === "session_busy" && msg.busy === false && msg.outcome === "cancelled") {
+            parentCancelled = true;
+          }
+
+          if (
+            msg.type === "agent_status"
+            && msg.agent?.agentId === created.agent.agentId
+            && msg.agent.busy === false
+          ) {
+            childStopped = true;
+          }
+
+          if (parentCancelled && childStopped) {
+            clearTimeout(timer);
+            ws.close();
+            resolve(messages);
+          }
+        };
+
+        ws.onerror = (e) => {
+          clearTimeout(timer);
+          ws.close();
+          reject(new Error(`WebSocket error: ${e}`));
+        };
+      });
+
+      expect(childAbortCount).toBe(1);
+      expect(
+        seen.some(
+          (msg) =>
+            msg.type === "agent_status"
+            && msg.agent?.agentId === created.agent.agentId
+            && msg.agent.busy === false,
+        ),
+      ).toBe(true);
+    } finally {
+      server.stop();
+    }
+  });
+
   test("agent_wait emits an explicit agent_wait_result event", async () => {
     const tmpDir = await makeTmpProject();
     const { server, url } = await startAgentServer(serverOpts(tmpDir, {
@@ -1290,7 +1408,7 @@ describe("WebSocket Lifecycle", () => {
       path.join(tmpDir, ".agent", "config.json"),
       `${JSON.stringify({
         provider: "google",
-        model: "gemini-3-pro-preview",
+        model: "gemini-3.1-pro-preview",
         preferredChildModel: "gemini-3-flash-preview",
       }, null, 2)}\n`,
       "utf-8",
@@ -1307,8 +1425,8 @@ describe("WebSocket Lifecycle", () => {
       const worker = await createPersistentAgent(url, "worker task", "worker");
       const research = await createPersistentAgent(url, "research task", "research");
 
-      expect(worker.agent.effectiveModel).toBe("gemini-3-pro-preview");
-      expect(research.agent.effectiveModel).toBe("gemini-3-pro-preview");
+      expect(worker.agent.effectiveModel).toBe("gemini-3.1-pro-preview");
+      expect(research.agent.effectiveModel).toBe("gemini-3.1-pro-preview");
     } finally {
       server.stop();
     }
@@ -1358,10 +1476,10 @@ describe("WebSocket Lifecycle", () => {
 
       const update = await sendAndWaitForEvent(
         `${url}?resumeSessionId=${childId}`,
-        (sessionId) => ({ type: "set_model", sessionId, model: "gemini-3-pro-preview" }),
+        (sessionId) => ({ type: "set_model", sessionId, model: "gemini-3.1-pro-preview" }),
         (msg) => msg.type === "config_updated",
       );
-      expect(update.config.model).toBe("gemini-3-pro-preview");
+      expect(update.config.model).toBe("gemini-3.1-pro-preview");
 
       await expect(fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8")).rejects.toThrow();
     } finally {
@@ -3044,13 +3162,18 @@ describe("Protocol Doc Parity", () => {
               "codex-cli": {
                 reasoningEffort: "xhigh",
               },
+              google: {
+                nativeWebSearch: true,
+                googleMaps: false,
+              },
             },
           },
         }),
         (message) =>
           message.type === "session_config" &&
           message.config?.providerOptions?.openai?.textVerbosity === "low" &&
-          message.config?.providerOptions?.["codex-cli"]?.reasoningEffort === "xhigh",
+          message.config?.providerOptions?.["codex-cli"]?.reasoningEffort === "xhigh" &&
+          message.config?.providerOptions?.google?.nativeWebSearch === true,
       );
 
       expect(event.config.providerOptions).toEqual({
@@ -3064,14 +3187,22 @@ describe("Protocol Doc Parity", () => {
           reasoningSummary: "detailed",
           textVerbosity: "medium",
         },
+        google: {
+          nativeWebSearch: true,
+          googleMaps: false,
+          thinkingConfig: {
+            thinkingLevel: "low",
+          },
+        },
       });
-      expect((event.config.providerOptions as any)?.google).toBeUndefined();
 
       const persistedConfig = JSON.parse(
         await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),
       ) as any;
       expect(persistedConfig.providerOptions.google.thinkingConfig.includeThoughts).toBe(true);
       expect(persistedConfig.providerOptions.google.thinkingConfig.thinkingLevel).toBe("low");
+      expect(persistedConfig.providerOptions.google.nativeWebSearch).toBe(true);
+      expect(persistedConfig.providerOptions.google.googleMaps).toBe(false);
       expect(persistedConfig.providerOptions.openai.reasoningEffort).toBe("high");
       expect(persistedConfig.providerOptions.openai.reasoningSummary).toBe("detailed");
       expect(persistedConfig.providerOptions.openai.textVerbosity).toBe("low");
@@ -3183,7 +3314,7 @@ describe("Protocol Doc Parity", () => {
           type: "set_config",
           sessionId,
           config: {
-            preferredChildModel: "gemini-3-pro-preview",
+            preferredChildModel: "gemini-3.1-pro-preview",
           },
         }),
         (message) => message.type === "error",
@@ -3191,7 +3322,7 @@ describe("Protocol Doc Parity", () => {
 
       expect(errorEvent.code).toBe("validation_failed");
       expect(errorEvent.source).toBe("session");
-      expect(errorEvent.message).toContain('Unsupported session config preferred child target "gemini-3-pro-preview" for provider openai');
+      expect(errorEvent.message).toContain('Unsupported session config preferred child target "gemini-3.1-pro-preview" for provider openai');
 
       const persistedConfig = JSON.parse(
         await fs.readFile(path.join(tmpDir, ".agent", "config.json"), "utf-8"),

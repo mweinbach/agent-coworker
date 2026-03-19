@@ -36,7 +36,17 @@ describe("pricing", () => {
         it("resolves exact match for google model", () => {
             const pricing = resolveModelPricing("google", "gemini-3-flash-preview");
             expect(pricing).not.toBeNull();
-            expect(pricing!.inputPerMillion).toBe(0.15);
+            expect(pricing!.inputPerMillion).toBe(0.5);
+            expect(pricing!.outputPerMillion).toBe(3);
+            expect(pricing!.cachedInputPerMillion).toBe(0.05);
+        });
+
+        it("resolves exact match for gemini-3.1-flash-lite-preview pricing", () => {
+            const pricing = resolveModelPricing("google", "gemini-3.1-flash-lite-preview");
+            expect(pricing).not.toBeNull();
+            expect(pricing!.inputPerMillion).toBe(0.25);
+            expect(pricing!.outputPerMillion).toBe(1.5);
+            expect(pricing!.cachedInputPerMillion).toBe(0.025);
         });
 
         it("resolves exact match for baseten models", () => {

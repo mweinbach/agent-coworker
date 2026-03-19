@@ -22,15 +22,6 @@ export type ResolvedGoogleInteractionsModel = {
  * This replaces the PI model catalog dependency for Google models.
  */
 const SUPPORTED_GOOGLE_INTERACTIONS_MODELS: Record<string, GoogleInteractionsModelInfo> = {
-  "gemini-3-pro-preview": {
-    id: "gemini-3-pro-preview",
-    name: "Gemini 3 Pro Preview",
-    reasoning: true,
-    input: ["text", "image"],
-    contextWindow: 1_000_000,
-    maxTokens: 64_000,
-    cost: { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
-  },
   "gemini-3.1-pro-preview": {
     id: "gemini-3.1-pro-preview",
     name: "Gemini 3.1 Pro Preview",
@@ -38,7 +29,7 @@ const SUPPORTED_GOOGLE_INTERACTIONS_MODELS: Record<string, GoogleInteractionsMod
     input: ["text", "image"],
     contextWindow: 1_000_000,
     maxTokens: 64_000,
-    cost: { input: 1.25, output: 10, cacheRead: 0.315, cacheWrite: 0 },
+    cost: { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
   },
   "gemini-3.1-pro-preview-customtools": {
     id: "gemini-3.1-pro-preview-customtools",
@@ -47,7 +38,7 @@ const SUPPORTED_GOOGLE_INTERACTIONS_MODELS: Record<string, GoogleInteractionsMod
     input: ["text", "image"],
     contextWindow: 1_000_000,
     maxTokens: 64_000,
-    cost: { input: 1.25, output: 10, cacheRead: 0.315, cacheWrite: 0 },
+    cost: { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
   },
   "gemini-3-flash-preview": {
     id: "gemini-3-flash-preview",
@@ -57,6 +48,15 @@ const SUPPORTED_GOOGLE_INTERACTIONS_MODELS: Record<string, GoogleInteractionsMod
     contextWindow: 1_048_576,
     maxTokens: 65_536,
     cost: { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
+  },
+  "gemini-3.1-flash-lite-preview": {
+    id: "gemini-3.1-flash-lite-preview",
+    name: "Gemini 3.1 Flash-Lite Preview",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
+    cost: { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0 },
   },
 };
 

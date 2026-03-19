@@ -1272,6 +1272,37 @@ describe("safeParseClientMessage", () => {
       }
     });
 
+    test("valid set_config accepts Gemini native tool provider options", () => {
+      const msg = expectOk(
+        JSON.stringify({
+          type: "set_config",
+          sessionId: "s1",
+          config: {
+            providerOptions: {
+              google: {
+                nativeWebSearch: true,
+                googleMaps: false,
+                thinkingConfig: {
+                  thinkingLevel: "minimal",
+                },
+              },
+            },
+          },
+        }),
+      );
+
+      expect(msg.type).toBe("set_config");
+      if (msg.type === "set_config") {
+        expect(msg.config.providerOptions?.google).toEqual({
+          nativeWebSearch: true,
+          googleMaps: false,
+          thinkingConfig: {
+            thinkingLevel: "minimal",
+          },
+        });
+      }
+    });
+
     test("valid set_config accepts clearToolOutputOverflowChars", () => {
       const msg = expectOk(
         JSON.stringify({
@@ -1363,7 +1394,7 @@ describe("safeParseClientMessage", () => {
             config: { providerOptions: { anthropic: { reasoningEffort: "high" } } },
           }),
         ),
-      ).toBe("set_config config.providerOptions only supports openai, codex-cli, and lmstudio");
+      ).toBe("set_config config.providerOptions only supports openai, codex-cli, google, and lmstudio");
       expect(
         expectErr(
           JSON.stringify({

@@ -3,6 +3,9 @@ import {
   CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES,
   CODEX_WEB_SEARCH_MODE_VALUES,
   getCodexWebSearchBackendFromProviderOptions,
+  getGoogleMapsFromProviderOptions,
+  getGoogleNativeWebSearchFromProviderOptions,
+  getGoogleThinkingLevelFromProviderOptions,
   mergeEditableOpenAiCompatibleProviderOptions,
   OPENAI_COMPATIBLE_PROVIDER_NAMES,
   OPENAI_REASONING_EFFORT_VALUES,
@@ -14,6 +17,7 @@ import {
   type CodexWebSearchContextSize,
   type CodexWebSearchLocation,
   type CodexWebSearchMode,
+  type GoogleProviderOptions as SharedGoogleProviderOptions,
   type OpenAiCompatibleProviderName as SharedOpenAiCompatibleProviderName,
   type OpenAiCompatibleProviderOptions as SharedOpenAiCompatibleProviderOptions,
   type OpenAiCompatibleProviderOptionsByProvider,
@@ -21,6 +25,14 @@ import {
   type OpenAiReasoningSummary,
   type OpenAiTextVerbosity,
 } from "../../../../src/shared/openaiCompatibleOptions";
+import {
+  GOOGLE_DYNAMIC_REASONING_EFFORT,
+  normalizeGoogleThinkingLevelForModel,
+  listGoogleReasoningEffortValuesForModel,
+  googleReasoningEffortFromThinkingLevel,
+  type GoogleReasoningEffort,
+  type GoogleThinkingLevel,
+} from "../../../../src/shared/googleThinking";
 
 export const REASONING_EFFORT_VALUES = OPENAI_REASONING_EFFORT_VALUES;
 export const REASONING_SUMMARY_VALUES = OPENAI_REASONING_SUMMARY_VALUES;
@@ -28,6 +40,7 @@ export const TEXT_VERBOSITY_VALUES = OPENAI_TEXT_VERBOSITY_VALUES;
 export const WEB_SEARCH_BACKEND_VALUES = CODEX_WEB_SEARCH_BACKEND_VALUES;
 export const WEB_SEARCH_MODE_VALUES = CODEX_WEB_SEARCH_MODE_VALUES;
 export const WEB_SEARCH_CONTEXT_SIZE_VALUES = CODEX_WEB_SEARCH_CONTEXT_SIZE_VALUES;
+export const GOOGLE_DYNAMIC_REASONING_VALUE = GOOGLE_DYNAMIC_REASONING_EFFORT;
 export const DEFAULT_CODEX_WEB_SEARCH_BACKEND: CodexWebSearchBackend = "native";
 export const DEFAULT_CODEX_WEB_SEARCH_MODE: CodexWebSearchMode = "live";
 
@@ -39,9 +52,12 @@ export type WebSearchBackendValue = CodexWebSearchBackend;
 export type WebSearchModeValue = CodexWebSearchMode;
 export type WebSearchContextSizeValue = CodexWebSearchContextSize;
 export type WebSearchLocationValue = CodexWebSearchLocation;
+export type GoogleReasoningEffortValue = GoogleReasoningEffort;
+export type GoogleThinkingLevelValue = GoogleThinkingLevel;
 
 export type OpenAICompatibleProviderOptions = SharedOpenAiCompatibleProviderOptions;
 export type CodexCliProviderOptions = SharedCodexCliProviderOptions;
+export type GoogleProviderOptions = SharedGoogleProviderOptions;
 export type WorkspaceProviderOptions = OpenAiCompatibleProviderOptionsByProvider;
 
 export const DEFAULT_WORKSPACE_PROVIDER_OPTIONS: {
@@ -138,6 +154,35 @@ export function getWorkspaceWebSearchLocation(
 
 export function hasWorkspaceWebSearchLocation(options: WorkspaceProviderOptions | undefined): boolean {
   return Object.keys(getWorkspaceWebSearchLocation(options)).length > 0;
+}
+
+export function getWorkspaceGoogleNativeWebSearchEnabled(
+  options: WorkspaceProviderOptions | undefined,
+  fallback = false,
+): boolean {
+  return getGoogleNativeWebSearchFromProviderOptions(options, fallback);
+}
+
+export function getWorkspaceGoogleMapsEnabled(
+  options: WorkspaceProviderOptions | undefined,
+  fallback = false,
+): boolean {
+  return getGoogleMapsFromProviderOptions(options, fallback);
+}
+
+export function getWorkspaceGoogleReasoningEffort(
+  options: WorkspaceProviderOptions | undefined,
+  modelId?: string,
+): GoogleReasoningEffortValue {
+  const rawLevel = getGoogleThinkingLevelFromProviderOptions(options);
+  const normalizedLevel = modelId ? normalizeGoogleThinkingLevelForModel(modelId, rawLevel) : rawLevel;
+  return googleReasoningEffortFromThinkingLevel(normalizedLevel);
+}
+
+export function getGoogleReasoningEffortValuesForModel(
+  modelId: string,
+): readonly GoogleReasoningEffortValue[] {
+  return listGoogleReasoningEffortValuesForModel(modelId);
 }
 
 export function listWorkspaceProviderOptionProviders(): readonly OpenAICompatibleProviderName[] {

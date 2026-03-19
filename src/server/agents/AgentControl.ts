@@ -228,4 +228,12 @@ export class AgentControl {
     this.deps.sessionBindings.delete(binding.session.id);
     return this.publish(opts.parentSessionId, binding.session, { executionState: "closed" });
   }
+
+  cancelAll(parentSessionId: string): void {
+    for (const binding of this.deps.sessionBindings.values()) {
+      const session = binding.session;
+      if (!session?.isAgentOf(parentSessionId)) continue;
+      session.cancel();
+    }
+  }
 }

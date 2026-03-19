@@ -909,9 +909,9 @@ function buildDcfModelMatrixRuns(): RunSpec[] {
       maxAttempts: 4,
     },
     {
-      id: "dcf-04-google-gemini-3-pro-preview",
+      id: "dcf-04-google-gemini-3.1-pro-preview",
       provider: "google",
-      model: "gemini-3-pro-preview",
+      model: "gemini-3.1-pro-preview",
       modelGuidance:
         "Include explicit formula references in validation output and stay strict about required artifact names.",
       maxSteps: 180,

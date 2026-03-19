@@ -315,6 +315,70 @@ describe("display citation markers", () => {
     ).toBe("Search [1](https://example.com/search) result");
   });
 
+  test("maps place citations from Gemini annotations into inline markers", () => {
+    expect(
+      normalizeDisplayCitationMarkers("Coffee nearby", {
+        citationMode: "markdown",
+        annotations: [
+          {
+            type: "place_citation",
+            start_index: 0,
+            end_index: 6,
+            name: "Blue Bottle Coffee",
+            url: "https://maps.google.com/?cid=123",
+          },
+        ],
+      }),
+    ).toBe("Coffee [1](https://maps.google.com/?cid=123) nearby");
+  });
+
+  test("tracks native URL context sources for assistant messages", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "nativeUrlContext",
+        result: {
+          provider: "google",
+          urls: ["https://example.com/about"],
+          results: [{ url: "https://example.com/about", status: "success" }],
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationUrlsByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", new Map([[1, "https://example.com/about"]])],
+    ]));
+  });
+
+  test("tracks native Google Maps sources for assistant messages", () => {
+    const feed = [
+      { id: "user-1", kind: "message", role: "user" as const },
+      {
+        id: "tool-1",
+        kind: "tool" as const,
+        name: "nativeGoogleMaps",
+        result: {
+          provider: "google",
+          places: [
+            { name: "Blue Bottle Coffee", url: "https://maps.google.com/?cid=123" },
+            { name: "Sightglass Coffee", url: "https://maps.google.com/?cid=456" },
+          ],
+        },
+      },
+      { id: "assistant-1", kind: "message", role: "assistant" as const },
+    ];
+
+    expect(buildCitationSourcesByMessageId(feed)).toEqual(new Map([
+      ["assistant-1", [
+        { title: "Blue Bottle Coffee", url: "https://maps.google.com/?cid=123" },
+        { title: "Sightglass Coffee", url: "https://maps.google.com/?cid=456" },
+      ]],
+    ]));
+  });
+
   test("appends a compact sources footer when native citations only exist out of band", () => {
     expect(
       normalizeDisplayCitationMarkers("Answer", {

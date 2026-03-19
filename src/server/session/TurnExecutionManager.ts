@@ -732,6 +732,9 @@ export class TurnExecutionManager {
 
   cancel() {
     if (!this.context.state.running) return;
+    if ((this.context.state.sessionInfo.sessionKind ?? "root") === "root") {
+      this.context.deps.cancelAgentSessionsImpl?.(this.context.id);
+    }
     if (this.context.state.abortController) {
       this.context.state.abortController.abort();
     }

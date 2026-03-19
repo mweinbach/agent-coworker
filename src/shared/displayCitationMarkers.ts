@@ -110,21 +110,22 @@ function extractOverflowFilePath(value: unknown): string | null {
   return null;
 }
 
-type UrlCitationAnnotation = {
+type LinkCitationAnnotation = {
   startIndex: number;
   endIndex: number;
   url: string;
+  title?: string;
 };
 
-function extractUrlCitationAnnotations(value: unknown): UrlCitationAnnotation[] {
+function extractLinkCitationAnnotations(value: unknown): LinkCitationAnnotation[] {
   if (!Array.isArray(value)) {
     return [];
   }
 
-  const annotations: UrlCitationAnnotation[] = [];
+  const annotations: LinkCitationAnnotation[] = [];
   for (const entry of value) {
     if (!isRecord(entry)) continue;
-    if (entry.type !== "url_citation") continue;
+    if (entry.type !== "url_citation" && entry.type !== "place_citation") continue;
     if (typeof entry.url !== "string" || entry.url.trim().length === 0) continue;
     if (typeof entry.start_index !== "number" || !Number.isFinite(entry.start_index)) continue;
     if (typeof entry.end_index !== "number" || !Number.isFinite(entry.end_index)) continue;
@@ -132,6 +133,11 @@ function extractUrlCitationAnnotations(value: unknown): UrlCitationAnnotation[] 
       startIndex: Math.max(0, Math.trunc(entry.start_index)),
       endIndex: Math.max(0, Math.trunc(entry.end_index)),
       url: entry.url,
+      ...(typeof entry.title === "string" && entry.title.trim().length > 0
+        ? { title: entry.title }
+        : typeof entry.name === "string" && entry.name.trim().length > 0
+          ? { title: entry.name }
+          : {}),
     });
   }
 
@@ -142,7 +148,7 @@ export function extractCitationUrlsFromAnnotations(annotations: unknown): Map<nu
   const byUrl = new Map<string, number>();
   const out = new Map<number, string>();
 
-  for (const annotation of extractUrlCitationAnnotations(annotations)) {
+  for (const annotation of extractLinkCitationAnnotations(annotations)) {
     if (byUrl.has(annotation.url)) continue;
     const nextIndex = byUrl.size + 1;
     byUrl.set(annotation.url, nextIndex);
@@ -247,6 +253,60 @@ function extractCitationSourcesFromNativeWebSearchResult(result: unknown): Map<n
   return new Map(sources.map((source, index) => [index + 1, source] as const));
 }
 
+function extractCitationSourcesFromNativeUrlContextResult(result: unknown): Map<number, CitationSource> {
+  const record = isRecord(result) ? result : null;
+  const urls = [
+    ...(
+      Array.isArray(record?.urls)
+        ? record.urls
+        : []
+    ),
+    ...(
+      Array.isArray(record?.results)
+        ? record.results.map((entry) => isRecord(entry) ? entry.url : undefined)
+        : []
+    ),
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const deduped = [...new Set(urls)];
+  return new Map(deduped.map((url, index) => [index + 1, { url }] as const));
+}
+
+function extractCitationUrlsFromNativeUrlContextResult(result: unknown): Map<number, string> {
+  return new Map(
+    [...extractCitationSourcesFromNativeUrlContextResult(result).entries()].map(([index, source]) => [index, source.url] as const),
+  );
+}
+
+function extractCitationSourcesFromNativeGoogleMapsResult(result: unknown): Map<number, CitationSource> {
+  const record = isRecord(result) ? result : null;
+  const places = Array.isArray(record?.places) ? record.places : [];
+  const sources = places
+    .map((entry) => {
+      if (!isRecord(entry)) return null;
+      if (typeof entry.url !== "string" || entry.url.trim().length === 0) return null;
+      const source: CitationSource = { url: entry.url };
+      if (typeof entry.name === "string" && entry.name.trim().length > 0) {
+        source.title = entry.name;
+      }
+      return source;
+    })
+    .filter((entry): entry is CitationSource => !!entry);
+  const deduped = new Map<string, CitationSource>();
+  for (const source of sources) {
+    if (!deduped.has(source.url)) {
+      deduped.set(source.url, source);
+    }
+  }
+  return new Map([...deduped.values()].map((source, index) => [index + 1, source] as const));
+}
+
+function extractCitationUrlsFromNativeGoogleMapsResult(result: unknown): Map<number, string> {
+  return new Map(
+    [...extractCitationSourcesFromNativeGoogleMapsResult(result).entries()].map(([index, source]) => [index, source.url] as const),
+  );
+}
+
 function renderCitationIds(
   ids: string[],
   options: CitationDisplayOptions,
@@ -300,7 +360,7 @@ function renderSourcesFooter(options: CitationDisplayOptions): string {
 }
 
 function insertNativeCitationMarkers(text: string, options: CitationDisplayOptions): string {
-  const annotations = extractUrlCitationAnnotations(options.annotations);
+  const annotations = extractLinkCitationAnnotations(options.annotations);
   if (annotations.length === 0) {
     return text;
   }
@@ -445,6 +505,22 @@ export function buildCitationUrlsByMessageId<T extends CitationFeedItem>(feed: r
       continue;
     }
 
+    if (itemKind === "tool" && item.name === "nativeUrlContext") {
+      const nextCitationUrls = extractCitationUrlsFromNativeUrlContextResult(item.result);
+      if (nextCitationUrls.size > 0) {
+        currentCitationUrls = nextCitationUrls;
+      }
+      continue;
+    }
+
+    if (itemKind === "tool" && item.name === "nativeGoogleMaps") {
+      const nextCitationUrls = extractCitationUrlsFromNativeGoogleMapsResult(item.result);
+      if (nextCitationUrls.size > 0) {
+        currentCitationUrls = nextCitationUrls;
+      }
+      continue;
+    }
+
     if (itemKind === "message" && item.role === "assistant") {
       const annotationCitationUrls = extractCitationUrlsFromAnnotations(item.annotations);
       if (annotationCitationUrls.size > 0) {
@@ -475,6 +551,22 @@ export function buildCitationSourcesByMessageId<T extends CitationFeedItem>(feed
 
     if (itemKind === "tool" && item.name === "nativeWebSearch") {
       const nextSources = extractCitationSourcesFromNativeWebSearchResult(item.result);
+      if (nextSources.size > 0) {
+        currentSources = [...nextSources.values()];
+      }
+      continue;
+    }
+
+    if (itemKind === "tool" && item.name === "nativeUrlContext") {
+      const nextSources = extractCitationSourcesFromNativeUrlContextResult(item.result);
+      if (nextSources.size > 0) {
+        currentSources = [...nextSources.values()];
+      }
+      continue;
+    }
+
+    if (itemKind === "tool" && item.name === "nativeGoogleMaps") {
+      const nextSources = extractCitationSourcesFromNativeGoogleMapsResult(item.result);
       if (nextSources.size > 0) {
         currentSources = [...nextSources.values()];
       }

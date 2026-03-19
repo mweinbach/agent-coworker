@@ -4,12 +4,11 @@
   "displayName": "Gemini 3.1 Pro Preview",
   "knowledgeCutoff": "January 2025",
   "supportsImageInput": true,
-  "promptTemplate": "system-models/gemini-3-pro-preview.md",
+  "promptTemplate": "system-models/gemini-3.1-pro-preview.md",
   "providerOptionsDefaults": {
     "thinkingConfig": {
-      "includeThoughts": true,
-      "thinkingLevel": "high"
+      "includeThoughts": true
     }
   },
-  "isDefault": false
+  "isDefault": true
 }

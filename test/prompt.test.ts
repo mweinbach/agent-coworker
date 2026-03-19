@@ -26,8 +26,8 @@ async function makeTmpDirs() {
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const base: AgentConfig = {
     provider: "google",
-    model: "gemini-3-pro-preview",
-    preferredChildModel: "gemini-3-pro-preview",
+    model: "gemini-3.1-pro-preview",
+    preferredChildModel: "gemini-3.1-pro-preview",
     workingDirectory: "/test/working",
     userName: "TestUser",
     knowledgeCutoff: "End of May 2025",
@@ -120,12 +120,12 @@ const IMAGE_GUIDANCE_PROMPT_FILES = [
   "prompts/system-models/claude-sonnet-4-6.md",
   "prompts/system-models/claude-opus-4-6.md",
   "prompts/system-models/gemini-3-flash-preview.md",
-  "prompts/system-models/gemini-3-pro-preview.md",
+  "prompts/system-models/gemini-3.1-pro-preview.md",
 ] as const;
 
 const WEBFETCH_DOWNLOAD_GUIDANCE_PROMPT_FILES = [
   ...IMAGE_GUIDANCE_PROMPT_FILES,
-  "prompts/system-models/gemini-3-pro-preview.md",
+  "prompts/system-models/gemini-3.1-pro-preview.md",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -470,24 +470,24 @@ describe("loadSystemPrompt", () => {
     }
   });
 
-  test("uses model-specific system template for gemini-3-pro-preview when present", async () => {
+  test("uses model-specific system template for gemini-3.1-pro-preview when present", async () => {
     const { builtIn } = await makeTmpDirs();
 
     await writeFile(path.join(builtIn, "prompts", "system.md"), "DEFAULT {{modelName}}");
     await writeFile(
-      path.join(builtIn, "prompts", "system-models", "gemini-3-pro-preview.md"),
+      path.join(builtIn, "prompts", "system-models", "gemini-3.1-pro-preview.md"),
       "GEMINI 3.1 PRO TEMPLATE {{modelName}}"
     );
 
     const config = makeConfig({
       builtInDir: builtIn,
       provider: "google",
-      model: "gemini-3-pro-preview",
+      model: "gemini-3.1-pro-preview",
       skillsDirs: ["/nonexistent/skills"],
     });
     const prompt = await loadSystemPrompt(config);
 
-    expect(prompt).toContain("GEMINI 3.1 PRO TEMPLATE Gemini 3 Pro Preview");
+    expect(prompt).toContain("GEMINI 3.1 PRO TEMPLATE Gemini 3.1 Pro Preview");
     expect(prompt).not.toContain("DEFAULT");
   });
 

@@ -33,7 +33,6 @@ function makeConfig(homeDir: string, overrides: Partial<AgentConfig> = {}): Agen
       google: {
         thinkingConfig: {
           includeThoughts: true,
-          thinkingLevel: "high",
         },
       },
     },
@@ -404,6 +403,97 @@ describe("google native interactions request building", () => {
     expect(genConfig.temperature).toBe(0.7);
   });
 
+  test("buildGoogleNativeRequest routes location-aware prompts to Google Maps when both native tool families are enabled", () => {
+    const request = googleNativeInternal.buildGoogleNativeRequest({
+      model: {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+      },
+      systemPrompt: "You are helpful.",
+      messages: [{ role: "user", content: "Find coffee shops near me" }] as ModelMessage[],
+      tools: [{ name: "bash", description: "Run bash commands", parameters: { type: "object" } }],
+      streamOptions: {
+        nativeWebSearch: true,
+        googleMaps: true,
+      },
+    });
+
+    expect(request.tools).toEqual([
+      { type: "function", name: "bash", description: "Run bash commands", parameters: { type: "object" } },
+      { type: "google_maps" },
+    ]);
+  });
+
+  test("buildGoogleNativeRequest routes explicit web/page tasks to Google Search and URL Context when both native tool families are enabled", () => {
+    const request = googleNativeInternal.buildGoogleNativeRequest({
+      model: {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+      },
+      systemPrompt: "You are helpful.",
+      messages: [{ role: "user", content: "Find coffee shops near me and read their websites" }] as ModelMessage[],
+      tools: [{ name: "bash", description: "Run bash commands", parameters: { type: "object" } }],
+      streamOptions: {
+        nativeWebSearch: true,
+        googleMaps: true,
+      },
+    });
+
+    expect(request.tools).toEqual([
+      { type: "function", name: "bash", description: "Run bash commands", parameters: { type: "object" } },
+      { type: "google_search", search_types: ["web_search"] },
+      { type: "url_context" },
+    ]);
+  });
+
+  test("unsupported Gemini thinking levels are omitted for the selected model", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "google-interactions-thinking-"));
+    const seenStreamOptions: Array<Record<string, unknown>> = [];
+    const runtime = createGoogleInteractionsRuntime({
+      runStepImpl: async (opts) => {
+        seenStreamOptions.push({ ...opts.streamOptions });
+        return {
+          assistant: {
+            role: "assistant",
+            api: "google-interactions",
+            provider: "google",
+            model: "gemini-3.1-pro-preview",
+            content: [{ type: "text", text: "ok" }],
+            usage: { input: 1, output: 1, totalTokens: 2 },
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+          interactionId: "omit-unsupported-thinking",
+        };
+      },
+    });
+
+    await runtime.runTurn(makeParams(makeConfig(homeDir, {
+      model: "gemini-3.1-pro-preview",
+      preferredChildModel: "gemini-3.1-pro-preview",
+      providerOptions: {
+        google: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: "minimal",
+          },
+        },
+      },
+    })));
+
+    expect(seenStreamOptions).toHaveLength(1);
+    expect(seenStreamOptions[0]?.thinkingLevel).toBeUndefined();
+    expect(seenStreamOptions[0]?.thinkingSummaries).toBe("auto");
+  });
+
   test("convertMessagesToInteractionsInput preserves roleful conversation turns", () => {
     const input = googleNativeInternal.convertMessagesToInteractionsInput([
       { role: "user", content: "Hello world" },
@@ -725,6 +815,130 @@ describe("google native interactions request building", () => {
         toolCallId: "call_1",
         toolName: "webSearch",
         input: { query: "NVIDIA GTC 2026 dates announcements keynote" },
+      },
+    ]);
+  });
+
+  test("mapGoogleEventToStreamParts normalizes native Google tool calls and results", () => {
+    const blocks = new Map();
+    const providerToolCallsById = new Map();
+
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.start",
+        index: 0,
+        content: {
+          type: "google_search_call",
+          id: "gs_1",
+          arguments: { queries: ["latest Gemini announcements"] },
+        },
+      },
+      blocks,
+      providerToolCallsById,
+    );
+
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(
+      {
+        event_type: "content.stop",
+        index: 0,
+      },
+      blocks,
+      providerToolCallsById,
+    )).toEqual([
+      { type: "tool-input-end", id: "gs_1", toolName: "nativeWebSearch", providerExecuted: true },
+    ]);
+
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.start",
+        index: 1,
+        content: {
+          type: "google_search_result",
+          call_id: "gs_1",
+          result: [{ search_suggestions: "Latest Gemini announcements" }],
+        },
+      },
+      blocks,
+      providerToolCallsById,
+    );
+
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(
+      {
+        event_type: "content.stop",
+        index: 1,
+      },
+      blocks,
+      providerToolCallsById,
+    )).toEqual([
+      {
+        type: "tool-result",
+        toolCallId: "gs_1",
+        toolName: "nativeWebSearch",
+        output: {
+          provider: "google",
+          status: "completed",
+          callId: "gs_1",
+          queries: ["latest Gemini announcements"],
+          results: [{ search_suggestions: "Latest Gemini announcements" }],
+          raw: [{ search_suggestions: "Latest Gemini announcements" }],
+        },
+        providerExecuted: true,
+      },
+    ]);
+  });
+
+  test("mapGoogleEventToStreamParts carries assistant text annotations through text-end", () => {
+    const blocks = new Map();
+    const providerToolCallsById = new Map();
+
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.start",
+        index: 0,
+        content: { type: "text", text: "Coffee shops" },
+      },
+      blocks,
+      providerToolCallsById,
+    );
+    googleNativeInternal.processStreamEvent(
+      {
+        event_type: "content.delta",
+        index: 0,
+        delta: {
+          type: "text",
+          text: " nearby",
+          annotations: [
+            {
+              type: "place_citation",
+              start_index: 0,
+              end_index: 12,
+              name: "Blue Bottle Coffee",
+              url: "https://maps.google.com/?cid=123",
+            },
+          ],
+        },
+      },
+      blocks,
+      providerToolCallsById,
+    );
+
+    expect(googleNativeInternal.mapGoogleEventToStreamParts(
+      { event_type: "content.stop", index: 0 },
+      blocks,
+      providerToolCallsById,
+    )).toEqual([
+      {
+        type: "text-end",
+        id: "s0",
+        annotations: [
+          {
+            type: "place_citation",
+            start_index: 0,
+            end_index: 12,
+            name: "Blue Bottle Coffee",
+            url: "https://maps.google.com/?cid=123",
+          },
+        ],
       },
     ]);
   });

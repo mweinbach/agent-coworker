@@ -209,6 +209,7 @@ function makeSession(
     sendAgentInputImpl: (opts: any) => Promise<void>;
     waitForAgentImpl: (opts: any) => Promise<any>;
     closeAgentImpl: (opts: any) => Promise<any>;
+    cancelAgentSessionsImpl: (parentSessionId: string) => void;
     deleteSessionImpl: (opts: any) => Promise<void>;
     sessionInfoPatch: Partial<SessionInfoState>;
   }>
@@ -238,6 +239,7 @@ function makeSession(
     sendAgentInputImpl: overrides?.sendAgentInputImpl,
     waitForAgentImpl: overrides?.waitForAgentImpl,
     closeAgentImpl: overrides?.closeAgentImpl,
+    cancelAgentSessionsImpl: overrides?.cancelAgentSessionsImpl,
     deleteSessionImpl: overrides?.deleteSessionImpl,
     sessionInfoPatch: overrides?.sessionInfoPatch,
   });
@@ -844,6 +846,8 @@ describe("AgentSession", () => {
               textVerbosity: "low",
             },
             google: {
+              nativeWebSearch: true,
+              googleMaps: false,
               thinkingConfig: {
                 includeThoughts: true,
                 thinkingLevel: "high",
@@ -864,8 +868,14 @@ describe("AgentSession", () => {
           reasoningEffort: "none",
           textVerbosity: "low",
         },
+        google: {
+          nativeWebSearch: true,
+          googleMaps: false,
+          thinkingConfig: {
+            thinkingLevel: "high",
+          },
+        },
       });
-      expect((evt.config.providerOptions as any)?.google).toBeUndefined();
     });
 
     test("setConfig emits session_config and persists preferredChildModel/observability/backupsEnabled/toolOutputOverflowChars", async () => {
@@ -873,7 +883,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
       await session.setConfig({
-        preferredChildModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3.1-pro-preview",
         observabilityEnabled: true,
         backupsEnabled: false,
         toolOutputOverflowChars: null,
@@ -882,7 +892,7 @@ describe("AgentSession", () => {
 
       const cfgEvt = events.filter((evt) => evt.type === "session_config").at(-1) as any;
       expect(cfgEvt).toBeDefined();
-      expect(cfgEvt.config.preferredChildModel).toBe("gemini-3-pro-preview");
+      expect(cfgEvt.config.preferredChildModel).toBe("gemini-3.1-pro-preview");
       expect(cfgEvt.config.observabilityEnabled).toBe(true);
       expect(cfgEvt.config.backupsEnabled).toBe(false);
       expect(cfgEvt.config.defaultBackupsEnabled).toBe(false);
@@ -890,13 +900,13 @@ describe("AgentSession", () => {
       expect(cfgEvt.config.defaultToolOutputOverflowChars).toBeNull();
       expect(cfgEvt.config.maxSteps).toBe(25);
       expect(cfgEvt.config.childModelRoutingMode).toBe("same-provider");
-      expect(cfgEvt.config.preferredChildModelRef).toBe("google:gemini-3-pro-preview");
+      expect(cfgEvt.config.preferredChildModelRef).toBe("google:gemini-3.1-pro-preview");
       expect(cfgEvt.config.allowedChildModelRefs).toEqual([]);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledTimes(1);
       expect(persistProjectConfigPatchImpl).toHaveBeenCalledWith({
-        preferredChildModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3.1-pro-preview",
         childModelRoutingMode: "same-provider",
-        preferredChildModelRef: "google:gemini-3-pro-preview",
+        preferredChildModelRef: "google:gemini-3.1-pro-preview",
         allowedChildModelRefs: [],
         observabilityEnabled: true,
         backupsEnabled: false,
@@ -985,7 +995,7 @@ describe("AgentSession", () => {
       });
 
       await session.setConfig({
-        preferredChildModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3.1-pro-preview",
       });
 
       expect(persistProjectConfigPatchImpl).not.toHaveBeenCalled();
@@ -997,7 +1007,7 @@ describe("AgentSession", () => {
       if (errEvt) {
         expect(errEvt.code).toBe("validation_failed");
         expect(errEvt.source).toBe("session");
-        expect(errEvt.message).toContain('Unsupported session config preferred child target "gemini-3-pro-preview" for provider openai');
+        expect(errEvt.message).toContain('Unsupported session config preferred child target "gemini-3.1-pro-preview" for provider openai');
       }
     });
 
@@ -1046,7 +1056,7 @@ describe("AgentSession", () => {
       const { session, events } = makeSession({ persistProjectConfigPatchImpl });
 
       await session.setConfig({
-        preferredChildModel: "gemini-3-pro-preview",
+        preferredChildModel: "gemini-3.1-pro-preview",
         observabilityEnabled: true,
         maxSteps: 25,
       });
@@ -2722,6 +2732,32 @@ describe("AgentSession", () => {
           e.type === "user_message"
           && (e as any).clientMessageId === "steer-cancelled"),
       ).toBe(false);
+    });
+
+    test("cancels child agents when a root turn is cancelled", async () => {
+      const cancelAgentSessionsImpl = mock(() => {});
+      const { session } = makeSession({ cancelAgentSessionsImpl });
+
+      mockRunTurn.mockImplementationOnce(async (params: any) => {
+        await new Promise((_, reject) => {
+          params.abortSignal.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("Aborted"), { name: "AbortError" })),
+            { once: true },
+          );
+        });
+
+        throw new Error("unreachable");
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      session.cancel();
+      await sendPromise;
+
+      expect(cancelAgentSessionsImpl).toHaveBeenCalledTimes(1);
+      expect(cancelAgentSessionsImpl).toHaveBeenCalledWith(session.id);
     });
 
     test("persists aggregated usage when a late steer continuation errors after an earlier pass consumed tokens", async () => {

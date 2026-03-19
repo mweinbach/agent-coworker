@@ -12,6 +12,8 @@ import { AGENT_ROLE_DEFINITIONS } from "./server/agents/roles";
 import type { AgentRole } from "./shared/agents";
 import {
   getCodexWebSearchBackendFromProviderOptions,
+  getGoogleMapsFromProviderOptions,
+  getGoogleNativeWebSearchFromProviderOptions,
   isCodexWebSearchMode,
 } from "./shared/openaiCompatibleOptions";
 import { isUserFacingProviderEnabled } from "./providers/catalog";
@@ -138,6 +140,55 @@ function renderCodexNativeWebSearchPrompt(prompt: string, config: AgentConfig): 
   }
 
   return `${prompt}\n\n## Codex Native Web Search\n\nThis Codex CLI session is configured to use provider-native web search for anything beyond your knowledge cutoff.\n\n- Use provider-native web search for general web lookup, opening specific pages, and finding within a page.\n- Prefer provider-native citations and sources when they are available. Do not add a manual \"Sources:\" section just to compensate for native citations.\n- Do not use local webFetch for ordinary HTML page reading in native-web-search sessions.\n- Only use local webFetch when the task explicitly requires downloading or saving a direct file into the local workspace and provider-native web search cannot satisfy that requirement.`;
+}
+
+function renderGoogleNativeToolsPrompt(prompt: string, config: AgentConfig): string {
+  if (config.provider !== "google") {
+    return prompt;
+  }
+
+  const nativeWebSearch = getGoogleNativeWebSearchFromProviderOptions(config.providerOptions);
+  const googleMaps = getGoogleMapsFromProviderOptions(config.providerOptions);
+  if (!nativeWebSearch && !googleMaps) {
+    return prompt;
+  }
+
+  const sections: string[] = [];
+  if (nativeWebSearch) {
+    sections.push(
+      "## Gemini Native Web Tools",
+      "",
+      "This Gemini API session is configured to use provider-native Google Search and URL Context for web access.",
+      "",
+      "- Use Gemini's built-in web search for current web lookup instead of the local `webSearch` tool.",
+      "- Use Gemini's built-in URL Context instead of local `webFetch` for ordinary page reading.",
+      "- Prefer provider-native citations and sources when they are available. Do not add a manual \"Sources:\" section just to compensate for native citations.",
+      "- Only use local file tools when the task explicitly requires saving content into the workspace.",
+    );
+  }
+  if (googleMaps) {
+    sections.push(
+      "## Gemini Google Maps Tool",
+      "",
+      "This Gemini API session also has provider-native Google Maps grounding enabled.",
+      "",
+      "- Use Google Maps grounding for geospatial, business, and local-place questions when it improves the answer.",
+      "- Prefer native place citations and map-derived results when they are available.",
+    );
+  }
+  if (nativeWebSearch && googleMaps) {
+    sections.push(
+      "## Gemini Tool Routing",
+      "",
+      "When both Gemini native web tools and Google Maps are enabled, Cowork routes one provider-native tool family per turn.",
+      "",
+      "- Use Google Maps grounding for clearly geographic or local-business questions.",
+      "- Use Google Search and URL Context for general web lookup and explicit page-reading tasks.",
+      "- Do not assume Google Search and Google Maps are available in the same request.",
+    );
+  }
+
+  return `${prompt}\n\n${sections.join("\n")}`;
 }
 
 const PROVIDER_DISPLAY_NAMES: Record<ProviderName, string> = {
@@ -348,6 +399,7 @@ export async function loadSystemPromptWithSkills(config: AgentConfig): Promise<S
   prompt = renderCapabilitySpecificPrompt(prompt, supportedModel);
   prompt = renderMemorySpecificPrompt(prompt, config.enableMemory ?? true);
   prompt = renderCodexNativeWebSearchPrompt(prompt, config);
+  prompt = renderGoogleNativeToolsPrompt(prompt, config);
   prompt = renderSpawnAgentSpecificPrompt(prompt, config);
   prompt = normalizeLegacySpawnAgentGuidance(prompt);
 

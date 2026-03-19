@@ -24,6 +24,7 @@ import {
   runGoogleNativeInteractionStep,
   type RunGoogleNativeInteractionStep,
 } from "./googleNativeInteractions";
+import { normalizeGoogleThinkingLevelForModel } from "../shared/googleThinking";
 
 import type { ModelMessage } from "../types";
 import type { LlmRuntime, RuntimeRunTurnParams, RuntimeRunTurnResult, RuntimeStepOverride } from "./types";
@@ -35,6 +36,7 @@ type GoogleInteractionsRuntimeOverrides = {
 };
 
 function buildGoogleStreamOptions(
+  modelId: string,
   providerOptions: Record<string, unknown> | undefined,
   abortSignal: AbortSignal | undefined,
   apiKey?: string,
@@ -48,7 +50,7 @@ function buildGoogleStreamOptions(
   const thinkingConfig = asRecord(googleSection.thinkingConfig);
   if (thinkingConfig) {
     const includeThoughts = thinkingConfig.includeThoughts !== false;
-    const level = asNonEmptyString(thinkingConfig.thinkingLevel);
+    const level = normalizeGoogleThinkingLevelForModel(modelId, asNonEmptyString(thinkingConfig.thinkingLevel));
     if (level) options.thinkingLevel = level;
     options.thinkingSummaries = includeThoughts ? "auto" : "none";
     const budget = typeof thinkingConfig.thinkingBudget === "number"
@@ -64,6 +66,13 @@ function buildGoogleStreamOptions(
 
   const toolChoice = asNonEmptyString(googleSection.toolChoice);
   if (toolChoice) options.toolChoice = toolChoice;
+
+  if (googleSection.nativeWebSearch === true) {
+    options.nativeWebSearch = true;
+  }
+  if (googleSection.googleMaps === true) {
+    options.googleMaps = true;
+  }
 
   return options;
 }
@@ -141,6 +150,7 @@ export function createGoogleInteractionsRuntime(
           stepProviderOptions = stepState.providerOptions;
 
           const googleStreamOptions = buildGoogleStreamOptions(
+            resolved.model.id,
             stepProviderOptions ?? asRecord(params.config.providerOptions) ?? undefined,
             params.abortSignal,
             resolved.apiKey,

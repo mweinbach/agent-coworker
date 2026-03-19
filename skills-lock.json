@@ -26,6 +26,11 @@
       "sourceType": "github",
       "computedHash": "c8e14e07a120c98c96253648320850bfd8a52453967b2477ff20bc51904aaa95"
     },
+    "gemini-interactions-api": {
+      "source": "google-gemini/gemini-skills",
+      "sourceType": "github",
+      "computedHash": "f0d51f45c0075be383a0891d239865223cab6cad63d88fde8f859e70c161ed34"
+    },
     "shadcn": {
       "source": "shadcn/ui",
       "sourceType": "github",

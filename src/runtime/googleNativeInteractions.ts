@@ -16,6 +16,8 @@ type GoogleInteractionsStreamOptions = {
   thinkingSummaries?: "auto" | "none";
   maxOutputTokens?: number;
   toolChoice?: string;
+  nativeWebSearch?: boolean;
+  googleMaps?: boolean;
 };
 
 export type GoogleNativeStepRequest = {
@@ -92,6 +94,62 @@ function asNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function extractLatestUserPromptText(messages: ModelMessage[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = asRecord(messages[index]);
+    if (!message || message.role !== "user") continue;
+
+    const directContent = asNonEmptyString(message.content);
+    if (directContent) return directContent;
+
+    if (!Array.isArray(message.content)) continue;
+
+    const parts: string[] = [];
+    for (const rawPart of message.content) {
+      if (typeof rawPart === "string") {
+        const text = asNonEmptyString(rawPart);
+        if (text) parts.push(text);
+        continue;
+      }
+
+      const part = asRecord(rawPart);
+      if (!part) continue;
+
+      const text = asNonEmptyString(part.text) ?? asNonEmptyString(part.inputText);
+      if (text) parts.push(text);
+    }
+
+    if (parts.length > 0) return parts.join("\n");
+  }
+
+  return undefined;
+}
+
+function shouldPreferGoogleMapsForPrompt(prompt: string | undefined): boolean {
+  const normalized = prompt?.trim().toLowerCase();
+  if (!normalized) return false;
+
+  const hasExplicitPageIntent =
+    normalized.includes("http://") ||
+    normalized.includes("https://") ||
+    normalized.includes("www.") ||
+    /\b(url|urls|website|websites|web page|webpage|site|sites|read|summarize|article|page|pages|document|pdf)\b/.test(normalized);
+  if (hasExplicitPageIntent) {
+    return false;
+  }
+
+  if (/\b(near me|nearby|nearest|closest|directions?|route|routing|travel time|distance|address|parking|transit|walk to|drive to)\b/.test(normalized)) {
+    return true;
+  }
+
+  const hasPlaceCategory =
+    /\b(coffee shop|coffee shops|cafe|cafes|restaurant|restaurants|hotel|hotels|bar|bars|pub|pubs|park|parks|museum|museums|store|stores|pharmacy|pharmacies|hospital|hospitals|gas station|gas stations|grocery store|grocery stores|supermarket|supermarkets|airport|airports|train station|train stations|bus station|bus stations|attraction|attractions|landmark|landmarks|local business|local businesses)\b/.test(normalized);
+  const hasLocationQualifier =
+    /\b(in|near|around|within|close to|best)\b/.test(normalized);
+
+  return hasPlaceCategory && hasLocationQualifier;
 }
 
 function getGoogleThoughtSignature(record: Record<string, unknown>): string | undefined {
@@ -297,6 +355,115 @@ function extractTextFromContent(content: unknown): string | undefined {
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
+type NativeGoogleToolName = "nativeWebSearch" | "nativeUrlContext" | "nativeGoogleMaps";
+
+function asRecordArray(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is Record<string, unknown> => entry !== null);
+}
+
+function mergeAnnotationArrays(
+  current: Array<Record<string, unknown>> | undefined,
+  incoming: unknown,
+): Array<Record<string, unknown>> | undefined {
+  const next = asRecordArray(incoming);
+  if (next.length === 0) return current;
+  if (!current || current.length === 0) return next;
+
+  const seen = new Set(current.map((entry) => safeJsonStringify(entry)));
+  const merged = [...current];
+  for (const entry of next) {
+    const signature = safeJsonStringify(entry);
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    merged.push(entry);
+  }
+  return merged;
+}
+
+function nativeToolNameFromContentType(contentType: string): NativeGoogleToolName | null {
+  if (contentType === "google_search_call" || contentType === "google_search_result") {
+    return "nativeWebSearch";
+  }
+  if (contentType === "url_context_call" || contentType === "url_context_result") {
+    return "nativeUrlContext";
+  }
+  if (contentType === "google_maps_call" || contentType === "google_maps_result") {
+    return "nativeGoogleMaps";
+  }
+  return null;
+}
+
+function isNativeGoogleToolCallContentType(contentType: string): boolean {
+  return contentType === "google_search_call" || contentType === "url_context_call" || contentType === "google_maps_call";
+}
+
+function isNativeGoogleToolResultContentType(contentType: string): boolean {
+  return contentType === "google_search_result" || contentType === "url_context_result" || contentType === "google_maps_result";
+}
+
+function extractStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => asNonEmptyString(entry))
+    .filter((entry): entry is string => !!entry);
+}
+
+function flattenGoogleMapsPlaces(result: unknown): Array<Record<string, unknown>> {
+  return asRecordArray(result).flatMap((entry) => asRecordArray(entry.places));
+}
+
+function extractGoogleMapsWidgetContextToken(result: unknown): string | undefined {
+  for (const entry of asRecordArray(result)) {
+    const token = asNonEmptyString(entry.widget_context_token);
+    if (token) return token;
+  }
+  return undefined;
+}
+
+function buildNativeGoogleToolResultOutput(
+  name: NativeGoogleToolName,
+  callId: string,
+  callArguments: Record<string, unknown>,
+  result: unknown,
+): Record<string, unknown> {
+  if (name === "nativeWebSearch") {
+    return {
+      provider: "google",
+      status: "completed",
+      callId,
+      queries: extractStringArray(callArguments.queries),
+      results: asRecordArray(result),
+      raw: result,
+    };
+  }
+
+  if (name === "nativeUrlContext") {
+    return {
+      provider: "google",
+      status: "completed",
+      callId,
+      urls: extractStringArray(callArguments.urls),
+      results: asRecordArray(result),
+      raw: result,
+    };
+  }
+
+  const places = flattenGoogleMapsPlaces(result);
+  const widgetContextToken = extractGoogleMapsWidgetContextToken(result);
+  return {
+    provider: "google",
+    status: "completed",
+    callId,
+    queries: extractStringArray(callArguments.queries),
+    places,
+    ...(widgetContextToken ? { widgetContextToken } : {}),
+    raw: result,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tool conversion: runtime tools → Interactions API tools
 // ---------------------------------------------------------------------------
@@ -312,6 +479,35 @@ function convertToolsToInteractionsTools(
   }));
 }
 
+function buildGoogleBuiltInTools(opts: GoogleNativeStepRequest): Array<Record<string, unknown>> {
+  const nativeWebSearchEnabled = opts.streamOptions.nativeWebSearch === true;
+  const googleMapsEnabled = opts.streamOptions.googleMaps === true;
+
+  if (nativeWebSearchEnabled && googleMapsEnabled) {
+    const latestUserPrompt = extractLatestUserPromptText(opts.messages);
+    if (shouldPreferGoogleMapsForPrompt(latestUserPrompt)) {
+      return [{ type: "google_maps" }];
+    }
+    return [
+      { type: "google_search", search_types: ["web_search"] },
+      { type: "url_context" },
+    ];
+  }
+
+  if (nativeWebSearchEnabled) {
+    return [
+      { type: "google_search", search_types: ["web_search"] },
+      { type: "url_context" },
+    ];
+  }
+
+  if (googleMapsEnabled) {
+    return [{ type: "google_maps" }];
+  }
+
+  return [];
+}
+
 // ---------------------------------------------------------------------------
 // Build request
 // ---------------------------------------------------------------------------
@@ -320,7 +516,10 @@ export function buildGoogleNativeRequest(
   opts: GoogleNativeStepRequest,
 ): Record<string, unknown> {
   const input = convertMessagesToInteractionsInput(opts.messages);
-  const tools = convertToolsToInteractionsTools(opts.tools);
+  const tools = [
+    ...convertToolsToInteractionsTools(opts.tools),
+    ...buildGoogleBuiltInTools(opts),
+  ];
 
   const generationConfig: Record<string, unknown> = {};
 
@@ -374,8 +573,15 @@ export function buildGoogleNativeRequest(
 
 type AssistantContentBlock =
   | { type: "thinking"; thinking: string; thinkingSignature?: string }
-  | { type: "text"; text: string }
-  | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown>; thoughtSignature?: string };
+  | { type: "text"; text: string; annotations?: Array<Record<string, unknown>> }
+  | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown>; thoughtSignature?: string }
+  | { type: "providerToolCall"; id: string; name: NativeGoogleToolName; arguments: Record<string, unknown>; thoughtSignature?: string }
+  | { type: "providerToolResult"; callId: string; name: NativeGoogleToolName; result: unknown; isError?: boolean; thoughtSignature?: string };
+
+type ProviderToolCallState = {
+  name: NativeGoogleToolName;
+  arguments: Record<string, unknown>;
+};
 
 function streamIdForIndex(index: number): string {
   return `s${index}`;
@@ -389,33 +595,78 @@ function queueEventDelivery(
   return pendingEventDelivery.then(() => emitEvent(event));
 }
 
+function rememberProviderToolCall(
+  providerToolCallsById: Map<string, ProviderToolCallState>,
+  id: string,
+  name: NativeGoogleToolName,
+  argumentsRecord: Record<string, unknown>,
+): void {
+  providerToolCallsById.set(id, {
+    name,
+    arguments: { ...argumentsRecord },
+  });
+}
+
 function processStreamEvent(
   event: Record<string, unknown>,
   contentBlocks: Map<number, AssistantContentBlock>,
+  providerToolCallsById: Map<string, ProviderToolCallState>,
 ): void {
   const eventType = event.event_type as string;
 
   if (eventType === "content.start") {
     const index = event.index as number;
-    const content = event.content as Record<string, unknown> | undefined;
+    const content = asRecord(event.content);
     if (!content) return;
 
-    const contentType = content.type as string;
+    const contentType = asNonEmptyString(content.type);
+    if (!contentType) return;
     if (contentType === "text") {
-      contentBlocks.set(index, { type: "text", text: (content.text as string) ?? "" });
+      contentBlocks.set(index, {
+        type: "text",
+        text: asNonEmptyString(content.text) ?? "",
+        ...(mergeAnnotationArrays(undefined, content.annotations) ? { annotations: mergeAnnotationArrays(undefined, content.annotations) } : {}),
+      });
     } else if (contentType === "function_call") {
       contentBlocks.set(index, {
         type: "toolCall",
-        id: (content.id as string) ?? `tool_${Date.now()}_${index}`,
-        name: (content.name as string) ?? "tool",
-        arguments: (content.arguments as Record<string, unknown>) ?? {},
-        ...(content.signature ? { thoughtSignature: content.signature as string } : {}),
+        id: asNonEmptyString(content.id) ?? `tool_${Date.now()}_${index}`,
+        name: asNonEmptyString(content.name) ?? "tool",
+        arguments: asRecord(content.arguments) ?? {},
+        ...(asNonEmptyString(content.signature) ? { thoughtSignature: asNonEmptyString(content.signature) } : {}),
       });
     } else if (contentType === "thought") {
       contentBlocks.set(index, {
         type: "thinking",
         thinking: "",
-        ...(content.signature ? { thinkingSignature: content.signature as string } : {}),
+        ...(asNonEmptyString(content.signature) ? { thinkingSignature: asNonEmptyString(content.signature) } : {}),
+      });
+    } else if (isNativeGoogleToolCallContentType(contentType)) {
+      const name = nativeToolNameFromContentType(contentType);
+      if (!name) return;
+      const id = asNonEmptyString(content.id) ?? `provider_tool_${Date.now()}_${index}`;
+      const argumentsRecord = asRecord(content.arguments) ?? {};
+      contentBlocks.set(index, {
+        type: "providerToolCall",
+        id,
+        name,
+        arguments: argumentsRecord,
+        ...(asNonEmptyString(content.signature) ? { thoughtSignature: asNonEmptyString(content.signature) } : {}),
+      });
+      rememberProviderToolCall(providerToolCallsById, id, name, argumentsRecord);
+    } else if (isNativeGoogleToolResultContentType(contentType)) {
+      const name =
+        providerToolCallsById.get(asNonEmptyString(content.call_id) ?? "")?.name
+        ?? nativeToolNameFromContentType(contentType);
+      const callId = asNonEmptyString(content.call_id);
+      if (!name || !callId) return;
+      contentBlocks.set(index, {
+        type: "providerToolResult",
+        callId,
+        name,
+        result: Array.isArray(content.result) ? content.result : [],
+        isError: content.is_error === true,
+        ...(asNonEmptyString(content.signature) ? { thoughtSignature: asNonEmptyString(content.signature) } : {}),
       });
     }
     return;
@@ -423,16 +674,22 @@ function processStreamEvent(
 
   if (eventType === "content.delta") {
     const index = event.index as number;
-    const delta = event.delta as Record<string, unknown> | undefined;
+    const delta = asRecord(event.delta);
     if (!delta) return;
 
-    const deltaType = delta.type as string;
+    const deltaType = asNonEmptyString(delta.type);
+    if (!deltaType) return;
     const existing = contentBlocks.get(index);
 
     if (deltaType === "text" && existing?.type === "text") {
-      existing.text += (delta.text as string) ?? "";
+      existing.text += String(delta.text ?? "");
+      existing.annotations = mergeAnnotationArrays(existing.annotations, delta.annotations);
     } else if (deltaType === "text" && !existing) {
-      contentBlocks.set(index, { type: "text", text: (delta.text as string) ?? "" });
+      contentBlocks.set(index, {
+        type: "text",
+        text: String(delta.text ?? ""),
+        ...(mergeAnnotationArrays(undefined, delta.annotations) ? { annotations: mergeAnnotationArrays(undefined, delta.annotations) } : {}),
+      });
     } else if (deltaType === "function_call") {
       if (existing?.type === "toolCall") {
         const deltaName = asNonEmptyString(delta.name);
@@ -448,22 +705,74 @@ function processStreamEvent(
           existing.thoughtSignature = deltaSignature;
         }
         // Merge arguments incrementally
-        const deltaArgs = delta.arguments as Record<string, unknown> | undefined;
+        const deltaArgs = asRecord(delta.arguments);
         if (deltaArgs) {
           Object.assign(existing.arguments, deltaArgs);
         }
       } else {
         contentBlocks.set(index, {
           type: "toolCall",
-          id: (delta.id as string) ?? `tool_${Date.now()}_${index}`,
-          name: (delta.name as string) ?? "tool",
-          arguments: (delta.arguments as Record<string, unknown>) ?? {},
-          ...(delta.signature ? { thoughtSignature: delta.signature as string } : {}),
+          id: asNonEmptyString(delta.id) ?? `tool_${Date.now()}_${index}`,
+          name: asNonEmptyString(delta.name) ?? "tool",
+          arguments: asRecord(delta.arguments) ?? {},
+          ...(asNonEmptyString(delta.signature) ? { thoughtSignature: asNonEmptyString(delta.signature) } : {}),
+        });
+      }
+    } else if (isNativeGoogleToolCallContentType(deltaType)) {
+      const name = nativeToolNameFromContentType(deltaType);
+      if (!name) return;
+      if (existing?.type === "providerToolCall") {
+        const deltaId = asNonEmptyString(delta.id);
+        if (deltaId) {
+          existing.id = deltaId;
+        }
+        const deltaSignature = asNonEmptyString(delta.signature);
+        if (deltaSignature) {
+          existing.thoughtSignature = deltaSignature;
+        }
+        const deltaArgs = asRecord(delta.arguments);
+        if (deltaArgs) {
+          Object.assign(existing.arguments, deltaArgs);
+        }
+        rememberProviderToolCall(providerToolCallsById, existing.id, existing.name, existing.arguments);
+      } else {
+        const id = asNonEmptyString(delta.id) ?? `provider_tool_${Date.now()}_${index}`;
+        const argumentsRecord = asRecord(delta.arguments) ?? {};
+        contentBlocks.set(index, {
+          type: "providerToolCall",
+          id,
+          name,
+          arguments: argumentsRecord,
+          ...(asNonEmptyString(delta.signature) ? { thoughtSignature: asNonEmptyString(delta.signature) } : {}),
+        });
+        rememberProviderToolCall(providerToolCallsById, id, name, argumentsRecord);
+      }
+    } else if (isNativeGoogleToolResultContentType(deltaType)) {
+      const callId = asNonEmptyString(delta.call_id);
+      const providerToolCall = callId ? providerToolCallsById.get(callId) : undefined;
+      const name = providerToolCall?.name ?? nativeToolNameFromContentType(deltaType);
+      if (!name || !callId) return;
+      if (existing?.type === "providerToolResult") {
+        existing.callId = callId;
+        existing.result = Array.isArray(delta.result) ? delta.result : existing.result;
+        existing.isError = delta.is_error === true;
+        const deltaSignature = asNonEmptyString(delta.signature);
+        if (deltaSignature) {
+          existing.thoughtSignature = deltaSignature;
+        }
+      } else {
+        contentBlocks.set(index, {
+          type: "providerToolResult",
+          callId,
+          name,
+          result: Array.isArray(delta.result) ? delta.result : [],
+          isError: delta.is_error === true,
+          ...(asNonEmptyString(delta.signature) ? { thoughtSignature: asNonEmptyString(delta.signature) } : {}),
         });
       }
     } else if (deltaType === "thought_summary") {
       if (existing?.type === "thinking") {
-        const summaryContent = delta.content as Record<string, unknown> | undefined;
+        const summaryContent = asRecord(delta.content);
         if (summaryContent?.type === "text" && typeof summaryContent.text === "string") {
           existing.thinking += summaryContent.text;
         }
@@ -480,6 +789,7 @@ function processStreamEvent(
 function mapGoogleEventToStreamParts(
   event: Record<string, unknown>,
   contentBlocks: Map<number, AssistantContentBlock>,
+  providerToolCallsById: Map<string, ProviderToolCallState>,
 ): Array<Record<string, unknown>> {
   const eventType = event.event_type as string;
   if (eventType !== "content.start" && eventType !== "content.delta" && eventType !== "content.stop") {
@@ -515,6 +825,21 @@ function mapGoogleEventToStreamParts(
       return parts;
     }
 
+    if (contentType && isNativeGoogleToolCallContentType(contentType)) {
+      const block = contentBlocks.get(index);
+      if (block?.type !== "providerToolCall") return [];
+      const parts: Array<Record<string, unknown>> = [{
+        type: "tool-input-start",
+        id: block.id,
+        toolName: block.name,
+        providerExecuted: true,
+      }];
+      if (Object.keys(block.arguments).length > 0) {
+        parts.push({ type: "tool-input-delta", id: block.id, delta: safeJsonStringify(block.arguments) });
+      }
+      return parts;
+    }
+
     return [];
   }
 
@@ -541,12 +866,23 @@ function mapGoogleEventToStreamParts(
       return [{ type: "tool-input-delta", id: block.id, delta: safeJsonStringify(deltaArgs) }];
     }
 
+    if (deltaType && isNativeGoogleToolCallContentType(deltaType)) {
+      const block = contentBlocks.get(index);
+      const deltaArgs = asRecord(delta?.arguments);
+      if (block?.type !== "providerToolCall" || !deltaArgs) return [];
+      return [{ type: "tool-input-delta", id: block.id, delta: safeJsonStringify(deltaArgs) }];
+    }
+
     return [];
   }
 
   const block = contentBlocks.get(index);
   if (block?.type === "text") {
-    return [{ type: "text-end", id: streamIdForIndex(index) }];
+    return [{
+      type: "text-end",
+      id: streamIdForIndex(index),
+      ...(block.annotations && block.annotations.length > 0 ? { annotations: block.annotations } : {}),
+    }];
   }
   if (block?.type === "thinking") {
     return [{ type: "reasoning-end", id: streamIdForIndex(index) }];
@@ -556,6 +892,21 @@ function mapGoogleEventToStreamParts(
       { type: "tool-input-end", id: block.id },
       { type: "tool-call", toolCallId: block.id, toolName: block.name, input: block.arguments },
     ];
+  }
+  if (block?.type === "providerToolCall") {
+    return [{ type: "tool-input-end", id: block.id, toolName: block.name, providerExecuted: true }];
+  }
+  if (block?.type === "providerToolResult") {
+    const call = providerToolCallsById.get(block.callId);
+    const output = buildNativeGoogleToolResultOutput(
+      block.name,
+      block.callId,
+      call?.arguments ?? {},
+      block.result,
+    );
+    return [block.isError
+      ? { type: "tool-error", toolCallId: block.callId, toolName: block.name, error: output, providerExecuted: true }
+      : { type: "tool-result", toolCallId: block.callId, toolName: block.name, output, providerExecuted: true }];
   }
   return [];
 }
@@ -579,6 +930,7 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
   } as Interactions.CreateModelInteractionParamsStreaming);
 
   const contentBlocks = new Map<number, AssistantContentBlock>();
+  const providerToolCallsById = new Map<string, ProviderToolCallState>();
   let interactionId: string | undefined;
   let pendingEventDelivery = Promise.resolve();
   let usageData: Record<string, unknown> | undefined;
@@ -632,8 +984,8 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
       }
 
       if (eventType === "content.start" || eventType === "content.delta" || eventType === "content.stop") {
-        processStreamEvent(eventRecord, contentBlocks);
-        for (const part of mapGoogleEventToStreamParts(eventRecord, contentBlocks)) {
+        processStreamEvent(eventRecord, contentBlocks, providerToolCallsById);
+        for (const part of mapGoogleEventToStreamParts(eventRecord, contentBlocks, providerToolCallsById)) {
           pendingEventDelivery = queueEventDelivery(
             pendingEventDelivery,
             emitEvent,
@@ -655,6 +1007,9 @@ export const runGoogleNativeInteractionStep: RunGoogleNativeInteractionStep = as
     const sortedIndices = [...contentBlocks.keys()].sort((a, b) => a - b);
     for (const index of sortedIndices) {
       const block = contentBlocks.get(index)!;
+      if (block.type === "providerToolCall" || block.type === "providerToolResult") {
+        continue;
+      }
       contentArray.push(block);
     }
     assistant.content = contentArray;
@@ -695,7 +1050,9 @@ export const __internal = {
   buildGoogleNativeRequest,
   convertMessagesToInteractionsInput,
   convertToolsToInteractionsTools,
+  extractLatestUserPromptText,
   mapGoogleEventToStreamParts,
   processStreamEvent,
   resolveGoogleApiKey,
+  shouldPreferGoogleMapsForPrompt,
 } as const;

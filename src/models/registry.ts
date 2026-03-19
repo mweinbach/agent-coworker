@@ -16,7 +16,7 @@ import codexCliGpt52Codex from "../../config/models/codex-cli/gpt-5.2-codex.json
 import codexCliGpt54 from "../../config/models/codex-cli/gpt-5.4.json";
 import codexCliGpt54Mini from "../../config/models/codex-cli/gpt-5.4-mini.json";
 import googleGemini3FlashPreview from "../../config/models/google/gemini-3-flash-preview.json";
-import googleGemini3ProPreview from "../../config/models/google/gemini-3-pro-preview.json";
+import googleGemini31FlashLitePreview from "../../config/models/google/gemini-3.1-flash-lite-preview.json";
 import googleGemini31ProPreview from "../../config/models/google/gemini-3.1-pro-preview.json";
 import googleGemini31ProPreviewCustomtools from "../../config/models/google/gemini-3.1-pro-preview-customtools.json";
 import openaiGpt5Mini from "../../config/models/openai/gpt-5-mini.json";
@@ -88,9 +88,9 @@ const RAW_MODEL_REGISTRY_ENTRIES = [
   codexCliGpt54,
   codexCliGpt54Mini,
   googleGemini3FlashPreview,
+  googleGemini31FlashLitePreview,
   googleGemini31ProPreview,
   googleGemini31ProPreviewCustomtools,
-  googleGemini3ProPreview,
   openaiGpt5Mini,
   openaiGpt51,
   openaiGpt52Codex,

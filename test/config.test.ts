@@ -620,7 +620,7 @@ describe("loadConfig", () => {
     });
 
     await writeJson(path.join(cwd, ".agent", "config.json"), {
-      preferredChildModel: "gemini-3-pro-preview",
+      preferredChildModel: "gemini-3.1-pro-preview",
     });
 
     const cfg = await loadConfig({
@@ -630,7 +630,7 @@ describe("loadConfig", () => {
       env: {},
     });
 
-    expect(cfg.preferredChildModel).toBe("gemini-3-pro-preview");
+    expect(cfg.preferredChildModel).toBe("gemini-3.1-pro-preview");
   });
 
   test("legacy subAgentModel config still seeds the preferred child model", async () => {

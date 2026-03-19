@@ -165,6 +165,7 @@ export type SessionDependencies = {
     parentSessionId: string;
     agentId: string;
   }) => Promise<PersistentAgentSummary>;
+  cancelAgentSessionsImpl?: (parentSessionId: string) => void;
   deleteSessionImpl?: (opts: {
     requesterSessionId: string;
     targetSessionId: string;

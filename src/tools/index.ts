@@ -24,16 +24,27 @@ import { createWebSearchTool } from "./webSearch";
 import { createWriteTool } from "./write";
 import { filterToolsForRole } from "../server/agents/toolPolicy";
 import { getAgentRoleDefinition } from "../server/agents/roles";
-import { getCodexWebSearchBackendFromProviderOptions } from "../shared/openaiCompatibleOptions";
+import {
+  getCodexWebSearchBackendFromProviderOptions,
+  getGoogleNativeWebSearchFromProviderOptions,
+} from "../shared/openaiCompatibleOptions";
 
 function usesLegacyCodexWebSearch(ctx: ToolContext): boolean {
   if (ctx.config.provider !== "codex-cli") return false;
   return getCodexWebSearchBackendFromProviderOptions(ctx.config.providerOptions) === "exa";
 }
 
+function usesGoogleNativeWebTools(ctx: ToolContext): boolean {
+  if (ctx.config.provider !== "google") return false;
+  return getGoogleNativeWebSearchFromProviderOptions(ctx.config.providerOptions) === true;
+}
+
 export function createTools(ctx: ToolContext): Record<string, any> {
   const askTool = createAskTool(ctx);
-  const includeLegacyWebSearch = ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx);
+  const includeLegacyWebSearch =
+    !usesGoogleNativeWebTools(ctx)
+    && (ctx.config.provider !== "codex-cli" || usesLegacyCodexWebSearch(ctx));
+  const includeWebFetch = !usesGoogleNativeWebTools(ctx);
   const baseTools = {
     bash: createBashTool(ctx),
     read: createReadTool(ctx),
@@ -42,7 +53,7 @@ export function createTools(ctx: ToolContext): Record<string, any> {
     glob: createGlobTool(ctx),
     grep: createGrepTool(ctx),
     ...(includeLegacyWebSearch ? { webSearch: createWebSearchTool(ctx) } : {}),
-    webFetch: createWebFetchTool(ctx),
+    ...(includeWebFetch ? { webFetch: createWebFetchTool(ctx) } : {}),
     ask: askTool,
     AskUserQuestion: askTool,
     todoWrite: createTodoWriteTool(ctx),

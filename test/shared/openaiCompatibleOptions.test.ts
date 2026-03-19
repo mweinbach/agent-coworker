@@ -2,12 +2,15 @@ import { describe, expect, test } from "bun:test";
 
 import {
   getCodexWebSearchBackendFromProviderOptions,
+  getGoogleMapsFromProviderOptions,
+  getGoogleNativeWebSearchFromProviderOptions,
+  getGoogleThinkingLevelFromProviderOptions,
   mergeEditableOpenAiCompatibleProviderOptions,
   pickEditableOpenAiCompatibleProviderOptions,
 } from "../../src/shared/openaiCompatibleOptions";
 
 describe("OpenAI compatible provider option helpers", () => {
-  test("pickEditableOpenAiCompatibleProviderOptions selects only valid openai/codex fields", () => {
+  test("pickEditableOpenAiCompatibleProviderOptions selects editable provider option fields", () => {
     const input = {
       openai: {
         reasoningEffort: "high",
@@ -33,7 +36,9 @@ describe("OpenAI compatible provider option helpers", () => {
         },
       },
       google: {
-        thinkingConfig: { includeThoughts: true },
+        nativeWebSearch: true,
+        googleMaps: false,
+        thinkingConfig: { thinkingLevel: "low" },
       },
       invalid: "value",
     };
@@ -59,6 +64,13 @@ describe("OpenAI compatible provider option helpers", () => {
             city: "New York",
             timezone: "America/New_York",
           },
+        },
+      },
+      google: {
+        nativeWebSearch: true,
+        googleMaps: false,
+        thinkingConfig: {
+          thinkingLevel: "low",
         },
       },
     });
@@ -166,5 +178,47 @@ describe("OpenAI compatible provider option helpers", () => {
         webSearchBackend: "exa",
       },
     })).toBe("exa");
+  });
+
+  test("google provider option getters read editable Gemini tool toggles", () => {
+    const providerOptions = {
+      google: {
+        nativeWebSearch: true,
+        googleMaps: false,
+        thinkingConfig: { thinkingLevel: "medium" },
+      },
+    };
+
+    expect(getGoogleNativeWebSearchFromProviderOptions(providerOptions)).toBe(true);
+    expect(getGoogleMapsFromProviderOptions(providerOptions)).toBe(false);
+    expect(getGoogleThinkingLevelFromProviderOptions(providerOptions)).toBe("medium");
+  });
+
+  test("mergeEditableOpenAiCompatibleProviderOptions preserves explicit empty Gemini thinkingConfig clears", () => {
+    const merged = mergeEditableOpenAiCompatibleProviderOptions(
+      {
+        google: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: "low",
+          },
+          nativeWebSearch: true,
+        },
+      },
+      {
+        google: {
+          thinkingConfig: {},
+        },
+      },
+    );
+
+    expect(merged).toEqual({
+      google: {
+        thinkingConfig: {
+          includeThoughts: true,
+        },
+        nativeWebSearch: true,
+      },
+    });
   });
 });

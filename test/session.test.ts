@@ -3387,6 +3387,46 @@ describe("AgentSession", () => {
       expect(lastPersistCall.snapshot.context.providerState).toEqual(googleProviderState);
     });
 
+    test("retries once when the stored Google continuation handle is rejected", async () => {
+      const freshGoogleProviderState = {
+        provider: "google" as const,
+        model: "gemini-3-flash-preview",
+        interactionId: "interaction_fresh",
+        updatedAt: "2026-03-19T18:30:00.000Z",
+      };
+      mockRunTurn
+        .mockImplementationOnce(async () => {
+          throw new Error("Invalid previous_interaction_id: interaction_id not found");
+        })
+        .mockImplementationOnce(async () => ({
+          text: "ok",
+          reasoningText: undefined,
+          responseMessages: [{ role: "assistant", content: "ok" }],
+          providerState: freshGoogleProviderState,
+        }));
+
+      const dir = "/tmp/test-session";
+      const config = makeConfig(dir, {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        preferredChildModel: "gemini-3-flash-preview",
+      });
+      const { session } = makeSession({ config });
+      (session as any).state.providerState = {
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        interactionId: "interaction_stale",
+        updatedAt: "2026-03-19T18:00:00.000Z",
+      };
+
+      await session.sendUserMessage("hello");
+
+      expect(mockRunTurn).toHaveBeenCalledTimes(2);
+      expect((mockRunTurn.mock.calls[0][0] as any).providerState?.interactionId).toBe("interaction_stale");
+      expect((mockRunTurn.mock.calls[1][0] as any).providerState).toBeNull();
+      expect((session as any).state.providerState).toEqual(freshGoogleProviderState);
+    });
+
     test("persists full session context including response history", async () => {
       mockRunTurn.mockResolvedValueOnce({
         text: "assistant reply",

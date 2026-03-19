@@ -319,6 +319,81 @@ describe("desktop transcript feed mapping", () => {
     ]);
   });
 
+  test("dedupes repeated-start legacy reasoning when it matches an earlier streamed step", () => {
+    const transcript: TranscriptEvent[] = [
+      {
+        ts: "2024-01-01T00:00:00.000Z",
+        threadId: "thread-1",
+        direction: "client",
+        payload: { type: "user_message", text: "tell me about gtc this year" },
+      },
+      {
+        ts: "2024-01-01T00:00:01.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-google-3",
+          index: 0,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          partType: "start",
+          part: {},
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:02.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-google-3",
+          index: 1,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          partType: "reasoning_delta",
+          part: { id: "s0", mode: "reasoning", text: "Searching for the latest GTC details." },
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:03.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: {
+          type: "model_stream_chunk",
+          sessionId: "thread-session",
+          turnId: "turn-google-3",
+          index: 2,
+          provider: "google",
+          model: "gemini-3.1-pro-preview-customtools",
+          partType: "start",
+          part: {},
+        },
+      },
+      {
+        ts: "2024-01-01T00:00:04.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: { type: "reasoning", kind: "reasoning", text: "Searching for the latest GTC details." },
+      },
+      {
+        ts: "2024-01-01T00:00:05.000Z",
+        threadId: "thread-1",
+        direction: "server",
+        payload: { type: "assistant_message", text: "Here is the summary." },
+      },
+    ];
+
+    const feed = mapTranscriptToFeed(transcript);
+    const reasoning = feed.filter((item) => item.kind === "reasoning");
+
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0]?.text).toBe("Searching for the latest GTC details.");
+    expect(feed.map((item) => item.kind)).toEqual(["message", "reasoning", "message"]);
+  });
+
   test("preserves transcript event order instead of sorting by timestamps", () => {
     const transcript: TranscriptEvent[] = [
       {

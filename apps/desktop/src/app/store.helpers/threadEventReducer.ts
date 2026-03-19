@@ -10,6 +10,7 @@ import {
 import {
   applyModelStreamUpdateToThreadFeed as applyModelStreamUpdateToThreadFeedCore,
   developerDiagnosticSystemLineFromServerEvent,
+  hasMatchingStreamedReasoningText,
   reasoningInsertBeforeAssistantAfterStreamReplay,
   shouldSkipAssistantMessageAfterStreamReplay,
   shouldSuppressRawDebugLogLine,
@@ -824,7 +825,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     }
 
     if (evt.type === "reasoning") {
-      if (stream.lastReasoningTurnId && stream.reasoningTurns.has(stream.lastReasoningTurnId)) {
+      if (hasMatchingStreamedReasoningText(stream, evt.text)) {
         return;
       }
 

@@ -204,6 +204,35 @@ function isInvalidOpenAiContinuationError(error: unknown): boolean {
   );
 }
 
+function isInvalidGoogleContinuationError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  const normalized = text.toLowerCase();
+  const mentionsInteractionId =
+    normalized.includes("interaction_id") ||
+    normalized.includes("interaction id") ||
+    normalized.includes("previous_interaction_id") ||
+    normalized.includes("previous interaction");
+  if (!mentionsInteractionId) return false;
+
+  return (
+    normalized.includes("not found") ||
+    normalized.includes("invalid") ||
+    normalized.includes("expired") ||
+    normalized.includes("unknown") ||
+    normalized.includes("does not exist")
+  );
+}
+
+function isInvalidProviderManagedContinuationError(provider: unknown, error: unknown): boolean {
+  if (supportsOpenAiContinuation(provider)) {
+    return isInvalidOpenAiContinuationError(error);
+  }
+  if (provider === "google") {
+    return isInvalidGoogleContinuationError(error);
+  }
+  return false;
+}
+
 function mergeTurnUsage(
   total: TurnUsage | undefined,
   next: TurnUsage | undefined,
@@ -578,15 +607,17 @@ export class TurnExecutionManager {
           res = await invokeRunTurn(remainingSteps);
         } catch (error) {
           const shouldRetryContinuation =
-            supportsOpenAiContinuation(this.context.state.config.provider) &&
+            supportsProviderManagedContinuationProvider(this.context.state.config.provider) &&
             this.context.state.providerState !== null &&
-            isInvalidOpenAiContinuationError(error);
+            isInvalidProviderManagedContinuationError(this.context.state.config.provider, error);
 
           if (!shouldRetryContinuation) {
             throw error;
           }
 
-          this.log("[warn] stored OpenAI continuation handle was rejected; retrying from local transcript");
+          this.log(
+            `[warn] stored ${this.context.state.config.provider} continuation handle was rejected; retrying from local transcript`
+          );
           this.context.state.providerState = null;
           this.context.queuePersistSessionSnapshot("session.provider_state_invalidated");
           res = await invokeRunTurn(remainingSteps, null);

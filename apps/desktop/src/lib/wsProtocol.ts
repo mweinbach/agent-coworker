@@ -12,9 +12,14 @@ export type {
   ChildModelRoutingMode,
   MCPServerConfig,
   ProviderName,
+  SkillCatalogSnapshot,
   ServerErrorCode,
   ServerErrorSource,
   SkillEntry,
+  SkillInstallPreview,
+  SkillInstallationEntry,
+  SkillMutationTargetScope,
+  SkillUpdateCheckResult,
   TodoItem,
 } from "../../../../src/types";
 

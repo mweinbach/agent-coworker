@@ -102,9 +102,9 @@ async function discoverSkillRoots(rootDir: string): Promise<string[]> {
   const found = new Set<string>();
 
   async function visit(dir: string): Promise<void> {
-    let dirents: Awaited<ReturnType<typeof fs.readdir>>;
+    let dirents: Array<{ name: string; isDirectory: () => boolean; isFile: () => boolean }>;
     try {
-      dirents = await fs.readdir(dir, { withFileTypes: true });
+      dirents = await fs.readdir(dir, { withFileTypes: true, encoding: "utf8" });
     } catch {
       return;
     }

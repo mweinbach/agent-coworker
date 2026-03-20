@@ -220,10 +220,20 @@ export type AppStoreState = {
   quitAndInstallUpdate: () => Promise<void>;
 
   openSkills: () => Promise<void>;
+  refreshSkillsCatalog: () => Promise<void>;
   selectSkill: (skillName: string) => Promise<void>;
+  selectSkillInstallation: (installationId: string) => Promise<void>;
+  previewSkillInstall: (sourceInput: string, targetScope: "project" | "global") => Promise<void>;
+  installSkills: (sourceInput: string, targetScope: "project" | "global") => Promise<void>;
   disableSkill: (skillName: string) => Promise<void>;
   enableSkill: (skillName: string) => Promise<void>;
   deleteSkill: (skillName: string) => Promise<void>;
+  disableSkillInstallation: (installationId: string) => Promise<void>;
+  enableSkillInstallation: (installationId: string) => Promise<void>;
+  deleteSkillInstallation: (installationId: string) => Promise<void>;
+  copySkillInstallation: (installationId: string, targetScope: "project" | "global") => Promise<void>;
+  checkSkillInstallationUpdate: (installationId: string) => Promise<void>;
+  updateSkillInstallation: (installationId: string) => Promise<void>;
 
   applyWorkspaceDefaultsToThread: (threadId: string, mode?: "auto" | "auto-resume" | "explicit") => Promise<void>;
   updateWorkspaceDefaults: (workspaceId: string, patch: WorkspaceDefaultsPatch) => Promise<void>;

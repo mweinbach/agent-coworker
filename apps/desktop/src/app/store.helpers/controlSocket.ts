@@ -345,9 +345,14 @@ export function createControlSocketHelpers(
           resolveControlSessionWaiters(workspaceId, evt.sessionId);
 
           try {
+            socket.send({ type: "skills_catalog_get", sessionId: evt.sessionId });
             socket.send({ type: "list_skills", sessionId: evt.sessionId });
             const selected = get().workspaceRuntimeById[workspaceId]?.selectedSkillName;
             if (selected) socket.send({ type: "read_skill", sessionId: evt.sessionId, skillName: selected });
+            const selectedInstallationId = get().workspaceRuntimeById[workspaceId]?.selectedSkillInstallationId;
+            if (selectedInstallationId) {
+              socket.send({ type: "skill_installation_get", sessionId: evt.sessionId, installationId: selectedInstallationId });
+            }
             socket.send({ type: "list_sessions", sessionId: evt.sessionId, scope: "workspace" });
             socket.send({ type: "provider_catalog_get", sessionId: evt.sessionId });
             socket.send({ type: "provider_auth_methods_get", sessionId: evt.sessionId });
@@ -515,6 +520,35 @@ export function createControlSocketHelpers(
           return;
         }
 
+        if (evt.type === "skills_catalog") {
+          set((s) => {
+            const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
+            const selectedInstallationId = workspaceRuntime.selectedSkillInstallationId;
+            const selectedInstallation =
+              selectedInstallationId
+                ? evt.catalog.installations.find((installation) => installation.installationId === selectedInstallationId) ?? null
+                : null;
+            return {
+              workspaceRuntimeById: {
+                ...s.workspaceRuntimeById,
+                [workspaceId]: {
+                  ...workspaceRuntime,
+                  skillsCatalog: evt.catalog,
+                  skillCatalogLoading: false,
+                  skillCatalogError: null,
+                  skillsMutationBlocked: evt.mutationBlocked,
+                  skillsMutationBlockedReason: evt.mutationBlockedReason ?? null,
+                  skillMutationPendingKeys: {},
+                  skillMutationError: null,
+                  selectedSkillInstallationId: selectedInstallation ? selectedInstallationId : null,
+                  selectedSkillInstallation: selectedInstallation,
+                },
+              },
+            };
+          });
+          return;
+        }
+
         if (evt.type === "skill_content") {
           set((s) => ({
             workspaceRuntimeById: {
@@ -523,6 +557,61 @@ export function createControlSocketHelpers(
                 ...s.workspaceRuntimeById[workspaceId],
                 selectedSkillName: evt.skill.name,
                 selectedSkillContent: evt.content,
+              },
+            },
+          }));
+          return;
+        }
+
+        if (evt.type === "skill_installation") {
+          set((s) => ({
+            workspaceRuntimeById: {
+              ...s.workspaceRuntimeById,
+              [workspaceId]: {
+                ...s.workspaceRuntimeById[workspaceId],
+                selectedSkillInstallationId: evt.installation?.installationId ?? s.workspaceRuntimeById[workspaceId].selectedSkillInstallationId,
+                selectedSkillInstallation: evt.installation,
+                  selectedSkillContent:
+                    typeof evt.content === "string"
+                      ? evt.content
+                      : evt.content === null
+                        ? null
+                        : s.workspaceRuntimeById[workspaceId].selectedSkillContent,
+                skillMutationPendingKeys: {},
+                skillMutationError: null,
+              },
+            },
+          }));
+          return;
+        }
+
+        if (evt.type === "skill_install_preview") {
+          set((s) => ({
+            workspaceRuntimeById: {
+              ...s.workspaceRuntimeById,
+              [workspaceId]: {
+                ...s.workspaceRuntimeById[workspaceId],
+                selectedSkillPreview: evt.preview,
+                skillMutationPendingKeys: {},
+                skillMutationError: null,
+              },
+            },
+          }));
+          return;
+        }
+
+        if (evt.type === "skill_installation_update_check") {
+          set((s) => ({
+            workspaceRuntimeById: {
+              ...s.workspaceRuntimeById,
+              [workspaceId]: {
+                ...s.workspaceRuntimeById[workspaceId],
+                skillUpdateChecksByInstallationId: {
+                  ...s.workspaceRuntimeById[workspaceId].skillUpdateChecksByInstallationId,
+                  [evt.result.installationId]: evt.result,
+                },
+                skillMutationPendingKeys: {},
+                skillMutationError: null,
               },
             },
           }));
@@ -725,6 +814,16 @@ export function createControlSocketHelpers(
                 [workspaceId]: {
                   ...workspaceRuntime,
                   memoriesLoading: hasPendingMemories ? false : workspaceRuntime.memoriesLoading,
+                  ...(evt.message.toLowerCase().includes("skill")
+                    ? {
+                        skillCatalogLoading: false,
+                        skillCatalogError: evt.message,
+                        skillsMutationBlocked: false,
+                        skillsMutationBlockedReason: null,
+                        skillMutationPendingKeys: {},
+                        skillMutationError: evt.message,
+                      }
+                    : {}),
                   ...(hasPendingBackupState
                     ? {
                         workspaceBackupsLoading: false,
@@ -795,6 +894,10 @@ export function createControlSocketHelpers(
                     controlConfig: null,
                     controlSessionConfig: null,
                     memoriesLoading: false,
+                    skillCatalogLoading: false,
+                    skillsMutationBlocked: false,
+                    skillsMutationBlockedReason: null,
+                    skillMutationPendingKeys: {},
                   },
                 }
               : s.workspaceRuntimeById,

@@ -210,7 +210,7 @@ async function readAgentInterface(skillRoot: string): Promise<SkillEntry["interf
   const agentsDir = path.join(skillRoot, "agents");
   let entries: Array<{ name: string; isFile: boolean }> = [];
   try {
-    const dirents = await fs.readdir(agentsDir, { withFileTypes: true });
+    const dirents = await fs.readdir(agentsDir, { withFileTypes: true, encoding: "utf8" });
     entries = dirents.map((entry) => ({ name: entry.name, isFile: entry.isFile() }));
   } catch {
     return undefined;
@@ -335,7 +335,7 @@ function getScanScopeDirs(descriptors: SkillScopeDescriptor[], includeDisabled: 
 
 async function buildInstallationEntry(opts: {
   scopeDir: ScanScopeDir;
-  dirent: Awaited<ReturnType<typeof fs.readdir>>[number];
+  dirent: { name: string };
 }): Promise<SkillInstallationEntry> {
   const rootDir = path.join(opts.scopeDir.skillsDir, opts.dirent.name);
   const skillPath = path.join(rootDir, "SKILL.md");
@@ -455,9 +455,9 @@ export async function scanSkillCatalog(
   const installations: SkillInstallationEntry[] = [];
 
   for (const scopeDir of scanDirs) {
-    let dirents: Awaited<ReturnType<typeof fs.readdir>>;
+    let dirents: Array<{ name: string; isDirectory: () => boolean }>;
     try {
-      dirents = await fs.readdir(scopeDir.skillsDir, { withFileTypes: true });
+      dirents = await fs.readdir(scopeDir.skillsDir, { withFileTypes: true, encoding: "utf8" });
     } catch {
       continue;
     }

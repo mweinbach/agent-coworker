@@ -106,6 +106,13 @@ function looksLikeInlineRepoPath(reference: string): boolean {
 }
 
 function looksLikeMarkdownRepoPath(reference: string): boolean {
+  const normalized = normalizeDocReference(reference);
+  if (normalized.startsWith("./")) {
+    const stripped = normalized.slice(2);
+    if (stripped.startsWith(".")) return false;
+    if (/\.md$/i.test(stripped)) return true;
+  }
+
   return looksLikeInlineRepoPath(reference) || isPlainRelativeDocLink(reference);
 }
 

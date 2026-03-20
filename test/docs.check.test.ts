@@ -69,4 +69,12 @@ describe("docs checker parity", () => {
       "websocket-protocol.md",
     ]);
   });
+
+  test("collectRepoPathReferences keeps dot-relative markdown doc links", () => {
+    expect(collectRepoPathReferences(
+      "See [Observability](./observability.md) from this doc.",
+    )).toEqual([
+      "./observability.md",
+    ]);
+  });
 });

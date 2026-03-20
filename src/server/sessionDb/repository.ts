@@ -7,6 +7,7 @@ import type { PersistedSessionSnapshot, PersistedSessionSummary } from "../sessi
 import type { ModelMessage } from "../../types";
 import { sessionSnapshotSchema, type SessionSnapshot } from "../../shared/sessionSnapshot";
 import { mapPersistedSessionRecordRow, mapPersistedSessionSubagentSummaryRow, mapPersistedSessionSummaryRow } from "./mappers";
+import { sameWorkspacePath } from "../../utils/workspacePath";
 import {
   parseBooleanInteger,
   parseJsonStringWithSchema,
@@ -26,7 +27,9 @@ export class SessionDbRepository {
   }
 
   listSessions(opts?: { workingDirectory?: string | null }): PersistedSessionSummary[] {
-    const rows = (opts?.workingDirectory
+    const filterWorkspace = opts?.workingDirectory != null && String(opts.workingDirectory).trim() !== "";
+
+    const rows = (filterWorkspace
       ? this.db
           .query(
             `SELECT
@@ -41,13 +44,13 @@ export class SessionDbRepository {
                message_count,
                last_event_seq,
                has_pending_ask,
-               has_pending_approval
+               has_pending_approval,
+               working_directory
              FROM sessions
              WHERE session_kind = 'root'
-               AND working_directory = ?
              ORDER BY updated_at DESC`,
           )
-          .all(opts.workingDirectory)
+          .all()
       : this.db
           .query(
             `SELECT
@@ -69,7 +72,17 @@ export class SessionDbRepository {
           )
           .all()) as Array<Record<string, unknown>>;
 
-    return rows.map(mapPersistedSessionSummaryRow);
+    const mapped = filterWorkspace
+      ? rows.filter((row) => sameWorkspacePath(String(row.working_directory ?? ""), opts!.workingDirectory!))
+      : rows;
+
+    return mapped.map((row) => {
+      if (!filterWorkspace) {
+        return mapPersistedSessionSummaryRow(row);
+      }
+      const { working_directory: _wd, ...summaryRow } = row;
+      return mapPersistedSessionSummaryRow(summaryRow);
+    });
   }
 
   listAgentSessions(parentSessionId: string): PersistentAgentSummary[] {

@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   getPersistedSessionFilePath,
+  LEGACY_JSON_SESSION_LIST_LAST_EVENT_SEQ,
   listPersistedSessionSnapshots,
   parsePersistedSessionSnapshot,
   readPersistedSessionSnapshot,
@@ -218,5 +219,35 @@ describe("sessionStore", () => {
 
     expect(summaries.map((summary) => summary.sessionId)).toEqual(["sess-b", "sess-a"]);
     expect(summaries).toHaveLength(2);
+    for (const summary of summaries) {
+      expect(summary.lastEventSeq).toBe(LEGACY_JSON_SESSION_LIST_LAST_EVENT_SEQ);
+    }
+  });
+
+  test("listPersistedSessionSnapshots filters by workingDirectory for workspace scope parity", async () => {
+    const sessionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-store-wd-"));
+    const snapshotA = makeSnapshot("sess-a");
+    const snapshotB = {
+      ...makeSnapshot("sess-b"),
+      config: {
+        ...makeSnapshot("sess-b").config,
+        workingDirectory: "/tmp/other-workspace",
+      },
+      updatedAt: "2026-02-19T00:00:03.000Z",
+    };
+    await writePersistedSessionSnapshot({ paths: { sessionsDir }, snapshot: snapshotA });
+    await writePersistedSessionSnapshot({ paths: { sessionsDir }, snapshot: snapshotB });
+
+    const scoped = await listPersistedSessionSnapshots(
+      { sessionsDir },
+      { workingDirectory: "/tmp/workspace" },
+    );
+    expect(scoped.map((s) => s.sessionId)).toEqual(["sess-a"]);
+
+    const scopedTrailing = await listPersistedSessionSnapshots(
+      { sessionsDir },
+      { workingDirectory: "/tmp/workspace/" },
+    );
+    expect(scopedTrailing.map((s) => s.sessionId)).toEqual(["sess-a"]);
   });
 });

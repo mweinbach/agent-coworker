@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
+import { sameWorkspacePath } from "../../utils/workspacePath";
 import { deletePersistedSessionSnapshot, listPersistedSessionSnapshots } from "../sessionStore";
 import type { SessionContext } from "./SessionContext";
 
@@ -52,7 +53,9 @@ export class SessionAdminManager {
         ? this.context.deps.sessionDb.listSessions({
             ...(scope === "workspace" ? { workingDirectory: this.context.state.config.workingDirectory } : {}),
           })
-        : await listPersistedSessionSnapshots(this.context.getCoworkPaths());
+        : await listPersistedSessionSnapshots(this.context.getCoworkPaths(), {
+            ...(scope === "workspace" ? { workingDirectory: this.context.state.config.workingDirectory } : {}),
+          });
       this.context.emit({ type: "sessions", sessionId: this.context.id, sessions });
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to list sessions: ${String(err)}`);
@@ -74,7 +77,7 @@ export class SessionAdminManager {
         this.context.emitError("validation_failed", "session", "Only root sessions can be hydrated via session snapshots");
         return;
       }
-      if (record.workingDirectory !== this.context.state.config.workingDirectory) {
+      if (!sameWorkspacePath(record.workingDirectory, this.context.state.config.workingDirectory)) {
         this.context.emitError("permission_denied", "session", "Target session is outside the active workspace");
         return;
       }

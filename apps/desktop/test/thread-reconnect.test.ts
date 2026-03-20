@@ -128,7 +128,7 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { useAppStore } = await import("../src/app/store");
-const { RUNTIME } = await import("../src/app/store.helpers");
+const { RUNTIME, defaultThreadRuntime } = await import("../src/app/store.helpers");
 
 function socketByClient(client: string): MockAgentSocket {
   const socket = [...MOCK_SOCKETS].reverse().find((s) => s.opts.client === client);
@@ -396,6 +396,64 @@ describe("thread reconnect", () => {
       },
     ]);
     expect(useAppStore.getState().threadRuntimeById[threadId]?.transcriptOnly).toBe(false);
+  });
+
+  test("selectThread skips get_session_snapshot when feed is loaded and snapshot cache matches", async () => {
+    const persistedSessionId = "persisted-thread-session";
+    const snapshot = makeSessionSnapshot(persistedSessionId);
+    RUNTIME.sessionSnapshots.set(persistedSessionId, {
+      fingerprint: {
+        updatedAt: snapshot.updatedAt,
+        messageCount: snapshot.messageCount,
+        lastEventSeq: snapshot.lastEventSeq,
+      },
+      snapshot,
+    });
+
+    useAppStore.setState((state) => ({
+      ...state,
+      threads: state.threads.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              sessionId: persistedSessionId,
+              lastMessageAt: snapshot.updatedAt,
+              messageCount: snapshot.messageCount,
+              lastEventSeq: snapshot.lastEventSeq,
+            }
+          : thread,
+      ),
+      threadRuntimeById: {
+        [threadId]: {
+          ...defaultThreadRuntime(),
+          sessionId: persistedSessionId,
+          feed: snapshot.feed,
+        },
+      },
+    }));
+
+    readTranscriptImpl = async () => {
+      throw new Error("readTranscript should not run when harness snapshot fetch is skipped");
+    };
+
+    const selectPromise = useAppStore.getState().selectThread(threadId);
+    await flushAsyncWork();
+
+    const controlSocket = socketByClient("desktop-control");
+    expect(controlSocket.sent.filter((msg: { type?: string }) => msg.type === "get_session_snapshot")).toEqual([]);
+
+    emitServerHello(controlSocket, "control-session");
+    await flushAsyncWork();
+    expect(controlSocket.sent.filter((msg: { type?: string }) => msg.type === "get_session_snapshot")).toEqual([]);
+
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, persistedSessionId);
+    await selectPromise;
+
+    expect(readTranscriptCalls).toEqual([]);
+    expect(controlSocket.sent.filter((msg: { type?: string }) => msg.type === "get_session_snapshot")).toEqual([]);
+    const activeThreadId = canonicalThreadId(persistedSessionId, threadId);
+    expect(useAppStore.getState().threadRuntimeById[activeThreadId]?.feed).toEqual(snapshot.feed);
   });
 
   test("stale local snapshot cache is ignored when harness thread metadata changes", async () => {

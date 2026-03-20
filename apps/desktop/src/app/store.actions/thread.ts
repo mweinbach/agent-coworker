@@ -363,6 +363,8 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
           ? cachedSnapshot.snapshot
           : null;
 
+      const skipHarnessSnapshotFetch = Boolean(alreadyLoaded && matchingCachedSnapshot);
+
       const requestId = beginThreadSelectionRequest(threadId);
       set((s) => ({
         selectedThreadId: threadId,
@@ -392,7 +394,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       if (!alreadyLoaded || matchingCachedSnapshot) {
         try {
           let loadedFromHarness = false;
-          if (sessionId) {
+          if (sessionId && !skipHarnessSnapshotFetch) {
             await ensureServerRunning(get, set, thread.workspaceId);
             ensureControlSocket(get, set, thread.workspaceId);
             const snapshot = await requestSessionSnapshot(get, set, thread.workspaceId, sessionId);

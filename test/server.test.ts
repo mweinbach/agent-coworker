@@ -1618,6 +1618,96 @@ describe("WebSocket Lifecycle", () => {
     }
   });
 
+  test("get_session_snapshot allows lexical workspace path aliases", async () => {
+    const workspace = await makeTmpProject();
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-server-home-"));
+    const now = new Date().toISOString();
+    const storedWd = path.join(workspace, ".");
+    const db = await SessionDb.create({ paths: getAiCoworkerPaths({ homedir: homeDir }) });
+    db.persistSessionMutation({
+      sessionId: "alias-session",
+      eventType: "session.created",
+      snapshot: {
+        sessionKind: "root",
+        parentSessionId: null,
+        role: null,
+        title: "Alias WD",
+        titleSource: "manual",
+        titleModel: null,
+        provider: "openai",
+        model: "gpt-5.4",
+        workingDirectory: storedWd,
+        enableMcp: true,
+        createdAt: now,
+        updatedAt: now,
+        status: "active",
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "alias hello" }],
+        providerState: null,
+        todos: [],
+        harnessContext: null,
+        costTracker: null,
+      },
+    });
+    db.persistSessionSnapshot("alias-session", {
+      sessionId: "alias-session",
+      title: "Alias WD",
+      titleSource: "manual",
+      titleModel: null,
+      provider: "openai",
+      model: "gpt-5.4",
+      sessionKind: "root",
+      parentSessionId: null,
+      role: null,
+      mode: null,
+      depth: null,
+      nickname: null,
+      requestedModel: null,
+      effectiveModel: null,
+      requestedReasoningEffort: null,
+      effectiveReasoningEffort: null,
+      executionState: null,
+      lastMessagePreview: "alias hello",
+      createdAt: now,
+      updatedAt: now,
+      messageCount: 1,
+      lastEventSeq: 1,
+      feed: [
+        {
+          id: "feed-user",
+          kind: "message",
+          role: "user",
+          ts: now,
+          text: "alias hello",
+        },
+      ],
+      agents: [],
+      todos: [],
+      sessionUsage: null,
+      lastTurnUsage: null,
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+    db.close();
+
+    const { server, url } = await startAgentServer(serverOpts(workspace, { homedir: homeDir }));
+    try {
+      const snapshotEvent = await sendAndWaitForEvent(
+        url,
+        (sessionId) => ({ type: "get_session_snapshot", sessionId, targetSessionId: "alias-session" }),
+        (msg) =>
+          (msg.type === "session_snapshot" && msg.targetSessionId === "alias-session")
+          || msg.type === "error",
+      );
+      expect(snapshotEvent.type).toBe("session_snapshot");
+      expect(snapshotEvent.snapshot.sessionId).toBe("alias-session");
+    } finally {
+      void server.stop(true);
+    }
+  });
+
   test("get_session_snapshot falls back to a synthesized snapshot when no stored projection exists", async () => {
     const workspace = await makeTmpProject();
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-server-home-"));

@@ -3303,7 +3303,7 @@ Persisted session list response to `list_sessions`.
 | `createdAt` | `string` | ISO 8601 creation timestamp |
 | `updatedAt` | `string` | ISO 8601 last update timestamp |
 | `messageCount` | `number` | Number of messages in history |
-| `lastEventSeq` | `number` | Latest persisted server-event sequence number |
+| `lastEventSeq` | `number` | Latest persisted server-event sequence number when the session store is SQLite-backed. Summaries produced from legacy per-session JSON files only (no session DB) use `0` here—there is no event log; use `messageCount` / `updatedAt` for ordering and staleness. |
 | `hasPendingAsk` | `boolean` | Whether the session is currently waiting on an ask prompt |
 | `hasPendingApproval` | `boolean` | Whether the session is currently waiting on an approval prompt |
 

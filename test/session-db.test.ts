@@ -327,6 +327,47 @@ describe("sessionDb", () => {
     }
   });
 
+  test("listSessions matches working directory across lexical normalization", async () => {
+    const paths = await makeTmpCoworkHome();
+    const db = await SessionDb.create({ paths });
+    try {
+      const realDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-db-wdnorm-"));
+      const canonical = path.resolve(realDir);
+      const now = new Date().toISOString();
+      db.persistSessionMutation({
+        sessionId: "wd-norm",
+        eventType: "session.created",
+        snapshot: {
+          sessionKind: "root",
+          parentSessionId: null,
+          role: null,
+          title: "Norm",
+          titleSource: "default",
+          titleModel: null,
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          workingDirectory: canonical,
+          enableMcp: true,
+          createdAt: now,
+          updatedAt: now,
+          status: "active",
+          hasPendingAsk: false,
+          hasPendingApproval: false,
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "hello" }],
+          providerState: null,
+          todos: [],
+          harnessContext: null,
+          costTracker: null,
+        },
+      });
+      expect(db.listSessions({ workingDirectory: path.join(canonical, ".") }).map((s) => s.sessionId)).toEqual(["wd-norm"]);
+      expect(db.listSessions({ workingDirectory: `${canonical}${path.sep}` }).map((s) => s.sessionId)).toEqual(["wd-norm"]);
+    } finally {
+      db.close();
+    }
+  });
+
   test("imports legacy JSON snapshots before marking legacy migration as applied", async () => {
     const paths = await makeTmpCoworkHome();
     const now = new Date().toISOString();

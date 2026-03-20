@@ -25,6 +25,7 @@ import {
 import { PROVIDER_NAMES } from "../types";
 import type { AgentConfig, HarnessContextState, ModelMessage, TodoItem } from "../types";
 import type { SessionTitleSource } from "./sessionTitleService";
+import { sameWorkspacePath } from "../utils/workspacePath";
 
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
@@ -274,6 +275,9 @@ export type PersistedSessionSummary = {
   hasPendingAsk: boolean;
   hasPendingApproval: boolean;
 };
+
+/** `lastEventSeq` for summaries from legacy JSON files (`listPersistedSessionSnapshots`): no event log → not comparable to SQLite-backed values. */
+export const LEGACY_JSON_SESSION_LIST_LAST_EVENT_SEQ = 0;
 
 const sessionTitleSourceSchema = z.enum(["default", "model", "heuristic", "manual"]);
 const providerNameSchema = z.enum(PROVIDER_NAMES);
@@ -876,7 +880,8 @@ export async function writePersistedSessionSnapshot(opts: {
 }
 
 export async function listPersistedSessionSnapshots(
-  paths: Pick<AiCoworkerPaths, "sessionsDir">
+  paths: Pick<AiCoworkerPaths, "sessionsDir">,
+  opts?: { workingDirectory?: string },
 ): Promise<PersistedSessionSummary[]> {
   let entries: string[];
   try {
@@ -919,6 +924,10 @@ export async function listPersistedSessionSnapshots(
       : "root";
     if (sessionKind !== "root") continue;
 
+    if (opts?.workingDirectory && !sameWorkspacePath(parsed.config.workingDirectory, opts.workingDirectory)) {
+      continue;
+    }
+
     summaries.push({
       sessionId: parsed.sessionId,
       title: parsed.session.title,
@@ -929,7 +938,7 @@ export async function listPersistedSessionSnapshots(
       createdAt: parsed.createdAt,
       updatedAt: parsed.updatedAt,
       messageCount: parsed.context.messages.length,
-      lastEventSeq: parsed.context.messages.length,
+      lastEventSeq: LEGACY_JSON_SESSION_LIST_LAST_EVENT_SEQ,
       hasPendingAsk: false,
       hasPendingApproval: false,
     });

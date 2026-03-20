@@ -205,6 +205,8 @@ export type SessionDependencies = {
   }) => Promise<WorkspaceBackupDeltaPreview>;
   getLiveSessionSnapshotImpl?: (sessionId: string) => SessionSnapshot | null;
   buildLegacySessionSnapshotImpl?: (record: import("../sessionDb").PersistedSessionRecord) => SessionSnapshot;
+  getSkillMutationBlockReasonImpl?: (workingDirectory: string) => string | null;
+  refreshSkillsAcrossWorkspaceSessionsImpl?: (workingDirectory: string) => Promise<void>;
 };
 
 export type SessionContext = {
@@ -232,4 +234,6 @@ export type SessionContext = {
   syncSessionBackupAvailability: () => Promise<void>;
   refreshProviderStatus: () => Promise<void>;
   emitProviderCatalog: () => Promise<void>;
+  getSkillMutationBlockReason: () => string | null;
+  refreshSkillsAcrossWorkspaceSessions: () => Promise<void>;
 };

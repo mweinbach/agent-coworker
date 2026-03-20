@@ -296,10 +296,14 @@ export function getSkillScopeDescriptors(skillsDirs: string[]): SkillScopeDescri
   return skillsDirs.map((skillsDir, index) => {
     const scope = scopes[index] ?? "built-in";
     const writable = scope === "project" || scope === "global";
+    const disabledSkillsDir =
+      path.basename(skillsDir) === "skills"
+        ? path.join(path.dirname(skillsDir), "disabled-skills")
+        : undefined;
     return {
       scope,
       skillsDir,
-      disabledSkillsDir: path.join(path.dirname(skillsDir), "disabled-skills"),
+      ...(disabledSkillsDir ? { disabledSkillsDir } : {}),
       writable,
       readable: true,
     };

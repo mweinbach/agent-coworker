@@ -419,6 +419,11 @@ export class AgentSession {
       syncSessionBackupAvailability: async () => {},
       refreshProviderStatus: async () => await this.providerCatalogManager.refreshProviderStatus(),
       emitProviderCatalog: async () => await this.providerCatalogManager.emitProviderCatalog(),
+      getSkillMutationBlockReason: () =>
+        this.deps.getSkillMutationBlockReasonImpl?.(this.state.config.workingDirectory) ?? null,
+      refreshSkillsAcrossWorkspaceSessions: async () => {
+        await this.deps.refreshSkillsAcrossWorkspaceSessionsImpl?.(this.state.config.workingDirectory);
+      },
     };
 
     this.historyManager = new HistoryManager(this.context);
@@ -808,6 +813,10 @@ export class AgentSession {
     return this.metadataManager.getObservabilityStatusEvent();
   }
 
+  getWorkingDirectory(): string {
+    return this.state.config.workingDirectory;
+  }
+
   replayPendingPrompts() {
     this.interactionManager.replayPendingPrompts();
   }
@@ -860,6 +869,46 @@ export class AgentSession {
     await this.skillManager.deleteSkill(skillNameRaw);
   }
 
+  async getSkillsCatalog() {
+    await this.skillManager.getSkillsCatalog();
+  }
+
+  async getSkillInstallation(installationId: string) {
+    await this.skillManager.getSkillInstallation(installationId);
+  }
+
+  async previewSkillInstall(sourceInput: string, targetScope: "project" | "global") {
+    await this.skillManager.previewSkillInstall(sourceInput, targetScope);
+  }
+
+  async installSkills(sourceInput: string, targetScope: "project" | "global") {
+    await this.skillManager.installSkills(sourceInput, targetScope);
+  }
+
+  async enableSkillInstallation(installationId: string) {
+    await this.skillManager.enableSkillInstallation(installationId);
+  }
+
+  async disableSkillInstallation(installationId: string) {
+    await this.skillManager.disableSkillInstallation(installationId);
+  }
+
+  async deleteSkillInstallation(installationId: string) {
+    await this.skillManager.deleteSkillInstallation(installationId);
+  }
+
+  async copySkillInstallation(installationId: string, targetScope: "project" | "global") {
+    await this.skillManager.copySkillInstallation(installationId, targetScope);
+  }
+
+  async checkSkillInstallationUpdate(installationId: string) {
+    await this.skillManager.checkSkillInstallationUpdate(installationId);
+  }
+
+  async updateSkillInstallation(installationId: string) {
+    await this.skillManager.updateSkillInstallation(installationId);
+  }
+
   async setEnableMcp(enableMcp: boolean) {
     await this.mcpManager.setEnableMcp(enableMcp);
   }
@@ -871,7 +920,7 @@ export class AgentSession {
     }
     this.context.emit({ type: "session_settings", sessionId: this.id, enableMcp: this.getEnableMcp(), enableMemory: this.getEnableMemory(), memoryRequireApproval: this.getMemoryRequireApproval() });
     this.queuePersistSessionSnapshot("session.enable_memory");
-    await this.refreshSystemPromptForMemoryChange();
+    await this.refreshSystemPromptWithSkills("session.enable_memory");
   }
 
   async setMemoryRequireApproval(memoryRequireApproval: boolean) {
@@ -900,7 +949,7 @@ export class AgentSession {
       return;
     }
     await this.emitMemories();
-    await this.refreshSystemPromptForMemoryChange();
+    await this.refreshSystemPromptWithSkills("session.memory_upsert");
   }
 
   async deleteMemory(scope: MemoryScope, id: string) {
@@ -911,19 +960,20 @@ export class AgentSession {
       return;
     }
     await this.emitMemories();
-    await this.refreshSystemPromptForMemoryChange();
+    await this.refreshSystemPromptWithSkills("session.memory_delete");
   }
 
-  private async refreshSystemPromptForMemoryChange() {
+  async refreshSystemPromptWithSkills(reason = "session.refresh_system_prompt") {
     try {
       const result = await this.context.deps.loadSystemPromptWithSkillsImpl(this.state.config);
       this.state.system = result.prompt;
       this.state.discoveredSkills = result.discoveredSkills;
+      this.queuePersistSessionSnapshot(reason);
     } catch (err) {
       this.context.emitError(
         "internal_error",
         "session",
-        `Failed to refresh system prompt after memory change: ${String(err)}`,
+        `Failed to refresh system prompt: ${String(err)}`,
       );
     }
   }

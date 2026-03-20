@@ -136,6 +136,13 @@ export function createSkillActions(
       const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "skills_catalog_get", sessionId }));
       if (!ok) {
         set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              skillCatalogLoading: false,
+            },
+          },
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),
@@ -224,6 +231,17 @@ export function createSkillActions(
       }));
       if (!ok) {
         set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              skillMutationPendingKeys: (() => {
+                const pendingKeys = { ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys };
+                delete pendingKeys[key];
+                return pendingKeys;
+              })(),
+            },
+          },
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),
@@ -260,6 +278,17 @@ export function createSkillActions(
       }));
       if (!ok) {
         set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              skillMutationPendingKeys: (() => {
+                const pendingKeys = { ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys };
+                delete pendingKeys[key];
+                return pendingKeys;
+              })(),
+            },
+          },
           notifications: pushNotification(s.notifications, {
             id: makeId(),
             ts: nowIso(),

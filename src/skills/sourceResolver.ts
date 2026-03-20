@@ -409,12 +409,14 @@ export async function buildSkillInstallPreview(opts: {
   catalog: SkillCatalogSnapshot;
   cwd?: string;
   fetchImpl?: FetchLike;
+  materialized?: MaterializedSkillSource;
 }): Promise<SkillInstallPreview> {
-  const materialized = await materializeSkillSource({
+  const materialized = opts.materialized ?? await materializeSkillSource({
     input: opts.input,
     cwd: opts.cwd,
     fetchImpl: opts.fetchImpl,
   });
+  const shouldCleanup = !opts.materialized;
 
   try {
     const candidates = materialized.candidates.map((candidate) =>
@@ -431,6 +433,8 @@ export async function buildSkillInstallPreview(opts: {
       warnings,
     };
   } finally {
-    await materialized.cleanup();
+    if (shouldCleanup) {
+      await materialized.cleanup();
+    }
   }
 }

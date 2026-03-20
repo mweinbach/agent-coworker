@@ -1,6 +1,5 @@
 import { defaultModelForProvider } from "@cowork/providers/catalog";
 import type { OpenAiCompatibleProviderOptionsByProvider } from "@cowork/shared/openaiCompatibleOptions";
-import { z } from "zod";
 
 import {
   deleteTranscript,
@@ -16,7 +15,7 @@ import {
   renamePath,
   trashPath,
 } from "../../lib/desktopCommands";
-import type { ProviderName } from "../../lib/wsProtocol";
+import type { ClientMessage, ProviderName } from "../../lib/wsProtocol";
 
 import {
   type AppStoreActions,
@@ -51,6 +50,139 @@ import { normalizeWorkspaceUserProfile } from "../types";
 import type { ThreadRecord, WorkspaceDefaultsPatch, WorkspaceRecord } from "../types";
 
 export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "applyWorkspaceDefaultsToThread" | "updateWorkspaceDefaults"> {
+  type DefaultsTargetState = {
+    config: { provider?: unknown; model?: unknown } | null | undefined;
+    sessionConfig: any;
+    enableMcp: boolean | null | undefined;
+  };
+
+  const stringArrayEqual = (left: string[] | undefined, right: string[] | undefined): boolean => {
+    if ((left?.length ?? 0) !== (right?.length ?? 0)) return false;
+    return (left ?? []).every((value, index) => value === (right ?? [])[index]);
+  };
+
+  const userProfileEqual = (
+    left: WorkspaceRecord["userProfile"] | undefined,
+    right: WorkspaceRecord["userProfile"] | undefined,
+  ): boolean => {
+    const normalizedLeft = normalizeWorkspaceUserProfile(left);
+    const normalizedRight = normalizeWorkspaceUserProfile(right);
+    return (
+      normalizedLeft.instructions === normalizedRight.instructions
+      && normalizedLeft.work === normalizedRight.work
+      && normalizedLeft.details === normalizedRight.details
+    );
+  };
+
+  const buildApplySessionDefaultsMessage = (opts: {
+    sessionId: string;
+    current: DefaultsTargetState;
+    desired: {
+      provider?: ProviderName;
+      model?: string;
+      enableMcp?: boolean;
+      backupsEnabled?: boolean;
+      toolOutputOverflowChars?: number | null;
+      preferredChildModel?: string;
+      childModelRoutingMode?: WorkspaceRecord["defaultChildModelRoutingMode"];
+      preferredChildModelRef?: string;
+      allowedChildModelRefs?: string[];
+      providerOptions?: WorkspaceRecord["providerOptions"];
+      userName?: string;
+      userProfile?: WorkspaceRecord["userProfile"];
+    };
+  }): ClientMessage | null => {
+    const configPatch: NonNullable<Extract<ClientMessage, { type: "apply_session_defaults" }>["config"]> = {};
+    const currentProvider =
+      opts.current.config?.provider && isProviderName(opts.current.config.provider)
+        ? opts.current.config.provider
+        : undefined;
+    const currentModel =
+      typeof opts.current.config?.model === "string"
+        ? opts.current.config.model.trim()
+        : undefined;
+
+    const providerChanged =
+      opts.desired.provider !== undefined
+      && !!opts.desired.model
+      && (opts.desired.provider !== currentProvider || opts.desired.model !== currentModel);
+    const enableMcpChanged =
+      typeof opts.desired.enableMcp === "boolean"
+      && opts.desired.enableMcp !== opts.current.enableMcp;
+
+    if (
+      typeof opts.desired.backupsEnabled === "boolean"
+      && opts.desired.backupsEnabled !== opts.current.sessionConfig?.defaultBackupsEnabled
+    ) {
+      configPatch.backupsEnabled = opts.desired.backupsEnabled;
+    }
+
+    const currentDefaultToolOutputOverflow = opts.current.sessionConfig?.defaultToolOutputOverflowChars;
+    if (opts.desired.toolOutputOverflowChars !== currentDefaultToolOutputOverflow) {
+      if (opts.desired.toolOutputOverflowChars !== undefined) {
+        configPatch.toolOutputOverflowChars = opts.desired.toolOutputOverflowChars;
+      } else if (currentDefaultToolOutputOverflow !== undefined) {
+        configPatch.clearToolOutputOverflowChars = true;
+      }
+    }
+
+    if (
+      opts.desired.preferredChildModel
+      && opts.desired.preferredChildModel !== opts.current.sessionConfig?.preferredChildModel
+    ) {
+      configPatch.preferredChildModel = opts.desired.preferredChildModel;
+    }
+    if (
+      opts.desired.childModelRoutingMode
+      && opts.desired.childModelRoutingMode !== opts.current.sessionConfig?.childModelRoutingMode
+    ) {
+      configPatch.childModelRoutingMode = opts.desired.childModelRoutingMode;
+    }
+    if (
+      opts.desired.preferredChildModelRef
+      && opts.desired.preferredChildModelRef !== opts.current.sessionConfig?.preferredChildModelRef
+    ) {
+      configPatch.preferredChildModelRef = opts.desired.preferredChildModelRef;
+    }
+    if (
+      opts.desired.allowedChildModelRefs
+      && !stringArrayEqual(opts.desired.allowedChildModelRefs, opts.current.sessionConfig?.allowedChildModelRefs)
+    ) {
+      configPatch.allowedChildModelRefs = opts.desired.allowedChildModelRefs;
+    }
+
+    const desiredProviderOptions = normalizeWorkspaceProviderOptions(opts.desired.providerOptions);
+    const currentProviderOptions = normalizeWorkspaceProviderOptions(opts.current.sessionConfig?.providerOptions);
+    if (JSON.stringify(desiredProviderOptions ?? null) !== JSON.stringify(currentProviderOptions ?? null) && desiredProviderOptions) {
+      configPatch.providerOptions = desiredProviderOptions as OpenAiCompatibleProviderOptionsByProvider;
+    }
+
+    if (
+      opts.desired.userName !== undefined
+      && opts.desired.userName !== opts.current.sessionConfig?.userName
+    ) {
+      configPatch.userName = opts.desired.userName;
+    }
+    if (
+      opts.desired.userProfile !== undefined
+      && !userProfileEqual(opts.desired.userProfile, opts.current.sessionConfig?.userProfile)
+    ) {
+      configPatch.userProfile = normalizeWorkspaceUserProfile(opts.desired.userProfile);
+    }
+
+    if (!providerChanged && !enableMcpChanged && Object.keys(configPatch).length === 0) {
+      return null;
+    }
+
+    return {
+      type: "apply_session_defaults",
+      sessionId: opts.sessionId,
+      ...(providerChanged ? { provider: opts.desired.provider, model: opts.desired.model } : {}),
+      ...(enableMcpChanged ? { enableMcp: opts.desired.enableMcp } : {}),
+      ...(Object.keys(configPatch).length > 0 ? { config: configPatch } : {}),
+    };
+  };
+
   const resolveWorkspaceDefaults = (workspaceId: string): WorkspaceRecord | null => {
     const workspace = get().workspaces.find((entry) => entry.id === workspaceId);
     if (!workspace) {
@@ -143,40 +275,13 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const rt = get().threadRuntimeById[threadId];
       if (!rt?.sessionId) return;
       const workspaceRuntime = get().workspaceRuntimeById[thread.workspaceId];
+      if (mode !== "explicit" && (!rt.sessionConfig || rt.enableMcp === null)) {
+        RUNTIME.pendingWorkspaceDefaultApplyThreadIds.add(threadId);
+        RUNTIME.pendingWorkspaceDefaultApplyModeByThread.set(threadId, mode);
+        return;
+      }
       const harnessBackupsDefault = workspaceRuntime?.controlSessionConfig?.defaultBackupsEnabled;
       const harnessToolOutputOverflowChars = workspaceRuntime?.controlSessionConfig?.defaultToolOutputOverflowChars;
-      const backupsEnabled = mode === "explicit" ? ws.defaultBackupsEnabled : harnessBackupsDefault;
-      const toolOutputOverflowChars = mode === "explicit" ? ws.defaultToolOutputOverflowChars : harnessToolOutputOverflowChars;
-      const clearToolOutputOverflowChars =
-        mode === "explicit"
-        && ws.defaultToolOutputOverflowChars === undefined
-        && rt.sessionConfig?.defaultToolOutputOverflowChars !== undefined;
-
-      // Explicit user-driven default changes should still hit live sessions
-      // immediately. Automatic connect-time sync only trusts the harness-
-      // sourced default once the control session has provided it.
-      if (typeof backupsEnabled === "boolean" || toolOutputOverflowChars !== undefined || clearToolOutputOverflowChars) {
-        const configPatch = {
-          ...(typeof backupsEnabled === "boolean" ? { backupsEnabled } : {}),
-          ...(toolOutputOverflowChars !== undefined
-            ? { toolOutputOverflowChars }
-            : clearToolOutputOverflowChars
-              ? { clearToolOutputOverflowChars: true }
-              : {}),
-        };
-        const okBackups = sendThread(get, threadId, (sessionId) => ({
-          type: "set_config",
-          sessionId,
-          config: configPatch,
-        }));
-        if (okBackups) {
-          appendThreadTranscript(threadId, "client", {
-            type: "set_config",
-            sessionId: rt.sessionId,
-            config: configPatch,
-          });
-        }
-      }
 
       // Defer model / provider / other config changes when the session is
       // busy — changing the model mid-turn is not safe.
@@ -231,64 +336,43 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const providerOptions = ws.providerOptions;
       const userName = ws.userName;
       const userProfile = ws.userProfile ? normalizeWorkspaceUserProfile(ws.userProfile) : undefined;
-      const hasProfileDefaults = userName !== undefined || userProfile !== undefined;
-
-      if (!preserveSessionModel && provider && model) {
-        const ok = sendThread(get, threadId, (sessionId) => ({
-          type: "set_model",
-          sessionId,
-          provider,
-          model,
-        }));
-        if (ok) appendThreadTranscript(threadId, "client", { type: "set_model", sessionId: rt.sessionId, provider, model });
+      const desiredEnableMcp = mode === "explicit"
+        ? ws.defaultEnableMcp
+        : (workspaceRuntime?.controlEnableMcp ?? ws.defaultEnableMcp);
+      const message = buildApplySessionDefaultsMessage({
+        sessionId: rt.sessionId,
+        current: {
+          config: rt.config,
+          sessionConfig: rt.sessionConfig,
+          enableMcp: rt.enableMcp,
+        },
+        desired: {
+          ...(!preserveSessionModel && provider && model ? { provider, model } : {}),
+          enableMcp: desiredEnableMcp,
+          ...(typeof (mode === "explicit" ? ws.defaultBackupsEnabled : harnessBackupsDefault) === "boolean"
+            ? { backupsEnabled: mode === "explicit" ? ws.defaultBackupsEnabled : harnessBackupsDefault }
+            : {}),
+          ...(mode === "explicit"
+            ? { toolOutputOverflowChars: ws.defaultToolOutputOverflowChars }
+            : harnessToolOutputOverflowChars !== undefined
+              ? { toolOutputOverflowChars: harnessToolOutputOverflowChars }
+              : {}),
+          ...(preferredChildModel ? { preferredChildModel } : {}),
+          ...(childModelRoutingMode ? { childModelRoutingMode } : {}),
+          ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
+          ...(allowedChildModelRefs ? { allowedChildModelRefs } : {}),
+          ...(providerOptions ? { providerOptions } : {}),
+          ...(userName !== undefined ? { userName } : {}),
+          ...(userProfile !== undefined ? { userProfile } : {}),
+        },
+      });
+      if (!message) {
+        return;
       }
 
-      if (preferredChildModel || preferredChildModelRef || providerOptions || hasProfileDefaults) {
-        const okConfig = sendThread(get, threadId, (sessionId) => ({
-          type: "set_config",
-          sessionId,
-          config: {
-            ...(preferredChildModel ? { preferredChildModel } : {}),
-            childModelRoutingMode,
-            ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
-            allowedChildModelRefs,
-            ...(providerOptions ? { providerOptions: providerOptions as OpenAiCompatibleProviderOptionsByProvider } : {}),
-            ...(userName !== undefined ? { userName } : {}),
-            ...(userProfile !== undefined ? { userProfile } : {}),
-          },
-        }));
-        if (okConfig) {
-          appendThreadTranscript(threadId, "client", {
-            type: "set_config",
-            sessionId: rt.sessionId,
-            config: {
-              ...(preferredChildModel ? { preferredChildModel } : {}),
-              childModelRoutingMode,
-              ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
-              allowedChildModelRefs,
-              ...(providerOptions ? { providerOptions } : {}),
-              ...(userName !== undefined ? { userName } : {}),
-              ...(userProfile !== undefined ? { userProfile } : {}),
-            },
-          });
-        }
-      }
-
-      const okMcp = sendThread(get, threadId, (sessionId) => ({
-        type: "set_enable_mcp",
-        sessionId,
-        enableMcp: mode === "explicit"
-          ? ws.defaultEnableMcp
-          : (workspaceRuntime?.controlEnableMcp ?? ws.defaultEnableMcp),
-      }));
-      if (okMcp) {
-        appendThreadTranscript(threadId, "client", {
-          type: "set_enable_mcp",
-          sessionId: rt.sessionId,
-          enableMcp: mode === "explicit"
-            ? ws.defaultEnableMcp
-            : (workspaceRuntime?.controlEnableMcp ?? ws.defaultEnableMcp),
-        });
+      const ok = sendThread(get, threadId, () => message);
+      if (ok) {
+        appendThreadTranscript(threadId, "client", message);
       }
     },
   
@@ -359,42 +443,37 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const providerOptions = nextWorkspace.providerOptions;
       const userName = nextWorkspace.userName;
       const userProfile = nextWorkspace.userProfile ? normalizeWorkspaceUserProfile(nextWorkspace.userProfile) : undefined;
-      const clearToolOutputOverflowChars = clearDefaultToolOutputOverflowChars === true;
+      const currentWorkspaceRuntime = get().workspaceRuntimeById[workspaceId];
+      const controlMessage = controlReady && currentWorkspaceRuntime?.controlSessionId
+        ? buildApplySessionDefaultsMessage({
+            sessionId: currentWorkspaceRuntime.controlSessionId,
+            current: {
+              config: currentWorkspaceRuntime.controlConfig,
+              sessionConfig: currentWorkspaceRuntime.controlSessionConfig,
+              enableMcp: currentWorkspaceRuntime.controlEnableMcp,
+            },
+            desired: {
+              provider,
+              model,
+              enableMcp: nextWorkspace.defaultEnableMcp,
+              backupsEnabled: nextWorkspace.defaultBackupsEnabled,
+              toolOutputOverflowChars,
+              ...(preferredChildModel ? { preferredChildModel } : {}),
+              childModelRoutingMode,
+              ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
+              allowedChildModelRefs,
+              ...(providerOptions ? { providerOptions } : {}),
+              ...(userName !== undefined ? { userName } : {}),
+              ...(userProfile !== undefined ? { userProfile } : {}),
+            },
+          })
+        : null;
 
-      const modelPersisted = controlReady && model
-        ? sendControl(get, workspaceId, (sessionId) => ({
-            type: "set_model",
-            sessionId,
-            provider,
-            model,
-          }))
+      const persisted = controlReady
+        ? (!controlMessage || sendControl(get, workspaceId, () => controlMessage))
         : false;
-      const subAgentPersisted = controlReady && sendControl(get, workspaceId, (sessionId) => ({
-        type: "set_config",
-        sessionId,
-        config: {
-          backupsEnabled: nextWorkspace.defaultBackupsEnabled,
-          ...(preferredChildModel ? { preferredChildModel } : {}),
-          childModelRoutingMode,
-          ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
-          allowedChildModelRefs,
-          ...(toolOutputOverflowChars !== undefined
-            ? { toolOutputOverflowChars }
-            : clearToolOutputOverflowChars
-              ? { clearToolOutputOverflowChars: true }
-              : {}),
-          ...(providerOptions ? { providerOptions: providerOptions as OpenAiCompatibleProviderOptionsByProvider } : {}),
-          ...(userName !== undefined ? { userName } : {}),
-          ...(userProfile !== undefined ? { userProfile } : {}),
-        },
-      }));
-      const mcpPersisted = controlReady && sendControl(get, workspaceId, (sessionId) => ({
-        type: "set_enable_mcp",
-        sessionId,
-        enableMcp: nextWorkspace.defaultEnableMcp,
-      }));
 
-      if (!modelPersisted || !subAgentPersisted || !mcpPersisted) {
+      if (!persisted) {
         set((s) => ({
           notifications: pushNotification(s.notifications, {
             id: makeId(),

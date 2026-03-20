@@ -119,6 +119,43 @@ function emitServerHello(socket: MockAgentSocket, sessionId: string) {
   });
 }
 
+function emitThreadSessionDefaults(
+  socket: MockAgentSocket,
+  sessionId: string,
+  overrides: {
+    settings?: Partial<Record<string, unknown>>;
+    config?: Partial<Record<string, unknown>>;
+  } = {},
+) {
+  socket.emit({
+    type: "session_settings",
+    sessionId,
+    enableMcp: true,
+    enableMemory: true,
+    memoryRequireApproval: false,
+    ...(overrides.settings ?? {}),
+  });
+  socket.emit({
+    type: "session_config",
+    sessionId,
+    config: {
+      yolo: false,
+      observabilityEnabled: false,
+      backupsEnabled: true,
+      defaultBackupsEnabled: true,
+      enableMemory: true,
+      memoryRequireApproval: false,
+      preferredChildModel: "gpt-5.2",
+      childModelRoutingMode: "same-provider",
+      preferredChildModelRef: "openai:gpt-5.2",
+      allowedChildModelRefs: [],
+      maxSteps: 100,
+      toolOutputOverflowChars: 25000,
+      ...(overrides.config ?? {}),
+    },
+  });
+}
+
 function makeSessionSnapshot(
   sessionId: string,
   overrides: Partial<Record<string, unknown>> = {},
@@ -833,23 +870,28 @@ describe("workspace settings sync", () => {
     await flushAsyncWork();
     const controlSocket = socketByClient("desktop-control");
 
-    expect(controlSocket.sent.filter((msg) => msg?.type === "set_model")).toHaveLength(0);
-    expect(controlSocket.sent.filter((msg) => msg?.type === "set_config")).toHaveLength(0);
-    expect(controlSocket.sent.filter((msg) => msg?.type === "set_enable_mcp")).toHaveLength(0);
+    expect(controlSocket.sent.filter((msg) => msg?.type === "apply_session_defaults")).toHaveLength(0);
     expect(useAppStore.getState().notifications).toHaveLength(0);
 
     emitServerHello(controlSocket, "control-session");
     await updatePromise;
 
-    const setModelMessages = controlSocket.sent.filter((msg) => msg?.type === "set_model");
-    const setConfigMessages = controlSocket.sent.filter((msg) => msg?.type === "set_config");
-    const setEnableMcpMessages = controlSocket.sent.filter((msg) => msg?.type === "set_enable_mcp");
-
-    expect(setModelMessages).toHaveLength(1);
-    expect(setConfigMessages).toHaveLength(1);
-    expect(setEnableMcpMessages).toHaveLength(1);
-    expect(setConfigMessages[0]?.config?.providerOptions?.["codex-cli"]?.reasoningEffort).toBe("xhigh");
-    expect(setConfigMessages[0]?.config?.providerOptions?.["codex-cli"]?.reasoningSummary).toBe("detailed");
+    const applyDefaultsMessages = controlSocket.sent.filter((msg) => msg?.type === "apply_session_defaults");
+    expect(applyDefaultsMessages).toHaveLength(1);
+    expect(applyDefaultsMessages[0]).toMatchObject({
+      type: "apply_session_defaults",
+      enableMcp: true,
+      config: {
+        backupsEnabled: true,
+        preferredChildModel: "gpt-5.2",
+        providerOptions: {
+          "codex-cli": {
+            reasoningEffort: "xhigh",
+            reasoningSummary: "detailed",
+          },
+        },
+      },
+    });
     expect(useAppStore.getState().notifications).toHaveLength(0);
   });
 
@@ -909,27 +951,19 @@ describe("workspace settings sync", () => {
     emitServerHello(controlSocket, "control-session");
     const threadSocket = socketByClient("desktop");
     emitServerHello(threadSocket, "thread-session");
+    emitThreadSessionDefaults(threadSocket, "thread-session");
     threadSocket.sent = [];
 
     const threadId = useAppStore.getState().threads[0]?.id;
     if (!threadId) throw new Error("expected thread");
     await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
 
-    const sentTypes = threadSocket.sent.map((message) => message?.type);
-    expect(sentTypes).toEqual(["set_config", "set_model", "set_config", "set_enable_mcp"]);
-    // First set_config carries immediate safe runtime defaults.
+    expect(threadSocket.sent).toHaveLength(1);
     expect(threadSocket.sent[0]).toMatchObject({
-      type: "set_config",
+      type: "apply_session_defaults",
+      sessionId: "thread-session",
       config: {
-        backupsEnabled: true,
         toolOutputOverflowChars: 25000,
-      },
-    });
-    // Second set_config carries the rest of the config patch
-    expect(threadSocket.sent[2]).toMatchObject({
-      type: "set_config",
-      config: {
-        preferredChildModel: "gpt-5.2",
         childModelRoutingMode: "cross-provider-allowlist",
         preferredChildModelRef: "opencode-zen:glm-5",
         allowedChildModelRefs: ["opencode-zen:glm-5", "opencode-go:glm-5"],
@@ -974,14 +1008,16 @@ describe("workspace settings sync", () => {
     emitServerHello(controlSocket, "control-session");
     const threadSocket = socketByClient("desktop");
     emitServerHello(threadSocket, "thread-session");
+    emitThreadSessionDefaults(threadSocket, "thread-session");
     threadSocket.sent = [];
 
     const threadId = useAppStore.getState().threads[0]?.id;
     if (!threadId) throw new Error("expected thread");
     await useAppStore.getState().applyWorkspaceDefaultsToThread(threadId);
 
-    expect(threadSocket.sent.find((message) => message?.type === "set_model")).toMatchObject({
-      type: "set_model",
+    expect(threadSocket.sent[0]).toMatchObject({
+      type: "apply_session_defaults",
+      sessionId: "thread-session",
       provider: "baseten",
       model: "moonshotai/Kimi-K2.5",
     });
@@ -1015,8 +1051,9 @@ describe("workspace settings sync", () => {
       defaultModel: "moonshotai/Kimi-K2.5",
     });
 
-    expect(controlSocket.sent.find((message) => message?.type === "set_model")).toMatchObject({
-      type: "set_model",
+    expect(controlSocket.sent[0]).toMatchObject({
+      type: "apply_session_defaults",
+      sessionId: "control-session",
       provider: "baseten",
       model: "moonshotai/Kimi-K2.5",
     });
@@ -1057,11 +1094,18 @@ describe("workspace settings sync", () => {
     });
 
     const threadSocket = socketByClient("desktop");
-    threadSocket.sent = [];
     emitServerHello(threadSocket, "thread-session");
+    threadSocket.sent = [];
+    emitThreadSessionDefaults(threadSocket, "thread-session", {
+      config: {
+        backupsEnabled: false,
+        defaultBackupsEnabled: true,
+      },
+    });
 
     expect(threadSocket.sent[0]).toMatchObject({
-      type: "set_config",
+      type: "apply_session_defaults",
+      sessionId: "thread-session",
       config: {
         backupsEnabled: false,
       },
@@ -1091,11 +1135,18 @@ describe("workspace settings sync", () => {
     });
 
     const threadSocket = socketByClient("desktop");
-    threadSocket.sent = [];
     emitServerHello(threadSocket, "thread-session");
+    threadSocket.sent = [];
+    emitThreadSessionDefaults(threadSocket, "thread-session", {
+      config: {
+        backupsEnabled: false,
+        defaultBackupsEnabled: true,
+      },
+    });
 
     expect(threadSocket.sent[0]).toMatchObject({
-      type: "set_config",
+      type: "apply_session_defaults",
+      sessionId: "thread-session",
       config: {
         backupsEnabled: false,
         toolOutputOverflowChars: 12000,
@@ -1145,10 +1196,13 @@ describe("workspace settings sync", () => {
       details: "Prefers Bun and TypeScript",
     });
 
-    expect(controlSocket.sent.find((message) => message?.type === "set_config")).toMatchObject({
-      type: "set_config",
+    expect(controlSocket.sent[0]).toMatchObject({
+      type: "apply_session_defaults",
+      sessionId: "control-session",
+      enableMcp: true,
       config: {
         backupsEnabled: true,
+        toolOutputOverflowChars: 25000,
         preferredChildModel: "gpt-5.2",
         userName: "Taylor",
         userProfile: {
@@ -1159,16 +1213,17 @@ describe("workspace settings sync", () => {
       },
     });
 
-    expect(threadSocket.sent.map((message) => message?.type)).toEqual([
-      "set_config",
-      "set_model",
-      "set_config",
-      "set_enable_mcp",
-    ]);
-    expect(threadSocket.sent[2]).toMatchObject({
-      type: "set_config",
+    expect(threadSocket.sent).toHaveLength(1);
+    expect(threadSocket.sent[0]).toMatchObject({
+      type: "apply_session_defaults",
+      sessionId: "thread-session",
+      enableMcp: true,
       config: {
+        backupsEnabled: true,
+        toolOutputOverflowChars: 25000,
         preferredChildModel: "gpt-5.2",
+        childModelRoutingMode: "same-provider",
+        preferredChildModelRef: "openai:gpt-5.2",
         userName: "Taylor",
         userProfile: {
           instructions: "Keep answers terse.",
@@ -1241,26 +1296,22 @@ describe("workspace settings sync", () => {
     const workspace = useAppStore.getState().workspaces.find((entry) => entry.id === workspaceId);
     expect(workspace?.defaultToolOutputOverflowChars).toBeUndefined();
 
-    expect(controlSocket.sent.find((message) => message?.type === "set_config")).toMatchObject({
-      type: "set_config",
+    expect(controlSocket.sent[0]).toMatchObject({
+      type: "apply_session_defaults",
+      sessionId: "control-session",
+      enableMcp: true,
       config: {
-        backupsEnabled: true,
-        preferredChildModel: "gpt-5.2",
         clearToolOutputOverflowChars: true,
       },
     });
-    expect(controlSocket.sent.find((message) => message?.type === "set_config")?.config?.toolOutputOverflowChars).toBeUndefined();
+    expect(controlSocket.sent[0]?.config?.toolOutputOverflowChars).toBeUndefined();
 
-    expect(threadSocket.sent.map((message) => message?.type)).toEqual([
-      "set_config",
-      "set_model",
-      "set_config",
-      "set_enable_mcp",
-    ]);
+    expect(threadSocket.sent).toHaveLength(1);
     expect(threadSocket.sent[0]).toMatchObject({
-      type: "set_config",
+      type: "apply_session_defaults",
+      sessionId: "thread-session",
+      enableMcp: true,
       config: {
-        backupsEnabled: true,
         clearToolOutputOverflowChars: true,
       },
     });
@@ -1323,12 +1374,11 @@ describe("workspace settings sync", () => {
       },
     });
 
-    const controlSent = controlSocket.sent.map((message) => message?.type);
-    expect(controlSent).toContain("set_model");
-    expect(controlSent).toContain("set_config");
-    expect(controlSent).toContain("set_enable_mcp");
-    expect(controlSocket.sent.find((message) => message?.type === "set_config")).toMatchObject({
-      type: "set_config",
+    expect(controlSocket.sent).toHaveLength(1);
+    expect(controlSocket.sent[0]).toMatchObject({
+      type: "apply_session_defaults",
+      sessionId: "control-session",
+      enableMcp: false,
       config: {
         backupsEnabled: false,
         preferredChildModel: "gpt-5.2-mini",
@@ -1347,25 +1397,15 @@ describe("workspace settings sync", () => {
       },
     });
 
-    expect(idleThreadSocket.sent.map((message) => message?.type)).toEqual([
-      "set_config",
-      "set_model",
-      "set_config",
-      "set_enable_mcp",
-    ]);
-    // First set_config carries immediate safe runtime defaults.
+    expect(idleThreadSocket.sent).toHaveLength(1);
     expect(idleThreadSocket.sent[0]).toMatchObject({
-      type: "set_config",
+      type: "apply_session_defaults",
+      sessionId: "thread-idle",
+      enableMcp: false,
       config: {
         backupsEnabled: false,
-        toolOutputOverflowChars: 12000,
-      },
-    });
-    // Second set_config carries the rest of the config patch
-    expect(idleThreadSocket.sent[2]).toMatchObject({
-      type: "set_config",
-      config: {
         preferredChildModel: "gpt-5.2-mini",
+        toolOutputOverflowChars: 12000,
         providerOptions: {
           openai: {
             reasoningEffort: "high",
@@ -1379,17 +1419,7 @@ describe("workspace settings sync", () => {
         },
       },
     });
-    // Busy thread still gets the immediate safe runtime config
-    expect(busyThreadSocket.sent.map((message) => message?.type)).toEqual([
-      "set_config",
-    ]);
-    expect(busyThreadSocket.sent[0]).toMatchObject({
-      type: "set_config",
-      config: {
-        backupsEnabled: false,
-        toolOutputOverflowChars: 12000,
-      },
-    });
+    expect(busyThreadSocket.sent).toHaveLength(0);
 
     busyThreadSocket.sent = [];
     busyThreadSocket.emit({
@@ -1398,24 +1428,15 @@ describe("workspace settings sync", () => {
       busy: false,
     });
 
-    // After becoming idle, the deferred sync retries the full defaults pass.
-    expect(busyThreadSocket.sent.map((message) => message?.type)).toEqual([
-      "set_config",
-      "set_model",
-      "set_config",
-      "set_enable_mcp",
-    ]);
+    expect(busyThreadSocket.sent).toHaveLength(1);
     expect(busyThreadSocket.sent[0]).toMatchObject({
-      type: "set_config",
+      type: "apply_session_defaults",
+      sessionId: "thread-busy",
+      enableMcp: false,
       config: {
         backupsEnabled: false,
-        toolOutputOverflowChars: 12000,
-      },
-    });
-    expect(busyThreadSocket.sent[2]).toMatchObject({
-      type: "set_config",
-      config: {
         preferredChildModel: "gpt-5.2-mini",
+        toolOutputOverflowChars: 12000,
         providerOptions: {
           openai: {
             reasoningEffort: "high",

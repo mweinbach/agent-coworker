@@ -161,6 +161,43 @@ function emitServerHello(
   });
 }
 
+function emitThreadSessionDefaults(
+  socket: MockAgentSocket,
+  sessionId: string,
+  overrides: {
+    settings?: Partial<Record<string, unknown>>;
+    config?: Partial<Record<string, unknown>>;
+  } = {},
+) {
+  socket.emit({
+    type: "session_settings",
+    sessionId,
+    enableMcp: true,
+    enableMemory: true,
+    memoryRequireApproval: false,
+    ...(overrides.settings ?? {}),
+  });
+  socket.emit({
+    type: "session_config",
+    sessionId,
+    config: {
+      yolo: false,
+      observabilityEnabled: false,
+      backupsEnabled: true,
+      defaultBackupsEnabled: true,
+      enableMemory: true,
+      memoryRequireApproval: false,
+      preferredChildModel: "gemini-3.1-pro-preview-customtools",
+      childModelRoutingMode: "same-provider",
+      preferredChildModelRef: "google:gemini-3.1-pro-preview-customtools",
+      allowedChildModelRefs: [],
+      maxSteps: 100,
+      toolOutputOverflowChars: 25000,
+      ...(overrides.config ?? {}),
+    },
+  });
+}
+
 function canonicalThreadId(sessionId: string, fallbackThreadId?: string): string {
   const state = useAppStore.getState();
   const thread = state.threads.find((item) =>
@@ -861,23 +898,11 @@ describe("thread reconnect", () => {
         outputDirectory: "/tmp/workspace/output",
       },
     });
+    threadSocket.sent = [];
+    emitThreadSessionDefaults(threadSocket, "persisted-thread-session");
 
     expect(threadSocket.sent.some((message) => message?.type === "set_model")).toBe(false);
-    expect(threadSocket.sent).toContainEqual({
-      type: "set_config",
-      sessionId: "persisted-thread-session",
-      config: {
-        preferredChildModel: "gemini-3.1-pro-preview-customtools",
-        childModelRoutingMode: "same-provider",
-        preferredChildModelRef: "google:gemini-3.1-pro-preview-customtools",
-        allowedChildModelRefs: [],
-      },
-    });
-    expect(threadSocket.sent).toContainEqual({
-      type: "set_enable_mcp",
-      sessionId: "persisted-thread-session",
-      enableMcp: true,
-    });
+    expect(threadSocket.sent.some((message) => message?.type === "apply_session_defaults")).toBe(false);
   });
 
   test("deferred auto-resume defaults preserve the resumed session model when the thread becomes idle", async () => {
@@ -923,6 +948,8 @@ describe("thread reconnect", () => {
     expect(RUNTIME.pendingWorkspaceDefaultApplyModeByThread.get(activeThreadId)).toBe("auto-resume");
 
     threadSocket.sent = [];
+    emitThreadSessionDefaults(threadSocket, "persisted-thread-session");
+    threadSocket.sent = [];
     threadSocket.emit({
       type: "session_busy",
       sessionId: "persisted-thread-session",
@@ -931,16 +958,7 @@ describe("thread reconnect", () => {
     });
 
     expect(threadSocket.sent.some((message) => message?.type === "set_model")).toBe(false);
-    expect(threadSocket.sent).toContainEqual({
-      type: "set_config",
-      sessionId: "persisted-thread-session",
-      config: {
-        preferredChildModel: "gemini-3.1-pro-preview-customtools",
-        childModelRoutingMode: "same-provider",
-        preferredChildModelRef: "google:gemini-3.1-pro-preview-customtools",
-        allowedChildModelRefs: [],
-      },
-    });
+    expect(threadSocket.sent.some((message) => message?.type === "apply_session_defaults")).toBe(false);
     expect(RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(activeThreadId)).toBe(false);
     expect(RUNTIME.pendingWorkspaceDefaultApplyModeByThread.has(activeThreadId)).toBe(false);
   });

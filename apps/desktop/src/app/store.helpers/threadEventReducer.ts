@@ -518,6 +518,10 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           },
         };
       });
+      if (RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)) {
+        const pendingMode = RUNTIME.pendingWorkspaceDefaultApplyModeByThread.get(threadId) ?? "auto";
+        void get().applyWorkspaceDefaultsToThread(threadId, pendingMode);
+      }
       return;
     }
 
@@ -604,6 +608,10 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
           },
         };
       });
+      if (RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(threadId)) {
+        const pendingMode = RUNTIME.pendingWorkspaceDefaultApplyModeByThread.get(threadId) ?? "auto";
+        void get().applyWorkspaceDefaultsToThread(threadId, pendingMode);
+      }
       return;
     }
 

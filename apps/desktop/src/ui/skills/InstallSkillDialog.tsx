@@ -20,6 +20,7 @@ export function InstallSkillDialog({
   const rt = wsRtById[workspaceId];
   const mutationBlocked = rt?.skillsMutationBlocked ?? false;
   const mutationBlockedReason = rt?.skillsMutationBlockedReason ?? null;
+  const skillInstallInFlight = Object.keys(rt?.skillMutationPendingKeys ?? {}).some((k) => k.startsWith("install:"));
 
   const handlePreview = async (targetScope: SkillMutationTargetScope) => {
     if (!sourceInput.trim()) return;
@@ -28,9 +29,13 @@ export function InstallSkillDialog({
 
   const handleInstall = async (targetScope: SkillMutationTargetScope) => {
     if (!sourceInput.trim()) return;
-    await installSkills(sourceInput, targetScope);
-    setOpen(false);
-    setSourceInput("");
+    try {
+      await installSkills(sourceInput, targetScope);
+      setOpen(false);
+      setSourceInput("");
+    } catch {
+      // Server failures surface as `skillMutationError` above; connection/superseded errors reject here.
+    }
   };
 
   return (
@@ -62,10 +67,21 @@ export function InstallSkillDialog({
               </Button>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" disabled={mutationBlocked} onClick={() => void handleInstall("project")} type="button">
+              <Button
+                size="sm"
+                disabled={mutationBlocked || skillInstallInFlight}
+                onClick={() => void handleInstall("project")}
+                type="button"
+              >
                 Install to Workspace
               </Button>
-              <Button size="sm" variant="secondary" disabled={mutationBlocked} onClick={() => void handleInstall("global")} type="button">
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={mutationBlocked || skillInstallInFlight}
+                onClick={() => void handleInstall("global")}
+                type="button"
+              >
                 Install to Cowork Library
               </Button>
             </div>

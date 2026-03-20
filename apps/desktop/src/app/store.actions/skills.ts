@@ -278,7 +278,9 @@ export function createSkillActions(
 
     installSkills: async (sourceInput: string, targetScope: "project" | "global") => {
       const workspaceId = get().selectedWorkspaceId;
-      if (!workspaceId) return;
+      if (!workspaceId) {
+        throw new Error("No workspace selected");
+      }
       const key = skillPendingKey(`install:${targetScope}`);
       set((s) => ({
         workspaceRuntimeById: {
@@ -320,7 +322,20 @@ export function createSkillActions(
             detail: "Unable to install skills.",
           }),
         }));
+        throw new Error("Unable to install skills.");
       }
+
+      return await new Promise<void>((resolve, reject) => {
+        const existing = RUNTIME.skillInstallWaiters.get(workspaceId);
+        if (existing) {
+          existing.reject(new Error("Another skill install was started"));
+        }
+        RUNTIME.skillInstallWaiters.set(workspaceId, {
+          pendingKey: key,
+          resolve: () => resolve(),
+          reject: (err: Error) => reject(err),
+        });
+      });
     },
   
 

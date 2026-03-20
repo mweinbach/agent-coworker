@@ -521,6 +521,13 @@ export function createControlSocketHelpers(
         }
 
         if (evt.type === "skills_catalog") {
+          const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
+          const workspaceRuntimeBefore = get().workspaceRuntimeById[workspaceId];
+          const shouldResolveInstall =
+            installWaiter != null &&
+            workspaceRuntimeBefore != null &&
+            workspaceRuntimeBefore.skillMutationPendingKeys[installWaiter.pendingKey] === true;
+
           set((s) => {
             const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
             const selectedInstallationId = workspaceRuntime.selectedSkillInstallationId;
@@ -546,6 +553,11 @@ export function createControlSocketHelpers(
               },
             };
           });
+
+          if (shouldResolveInstall && installWaiter) {
+            RUNTIME.skillInstallWaiters.delete(workspaceId);
+            installWaiter.resolve();
+          }
           return;
         }
 
@@ -795,6 +807,18 @@ export function createControlSocketHelpers(
 
         if (evt.type === "error") {
           resolvePendingControlRequestWaitersOnError(workspaceId, evt);
+          const workspaceRuntimeBefore = get().workspaceRuntimeById[workspaceId];
+          const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
+          const hasPendingSkillStateBefore =
+            workspaceRuntimeBefore &&
+            (workspaceRuntimeBefore.skillCatalogLoading ||
+              Object.keys(workspaceRuntimeBefore.skillMutationPendingKeys).length > 0);
+          const shouldRejectInstall =
+            installWaiter &&
+            workspaceRuntimeBefore &&
+            hasPendingSkillStateBefore &&
+            workspaceRuntimeBefore.skillMutationPendingKeys[installWaiter.pendingKey] === true;
+
           set((s) => {
             const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
             const hasPendingMemories = workspaceRuntime.memoriesLoading;
@@ -845,6 +869,11 @@ export function createControlSocketHelpers(
               },
             };
           });
+
+          if (shouldRejectInstall && installWaiter) {
+            RUNTIME.skillInstallWaiters.delete(workspaceId);
+            installWaiter.reject(new Error(evt.message));
+          }
           return;
         }
 
@@ -867,6 +896,11 @@ export function createControlSocketHelpers(
           return;
         }
         RUNTIME.controlSockets.delete(workspaceId);
+        const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
+        if (installWaiter) {
+          RUNTIME.skillInstallWaiters.delete(workspaceId);
+          installWaiter.reject(new Error("Control connection closed"));
+        }
         resolveControlSessionWaiters(workspaceId, null);
         resolveWorkspaceSessionWaiters(workspaceId, null);
         for (const key of [...sessionSnapshotWaiters.keys()]) {

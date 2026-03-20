@@ -121,6 +121,7 @@ describe("control socket helper timeouts", () => {
   beforeEach(() => {
     MOCK_SOCKETS.length = 0;
     RUNTIME.controlSockets.clear();
+    RUNTIME.skillInstallWaiters.clear();
     RUNTIME.sessionSnapshots.clear();
     persistCalls = 0;
   });
@@ -160,6 +161,7 @@ describe("control socket workspace sessions", () => {
   beforeEach(() => {
     MOCK_SOCKETS.length = 0;
     RUNTIME.controlSockets.clear();
+    RUNTIME.skillInstallWaiters.clear();
     RUNTIME.sessionSnapshots.clear();
     persistCalls = 0;
   });
@@ -274,6 +276,7 @@ describe("control socket skill error recovery", () => {
   beforeEach(() => {
     MOCK_SOCKETS.length = 0;
     RUNTIME.controlSockets.clear();
+    RUNTIME.skillInstallWaiters.clear();
     RUNTIME.sessionSnapshots.clear();
     persistCalls = 0;
   });
@@ -371,6 +374,56 @@ describe("control socket skill error recovery", () => {
     expect(state.workspaceRuntimeById[workspaceId].skillsMutationBlocked).toBe(true);
     expect(state.workspaceRuntimeById[workspaceId].skillsMutationBlockedReason).toBe("still blocked");
   });
+
+  test("error rejects skill install waiter when pending key matches", async () => {
+    const state = {
+      selectedWorkspaceId: workspaceId,
+      threads: [],
+      selectedThreadId: null,
+      threadRuntimeById: {},
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          skillMutationPendingKeys: { "install:global": true },
+        },
+      },
+      workspaces: [],
+      notifications: [],
+      providerStatusRefreshing: false,
+      providerLastAuthChallenge: null,
+    } as any;
+    const get = () => state;
+    const set = (updater: any) => {
+      const patch = typeof updater === "function" ? updater(state) : updater;
+      Object.assign(state, patch);
+    };
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+
+    const installPromise = new Promise<void>((resolve, reject) => {
+      RUNTIME.skillInstallWaiters.set(workspaceId, {
+        pendingKey: "install:global",
+        resolve,
+        reject,
+      });
+    });
+
+    controlSocket.emit({
+      type: "error",
+      sessionId: "control-session",
+      source: "session",
+      code: "internal_error",
+      message: "install failed on disk",
+    });
+
+    await expect(installPromise).rejects.toThrow("install failed on disk");
+    expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
+  });
 });
 
 describe("control socket skill detail events", () => {
@@ -405,8 +458,40 @@ describe("control socket skill detail events", () => {
   beforeEach(() => {
     MOCK_SOCKETS.length = 0;
     RUNTIME.controlSockets.clear();
+    RUNTIME.skillInstallWaiters.clear();
     RUNTIME.sessionSnapshots.clear();
     persistCalls = 0;
+  });
+
+  test("skills_catalog resolves skill install waiter when pending key matches", async () => {
+    const { state, get, set } = createState({
+      skillMutationPendingKeys: { "install:project": true },
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+
+    const installPromise = new Promise<void>((resolve, reject) => {
+      RUNTIME.skillInstallWaiters.set(workspaceId, {
+        pendingKey: "install:project",
+        resolve,
+        reject,
+      });
+    });
+
+    controlSocket.emit({
+      type: "skills_catalog",
+      sessionId: "control-session",
+      catalog: { scopes: [], effectiveSkills: [], installations: [] },
+      mutationBlocked: false,
+    } as any);
+
+    await installPromise;
+    expect(RUNTIME.skillInstallWaiters.has(workspaceId)).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
   });
 
   test("skill_installation keeps in-flight mutation keys while loading details", () => {

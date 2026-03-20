@@ -18,7 +18,7 @@ mock.module("../src/lib/desktopCommands", () => ({
 }));
 
 mock.module("../src/app/store.helpers", () => ({
-  RUNTIME: { controlSockets: new Map() },
+  RUNTIME: { controlSockets: new Map(), skillInstallWaiters: new Map() },
   appendThreadTranscript: async () => {},
   basename: (value: string) => value.split("/").at(-1) ?? value,
   buildContextPreamble: () => "",
@@ -126,7 +126,9 @@ describe("skill store actions", () => {
     state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys = { other: true };
     const { get, set } = createStoreHarness(state);
 
-    await createSkillActions(set as any, get as any).installSkills("owner/repo", "global");
+    await expect(createSkillActions(set as any, get as any).installSkills("owner/repo", "global")).rejects.toThrow(
+      "Unable to install skills.",
+    );
 
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ other: true });
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();

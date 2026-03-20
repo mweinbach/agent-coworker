@@ -582,7 +582,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
         return;
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        console.error("Desktop init failed:", error);
+        console.warn(`Desktop init failed: ${detail}`);
         if (get().ready) {
           set((s) => ({
             bootstrapPending: false,

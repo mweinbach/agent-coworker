@@ -29,6 +29,7 @@ const mockRunTurn = mock(async () => ({
 }));
 
 mock.module("../src/agent", () => ({
+  ...REAL_AGENT,
   runTurn: mockRunTurn,
 }));
 

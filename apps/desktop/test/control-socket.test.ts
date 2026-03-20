@@ -278,7 +278,7 @@ describe("control socket skill error recovery", () => {
     persistCalls = 0;
   });
 
-  test("error clears pending skill state even when the message does not mention skills", () => {
+  test("error clears pending skill state without clearing the server skill-mutation block", () => {
     const state = {
       selectedWorkspaceId: workspaceId,
       threads: [],
@@ -320,6 +320,8 @@ describe("control socket skill error recovery", () => {
 
     expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
     expect(state.workspaceRuntimeById[workspaceId].skillCatalogError).toBe("EACCES: permission denied");
+    expect(state.workspaceRuntimeById[workspaceId].skillsMutationBlocked).toBe(true);
+    expect(state.workspaceRuntimeById[workspaceId].skillsMutationBlockedReason).toBe("catalog locked");
     expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe("EACCES: permission denied");
   });

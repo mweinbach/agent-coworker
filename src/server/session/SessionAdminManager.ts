@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import type { SessionSnapshot } from "../../shared/sessionSnapshot";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 import { sameWorkspacePath } from "../../utils/workspacePath";
 import {
@@ -10,7 +11,35 @@ import {
 } from "../sessionStore";
 import type { SessionContext } from "./SessionContext";
 
-function shouldIncludeTopLevelSessionSummary(session: PersistedSessionSummary): boolean {
+function mergeLiveTopLevelSessionSummary(
+  session: PersistedSessionSummary,
+  liveSnapshot: SessionSnapshot | null,
+): PersistedSessionSummary {
+  if (!liveSnapshot || liveSnapshot.sessionKind !== "root") {
+    return session;
+  }
+
+  return {
+    sessionId: liveSnapshot.sessionId,
+    title: liveSnapshot.title,
+    titleSource: liveSnapshot.titleSource,
+    titleModel: liveSnapshot.titleModel,
+    provider: liveSnapshot.provider,
+    model: liveSnapshot.model,
+    createdAt: liveSnapshot.createdAt,
+    updatedAt: liveSnapshot.updatedAt,
+    messageCount: liveSnapshot.messageCount,
+    lastEventSeq: liveSnapshot.lastEventSeq,
+    hasPendingAsk: liveSnapshot.hasPendingAsk,
+    hasPendingApproval: liveSnapshot.hasPendingApproval,
+  };
+}
+
+function shouldIncludeTopLevelSessionSummary(session: PersistedSessionSummary, liveSnapshot: SessionSnapshot | null): boolean {
+  if (liveSnapshot?.sessionKind === "root" && (liveSnapshot.executionState === "running" || liveSnapshot.executionState === "pending_init")) {
+    return true;
+  }
+
   return session.messageCount > 0
     || session.titleSource !== "default"
     || session.hasPendingAsk
@@ -67,7 +96,15 @@ export class SessionAdminManager {
         : await listPersistedSessionSnapshots(this.context.getCoworkPaths(), {
             ...(scope === "workspace" ? { workingDirectory: this.context.state.config.workingDirectory } : {}),
           }))
-        .filter(shouldIncludeTopLevelSessionSummary);
+        .map((session) => {
+          const liveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(session.sessionId) ?? null;
+          const effectiveSummary = mergeLiveTopLevelSessionSummary(session, liveSnapshot);
+          return shouldIncludeTopLevelSessionSummary(effectiveSummary, liveSnapshot)
+            ? effectiveSummary
+            : null;
+        })
+        .filter((session): session is PersistedSessionSummary => session !== null)
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
       this.context.emit({ type: "sessions", sessionId: this.context.id, sessions });
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to list sessions: ${String(err)}`);

@@ -113,7 +113,7 @@ describe("desktop IPC security helpers", () => {
     }
   });
 
-  test("resolveAllowedOpenPath only allows directories outside workspace roots", async () => {
+  test("resolveAllowedOpenPath stays within workspace roots", async () => {
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
     const workspaceRoot = await fs.realpath(tempWorkspace);
     const home = os.homedir();
@@ -127,7 +127,7 @@ describe("desktop IPC security helpers", () => {
       await fs.writeFile(workspaceFile, "inside workspace\n");
 
       expect(resolveAllowedOpenPath([workspaceRoot], workspaceFile)).toBe(workspaceFile);
-      expect(resolveAllowedOpenPath([workspaceRoot], externalDir)).toBe(await fs.realpath(externalDir));
+      expect(() => resolveAllowedOpenPath([workspaceRoot], externalDir)).toThrow("outside allowed workspace roots");
       expect(() => resolveAllowedOpenPath([workspaceRoot], externalFile)).toThrow("outside allowed workspace roots");
     } finally {
       await fs.rm(tempWorkspace, { recursive: true, force: true });

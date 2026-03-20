@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -45,8 +44,8 @@ export function resolveAllowedPath(workspaceRoots: string[], requestedPath: stri
 
 /**
  * Workspace roots plus Cowork agent homes where skills and config commonly live.
- * Used for `revealPath` and directory-only `openPath` targets outside the active
- * workspace (e.g. ~/.cowork/skills, ~/.agent/skills).
+ * Used for `revealPath` targets outside the active workspace
+ * (e.g. ~/.cowork/skills, ~/.agent/skills).
  */
 export function getRevealOpenPathRoots(workspaceRoots: string[]): string[] {
   const home = os.homedir();
@@ -63,19 +62,5 @@ export function resolveAllowedRevealOrOpenPath(workspaceRoots: string[], request
 }
 
 export function resolveAllowedOpenPath(workspaceRoots: string[], requestedPath: string): string {
-  try {
-    return resolveAllowedPath(workspaceRoots, requestedPath);
-  } catch (workspaceError) {
-    const resolved = resolveAllowedRevealOrOpenPath(workspaceRoots, requestedPath);
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(resolved);
-    } catch {
-      throw workspaceError;
-    }
-    if (!stat.isDirectory()) {
-      throw workspaceError;
-    }
-    return resolved;
-  }
+  return resolveAllowedPath(workspaceRoots, requestedPath);
 }

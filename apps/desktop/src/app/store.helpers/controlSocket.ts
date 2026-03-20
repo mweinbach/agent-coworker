@@ -823,8 +823,6 @@ export function createControlSocketHelpers(
                     ? {
                         skillCatalogLoading: false,
                         skillCatalogError: evt.message,
-                        skillsMutationBlocked: false,
-                        skillsMutationBlockedReason: null,
                         skillMutationPendingKeys: {},
                         skillMutationError: evt.message,
                       }

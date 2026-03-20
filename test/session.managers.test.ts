@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { SessionContext } from "../src/server/session/SessionContext";
 import { HistoryManager } from "../src/server/session/HistoryManager";
 import { McpManager } from "../src/server/session/McpManager";
+import { SessionAdminManager } from "../src/server/session/SessionAdminManager";
 import { SessionMetadataManager } from "../src/server/session/SessionMetadataManager";
 
 function makeBaseContext(): SessionContext {
@@ -143,5 +144,80 @@ describe("session managers", () => {
     expect(evt.ok).toBe(false);
     expect(String(evt.message)).toContain("lookup failed");
     expect(context.state.connecting).toBe(false);
+  });
+
+  test("SessionAdminManager listSessions keeps live running sessions visible when persisted summaries lag", async () => {
+    const context = makeBaseContext();
+    const emitted: any[] = [];
+    context.emit = (evt) => emitted.push(evt);
+    context.deps.sessionDb = {
+      listSessions: () => [{
+        sessionId: "live-root",
+        title: "New Session",
+        titleSource: "default",
+        titleModel: null,
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        messageCount: 0,
+        lastEventSeq: 1,
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+      }],
+    } as any;
+    context.deps.getLiveSessionSnapshotImpl = () => ({
+      sessionId: "live-root",
+      title: "New Session",
+      titleSource: "default",
+      titleModel: null,
+      provider: "google",
+      model: "gemini-3-flash-preview",
+      sessionKind: "root",
+      parentSessionId: null,
+      role: null,
+      mode: null,
+      depth: null,
+      nickname: null,
+      requestedModel: null,
+      effectiveModel: null,
+      requestedReasoningEffort: null,
+      effectiveReasoningEffort: null,
+      executionState: "running",
+      lastMessagePreview: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:10.000Z",
+      messageCount: 1,
+      lastEventSeq: 2,
+      feed: [],
+      agents: [],
+      todos: [],
+      sessionUsage: null,
+      lastTurnUsage: null,
+      hasPendingAsk: false,
+      hasPendingApproval: false,
+    });
+
+    const manager = new SessionAdminManager(context);
+    await manager.listSessions("workspace");
+
+    expect(emitted).toContainEqual({
+      type: "sessions",
+      sessionId: "session-1",
+      sessions: [{
+        sessionId: "live-root",
+        title: "New Session",
+        titleSource: "default",
+        titleModel: null,
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:10.000Z",
+        messageCount: 1,
+        lastEventSeq: 2,
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+      }],
+    });
   });
 });

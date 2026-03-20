@@ -4,8 +4,14 @@ type ReactGrabDevLoaders = {
 };
 
 const defaultReactGrabDevLoaders: ReactGrabDevLoaders = {
-  loadReactGrab: async () => await import("react-grab"),
-  loadReactGrabMcpClient: async () => await import("@react-grab/mcp/client"),
+  loadReactGrab: async () => {
+    const moduleId = "react-grab";
+    return await import(/* @vite-ignore */ moduleId);
+  },
+  loadReactGrabMcpClient: async () => {
+    const moduleId = "@react-grab/mcp/client";
+    return await import(/* @vite-ignore */ moduleId);
+  },
 };
 
 export async function maybeLoadReactGrabDevTools(
@@ -14,8 +20,12 @@ export async function maybeLoadReactGrabDevTools(
 ): Promise<void> {
   if (!isDev) return;
 
-  await Promise.all([
-    loaders.loadReactGrab(),
-    loaders.loadReactGrabMcpClient(),
-  ]);
+  try {
+    await Promise.all([
+      loaders.loadReactGrab(),
+      loaders.loadReactGrabMcpClient(),
+    ]);
+  } catch (error) {
+    console.warn("[desktop] React Grab devtools not loaded:", error);
+  }
 }

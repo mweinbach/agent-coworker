@@ -189,9 +189,7 @@ export function parseGitHubUrl(raw: string): ParsedGitHubSource | null {
     }
     const [owner, repo, ref, ...filePathSegments] = segments;
     const filePath = filePathSegments.join("/");
-    const subdir = filePath.toLowerCase().endsWith("/skill.md")
-      ? path.posix.dirname(filePath)
-      : path.posix.dirname(filePath);
+    const subdir = path.posix.dirname(filePath);
     return {
       kind: "raw",
       repo: normalizeRepo(`${owner}/${repo}`),

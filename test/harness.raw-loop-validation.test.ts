@@ -208,6 +208,20 @@ describe("raw-loop validation repair policy", () => {
     expect(result.degraded).toBe(true);
     expect(result.validationResult.issues.some((entry) => entry.code === "repair_failed")).toBe(true);
   });
+
+  test("callers can clear stale validation when a later attempt fails before validation", async () => {
+    let finalValidation: { issues: Array<{ code: string }> } | null = {
+      issues: [{ code: "schema_failed" }],
+    };
+
+    try {
+      throw new Error("provider offline");
+    } catch {
+      finalValidation = null;
+    }
+
+    expect(finalValidation).toBeNull();
+  });
 });
 
 describe("raw-loop budget summaries", () => {

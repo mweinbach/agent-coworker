@@ -2313,6 +2313,7 @@ async function main() {
         repairAttempted = attemptRepairAttempted;
         repairSucceeded = attemptRepairSucceeded;
         degraded = attemptDegraded;
+        finalValidation = null;
         finalToolLogLines = toolLogLines;
         finalAskEvents = askEvents;
         finalApprovalEvents = approvalEvents;

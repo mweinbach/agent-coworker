@@ -161,9 +161,25 @@ export function createSkillActions(
       }));
     },
 
-    selectSkillInstallation: async (installationId: string) => {
+    selectSkillInstallation: async (installationId: string | null) => {
       const workspaceId = get().selectedWorkspaceId;
       if (!workspaceId) return;
+      if (installationId === null) {
+        set((s) => ({
+          workspaceRuntimeById: {
+            ...s.workspaceRuntimeById,
+            [workspaceId]: {
+              ...s.workspaceRuntimeById[workspaceId],
+              selectedSkillInstallationId: null,
+              selectedSkillInstallation: null,
+              selectedSkillName: null,
+              selectedSkillContent: null,
+              selectedSkillPreview: null,
+            },
+          },
+        }));
+        return;
+      }
       const ok = sendControl(get, workspaceId, (sessionId) => ({
         type: "skill_installation_get",
         sessionId,

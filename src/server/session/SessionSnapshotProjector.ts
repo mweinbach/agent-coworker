@@ -306,6 +306,24 @@ function humanizeUnderscoreLabel(value: string): string {
   return value.replace(/_/g, " ");
 }
 
+function normalizeQuestionPreview(question: string, maxChars = 220): string {
+  let normalized = question.trim().replace(/\s+/g, " ");
+  normalized = normalized.replace(/^question:\s*/i, "").trim();
+  if (!normalized) return "";
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, maxChars - 1)}...`;
+}
+
+function formatAskSystemLine(evt: Extract<ServerEvent, { type: "ask" }>): string {
+  const preview = normalizeQuestionPreview(evt.question);
+  return preview ? `question: ${preview}` : "question:";
+}
+
+function formatApprovalSystemLine(evt: Extract<ServerEvent, { type: "approval" }>): string {
+  const command = evt.command.trim();
+  return command ? `approval requested: ${command}` : "approval requested";
+}
+
 function formatObservabilityDiagnosticLine(evt: {
   enabled: boolean;
   health: { status?: unknown; reason?: unknown; message?: unknown };
@@ -657,7 +675,37 @@ export class SessionSnapshotProjector {
         todos: [],
         sessionUsage: null,
         lastTurnUsage: null,
+        hasPendingAsk: false,
+        hasPendingApproval: false,
       };
+      return;
+    }
+
+    if (evt.type === "ask") {
+      this.snapshot = {
+        ...this.snapshot,
+        hasPendingAsk: true,
+      };
+      this.pushFeedItem({
+        id: crypto.randomUUID(),
+        kind: "system",
+        ts,
+        line: formatAskSystemLine(evt),
+      });
+      return;
+    }
+
+    if (evt.type === "approval") {
+      this.snapshot = {
+        ...this.snapshot,
+        hasPendingApproval: true,
+      };
+      this.pushFeedItem({
+        id: crypto.randomUUID(),
+        kind: "system",
+        ts,
+        line: formatApprovalSystemLine(evt),
+      });
       return;
     }
 

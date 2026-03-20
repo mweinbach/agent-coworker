@@ -2115,6 +2115,28 @@ describe("AgentSession", () => {
       expect(askEvt).toBeDefined();
       expect((sessionAny.pendingAskEvents as Map<string, unknown>).size).toBe(0);
     });
+
+    test("keeps the projector pending ask flag in sync after resolution", async () => {
+      const { session, events } = makeSession();
+      const sessionAny = session as any;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const answer = await params.askUser("question?");
+        return { text: answer, reasoningText: undefined, responseMessages: [] };
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const askEvt = events.find((e) => e.type === "ask") as any;
+      expect(askEvt).toBeDefined();
+      expect(sessionAny.sessionSnapshotProjector.getSnapshot().hasPendingAsk).toBe(true);
+
+      session.handleAskResponse(askEvt.requestId, "answer");
+      await sendPromise;
+
+      expect(sessionAny.sessionSnapshotProjector.getSnapshot().hasPendingAsk).toBe(false);
+    });
   });
 
   // =========================================================================
@@ -2224,6 +2246,28 @@ describe("AgentSession", () => {
       const approvalEvt = events.find((e) => e.type === "approval");
       expect(approvalEvt).toBeDefined();
       expect((sessionAny.pendingApprovalEvents as Map<string, unknown>).size).toBe(0);
+    });
+
+    test("keeps the projector pending approval flag in sync after resolution", async () => {
+      const { session, events } = makeSession();
+      const sessionAny = session as any;
+
+      mockRunTurn.mockImplementation(async (params: any) => {
+        const approved = await params.approveCommand("npm install");
+        return { text: approved ? "approved" : "denied", reasoningText: undefined, responseMessages: [] };
+      });
+
+      const sendPromise = session.sendUserMessage("go");
+      await new Promise((r) => setTimeout(r, 10));
+
+      const approvalEvt = events.find((e) => e.type === "approval") as any;
+      expect(approvalEvt).toBeDefined();
+      expect(sessionAny.sessionSnapshotProjector.getSnapshot().hasPendingApproval).toBe(true);
+
+      session.handleApprovalResponse(approvalEvt.requestId, true);
+      await sendPromise;
+
+      expect(sessionAny.sessionSnapshotProjector.getSnapshot().hasPendingApproval).toBe(false);
     });
 
     test("marks dangerous commands in the approval event", async () => {

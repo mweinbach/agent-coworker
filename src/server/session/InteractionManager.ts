@@ -54,11 +54,11 @@ export class InteractionManager {
     }
   }
 
-  handleAskResponse(requestId: string, answer: string) {
+  handleAskResponse(requestId: string, answer: string): boolean {
     const pending = this.pendingAsk.get(requestId);
     if (!pending) {
       this.opts.log(`[warn] ask_response for unknown requestId: ${requestId}`);
-      return;
+      return false;
     }
 
     if (answer.trim().length === 0) {
@@ -71,26 +71,28 @@ export class InteractionManager {
       if (pendingEvt) {
         this.opts.emit(pendingEvt);
       }
-      return;
+      return false;
     }
 
     this.pendingAsk.delete(requestId);
     this.pendingAskEvents.delete(requestId);
     this.opts.queuePersistSessionSnapshot("session.ask_resolved");
     pending.resolve(answer);
+    return true;
   }
 
-  handleApprovalResponse(requestId: string, approved: boolean) {
+  handleApprovalResponse(requestId: string, approved: boolean): boolean {
     const pending = this.pendingApproval.get(requestId);
     if (!pending) {
       this.opts.log(`[warn] approval_response for unknown requestId: ${requestId}`);
-      return;
+      return false;
     }
 
     this.pendingApproval.delete(requestId);
     this.pendingApprovalEvents.delete(requestId);
     this.opts.queuePersistSessionSnapshot("session.approval_resolved");
     pending.resolve(approved);
+    return true;
   }
 
   rejectAllPending(reason: string) {

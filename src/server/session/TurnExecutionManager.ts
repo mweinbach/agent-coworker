@@ -754,12 +754,12 @@ export class TurnExecutionManager {
     }
   }
 
-  handleAskResponse(requestId: string, answer: string) {
-    this.deps.interactionManager.handleAskResponse(requestId, answer);
+  handleAskResponse(requestId: string, answer: string): boolean {
+    return this.deps.interactionManager.handleAskResponse(requestId, answer);
   }
 
-  handleApprovalResponse(requestId: string, approved: boolean) {
-    this.deps.interactionManager.handleApprovalResponse(requestId, approved);
+  handleApprovalResponse(requestId: string, approved: boolean): boolean {
+    return this.deps.interactionManager.handleApprovalResponse(requestId, approved);
   }
 
   cancel(opts?: { includeSubagents?: boolean }) {

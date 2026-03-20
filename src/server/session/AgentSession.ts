@@ -1005,11 +1005,17 @@ export class AgentSession {
   }
 
   handleAskResponse(requestId: string, answer: string) {
-    this.turnExecutionManager.handleAskResponse(requestId, answer);
+    const handled = this.turnExecutionManager.handleAskResponse(requestId, answer);
+    if (handled) {
+      this.sessionSnapshotProjector.syncSessionState({ hasPendingAsk: this.hasPendingAsk });
+    }
   }
 
   handleApprovalResponse(requestId: string, approved: boolean) {
-    this.turnExecutionManager.handleApprovalResponse(requestId, approved);
+    const handled = this.turnExecutionManager.handleApprovalResponse(requestId, approved);
+    if (handled) {
+      this.sessionSnapshotProjector.syncSessionState({ hasPendingApproval: this.hasPendingApproval });
+    }
   }
 
   cancel(opts?: { includeSubagents?: boolean }) {

@@ -458,7 +458,14 @@ export async function startAgentServer(
 
   const loadInitialSessionSnapshot = (persisted: PersistedSessionRecord) => {
     try {
-      return sessionDb.getSessionSnapshot(persisted.sessionId) ?? createLegacySessionSnapshot(persisted);
+      const snapshot = sessionDb.getSessionSnapshot(persisted.sessionId);
+      if (!snapshot) {
+        return createLegacySessionSnapshot(persisted);
+      }
+      if (snapshot.lastEventSeq < persisted.lastEventSeq) {
+        return createLegacySessionSnapshot(persisted);
+      }
+      return snapshot;
     } catch {
       return createLegacySessionSnapshot(persisted);
     }

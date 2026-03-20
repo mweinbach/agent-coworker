@@ -83,9 +83,15 @@ export class SessionAdminManager {
       }
 
       const liveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(targetSessionId) ?? null;
+      let dbSnapshot: ReturnType<NonNullable<SessionContext["deps"]["sessionDb"]>["getSessionSnapshot"]> = null;
+      try {
+        dbSnapshot = this.context.deps.sessionDb?.getSessionSnapshot(targetSessionId) ?? null;
+      } catch {
+        // Malformed/schema-mismatched snapshot row - fall back to legacy
+      }
       const snapshot =
         liveSnapshot
-        ?? this.context.deps.sessionDb?.getSessionSnapshot(targetSessionId)
+        ?? dbSnapshot
         ?? this.context.deps.buildLegacySessionSnapshotImpl?.(record)
         ?? null;
 

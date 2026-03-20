@@ -3,9 +3,9 @@ import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../components/ui/dialog";
-import { openPath, revealPath } from "../../lib/desktopCommands";
+import { openPath } from "../../lib/desktopCommands";
 import { actionPending, normalizeDisplayContent, scopeLabel, skillSourceLabel, stateTone, SkillIcon } from "./utils";
-import { ExternalLinkIcon, FolderOpenIcon } from "lucide-react";
+import { ExternalLinkIcon } from "lucide-react";
 
 export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
@@ -83,7 +83,16 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                       </>
                     )}
                     {selectedInstallation && (
-                      <Button variant="link" className="h-auto p-0 text-muted-foreground hover:text-foreground" onClick={() => void revealPath({ path: selectedInstallation.rootDir })}>
+                      <Button
+                        type="button"
+                        variant="link"
+                        className="h-auto p-0 text-muted-foreground hover:text-foreground"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void openPath({ path: selectedInstallation.rootDir });
+                        }}
+                      >
                         <span className="flex items-center gap-1">
                           Open folder <ExternalLinkIcon className="h-3 w-3" />
                         </span>

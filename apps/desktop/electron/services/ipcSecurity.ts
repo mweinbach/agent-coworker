@@ -1,3 +1,6 @@
+import os from "node:os";
+import path from "node:path";
+
 import { resolveDesktopRendererUrl } from "./rendererUrl";
 import { assertPathWithinRoots } from "./validation";
 
@@ -37,4 +40,23 @@ export function resolveAllowedDirectoryPath(workspaceRoots: string[], requestedP
 
 export function resolveAllowedPath(workspaceRoots: string[], requestedPath: string): string {
   return assertPathWithinRoots(workspaceRoots, requestedPath, "path");
+}
+
+/**
+ * Workspace roots plus Cowork agent homes where skills and config commonly live.
+ * Used only for user-initiated `openPath` / `revealPath` so Finder opens skill installs
+ * outside the active workspace (e.g. ~/.cowork/skills, ~/.agent/skills).
+ */
+export function getRevealOpenPathRoots(workspaceRoots: string[]): string[] {
+  const home = os.homedir();
+  const extra: string[] = [path.join(home, ".cowork"), path.join(home, ".agent")];
+  const builtin = process.env.COWORK_BUILTIN_DIR?.trim();
+  if (builtin) {
+    extra.push(path.resolve(builtin));
+  }
+  return [...workspaceRoots, ...extra];
+}
+
+export function resolveAllowedRevealOrOpenPath(workspaceRoots: string[], requestedPath: string): string {
+  return assertPathWithinRoots(getRevealOpenPathRoots(workspaceRoots), requestedPath, "path");
 }

@@ -234,6 +234,7 @@ export const persistedStateInputSchema: z.ZodType<PersistedState> = z.object({
   threads: z.array(persistedThreadSchema),
   developerMode: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
   showHiddenFiles: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()),
+  perWorkspaceSettings: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
   version: z.preprocess(
     (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 2),
     z.number().int().nonnegative(),

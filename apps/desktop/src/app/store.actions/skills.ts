@@ -42,6 +42,7 @@ import {
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
+  syncDesktopStateCache,
   truncateTitle,
 } from "../store.helpers";
 import type { ThreadRecord, WorkspaceRecord } from "../types";
@@ -68,6 +69,7 @@ export function createSkillActions(set: StoreSet, get: StoreGet): Pick<AppStoreA
       }
   
       set({ view: "skills", selectedWorkspaceId: workspaceId });
+      syncDesktopStateCache(get);
       ensureWorkspaceRuntime(get, set, workspaceId);
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);

@@ -1,11 +1,14 @@
 import { create } from "zustand";
 
 import { createAppActions } from "./store.actions";
+import { buildCachedDesktopStateSeed } from "./store.actions/bootstrap";
+import { loadDesktopStateCacheRaw } from "./localStateCache";
 import { DEFAULT_PROVIDER_UI_STATE } from "./providerUiState";
 import { createDefaultUpdaterState, type AppStoreDataState, type AppStoreState } from "./store.helpers";
 
 const initialState: AppStoreDataState = {
   ready: false,
+  bootstrapPending: false,
   startupError: null,
   view: "chat",
 
@@ -56,8 +59,11 @@ const initialState: AppStoreDataState = {
   sidebarWidth: 248,
 };
 
+const cachedStateSeed = buildCachedDesktopStateSeed(loadDesktopStateCacheRaw());
+
 export const useAppStore = create<AppStoreState>((set, get) => ({
   ...initialState,
+  ...cachedStateSeed,
   ...createAppActions((partial) => set(partial as any), get),
 }));
 

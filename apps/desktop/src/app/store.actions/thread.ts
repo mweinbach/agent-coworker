@@ -45,6 +45,7 @@ import {
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
+  syncDesktopStateCache,
   truncateTitle,
 } from "../store.helpers";
 import type { ThreadBusyPolicy, ThreadRecord, WorkspaceRecord } from "../types";
@@ -222,6 +223,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
 
     selectThread: async (threadId: string) => {
       set({ selectedThreadId: threadId, view: "chat" });
+      syncDesktopStateCache(get);
       ensureThreadRuntime(get, set, threadId);
   
       const thread = get().threads.find((t) => t.id === threadId);

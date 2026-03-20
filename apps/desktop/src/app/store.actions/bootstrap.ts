@@ -22,6 +22,7 @@ import type { ProviderName } from "../../lib/wsProtocol";
 import type { ChildModelRoutingMode } from "../../lib/wsProtocol";
 
 import {
+  type AppStoreDataState,
   type AppStoreActions,
   type StoreGet,
   type StoreSet,
@@ -46,6 +47,8 @@ import {
   sendThread,
   sendUserMessageToThread,
   normalizeThreadTitleSource,
+  syncDesktopStateCache,
+  syncDesktopStateCacheNow,
   truncateTitle,
 } from "../store.helpers";
 import { deriveConnectedProviders, normalizePersistedProviderState } from "../persistedProviderState";
@@ -53,9 +56,12 @@ import { deriveDefaultLmStudioUiEnabled, normalizePersistedProviderUiState } fro
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import {
   normalizeWorkspaceUserProfile,
+  type CachedDesktopUiState,
   type PersistedOnboardingState,
   type PersistedProviderState,
+  type SettingsPageId,
   type ThreadRecord,
+  type ViewId,
   type WorkspaceRecord,
 } from "../types";
 import {
@@ -91,6 +97,37 @@ const normalizedSessionIdSchema = z.preprocess(
 const normalizedLastEventSeqSchema = z.preprocess(
   (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0),
   z.number().int().nonnegative()
+);
+const normalizedViewSchema = z.preprocess(
+  (value) => (value === "chat" || value === "skills" || value === "settings" ? value : "chat"),
+  z.enum(["chat", "skills", "settings"])
+);
+const normalizedSettingsPageSchema = z.preprocess(
+  (value) => (
+    value === "providers"
+    || value === "usage"
+    || value === "workspaces"
+    || value === "backup"
+    || value === "mcp"
+    || value === "memory"
+    || value === "updates"
+    || value === "developer"
+      ? value
+      : "providers"
+  ),
+  z.enum(["providers", "usage", "workspaces", "backup", "mcp", "memory", "updates", "developer"])
+);
+const normalizedNullableSelectionSchema = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() ? value : null),
+  z.string().nullable()
+);
+const normalizedUiWidthSchema = (min: number, max: number, fallback: number) => z.preprocess(
+  (value) => (
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.max(min, Math.min(max, Math.floor(value)))
+      : fallback
+  ),
+  z.number().int()
 );
 
 const persistedWorkspaceSchema = z.object({
@@ -181,6 +218,30 @@ const persistedThreadSchema = z.object({
   lastEventSeq: thread.lastEventSeq,
 }));
 
+const persistedUiSchema = z.object({
+  selectedWorkspaceId: normalizedNullableSelectionSchema.optional(),
+  selectedThreadId: normalizedNullableSelectionSchema.optional(),
+  view: normalizedViewSchema.optional(),
+  settingsPage: normalizedSettingsPageSchema.optional(),
+  lastNonSettingsView: normalizedViewSchema.optional(),
+  sidebarCollapsed: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
+  sidebarWidth: normalizedUiWidthSchema(160, 440, 248).optional(),
+  contextSidebarCollapsed: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
+  contextSidebarWidth: normalizedUiWidthSchema(200, 600, 300).optional(),
+  messageBarHeight: normalizedUiWidthSchema(80, 500, 120).optional(),
+}).passthrough().transform((ui): CachedDesktopUiState => ({
+  selectedWorkspaceId: ui.selectedWorkspaceId ?? null,
+  selectedThreadId: ui.selectedThreadId ?? null,
+  view: ui.view ?? "chat",
+  settingsPage: ui.settingsPage ?? "providers",
+  lastNonSettingsView: ui.lastNonSettingsView ?? "chat",
+  sidebarCollapsed: ui.sidebarCollapsed ?? false,
+  sidebarWidth: ui.sidebarWidth ?? 248,
+  contextSidebarCollapsed: ui.contextSidebarCollapsed ?? false,
+  contextSidebarWidth: ui.contextSidebarWidth ?? 300,
+  messageBarHeight: ui.messageBarHeight ?? 120,
+}));
+
 const persistedStateSchema = z.object({
   workspaces: z.preprocess((value) => value ?? [], z.array(persistedWorkspaceSchema)),
   threads: z.preprocess((value) => value ?? [], z.array(persistedThreadSchema)),
@@ -196,22 +257,9 @@ const persistedStateSchema = z.object({
     }),
   });
   const onboarding = (state as { onboarding?: PersistedOnboardingState }).onboarding;
-  const workspaceByRecency = [...state.workspaces].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
-  const selectedWorkspaceId = workspaceByRecency[0]?.id ?? null;
-  const workspaceThreads = selectedWorkspaceId
-    ? state.threads
-        .filter((thread) => thread.workspaceId === selectedWorkspaceId)
-        .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
-    : [];
-  const selectedThreadId =
-    workspaceThreads.find((thread) => thread.status === "active")?.id ??
-    workspaceThreads[0]?.id ??
-    null;
   return {
     workspaces: state.workspaces,
     threads: state.threads,
-    selectedWorkspaceId,
-    selectedThreadId,
     developerMode: state.developerMode,
     showHiddenFiles: state.showHiddenFiles,
     perWorkspaceSettings: state.perWorkspaceSettings,
@@ -221,12 +269,139 @@ const persistedStateSchema = z.object({
   };
 });
 
+type HydratedPersistedDesktopState = z.infer<typeof persistedStateSchema>;
+
+export function hydratePersistedDesktopState(value: unknown): HydratedPersistedDesktopState {
+  return persistedStateSchema.parse(value);
+}
+
+function buildResolvedDesktopUiState(
+  workspaces: WorkspaceRecord[],
+  threads: ThreadRecord[],
+  ui?: CachedDesktopUiState | null,
+) {
+  const normalizedUi = persistedUiSchema.parse(ui ?? {});
+  const workspaceByRecency = [...workspaces].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
+  const fallbackSelectedWorkspaceId = workspaceByRecency[0]?.id ?? null;
+  const selectedWorkspaceId =
+    normalizedUi.selectedWorkspaceId && workspaces.some((workspace) => workspace.id === normalizedUi.selectedWorkspaceId)
+      ? normalizedUi.selectedWorkspaceId
+      : fallbackSelectedWorkspaceId;
+  const workspaceThreads = selectedWorkspaceId
+    ? threads
+        .filter((thread) => thread.workspaceId === selectedWorkspaceId)
+        .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
+    : [];
+  const fallbackSelectedThreadId =
+    workspaceThreads.find((thread) => thread.status === "active")?.id ??
+    workspaceThreads[0]?.id ??
+    null;
+  const selectedThreadId =
+    normalizedUi.selectedThreadId && workspaceThreads.some((thread) => thread.id === normalizedUi.selectedThreadId)
+      ? normalizedUi.selectedThreadId
+      : fallbackSelectedThreadId;
+  const fallbackLastNonSettingsView = normalizedUi.view === "settings" ? "chat" : normalizedUi.view ?? "chat";
+  const lastNonSettingsView =
+    normalizedUi.lastNonSettingsView && normalizedUi.lastNonSettingsView !== "settings"
+      ? normalizedUi.lastNonSettingsView
+      : fallbackLastNonSettingsView;
+
+  return {
+    selectedWorkspaceId,
+    selectedThreadId,
+    view: normalizedUi.view ?? "chat",
+    settingsPage: normalizedUi.settingsPage ?? "providers",
+    lastNonSettingsView,
+    sidebarCollapsed: normalizedUi.sidebarCollapsed ?? false,
+    sidebarWidth: normalizedUi.sidebarWidth ?? 248,
+    contextSidebarCollapsed: normalizedUi.contextSidebarCollapsed ?? false,
+    contextSidebarWidth: normalizedUi.contextSidebarWidth ?? 300,
+    messageBarHeight: normalizedUi.messageBarHeight ?? 120,
+  };
+}
+
+function extractCachedDesktopState(value: unknown): {
+  persistedState: unknown;
+  ui: unknown;
+} | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if ("persistedState" in record) {
+    return {
+      persistedState: record.persistedState,
+      ui: record.ui,
+    };
+  }
+
+  return {
+    persistedState: value,
+    ui: record.ui,
+  };
+}
+
+export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDataState> | null {
+  try {
+    const cached = extractCachedDesktopState(value);
+    if (!cached) {
+      return null;
+    }
+
+    const state = hydratePersistedDesktopState(cached.persistedState);
+    const ui = buildResolvedDesktopUiState(state.workspaces, state.threads, cached.ui as CachedDesktopUiState | undefined);
+    const connectedProviders = deriveConnectedProviders(state.providerState as PersistedProviderState | undefined);
+    return {
+      ready: true,
+      bootstrapPending: true,
+      startupError: null,
+      workspaces: state.workspaces,
+      threads: state.threads,
+      selectedWorkspaceId: ui.selectedWorkspaceId,
+      selectedThreadId: ui.selectedThreadId,
+      providerStatusByName: state.providerState?.statusByName ?? {},
+      providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
+      providerConnected: connectedProviders,
+      providerUiState: state.providerUiState,
+      developerMode: state.developerMode,
+      showHiddenFiles: state.showHiddenFiles,
+      perWorkspaceSettings: state.perWorkspaceSettings,
+      onboardingState: state.onboarding ?? DEFAULT_ONBOARDING_STATE,
+      onboardingVisible: false,
+      onboardingStep: "welcome",
+      view: ui.view,
+      settingsPage: ui.settingsPage,
+      lastNonSettingsView: ui.lastNonSettingsView,
+      sidebarCollapsed: ui.sidebarCollapsed,
+      sidebarWidth: ui.sidebarWidth,
+      contextSidebarCollapsed: ui.contextSidebarCollapsed,
+      contextSidebarWidth: ui.contextSidebarWidth,
+      messageBarHeight: ui.messageBarHeight,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "init" | "openSettings" | "closeSettings" | "setSettingsPage" | "setDeveloperMode" | "setShowHiddenFiles" | "setPerWorkspaceSettings" | "setUpdateState" | "checkForUpdates" | "quitAndInstallUpdate" | "toggleSidebar" | "toggleContextSidebar" | "setSidebarWidth" | "setContextSidebarWidth" | "setMessageBarHeight"> {
   return {
     init: async () => {
-      set({ startupError: null });
+      set({ startupError: null, bootstrapPending: true });
       try {
-        const state = persistedStateSchema.parse(await loadState());
+        const state = hydratePersistedDesktopState(await loadState());
+        const ui = buildResolvedDesktopUiState(state.workspaces, state.threads, {
+          selectedWorkspaceId: get().selectedWorkspaceId,
+          selectedThreadId: get().selectedThreadId,
+          view: get().view,
+          settingsPage: get().settingsPage,
+          lastNonSettingsView: get().lastNonSettingsView,
+          sidebarCollapsed: get().sidebarCollapsed,
+          sidebarWidth: get().sidebarWidth,
+          contextSidebarCollapsed: get().contextSidebarCollapsed,
+          contextSidebarWidth: get().contextSidebarWidth,
+          messageBarHeight: get().messageBarHeight,
+        });
         let updateState = get().updateState;
         try {
           updateState = await getUpdateState();
@@ -252,8 +427,8 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
         set({
           workspaces: state.workspaces,
           threads: state.threads,
-          selectedWorkspaceId: state.selectedWorkspaceId,
-          selectedThreadId: state.selectedThreadId,
+          selectedWorkspaceId: ui.selectedWorkspaceId,
+          selectedThreadId: ui.selectedThreadId,
           providerStatusByName: state.providerState?.statusByName ?? {},
           providerStatusLastUpdatedAt: state.providerState?.statusLastUpdatedAt ?? null,
           providerConnected: connectedProviders,
@@ -263,26 +438,55 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           perWorkspaceSettings: state.perWorkspaceSettings,
           updateState,
           ready: true,
+          bootstrapPending: false,
           startupError: null,
           onboardingState: resolvedOnboarding,
           onboardingVisible: autoOpen,
           onboardingStep: "welcome",
+          view: ui.view,
+          settingsPage: ui.settingsPage,
+          lastNonSettingsView: ui.lastNonSettingsView,
+          sidebarCollapsed: ui.sidebarCollapsed,
+          sidebarWidth: ui.sidebarWidth,
+          contextSidebarCollapsed: ui.contextSidebarCollapsed,
+          contextSidebarWidth: ui.contextSidebarWidth,
+          messageBarHeight: ui.messageBarHeight,
         });
 
         // Persist backfilled onboarding status if we changed it.
         if (resolvedOnboarding.status !== (state.onboarding?.status ?? "pending")) {
           void persistNow(get);
+        } else {
+          syncDesktopStateCacheNow(get);
         }
 
-        if (state.selectedThreadId) {
-          await get().selectThread(state.selectedThreadId);
-        } else if (state.selectedWorkspaceId) {
-          await get().selectWorkspace(state.selectedWorkspaceId);
+        if (ui.selectedThreadId && ui.view === "chat") {
+          await get().selectThread(ui.selectedThreadId);
+        } else if (ui.selectedWorkspaceId && ui.view === "chat") {
+          await get().selectWorkspace(ui.selectedWorkspaceId);
+        } else if (ui.selectedWorkspaceId && ui.view === "skills") {
+          ensureWorkspaceRuntime(get, set, ui.selectedWorkspaceId);
+          await ensureServerRunning(get, set, ui.selectedWorkspaceId);
+          ensureControlSocket(get, set, ui.selectedWorkspaceId);
         }
         return;
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         console.error("Desktop init failed:", error);
+        if (get().ready) {
+          set((s) => ({
+            bootstrapPending: false,
+            startupError: detail,
+            notifications: pushNotification(s.notifications, {
+              id: makeId(),
+              ts: nowIso(),
+              kind: "error",
+              title: "Startup recovery mode",
+              detail,
+            }),
+          }));
+          return;
+        }
         set((s) => ({
           workspaces: [],
           threads: [],
@@ -298,6 +502,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
           providerLastAuthResult: null,
           providerUiState: normalizePersistedProviderUiState(undefined),
           ready: true,
+          bootstrapPending: false,
           startupError: detail,
           onboardingVisible: false,
           onboardingStep: "welcome" as const,
@@ -320,6 +525,7 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
         settingsPage: page ?? s.settingsPage,
         lastNonSettingsView: s.view === "settings" ? s.lastNonSettingsView : s.view,
       }));
+      syncDesktopStateCache(get);
     },
   
 
@@ -327,10 +533,14 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
       set((s) => ({
         view: s.lastNonSettingsView === "settings" ? "chat" : s.lastNonSettingsView,
       }));
+      syncDesktopStateCache(get);
     },
   
 
-    setSettingsPage: (page) => set({ settingsPage: page }),
+    setSettingsPage: (page) => {
+      set({ settingsPage: page });
+      syncDesktopStateCache(get);
+    },
   
 
     setDeveloperMode: (v) => {
@@ -404,16 +614,31 @@ export function createBootstrapActions(set: StoreSet, get: StoreGet): Pick<AppSt
     },
   
 
-    toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+    toggleSidebar: () => {
+      set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed }));
+      syncDesktopStateCache(get);
+    },
 
-    toggleContextSidebar: () => set((s) => ({ contextSidebarCollapsed: !s.contextSidebarCollapsed })),
+    toggleContextSidebar: () => {
+      set((s) => ({ contextSidebarCollapsed: !s.contextSidebarCollapsed }));
+      syncDesktopStateCache(get);
+    },
   
 
-    setSidebarWidth: (width: number) => set({ sidebarWidth: Math.max(160, Math.min(440, width)) }),
+    setSidebarWidth: (width: number) => {
+      set({ sidebarWidth: Math.max(160, Math.min(440, width)) });
+      syncDesktopStateCache(get);
+    },
 
-    setContextSidebarWidth: (width: number) => set({ contextSidebarWidth: Math.max(200, Math.min(600, width)) }),
+    setContextSidebarWidth: (width: number) => {
+      set({ contextSidebarWidth: Math.max(200, Math.min(600, width)) });
+      syncDesktopStateCache(get);
+    },
 
-    setMessageBarHeight: (height: number) => set({ messageBarHeight: Math.max(80, Math.min(500, height)) }),
+    setMessageBarHeight: (height: number) => {
+      set({ messageBarHeight: Math.max(80, Math.min(500, height)) });
+      syncDesktopStateCache(get);
+    },
   
   };
 }

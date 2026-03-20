@@ -27,7 +27,7 @@ import {
   mapTranscriptToFeed,
 } from "./store.feedMapping";
 import { createControlSocketHelpers } from "./store.helpers/controlSocket";
-import { persist, persistNow } from "./store.helpers/persistence";
+import { persist, persistNow, syncDesktopStateCache, syncDesktopStateCacheNow } from "./store.helpers/persistence";
 import {
   RUNTIME,
   bumpWorkspaceStartGeneration,
@@ -135,6 +135,7 @@ function providerAuthMethodsFor(state: AppStoreState, provider: ProviderName): P
 
 export type AppStoreState = {
   ready: boolean;
+  bootstrapPending: boolean;
   startupError: string | null;
   view: ViewId;
 
@@ -435,6 +436,8 @@ export {
   markPendingThreadSteerAccepted,
   persist,
   persistNow,
+  syncDesktopStateCache,
+  syncDesktopStateCacheNow,
   ensureServerRunning,
   ensureControlSocket,
   waitForControlSession,

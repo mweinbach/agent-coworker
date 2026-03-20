@@ -50,6 +50,7 @@ function defaultState(): PersistedState {
     threads: [],
     developerMode: false,
     showHiddenFiles: false,
+    perWorkspaceSettings: false,
     providerUiState: normalizePersistedProviderUiState(undefined),
   };
 }
@@ -300,6 +301,7 @@ async function sanitizePersistedState(value: unknown): Promise<PersistedState> {
     threads,
     developerMode: typeof value.developerMode === "boolean" ? value.developerMode : false,
     showHiddenFiles: typeof value.showHiddenFiles === "boolean" ? value.showHiddenFiles : false,
+    perWorkspaceSettings: typeof value.perWorkspaceSettings === "boolean" ? value.perWorkspaceSettings : false,
     ...(providerState ? { providerState } : {}),
     providerUiState,
     ...(onboarding ? { onboarding } : {}),

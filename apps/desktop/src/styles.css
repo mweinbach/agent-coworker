@@ -144,9 +144,6 @@ body {
   border-right-style: solid;
   border-right-color: var(--glass-border);
   backdrop-filter: blur(var(--sidebar-titlebar-blur));
-  transition:
-    width 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    border-right-width 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .app-topbar__content-fill {
@@ -159,7 +156,6 @@ body {
   background: var(--content-surface);
   border-bottom: 1px solid var(--glass-border);
   backdrop-filter: blur(var(--titlebar-blur));
-  transition: left 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 :root[data-platform="darwin"] .app-topbar__inline-sidebar-toggle {
@@ -421,6 +417,17 @@ body.app-resizing-sidebars .app-topbar__content-fill {
 
 body.app-resizing-sidebars .app-left-sidebar-pane {
   backdrop-filter: none;
+}
+
+body.app-animating-sidebars .app-left-sidebar-pane,
+body.app-animating-sidebars .app-right-sidebar-pane,
+body.app-animating-sidebars .app-topbar__sidebar-fill,
+body.app-animating-sidebars .app-topbar__content-fill {
+  transition:
+    width 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    left 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-right-width 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-left-width 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 body.app-animating-sidebars .app-left-sidebar-pane,

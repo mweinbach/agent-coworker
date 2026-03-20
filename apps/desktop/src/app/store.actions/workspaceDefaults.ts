@@ -46,11 +46,87 @@ import {
   truncateTitle,
   waitForControlSession,
 } from "../store.helpers";
-import { mergeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
+import { mergeWorkspaceProviderOptions, normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import { normalizeWorkspaceUserProfile } from "../types";
 import type { ThreadRecord, WorkspaceDefaultsPatch, WorkspaceRecord } from "../types";
 
 export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "applyWorkspaceDefaultsToThread" | "updateWorkspaceDefaults"> {
+  const resolveWorkspaceDefaults = (workspaceId: string): WorkspaceRecord | null => {
+    const workspace = get().workspaces.find((entry) => entry.id === workspaceId);
+    if (!workspace) {
+      return null;
+    }
+
+    const runtime = get().workspaceRuntimeById[workspaceId];
+    const controlConfig = runtime?.controlConfig as { provider?: unknown; model?: unknown } | null | undefined;
+    const controlSessionConfig = runtime?.controlSessionConfig;
+    const provider =
+      workspace.defaultProvider && isProviderName(workspace.defaultProvider)
+        ? workspace.defaultProvider
+        : controlConfig?.provider && isProviderName(controlConfig.provider)
+          ? controlConfig.provider
+          : "google";
+    const liveDefaultModel = get().providerDefaultModelByProvider[provider]?.trim() || "";
+    const controlModel = typeof controlConfig?.model === "string" ? controlConfig.model.trim() : "";
+    const defaultModel = workspace.defaultModel?.trim() || controlModel || liveDefaultModel || defaultModelForProvider(provider);
+    const defaultPreferredChildModel =
+      controlSessionConfig?.preferredChildModel?.trim()
+      || workspace.defaultPreferredChildModel?.trim()
+      || defaultModel;
+    const defaultPreferredChildModelRef =
+      controlSessionConfig?.preferredChildModelRef?.trim()
+      || workspace.defaultPreferredChildModelRef?.trim()
+      || (defaultPreferredChildModel ? `${provider}:${defaultPreferredChildModel}` : undefined);
+
+    return {
+      ...workspace,
+      defaultProvider: provider,
+      defaultModel,
+      defaultPreferredChildModel,
+      defaultChildModelRoutingMode: controlSessionConfig?.childModelRoutingMode ?? workspace.defaultChildModelRoutingMode ?? "same-provider",
+      defaultPreferredChildModelRef,
+      defaultAllowedChildModelRefs: controlSessionConfig?.allowedChildModelRefs ?? workspace.defaultAllowedChildModelRefs ?? [],
+      defaultToolOutputOverflowChars: controlSessionConfig?.defaultToolOutputOverflowChars ?? workspace.defaultToolOutputOverflowChars,
+      providerOptions: normalizeWorkspaceProviderOptions(controlSessionConfig?.providerOptions) ?? workspace.providerOptions,
+      userName: typeof controlSessionConfig?.userName === "string" ? controlSessionConfig.userName : workspace.userName,
+      userProfile: controlSessionConfig?.userProfile
+        ? normalizeWorkspaceUserProfile(controlSessionConfig.userProfile)
+        : workspace.userProfile
+          ? normalizeWorkspaceUserProfile(workspace.userProfile)
+          : undefined,
+      defaultEnableMcp: typeof runtime?.controlEnableMcp === "boolean" ? runtime.controlEnableMcp : workspace.defaultEnableMcp,
+      defaultBackupsEnabled:
+        typeof controlSessionConfig?.defaultBackupsEnabled === "boolean"
+          ? controlSessionConfig.defaultBackupsEnabled
+          : workspace.defaultBackupsEnabled,
+    };
+  };
+
+  const applyWorkspacePatch = (
+    workspace: WorkspaceRecord,
+    patch: WorkspaceDefaultsPatch,
+  ): WorkspaceRecord => {
+    const { clearDefaultToolOutputOverflowChars, userProfile: userProfilePatch, ...workspacePatch } = patch;
+    return {
+      ...workspace,
+      ...workspacePatch,
+      ...(clearDefaultToolOutputOverflowChars ? { defaultToolOutputOverflowChars: undefined } : {}),
+      ...(workspacePatch.providerOptions !== undefined
+        ? {
+            providerOptions: mergeWorkspaceProviderOptions(workspace.providerOptions, workspacePatch.providerOptions),
+          }
+        : {}),
+      ...(userProfilePatch !== undefined
+        ? {
+            userProfile: {
+              ...normalizeWorkspaceUserProfile(workspace.userProfile),
+              ...userProfilePatch,
+            },
+          }
+        : {}),
+    };
+  };
+
   return {
     applyWorkspaceDefaultsToThread: async (
       threadId: string,
@@ -58,7 +134,11 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
     ) => {
       const thread = get().threads.find((t) => t.id === threadId);
       if (!thread) return;
-      const ws = get().workspaces.find((w) => w.id === thread.workspaceId);
+      const ws = (
+        mode === "explicit"
+          ? get().workspaces.find((entry) => entry.id === thread.workspaceId) ?? null
+          : resolveWorkspaceDefaults(thread.workspaceId)
+      );
       if (!ws) return;
       const rt = get().threadRuntimeById[threadId];
       if (!rt?.sessionId) return;
@@ -197,41 +277,39 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const okMcp = sendThread(get, threadId, (sessionId) => ({
         type: "set_enable_mcp",
         sessionId,
-        enableMcp: ws.defaultEnableMcp,
+        enableMcp: mode === "explicit"
+          ? ws.defaultEnableMcp
+          : (workspaceRuntime?.controlEnableMcp ?? ws.defaultEnableMcp),
       }));
       if (okMcp) {
-        appendThreadTranscript(threadId, "client", { type: "set_enable_mcp", sessionId: rt.sessionId, enableMcp: ws.defaultEnableMcp });
+        appendThreadTranscript(threadId, "client", {
+          type: "set_enable_mcp",
+          sessionId: rt.sessionId,
+          enableMcp: mode === "explicit"
+            ? ws.defaultEnableMcp
+            : (workspaceRuntime?.controlEnableMcp ?? ws.defaultEnableMcp),
+        });
       }
     },
   
 
     updateWorkspaceDefaults: async (workspaceId, patch: WorkspaceDefaultsPatch) => {
-      const { clearDefaultToolOutputOverflowChars, userProfile: userProfilePatch, ...workspacePatch } = patch;
+      const optimisticWorkspace =
+        resolveWorkspaceDefaults(workspaceId)
+        ?? get().workspaces.find((workspace) => workspace.id === workspaceId);
+      if (!optimisticWorkspace) {
+        return;
+      }
+
       set((s) => ({
         workspaces: s.workspaces.map((w) => {
           if (w.id !== workspaceId) return w;
-          return {
-            ...w,
-            ...workspacePatch,
-            ...(clearDefaultToolOutputOverflowChars ? { defaultToolOutputOverflowChars: undefined } : {}),
-            ...(workspacePatch.providerOptions !== undefined
-              ? {
-                  providerOptions: mergeWorkspaceProviderOptions(w.providerOptions, workspacePatch.providerOptions),
-                }
-              : {}),
-            ...(userProfilePatch !== undefined
-              ? {
-                  userProfile: {
-                    ...normalizeWorkspaceUserProfile(w.userProfile),
-                    ...userProfilePatch,
-                  },
-                }
-              : {}),
-          };
+          return applyWorkspacePatch(optimisticWorkspace, patch);
         }),
       }));
       await persistNow(get);
 
+      const { clearDefaultToolOutputOverflowChars, userProfile: userProfilePatch, ...workspacePatch } = patch;
       const shouldSyncCoreSettings =
         workspacePatch.defaultProvider !== undefined ||
         workspacePatch.defaultModel !== undefined ||
@@ -253,24 +331,34 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
       const controlReady = await waitForControlSession(get, workspaceId);
-      const workspace = get().workspaces.find((w) => w.id === workspaceId);
+      const workspace = controlReady
+        ? resolveWorkspaceDefaults(workspaceId)
+        : get().workspaces.find((w) => w.id === workspaceId);
       if (!workspace) return;
+      const nextWorkspace = applyWorkspacePatch(workspace, patch);
+
+      set((s) => ({
+        workspaces: s.workspaces.map((entry) => (
+          entry.id === workspaceId ? nextWorkspace : entry
+        )),
+      }));
+      await persistNow(get);
 
       const provider = (
-        workspace.defaultProvider && isProviderName(workspace.defaultProvider)
-          ? workspace.defaultProvider
+        nextWorkspace.defaultProvider && isProviderName(nextWorkspace.defaultProvider)
+          ? nextWorkspace.defaultProvider
           : "google"
       );
       const liveDefaultModel = get().providerDefaultModelByProvider[provider]?.trim() || "";
-      const model = workspace.defaultModel?.trim() || liveDefaultModel || defaultModelForProvider(provider);
-      const preferredChildModel = workspace.defaultPreferredChildModel?.trim() || model || "";
-      const childModelRoutingMode = workspace.defaultChildModelRoutingMode ?? "same-provider";
-      const preferredChildModelRef = workspace.defaultPreferredChildModelRef?.trim() || (preferredChildModel ? `${provider}:${preferredChildModel}` : "");
-      const allowedChildModelRefs = workspace.defaultAllowedChildModelRefs ?? [];
-      const toolOutputOverflowChars = workspace.defaultToolOutputOverflowChars;
-      const providerOptions = workspace.providerOptions;
-      const userName = workspace.userName;
-      const userProfile = workspace.userProfile ? normalizeWorkspaceUserProfile(workspace.userProfile) : undefined;
+      const model = nextWorkspace.defaultModel?.trim() || liveDefaultModel || defaultModelForProvider(provider);
+      const preferredChildModel = nextWorkspace.defaultPreferredChildModel?.trim() || model || "";
+      const childModelRoutingMode = nextWorkspace.defaultChildModelRoutingMode ?? "same-provider";
+      const preferredChildModelRef = nextWorkspace.defaultPreferredChildModelRef?.trim() || (preferredChildModel ? `${provider}:${preferredChildModel}` : "");
+      const allowedChildModelRefs = nextWorkspace.defaultAllowedChildModelRefs ?? [];
+      const toolOutputOverflowChars = nextWorkspace.defaultToolOutputOverflowChars;
+      const providerOptions = nextWorkspace.providerOptions;
+      const userName = nextWorkspace.userName;
+      const userProfile = nextWorkspace.userProfile ? normalizeWorkspaceUserProfile(nextWorkspace.userProfile) : undefined;
       const clearToolOutputOverflowChars = clearDefaultToolOutputOverflowChars === true;
 
       const modelPersisted = controlReady && model
@@ -285,7 +373,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
         type: "set_config",
         sessionId,
         config: {
-          backupsEnabled: workspace.defaultBackupsEnabled,
+          backupsEnabled: nextWorkspace.defaultBackupsEnabled,
           ...(preferredChildModel ? { preferredChildModel } : {}),
           childModelRoutingMode,
           ...(preferredChildModelRef ? { preferredChildModelRef } : {}),
@@ -303,7 +391,7 @@ export function createWorkspaceDefaultsActions(set: StoreSet, get: StoreGet): Pi
       const mcpPersisted = controlReady && sendControl(get, workspaceId, (sessionId) => ({
         type: "set_enable_mcp",
         sessionId,
-        enableMcp: workspace.defaultEnableMcp,
+        enableMcp: nextWorkspace.defaultEnableMcp,
       }));
 
       if (!modelPersisted || !subAgentPersisted || !mcpPersisted) {

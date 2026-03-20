@@ -120,6 +120,27 @@ export type PersistedOnboardingState = {
 };
 
 export type OnboardingStep = "welcome" | "workspace" | "provider" | "defaults" | "firstThread";
+export type ViewId = "chat" | "skills" | "settings";
+export type SettingsPageId = "providers" | "usage" | "workspaces" | "backup" | "mcp" | "memory" | "updates" | "developer";
+
+export type CachedDesktopUiState = {
+  selectedWorkspaceId?: string | null;
+  selectedThreadId?: string | null;
+  view?: ViewId;
+  settingsPage?: SettingsPageId;
+  lastNonSettingsView?: ViewId;
+  sidebarCollapsed?: boolean;
+  sidebarWidth?: number;
+  contextSidebarCollapsed?: boolean;
+  contextSidebarWidth?: number;
+  messageBarHeight?: number;
+};
+
+export type DesktopStateCache = {
+  version: number;
+  persistedState: PersistedState;
+  ui: CachedDesktopUiState;
+};
 
 export type PersistedState = {
   version: number;
@@ -171,10 +192,6 @@ export type FeedItem =
   | { id: string; kind: "log"; ts: string; line: string }
   | { id: string; kind: "error"; ts: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
   | { id: string; kind: "system"; ts: string; line: string };
-
-export type ViewId = "chat" | "skills" | "settings";
-
-export type SettingsPageId = "providers" | "usage" | "workspaces" | "backup" | "mcp" | "memory" | "updates" | "developer";
 
 export type SessionConfigSubset = Extract<ServerEvent, { type: "session_config" }>["config"];
 export type MCPServersEvent = Extract<ServerEvent, { type: "mcp_servers" }>;

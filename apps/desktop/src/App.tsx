@@ -3,8 +3,8 @@ import { memo, useEffect, useMemo, useRef } from "react";
 import { useAppStore } from "./app/store";
 import type { DesktopMenuCommand, SystemAppearance } from "./lib/desktopApi";
 import {
-  getUpdateState,
   getSystemAppearance,
+  getUpdateState,
   onMenuCommand,
   onSystemAppearanceChanged,
   onUpdateStateChanged,
@@ -16,10 +16,10 @@ import { ContextSidebar } from "./ui/ContextSidebar";
 import { PromptModal } from "./ui/PromptModal";
 import { Sidebar } from "./ui/Sidebar";
 import { AppTopBar } from "./ui/layout/AppTopBar";
+import { ContextSidebarResizer } from "./ui/layout/ContextSidebarResizer";
 import { PrimaryContent } from "./ui/layout/PrimaryContent";
 import { SettingsContent } from "./ui/layout/SettingsContent";
 import { SidebarResizer } from "./ui/layout/SidebarResizer";
-import { ContextSidebarResizer } from "./ui/layout/ContextSidebarResizer";
 import { DesktopOnboarding } from "./ui/onboarding/DesktopOnboarding";
 
 const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed: boolean }) {
@@ -27,7 +27,7 @@ const LeftSidebarPane = memo(function LeftSidebarPane({ collapsed }: { collapsed
 
   return (
     <div
-      className="app-left-sidebar-pane relative shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] border-r border-border/70"
+      className="app-left-sidebar-pane relative shrink-0 overflow-hidden border-r border-border/70"
       style={{ width: collapsed ? 0 : sidebarWidth, borderRightWidth: collapsed ? 0 : 1 }}
     >
       <div className="absolute top-0 bottom-0 right-0 flex" style={{ width: sidebarWidth }}>
@@ -43,7 +43,7 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
 
   return (
     <div
-      className="app-right-sidebar-pane relative shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] border-l border-border/80"
+      className="app-right-sidebar-pane relative shrink-0 overflow-hidden border-l border-border/80"
       style={{ width: collapsed ? 0 : contextSidebarWidth, borderLeftWidth: collapsed ? 0 : 1 }}
     >
       {!collapsed ? <ContextSidebarResizer /> : null}
@@ -54,11 +54,15 @@ const RightSidebarPane = memo(function RightSidebarPane({ collapsed }: { collaps
   );
 });
 
-export default function App() {
-  const ready = useAppStore((s) => s.ready);
-  const startupError = useAppStore((s) => s.startupError);
-  const init = useAppStore((s) => s.init);
-
+const ChatShell = memo(function ChatShell({
+  init,
+  ready,
+  startupError,
+}: {
+  init: () => Promise<void>;
+  ready: boolean;
+  startupError: string | null;
+}) {
   const view = useAppStore((s) => s.view);
   const threads = useAppStore((s) => s.threads);
   const selectedThreadId = useAppStore((s) => s.selectedThreadId);
@@ -68,21 +72,79 @@ export default function App() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const contextSidebarCollapsed = useAppStore((s) => s.contextSidebarCollapsed);
   const toggleContextSidebar = useAppStore((s) => s.toggleContextSidebar);
-  const openSkills = useAppStore((s) => s.openSkills);
-  const openSettings = useAppStore((s) => s.openSettings);
+  const hasAnimatedSidebarsRef = useRef(false);
+
+  const activeThread = useMemo(
+    () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
+    [selectedThreadId, threads],
+  );
+  const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
+  const busy = runtime?.busy === true;
+  const showContextSidebar = view === "chat" && activeThread !== null;
+
+  useEffect(() => {
+    if (!hasAnimatedSidebarsRef.current) {
+      hasAnimatedSidebarsRef.current = true;
+      return;
+    }
+    document.body.classList.add("app-animating-sidebars");
+    const timer = window.setTimeout(() => {
+      document.body.classList.remove("app-animating-sidebars");
+    }, 340);
+    return () => {
+      window.clearTimeout(timer);
+      document.body.classList.remove("app-animating-sidebars");
+    };
+  }, [sidebarCollapsed, contextSidebarCollapsed]);
+
+  return (
+    <div className="app-shell h-full flex flex-col text-foreground">
+      <div className="app-window-drag-strip" aria-hidden="true" />
+      <AppTopBar
+        busy={busy}
+        onToggleSidebar={toggleSidebar}
+        sidebarCollapsed={sidebarCollapsed}
+        sidebarWidth={sidebarWidth}
+        contextSidebarCollapsed={contextSidebarCollapsed}
+        onToggleContextSidebar={toggleContextSidebar}
+      />
+      <div className="flex min-h-0 flex-1">
+        <LeftSidebarPane collapsed={sidebarCollapsed} />
+
+        <main className="app-main-content flex min-w-0 min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 overflow-hidden">
+            <div className="relative min-w-0 min-h-0 flex-1 overflow-hidden">
+              <PrimaryContent
+                init={init}
+                ready={ready}
+                startupError={startupError}
+                view={view === "skills" ? "skills" : "chat"}
+              />
+            </div>
+            {showContextSidebar ? <RightSidebarPane collapsed={contextSidebarCollapsed} /> : null}
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+});
+
+export default function App() {
+  const ready = useAppStore((s) => s.ready);
+  const bootstrapPending = useAppStore((s) => s.bootstrapPending);
+  const startupError = useAppStore((s) => s.startupError);
+  const init = useAppStore((s) => s.init);
+  const view = useAppStore((s) => s.view);
   const notifications = useAppStore((s) => s.notifications);
   const setUpdateState = useAppStore((s) => s.setUpdateState);
-  const checkForUpdates = useAppStore((s) => s.checkForUpdates);
-
-  const newThread = useAppStore((s) => s.newThread);
   const seenNotificationIds = useRef(new Set<string>());
 
   useEffect(() => {
-    if (ready) return;
+    if (ready && !bootstrapPending) return;
     void init().catch((err) => {
       console.error(err);
     });
-  }, [init, ready]);
+  }, [bootstrapPending, init, ready]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -93,8 +155,6 @@ export default function App() {
           return;
         }
         if (state.promptModal) {
-          // For ask modals, send a response so the server-side deferred promise
-          // resolves instead of hanging forever.
           if (state.promptModal.kind === "ask") {
             state.answerAsk(
               state.promptModal.threadId,
@@ -114,7 +174,6 @@ export default function App() {
           const runtime = state.threadRuntimeById[state.selectedThreadId];
           if (runtime?.busy) {
             state.cancelThread(state.selectedThreadId);
-            return;
           }
         }
       }
@@ -126,35 +185,36 @@ export default function App() {
 
   useEffect(() => {
     function handleMenuCommand(command: DesktopMenuCommand): void {
+      const state = useAppStore.getState();
       if (command === "newThread") {
-        void newThread();
+        void state.newThread();
         return;
       }
       if (command === "toggleSidebar") {
-        toggleSidebar();
+        state.toggleSidebar();
         return;
       }
       if (command === "openSettings") {
-        openSettings();
+        state.openSettings();
         return;
       }
       if (command === "openWorkspacesSettings") {
-        openSettings("workspaces");
+        state.openSettings("workspaces");
         return;
       }
       if (command === "openUpdates") {
-        openSettings("updates");
-        void checkForUpdates();
+        state.openSettings("updates");
+        void state.checkForUpdates();
         return;
       }
       if (command === "openSkills") {
-        void openSkills();
+        void state.openSkills();
       }
     }
 
     const unsubscribe = onMenuCommand(handleMenuCommand);
     return unsubscribe;
-  }, [checkForUpdates, newThread, openSettings, openSkills, toggleSidebar]);
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onUpdateStateChanged(setUpdateState);
@@ -200,66 +260,20 @@ export default function App() {
     }
   }, [notifications]);
 
-  const activeThread = useMemo(
-    () => threads.find((thread) => thread.id === selectedThreadId) ?? null,
-    [selectedThreadId, threads],
-  );
-  const runtime = selectedThreadId ? threadRuntimeById[selectedThreadId] : null;
-  const busy = runtime?.busy === true;
-  const showContextSidebar = view === "chat" && activeThread !== null;
-
-  useEffect(() => {
-    document.body.classList.add("app-animating-sidebars");
-    const timer = window.setTimeout(() => {
-      document.body.classList.remove("app-animating-sidebars");
-    }, 340);
-    return () => {
-      window.clearTimeout(timer);
-      document.body.classList.remove("app-animating-sidebars");
-    };
-  }, [sidebarCollapsed, contextSidebarCollapsed]);
-
-  if (view === "settings") {
-    return (
-      <div className="app-shell app-shell--settings flex h-full min-h-0 flex-col text-foreground">
-        <div className="app-window-drag-strip" aria-hidden="true" />
-        <div className="min-h-0 flex-1">
-          <SettingsContent init={init} ready={ready} startupError={startupError} />
-        </div>
-        <PromptModal />
-        <DesktopOnboarding />
-      </div>
-    );
-  }
-
   return (
-    <div className="app-shell h-full flex flex-col text-foreground">
-      <div className="app-window-drag-strip" aria-hidden="true" />
-      <AppTopBar
-        busy={busy}
-        onToggleSidebar={toggleSidebar}
-        sidebarCollapsed={sidebarCollapsed}
-        sidebarWidth={sidebarWidth}
-        contextSidebarCollapsed={contextSidebarCollapsed}
-        onToggleContextSidebar={toggleContextSidebar}
-      />
-      <div className="flex min-h-0 flex-1">
-        <LeftSidebarPane collapsed={sidebarCollapsed} />
-
-        <main className="app-main-content flex min-w-0 min-h-0 flex-1 flex-col">
-          <div className="flex min-h-0 flex-1 overflow-hidden">
-            <div className="relative min-w-0 min-h-0 flex-1 overflow-hidden">
-              <PrimaryContent init={init} ready={ready} startupError={startupError} view={view} />
-            </div>
-            {showContextSidebar ? (
-              <RightSidebarPane collapsed={contextSidebarCollapsed} />
-            ) : null}
+    <>
+      {view === "settings" ? (
+        <div className="app-shell app-shell--settings flex h-full min-h-0 flex-col text-foreground">
+          <div className="app-window-drag-strip" aria-hidden="true" />
+          <div className="min-h-0 flex-1">
+            <SettingsContent init={init} ready={ready} startupError={startupError} />
           </div>
-        </main>
-      </div>
-
+        </div>
+      ) : (
+        <ChatShell init={init} ready={ready} startupError={startupError} />
+      )}
       <PromptModal />
       <DesktopOnboarding />
-    </div>
+    </>
   );
 }

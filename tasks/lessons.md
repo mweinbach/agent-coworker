@@ -1,5 +1,6 @@
 # Lessons
 
+- For desktop warm-start work in this repo, keep renderer-local cache strictly local and treat harness-owned `.cowork` or other shared config/session state as authoritative; never let desktop-only cache or shell state overwrite cross-client defaults just because it loaded first.
 - When a desktop visual fix is meant to preserve a native top-bar look, improve contrast first and avoid adding pill or capsule chrome unless the user explicitly asks for it.
 - When the user asks to remove a retired model, delete the full support surface in one pass: registry entries, config files, prompt-template paths, fixtures, raw-loop cases, and tests. Do not leave the retired model ID behind as a shared filename or example value.
 - For Gemini built-in tools, do not assume individually supported tools can be sent together in one request; verify the exact combination against current docs and backend behavior, and route one tool family per request when the API rejects the combination.

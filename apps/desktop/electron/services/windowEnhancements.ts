@@ -21,7 +21,7 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean 
 
 function windowsTitleBarOverlay(
   useDarkColors: boolean,
-): NonNullable<BrowserWindowConstructorOptions["titleBarOverlay"]> {
+): Parameters<BrowserWindow["setTitleBarOverlay"]>[0] {
   return {
     color: "#00000000",
     symbolColor: useDarkColors ? WINDOWS_DARK_SYMBOL_COLOR : WINDOWS_LIGHT_SYMBOL_COLOR,

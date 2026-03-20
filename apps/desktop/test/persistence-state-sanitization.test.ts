@@ -508,6 +508,7 @@ describe("desktop persistence state validation", () => {
       threads: [],
       developerMode: false,
       showHiddenFiles: false,
+      perWorkspaceSettings: false,
       providerUiState: {
         lmstudio: {
           enabled: false,

@@ -204,10 +204,15 @@ const persistedThreadSchema = z.object({
   lastMessageAt: nonEmptyStringSchema,
   status: z.enum(["active", "disconnected"]),
   sessionId: z.preprocess((value) => (typeof value === "string" && value.trim() ? value : null), z.string().nullable()),
+  messageCount: z.preprocess(
+    (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0),
+    z.number().int().nonnegative(),
+  ),
   lastEventSeq: z.preprocess(
     (value) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0),
     z.number().int().nonnegative(),
   ),
+  legacyTranscriptId: z.preprocess((value) => (typeof value === "string" && value.trim() ? value : null), z.string().nullable()).optional(),
 }).passthrough();
 
 const persistedOnboardingSchema = z.object({

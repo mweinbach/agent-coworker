@@ -267,7 +267,9 @@ function sanitizeThreads(value: unknown, workspaceIds: Set<string>): ThreadRecor
       lastMessageAt,
       status: asThreadStatus(item.status),
       sessionId: asNonEmptyString(item.sessionId) ?? null,
+      messageCount: asNonNegativeInteger(item.messageCount, 0),
       lastEventSeq: asNonNegativeInteger(item.lastEventSeq, 0),
+      legacyTranscriptId: asNonEmptyString(item.legacyTranscriptId) ?? null,
     });
     seenThreadIds.add(id);
   }

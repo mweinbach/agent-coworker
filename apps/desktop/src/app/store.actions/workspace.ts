@@ -41,6 +41,7 @@ import {
   providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
+  requestWorkspaceSessions,
   sendControl,
   sendThread,
   sendUserMessageToThread,
@@ -105,6 +106,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
       await persistNow(get);
       await ensureServerRunning(get, set, ws.id);
       ensureControlSocket(get, set, ws.id);
+      void requestWorkspaceSessions(get, set, ws.id);
     },
   
 
@@ -182,6 +184,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
   
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
+      void requestWorkspaceSessions(get, set, workspaceId);
     },
 
     reorderWorkspaces: async (sourceWorkspaceId: string, targetWorkspaceId: string) => {
@@ -247,6 +250,7 @@ export function createWorkspaceActions(set: StoreSet, get: StoreGet): Pick<AppSt
 
       await ensureServerRunning(get, set, workspaceId);
       ensureControlSocket(get, set, workspaceId);
+      void requestWorkspaceSessions(get, set, workspaceId);
     },
 
   };

@@ -29,6 +29,7 @@ import {
   providerAuthMethodsFor,
   pushNotification,
   queuePendingThreadMessage,
+  requestSessionSnapshot,
   sendControl,
   sendThread,
   sendUserMessageToThread,
@@ -37,7 +38,7 @@ import {
   truncateTitle,
 } from "../store.helpers";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
-import type { ThreadBusyPolicy, ThreadRecord, WorkspaceRecord } from "../types";
+import type { SessionSnapshot, SessionSnapshotFingerprint, ThreadBusyPolicy, ThreadRecord, WorkspaceRecord } from "../types";
 
 export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "removeThread" | "deleteThreadHistory" | "renameThread" | "newThread" | "selectThread" | "reconnectThread" | "sendMessage" | "cancelThread" | "clearThreadUsageHardCap" | "setThreadModel" | "setComposerText" | "setInjectContext" | "answerAsk" | "answerApproval" | "dismissPrompt" | "loadAllThreadUsage"> {
   const waitForSelectionFrame = async () => {
@@ -83,6 +84,94 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
 
   const closeThreadSession = (threadId: string) => {
     sendThread(get, threadId, (sessionId) => ({ type: "session_close", sessionId }));
+  };
+
+  const threadFingerprint = (thread: ThreadRecord): SessionSnapshotFingerprint => ({
+    updatedAt: thread.lastMessageAt,
+    messageCount: thread.messageCount,
+    lastEventSeq: thread.lastEventSeq,
+  });
+
+  const fingerprintMatches = (left: SessionSnapshotFingerprint, right: SessionSnapshotFingerprint): boolean =>
+    left.updatedAt === right.updatedAt
+    && left.messageCount === right.messageCount
+    && left.lastEventSeq === right.lastEventSeq;
+
+  const cacheSessionSnapshot = (snapshot: SessionSnapshot) => {
+    RUNTIME.sessionSnapshots.set(snapshot.sessionId, {
+      fingerprint: {
+        updatedAt: snapshot.updatedAt,
+        messageCount: snapshot.messageCount,
+        lastEventSeq: snapshot.lastEventSeq,
+      },
+      snapshot,
+    });
+    syncDesktopStateCache(get);
+  };
+
+  const applySessionSnapshot = (threadId: string, sessionId: string, snapshot: SessionSnapshot) => {
+    set((s) => {
+      const currentThread = s.threads.find((thread) => thread.id === threadId);
+      const nextThreads = s.threads.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              title: snapshot.title,
+              titleSource: snapshot.titleSource,
+              lastMessageAt: snapshot.updatedAt,
+              sessionId,
+              messageCount: snapshot.messageCount,
+              lastEventSeq: snapshot.lastEventSeq,
+            }
+          : thread,
+      );
+      const currentRuntime = s.threadRuntimeById[threadId];
+      return {
+        threads: nextThreads,
+        threadRuntimeById: {
+          ...s.threadRuntimeById,
+          [threadId]: {
+            ...currentRuntime,
+            sessionId,
+            sessionKind: snapshot.sessionKind,
+            parentSessionId: snapshot.parentSessionId,
+            role: snapshot.role,
+            mode: snapshot.mode,
+            depth: snapshot.depth ?? 0,
+            nickname: snapshot.nickname,
+            requestedModel: snapshot.requestedModel,
+            effectiveModel: snapshot.effectiveModel,
+            requestedReasoningEffort: snapshot.requestedReasoningEffort,
+            effectiveReasoningEffort: snapshot.effectiveReasoningEffort,
+            executionState: snapshot.executionState,
+            lastMessagePreview: snapshot.lastMessagePreview,
+            agents: snapshot.agents,
+            sessionUsage: snapshot.sessionUsage,
+            lastTurnUsage: snapshot.lastTurnUsage,
+            feed: snapshot.feed,
+            hydrating: false,
+            transcriptOnly: false,
+            connected: currentRuntime?.connected ?? false,
+            config: currentRuntime?.config ?? null,
+            sessionConfig: currentRuntime?.sessionConfig ?? null,
+            enableMcp: currentRuntime?.enableMcp ?? null,
+            busy: currentRuntime?.busy ?? false,
+            busySince: currentRuntime?.busySince ?? null,
+            activeTurnId: currentRuntime?.activeTurnId ?? null,
+            pendingSteer: currentRuntime?.pendingSteer ?? null,
+            wsUrl: currentRuntime?.wsUrl ?? null,
+          },
+        },
+      };
+    });
+  };
+
+  const hydrateLegacyTranscript = async (thread: ThreadRecord) => {
+    const transcriptId = thread.legacyTranscriptId ?? thread.id;
+    if (!transcriptId) return null;
+    return typeof desktopCommands.hydrateTranscript === "function"
+      ? await desktopCommands.hydrateTranscript({ threadId: transcriptId })
+      : hydrateTranscriptSnapshot(await desktopCommands.readTranscript({ threadId: transcriptId }));
   };
 
   return {
@@ -231,6 +320,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         lastMessageAt: createdAt,
         status: "active",
         sessionId: null,
+        messageCount: 0,
         lastEventSeq: 0,
       };
   
@@ -263,6 +353,15 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       }
 
       const alreadyLoaded = rt?.feed && rt.feed.length > 0;
+      const sessionId = rt?.sessionId ?? thread.sessionId;
+      const expectedFingerprint = threadFingerprint(thread);
+      const cachedSnapshot = sessionId ? RUNTIME.sessionSnapshots.get(sessionId) : null;
+      const matchingCachedSnapshot =
+        sessionId
+        && cachedSnapshot
+        && fingerprintMatches(cachedSnapshot.fingerprint, expectedFingerprint)
+          ? cachedSnapshot.snapshot
+          : null;
 
       const requestId = beginThreadSelectionRequest(threadId);
       set((s) => ({
@@ -273,7 +372,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
           ...s.threadRuntimeById,
           [threadId]: {
             ...s.threadRuntimeById[threadId],
-            hydrating: !alreadyLoaded,
+            hydrating: !alreadyLoaded && !matchingCachedSnapshot,
             transcriptOnly: false,
           },
         },
@@ -286,30 +385,52 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         return;
       }
 
-      if (!alreadyLoaded) {
+      if (matchingCachedSnapshot && sessionId) {
+        applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
+      }
+
+      if (!alreadyLoaded || matchingCachedSnapshot) {
         try {
-          const snapshot = typeof desktopCommands.hydrateTranscript === "function"
-            ? await desktopCommands.hydrateTranscript({ threadId })
-            : hydrateTranscriptSnapshot(await desktopCommands.readTranscript({ threadId }));
-          if (!isSelectionCurrent(threadId, requestId)) {
-            clearThreadHydrationIfCurrent(threadId, requestId);
-            return;
+          let loadedFromHarness = false;
+          if (sessionId) {
+            await ensureServerRunning(get, set, thread.workspaceId);
+            ensureControlSocket(get, set, thread.workspaceId);
+            const snapshot = await requestSessionSnapshot(get, set, thread.workspaceId, sessionId);
+            if (!isSelectionCurrent(threadId, requestId)) {
+              clearThreadHydrationIfCurrent(threadId, requestId);
+              return;
+            }
+            if (snapshot) {
+              applySessionSnapshot(threadId, sessionId, snapshot);
+              cacheSessionSnapshot(snapshot);
+              loadedFromHarness = true;
+            }
           }
 
-          set((s) => ({
-            threadRuntimeById: {
-              ...s.threadRuntimeById,
-              [threadId]: {
-                ...s.threadRuntimeById[threadId],
-                sessionUsage: snapshot.sessionUsage,
-                lastTurnUsage: snapshot.lastTurnUsage,
-                agents: snapshot.agents,
-                feed: snapshot.feed,
-                hydrating: false,
-                transcriptOnly: false,
+          if (!loadedFromHarness && !matchingCachedSnapshot && !alreadyLoaded) {
+            const snapshot = await hydrateLegacyTranscript(thread);
+            if (!snapshot) {
+              throw new Error("No harness snapshot or legacy transcript cache was available.");
+            }
+            if (!isSelectionCurrent(threadId, requestId)) {
+              clearThreadHydrationIfCurrent(threadId, requestId);
+              return;
+            }
+            set((s) => ({
+              threadRuntimeById: {
+                ...s.threadRuntimeById,
+                [threadId]: {
+                  ...s.threadRuntimeById[threadId],
+                  sessionUsage: snapshot.sessionUsage,
+                  lastTurnUsage: snapshot.lastTurnUsage,
+                  agents: snapshot.agents,
+                  feed: snapshot.feed,
+                  hydrating: false,
+                  transcriptOnly: true,
+                },
               },
-            },
-          }));
+            }));
+          }
         } catch (error) {
           if (!isSelectionCurrent(threadId, requestId)) {
             clearThreadHydrationIfCurrent(threadId, requestId);

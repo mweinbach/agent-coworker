@@ -1,6 +1,6 @@
 import type { DesktopStateCache } from "./types";
 
-export const DESKTOP_STATE_CACHE_KEY = "cowork.desktop.state-cache.v1";
+export const DESKTOP_STATE_CACHE_KEY = "cowork.desktop.state-cache.v2";
 
 export function loadDesktopStateCacheRaw(): unknown | null {
   if (typeof window === "undefined") {

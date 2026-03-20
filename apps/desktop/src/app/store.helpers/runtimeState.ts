@@ -5,7 +5,7 @@ import {
   type ThreadModelStreamRuntime,
 } from "../store.feedMapping";
 import type { AppStoreState } from "../store.helpers";
-import type { ThreadRuntime, WorkspaceRuntime } from "../types";
+import type { CachedSessionSnapshot, ThreadRuntime, WorkspaceRuntime } from "../types";
 
 export type PendingThreadSteer = {
   clientMessageId: string;
@@ -29,6 +29,7 @@ export type RuntimeMaps = {
   workspaceStartPromises: Map<string, { generation: number; promise: Promise<void> }>;
   workspaceStartGenerations: Map<string, number>;
   modelStreamByThread: Map<string, ThreadModelStreamRuntime>;
+  sessionSnapshots: Map<string, CachedSessionSnapshot>;
   workspacePickerOpen: boolean;
 };
 
@@ -45,6 +46,7 @@ export const RUNTIME: RuntimeMaps = {
   workspaceStartPromises: new Map(),
   workspaceStartGenerations: new Map(),
   modelStreamByThread: new Map(),
+  sessionSnapshots: new Map(),
   workspacePickerOpen: false,
 };
 
@@ -120,6 +122,38 @@ export function clearPendingThreadSteer(threadId: string, clientMessageId: strin
 
 export function clearPendingThreadSteers(threadId: string) {
   RUNTIME.pendingThreadSteers.delete(threadId);
+}
+
+function moveMapEntry<T>(map: Map<string, T>, from: string, to: string): void {
+  if (from === to) return;
+  if (!map.has(from) || map.has(to)) {
+    map.delete(from);
+    return;
+  }
+  const value = map.get(from);
+  map.delete(from);
+  if (value !== undefined) {
+    map.set(to, value);
+  }
+}
+
+export function rekeyThreadRuntimeMaps(fromThreadId: string, toThreadId: string): void {
+  if (!fromThreadId || !toThreadId || fromThreadId === toThreadId) {
+    return;
+  }
+
+  moveMapEntry(RUNTIME.threadSockets, fromThreadId, toThreadId);
+  moveMapEntry(RUNTIME.optimisticUserMessageIds, fromThreadId, toThreadId);
+  moveMapEntry(RUNTIME.pendingThreadMessages, fromThreadId, toThreadId);
+  moveMapEntry(RUNTIME.pendingThreadSteers, fromThreadId, toThreadId);
+  moveMapEntry(RUNTIME.threadSelectionRequests, fromThreadId, toThreadId);
+  moveMapEntry(RUNTIME.pendingWorkspaceDefaultApplyModeByThread, fromThreadId, toThreadId);
+  moveMapEntry(RUNTIME.modelStreamByThread, fromThreadId, toThreadId);
+
+  if (RUNTIME.pendingWorkspaceDefaultApplyThreadIds.has(fromThreadId)) {
+    RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(fromThreadId);
+    RUNTIME.pendingWorkspaceDefaultApplyThreadIds.add(toThreadId);
+  }
 }
 
 export function beginThreadSelectionRequest(threadId: string): number {

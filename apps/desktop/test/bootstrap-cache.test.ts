@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
-const DESKTOP_STATE_CACHE_KEY = "cowork.desktop.state-cache.v1";
+const DESKTOP_STATE_CACHE_KEY = "cowork.desktop.state-cache.v2";
 const storage = new Map<string, string>();
 
 const localStorageMock = {
@@ -49,6 +49,7 @@ const cachedState = {
         lastMessageAt: "2026-03-19T00:00:00.000Z",
         status: "active",
         sessionId: null,
+        messageCount: 0,
         lastEventSeq: 0,
       },
     ],
@@ -94,6 +95,7 @@ const legacyCachedState = {
       lastMessageAt: "2026-03-19T00:00:00.000Z",
       status: "active",
       sessionId: null,
+      messageCount: 0,
       lastEventSeq: 0,
     },
   ],
@@ -137,6 +139,7 @@ let loadedState: any = {
       lastMessageAt: "2026-03-20T00:00:00.000Z",
       status: "active",
       sessionId: null,
+      messageCount: 0,
       lastEventSeq: 0,
     },
   ],
@@ -224,6 +227,7 @@ mock.module("../src/lib/agentSocket", () => ({
 localStorageMock.setItem(DESKTOP_STATE_CACHE_KEY, JSON.stringify(cachedState));
 
 const { useAppStore } = await import("../src/app/store");
+const { RUNTIME } = await import("../src/app/store.helpers");
 const { buildCachedDesktopStateSeed } = await import("../src/app/store.actions/bootstrap");
 const { createDefaultUpdaterState } = await import("../src/lib/desktopApi");
 
@@ -280,6 +284,7 @@ function resetStoreToCachedSeed(value: unknown = cachedState) {
 describe("desktop bootstrap cache", () => {
   beforeEach(() => {
     loadStateError = null;
+    RUNTIME.sessionSnapshots.clear();
     loadedState = {
       ...loadedState,
       workspaces: [
@@ -304,6 +309,7 @@ describe("desktop bootstrap cache", () => {
           lastMessageAt: "2026-03-20T00:00:00.000Z",
           status: "active",
           sessionId: null,
+          messageCount: 0,
           lastEventSeq: 0,
         },
       ],
@@ -345,6 +351,56 @@ describe("desktop bootstrap cache", () => {
     };
     const seed = buildCachedDesktopStateSeed(chatCachedState);
     expect(seed?.threadRuntimeById?.["thread-cached"]?.hydrating).toBe(true);
+  });
+
+  test("buildCachedDesktopStateSeed restores cached harness snapshots for warm startup", () => {
+    const snapshotCachedState = {
+      ...cachedState,
+      sessionSnapshots: {
+        "thread-session": {
+          fingerprint: {
+            updatedAt: "2026-03-19T00:00:00.000Z",
+            messageCount: 1,
+            lastEventSeq: 2,
+          },
+          snapshot: {
+            sessionId: "thread-session",
+            title: "Cached Harness Snapshot",
+            titleSource: "model",
+            titleModel: "gpt-5.2",
+            provider: "openai",
+            model: "gpt-5.2",
+            sessionKind: "root",
+            parentSessionId: null,
+            role: null,
+            mode: null,
+            depth: 0,
+            nickname: null,
+            requestedModel: "gpt-5.2",
+            effectiveModel: "gpt-5.2",
+            requestedReasoningEffort: null,
+            effectiveReasoningEffort: null,
+            executionState: null,
+            lastMessagePreview: "Cached Harness Snapshot",
+            createdAt: "2026-03-19T00:00:00.000Z",
+            updatedAt: "2026-03-19T00:00:00.000Z",
+            messageCount: 1,
+            lastEventSeq: 2,
+            feed: [],
+            agents: [],
+            todos: [],
+            sessionUsage: null,
+            lastTurnUsage: null,
+            hasPendingAsk: false,
+            hasPendingApproval: false,
+          },
+        },
+      },
+    };
+
+    const seed = buildCachedDesktopStateSeed(snapshotCachedState);
+    expect(seed?.ready).toBe(true);
+    expect(RUNTIME.sessionSnapshots.get("thread-session")?.snapshot.title).toBe("Cached Harness Snapshot");
   });
 
   test("init keeps cached state visible until authoritative load completes", async () => {

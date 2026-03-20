@@ -36,6 +36,7 @@ import {
   hasPendingThreadSteer,
   markPendingThreadSteerAccepted,
   rememberPendingThreadSteer,
+  rekeyThreadRuntimeMaps,
   resetModelStreamRuntime,
   shiftPendingThreadMessage,
 } from "./runtimeState";
@@ -71,6 +72,65 @@ type ThreadEventReducerDeps = {
 };
 
 export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
+  function migrateThreadIdentity(get: StoreGet, set: StoreSet, fromThreadId: string, toThreadId: string): string {
+    if (!fromThreadId || !toThreadId || fromThreadId === toThreadId) {
+      return toThreadId;
+    }
+
+    rekeyThreadRuntimeMaps(fromThreadId, toThreadId);
+    set((s) => {
+      const existingThread = s.threads.find((thread) => thread.id === fromThreadId);
+      const existingRuntime = s.threadRuntimeById[fromThreadId];
+      const replacementThread = s.threads.find((thread) => thread.id === toThreadId);
+      const replacementRuntime = s.threadRuntimeById[toThreadId];
+
+      const nextThreads = replacementThread
+        ? s.threads.filter((thread) => thread.id !== fromThreadId)
+        : s.threads.map((thread) =>
+            thread.id === fromThreadId
+              ? {
+                  ...thread,
+                  id: toThreadId,
+                  sessionId: toThreadId,
+                  legacyTranscriptId:
+                    thread.legacyTranscriptId
+                    ?? (thread.id !== toThreadId ? thread.id : null),
+                }
+              : thread,
+          );
+
+      const nextThreadRuntimeById = { ...s.threadRuntimeById };
+      if (existingRuntime) {
+        delete nextThreadRuntimeById[fromThreadId];
+        if (!replacementRuntime) {
+          nextThreadRuntimeById[toThreadId] = {
+            ...existingRuntime,
+            sessionId: toThreadId,
+          };
+        }
+      }
+
+      const nextLatestTodosByThreadId = { ...s.latestTodosByThreadId };
+      if (fromThreadId in nextLatestTodosByThreadId && !(toThreadId in nextLatestTodosByThreadId)) {
+        nextLatestTodosByThreadId[toThreadId] = nextLatestTodosByThreadId[fromThreadId]!;
+      }
+      delete nextLatestTodosByThreadId[fromThreadId];
+
+      return {
+        threads: nextThreads,
+        selectedThreadId: s.selectedThreadId === fromThreadId ? toThreadId : s.selectedThreadId,
+        promptModal:
+          s.promptModal && s.promptModal.threadId === fromThreadId
+            ? { ...s.promptModal, threadId: toThreadId }
+            : s.promptModal,
+        threadRuntimeById: nextThreadRuntimeById,
+        latestTodosByThreadId: nextLatestTodosByThreadId,
+      };
+    });
+
+    return get().threads.find((thread) => thread.sessionId === toThreadId)?.id ?? toThreadId;
+  }
+
   function pushFeedItem(set: StoreSet, threadId: string, item: FeedItem) {
     set((s) => {
       const rt = s.threadRuntimeById[threadId];
@@ -920,6 +980,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
     ensureThreadRuntime(get, set, threadId);
     const persistedThreadSessionId = get().threads.find((thread) => thread.id === threadId)?.sessionId ?? undefined;
     const resumeSessionId = get().threadRuntimeById[threadId]?.sessionId ?? persistedThreadSessionId ?? undefined;
+    let activeThreadId = threadId;
 
     const socket = new AgentSocket({
       url,
@@ -927,19 +988,24 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
       client: "desktop",
       version: VERSION,
       autoReconnect: true,
-      onEvent: (evt) => handleThreadEvent(get, set, threadId, evt, pendingFirstMessage, pendingFirstMessageQueued),
+      onEvent: (evt) => {
+        if (evt.type === "server_hello" && activeThreadId !== evt.sessionId) {
+          activeThreadId = migrateThreadIdentity(get, set, activeThreadId, evt.sessionId);
+        }
+        handleThreadEvent(get, set, activeThreadId, evt, pendingFirstMessage, pendingFirstMessageQueued);
+      },
       onClose: () => {
-        RUNTIME.threadSockets.delete(threadId);
-        RUNTIME.modelStreamByThread.delete(threadId);
-        RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(threadId);
-        RUNTIME.pendingWorkspaceDefaultApplyModeByThread.delete(threadId);
+        RUNTIME.threadSockets.delete(activeThreadId);
+        RUNTIME.modelStreamByThread.delete(activeThreadId);
+        RUNTIME.pendingWorkspaceDefaultApplyThreadIds.delete(activeThreadId);
+        RUNTIME.pendingWorkspaceDefaultApplyModeByThread.delete(activeThreadId);
         set((s) => {
-          const rt = s.threadRuntimeById[threadId];
+          const rt = s.threadRuntimeById[activeThreadId];
           if (!rt) return {};
           return {
             threadRuntimeById: {
               ...s.threadRuntimeById,
-              [threadId]: {
+              [activeThreadId]: {
                 ...rt,
                 connected: false,
                 busy: false,
@@ -948,7 +1014,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
                 pendingSteer: rt.pendingSteer,
               },
             },
-            threads: s.threads.map((t) => (t.id === threadId ? { ...t, status: "disconnected" } : t)),
+            threads: s.threads.map((t) => (t.id === activeThreadId ? { ...t, status: "disconnected" } : t)),
           };
         });
         void deps.persist(get);

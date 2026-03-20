@@ -56,6 +56,7 @@ import { deriveConnectedProviders, normalizePersistedProviderState } from "../pe
 import { deriveDefaultLmStudioUiEnabled, normalizePersistedProviderUiState } from "../providerUiState";
 import { normalizeWorkspaceProviderOptions } from "../openaiCompatibleProviderOptions";
 import {
+  type CachedSessionSnapshot,
   normalizeWorkspaceUserProfile,
   type CachedDesktopUiState,
   type PersistedOnboardingState,
@@ -206,9 +207,11 @@ const persistedThreadSchema = z.object({
   lastMessageAt: z.string(),
   status: normalizedThreadStatusSchema,
   sessionId: normalizedSessionIdSchema,
+  messageCount: normalizedLastEventSeqSchema,
   lastEventSeq: normalizedLastEventSeqSchema,
+  legacyTranscriptId: normalizedSessionIdSchema.optional(),
 }).passthrough().transform((thread): ThreadRecord => ({
-  id: thread.id,
+  id: thread.sessionId ?? thread.id,
   workspaceId: thread.workspaceId,
   title: thread.title,
   titleSource: normalizeThreadTitleSource(thread.titleSource, thread.title),
@@ -216,7 +219,11 @@ const persistedThreadSchema = z.object({
   lastMessageAt: thread.lastMessageAt,
   status: thread.status,
   sessionId: thread.sessionId,
+  messageCount: thread.messageCount,
   lastEventSeq: thread.lastEventSeq,
+  legacyTranscriptId:
+    thread.legacyTranscriptId
+    ?? (thread.sessionId && thread.sessionId !== thread.id ? thread.id : null),
 }));
 
 const persistedUiSchema = z.object({
@@ -297,9 +304,14 @@ function buildResolvedDesktopUiState(
     workspaceThreads.find((thread) => thread.status === "active")?.id ??
     workspaceThreads[0]?.id ??
     null;
+  const migratedSelectedThreadId = normalizedUi.selectedThreadId
+    ? workspaceThreads.find((thread) => thread.id === normalizedUi.selectedThreadId)?.id
+      ?? workspaceThreads.find((thread) => thread.legacyTranscriptId === normalizedUi.selectedThreadId)?.id
+      ?? null
+    : null;
   const selectedThreadId =
-    normalizedUi.selectedThreadId && workspaceThreads.some((thread) => thread.id === normalizedUi.selectedThreadId)
-      ? normalizedUi.selectedThreadId
+    migratedSelectedThreadId
+      ? migratedSelectedThreadId
       : fallbackSelectedThreadId;
   const fallbackLastNonSettingsView = normalizedUi.view === "settings" ? "chat" : normalizedUi.view ?? "chat";
   const lastNonSettingsView =
@@ -324,6 +336,7 @@ function buildResolvedDesktopUiState(
 function extractCachedDesktopState(value: unknown): {
   persistedState: unknown;
   ui: unknown;
+  sessionSnapshots?: unknown;
 } | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -334,12 +347,14 @@ function extractCachedDesktopState(value: unknown): {
     return {
       persistedState: record.persistedState,
       ui: record.ui,
+      sessionSnapshots: record.sessionSnapshots,
     };
   }
 
   return {
     persistedState: value,
     ui: record.ui,
+    sessionSnapshots: record.sessionSnapshots,
   };
 }
 
@@ -366,6 +381,13 @@ export function buildCachedDesktopStateSeed(value: unknown): Partial<AppStoreDat
     }
 
     const state = hydratePersistedDesktopState(cached.persistedState);
+    RUNTIME.sessionSnapshots.clear();
+    if (cached.sessionSnapshots && typeof cached.sessionSnapshots === "object" && !Array.isArray(cached.sessionSnapshots)) {
+      for (const [sessionId, entry] of Object.entries(cached.sessionSnapshots as Record<string, CachedSessionSnapshot>)) {
+        if (!entry || typeof entry !== "object") continue;
+        RUNTIME.sessionSnapshots.set(sessionId, entry);
+      }
+    }
     const ui = buildResolvedDesktopUiState(state.workspaces, state.threads, cached.ui as CachedDesktopUiState | undefined);
     const connectedProviders = deriveConnectedProviders(state.providerState as PersistedProviderState | undefined);
     return {

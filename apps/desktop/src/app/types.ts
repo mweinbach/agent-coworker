@@ -9,6 +9,7 @@ import type {
   SkillEntry,
   TodoItem,
 } from "../lib/wsProtocol";
+import type { SessionFeedItem } from "../../../../src/shared/sessionSnapshot";
 import type { WorkspaceProviderOptions } from "./openaiCompatibleProviderOptions";
 
 export type WorkspaceUserProfile = {
@@ -86,7 +87,9 @@ export type ThreadRecord = {
   lastMessageAt: string;
   status: ThreadStatus;
   sessionId: string | null;
+  messageCount: number;
   lastEventSeq: number;
+  legacyTranscriptId?: string | null;
 };
 
 export type ThreadPendingSteer = {
@@ -140,6 +143,7 @@ export type DesktopStateCache = {
   version: number;
   persistedState: PersistedState;
   ui: CachedDesktopUiState;
+  sessionSnapshots?: Record<string, CachedSessionSnapshot>;
 };
 
 export type PersistedState = {
@@ -177,21 +181,7 @@ export type ToolApprovalMetadata = {
   toolCall?: unknown;
 };
 
-export type FeedItem =
-  | {
-      id: string;
-      kind: "message";
-      role: "user" | "assistant";
-      ts: string;
-      text: string;
-      annotations?: Array<Record<string, unknown>>;
-    }
-  | { id: string; kind: "reasoning"; mode: "reasoning" | "summary"; ts: string; text: string }
-  | { id: string; kind: "tool"; ts: string; name: string; state: ToolFeedState; args?: unknown; result?: unknown; approval?: ToolApprovalMetadata }
-  | { id: string; kind: "todos"; ts: string; todos: TodoItem[] }
-  | { id: string; kind: "log"; ts: string; line: string }
-  | { id: string; kind: "error"; ts: string; message: string; code: ServerErrorCode; source: ServerErrorSource }
-  | { id: string; kind: "system"; ts: string; line: string };
+export type FeedItem = SessionFeedItem;
 
 export type SessionConfigSubset = Extract<ServerEvent, { type: "session_config" }>["config"];
 export type MCPServersEvent = Extract<ServerEvent, { type: "mcp_servers" }>;
@@ -202,6 +192,12 @@ export type SessionUsageSnapshot = NonNullable<Extract<ServerEvent, { type: "ses
 export type TurnUsageSnapshot = Pick<Extract<ServerEvent, { type: "turn_usage" }>, "turnId" | "usage">;
 export type WorkspaceBackupsEvent = Extract<ServerEvent, { type: "workspace_backups" }>;
 export type WorkspaceBackupDeltaEvent = Extract<ServerEvent, { type: "workspace_backup_delta" }>;
+export type SessionSnapshot = Extract<ServerEvent, { type: "session_snapshot" }>["snapshot"];
+export type SessionSnapshotFingerprint = Pick<SessionSnapshot, "updatedAt" | "messageCount" | "lastEventSeq">;
+export type CachedSessionSnapshot = {
+  fingerprint: SessionSnapshotFingerprint;
+  snapshot: SessionSnapshot;
+};
 export type WorkspaceBackupEntry = WorkspaceBackupsEvent["backups"][number];
 export type ThreadAgentSummary = Extract<ServerEvent, { type: "agent_status" }>["agent"];
 export type ThreadSessionKind = Extract<ServerEvent, { type: "server_hello" }>["sessionKind"];

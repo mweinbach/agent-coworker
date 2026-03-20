@@ -4,6 +4,7 @@ import { normalizePersistedProviderUiState } from "../providerUiState";
 import { normalizePersistedProviderState } from "../persistedProviderState";
 import type { AppStoreState } from "../store.helpers";
 import type { CachedDesktopUiState, PersistedState } from "../types";
+import { RUNTIME } from "./runtimeState";
 
 const PERSIST_DEBOUNCE_MS = 300;
 const DESKTOP_CACHE_DEBOUNCE_MS = 120;
@@ -49,9 +50,10 @@ function buildCachedDesktopUiState(state: AppStoreState): CachedDesktopUiState {
 function syncDesktopStateCacheState(state: AppStoreState): PersistedState {
   const persistedState = buildPersistedState(state);
   saveDesktopStateCache({
-    version: 1,
+    version: 2,
     persistedState,
     ui: buildCachedDesktopUiState(state),
+    sessionSnapshots: Object.fromEntries(RUNTIME.sessionSnapshots.entries()),
   });
   return persistedState;
 }

@@ -1,50 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { JSDOM } from "jsdom";
 import { createElement } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { setupJsdom } from "./jsdomHarness";
 
 const { useAppStore } = await import("../src/app/store");
 const { ContextSidebar } = await import("../src/ui/ContextSidebar");
-
-function setupJsdom() {
-  const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", {
-    url: "http://localhost",
-  });
-  const saved = {
-    window: globalThis.window,
-    document: globalThis.document,
-    navigator: globalThis.navigator,
-    HTMLElement: globalThis.HTMLElement,
-    Node: globalThis.Node,
-    getComputedStyle: globalThis.getComputedStyle,
-    actEnv: (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT,
-  };
-
-  Object.assign(globalThis, {
-    window: dom.window,
-    document: dom.window.document,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    Node: dom.window.Node,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-  });
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-  return {
-    dom,
-    restore: () => {
-      globalThis.window = saved.window;
-      globalThis.document = saved.document;
-      globalThis.navigator = saved.navigator;
-      globalThis.HTMLElement = saved.HTMLElement;
-      globalThis.Node = saved.Node;
-      globalThis.getComputedStyle = saved.getComputedStyle;
-      (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = saved.actEnv;
-      dom.window.close();
-    },
-  };
-}
 
 describe("desktop context sidebar", () => {
   test("renders child-agent summaries for the selected thread", async () => {

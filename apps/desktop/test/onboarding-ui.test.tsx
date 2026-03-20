@@ -1,70 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { JSDOM } from "jsdom";
 import { createElement } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-
-type JsdomHarness = {
-  dom: JSDOM;
-  restore: () => void;
-};
-
-function setupJsdom(): JsdomHarness {
-  const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", {
-    url: "http://localhost",
-  });
-  class MockResizeObserver {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  }
-  const requestAnimationFrame = (callback: FrameRequestCallback) => {
-    callback(0);
-    return 0;
-  };
-  const saved = {
-    window: globalThis.window,
-    document: globalThis.document,
-    navigator: globalThis.navigator,
-    HTMLElement: globalThis.HTMLElement,
-    Node: globalThis.Node,
-    getComputedStyle: globalThis.getComputedStyle,
-    requestAnimationFrame: globalThis.requestAnimationFrame,
-    cancelAnimationFrame: globalThis.cancelAnimationFrame,
-    ResizeObserver: globalThis.ResizeObserver,
-    actEnv: (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT,
-  };
-
-  Object.assign(globalThis, {
-    window: dom.window,
-    document: dom.window.document,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    Node: dom.window.Node,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    requestAnimationFrame,
-    cancelAnimationFrame: () => {},
-    ResizeObserver: MockResizeObserver,
-  });
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-  return {
-    dom,
-    restore: () => {
-      globalThis.window = saved.window;
-      globalThis.document = saved.document;
-      globalThis.navigator = saved.navigator;
-      globalThis.HTMLElement = saved.HTMLElement;
-      globalThis.Node = saved.Node;
-      globalThis.getComputedStyle = saved.getComputedStyle;
-      globalThis.requestAnimationFrame = saved.requestAnimationFrame;
-      globalThis.cancelAnimationFrame = saved.cancelAnimationFrame;
-      globalThis.ResizeObserver = saved.ResizeObserver;
-      (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = saved.actEnv;
-      dom.window.close();
-    },
-  };
-}
+import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -132,6 +70,27 @@ mock.module("../src/lib/agentSocket", () => ({
   },
 }));
 
+class MockResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+function setupOnboardingJsdom() {
+  return setupJsdom({
+    includeAnimationFrame: {
+      requestAnimationFrame: (callback: FrameRequestCallback) => {
+        callback(0);
+        return 0;
+      },
+      cancelAnimationFrame: () => {},
+    },
+    extraGlobals: {
+      ResizeObserver: MockResizeObserver,
+    },
+  });
+}
+
 const { useAppStore } = await import("../src/app/store");
 const { DesktopOnboarding } = await import("../src/ui/onboarding/DesktopOnboarding");
 const { DeveloperPage } = await import("../src/ui/settings/pages/DeveloperPage");
@@ -157,7 +116,7 @@ describe("DeveloperPage rerun onboarding button", () => {
   });
 
   test("renders the 'Run onboarding again' button", async () => {
-    const harness = setupJsdom();
+    const harness = setupOnboardingJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
@@ -203,7 +162,7 @@ describe("DeveloperPage rerun onboarding button", () => {
     const requestProviderCatalog = mock(async () => {});
     const requestProviderAuthMethods = mock(async () => {});
     const refreshProviderStatus = mock(async () => {});
-    const harness = setupJsdom();
+    const harness = setupOnboardingJsdom();
 
     try {
       const container = harness.dom.window.document.getElementById("root");
@@ -243,7 +202,7 @@ describe("DeveloperPage rerun onboarding button", () => {
   });
 
   test("provider step shows LM Studio local connect controls instead of an API key field", async () => {
-    const harness = setupJsdom();
+    const harness = setupOnboardingJsdom();
     const setLmStudioEnabled = mock(async () => {});
     const refreshProviderStatus = mock(async () => {});
 
@@ -329,7 +288,7 @@ describe("DeveloperPage rerun onboarding button", () => {
 
   test("clicking 'Run onboarding again' calls startOnboarding", async () => {
     const startOnboarding = mock(() => {});
-    const harness = setupJsdom();
+    const harness = setupOnboardingJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");

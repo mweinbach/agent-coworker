@@ -1,8 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
-import { JSDOM } from "jsdom";
 import { createElement, StrictMode } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
+import { setupJsdom } from "./jsdomHarness";
 
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
@@ -69,63 +69,24 @@ mock.module("../src/lib/agentSocket", () => ({
   },
 }));
 
-type JsdomHarness = {
-  dom: JSDOM;
-  restore: () => void;
-};
-
-function setupJsdom(): JsdomHarness {
-  const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", {
-    url: "http://localhost",
-  });
-  const saved = {
-    window: globalThis.window,
-    document: globalThis.document,
-    navigator: globalThis.navigator,
-    HTMLElement: globalThis.HTMLElement,
-    Node: globalThis.Node,
-    getComputedStyle: globalThis.getComputedStyle,
-    requestAnimationFrame: globalThis.requestAnimationFrame,
-    cancelAnimationFrame: globalThis.cancelAnimationFrame,
-    actEnv: (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT,
-  };
-
-  Object.assign(globalThis, {
-    window: dom.window,
-    document: dom.window.document,
-    navigator: dom.window.navigator,
-    HTMLElement: dom.window.HTMLElement,
-    Node: dom.window.Node,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0) as unknown as number,
-    cancelAnimationFrame: (id: number) => clearTimeout(id),
-  });
-  dom.window.requestAnimationFrame = globalThis.requestAnimationFrame;
-  dom.window.cancelAnimationFrame = globalThis.cancelAnimationFrame;
-  if (typeof dom.window.HTMLElement.prototype.attachEvent !== "function") {
-    (dom.window.HTMLElement.prototype as { attachEvent?: (name: string, handler: unknown) => void }).attachEvent = () => {};
-  }
-  if (typeof dom.window.HTMLElement.prototype.detachEvent !== "function") {
-    (dom.window.HTMLElement.prototype as { detachEvent?: (name: string, handler: unknown) => void }).detachEvent = () => {};
-  }
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-  return {
-    dom,
-    restore: () => {
-      globalThis.window = saved.window;
-      globalThis.document = saved.document;
-      globalThis.navigator = saved.navigator;
-      globalThis.HTMLElement = saved.HTMLElement;
-      globalThis.Node = saved.Node;
-      globalThis.getComputedStyle = saved.getComputedStyle;
-      globalThis.requestAnimationFrame = saved.requestAnimationFrame;
-      globalThis.cancelAnimationFrame = saved.cancelAnimationFrame;
-      (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = saved.actEnv;
-      dom.window.close();
+function setupChatViewJsdom() {
+  return setupJsdom({
+    includeAnimationFrame: {
+      requestAnimationFrame: (callback: FrameRequestCallback) =>
+        setTimeout(() => callback(Date.now()), 0) as unknown as number,
+      cancelAnimationFrame: (id: number) => clearTimeout(id),
     },
-  };
+    setupWindow: (dom) => {
+      if (typeof dom.window.HTMLElement.prototype.attachEvent !== "function") {
+        (dom.window.HTMLElement.prototype as { attachEvent?: (name: string, handler: unknown) => void }).attachEvent = () => {};
+      }
+      if (typeof dom.window.HTMLElement.prototype.detachEvent !== "function") {
+        (dom.window.HTMLElement.prototype as { detachEvent?: (name: string, handler: unknown) => void }).detachEvent = () => {};
+      }
+    },
+  });
 }
+
 
 const { useAppStore } = await import("../src/app/store");
 const { ChatView, countActiveChildAgents } = await import("../src/ui/ChatView");
@@ -185,7 +146,7 @@ describe("desktop chat view stability", () => {
       composerText: "",
     });
 
-    const harness = setupJsdom();
+    const harness = setupChatViewJsdom();
     const realError = console.error;
     const consoleErrors: string[] = [];
     console.error = (...args: unknown[]) => {
@@ -286,7 +247,7 @@ describe("desktop chat view stability", () => {
       composerText: "",
     });
 
-    const harness = setupJsdom();
+    const harness = setupChatViewJsdom();
     try {
       const container = harness.dom.window.document.getElementById("root");
       if (!container) throw new Error("missing root");
@@ -369,7 +330,7 @@ describe("desktop chat view stability", () => {
       composerText: "",
     });
 
-    const harness = setupJsdom();
+    const harness = setupChatViewJsdom();
 
     try {
       const container = harness.dom.window.document.getElementById("root");

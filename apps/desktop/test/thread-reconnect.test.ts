@@ -59,6 +59,8 @@ let mockedTranscript: any[] = [];
 let mockedTranscriptError: Error | null = null;
 let readTranscriptImpl: ((threadId: string) => Promise<any[]>) | null = null;
 const readTranscriptCalls: string[] = [];
+const appendTranscriptBatchCalls: Array<Array<{ ts: string; threadId: string; direction: "server" | "client"; payload: unknown }>> = [];
+const deleteTranscriptCalls: string[] = [];
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
   themeSource: "system",
@@ -79,9 +81,13 @@ const MOCK_UPDATE_STATE = {
 };
 
 mock.module("../src/lib/desktopCommands", () => ({
-  appendTranscriptBatch: async () => {},
+  appendTranscriptBatch: async (events: Array<{ ts: string; threadId: string; direction: "server" | "client"; payload: unknown }>) => {
+    appendTranscriptBatchCalls.push(events);
+  },
   appendTranscriptEvent: async () => {},
-  deleteTranscript: async () => {},
+  deleteTranscript: async ({ threadId }: { threadId: string }) => {
+    deleteTranscriptCalls.push(threadId);
+  },
   listDirectory: async () => [],
   loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
   pickWorkspaceDirectory: async () => null,
@@ -223,6 +229,8 @@ describe("thread reconnect", () => {
     mockedTranscriptError = null;
     readTranscriptImpl = null;
     readTranscriptCalls.length = 0;
+    appendTranscriptBatchCalls.length = 0;
+    deleteTranscriptCalls.length = 0;
     RUNTIME.controlSockets.clear();
     RUNTIME.threadSockets.clear();
     RUNTIME.optimisticUserMessageIds.clear();
@@ -398,6 +406,70 @@ describe("thread reconnect", () => {
     expect(useAppStore.getState().threadRuntimeById[threadId]?.transcriptOnly).toBe(false);
   });
 
+  test("selectThread falls back immediately when session snapshot lookup errors", async () => {
+    const rekeyedThreadId = "persisted-thread-session";
+    useAppStore.setState((state) => ({
+      ...state,
+      threads: state.threads.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              id: rekeyedThreadId,
+              sessionId: rekeyedThreadId,
+              messageCount: 2,
+              lastEventSeq: 4,
+              legacyTranscriptId: threadId,
+            }
+          : thread,
+      ),
+    }));
+    readTranscriptImpl = async (requestedThreadId) => requestedThreadId === threadId
+      ? [
+          {
+            ts: "2024-01-01T00:00:01.000Z",
+            threadId: "legacy-thread-id",
+            direction: "server",
+            payload: {
+              type: "assistant_message",
+              sessionId: rekeyedThreadId,
+              text: "Recovered from transcript",
+            },
+          },
+        ]
+      : [];
+
+    const selectPromise = useAppStore.getState().selectThread(rekeyedThreadId);
+    await flushAsyncWork();
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    await flushAsyncWork();
+    controlSocket.emit({
+      type: "error",
+      sessionId: "control-session",
+      source: "session",
+      code: "validation_failed",
+      message: `Unknown target session: ${rekeyedThreadId}`,
+    });
+
+    await expect(Promise.race([
+      selectPromise.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
+    ])).resolves.toBe(true);
+    await selectPromise;
+
+    expect(readTranscriptCalls).toEqual(expect.arrayContaining([threadId, rekeyedThreadId]));
+    expect(useAppStore.getState().threadRuntimeById[rekeyedThreadId]?.feed).toEqual([
+      {
+        id: expect.any(String),
+        kind: "message",
+        role: "assistant",
+        ts: "2024-01-01T00:00:01.000Z",
+        text: "Recovered from transcript",
+      },
+    ]);
+  });
+
   test("selectThread skips get_session_snapshot when feed is loaded and snapshot cache matches", async () => {
     const persistedSessionId = "persisted-thread-session";
     const snapshot = makeSessionSnapshot(persistedSessionId);
@@ -532,6 +604,66 @@ describe("thread reconnect", () => {
         text: "Fresh harness snapshot",
       },
     ]);
+  });
+
+  test("loadAllThreadUsage reads both legacy and canonical transcript ids", async () => {
+    useAppStore.setState((state) => ({
+      ...state,
+      threads: state.threads.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              id: "persisted-thread-session",
+              sessionId: "persisted-thread-session",
+              legacyTranscriptId: "legacy-thread-id",
+            }
+          : thread,
+      ),
+      selectedThreadId: "persisted-thread-session",
+      threadRuntimeById: {},
+    }));
+    readTranscriptImpl = async (requestedThreadId) => {
+      if (requestedThreadId === "legacy-thread-id") {
+        return [
+          {
+            ts: "2024-01-01T00:00:00.000Z",
+            threadId: "legacy-thread-id",
+            direction: "server",
+            payload: {
+              type: "session_usage",
+              sessionId: "persisted-thread-session",
+              usage: {
+                sessionId: "persisted-thread-session",
+                totalTurns: 1,
+                totalPromptTokens: 10,
+                totalCompletionTokens: 20,
+                totalTokens: 30,
+                estimatedTotalCostUsd: 0.01,
+                costTrackingAvailable: true,
+                byModel: [],
+                turns: [],
+                budgetStatus: {
+                  configured: false,
+                  warnAtUsd: null,
+                  stopAtUsd: null,
+                  warningTriggered: false,
+                  stopTriggered: false,
+                  currentCostUsd: null,
+                },
+                createdAt: "2024-01-01T00:00:00.000Z",
+                updatedAt: "2024-01-01T00:00:00.000Z",
+              },
+            },
+          },
+        ];
+      }
+      return [];
+    };
+
+    await useAppStore.getState().loadAllThreadUsage();
+
+    expect(readTranscriptCalls).toEqual(expect.arrayContaining(["legacy-thread-id", "persisted-thread-session"]));
+    expect(useAppStore.getState().threadRuntimeById["persisted-thread-session"]?.sessionUsage?.totalTokens).toBe(30);
   });
 
   test("resumed threads do not replay workspace default set_model on reconnect", async () => {
@@ -1190,5 +1322,47 @@ describe("thread reconnect", () => {
 
     const state = useAppStore.getState();
     expect(state.notifications.some((item) => item.title === "Transcript load failed")).toBe(true);
+  });
+
+  test("removeThread deletes both legacy and canonical transcript files after session rekey", async () => {
+    const rekeyedThreadId = "thread-session";
+    useAppStore.setState((state) => ({
+      ...state,
+      threads: state.threads.map((thread) =>
+        thread.id === threadId
+          ? {
+              ...thread,
+              id: rekeyedThreadId,
+              sessionId: rekeyedThreadId,
+              legacyTranscriptId: threadId,
+            }
+          : thread,
+      ),
+      selectedThreadId: rekeyedThreadId,
+    }));
+
+    await useAppStore.getState().removeThread(rekeyedThreadId);
+
+    expect(deleteTranscriptCalls).toEqual([threadId, rekeyedThreadId]);
+  });
+
+  test("sendMessage still appends transcript batches", async () => {
+    await useAppStore.getState().selectThread(threadId);
+
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+    const activeThreadId = canonicalThreadId("thread-session", threadId);
+
+    await useAppStore.getState().sendMessage("hello");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await flushAsyncWork();
+
+    expect(
+      appendTranscriptBatchCalls.flat().some((entry) =>
+        entry.threadId === activeThreadId
+        && entry.direction === "client"
+        && (entry.payload as { type?: string }).type === "user_message"
+      ),
+    ).toBe(true);
   });
 });

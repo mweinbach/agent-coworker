@@ -580,7 +580,7 @@ describe("workspace settings sync", () => {
   });
 
   test("control session_config hydrates the workspace defaults from the harness", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
 
@@ -626,7 +626,7 @@ describe("workspace settings sync", () => {
   });
 
   test("control session_config keeps session backup overrides separate from the workspace default", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
 
@@ -688,7 +688,7 @@ describe("workspace settings sync", () => {
       ),
     }));
 
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
 
@@ -794,7 +794,7 @@ describe("workspace settings sync", () => {
       ),
     }));
 
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
 
@@ -904,7 +904,7 @@ describe("workspace settings sync", () => {
       ),
     }));
 
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     const threadSocket = socketByClient("desktop");
@@ -969,7 +969,7 @@ describe("workspace settings sync", () => {
       ),
     }));
 
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     const threadSocket = socketByClient("desktop");
@@ -1002,7 +1002,7 @@ describe("workspace settings sync", () => {
       ),
     }));
 
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     const threadSocket = socketByClient("desktop");
@@ -1023,7 +1023,7 @@ describe("workspace settings sync", () => {
   });
 
   test("thread connect does not replay a stale local backup default before the harness sync arrives", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     const threadSocket = socketByClient("desktop");
@@ -1037,7 +1037,7 @@ describe("workspace settings sync", () => {
   });
 
   test("thread connect only replays explicit harness overflow defaults after control-session hydration", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     controlSocket.emit({
@@ -1070,7 +1070,7 @@ describe("workspace settings sync", () => {
   });
 
   test("thread connect replays the explicit harness overflow default when one is configured", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     controlSocket.emit({
@@ -1121,7 +1121,7 @@ describe("workspace settings sync", () => {
       ),
     }));
 
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     const threadSocket = socketByClient("desktop");
@@ -1192,7 +1192,7 @@ describe("workspace settings sync", () => {
       ),
     }));
 
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     controlSocket.emit({
@@ -1285,8 +1285,8 @@ describe("workspace settings sync", () => {
       ),
     }));
 
-    await useAppStore.getState().newThread({ workspaceId });
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
 
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");

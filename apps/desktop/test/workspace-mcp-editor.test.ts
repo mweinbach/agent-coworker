@@ -166,7 +166,7 @@ describe("workspace MCP editor flow", () => {
   });
 
   test("requests MCP servers on control connect and hydrates runtime from mcp_servers", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
 
@@ -212,7 +212,7 @@ describe("workspace MCP editor flow", () => {
   });
 
   test("upsertWorkspaceMcpServer sends mcp_server_upsert and accepts refreshed snapshot", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     controlSocket.sent = [];
@@ -254,7 +254,7 @@ describe("workspace MCP editor flow", () => {
   });
 
   test("requestWorkspaceMcpServers sends mcp_servers_get", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     controlSocket.sent = [];

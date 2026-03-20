@@ -210,6 +210,7 @@ const persistedThreadSchema = z.object({
   messageCount: normalizedLastEventSeqSchema,
   lastEventSeq: normalizedLastEventSeqSchema,
   legacyTranscriptId: normalizedSessionIdSchema.optional(),
+  draft: z.preprocess((value) => (typeof value === "boolean" ? value : false), z.boolean()).optional(),
 }).passthrough().transform((thread): ThreadRecord => ({
   id: thread.sessionId ?? thread.id,
   workspaceId: thread.workspaceId,
@@ -224,6 +225,7 @@ const persistedThreadSchema = z.object({
   legacyTranscriptId:
     thread.legacyTranscriptId
     ?? (thread.sessionId && thread.sessionId !== thread.id ? thread.id : null),
+  draft: thread.draft ?? false,
 }));
 
 const persistedUiSchema = z.object({

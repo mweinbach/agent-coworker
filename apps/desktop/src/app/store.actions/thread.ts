@@ -38,7 +38,14 @@ import {
   truncateTitle,
 } from "../store.helpers";
 import { hydrateTranscriptSnapshot } from "../transcriptHydration";
-import type { SessionSnapshot, SessionSnapshotFingerprint, ThreadBusyPolicy, ThreadRecord, WorkspaceRecord } from "../types";
+import type {
+  SessionSnapshot,
+  SessionSnapshotFingerprint,
+  ThreadBusyPolicy,
+  ThreadRecord,
+  TranscriptEvent,
+  WorkspaceRecord,
+} from "../types";
 
 export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStoreActions, "removeThread" | "deleteThreadHistory" | "renameThread" | "newThread" | "selectThread" | "reconnectThread" | "sendMessage" | "cancelThread" | "clearThreadUsageHardCap" | "setThreadModel" | "setComposerText" | "setInjectContext" | "answerAsk" | "answerApproval" | "dismissPrompt" | "loadAllThreadUsage"> {
   const waitForSelectionFrame = async () => {
@@ -111,7 +118,6 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
 
   const applySessionSnapshot = (threadId: string, sessionId: string, snapshot: SessionSnapshot) => {
     set((s) => {
-      const currentThread = s.threads.find((thread) => thread.id === threadId);
       const nextThreads = s.threads.map((thread) =>
         thread.id === threadId
           ? {
@@ -166,16 +172,62 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
     });
   };
 
+  const transcriptIdsForThread = (
+    thread: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
+  ): string[] => {
+    const ids = [thread.legacyTranscriptId ?? null, thread.sessionId ?? null, thread.id];
+    return [...new Set(ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0))];
+  };
+
+  const readTranscriptEvents = async (
+    thread: Pick<ThreadRecord, "id" | "sessionId" | "legacyTranscriptId">,
+  ): Promise<TranscriptEvent[]> => {
+    const transcripts = await Promise.all(
+      transcriptIdsForThread(thread).map(async (transcriptId) => {
+        try {
+          return await desktopCommands.readTranscript({ threadId: transcriptId });
+        } catch {
+          return [];
+        }
+      }),
+    );
+
+    return transcripts
+      .flat()
+      .sort((left, right) => left.ts.localeCompare(right.ts));
+  };
+
   const hydrateLegacyTranscript = async (thread: ThreadRecord) => {
-    const transcriptId = thread.legacyTranscriptId ?? thread.id;
-    if (!transcriptId) return null;
-    return typeof desktopCommands.hydrateTranscript === "function"
-      ? await desktopCommands.hydrateTranscript({ threadId: transcriptId })
-      : hydrateTranscriptSnapshot(await desktopCommands.readTranscript({ threadId: transcriptId }));
+    const transcriptIds = transcriptIdsForThread(thread);
+    if (transcriptIds.length === 0) return null;
+
+    if (transcriptIds.length === 1 && typeof desktopCommands.hydrateTranscript === "function") {
+      return await desktopCommands.hydrateTranscript({ threadId: transcriptIds[0]! });
+    }
+
+    const transcript: TranscriptEvent[] = [];
+    let successfulReads = 0;
+    let firstError: unknown = null;
+    for (const transcriptId of transcriptIds) {
+      try {
+        transcript.push(...await desktopCommands.readTranscript({ threadId: transcriptId }));
+        successfulReads += 1;
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+
+    if (successfulReads === 0 && firstError) {
+      throw firstError;
+    }
+
+    transcript.sort((left, right) => left.ts.localeCompare(right.ts));
+    return hydrateTranscriptSnapshot(transcript);
   };
 
   return {
     removeThread: async (threadId: string) => {
+      const thread = get().threads.find((t) => t.id === threadId);
       const sock = RUNTIME.threadSockets.get(threadId);
       closeThreadSession(threadId);
       RUNTIME.threadSockets.delete(threadId);
@@ -199,19 +251,23 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
   
         const nextThreadRuntimeById = { ...s.threadRuntimeById };
         delete nextThreadRuntimeById[threadId];
-  
-      return {
+
+        return {
           threads: remainingThreads,
           selectedThreadId,
           promptModal: nextPromptModal,
           threadRuntimeById: nextThreadRuntimeById,
         };
       });
-  
-      try {
-        await desktopCommands.deleteTranscript({ threadId });
-      } catch {
-        // ignore
+
+      if (thread) {
+        for (const transcriptId of transcriptIdsForThread(thread)) {
+          try {
+            await desktopCommands.deleteTranscript({ threadId: transcriptId });
+          } catch {
+            // ignore
+          }
+        }
       }
 
       await persistNow(get);
@@ -288,25 +344,42 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       if (get().selectedWorkspaceId !== workspaceId) {
         set({ selectedWorkspaceId: workspaceId });
       }
-  
-      await ensureServerRunning(get, set, workspaceId);
-      ensureControlSocket(get, set, workspaceId);
-  
-      const wsRt = get().workspaceRuntimeById[workspaceId];
-      const url = wsRt?.serverUrl;
-      if (!url) {
-        set((s) => ({
-          notifications: pushNotification(s.notifications, {
-            id: makeId(),
-            ts: nowIso(),
-            kind: "error",
-            title: "Unable to create session",
-            detail: wsRt?.error ?? "Workspace server is not ready.",
-          }),
-        }));
-        return;
+
+      const createSessionImmediately = opts?.mode === "session" || Boolean(opts?.firstMessage?.trim());
+      if (!createSessionImmediately) {
+        const existingDraft = get().threads.find((thread) => thread.workspaceId === workspaceId && thread.draft === true);
+        if (existingDraft) {
+          set({
+            selectedThreadId: existingDraft.id,
+            view: "chat",
+          });
+          ensureThreadRuntime(get, set, existingDraft.id);
+          await persistNow(get);
+          return;
+        }
       }
-  
+
+      let url: string | null = null;
+      if (createSessionImmediately) {
+        await ensureServerRunning(get, set, workspaceId);
+        ensureControlSocket(get, set, workspaceId);
+
+        const wsRt = get().workspaceRuntimeById[workspaceId];
+        url = wsRt?.serverUrl ?? null;
+        if (!url) {
+          set((s) => ({
+            notifications: pushNotification(s.notifications, {
+              id: makeId(),
+              ts: nowIso(),
+              kind: "error",
+              title: "Unable to create session",
+              detail: wsRt?.error ?? "Workspace server is not ready.",
+            }),
+          }));
+          return;
+        }
+      }
+
       const threadId = makeId();
       const createdAt = nowIso();
       const title = opts?.titleHint ? truncateTitle(opts.titleHint) : "New thread";
@@ -322,6 +395,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         sessionId: null,
         messageCount: 0,
         lastEventSeq: 0,
+        draft: !createSessionImmediately,
       };
   
       set((s) => ({
@@ -337,7 +411,15 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         },
       }));
       await persistNow(get);
-  
+
+      if (!createSessionImmediately) {
+        return;
+      }
+
+      if (!url) {
+        return;
+      }
+
       ensureThreadSocket(get, set, threadId, url, opts?.firstMessage, false);
     },
   
@@ -347,6 +429,23 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       if (!thread) return;
 
       ensureThreadRuntime(get, set, threadId);
+      if (thread.draft) {
+        set((s) => ({
+          selectedThreadId: threadId,
+          selectedWorkspaceId: thread.workspaceId,
+          view: "chat",
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: {
+              ...s.threadRuntimeById[threadId],
+              hydrating: false,
+              transcriptOnly: false,
+            },
+          },
+        }));
+        syncDesktopStateCache(get);
+        return;
+      }
       const rt = get().threadRuntimeById[threadId];
       if (get().selectedThreadId === threadId && (RUNTIME.threadSelectionRequests.has(threadId) || RUNTIME.threadSockets.has(threadId))) {
         return;
@@ -364,6 +463,10 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
           : null;
 
       const skipHarnessSnapshotFetch = Boolean(alreadyLoaded && matchingCachedSnapshot);
+      const shouldFetchHarnessSnapshot =
+        Boolean(sessionId)
+        && !skipHarnessSnapshotFetch
+        && (thread.messageCount > 0 || thread.lastEventSeq > 0 || Boolean(thread.legacyTranscriptId));
 
       const requestId = beginThreadSelectionRequest(threadId);
       set((s) => ({
@@ -391,10 +494,11 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
       }
 
+      let stayTranscriptOnly = false;
       if (!alreadyLoaded || matchingCachedSnapshot) {
         try {
           let loadedFromHarness = false;
-          if (sessionId && !skipHarnessSnapshotFetch) {
+          if (sessionId && shouldFetchHarnessSnapshot) {
             await ensureServerRunning(get, set, thread.workspaceId);
             ensureControlSocket(get, set, thread.workspaceId);
             const snapshot = await requestSessionSnapshot(get, set, thread.workspaceId, sessionId);
@@ -406,6 +510,8 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
               applySessionSnapshot(threadId, sessionId, snapshot);
               cacheSessionSnapshot(snapshot);
               loadedFromHarness = true;
+            } else {
+              stayTranscriptOnly = true;
             }
           }
 
@@ -459,6 +565,17 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         return;
       }
 
+      if (stayTranscriptOnly) {
+        set((s) => ({
+          threadRuntimeById: {
+            ...s.threadRuntimeById,
+            [threadId]: { ...s.threadRuntimeById[threadId], hydrating: false, transcriptOnly: true },
+          },
+        }));
+        clearThreadSelectionRequest(threadId, requestId);
+        return;
+      }
+
       set((s) => ({
         threadRuntimeById: {
           ...s.threadRuntimeById,
@@ -480,6 +597,10 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
   
       const thread = get().threads.find((t) => t.id === threadId);
       if (!thread) return;
+
+      if (thread.draft && !firstMessage?.trim()) {
+        return;
+      }
   
       await get().selectWorkspace(thread.workspaceId);
       if (!isReconnectCurrent()) return;
@@ -640,7 +761,7 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
           if (rt?.sessionUsage !== undefined && rt.sessionUsage !== null) return;
 
           try {
-            const transcript = await desktopCommands.readTranscript({ threadId: thread.id });
+            const transcript = await readTranscriptEvents(thread);
             const usageState = extractUsageStateFromTranscript(transcript);
             if (!usageState.sessionUsage) return; // No usage in this thread
 

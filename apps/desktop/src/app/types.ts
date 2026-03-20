@@ -90,6 +90,7 @@ export type ThreadRecord = {
   messageCount: number;
   lastEventSeq: number;
   legacyTranscriptId?: string | null;
+  draft?: boolean;
 };
 
 export type ThreadPendingSteer = {

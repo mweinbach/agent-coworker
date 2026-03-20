@@ -12,17 +12,22 @@ const DESKTOP_CACHE_DEBOUNCE_MS = 120;
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 let _desktopCacheTimer: ReturnType<typeof setTimeout> | null = null;
 
+function buildPersistableThreads(state: AppStoreState) {
+  return state.threads.filter((thread) => thread.draft !== true);
+}
+
 function buildPersistedState(state: AppStoreState): PersistedState {
   const providerState = normalizePersistedProviderState({
     statusByName: state.providerStatusByName,
     statusLastUpdatedAt: state.providerStatusLastUpdatedAt,
   });
   const providerUiState = normalizePersistedProviderUiState(state.providerUiState);
+  const threads = buildPersistableThreads(state);
 
   return {
     version: 2,
     workspaces: state.workspaces,
-    threads: state.threads,
+    threads,
     developerMode: state.developerMode,
     showHiddenFiles: state.showHiddenFiles,
     perWorkspaceSettings: state.perWorkspaceSettings,
@@ -33,9 +38,15 @@ function buildPersistedState(state: AppStoreState): PersistedState {
 }
 
 function buildCachedDesktopUiState(state: AppStoreState): CachedDesktopUiState {
+  const persistedThreadIds = new Set(buildPersistableThreads(state).map((thread) => thread.id));
+  const selectedThreadId =
+    state.selectedThreadId && persistedThreadIds.has(state.selectedThreadId)
+      ? state.selectedThreadId
+      : null;
+
   return {
     selectedWorkspaceId: state.selectedWorkspaceId,
-    selectedThreadId: state.selectedThreadId,
+    selectedThreadId,
     view: state.view,
     settingsPage: state.settingsPage,
     lastNonSettingsView: state.lastNonSettingsView,

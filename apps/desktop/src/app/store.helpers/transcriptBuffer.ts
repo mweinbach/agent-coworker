@@ -1,14 +1,37 @@
+import { appendTranscriptBatch } from "../../lib/desktopCommands";
+
+type PendingTranscriptEntry = {
+  ts: string;
+  threadId: string;
+  direction: "server" | "client";
+  payload: unknown;
+};
+
+const TRANSCRIPT_BATCH_MS = 200;
+
 type TranscriptBufferDeps = {
   nowIso: () => string;
 };
 
-export function createTranscriptBuffer(_deps: TranscriptBufferDeps) {
+export function createTranscriptBuffer(deps: TranscriptBufferDeps) {
+  let transcriptBuffer: PendingTranscriptEntry[] = [];
+  let transcriptTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function flushTranscriptBuffer() {
+    if (transcriptBuffer.length === 0) return;
+    const batch = transcriptBuffer;
+    transcriptBuffer = [];
+    transcriptTimer = null;
+    // Session snapshots are the long-term history source, but transcript JSONL
+    // still backs compatibility paths like offline fallback hydration and usage.
+    void appendTranscriptBatch(batch);
+  }
+
   function appendThreadTranscript(threadId: string, direction: "server" | "client", payload: unknown) {
-    void threadId;
-    void direction;
-    void payload;
-    // Harness-backed session snapshots are the authoritative history source.
-    // Keep legacy transcript JSONL read-only during the migration window.
+    transcriptBuffer.push({ ts: deps.nowIso(), threadId, direction, payload });
+    if (!transcriptTimer) {
+      transcriptTimer = setTimeout(flushTranscriptBuffer, TRANSCRIPT_BATCH_MS);
+    }
   }
 
   return {

@@ -185,7 +185,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("control hello requests provider catalog/auth methods/status", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
 
     emitServerHello(controlSocket, "control-session");
@@ -302,8 +302,34 @@ describe("desktop protocol v2 mapping", () => {
     expect(useAppStore.getState().selectedThreadId).toBe("thread-session");
   });
 
+  test("draft threads stay local until the first message promotes them into a real session", async () => {
+    await useAppStore.getState().newThread();
+    const draftThreadId = useAppStore.getState().selectedThreadId!;
+
+    expect(MOCK_SOCKETS).toHaveLength(0);
+    expect(useAppStore.getState().threads.find((thread) => thread.id === draftThreadId)?.draft).toBe(true);
+
+    await useAppStore.getState().sendMessage("hello from draft");
+    await flushAsyncWork();
+
+    const controlSocket = socketByClient("desktop-control");
+    expect(controlSocket).toBeDefined();
+
+    const threadSocket = socketByClient("desktop");
+    emitServerHello(threadSocket, "thread-session");
+
+    const sentMessages = threadSocket.sent.filter((msg) => msg?.type === "user_message");
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0]?.text).toBe("hello from draft");
+
+    const threadId = canonicalThreadId("thread-session", draftThreadId);
+    const thread = useAppStore.getState().threads.find((item) => item.id === threadId);
+    expect(thread?.draft).toBe(false);
+    expect(thread?.sessionId).toBe("thread-session");
+  });
+
   test("stores activeTurnId from resumed busy hello and live session_busy events", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId!;
     const threadSocket = socketByClient("desktop");
 
@@ -345,7 +371,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("queues exactly one next-turn message per session_busy false transition", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const threadId = useAppStore.getState().selectedThreadId!;
     const threadSocket = socketByClient("desktop");
     emitServerHello(threadSocket, "thread-session");
@@ -396,7 +422,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("busy steer sends steer_message with activeTurnId and tracks acceptance separately from queued messages", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId!;
     const threadSocket = socketByClient("desktop");
     emitServerHello(threadSocket, "thread-session");
@@ -448,7 +474,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("busy steer keeps the composer text when the server rejects the steer", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId!;
     const threadSocket = socketByClient("desktop");
     emitServerHello(threadSocket, "thread-session");
@@ -480,7 +506,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("busy steer ignores duplicate submits while the same draft is still pending", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId!;
     const threadSocket = socketByClient("desktop");
     emitServerHello(threadSocket, "thread-session");
@@ -508,7 +534,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("requestWorkspaceMemories replaces a stale control socket when the workspace server URL changes", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const originalSocket = socketByClient("desktop-control");
     emitServerHello(originalSocket, "old-control-session");
 
@@ -551,7 +577,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("mcp events update runtime slices and notifications", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
 
@@ -602,7 +628,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("workspace_backups event hydrates the workspace runtime slice", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
 
@@ -648,7 +674,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("workspace_backup_delta event hydrates the workspace delta slice", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
 
@@ -678,7 +704,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("workspace backup actions send control-session messages", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     const threadSocket = socketByClient("desktop");
@@ -726,7 +752,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("control errors clear memory loading when memory_list fails", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
 
@@ -750,7 +776,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("connectProvider sends provider_auth_set_api_key for keyed providers", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     controlSocket.sent = [];
@@ -765,7 +791,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("copyProviderApiKey sends provider_auth_copy_api_key", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     controlSocket.sent = [];
@@ -779,7 +805,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("connectProvider sends oauth authorize+callback for oauth providers", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     controlSocket.sent = [];
@@ -792,7 +818,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("logoutProviderAuth sends provider_auth_logout", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
     controlSocket.sent = [];
@@ -805,7 +831,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("provider auth challenge keeps command metadata for desktop UI", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
 
@@ -833,7 +859,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("provider auth result with oauth_pending uses pending notification title", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
 
@@ -853,7 +879,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("provider auth logout result uses disconnected notification title", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
     emitServerHello(controlSocket, "control-session");
 
@@ -872,7 +898,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("approval prompt keeps required reasonCode", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const threadId = useAppStore.getState().selectedThreadId;
     if (!threadId) throw new Error("Expected selected thread");
 
@@ -897,7 +923,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("session_info updates canonical thread title", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -924,7 +950,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("non-manual session_info titles are applied once", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -964,7 +990,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("manual local rename is not overwritten by non-manual session_info", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -994,7 +1020,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("error feed + notification keep required source/code", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -1025,7 +1051,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("model_stream_chunk updates assistant/reasoning/tool feed and dedupes legacy finals", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -1120,7 +1146,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("repeated same-turn start chunks do not re-enable legacy reasoning duplicates", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -1202,7 +1228,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("model_stream_raw drives live feed replay and suppresses stale normalized reasoning chunks", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -1272,7 +1298,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("late reasoning summaries stay ahead of the raw-backed final assistant message", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -1350,7 +1376,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("model stream approval parts render as tool cards while source/file/unknown parts stay in system items", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -1432,7 +1458,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("raw function-call argument deltas become readable tool args and names", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -1488,7 +1514,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("ignores stale session events for control and thread sockets", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const threadId = useAppStore.getState().selectedThreadId;
     if (!threadId) throw new Error("Expected selected thread");
 
@@ -1538,7 +1564,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("verified-only local providers stay in providerConnected", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const controlSocket = socketByClient("desktop-control");
 
     emitServerHello(controlSocket, "control-session");
@@ -1562,7 +1588,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("legacy log events still map to log feed items when no model stream exists", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -1586,7 +1612,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("suppresses raw provider debug log lines", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const threadId = useAppStore.getState().selectedThreadId;
     if (!threadId) throw new Error("Expected selected thread");
 
@@ -1606,7 +1632,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("developer diagnostics server events become readable system notices", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -1663,7 +1689,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("manual cancel sends cancel only and does not auto-reset busy state", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -1690,7 +1716,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("manual cancel can request stopping subagents too", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -1719,7 +1745,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("session_busy does not trigger automatic cancel", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const threadId = useAppStore.getState().selectedThreadId;
     if (!threadId) throw new Error("Expected selected thread");
 
@@ -1748,7 +1774,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("removeThread sends session_close for connected thread sessions", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -1767,7 +1793,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("deleteThreadHistory sends delete_session via control socket after closing thread session", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const initialThreadId = useAppStore.getState().selectedThreadId;
     if (!initialThreadId) throw new Error("Expected selected thread");
 
@@ -1795,7 +1821,7 @@ describe("desktop protocol v2 mapping", () => {
   });
 
   test("removeWorkspace sends session_close for control and thread sessions", async () => {
-    await useAppStore.getState().newThread({ workspaceId });
+    await useAppStore.getState().newThread({ workspaceId, mode: "session" });
     const threadId = useAppStore.getState().selectedThreadId;
     if (!threadId) throw new Error("Expected selected thread");
 

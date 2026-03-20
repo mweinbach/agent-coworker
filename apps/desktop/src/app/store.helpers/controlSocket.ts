@@ -79,6 +79,27 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
     }
   }
 
+  function resolvePendingControlRequestWaitersOnError(
+    workspaceId: string,
+    evt: Extract<ServerEvent, { type: "error" }>,
+  ) {
+    if (evt.source !== "session") {
+      return;
+    }
+
+    const message = evt.message.toLowerCase();
+    if (message.includes("list sessions")) {
+      resolveWorkspaceSessionWaiters(workspaceId, null);
+    }
+
+    if (message.includes("snapshot") || message.includes("target session")) {
+      for (const key of [...sessionSnapshotWaiters.keys()]) {
+        if (!key.startsWith(`${workspaceId}:`)) continue;
+        resolveSessionSnapshotWaiters(workspaceId, key.slice(workspaceId.length + 1), null);
+      }
+    }
+  }
+
   function upsertWorkspaceThreads(
     allThreads: ThreadRecord[],
     threadRuntimeById: ReturnType<StoreGet>["threadRuntimeById"],
@@ -114,6 +135,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
         sessionId: session.sessionId,
         messageCount: session.messageCount,
         lastEventSeq: session.lastEventSeq,
+        draft: false,
         legacyTranscriptId:
           existing?.legacyTranscriptId
           ?? (existing && existing.id !== session.sessionId ? existing.id : null),
@@ -570,6 +592,7 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
         }
 
         if (evt.type === "error") {
+          resolvePendingControlRequestWaitersOnError(workspaceId, evt);
           set((s) => {
             const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
             const hasPendingMemories = workspaceRuntime.memoriesLoading;

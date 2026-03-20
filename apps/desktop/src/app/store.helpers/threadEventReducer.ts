@@ -92,6 +92,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
                   ...thread,
                   id: toThreadId,
                   sessionId: toThreadId,
+                  draft: false,
                   legacyTranscriptId:
                     thread.legacyTranscriptId
                     ?? (thread.id !== toThreadId ? thread.id : null),
@@ -447,7 +448,7 @@ export function createThreadEventReducer(deps: ThreadEventReducerDeps) {
             },
           },
           threads: s.threads.map((t) =>
-            t.id === threadId ? { ...t, status: "active", sessionId: evt.sessionId } : t,
+            t.id === threadId ? { ...t, status: "active", sessionId: evt.sessionId, draft: false } : t,
           ),
         };
       });

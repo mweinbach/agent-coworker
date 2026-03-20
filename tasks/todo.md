@@ -82,3 +82,25 @@ Mirrors: OpenAI → OpenAI Responses runtime → `openai` SDK → Responses API
 - [x] `~/.bun/bin/bun run build:server-binary`
 - [x] `~/.bun/bin/bun run build:desktop-resources`
 - [x] `~/.bun/bin/bun run desktop:build`
+
+## Desktop Draft Thread Persistence 2026-03-19
+
+### Plan
+- [x] Trace why desktop `newThread()` was creating/persisting sessions before the user sent a message
+- [x] Keep empty new threads renderer-local as drafts until the first non-empty user message promotes them into a real session
+- [x] Add regressions for local draft behavior, first-message promotion, and reconnect/persistence edge cases
+- [x] Re-run repo verification and production desktop/server builds
+
+### Notes
+- Root cause was eager desktop thread creation: clicking around the app created a full thread record/session path even when the composer stayed empty, so blank entries accumulated in persisted state.
+- The fix makes the default desktop new-thread path a local `draft` record, dedupes to one draft per workspace, skips socket/server startup for that draft, and filters drafts out of persisted desktop state until the first real message is sent.
+- Existing reconnect/transcript work on this branch already touched thread hydration paths, so the fix also keeps transcript-only fallback threads from reconnecting or fetching harness snapshots unless there is real persisted session content to restore.
+
+### Verification
+- [x] `~/.bun/bin/bun run typecheck`
+- [x] `~/.bun/bin/bun test apps/desktop/test/thread-reconnect.test.ts`
+- [x] `~/.bun/bin/bun test apps/desktop/test/settings-nav.test.ts apps/desktop/test/protocol-v2-events.test.ts apps/desktop/test/workspace-mcp-editor.test.ts apps/desktop/test/workspace-settings-sync.test.ts apps/desktop/test/thread-reconnect.test.ts`
+- [x] `~/.bun/bin/bun test`
+- [x] `~/.bun/bin/bun run build:server-binary`
+- [x] `~/.bun/bin/bun run build:desktop-resources`
+- [x] `~/.bun/bin/bun run desktop:build`

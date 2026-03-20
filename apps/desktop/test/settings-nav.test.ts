@@ -18,6 +18,9 @@ const MOCK_UPDATE_STATE = {
   progress: null,
   error: null,
 };
+const savedStates: any[] = [];
+let startWorkspaceServerCalls = 0;
+let agentSocketConnectCalls = 0;
 
 mock.module("../src/lib/desktopCommands", () => ({
   appendTranscriptBatch: async () => {},
@@ -27,8 +30,13 @@ mock.module("../src/lib/desktopCommands", () => ({
   loadState: async () => ({ version: 1, workspaces: [], threads: [] }),
   pickWorkspaceDirectory: async () => null,
   readTranscript: async () => [],
-  saveState: async () => {},
-  startWorkspaceServer: async () => ({ url: "ws://mock" }),
+  saveState: async (state: any) => {
+    savedStates.push(structuredClone(state));
+  },
+  startWorkspaceServer: async () => {
+    startWorkspaceServerCalls += 1;
+    return { url: "ws://mock" };
+  },
   stopWorkspaceServer: async () => {},
   showContextMenu: async () => null,
   windowMinimize: async () => {},
@@ -57,7 +65,9 @@ mock.module("../src/lib/desktopCommands", () => ({
 
 mock.module("../src/lib/agentSocket", () => ({
   AgentSocket: class {
-    connect() {}
+    connect() {
+      agentSocketConnectCalls += 1;
+    }
     send() {
       return true;
     }
@@ -69,6 +79,9 @@ const { useAppStore } = await import("../src/app/store");
 
 describe("settings nav (store)", () => {
   beforeEach(() => {
+    savedStates.length = 0;
+    startWorkspaceServerCalls = 0;
+    agentSocketConnectCalls = 0;
     useAppStore.setState({
       view: "chat",
       lastNonSettingsView: "chat",
@@ -168,6 +181,10 @@ describe("settings nav (store)", () => {
     expect(state.threads.length).toBe(1);
     expect(state.threads[0]?.workspaceId).toBe("ws-1");
     expect(state.selectedThreadId).toBe(state.threads[0]?.id);
+    expect(state.threads[0]?.draft).toBe(true);
+    expect(savedStates.at(-1)?.threads).toEqual([]);
+    expect(startWorkspaceServerCalls).toBe(0);
+    expect(agentSocketConnectCalls).toBe(0);
   });
 
   test("cancelThread does not auto-reset busy state when socket is unavailable", () => {

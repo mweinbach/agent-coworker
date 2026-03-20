@@ -158,6 +158,7 @@ describe("WebSocket harness context runtime visibility", () => {
           }
         },
       );
+      await new Promise((resolve) => setTimeout(resolve, 50));
     } finally {
       first.server.stop();
     }

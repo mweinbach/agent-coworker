@@ -12,6 +12,17 @@ const DESKTOP_CACHE_DEBOUNCE_MS = 120;
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 let _desktopCacheTimer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * Filters out draft threads from persistence.
+ *
+ * Draft threads (thread.draft === true) are ephemeral UI-only threads that
+ * exist until the first message is sent. They are NOT persisted to disk,
+ * so if the app crashes or closes before the first message, the draft is lost.
+ * This is intentional to avoid accumulating empty threads.
+ *
+ * Note: Draft threads can still be selected in the UI. The draft flag only
+ * affects persistence, not runtime behavior.
+ */
 function buildPersistableThreads(state: AppStoreState) {
   return state.threads.filter((thread) => thread.draft !== true);
 }

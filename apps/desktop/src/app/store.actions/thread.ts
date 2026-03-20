@@ -486,11 +486,15 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       const expectedFingerprint = threadFingerprint(thread);
       const cachedSnapshot = sessionId ? RUNTIME.sessionSnapshots.get(sessionId) : null;
       const matchingCachedSnapshot =
-        sessionId
-        && cachedSnapshot
-        && fingerprintMatches(cachedSnapshot.fingerprint, expectedFingerprint)
+        sessionId && cachedSnapshot && fingerprintMatches(cachedSnapshot.fingerprint, expectedFingerprint)
           ? cachedSnapshot.snapshot
           : null;
+
+      if (sessionId && cachedSnapshot && !matchingCachedSnapshot) {
+        console.debug(
+          `[selectThread] Cache fingerprint mismatch for session ${sessionId}: cached ${JSON.stringify(cachedSnapshot.fingerprint)} vs expected ${JSON.stringify(expectedFingerprint)}`,
+        );
+      }
 
       const skipHarnessSnapshotFetch = Boolean(alreadyLoaded && matchingCachedSnapshot);
       const shouldFetchHarnessSnapshot =
@@ -520,8 +524,17 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
         return;
       }
 
+      let appliedCachedSnapshot = false;
       if (matchingCachedSnapshot && sessionId && skipHarnessSnapshotFetch) {
         applySessionSnapshot(threadId, sessionId, matchingCachedSnapshot);
+        appliedCachedSnapshot = true;
+      }
+
+      if (!isSelectionCurrent(threadId, requestId)) {
+        if (appliedCachedSnapshot) {
+          clearThreadHydrationIfCurrent(threadId, requestId);
+        }
+        return;
       }
 
       let stayTranscriptOnly = false;

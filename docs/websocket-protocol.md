@@ -243,6 +243,26 @@ If connecting with `?resumeSessionId=<id>`, the server resumes the existing sess
 
 Child sessions created through `agent_spawn` are normal persisted sessions. They can be resumed directly with `?resumeSessionId=<childSessionId>`, and the server identifies them with `sessionKind: "agent"` plus `parentSessionId`, `role`, `mode`, and `depth`.
 
+### Thread Identity Migration (Desktop UI)
+
+The desktop UI creates draft threads with local IDs before sending the first message. When a draft thread sends its first message, the harness assigns a canonical `sessionId`. The desktop client must then migrate the local threadID to the new sessionId.
+
+Key fields in thread records:
+
+- `id`: Thread identifier (local ID for drafts, sessionId for active threads)
+- `sessionId`: The harness-assigned session ID (null for drafts)
+- `legacyTranscriptId`: Previous local ID when migrated, used to locate legacy transcript files on disk
+
+Migration flow:
+
+1. Draft thread created with local `id`, `sessionId: null`
+2. First message sent → harness assigns canonical `sessionId`
+3. `server_hello` arrives with the new `sessionId`
+4. Client updates thread: `id → sessionId`, sets `sessionId`, stores original `id` in `legacyTranscriptId`
+5. Future transcript lookups check `legacyTranscriptId` first, then `sessionId`, then current `id`
+
+This ensures transcript files written under the old local ID are still discoverable after migration.
+
 ## Validation Rules
 
 All client messages are validated by `safeParseClientMessage()` before dispatch:

@@ -44,7 +44,7 @@ export function resolveAllowedPath(workspaceRoots: string[], requestedPath: stri
 
 /**
  * Workspace roots plus Cowork agent homes where skills and config commonly live.
- * Used for `revealPath` targets outside the active workspace
+ * Used for `revealPath` and `openPath` targets outside the active workspace
  * (e.g. ~/.cowork/skills, ~/.agent/skills).
  */
 export function getRevealOpenPathRoots(workspaceRoots: string[]): string[] {
@@ -62,5 +62,5 @@ export function resolveAllowedRevealOrOpenPath(workspaceRoots: string[], request
 }
 
 export function resolveAllowedOpenPath(workspaceRoots: string[], requestedPath: string): string {
-  return resolveAllowedPath(workspaceRoots, requestedPath);
+  return resolveAllowedRevealOrOpenPath(workspaceRoots, requestedPath);
 }

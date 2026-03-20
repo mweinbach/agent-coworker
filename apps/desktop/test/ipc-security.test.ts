@@ -113,25 +113,30 @@ describe("desktop IPC security helpers", () => {
     }
   });
 
-  test("resolveAllowedOpenPath stays within workspace roots", async () => {
+  test("resolveAllowedOpenPath allows workspace and same reveal allowlist as revealPath", async () => {
     const tempWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-ws-"));
     const workspaceRoot = await fs.realpath(tempWorkspace);
     const home = os.homedir();
-    const coworkRoot = path.join(home, ".cowork");
-    await fs.mkdir(coworkRoot, { recursive: true });
-    const externalDir = await fs.mkdtemp(path.join(coworkRoot, "ipc-open-path-"));
-    const externalFile = path.join(externalDir, "run.sh");
     const workspaceFile = path.join(workspaceRoot, "inside.txt");
+    const coworkSkillDir = path.join(home, ".cowork", "skills", "some-skill");
+    const agentSkillFile = path.join(home, ".agent", "skills", "other", "SKILL.md");
     try {
-      await fs.writeFile(externalFile, "#!/bin/sh\n");
       await fs.writeFile(workspaceFile, "inside workspace\n");
 
       expect(resolveAllowedOpenPath([workspaceRoot], workspaceFile)).toBe(workspaceFile);
-      expect(() => resolveAllowedOpenPath([workspaceRoot], externalDir)).toThrow("outside allowed workspace roots");
-      expect(() => resolveAllowedOpenPath([workspaceRoot], externalFile)).toThrow("outside allowed workspace roots");
+      expect(() => resolveAllowedOpenPath([workspaceRoot], coworkSkillDir)).not.toThrow();
+      expect(() => resolveAllowedOpenPath([workspaceRoot], agentSkillFile)).not.toThrow();
+
+      const outside = await fs.mkdtemp(path.join(os.tmpdir(), "cowork-desktop-open-nope-"));
+      try {
+        expect(() => resolveAllowedOpenPath([workspaceRoot], path.join(outside, "secret"))).toThrow(
+          "outside allowed workspace roots",
+        );
+      } finally {
+        await fs.rm(outside, { recursive: true, force: true });
+      }
     } finally {
       await fs.rm(tempWorkspace, { recursive: true, force: true });
-      await fs.rm(externalDir, { recursive: true, force: true });
     }
   });
 });

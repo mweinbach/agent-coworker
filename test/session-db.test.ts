@@ -334,7 +334,7 @@ describe("sessionDb", () => {
       const realDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-db-wdnorm-"));
       const canonical = path.resolve(realDir);
       const now = new Date().toISOString();
-      db.persistSessionMutation({
+      await db.persistSessionMutation({
         sessionId: "wd-norm",
         eventType: "session.created",
         snapshot: {

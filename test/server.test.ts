@@ -1562,7 +1562,7 @@ describe("WebSocket Lifecycle", () => {
       costTracker: null,
     };
 
-    db.persistSessionMutation({
+    await db.persistSessionMutation({
       sessionId: "blank-root",
       eventType: "session.created",
       snapshot: {
@@ -1572,7 +1572,7 @@ describe("WebSocket Lifecycle", () => {
         messages: [],
       },
     });
-    db.persistSessionMutation({
+    await db.persistSessionMutation({
       sessionId: "manual-empty-root",
       eventType: "session.created",
       snapshot: {
@@ -1582,7 +1582,7 @@ describe("WebSocket Lifecycle", () => {
         messages: [],
       },
     });
-    db.persistSessionMutation({
+    await db.persistSessionMutation({
       sessionId: "message-root",
       eventType: "session.created",
       snapshot: {
@@ -1755,7 +1755,7 @@ describe("WebSocket Lifecycle", () => {
     const now = new Date().toISOString();
     const storedWd = path.join(workspace, ".");
     const db = await SessionDb.create({ paths: getAiCoworkerPaths({ homedir: homeDir }) });
-    db.persistSessionMutation({
+    await db.persistSessionMutation({
       sessionId: "alias-session",
       eventType: "session.created",
       snapshot: {
@@ -1782,7 +1782,7 @@ describe("WebSocket Lifecycle", () => {
         costTracker: null,
       },
     });
-    db.persistSessionSnapshot("alias-session", {
+    await db.persistSessionSnapshot("alias-session", {
       sessionId: "alias-session",
       title: "Alias WD",
       titleSource: "manual",

@@ -2417,9 +2417,13 @@ describe("safeParseClientMessage", () => {
           installations: [],
         },
         mutationBlocked: false,
+        clearedMutationPendingKeys: ["install:project"],
       });
       expect(catalogEvt).not.toBeNull();
       expect(catalogEvt?.type).toBe("skills_catalog");
+      if (catalogEvt?.type === "skills_catalog") {
+        expect(catalogEvt.clearedMutationPendingKeys).toEqual(["install:project"]);
+      }
 
       const installationEvt = safeParseServerEvent({
         type: "skill_installation",

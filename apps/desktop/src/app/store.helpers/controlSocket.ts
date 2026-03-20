@@ -262,6 +262,21 @@ export function createControlSocketHelpers(
     });
   }
 
+  function omitSkillMutationPendingKeys(
+    pendingKeys: Record<string, true>,
+    clearedPendingKeys?: readonly string[],
+  ): Record<string, true> {
+    if (!clearedPendingKeys || clearedPendingKeys.length === 0) {
+      return pendingKeys;
+    }
+
+    const nextPendingKeys = { ...pendingKeys };
+    for (const key of clearedPendingKeys) {
+      delete nextPendingKeys[key];
+    }
+    return nextPendingKeys;
+  }
+
   function ensureControlSocket(get: StoreGet, set: StoreSet, workspaceId: string) {
     const rt = get().workspaceRuntimeById[workspaceId];
     const url = rt?.serverUrl;
@@ -535,9 +550,11 @@ export function createControlSocketHelpers(
         if (evt.type === "skills_catalog") {
           const installWaiter = RUNTIME.skillInstallWaiters.get(workspaceId);
           const workspaceRuntimeBefore = get().workspaceRuntimeById[workspaceId];
+          const clearedMutationPendingKeys = evt.clearedMutationPendingKeys ?? [];
           const shouldResolveInstall =
             installWaiter != null &&
             workspaceRuntimeBefore != null &&
+            clearedMutationPendingKeys.includes(installWaiter.pendingKey) &&
             workspaceRuntimeBefore.skillMutationPendingKeys[installWaiter.pendingKey] === true;
 
           set((s) => {
@@ -557,7 +574,10 @@ export function createControlSocketHelpers(
                   skillCatalogError: null,
                   skillsMutationBlocked: evt.mutationBlocked,
                   skillsMutationBlockedReason: evt.mutationBlockedReason ?? null,
-                  skillMutationPendingKeys: {},
+                  skillMutationPendingKeys: omitSkillMutationPendingKeys(
+                    workspaceRuntime.skillMutationPendingKeys,
+                    clearedMutationPendingKeys,
+                  ),
                   skillMutationError: null,
                   selectedSkillInstallationId: selectedInstallation ? selectedInstallationId : null,
                   selectedSkillInstallation: selectedInstallation,

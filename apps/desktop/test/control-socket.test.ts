@@ -540,6 +540,36 @@ describe("control socket skill detail events", () => {
     expect(state.workspaceRuntimeById[workspaceId].selectedSkillPreview).toEqual({ summary: "preview" });
   });
 
+  test("skill_install_preview from install/update does not clear preview pending or clobber in-flight preview", () => {
+    const { state, get, set } = createState({
+      skillMutationPendingKeys: {
+        preview: true,
+        "install:project": true,
+      },
+      selectedSkillPreview: { summary: "waiting-for-user-preview" },
+    });
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.emit({
+      type: "skill_install_preview",
+      sessionId: "control-session",
+      fromUserPreviewRequest: false,
+      preview: { summary: "side-effect-from-install" },
+    } as any);
+
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({
+      preview: true,
+      "install:project": true,
+    });
+    expect(state.workspaceRuntimeById[workspaceId].selectedSkillPreview).toEqual({
+      summary: "waiting-for-user-preview",
+    });
+  });
+
   test("skill_installation_update_check keeps in-flight mutation keys", () => {
     const { state, get, set } = createState({
       skillMutationPendingKeys: { "install:project": true },

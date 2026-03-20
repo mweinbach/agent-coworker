@@ -28,16 +28,37 @@ describe("resolveSkillSource", () => {
     expect(resolved.requestedSkillName).toBe("imagegen");
   });
 
-  test("parses GitHub shorthand and blob URLs", () => {
-    const shorthand = resolveSkillSource("openai/skills");
-    expect(shorthand.kind).toBe("github_shorthand");
-    expect(shorthand.repo).toBe("openai/skills");
+  test("parses GitHub shorthand and blob URLs", async () => {
+    const cwd = await makeTmpDir();
+    try {
+      const shorthand = resolveSkillSource("openai/skills", cwd);
+      expect(shorthand.kind).toBe("github_shorthand");
+      expect(shorthand.repo).toBe("openai/skills");
 
-    const blob = resolveSkillSource("https://github.com/openai/skills/blob/main/skills/commit/SKILL.md");
-    expect(blob.kind).toBe("github_blob");
-    expect(blob.repo).toBe("openai/skills");
-    expect(blob.ref).toBe("main");
-    expect(blob.subdir).toBe("skills/commit");
+      const blob = resolveSkillSource("https://github.com/openai/skills/blob/main/skills/commit/SKILL.md");
+      expect(blob.kind).toBe("github_blob");
+      expect(blob.repo).toBe("openai/skills");
+      expect(blob.ref).toBe("main");
+      expect(blob.subdir).toBe("skills/commit");
+    } finally {
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("prefers an existing relative local path over owner/repo shorthand", async () => {
+    const root = await makeTmpDir();
+    try {
+      const relative = path.join("skills", "my-skill");
+      const absoluteSkill = path.join(root, relative);
+      await fs.mkdir(absoluteSkill, { recursive: true });
+      await fs.writeFile(path.join(absoluteSkill, "SKILL.md"), skillDoc("my-skill", "Local skill."), "utf-8");
+
+      const resolved = resolveSkillSource(relative, root);
+      expect(resolved.kind).toBe("local_path");
+      expect(resolved.localPath).toBe(path.resolve(root, relative));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
 

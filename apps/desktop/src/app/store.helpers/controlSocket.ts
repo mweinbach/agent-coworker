@@ -597,21 +597,28 @@ export function createControlSocketHelpers(
         }
 
         if (evt.type === "skill_install_preview") {
-          set((s) => ({
-            workspaceRuntimeById: {
-              ...s.workspaceRuntimeById,
-              [workspaceId]: {
-                ...s.workspaceRuntimeById[workspaceId],
-                selectedSkillPreview: evt.preview,
-                skillMutationPendingKeys: (() => {
-                  const pendingKeys = { ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys };
-                  delete pendingKeys.preview;
-                  return pendingKeys;
-                })(),
-                skillMutationError: null,
+          set((s) => {
+            const rt = s.workspaceRuntimeById[workspaceId];
+            const previewPending = rt.skillMutationPendingKeys.preview === true;
+            const fromUserPreviewRequest = evt.fromUserPreviewRequest !== false;
+            const nextPreview =
+              fromUserPreviewRequest || !previewPending ? evt.preview : rt.selectedSkillPreview;
+            const pendingKeys = { ...rt.skillMutationPendingKeys };
+            if (fromUserPreviewRequest) {
+              delete pendingKeys.preview;
+            }
+            return {
+              workspaceRuntimeById: {
+                ...s.workspaceRuntimeById,
+                [workspaceId]: {
+                  ...rt,
+                  selectedSkillPreview: nextPreview,
+                  skillMutationPendingKeys: pendingKeys,
+                  skillMutationError: null,
+                },
               },
-            },
-          }));
+            };
+          });
           return;
         }
 

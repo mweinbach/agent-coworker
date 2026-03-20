@@ -419,6 +419,8 @@ export type ServerEvent =
     type: "skill_install_preview";
     sessionId: string;
     preview: SkillInstallPreview;
+    /** When false, emitted after install/update; do not clear an in-flight user preview. Omitted = legacy (treat as true). */
+    fromUserPreviewRequest?: boolean;
   }
   | {
     type: "skill_installation_update_check";

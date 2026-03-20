@@ -3251,10 +3251,13 @@ Detailed metadata and content payload for one installation copy.
 
 Preview payload emitted in response to `skill_install_preview` and after successful install/update operations.
 
+`fromUserPreviewRequest` distinguishes user-initiated previews from install/update side effects so clients can keep “preview loading” state until the matching preview response arrives.
+
 ```json
 {
   "type": "skill_install_preview",
   "sessionId": "...",
+  "fromUserPreviewRequest": true,
   "preview": {
     "source": { "kind": "github_repo", "raw": "openai/skills", "displaySource": "https://github.com/openai/skills" },
     "targetScope": "project",
@@ -3268,6 +3271,7 @@ Preview payload emitted in response to `skill_install_preview` and after success
 |-------|------|-------------|
 | `type` | `"skill_install_preview"` | — |
 | `sessionId` | `string` | Session identifier |
+| `fromUserPreviewRequest` | `boolean?` | `true` for the direct reply to client `skill_install_preview`; `false` after successful `skill_install` / `skill_installation_update`. Omitted on older servers — treat as `true`. |
 | `preview` | `SkillInstallPreview` | Install preview payload |
 
 ---

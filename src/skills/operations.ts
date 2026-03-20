@@ -171,6 +171,16 @@ export async function installSkillsFromSource(opts: {
       throw new Error("No valid skill installations were found in the provided source");
     }
 
+    const seenNames = new Set<string>();
+    for (const candidate of validCandidates) {
+      if (seenNames.has(candidate.name)) {
+        throw new Error(
+          `The install source contains more than one valid skill named "${candidate.name}". Split the source or remove duplicates so each skill name is unique.`,
+        );
+      }
+      seenNames.add(candidate.name);
+    }
+
     const origin = originFromDescriptor(materialized.descriptor);
     const installedIds: string[] = [];
     for (const candidate of validCandidates) {

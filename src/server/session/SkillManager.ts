@@ -329,6 +329,7 @@ export class SkillManager {
         type: "skill_install_preview",
         sessionId: this.context.id,
         preview,
+        fromUserPreviewRequest: true,
       });
     } catch (err) {
       this.context.emitError("internal_error", "session", `Failed to preview skill install: ${String(err)}`);
@@ -347,6 +348,7 @@ export class SkillManager {
           type: "skill_install_preview",
           sessionId: this.context.id,
           preview: result.preview,
+          fromUserPreviewRequest: false,
         });
         await this.afterSuccessfulMutation(result.installationIds[0]);
       } catch (err) {
@@ -487,6 +489,7 @@ export class SkillManager {
           type: "skill_install_preview",
           sessionId: this.context.id,
           preview: result.preview,
+          fromUserPreviewRequest: false,
         });
         await this.afterSuccessfulMutation(installationId);
       } catch (err) {

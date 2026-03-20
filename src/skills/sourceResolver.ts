@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -209,6 +210,17 @@ export function resolveSkillSource(input: string, cwd = process.cwd()): SkillSou
 
   const githubShorthand = parseGitHubShorthand(trimmed);
   if (githubShorthand) {
+    const candidateLocalPath = path.isAbsolute(trimmed)
+      ? path.resolve(expandHomeDir(trimmed))
+      : path.resolve(cwd, expandHomeDir(trimmed));
+    if (existsSync(candidateLocalPath)) {
+      return {
+        kind: "local_path",
+        raw: trimmed,
+        displaySource: candidateLocalPath,
+        localPath: candidateLocalPath,
+      };
+    }
     return {
       kind: "github_shorthand",
       raw: trimmed,

@@ -403,6 +403,7 @@ const serverEventSchema = z.discriminatedUnion("type", [
     type: z.literal("skill_install_preview"),
     sessionId: nonEmptyTrimmedStringSchema,
     preview: recordUnknownSchema,
+    fromUserPreviewRequest: z.boolean().optional(),
   }).passthrough(),
   z.object({
     type: z.literal("skill_installation_update_check"),

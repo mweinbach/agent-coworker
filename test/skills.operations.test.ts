@@ -7,6 +7,7 @@ import { scanSkillCatalog } from "../src/skills/catalog";
 import {
   checkSkillInstallationUpdate,
   copySkillInstallationToScope,
+  installSkillsFromSource,
   updateSkillInstallation,
 } from "../src/skills/operations";
 import type { AgentConfig } from "../src/types";
@@ -202,5 +203,25 @@ describe("copySkillInstallationToScope", () => {
     expect(result.installationId.length).toBeGreaterThan(0);
     const copiedMd = path.join(config.skillsDirs[1]!, "my-skill", "SKILL.md");
     expect(await fs.readFile(copiedMd, "utf-8")).toContain("From project");
+  });
+});
+
+describe("installSkillsFromSource", () => {
+  test("rejects a source with two valid skills that share the same name", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "skills-install-dup-"));
+    try {
+      const config = makeConfig(root);
+      const bundle = path.join(root, "bundle");
+      await fs.mkdir(path.join(bundle, "a", "dup-skill"), { recursive: true });
+      await fs.writeFile(path.join(bundle, "a", "dup-skill", "SKILL.md"), skillDoc("dup-skill", "One"), "utf-8");
+      await fs.mkdir(path.join(bundle, "b", "dup-skill"), { recursive: true });
+      await fs.writeFile(path.join(bundle, "b", "dup-skill", "SKILL.md"), skillDoc("dup-skill", "Two"), "utf-8");
+
+      await expect(installSkillsFromSource({ config, input: bundle, targetScope: "project" })).rejects.toThrow(
+        /more than one valid skill named "dup-skill"/,
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

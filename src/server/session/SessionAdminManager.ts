@@ -154,6 +154,34 @@ export class SessionAdminManager {
       return;
     }
     try {
+      const liveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(targetSessionId) ?? null;
+      const liveWorkingDirectory = this.context.deps.getLiveSessionWorkingDirectoryImpl?.(targetSessionId) ?? null;
+      const isSelfSnapshotRequest = targetSessionId === this.context.id;
+
+      // Live sessions can answer immediately even if sqlite persistence is still catching up.
+      if (liveSnapshot && (isSelfSnapshotRequest || liveWorkingDirectory)) {
+        if (liveSnapshot.sessionKind !== "root") {
+          this.context.emitError("validation_failed", "session", "Only root sessions can be hydrated via session snapshots");
+          return;
+        }
+        if (
+          !isSelfSnapshotRequest
+          && liveWorkingDirectory
+          && !sameWorkspacePath(liveWorkingDirectory, this.context.state.config.workingDirectory)
+        ) {
+          this.context.emitError("permission_denied", "session", "Target session is outside the active workspace");
+          return;
+        }
+
+        this.context.emit({
+          type: "session_snapshot",
+          sessionId: this.context.id,
+          targetSessionId,
+          snapshot: liveSnapshot,
+        });
+        return;
+      }
+
       const record = this.context.deps.sessionDb?.getSessionRecord(targetSessionId) ?? null;
       if (!record) {
         this.context.emitError("validation_failed", "session", `Unknown target session: ${targetSessionId}`);
@@ -168,7 +196,6 @@ export class SessionAdminManager {
         return;
       }
 
-      const liveSnapshot = this.context.deps.getLiveSessionSnapshotImpl?.(targetSessionId) ?? null;
       let dbSnapshot: ReturnType<NonNullable<SessionContext["deps"]["sessionDb"]>["getSessionSnapshot"]> = null;
       try {
         dbSnapshot = this.context.deps.sessionDb?.getSessionSnapshot(targetSessionId) ?? null;

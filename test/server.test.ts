@@ -1644,6 +1644,56 @@ describe("WebSocket Lifecycle", () => {
     }
   }, 15_000);
 
+  test("get_session_snapshot prefers live snapshots before sqlite persistence catches up", async () => {
+    const tmpDir = await makeTmpProject();
+    const originalPersistSessionMutation = SessionDb.prototype.persistSessionMutation;
+    let releasePersistence: (() => void) | null = null;
+    const persistenceGate = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+
+    SessionDb.prototype.persistSessionMutation = async function (
+      this: SessionDb,
+      ...args: Parameters<SessionDb["persistSessionMutation"]>
+    ): Promise<number> {
+      await persistenceGate;
+      return await originalPersistSessionMutation.apply(this, args);
+    };
+
+    let server: Awaited<ReturnType<typeof startAgentServer>>["server"] | null = null;
+    try {
+      const started = await startAgentServer(serverOpts(tmpDir, {
+        runTurnImpl: (async () => ({
+          text: "assistant reply",
+          responseMessages: [],
+        })) as any,
+      }));
+      server = started.server;
+
+      const created = await createSessionWithAssistantTurn(started.url, "hello snapshot");
+      const snapshotEvent = await sendToExistingSessionAndWaitForEvent(
+        started.url,
+        created.sessionId,
+        (sessionId) => ({ type: "get_session_snapshot", sessionId, targetSessionId: created.sessionId }),
+        (msg) => msg.type === "session_snapshot" && msg.targetSessionId === created.sessionId,
+        3_000,
+      );
+
+      expect(snapshotEvent.snapshot.sessionId).toBe(created.sessionId);
+      expect(snapshotEvent.snapshot.lastEventSeq).toBeGreaterThan(0);
+      expect(snapshotEvent.snapshot.feed).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "message", role: "user", text: "hello snapshot" }),
+          expect.objectContaining({ kind: "message", role: "assistant", text: "assistant reply" }),
+        ]),
+      );
+    } finally {
+      releasePersistence?.();
+      SessionDb.prototype.persistSessionMutation = originalPersistSessionMutation;
+      server?.stop();
+    }
+  }, 15_000);
+
   test("get_session_snapshot reads persisted snapshots from sqlite on cold resume", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-server-home-"));
     const workspace = await makeTmpProject();

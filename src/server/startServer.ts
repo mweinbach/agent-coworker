@@ -444,6 +444,8 @@ export async function startAgentServer(
       }) =>
         await workspaceBackupService.getCheckpointDelta(opts.workingDirectory, opts.targetSessionId, opts.checkpointId),
       getLiveSessionSnapshotImpl: (sessionId: string) => sessionBindings.get(sessionId)?.session?.buildSessionSnapshot() ?? null,
+      getLiveSessionWorkingDirectoryImpl: (sessionId: string) =>
+        sessionBindings.get(sessionId)?.session?.getWorkingDirectory() ?? null,
       buildLegacySessionSnapshotImpl: (record: import("./sessionDb").PersistedSessionRecord) =>
         createLegacySessionSnapshot(record),
       getSkillMutationBlockReasonImpl: (workingDirectory: string) => {

@@ -204,6 +204,7 @@ export type SessionDependencies = {
     checkpointId: string;
   }) => Promise<WorkspaceBackupDeltaPreview>;
   getLiveSessionSnapshotImpl?: (sessionId: string) => SessionSnapshot | null;
+  getLiveSessionWorkingDirectoryImpl?: (sessionId: string) => string | null;
   buildLegacySessionSnapshotImpl?: (record: import("../sessionDb").PersistedSessionRecord) => SessionSnapshot;
   getSkillMutationBlockReasonImpl?: (workingDirectory: string) => string | null;
   refreshSkillsAcrossWorkspaceSessionsImpl?: (workingDirectory: string) => Promise<void>;

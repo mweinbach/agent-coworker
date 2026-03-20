@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
 const DESKTOP_STATE_CACHE_KEY = "cowork.desktop.state-cache.v2";
 const storage = new Map<string, string>();
@@ -18,10 +18,24 @@ const localStorageMock = {
   },
 };
 
-Object.defineProperty(globalThis, "window", {
-  configurable: true,
-  value: { localStorage: localStorageMock },
-});
+const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+
+function installWindowMock() {
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: { localStorage: localStorageMock },
+  });
+}
+
+function restoreWindowMock() {
+  if (originalWindowDescriptor) {
+    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
+    return;
+  }
+  delete (globalThis as Record<string, unknown>).window;
+}
+
+installWindowMock();
 
 const cachedState = {
   version: 1,
@@ -283,6 +297,7 @@ function resetStoreToCachedSeed(value: unknown = cachedState) {
 
 describe("desktop bootstrap cache", () => {
   beforeEach(() => {
+    installWindowMock();
     loadStateError = null;
     RUNTIME.sessionSnapshots.clear();
     loadedState = {
@@ -317,6 +332,10 @@ describe("desktop bootstrap cache", () => {
     localStorageMock.clear();
     localStorageMock.setItem(DESKTOP_STATE_CACHE_KEY, JSON.stringify(cachedState));
     resetStoreToCachedSeed();
+  });
+
+  afterAll(() => {
+    restoreWindowMock();
   });
 
   test("buildCachedDesktopStateSeed restores shell state from cache", () => {

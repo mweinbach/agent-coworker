@@ -33,12 +33,20 @@ type ControlSocketDeps = {
   isProviderName: (value: unknown) => value is ProviderName;
 };
 
+type ControlSocketHelperOptions = {
+  requestTimeoutMs?: number;
+};
+
 const REQUEST_TIMEOUT_MS = 5_000;
 
-export function createControlSocketHelpers(deps: ControlSocketDeps) {
+export function createControlSocketHelpers(
+  deps: ControlSocketDeps,
+  options: ControlSocketHelperOptions = {},
+) {
   const controlSessionWaiters = new Map<string, Set<(sessionId: string | null) => void>>();
   const workspaceSessionWaiters = new Map<string, Set<(sessions: Extract<ServerEvent, { type: "sessions" }>["sessions"] | null) => void>>();
   const sessionSnapshotWaiters = new Map<string, Set<(snapshot: SessionSnapshot | null) => void>>();
+  const requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
 
   function resolveControlSessionWaiters(workspaceId: string, sessionId: string | null) {
     const waiters = controlSessionWaiters.get(workspaceId);
@@ -51,6 +59,24 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
 
   function snapshotWaiterKey(workspaceId: string, sessionId: string): string {
     return `${workspaceId}:${sessionId}`;
+  }
+
+  function registerWaiter<T>(
+    waitersByKey: Map<string, Set<(value: T | null) => void>>,
+    key: string,
+    resolve: (value: T | null) => void,
+  ): () => void {
+    const waiters = waitersByKey.get(key) ?? new Set();
+    waiters.add(resolve);
+    waitersByKey.set(key, waiters);
+    return () => {
+      const existing = waitersByKey.get(key);
+      if (!existing) return;
+      existing.delete(resolve);
+      if (existing.size === 0) {
+        waitersByKey.delete(key);
+      }
+    };
   }
 
   function resolveWorkspaceSessionWaiters(
@@ -155,12 +181,22 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
     ];
   }
 
-  function withTimeout<T>(register: (resolve: (value: T | null) => void) => void): Promise<T | null> {
+  function withTimeout<T>(
+    register: (resolve: (value: T | null) => void) => (() => void) | void,
+  ): Promise<T | null> {
     return new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(null), REQUEST_TIMEOUT_MS);
-      register((value) => {
+      let settled = false;
+      let unregister: (() => void) | void;
+      const finish = (value: T | null) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         resolve(value);
+        unregister?.();
+      };
+      const timer = setTimeout(() => finish(null), requestTimeoutMs);
+      unregister = register((value) => {
+        finish(value);
       });
     });
   }
@@ -748,13 +784,12 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
     const sessionId = get().workspaceRuntimeById[workspaceId]?.controlSessionId;
     if (!ready || !sessionId) return null;
     return await withTimeout((resolve) => {
-      const waiters = workspaceSessionWaiters.get(workspaceId) ?? new Set();
-      waiters.add(resolve);
-      workspaceSessionWaiters.set(workspaceId, waiters);
+      const unregister = registerWaiter(workspaceSessionWaiters, workspaceId, resolve);
       const socket = RUNTIME.controlSockets.get(workspaceId);
       if (!socket?.send({ type: "list_sessions", sessionId, scope: "workspace" })) {
         resolveWorkspaceSessionWaiters(workspaceId, null);
       }
+      return unregister;
     });
   }
 
@@ -770,13 +805,12 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
     if (!ready || !sessionId) return null;
     return await withTimeout((resolve) => {
       const key = snapshotWaiterKey(workspaceId, targetSessionId);
-      const waiters = sessionSnapshotWaiters.get(key) ?? new Set();
-      waiters.add(resolve);
-      sessionSnapshotWaiters.set(key, waiters);
+      const unregister = registerWaiter(sessionSnapshotWaiters, key, resolve);
       const socket = RUNTIME.controlSockets.get(workspaceId);
       if (!socket?.send({ type: "get_session_snapshot", sessionId, targetSessionId })) {
         resolveSessionSnapshotWaiters(workspaceId, targetSessionId, null);
       }
+      return unregister;
     });
   }
 
@@ -786,5 +820,12 @@ export function createControlSocketHelpers(deps: ControlSocketDeps) {
     sendControl,
     requestWorkspaceSessions,
     requestSessionSnapshot,
+    __internal: {
+      getPendingWaiterCounts: () => ({
+        controlSessionWaiters: [...controlSessionWaiters.values()].reduce((total, waiters) => total + waiters.size, 0),
+        workspaceSessionWaiters: [...workspaceSessionWaiters.values()].reduce((total, waiters) => total + waiters.size, 0),
+        sessionSnapshotWaiters: [...sessionSnapshotWaiters.values()].reduce((total, waiters) => total + waiters.size, 0),
+      }),
+    },
   };
 }

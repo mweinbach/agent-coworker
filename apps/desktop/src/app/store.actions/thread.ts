@@ -278,6 +278,9 @@ export function createThreadActions(set: StoreSet, get: StoreGet): Pick<AppStore
       const thread = get().threads.find((t) => t.id === threadId);
       if (!thread) return;
       const targetSessionId = get().threadRuntimeById[threadId]?.sessionId ?? thread.sessionId;
+      if (targetSessionId) {
+        RUNTIME.sessionSnapshots.delete(targetSessionId);
+      }
 
       await get().removeThread(threadId);
 

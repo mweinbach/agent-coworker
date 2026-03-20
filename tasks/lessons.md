@@ -160,6 +160,7 @@
 - For desktop thread creation in this repo, treat an untouched "new thread" as a renderer-local draft only: do not open a socket, start a workspace session, reconnect, or persist the thread until the user has actually sent a non-empty message.
 - For desktop React/JSDOM tests in this repo, never mutate `globalThis` test DOM globals with `Object.assign(...)` or plain assignment; Bun/CI can expose properties like `navigator` as getter-only, so use a shared descriptor-safe helper that installs/restores globals with `Object.defineProperty`.
 - For shared workspace/session path comparisons, never rely on raw resolved-string equality across platforms; Windows workspace identity must case-fold after lexical normalization, and the helper should expose deterministic test coverage for `win32` semantics from non-Windows CI.
+- When the user asks to fix CI or review feedback in this repo, keep verification scoped to the failing checks unless they explicitly ask for build/package validation; do not default to the desktop build matrix.
 
 ## 2026-03-18 Tool Output Overflow Audit
 

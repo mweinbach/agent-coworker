@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
 type MockSocketOpts = {
   client: string;
@@ -33,6 +33,23 @@ class MockAgentSocket {
 }
 
 const MOCK_SOCKETS: MockAgentSocket[] = [];
+const DESKTOP_STATE_CACHE_KEY = "cowork.desktop.state-cache.v2";
+const storage = new Map<string, string>();
+const localStorageMock = {
+  getItem(key: string) {
+    return storage.has(key) ? storage.get(key)! : null;
+  },
+  setItem(key: string, value: string) {
+    storage.set(key, value);
+  },
+  removeItem(key: string) {
+    storage.delete(key);
+  },
+  clear() {
+    storage.clear();
+  },
+};
+const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 const MOCK_SYSTEM_APPEARANCE = {
   platform: "linux",
   themeSource: "system",
@@ -95,6 +112,21 @@ mock.module("../src/lib/agentSocket", () => ({
 const { useAppStore } = await import("../src/app/store");
 const { RUNTIME } = await import("../src/app/store.helpers");
 
+function installWindowMock() {
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: { localStorage: localStorageMock },
+  });
+}
+
+function restoreWindowMock() {
+  if (originalWindowDescriptor) {
+    Object.defineProperty(globalThis, "window", originalWindowDescriptor);
+    return;
+  }
+  delete (globalThis as Record<string, unknown>).window;
+}
+
 function socketByClient(client: string): MockAgentSocket {
   const socket = [...MOCK_SOCKETS].reverse().find((s) => s.opts.client === client);
   if (!socket) throw new Error(`Missing mock socket for client=${client}`);
@@ -134,8 +166,10 @@ describe("desktop protocol v2 mapping", () => {
   let workspaceId = "";
 
   beforeEach(() => {
+    installWindowMock();
     workspaceId = `ws-${crypto.randomUUID()}`;
     MOCK_SOCKETS.length = 0;
+    localStorageMock.clear();
     RUNTIME.controlSockets.clear();
     RUNTIME.threadSockets.clear();
     RUNTIME.optimisticUserMessageIds.clear();
@@ -182,6 +216,10 @@ describe("desktop protocol v2 mapping", () => {
       startupError: null,
       ready: true,
     });
+  });
+
+  afterAll(() => {
+    restoreWindowMock();
   });
 
   test("control hello requests provider catalog/auth methods/status", async () => {
@@ -1802,6 +1840,44 @@ describe("desktop protocol v2 mapping", () => {
     emitServerHello(controlSocket, "control-session");
     emitServerHello(threadSocket, "thread-session");
     const threadId = canonicalThreadId("thread-session", initialThreadId);
+    RUNTIME.sessionSnapshots.set("thread-session", {
+      fingerprint: {
+        updatedAt: "2024-01-01T00:00:02.000Z",
+        messageCount: 2,
+        lastEventSeq: 4,
+      },
+      snapshot: {
+        sessionId: "thread-session",
+        title: "Cached Thread",
+        titleSource: "model",
+        titleModel: "gpt-5.2",
+        provider: "openai",
+        model: "gpt-5.2",
+        sessionKind: "root",
+        parentSessionId: null,
+        role: null,
+        mode: null,
+        depth: 0,
+        nickname: null,
+        requestedModel: "gpt-5.2",
+        effectiveModel: "gpt-5.2",
+        requestedReasoningEffort: null,
+        effectiveReasoningEffort: null,
+        executionState: null,
+        lastMessagePreview: "Hello from cache",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:02.000Z",
+        messageCount: 2,
+        lastEventSeq: 4,
+        feed: [],
+        agents: [],
+        todos: [],
+        sessionUsage: null,
+        lastTurnUsage: null,
+        hasPendingAsk: false,
+        hasPendingApproval: false,
+      },
+    });
     controlSocket.sent = [];
     threadSocket.sent = [];
 
@@ -1818,6 +1894,10 @@ describe("desktop protocol v2 mapping", () => {
           && msg?.targetSessionId === "thread-session"
       )
     ).toBe(true);
+    expect(RUNTIME.sessionSnapshots.has("thread-session")).toBe(false);
+    const cachedState = localStorageMock.getItem(DESKTOP_STATE_CACHE_KEY);
+    expect(cachedState).not.toBeNull();
+    expect(JSON.parse(cachedState!).sessionSnapshots?.["thread-session"]).toBeUndefined();
   });
 
   test("removeWorkspace sends session_close for control and thread sessions", async () => {

@@ -305,14 +305,6 @@ export async function updateSkillInstallation(opts: {
     throw new Error("No update source is recorded for this installation");
   }
 
-  const previewResult = await checkSkillInstallationUpdate({
-    config: opts.config,
-    installation: opts.installation,
-  });
-  if (!previewResult.canUpdate || !previewResult.preview) {
-    throw new Error(previewResult.reason ?? "This installation cannot be updated");
-  }
-
   const writableScope = requireWritableScope(opts.config, opts.installation.scope as SkillMutationTargetScope);
   const materialized = await materializeSkillSource({
     input,
@@ -320,6 +312,13 @@ export async function updateSkillInstallation(opts: {
   });
 
   try {
+    const preview = await buildSkillInstallPreview({
+      input,
+      targetScope: opts.installation.scope as SkillMutationTargetScope,
+      catalog: await refreshCatalog(opts.config),
+      cwd: opts.config.workingDirectory,
+      materialized,
+    });
     const selectedCandidate =
       materialized.candidates.find((candidate) => candidate.name === opts.installation.name && candidate.diagnostics.length === 0)
       ?? materialized.candidates.find((candidate) => candidate.diagnostics.length === 0);
@@ -339,7 +338,7 @@ export async function updateSkillInstallation(opts: {
     });
 
     return {
-      preview: previewResult.preview,
+      preview,
       catalog: await refreshCatalog(opts.config),
     };
   } finally {

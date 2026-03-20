@@ -796,6 +796,9 @@ export function createControlSocketHelpers(
           set((s) => {
             const workspaceRuntime = s.workspaceRuntimeById[workspaceId];
             const hasPendingMemories = workspaceRuntime.memoriesLoading;
+            const hasPendingSkillState =
+              workspaceRuntime.skillCatalogLoading
+              || Object.keys(workspaceRuntime.skillMutationPendingKeys).length > 0;
             const hasPendingBackupState =
               workspaceRuntime.workspaceBackupsLoading
               || Object.keys(workspaceRuntime.workspaceBackupPendingActionKeys).length > 0;
@@ -814,7 +817,7 @@ export function createControlSocketHelpers(
                 [workspaceId]: {
                   ...workspaceRuntime,
                   memoriesLoading: hasPendingMemories ? false : workspaceRuntime.memoriesLoading,
-                  ...(evt.message.toLowerCase().includes("skill")
+                  ...(hasPendingSkillState
                     ? {
                         skillCatalogLoading: false,
                         skillCatalogError: evt.message,

@@ -41,7 +41,7 @@ mock.module("../src/lib/agentSocket", () => ({
 }));
 
 const { createControlSocketHelpers } = await import("../src/app/store.helpers/controlSocket");
-const { RUNTIME } = await import("../src/app/store.helpers/runtimeState");
+const { RUNTIME, defaultWorkspaceRuntime } = await import("../src/app/store.helpers/runtimeState");
 
 let persistCalls = 0;
 
@@ -265,5 +265,108 @@ describe("control socket workspace sessions", () => {
     });
 
     expect(state.selectedThreadId).toBe("session-keep");
+  });
+});
+
+describe("control socket skill error recovery", () => {
+  const workspaceId = "ws-skills";
+
+  beforeEach(() => {
+    MOCK_SOCKETS.length = 0;
+    RUNTIME.controlSockets.clear();
+    RUNTIME.sessionSnapshots.clear();
+    persistCalls = 0;
+  });
+
+  test("error clears pending skill state even when the message does not mention skills", () => {
+    const state = {
+      selectedWorkspaceId: workspaceId,
+      threads: [],
+      selectedThreadId: null,
+      threadRuntimeById: {},
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          skillCatalogLoading: true,
+          skillMutationPendingKeys: { preview: true },
+          skillsMutationBlocked: true,
+          skillsMutationBlockedReason: "catalog locked",
+        },
+      },
+      workspaces: [],
+      notifications: [],
+      providerStatusRefreshing: false,
+      providerLastAuthChallenge: null,
+    } as any;
+    const get = () => state;
+    const set = (updater: any) => {
+      const patch = typeof updater === "function" ? updater(state) : updater;
+      Object.assign(state, patch);
+    };
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.emit({
+      type: "error",
+      sessionId: "control-session",
+      source: "session",
+      code: "internal_error",
+      message: "EACCES: permission denied",
+    });
+
+    expect(state.workspaceRuntimeById[workspaceId].skillCatalogLoading).toBe(false);
+    expect(state.workspaceRuntimeById[workspaceId].skillCatalogError).toBe("EACCES: permission denied");
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({});
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe("EACCES: permission denied");
+  });
+
+  test("error leaves skill state alone when no skill work is pending", () => {
+    const state = {
+      selectedWorkspaceId: workspaceId,
+      threads: [],
+      selectedThreadId: null,
+      threadRuntimeById: {},
+      workspaceRuntimeById: {
+        [workspaceId]: {
+          ...defaultWorkspaceRuntime(),
+          serverUrl: "ws://mock",
+          skillCatalogError: "keep catalog error",
+          skillMutationError: "keep mutation error",
+          skillsMutationBlocked: true,
+          skillsMutationBlockedReason: "still blocked",
+        },
+      },
+      workspaces: [],
+      notifications: [],
+      providerStatusRefreshing: false,
+      providerLastAuthChallenge: null,
+    } as any;
+    const get = () => state;
+    const set = (updater: any) => {
+      const patch = typeof updater === "function" ? updater(state) : updater;
+      Object.assign(state, patch);
+    };
+
+    const helpers = createControlSocketHelpers(deps);
+    helpers.ensureControlSocket(get as any, set as any, workspaceId);
+
+    const controlSocket = socketByClient("desktop-control");
+    emitServerHello(controlSocket, "control-session");
+    controlSocket.emit({
+      type: "error",
+      sessionId: "control-session",
+      source: "session",
+      code: "internal_error",
+      message: "provider skill handshake failed",
+    });
+
+    expect(state.workspaceRuntimeById[workspaceId].skillCatalogError).toBe("keep catalog error");
+    expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBe("keep mutation error");
+    expect(state.workspaceRuntimeById[workspaceId].skillsMutationBlocked).toBe(true);
+    expect(state.workspaceRuntimeById[workspaceId].skillsMutationBlockedReason).toBe("still blocked");
   });
 });

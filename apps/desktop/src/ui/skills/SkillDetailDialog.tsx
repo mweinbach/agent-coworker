@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Streamdown } from "streamdown";
 import { useAppStore } from "../../app/store";
 import { Badge } from "../../components/ui/badge";
@@ -8,6 +9,7 @@ import { actionPending, normalizeDisplayContent, scopeLabel, skillSourceLabel, s
 import { ExternalLinkIcon } from "lucide-react";
 
 export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
+  const [dismissedInstallationId, setDismissedInstallationId] = useState<string | null>(null);
   const wsRtById = useAppStore((s) => s.workspaceRuntimeById);
   const selectSkillInstallation = useAppStore((s) => s.selectSkillInstallation);
   const disableSkillInstallation = useAppStore((s) => s.disableSkillInstallation);
@@ -24,8 +26,19 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
   const selectedSkill = skills.find((s) => s.name === selectedSkillName) ?? null;
   const selectedInstallation = rt?.selectedSkillInstallation ?? null;
   const selectedSkillInstallationId = rt?.selectedSkillInstallationId ?? null;
+  const deletePending = selectedInstallation ? actionPending(rt, "delete", selectedInstallation.installationId) : false;
+  const isDismissedAfterDelete =
+    selectedSkillInstallationId !== null && dismissedInstallationId === selectedSkillInstallationId;
+  const isOpen = !isDismissedAfterDelete && (selectedSkillInstallationId !== null || selectedSkillName !== null);
 
-  const isOpen = selectedSkillInstallationId !== null || selectedSkillName !== null;
+  useEffect(() => {
+    if (!dismissedInstallationId) {
+      return;
+    }
+    if (selectedSkillInstallationId !== dismissedInstallationId || !deletePending) {
+      setDismissedInstallationId(null);
+    }
+  }, [deletePending, dismissedInstallationId, selectedSkillInstallationId]);
 
   const handleOpenChange = (open: boolean) => {
     if (!open) {
@@ -155,10 +168,10 @@ export function SkillDetailDialog({ workspaceId }: { workspaceId: string }) {
                 variant="destructive"
                 size="sm"
                 className="bg-destructive/10 text-destructive hover:bg-destructive/20 border-transparent"
-                disabled={mutationBlocked || actionPending(rt, "delete", selectedInstallation.installationId)}
+                disabled={mutationBlocked || deletePending}
                 onClick={() => {
+                  setDismissedInstallationId(selectedInstallation.installationId);
                   void deleteSkillInstallation(selectedInstallation.installationId);
-                  handleOpenChange(false);
                 }}
               >
                 Uninstall

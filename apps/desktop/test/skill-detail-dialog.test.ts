@@ -149,4 +149,81 @@ describe("skill detail dialog", () => {
       harness.restore();
     }
   });
+
+  test("uninstall does not clear the selected installation before the delete response returns", async () => {
+    openPathMock.mockClear();
+    revealPathMock.mockClear();
+
+    const previousState = useAppStore.getState();
+    const deleteSkillInstallationMock = mock(async () => {});
+    const selectSkillInstallationMock = mock(async () => {});
+    const installationRoot = "/home/test/.cowork/skills/example-skill";
+
+    useAppStore.setState({
+      deleteSkillInstallation: deleteSkillInstallationMock as typeof previousState.deleteSkillInstallation,
+      selectSkillInstallation: selectSkillInstallationMock as typeof previousState.selectSkillInstallation,
+      workspaceRuntimeById: {
+        "ws-1": {
+          ...defaultWorkspaceRuntime(),
+          selectedSkillContent: null,
+          selectedSkillInstallationId: "skill-1",
+          selectedSkillInstallation: {
+            installationId: "skill-1",
+            name: "example-skill",
+            description: "Example skill",
+            scope: "project",
+            enabled: true,
+            writable: true,
+            managed: true,
+            effective: true,
+            state: "effective",
+            rootDir: installationRoot,
+            skillPath: `${installationRoot}/SKILL.md`,
+            path: `${installationRoot}/SKILL.md`,
+            triggers: [],
+            descriptionSource: "unknown",
+            diagnostics: [],
+          },
+        },
+      },
+    });
+
+    const harness = setupJsdom();
+
+    try {
+      const container = harness.dom.window.document.getElementById("root");
+      if (!container) {
+        throw new Error("missing root");
+      }
+      const root = createRoot(container);
+
+      await act(async () => {
+        root.render(createElement(SkillDetailDialog, { workspaceId: "ws-1" }));
+      });
+
+      const uninstallButton = Array.from(harness.dom.window.document.querySelectorAll("button")).find(
+        (button) => button.textContent?.includes("Uninstall"),
+      );
+
+      if (!uninstallButton) {
+        throw new Error("missing uninstall button");
+      }
+
+      await act(async () => {
+        uninstallButton.dispatchEvent(new harness.dom.window.MouseEvent("click", { bubbles: true }));
+        await Promise.resolve();
+      });
+
+      expect(deleteSkillInstallationMock).toHaveBeenCalledTimes(1);
+      expect(deleteSkillInstallationMock).toHaveBeenCalledWith("skill-1");
+      expect(selectSkillInstallationMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
+      useAppStore.setState(previousState);
+      harness.restore();
+    }
+  });
 });

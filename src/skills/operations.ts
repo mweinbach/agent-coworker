@@ -11,7 +11,7 @@ import type {
   SkillMutationTargetScope,
   SkillUpdateCheckResult,
 } from "../types";
-import { sameWorkspacePath } from "../utils/workspacePath";
+import { workspacePathOverlaps } from "../utils/workspacePath";
 import { getInstallationById, getSkillScopeDescriptors, scanSkillCatalog } from "./catalog";
 import { createManagedInstallationId, adoptSkillInstallManifest, writeSkillInstallManifest } from "./manifest";
 import { buildSkillInstallPreview, materializeSkillSource, resolveSkillSource } from "./sourceResolver";
@@ -88,7 +88,7 @@ async function stageCopySourceIfNeeded(sourceRoot: string, conflictingTargets: s
   sourceRoot: string;
   cleanup: () => Promise<void>;
 }> {
-  const overlapsConflict = conflictingTargets.some((targetRoot) => sameWorkspacePath(sourceRoot, targetRoot));
+  const overlapsConflict = conflictingTargets.some((targetRoot) => workspacePathOverlaps(sourceRoot, targetRoot));
   if (!overlapsConflict) {
     return {
       sourceRoot,

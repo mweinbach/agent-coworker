@@ -11,31 +11,7 @@ import {
 } from "../sessionStore";
 import type { SessionContext } from "./SessionContext";
 
-function mergeLiveTopLevelSessionSummary(
-  session: PersistedSessionSummary,
-  liveSnapshot: SessionSnapshot | null,
-): PersistedSessionSummary {
-  if (!liveSnapshot || liveSnapshot.sessionKind !== "root") {
-    return session;
-  }
-
-  return {
-    sessionId: liveSnapshot.sessionId,
-    title: liveSnapshot.title,
-    titleSource: liveSnapshot.titleSource,
-    titleModel: liveSnapshot.titleModel,
-    provider: liveSnapshot.provider,
-    model: liveSnapshot.model,
-    createdAt: liveSnapshot.createdAt,
-    updatedAt: liveSnapshot.updatedAt,
-    messageCount: liveSnapshot.messageCount,
-    lastEventSeq: liveSnapshot.lastEventSeq,
-    hasPendingAsk: liveSnapshot.hasPendingAsk,
-    hasPendingApproval: liveSnapshot.hasPendingApproval,
-  };
-}
-
-function mapLiveTopLevelSessionSummary(liveSnapshot: SessionSnapshot | null): PersistedSessionSummary | null {
+function snapshotToTopLevelSessionSummary(liveSnapshot: SessionSnapshot | null): PersistedSessionSummary | null {
   if (!liveSnapshot || liveSnapshot.sessionKind !== "root") {
     return null;
   }
@@ -54,6 +30,17 @@ function mapLiveTopLevelSessionSummary(liveSnapshot: SessionSnapshot | null): Pe
     hasPendingAsk: liveSnapshot.hasPendingAsk,
     hasPendingApproval: liveSnapshot.hasPendingApproval,
   };
+}
+
+function mergeLiveTopLevelSessionSummary(
+  session: PersistedSessionSummary,
+  liveSnapshot: SessionSnapshot | null,
+): PersistedSessionSummary {
+  return snapshotToTopLevelSessionSummary(liveSnapshot) ?? session;
+}
+
+function mapLiveTopLevelSessionSummary(liveSnapshot: SessionSnapshot | null): PersistedSessionSummary | null {
+  return snapshotToTopLevelSessionSummary(liveSnapshot);
 }
 
 function shouldIncludeTopLevelSessionSummary(

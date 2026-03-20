@@ -12,6 +12,19 @@ function cloneContext(context: HarnessContextState): HarnessContextState {
   };
 }
 
+function normalizeMetadata(
+  metadata: HarnessContextPayload["metadata"],
+): HarnessContextState["metadata"] {
+  if (!metadata) return undefined;
+
+  const entries = Object.entries(metadata)
+    .map(([key, value]) => [key.trim(), value.trim()] as const)
+    .filter(([key, value]) => key.length > 0 && value.length > 0);
+
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries);
+}
+
 export class HarnessContextStore {
   private readonly bySessionId = new Map<string, HarnessContextState>();
 
@@ -27,7 +40,7 @@ export class HarnessContextStore {
       objective: context.objective.trim(),
       acceptanceCriteria: context.acceptanceCriteria.map((item) => item.trim()).filter(Boolean),
       constraints: context.constraints.map((item) => item.trim()).filter(Boolean),
-      metadata: context.metadata ? { ...context.metadata } : undefined,
+      metadata: normalizeMetadata(context.metadata),
       updatedAt: new Date().toISOString(),
     };
 

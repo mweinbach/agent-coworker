@@ -77,6 +77,20 @@ describe("HarnessContextStore", () => {
     expect(result.metadata).toEqual({ env: "prod", tier: "1" });
   });
 
+  test("set trims metadata keys and values and drops blank entries", () => {
+    const store = new HarnessContextStore();
+    store.set("s1", makePayload({
+      metadata: {
+        " env ": " prod ",
+        blank: "   ",
+        "   ": "ignored",
+      },
+    }));
+
+    const result = store.get("s1")!;
+    expect(result.metadata).toEqual({ env: "prod" });
+  });
+
   test("set excludes metadata when not provided", () => {
     const store = new HarnessContextStore();
     store.set("s1", makePayload({ metadata: undefined }));

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AgentConfig } from "../src/types";
 import type { RunTurnParams } from "../src/agent";
 import { createRunTurn } from "../src/agent";
+import { buildTurnSystemPrompt } from "../src/harness/buildTurnSystemPrompt";
 import { __internal as observabilityRuntimeInternal } from "../src/observability/runtime";
 import { SessionCostTracker } from "../src/session/costTracker";
 
@@ -162,6 +163,51 @@ describe("runTurn", () => {
     const callArg = mockStreamText.mock.calls[0][0] as any;
     expect(callArg.system).toContain("## Active MCP Tools");
     expect(callArg.system).toContain("`mcp__{serverName}__{toolName}`");
+  });
+
+  test("buildTurnSystemPrompt appends harness context when present", () => {
+    const system = buildTurnSystemPrompt(
+      "Base system prompt",
+      [],
+      {
+        runId: "run-01",
+        taskId: "task-01",
+        objective: "Improve startup reliability",
+        acceptanceCriteria: ["Startup completes in under 800ms"],
+        constraints: ["No API changes"],
+        metadata: { owner: "agent" },
+        updatedAt: "2026-03-20T12:00:00.000Z",
+      },
+    );
+
+    expect(system).toContain("Base system prompt");
+    expect(system).toContain("## Active Harness Context");
+    expect(system).toContain("- Run ID: run-01");
+    expect(system).toContain("### Acceptance Criteria");
+    expect(system).toContain("1. Startup completes in under 800ms");
+    expect(system).toContain("### Constraints");
+  });
+
+  test("passes harness context into the runtime system prompt", async () => {
+    const params = makeParams({
+      harnessContext: {
+        runId: "run-ctx",
+        objective: "Verify runtime injection",
+        acceptanceCriteria: ["System prompt contains harness context"],
+        constraints: ["Do not override safety policy"],
+        metadata: { milestone: "phase-a" },
+        updatedAt: "2026-03-20T12:00:00.000Z",
+      },
+    });
+
+    await runTurn(params);
+
+    const callArg = mockStreamText.mock.calls[0][0] as any;
+    expect(callArg.system).toContain("## Active Harness Context");
+    expect(callArg.system).toContain("- Run ID: run-ctx");
+    expect(callArg.system).toContain("- Objective: Verify runtime injection");
+    expect(callArg.system).toContain("1. System prompt contains harness context");
+    expect(callArg.system).toContain("1. Do not override safety policy");
   });
 
   // -------------------------------------------------------------------------

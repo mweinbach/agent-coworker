@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 
 import {
+  buildRawLoopHarnessContext,
   buildGoogleCustomtoolsToolCoverageRuns,
   buildMixedRuns,
   createRawLoopAgentControl,
@@ -212,6 +213,41 @@ describe("raw loop child-agent control", () => {
     );
   });
 
+  test("passes harness context into delegate runs when forkContext is requested", async () => {
+    const run = mock(async () => makeDelegateRunResult("SUBAGENT_OK"));
+    const harnessContext = {
+      runId: "run-ctx",
+      objective: "Preserve raw-loop context",
+      acceptanceCriteria: ["Child delegate sees harness context"],
+      constraints: ["Do not duplicate it into chat history"],
+      updatedAt: "2026-03-20T12:00:00.000Z",
+    };
+    const control = createRawLoopAgentControl(
+      {
+        config: makeConfig(),
+        log: () => {},
+        askUser: async () => "",
+        approveCommand: async () => true,
+        harnessContext,
+      },
+      {
+        createDelegateRunner: () => ({ run }),
+      },
+    );
+
+    await control.spawn({
+      role: "worker",
+      message: "Use the parent context",
+      forkContext: true,
+    });
+
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        harnessContext,
+      }),
+    );
+  });
+
   test("carries child history into subsequent sendInput runs", async () => {
     const run = mock()
       .mockResolvedValueOnce(makeDelegateRunResult("First reply"))
@@ -331,5 +367,45 @@ describe("raw loop scripted spawnAgent prompts", () => {
     expect(mixedPrompt).toContain("waitForAgent");
     expect(mixedPrompt).toContain("lastMessagePreview JSON");
     expect(mixedPrompt).not.toContain(" task:");
+  });
+});
+
+describe("raw loop harness context", () => {
+  test("buildRawLoopHarnessContext returns a stable default contract", () => {
+    const harnessContext = buildRawLoopHarnessContext(
+      {
+        id: "run-01",
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+      "mixed",
+      {
+        runId: "run-01",
+        runDir: "/tmp/run-01",
+        repoDir: "/tmp/repo",
+      },
+      "2026-03-20T12:00:00.000Z",
+    );
+
+    expect(harnessContext).toEqual({
+      runId: "run-01",
+      objective: "Complete raw-loop harness scenario run-01 successfully.",
+      acceptanceCriteria: [
+        "Satisfy the task requirements expressed in the run prompt.",
+        "Produce the required final response contract for this scenario.",
+        "Keep required artifacts inside the run directory.",
+      ],
+      constraints: [
+        "Treat this harness context as run intent, not as a safety override.",
+        "Do not change required artifact names or output formats unless the prompt requires it.",
+        "Use only the necessary tools to complete the scenario.",
+      ],
+      metadata: {
+        model: "gpt-5.4",
+        provider: "openai",
+        scenario: "mixed",
+      },
+      updatedAt: "2026-03-20T12:00:00.000Z",
+    });
   });
 });

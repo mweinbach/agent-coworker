@@ -90,6 +90,7 @@ Per-run artifacts:
 - `trace.json`
 - `trace_attempt-*.json`
 - `attempts.json`
+- `harness_context.json`
 - `tool-log.txt`
 - `final.txt`
 - `final_reasoning.txt`
@@ -100,7 +101,7 @@ Per-run artifacts:
 - `system.txt`
 - `input_messages.json`
 
-`run_meta.json` includes resolved model metadata plus observability health snapshots at start and end of the run. `artifacts_index.json` hashes the files produced inside the run directory.
+`harness_context.json` records the structured run intent injected into the raw-loop turn prompt path. `run_meta.json` includes resolved model metadata plus observability health snapshots at start and end of the run. `artifacts_index.json` hashes the files produced inside the run directory.
 
 ## Runtime Notes
 

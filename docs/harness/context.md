@@ -1,6 +1,13 @@
 # Harness Context
 
-Harness context captures run intent in a structured format that agents can read/write over WebSocket.
+Harness context captures structured run intent that the server owns, persists, and injects into runtime turns.
+
+The key distinction is:
+
+- **memory** is long-lived knowledge
+- **harness context** is the active task contract for the current session/run
+
+Harness context is session-scoped state. It is not chat history, and it does not override higher-priority system policy, safety rules, or tool-approval requirements.
 
 ## Schema
 
@@ -34,3 +41,23 @@ Normalization rules:
 - Session snapshots include `context.harnessContext`, and the SQLite materialized state stores the same payload in `harness_context_json`.
 - When a session is resumed from storage, [`AgentSession.ts`](../../src/server/session/AgentSession.ts) seeds the live context store from the persisted snapshot before normal event handling resumes.
 - The live in-memory entry is cleared when the session is disposed or closed.
+
+## Runtime Injection Behavior
+
+- The turn runtime reads the current live harness context at turn/pass invocation time from the session-owned store.
+- The current context is rendered into the runtime system prompt as a compact **Active Harness Context** section.
+- Because the context is read at invocation time, multi-pass turns continue to see the latest contract instead of only a one-time startup snapshot.
+- The rendered section explicitly frames the data as a task contract and reminds the model that it does **not** override safety/tool policy.
+
+## Child-Agent Behavior
+
+- Forked child sessions inherit harness context through the existing seed-context path.
+- `AgentSession.buildForkContextSeed()` includes `harnessContext`.
+- `AgentControl.spawn()` passes that seed when `forkContext: true`.
+- The child sees inherited context in its runtime prompt path, but the context is **not** duplicated into transcript messages.
+
+## Raw-Loop Behavior
+
+- Raw-loop runs can also carry structured harness context.
+- The raw-loop runner persists the resolved context to `harness_context.json` inside each run directory.
+- Raw-loop delegated child agents preserve harness context when the run forks context into the child delegate.

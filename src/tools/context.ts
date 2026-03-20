@@ -1,5 +1,5 @@
 import type { AgentReasoningEffort, PersistentAgentSummary, AgentRole } from "../shared/agents";
-import type { AgentConfig } from "../types";
+import type { AgentConfig, HarnessContextState } from "../types";
 import type { TodoItem } from "../types";
 import type { SessionCostTracker, SessionUsageSnapshot } from "../session/costTracker";
 
@@ -51,6 +51,9 @@ export interface ToolContext {
    */
   turnUserPrompt?: string;
   getTurnUserPrompt?: () => string | undefined;
+
+  /** Structured run intent for the active session/turn. */
+  harnessContext?: HarnessContextState | null;
 
   /** Optional role for child-agent tool filtering. */
   agentRole?: AgentRole;

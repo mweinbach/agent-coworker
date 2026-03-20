@@ -16,7 +16,14 @@ import { routeAgentConfig } from "../src/server/agents/modelRouter";
 import { getAgentRoleDefinition } from "../src/server/agents/roles";
 import type { AgentReasoningEffort, AgentRole, PersistentAgentSummary } from "../src/shared/agents";
 import { ensureDefaultGlobalSkillsReady } from "../src/skills/defaultGlobalSkills";
-import type { AgentConfig, ModelMessage, ProviderName, TodoItem } from "../src/types";
+import type {
+  AgentConfig,
+  HarnessContextPayload,
+  HarnessContextState,
+  ModelMessage,
+  ProviderName,
+  TodoItem,
+} from "../src/types";
 import type { ToolContext } from "../src/tools";
 import { createAskTool } from "../src/tools/ask";
 import { createBashTool } from "../src/tools/bash";
@@ -159,6 +166,7 @@ type RunTrace = {
   system: string;
   userPrompt: string;
   inputMessages: ModelMessage[];
+  harnessContext: HarnessContextState | null;
 
   toolLogLines: string[];
   askEvents: AskEvent[];
@@ -195,6 +203,7 @@ type RunSpec = {
   guardedToolsBeforeSkill?: string[];
   requiredToolBeforeTools?: string;
   guardedToolsBeforeRequiredTool?: string[];
+  harnessContext?: (ctx: PromptContext) => HarnessContextPayload;
   prompt: (ctx: PromptContext) => string;
 };
 
@@ -206,6 +215,7 @@ type RawLoopAgentControlState = {
   routedConfig: AgentConfig;
   connectedProviders: readonly ProviderName[];
   historyMessages: ModelMessage[];
+  harnessContext: HarnessContextState | null;
   abortController: AbortController | null;
   runPromise: Promise<void> | null;
   runToken: number;
@@ -243,6 +253,64 @@ function safeJsonStringify(v: unknown): string {
       return value;
     },
     2
+  );
+}
+
+function toHarnessContextState(
+  payload: HarnessContextPayload,
+  updatedAt = isoSafeNow(),
+): HarnessContextState {
+  const metadataEntries = Object.entries(payload.metadata ?? {})
+    .map(([key, value]) => [key.trim(), value.trim()] as const)
+    .filter(([key, value]) => key.length > 0 && value.length > 0);
+
+  return {
+    runId: payload.runId.trim(),
+    taskId: payload.taskId?.trim() || undefined,
+    objective: payload.objective.trim(),
+    acceptanceCriteria: payload.acceptanceCriteria.map((item) => item.trim()).filter(Boolean),
+    constraints: payload.constraints.map((item) => item.trim()).filter(Boolean),
+    ...(metadataEntries.length > 0 ? { metadata: Object.fromEntries(metadataEntries) } : {}),
+    updatedAt,
+  };
+}
+
+function defaultHarnessContextForRun(
+  run: Pick<RunSpec, "id" | "provider" | "model">,
+  scenario: RawLoopArgs["scenario"],
+): HarnessContextPayload {
+  return {
+    runId: run.id,
+    objective: `Complete raw-loop harness scenario ${run.id} successfully.`,
+    acceptanceCriteria: [
+      "Satisfy the task requirements expressed in the run prompt.",
+      "Produce the required final response contract for this scenario.",
+      "Keep required artifacts inside the run directory.",
+    ],
+    constraints: [
+      "Treat this harness context as run intent, not as a safety override.",
+      "Do not change required artifact names or output formats unless the prompt requires it.",
+      "Use only the necessary tools to complete the scenario.",
+    ],
+    metadata: {
+      provider: run.provider,
+      model: run.model,
+      scenario,
+    },
+  };
+}
+
+export function buildRawLoopHarnessContext(
+  run: Pick<RunSpec, "id" | "provider" | "model"> & {
+    harnessContext?: (ctx: PromptContext) => HarnessContextPayload;
+  },
+  scenario: RawLoopArgs["scenario"],
+  promptContext: PromptContext,
+  updatedAt = isoSafeNow(),
+): HarnessContextState {
+  return toHarnessContextState(
+    run.harnessContext?.(promptContext) ?? defaultHarnessContextForRun(run, scenario),
+    updatedAt,
   );
 }
 
@@ -316,7 +384,7 @@ function withExecuteGuard(
 
 export function createRawLoopAgentControl(
   opts: Pick<ToolContext, "config" | "log" | "askUser" | "approveCommand" | "availableSkills" | "spawnDepth" | "abortSignal">
-    & { parentMessages?: ModelMessage[] },
+    & { parentMessages?: ModelMessage[]; harnessContext?: HarnessContextState | null },
   deps: RawLoopAgentControlDeps = {},
 ): NonNullable<ToolContext["agentControl"]> {
   const statusBus = new StatusBus();
@@ -371,6 +439,7 @@ export function createRawLoopAgentControl(
       abortSignal: controller.signal,
       discoveredSkills: opts.availableSkills,
       ...(priorMessages.length > 0 ? { seedMessages: priorMessages } : {}),
+      ...(state.harnessContext ? { harnessContext: state.harnessContext } : {}),
       ...(state.requestedModel ? { model: state.requestedModel } : {}),
       ...(state.requestedReasoningEffort ? { reasoningEffort: state.requestedReasoningEffort } : {}),
       ...(state.connectedProviders.length > 0 ? { connectedProviders: state.connectedProviders } : {}),
@@ -454,6 +523,10 @@ export function createRawLoopAgentControl(
           forkContext && opts.parentMessages
             ? structuredClone(opts.parentMessages)
             : [],
+        harnessContext:
+          forkContext && opts.harnessContext
+            ? structuredClone(opts.harnessContext)
+            : null,
         abortController: null,
         runPromise: null,
         runToken: 0,
@@ -1677,12 +1750,15 @@ async function main() {
 
     const { prompt: system, discoveredSkills } = await loadSystemPromptWithSkills(config);
 
-    const userPrompt = run.prompt({ runId: run.id, runDir, repoDir });
+    const promptContext = { runId: run.id, runDir, repoDir };
+    const userPrompt = run.prompt(promptContext);
     const inputMessages: ModelMessage[] = [{ role: "user", content: userPrompt }];
+    const harnessContext = buildRawLoopHarnessContext(run, cliArgs.scenario, promptContext, startedAt);
 
     await fs.writeFile(path.join(runDir, "prompt.txt"), userPrompt, "utf-8");
     await fs.writeFile(path.join(runDir, "system.txt"), system, "utf-8");
     await fs.writeFile(path.join(runDir, "input_messages.json"), safeJsonStringify(inputMessages), "utf-8");
+    await fs.writeFile(path.join(runDir, "harness_context.json"), safeJsonStringify(harnessContext), "utf-8");
 
     const attempts: AttemptMeta[] = [];
     const maxAttempts = run.maxAttempts ?? 5;
@@ -1751,6 +1827,7 @@ async function main() {
         approveCommand,
         availableSkills: discoveredSkills,
         parentMessages: inputMessages,
+        harnessContext,
       }, {
         getConnectedProviders: async () => connectedProviders,
       });
@@ -1761,6 +1838,7 @@ async function main() {
             config,
             system,
             messages: inputMessages,
+            harnessContext,
             log,
             askUser,
             approveCommand,
@@ -1829,6 +1907,7 @@ async function main() {
               config,
               system,
               messages: finalizeMessages,
+              harnessContext,
               log,
               askUser,
               approveCommand,
@@ -1878,6 +1957,7 @@ async function main() {
           system,
           userPrompt,
           inputMessages,
+          harnessContext,
           toolLogLines,
           askEvents,
           approvalEvents,
@@ -1914,6 +1994,7 @@ async function main() {
           system,
           userPrompt,
           inputMessages,
+          harnessContext,
           toolLogLines,
           askEvents,
           approvalEvents,
@@ -1942,6 +2023,7 @@ async function main() {
       system,
       userPrompt,
       inputMessages,
+      harnessContext,
       toolLogLines: finalToolLogLines,
       askEvents: finalAskEvents,
       approvalEvents: finalApprovalEvents,
@@ -2014,6 +2096,7 @@ async function main() {
       runDir,
       startedAt,
       finishedAt,
+      harnessContext,
       observabilityEnabled: config.observabilityEnabled ?? false,
       observability: {
         provider: "langfuse",

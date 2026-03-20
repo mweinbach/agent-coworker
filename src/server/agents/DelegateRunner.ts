@@ -4,8 +4,9 @@ import { buildGooglePrepareStep } from "../../providers/googleReplay";
 import { createRuntime } from "../../runtime";
 import { createTools } from "../../tools";
 import type { ToolContext } from "../../tools";
+import { buildTurnSystemPrompt } from "../../harness/buildTurnSystemPrompt";
 import type { ModelMessage } from "../../types";
-import type { AgentConfig, ProviderName } from "../../types";
+import type { AgentConfig, HarnessContextState, ProviderName } from "../../types";
 import type { AgentReasoningEffort, AgentRole } from "../../shared/agents";
 
 import { routeAgentConfig } from "./modelRouter";
@@ -47,6 +48,7 @@ export class DelegateRunner {
     abortSignal?: AbortSignal;
     discoveredSkills?: ToolContext["availableSkills"];
     seedMessages?: ModelMessage[];
+    harnessContext?: HarnessContextState | null;
     model?: string;
     reasoningEffort?: AgentReasoningEffort;
     connectedProviders?: readonly ProviderName[];
@@ -61,7 +63,11 @@ export class DelegateRunner {
     if (routed.fallbackLine) {
       opts.log(`[delegate:${opts.role}] ${routed.fallbackLine}`);
     }
-    const system = await this.deps.loadAgentPrompt(routed.config, opts.role);
+    const system = buildTurnSystemPrompt(
+      await this.deps.loadAgentPrompt(routed.config, opts.role),
+      [],
+      opts.harnessContext,
+    );
     const delegateContext: ToolContext = {
       config: routed.config,
       log: (line) => opts.log(`[delegate:${opts.role}] ${line}`),
@@ -71,6 +77,7 @@ export class DelegateRunner {
       abortSignal: opts.abortSignal,
       availableSkills: opts.discoveredSkills,
       turnUserPrompt: opts.message,
+      harnessContext: opts.harnessContext,
       agentRole: opts.role,
     };
     const tools = filterToolsForRole(this.deps.createTools(delegateContext), roleDefinition);

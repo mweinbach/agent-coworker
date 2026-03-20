@@ -70,6 +70,29 @@ function createStoreHarness(state: ReturnType<typeof createState>) {
   return { get, set };
 }
 
+const failedSkillMutationActions = [
+  {
+    name: "disableSkillInstallation",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.disableSkillInstallation("inst-1"),
+  },
+  {
+    name: "enableSkillInstallation",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.enableSkillInstallation("inst-1"),
+  },
+  {
+    name: "deleteSkillInstallation",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.deleteSkillInstallation("inst-1"),
+  },
+  {
+    name: "copySkillInstallation",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.copySkillInstallation("inst-1", "project"),
+  },
+  {
+    name: "updateSkillInstallation",
+    invoke: (actions: ReturnType<typeof createSkillActions>) => actions.updateSkillInstallation("inst-1"),
+  },
+] as const;
+
 describe("skill store actions", () => {
   beforeEach(() => {
     sendControlResult = false;
@@ -109,4 +132,17 @@ describe("skill store actions", () => {
     expect(state.workspaceRuntimeById[workspaceId].skillMutationError).toBeNull();
     expect(state.notifications).toHaveLength(1);
   });
+
+  for (const { name, invoke } of failedSkillMutationActions) {
+    test(`${name} removes only its pending key when sendControl fails`, async () => {
+      const state = createState();
+      state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys = { other: true };
+      const { get, set } = createStoreHarness(state);
+
+      await invoke(createSkillActions(set as any, get as any));
+
+      expect(state.workspaceRuntimeById[workspaceId].skillMutationPendingKeys).toEqual({ other: true });
+      expect(state.notifications).toHaveLength(1);
+    });
+  }
 });

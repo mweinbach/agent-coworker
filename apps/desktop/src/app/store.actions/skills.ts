@@ -51,6 +51,29 @@ function skillPendingKey(action: string, id?: string): string {
   return id ? `${action}:${id}` : action;
 }
 
+function clearFailedSkillMutationSend(set: StoreSet, workspaceId: string, key: string, detail: string): void {
+  set((s) => ({
+    workspaceRuntimeById: {
+      ...s.workspaceRuntimeById,
+      [workspaceId]: {
+        ...s.workspaceRuntimeById[workspaceId],
+        skillMutationPendingKeys: (() => {
+          const pendingKeys = { ...s.workspaceRuntimeById[workspaceId].skillMutationPendingKeys };
+          delete pendingKeys[key];
+          return pendingKeys;
+        })(),
+      },
+    },
+    notifications: pushNotification(s.notifications, {
+      id: makeId(),
+      ts: nowIso(),
+      kind: "error",
+      title: "Not connected",
+      detail,
+    }),
+  }));
+}
+
 export function createSkillActions(
   set: StoreSet,
   get: StoreGet,
@@ -352,7 +375,10 @@ export function createSkillActions(
           },
         },
       }));
-      sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_disable", sessionId, installationId }));
+      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_disable", sessionId, installationId }));
+      if (!ok) {
+        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to disable skill installation.");
+      }
     },
 
     enableSkillInstallation: async (installationId: string) => {
@@ -371,7 +397,10 @@ export function createSkillActions(
           },
         },
       }));
-      sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_enable", sessionId, installationId }));
+      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_enable", sessionId, installationId }));
+      if (!ok) {
+        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to enable skill installation.");
+      }
     },
 
     deleteSkillInstallation: async (installationId: string) => {
@@ -390,7 +419,10 @@ export function createSkillActions(
           },
         },
       }));
-      sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_delete", sessionId, installationId }));
+      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_delete", sessionId, installationId }));
+      if (!ok) {
+        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to delete skill installation.");
+      }
     },
 
     copySkillInstallation: async (installationId: string, targetScope: "project" | "global") => {
@@ -409,12 +441,15 @@ export function createSkillActions(
           },
         },
       }));
-      sendControl(get, workspaceId, (sessionId) => ({
+      const ok = sendControl(get, workspaceId, (sessionId) => ({
         type: "skill_installation_copy",
         sessionId,
         installationId,
         targetScope,
       }));
+      if (!ok) {
+        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to copy skill installation.");
+      }
     },
 
     checkSkillInstallationUpdate: async (installationId: string) => {
@@ -444,7 +479,10 @@ export function createSkillActions(
           },
         },
       }));
-      sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_update", sessionId, installationId }));
+      const ok = sendControl(get, workspaceId, (sessionId) => ({ type: "skill_installation_update", sessionId, installationId }));
+      if (!ok) {
+        clearFailedSkillMutationSend(set, workspaceId, key, "Unable to update skill installation.");
+      }
     },
   
   };

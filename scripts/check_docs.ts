@@ -74,10 +74,19 @@ function looksLikeRepoPath(reference: string): boolean {
   if (!normalized || normalized.startsWith("http://") || normalized.startsWith("https://") || normalized.startsWith("mailto:")) {
     return false;
   }
+  if (normalized.startsWith("~/.agent") || normalized.startsWith("~/.cowork")) return false;
   if (normalized.includes("<") || normalized.includes(">")) return false;
   if (normalized.includes("myTool") || normalized.includes("myProvider") || normalized.includes("my-skill")) return false;
-  if (normalized.startsWith("./")) return true;
-  if (normalized.startsWith("../")) return true;
+  if (normalized.startsWith("./")) {
+    const stripped = normalized.slice(2);
+    if (stripped.startsWith(".")) return false;
+    return REPO_PATH_PREFIXES.some((prefix) => stripped.startsWith(prefix));
+  }
+  if (normalized.startsWith("../")) {
+    const stripped = normalized.replace(/^(\.\.\/)+/, "");
+    if (stripped.startsWith(".")) return false;
+    return TOP_LEVEL_DOCS.includes(stripped) || REPO_PATH_PREFIXES.some((prefix) => stripped.startsWith(prefix));
+  }
   if (TOP_LEVEL_DOCS.includes(normalized)) return true;
   return REPO_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }

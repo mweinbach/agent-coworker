@@ -6,7 +6,7 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
 
 - URL: `ws://127.0.0.1:{port}/ws`
 - Session resume: `?resumeSessionId=<sessionId>`
-- Current protocol version: `7.26`
+- Current protocol version: `7.27`
 
 ## Table of Contents
 
@@ -48,6 +48,10 @@ Canonical protocol contract for `agent-coworker` WebSocket clients.
   - Error & Keepalive: [error](#error) | [pong](#pong)
 
 ## Protocol v7 Notes
+
+Changes in `7.27`:
+
+- `skills_catalog` may now include `clearedMutationPendingKeys` so clients can clear only the mutation spinners completed by that catalog refresh.
 
 Changes in `7.26`:
 
@@ -3211,7 +3215,8 @@ Full skills catalog snapshot for the desktop skills manager.
     "effectiveSkills": [],
     "installations": []
   },
-  "mutationBlocked": false
+  "mutationBlocked": false,
+  "clearedMutationPendingKeys": ["install:project"]
 }
 ```
 
@@ -3221,6 +3226,7 @@ Full skills catalog snapshot for the desktop skills manager.
 | `sessionId` | `string` | Session identifier |
 | `catalog` | `SkillCatalogSnapshot` | Full catalog snapshot |
 | `mutationBlocked` | `boolean` | Whether install/update/delete/enable/disable/copy are currently blocked |
+| `clearedMutationPendingKeys` | `string[]?` | Optional pending mutation keys completed by this refresh; omit on plain catalog reads |
 | `mutationBlockedReason` | `string?` | Optional explanation when blocked |
 
 ---

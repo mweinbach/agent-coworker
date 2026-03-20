@@ -29,6 +29,10 @@ export class SkillManager {
     }
   ) {}
 
+  private skillMutationPendingKey(action: string, id?: string): string {
+    return id ? `${action}:${id}` : action;
+  }
+
   private get mutationBlockReason(): string | null {
     return this.context.getSkillMutationBlockReason();
   }
@@ -41,7 +45,7 @@ export class SkillManager {
     this.context.emit({ type: "skills_list", sessionId: this.context.id, skills });
   }
 
-  private async emitSkillsCatalog() {
+  private async emitSkillsCatalog(clearedMutationPendingKeys: string[] = []) {
     const catalog = await getSkillCatalog(this.context.state.config);
     const mutationBlockedReason = this.mutationBlockReason;
     this.context.emit({
@@ -49,6 +53,7 @@ export class SkillManager {
       sessionId: this.context.id,
       catalog,
       mutationBlocked: mutationBlockedReason !== null,
+      ...(clearedMutationPendingKeys.length > 0 ? { clearedMutationPendingKeys } : {}),
       ...(mutationBlockedReason ? { mutationBlockedReason } : {}),
     });
   }
@@ -85,11 +90,17 @@ export class SkillManager {
     });
   }
 
-  private async afterSuccessfulMutation(selectedInstallationId?: string) {
+  private async afterSuccessfulMutation({
+    selectedInstallationId,
+    clearedMutationPendingKeys = [],
+  }: {
+    selectedInstallationId?: string;
+    clearedMutationPendingKeys?: string[];
+  } = {}) {
     await this.context.refreshSkillsAcrossWorkspaceSessions();
     await this.emitLegacySkillsList();
     await this.listCommands();
-    await this.emitSkillsCatalog();
+    await this.emitSkillsCatalog(clearedMutationPendingKeys);
     if (selectedInstallationId) {
       await this.emitInstallationDetail(selectedInstallationId);
     }
@@ -221,7 +232,7 @@ export class SkillManager {
         const nextInstallation = getEffectiveInstallationByName(nextCatalog, installation.name)
           ?? nextCatalog.installations.find((entry) => entry.name === installation.name)
           ?? null;
-        await this.afterSuccessfulMutation(nextInstallation?.installationId);
+        await this.afterSuccessfulMutation({ selectedInstallationId: nextInstallation?.installationId });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to disable skill: ${String(err)}`);
       }
@@ -259,7 +270,7 @@ export class SkillManager {
         const nextInstallation = getEffectiveInstallationByName(nextCatalog, installation.name)
           ?? nextCatalog.installations.find((entry) => entry.name === installation.name)
           ?? null;
-        await this.afterSuccessfulMutation(nextInstallation?.installationId);
+        await this.afterSuccessfulMutation({ selectedInstallationId: nextInstallation?.installationId });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to enable skill: ${String(err)}`);
       }
@@ -354,7 +365,10 @@ export class SkillManager {
           preview: result.preview,
           fromUserPreviewRequest: false,
         });
-        await this.afterSuccessfulMutation(result.installationIds[0]);
+        await this.afterSuccessfulMutation({
+          selectedInstallationId: result.installationIds[0],
+          clearedMutationPendingKeys: [this.skillMutationPendingKey(`install:${targetScope}`)],
+        });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to install skills: ${String(err)}`);
       }
@@ -376,7 +390,10 @@ export class SkillManager {
           config: this.context.state.config,
           installation,
         });
-        await this.afterSuccessfulMutation(installationId);
+        await this.afterSuccessfulMutation({
+          selectedInstallationId: installationId,
+          clearedMutationPendingKeys: [this.skillMutationPendingKey("enable", installationId)],
+        });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to enable skill installation: ${String(err)}`);
       }
@@ -398,7 +415,10 @@ export class SkillManager {
           config: this.context.state.config,
           installation,
         });
-        await this.afterSuccessfulMutation(installationId);
+        await this.afterSuccessfulMutation({
+          selectedInstallationId: installationId,
+          clearedMutationPendingKeys: [this.skillMutationPendingKey("disable", installationId)],
+        });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to disable skill installation: ${String(err)}`);
       }
@@ -420,7 +440,9 @@ export class SkillManager {
           config: this.context.state.config,
           installation,
         });
-        await this.afterSuccessfulMutation();
+        await this.afterSuccessfulMutation({
+          clearedMutationPendingKeys: [this.skillMutationPendingKey("delete", installationId)],
+        });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to delete skill installation: ${String(err)}`);
       }
@@ -443,7 +465,10 @@ export class SkillManager {
           installation,
           targetScope,
         });
-        await this.afterSuccessfulMutation(result.installationId);
+        await this.afterSuccessfulMutation({
+          selectedInstallationId: result.installationId,
+          clearedMutationPendingKeys: [this.skillMutationPendingKey(`copy:${targetScope}`, installationId)],
+        });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to copy skill installation: ${String(err)}`);
       }
@@ -495,7 +520,10 @@ export class SkillManager {
           preview: result.preview,
           fromUserPreviewRequest: false,
         });
-        await this.afterSuccessfulMutation(installationId);
+        await this.afterSuccessfulMutation({
+          selectedInstallationId: installationId,
+          clearedMutationPendingKeys: [this.skillMutationPendingKey("update", installationId)],
+        });
       } catch (err) {
         this.context.emitError("internal_error", "session", `Failed to update skill installation: ${String(err)}`);
       }

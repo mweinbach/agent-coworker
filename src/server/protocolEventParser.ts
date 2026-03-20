@@ -391,6 +391,7 @@ const serverEventSchema = z.discriminatedUnion("type", [
     sessionId: nonEmptyTrimmedStringSchema,
     catalog: recordUnknownSchema,
     mutationBlocked: z.boolean(),
+    clearedMutationPendingKeys: z.array(z.string()).optional(),
     mutationBlockedReason: z.string().optional(),
   }).passthrough(),
   z.object({

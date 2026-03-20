@@ -1395,6 +1395,7 @@ describe("AgentSession", () => {
       expect(evt.catalog.installations).toHaveLength(2);
       expect(evt.catalog.effectiveSkills).toHaveLength(1);
       expect(evt.catalog.effectiveSkills[0]?.scope).toBe("project");
+      expect(evt.clearedMutationPendingKeys).toBeUndefined();
     });
 
     test("installSkills installs a local skill into workspace scope and emits catalog/detail", async () => {
@@ -1412,6 +1413,7 @@ describe("AgentSession", () => {
       const catalogEvt = events.filter((event) => event.type === "skills_catalog").at(-1) as any;
       expect(catalogEvt).toBeDefined();
       expect(catalogEvt.catalog.effectiveSkills.some((skill: any) => skill.name === "alpha")).toBe(true);
+      expect(catalogEvt.clearedMutationPendingKeys).toEqual(["install:project"]);
 
       const detailEvt = events.filter((event) => event.type === "skill_installation").at(-1) as any;
       expect(detailEvt).toBeDefined();
